@@ -1,5 +1,6 @@
 import { join } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
+import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 
@@ -137,9 +138,12 @@ export class AgentPTY {
 
     // Spawn claude directly (no shell wrapper) — cross-platform, no shell escaping needed.
     // env is passed natively via node-pty options; no bash export commands required.
+    // On Windows, node-pty uses CreateProcess which does NOT resolve .exe extensions
+    // from bare command names. We must use 'claude.exe' explicitly.
     const claudeArgs = this.buildClaudeArgs(mode, prompt);
+    const claudeCmd = platform() === 'win32' ? 'claude.exe' : 'claude';
 
-    this.pty = this.spawnFn!('claude', claudeArgs, {
+    this.pty = this.spawnFn!(claudeCmd, claudeArgs, {
       name: 'xterm-256color',
       cols: 200,
       rows: 50,
@@ -297,6 +301,14 @@ export class AgentPTY {
         env[key] = process.env[key]!;
       }
     }
+
+    // Windows: ensure UTF-8 locale so emoji and Unicode pass through the PTY
+    if (platform() === 'win32') {
+      if (!env['LANG']) env['LANG'] = 'en_US.UTF-8';
+      if (!env['LC_ALL']) env['LC_ALL'] = 'en_US.UTF-8';
+      if (!process.env['PYTHONIOENCODING']) env['PYTHONIOENCODING'] = 'utf-8';
+    }
+
     return env;
   }
 }

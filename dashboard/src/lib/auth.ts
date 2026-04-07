@@ -114,13 +114,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
 });
 
-/** Seed admin user from env vars if no users exist in the database */
+/** Seed admin user from env vars, or sync password if it changed */
 export async function seedAdminUser(): Promise<void> {
   const row = db
     .prepare('SELECT COUNT(*) as count FROM users')
     .get() as { count: number };
-
-  if (row.count > 0) return;
 
   const username = process.env.ADMIN_USERNAME ?? 'admin';
 
@@ -132,6 +130,22 @@ export async function seedAdminUser(): Promise<void> {
   const KNOWN_DEFAULTS = ['cortextos', 'password', 'admin', 'changeme'];
   if (process.env.NODE_ENV === 'production' && KNOWN_DEFAULTS.includes(password)) {
     throw new Error('ADMIN_PASSWORD is a known default. Set a strong password in .env.local');
+  }
+
+  if (row.count > 0) {
+    // Sync password: if ADMIN_PASSWORD env var changed, update the stored hash
+    const user = db
+      .prepare('SELECT password_hash FROM users WHERE username = ?')
+      .get(username) as { password_hash: string } | undefined;
+    if (user) {
+      const matches = await bcrypt.compare(password, user.password_hash);
+      if (!matches) {
+        const hash = await bcrypt.hash(password, 12);
+        db.prepare('UPDATE users SET password_hash = ? WHERE username = ?').run(hash, username);
+        console.log(`[auth] Admin password updated from environment`);
+      }
+    }
+    return;
   }
 
   const hash = await bcrypt.hash(password, 12);

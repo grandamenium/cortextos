@@ -15,14 +15,24 @@ const SAFE_NAME = /^[@a-z0-9._/-]+$/i;
 
 function tryInstallGlobal(pkg: string): boolean {
   if (!SAFE_NAME.test(pkg)) return false;
-  const result = spawnSync('npm', ['install', '-g', pkg], { stdio: 'inherit', timeout: 120000 });
+  // On Windows, 'npm' is a .cmd wrapper; use shell to resolve it.
+  // Pass as single string to avoid DEP0190 deprecation warning.
+  const result = IS_WINDOWS
+    ? spawnSync(`npm install -g ${pkg}`, { stdio: 'inherit', timeout: 120000, shell: true })
+    : spawnSync('npm', ['install', '-g', pkg], { stdio: 'inherit', timeout: 120000 });
   return result.status === 0;
 }
 
 function commandExists(cmd: string): boolean {
   if (!SAFE_NAME.test(cmd)) return false;
-  const which = IS_WINDOWS ? 'where' : 'which';
-  const result = spawnSync(which, [cmd], { stdio: 'pipe' });
+  // On Windows, use shell so 'where' runs through cmd.exe with the full
+  // system PATH — without it, where.exe can miss tools installed via
+  // WinGet or user-space installers when PATH contains Unix-style paths.
+  if (IS_WINDOWS) {
+    const result = spawnSync(`where ${cmd}`, { stdio: 'pipe', shell: true });
+    return result.status === 0;
+  }
+  const result = spawnSync('which', [cmd], { stdio: 'pipe' });
   return result.status === 0;
 }
 
@@ -131,7 +141,9 @@ export const installCommand = new Command('install')
       if (IS_MAC) {
         console.error('    Install Xcode Command Line Tools: xcode-select --install');
       } else if (IS_WINDOWS) {
-        console.error('    Install Visual C++ Build Tools: npm install -g windows-build-tools');
+        console.error('    Install "Desktop development with C++" workload from Visual Studio Build Tools:');
+        console.error('    https://visualstudio.microsoft.com/visual-cpp-build-tools/');
+        console.error('    Then run: npm rebuild node-pty');
       } else {
         console.error('    Install build tools: sudo apt-get install -y build-essential python3');
       }
@@ -216,6 +228,40 @@ export const installCommand = new Command('install')
       } catch {
         console.log('  ✓ jq: installed');
       }
+    }
+
+    // Python venv for Knowledge Base
+    const kbVenvDir = join(process.cwd(), 'knowledge-base', 'venv');
+    const kbReqs = join(process.cwd(), 'knowledge-base', 'scripts', 'requirements.txt');
+    const python3Cmd = IS_WINDOWS ? 'python' : 'python3';
+    if (commandExists(python3Cmd)) {
+      if (!existsSync(kbVenvDir)) {
+        console.log('  - Knowledge Base venv: not found. Creating...');
+        const venvResult = spawnSync(python3Cmd, ['-m', 'venv', kbVenvDir], { stdio: 'inherit', timeout: 60000 });
+        if (venvResult.status === 0) {
+          console.log('  ✓ Knowledge Base venv created');
+          // Install KB dependencies
+          if (existsSync(kbReqs)) {
+            const pip = IS_WINDOWS
+              ? join(kbVenvDir, 'Scripts', 'pip')
+              : join(kbVenvDir, 'bin', 'pip');
+            const pipResult = spawnSync(pip, ['install', '--quiet', '-r', kbReqs], { stdio: 'inherit', timeout: 120000 });
+            if (pipResult.status === 0) {
+              console.log('  ✓ Knowledge Base dependencies installed');
+            } else {
+              console.log('  ! Knowledge Base dependencies failed to install. Run kb-setup.sh manually.');
+            }
+          }
+        } else {
+          console.log('  ! Could not create Knowledge Base venv. Run: bus/kb-setup.sh --org <org>');
+        }
+      } else {
+        console.log('  ✓ Knowledge Base venv exists');
+      }
+    } else {
+      console.log(`  ! ${python3Cmd}: not found. Knowledge Base requires Python 3.`);
+      if (IS_WINDOWS) console.log('    Install from: https://www.python.org/downloads/');
+      else console.log('    Install with: sudo apt-get install -y python3 python3-venv');
     }
 
     console.log('');
@@ -305,6 +351,18 @@ export const installCommand = new Command('install')
     );
     try { chmodSync(dashEnvPath, 0o600); } catch { /* ignore on Windows */ }
     console.log(`  Generated dashboard credentials at ${dashEnvPath}`);
+
+    // Register cortextos CLI globally so agent PTY sessions can find it
+    console.log('Registering cortextos CLI globally...');
+    const linkResult = IS_WINDOWS
+      ? spawnSync('npm link', { stdio: 'pipe', cwd: process.cwd(), timeout: 30000, shell: true })
+      : spawnSync('npm', ['link'], { stdio: 'pipe', cwd: process.cwd(), timeout: 30000 });
+    if (linkResult.status === 0) {
+      console.log('  ✓ cortextos registered globally (npm link)');
+    } else {
+      console.log('  ! npm link failed. Run manually: npm link (from the cortextOS directory)');
+      console.log('    Without this, agents cannot use bus commands in PTY sessions.');
+    }
 
     console.log('\n  Installation complete.');
     console.log(`  State directory: ${ctxRoot}`);

@@ -154,11 +154,11 @@ export const dashboardCommand = new Command('dashboard')
     }
     console.log('');
 
-    const child = spawn('npx', startArgs, {
-      cwd: dashboardDir,
-      stdio: 'inherit',
-      env: dashEnv,
-    });
+    // On Windows, npx is a .cmd wrapper requiring shell resolution.
+    // Pass as single string to avoid Node.js DEP0190 deprecation warning.
+    const child = IS_WINDOWS
+      ? spawn(['npx', ...startArgs].join(' '), { cwd: dashboardDir, stdio: 'inherit', env: dashEnv, shell: true })
+      : spawn('npx', startArgs, { cwd: dashboardDir, stdio: 'inherit', env: dashEnv });
 
     child.on('error', (err: Error) => {
       console.error('Failed to start dashboard:', err.message);

@@ -58,10 +58,17 @@ else
   echo "  [OK] Venv already exists"
 fi
 
+# Resolve platform-specific venv paths (Windows uses Scripts/, Unix uses bin/)
+if [[ -d "$VENV_DIR/Scripts" ]]; then
+  VENV_BIN="$VENV_DIR/Scripts"
+else
+  VENV_BIN="$VENV_DIR/bin"
+fi
+
 # Install/upgrade dependencies
 echo "  Installing Python dependencies..."
-"$VENV_DIR/bin/pip" install --quiet --upgrade pip
-"$VENV_DIR/bin/pip" install --quiet -r "$REQS"
+"$VENV_BIN/pip" install --quiet --upgrade pip 2>/dev/null || true
+"$VENV_BIN/pip" install --quiet -r "$REQS"
 echo "  [OK] Dependencies installed"
 
 # Validate mmrag.py is accessible
@@ -88,13 +95,21 @@ EOF
   echo "  [OK] mmrag config.json created"
 else
   echo "  [OK] mmrag config.json already exists"
+
+  # Migrate stale embedding model names (text-embedding-004 was shut down 2026-01-14)
+  if grep -qE '"embedding_model"\s*:\s*"(models/text-embedding-004|text-embedding-004)"' "$CONFIG_FILE" 2>/dev/null; then
+    sed -i.bak 's/"models\/text-embedding-004"/"gemini-embedding-001"/g; s/"text-embedding-004"/"gemini-embedding-001"/g' "$CONFIG_FILE"
+    rm -f "${CONFIG_FILE}.bak"
+    echo "  [MIGRATED] embedding_model updated to gemini-embedding-001 (text-embedding-004 was shut down)"
+  fi
 fi
 
 # Test import
 MMRAG_DIR="$KB_ROOT" \
 MMRAG_CHROMADB_DIR="$CHROMADB_DIR" \
 MMRAG_CONFIG="$CONFIG_FILE" \
-"$VENV_DIR/bin/python3" -c "import chromadb; import google.genai; print('  [OK] Core imports work')"
+"$VENV_BIN/python3" -c "import chromadb; import google.genai; print('  [OK] Core imports work')" 2>/dev/null || \
+"$VENV_BIN/python" -c "import chromadb; import google.genai; print('  [OK] Core imports work')"
 
 echo ""
 echo "Knowledge base ready for org: $ORG"

@@ -77,7 +77,7 @@ export const doctorCommand = new Command('doctor')
         status: 'fail',
         message: 'Failed to load native module',
         fix: process.platform === 'win32'
-          ? 'Install Visual C++ Build Tools: npm install -g windows-build-tools'
+          ? 'Install "Desktop development with C++" workload from Visual Studio Build Tools (https://visualstudio.microsoft.com/visual-cpp-build-tools/), then run: npm rebuild node-pty'
           : 'Install build tools: xcode-select --install (macOS) or apt install build-essential (Linux)',
       });
     }

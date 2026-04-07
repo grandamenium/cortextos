@@ -174,6 +174,8 @@ cortextos bus send-message "$AGENT" high "soft-restart" "model change to $NEW_MO
 - `claude-sonnet-4-6` - Good balance, ~5x cheaper than Opus
 - `claude-haiku-4-5-20251001` - Fastest, cheapest, for simple tasks
 
+**Context window suffix:** Append `[1m]` to any model ID (e.g., `claude-opus-4-6[1m]`) to enable the extended 1M token context window. Without it, agents get the default shorter context window and will compact much sooner. Recommended for orchestrators and any agent doing complex multi-step work.
+
 **No model set = default (Opus).** Always set explicitly for cost control.
 
 ---

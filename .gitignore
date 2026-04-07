@@ -33,6 +33,8 @@ agents/*/memory/
 # Test artifacts
 test-results/
 *.log
+# Spurious directory created when ${APPDATA} env var unexpanded during npm link on Windows
+${APPDATA}/
 
 # Knowledge base
 knowledge-base/venv/
