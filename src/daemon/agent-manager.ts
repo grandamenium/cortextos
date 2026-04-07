@@ -356,21 +356,24 @@ export class AgentManager {
 
   /**
    * Restart a specific agent.
+   *
+   * Delegates to stopAgent + startAgent to guarantee a full teardown and
+   * rebuild of every per-agent resource: AgentProcess, FastChecker, TelegramAPI,
+   * TelegramPoller, crash callback, and slash-command registration. Fresh
+   * credentials are re-read from {agentDir}/.env on each restart.
+   *
+   * agentDir is auto-discovered by startAgent() from frameworkRoot/orgs/{org}/agents/{name}.
+   * Participates in the pendingRestarts race protection used by restart-all.
    */
   async restartAgent(name: string): Promise<void> {
-    const entry = this.agents.get(name);
-    if (!entry) return;
-
-    entry.checker.stop();
-    try {
-      await entry.process.stop();
-    } catch (err) {
-      console.error(`[agent-manager] Error stopping ${name} during restart:`, err);
+    if (!this.agents.has(name)) {
+      console.log(`[agent-manager] Agent ${name} not found — cannot restart`);
+      return;
     }
-    await entry.process.start();
-    entry.checker.start().catch((err) => {
-      console.error(`[agent-manager] Fast checker error for ${name}:`, err);
-    });
+    console.log(`[agent-manager] Restarting ${name}`);
+    await this.stopAgent(name);
+    await this.startAgent(name, '');
+    console.log(`[agent-manager] Restart complete for ${name}`);
   }
 
   /**
