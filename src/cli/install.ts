@@ -258,6 +258,7 @@ export const installCommand = new Command('install')
         `CTX_ROOT=${ctxRoot}`,
         '',
       ].join('\n'), 'utf-8');
+      try { chmodSync(envPath, 0o600); } catch { /* ignore on Windows */ }
       console.log('  Created .env');
     }
 
