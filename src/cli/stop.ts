@@ -1,5 +1,23 @@
 import { Command } from 'commander';
+import { mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
+
+/**
+ * BUG-036 fix: write a `.user-stop` marker before the agent's PTY is killed,
+ * so the SessionEnd crash-alert hook (src/hooks/hook-crash-alert.ts) knows
+ * the stop was intentional and does not fire a false 🚨 CRASH alarm.
+ * Pattern matches src/cli/bus.ts:1285-1289.
+ */
+export function writeStopMarker(instanceId: string, agent: string, reason: string): void {
+  try {
+    const ctxRoot = join(homedir(), '.cortextos', instanceId);
+    const stateDir = join(ctxRoot, 'state', agent);
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, '.user-stop'), reason);
+  } catch { /* don't block stop on marker-write failure */ }
+}
 
 export const stopCommand = new Command('stop')
   .argument('[agent]', 'Agent name to stop. Omit and pass --all to stop every running agent.')
@@ -34,6 +52,7 @@ export const stopCommand = new Command('stop')
 
     if (agent) {
       console.log(`Stopping agent: ${agent}`);
+      writeStopMarker(options.instance, agent, 'stopped via cortextos stop');
       const response = await ipc.send({ type: 'stop-agent', agent });
       if (response.success) {
         console.log(`  ${response.data}`);
@@ -57,6 +76,7 @@ export const stopCommand = new Command('stop')
       return;
     }
     for (const a of agents) {
+      writeStopMarker(options.instance, a, 'stopped via cortextos stop --all');
       const response = await ipc.send({ type: 'stop-agent', agent: a });
       console.log(`  ${a}: ${response.success ? 'stopped' : response.error}`);
     }

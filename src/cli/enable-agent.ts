@@ -34,6 +34,21 @@ function readEnabledAgents(instanceId: string): Record<string, any> {
   }
 }
 
+/**
+ * BUG-036 fix: write a `.user-disable` marker before the agent's PTY is killed,
+ * so the SessionEnd crash-alert hook (src/hooks/hook-crash-alert.ts) knows the
+ * disable was intentional and does not fire a false 🚨 CRASH alarm.
+ * Pattern matches src/cli/bus.ts:1285-1289.
+ */
+export function writeDisableMarker(instanceId: string, agent: string, reason: string): void {
+  try {
+    const ctxRoot = join(homedir(), '.cortextos', instanceId);
+    const stateDir = join(ctxRoot, 'state', agent);
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, '.user-disable'), reason);
+  } catch { /* don't block disable on marker-write failure */ }
+}
+
 function writeEnabledAgents(instanceId: string, agents: Record<string, any>): void {
   const path = getEnabledAgentsPath(instanceId);
   const dir = join(homedir(), '.cortextos', instanceId, 'config');
@@ -149,6 +164,13 @@ export const disableAgentCommand = new Command('disable')
     const ipc = new IPCClient(options.instance);
     const running = await ipc.isDaemonRunning();
     if (running) {
+      // BUG-036 fix: write .user-disable marker BEFORE the stop, so the
+      // SessionEnd crash-alert hook in src/hooks/hook-crash-alert.ts knows
+      // this was an intentional disable and not a crash. Without this,
+      // the hook defaults to "crash" and the user gets a false 🚨 CRASH alarm.
+      // Pattern matches src/cli/bus.ts:1285-1289.
+      writeDisableMarker(options.instance, agent, 'disabled via cortextos disable');
+
       const response = await ipc.send({ type: 'stop-agent', agent });
       if (response.success) {
         console.log(`Agent "${agent}" disabled and stopped.`);
