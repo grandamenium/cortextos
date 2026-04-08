@@ -6,50 +6,44 @@ import { sendMessage } from './message.js';
 
 /**
  * List all agents in the system.
- * Scans enabled-agents.json and org agent directories.
- * Mirrors bash list-agents.sh behavior.
+ *
+ * Merges two sources of truth:
+ *   1. The framework directory scan (`${CTX_FRAMEWORK_ROOT}/orgs/<org>/agents/`)
+ *      — this is what the daemon discovers and runs.
+ *   2. `enabled-agents.json` — explicit user-set enable/disable state from
+ *      `cortextos enable`/`disable` and the dashboard.
+ *
+ * BUG-028: previously this function treated `enabled-agents.json` as
+ * authoritative — if the file existed, the directory scan was skipped, causing
+ * `cortextos list-agents` to miss agents that the daemon was actually running.
+ * Now both sources are always merged, with the file providing the explicit
+ * enabled flag and the directory scan providing the canonical existence check.
  */
 export function listAgents(ctxRoot: string, org?: string): AgentInfo[] {
   const agents: AgentInfo[] = [];
   const seen = new Set<string>();
 
-  // 1. Read enabled-agents.json for configured agents
+  // 1. Read enabled-agents.json for explicit enable/disable state.
+  // This is treated as metadata, not as the list of agents to display.
   const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
   let enabledAgents: Record<string, { org?: string; enabled?: boolean }> = {};
-
   if (existsSync(enabledFile)) {
     try {
       enabledAgents = JSON.parse(readFileSync(enabledFile, 'utf-8'));
     } catch {
-      // Skip corrupt file
+      // Skip corrupt file — fall through to directory scan only.
     }
   }
 
-  for (const [name, cfg] of Object.entries(enabledAgents)) {
-    if (!/^[a-z0-9_-]+$/.test(name)) continue;
-    const agentOrg = cfg.org || '';
-
-    // Filter by org if specified
-    if (org && agentOrg !== org) continue;
-
-    seen.add(name);
-    agents.push(buildAgentInfo(name, agentOrg, cfg.enabled !== false, ctxRoot));
-  }
-
-  // 2. Scan project directories for agents not in enabled list.
-  // If enabled-agents.json exists it's authoritative — skip directory scan.
-  // Without CTX_FRAMEWORK_ROOT set, skip scan to avoid cross-environment bleed.
-  if (existsSync(enabledFile) || !process.env.CTX_FRAMEWORK_ROOT) {
-    return agents;
-  }
-
+  // 2. ALWAYS scan org agent directories (BUG-028 fix).
+  // The directory scan is now the primary source for "what agents exist".
+  // The enabled-agents.json entries are merged in as metadata.
   const cliProjectRoot = process.env.CTX_FRAMEWORK_ROOT;
   const scanRoots: string[] = [];
-
-  if (existsSync(join(cliProjectRoot, 'orgs'))) {
+  if (cliProjectRoot && existsSync(join(cliProjectRoot, 'orgs'))) {
     scanRoots.push(cliProjectRoot);
   }
-  // Also try cwd as fallback (only if no other roots found)
+  // Fallback: cwd, but only if no framework root is set
   if (scanRoots.length === 0) {
     const cwd = process.cwd();
     if (existsSync(join(cwd, 'orgs'))) {
@@ -85,13 +79,29 @@ export function listAgents(ctxRoot: string, org?: string): AgentInfo[] {
         if (!/^[a-z0-9_-]+$/.test(agentName)) continue;
         if (seen.has(agentName)) continue;
 
-        const agentDir = join(agentsDir, orgName, 'agents', agentName);
-        if (!existsSync(join(agentsDir, agentName))) continue;
-
         seen.add(agentName);
-        agents.push(buildAgentInfo(agentName, orgName, false, ctxRoot));
+
+        // Determine enabled state: explicit from enabled-agents.json if present,
+        // otherwise default to enabled (matches the daemon's discoverAndStart
+        // default-on behavior).
+        const explicitEntry = enabledAgents[agentName];
+        const isEnabled = explicitEntry ? explicitEntry.enabled !== false : true;
+
+        agents.push(buildAgentInfo(agentName, orgName, isEnabled, ctxRoot));
       }
     }
+  }
+
+  // 3. Append any entries from enabled-agents.json that don't have a corresponding
+  // directory on disk (stale registrations — file has them but the dir was deleted
+  // or never existed). These are surfaced so users can clean them up.
+  for (const [name, cfg] of Object.entries(enabledAgents)) {
+    if (!/^[a-z0-9_-]+$/.test(name)) continue;
+    if (seen.has(name)) continue;
+    const agentOrg = cfg.org || '';
+    if (org && agentOrg !== org) continue;
+    seen.add(name);
+    agents.push(buildAgentInfo(name, agentOrg, cfg.enabled !== false, ctxRoot));
   }
 
   return agents;

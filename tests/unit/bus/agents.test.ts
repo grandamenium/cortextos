@@ -129,6 +129,49 @@ describe('Agent Discovery', () => {
       expect(agents.length).toBe(1);
       expect(agents[0].name).toBe('boris');
     });
+
+    // BUG-028: daemon and CLI must agree on what's enabled.
+    // Previously, listAgents short-circuited on enabled-agents.json existence,
+    // hiding agents the daemon was actually running from `cortextos list-agents`.
+    it('shows agents from dir scan even when enabled-agents.json exists', () => {
+      // Set up: enabled-agents.json with one agent (alice), but TWO dirs on disk
+      // (alice and bob). Previously listAgents would only return alice. After
+      // the fix, both should be returned.
+      const configDir = join(ctxRoot, 'config');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'enabled-agents.json'),
+        JSON.stringify({ alice: { org: 'acme', enabled: true } }),
+      );
+
+      const frameworkRoot = join(testDir, 'framework');
+      process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
+      mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+      mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob'), { recursive: true });
+
+      const agents = listAgents(ctxRoot);
+      expect(agents.map(a => a.name).sort()).toEqual(['alice', 'bob']);
+    });
+
+    it('respects enabled: false from enabled-agents.json for agents found in dir scan', () => {
+      // Set up: dir for alice + entry in enabled-agents.json saying enabled: false.
+      // listAgents should return alice with enabled: false (not skip her entirely).
+      const configDir = join(ctxRoot, 'config');
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(
+        join(configDir, 'enabled-agents.json'),
+        JSON.stringify({ alice: { org: 'acme', enabled: false } }),
+      );
+
+      const frameworkRoot = join(testDir, 'framework');
+      process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
+      mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+
+      const agents = listAgents(ctxRoot);
+      expect(agents.length).toBe(1);
+      expect(agents[0].name).toBe('alice');
+      expect(agents[0].enabled).toBe(false);
+    });
   });
 
   describe('notifyAgent', () => {

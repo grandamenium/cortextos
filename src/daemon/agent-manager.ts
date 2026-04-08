@@ -39,12 +39,43 @@ export class AgentManager {
    */
   async discoverAndStart(): Promise<void> {
     const agentDirs = this.discoverAgents();
+
+    // BUG-028: read instance-level enabled-agents.json so the daemon respects
+    // the user's explicit enable/disable choices written by the CLI
+    // (`cortextos enable`/`disable`) and the dashboard. Without this read, those
+    // commands have no effect across daemon restarts — the daemon would
+    // re-discover and re-start any agent dir on disk regardless of user intent.
+    const instanceEnabled = this.readInstanceEnableList();
+
     for (const { name, dir, config } of agentDirs) {
+      // Per-agent config.json `enabled: false` (existing behavior, unchanged)
       if (config.enabled === false) {
-        console.log(`[agent-manager] Skipping disabled agent: ${name}`);
+        console.log(`[agent-manager] Skipping disabled agent: ${name} (per-agent config.json)`);
+        continue;
+      }
+      // Instance-level enabled-agents.json `enabled: false` (BUG-028 fix)
+      const entry = instanceEnabled[name];
+      if (entry && entry.enabled === false) {
+        console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
         continue;
       }
       await this.startAgent(name, dir, config);
+    }
+  }
+
+  /**
+   * Read the instance-level enabled-agents.json registry.
+   * Returns an empty object if the file is missing or unreadable —
+   * agents not present in the file default to enabled, matching the existing
+   * default-on behavior of `discoverAndStart`.
+   */
+  private readInstanceEnableList(): Record<string, { enabled?: boolean; org?: string; status?: string }> {
+    const enabledFile = join(this.ctxRoot, 'config', 'enabled-agents.json');
+    if (!existsSync(enabledFile)) return {};
+    try {
+      return JSON.parse(readFileSync(enabledFile, 'utf-8'));
+    } catch {
+      return {}; // corrupt or unreadable — fall through to default-enabled
     }
   }
 
