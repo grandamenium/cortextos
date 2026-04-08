@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
@@ -378,9 +378,34 @@ export class AgentManager {
 
   /**
    * Stop all agents.
+   *
+   * BUG-034 partial fix: writes a `.daemon-stop` marker file in each agent's
+   * state dir BEFORE stopping it. The SessionEnd crash-alert hook
+   * (src/hooks/hook-crash-alert.ts) reads this marker and reports a clean
+   * `🛑 daemon shutdown` notification instead of a false `🚨 CRASH` alarm.
+   * Without this, every `pm2 restart cortextos-daemon` (or `pm2 stop`)
+   * generates a false crash alarm per agent — trust-destroying.
+   *
+   * Pattern matches src/cli/bus.ts:1283-1289 and PR #12 (BUG-036). Markers
+   * are written synchronously before the async stop loop starts, so by the
+   * time `pty.kill()` runs, every agent already has its marker on disk.
    */
   async stopAll(): Promise<void> {
     const names = [...this.agents.keys()];
+
+    for (const name of names) {
+      try {
+        const stateDir = join(this.ctxRoot, 'state', name);
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(join(stateDir, '.daemon-stop'), 'daemon shutdown (SIGTERM)');
+      } catch (err) {
+        // Don't block shutdown on marker-write failure — worst case the user
+        // gets a false crash alarm (the bug we're fixing), best case they get
+        // the correct daemon-stop notification.
+        console.error(`[agent-manager] Failed to write .daemon-stop marker for ${name}: ${err}`);
+      }
+    }
+
     for (const name of names) {
       try {
         await this.stopAgent(name);

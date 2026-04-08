@@ -4,6 +4,30 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 
+/**
+ * BUG-035 fix: discover the cortextOS framework root without depending on
+ * `process.cwd()`. Order of precedence:
+ *   1. CTX_FRAMEWORK_ROOT env var (explicit, set by ecosystem.config.js)
+ *   2. CTX_PROJECT_ROOT env var (legacy alias)
+ *   3. ~/cortextos/ (the canonical install location from install.mjs)
+ *   4. process.cwd() (last-resort legacy fallback)
+ *
+ * Without this, `cortextos enable` and similar CLI commands silently fail
+ * outside ~/cortextos with a misleading "no .env found" error, even when
+ * the .env exists at the canonical location. The error message is then
+ * misleading because it doesn't list the paths that were checked.
+ */
+export function discoverProjectRoot(): string {
+  if (process.env.CTX_FRAMEWORK_ROOT) return process.env.CTX_FRAMEWORK_ROOT;
+  if (process.env.CTX_PROJECT_ROOT) return process.env.CTX_PROJECT_ROOT;
+  // Canonical install location (install.mjs always installs to ~/cortextos)
+  const canonical = join(homedir(), 'cortextos');
+  if (existsSync(join(canonical, 'orgs')) || existsSync(join(canonical, 'agents'))) {
+    return canonical;
+  }
+  return process.cwd();
+}
+
 function parseEnvFile(path: string): Record<string, string> {
   const vars: Record<string, string> = {};
   try {
@@ -25,13 +49,51 @@ function getEnabledAgentsPath(instanceId: string): string {
   return join(homedir(), '.cortextos', instanceId, 'config', 'enabled-agents.json');
 }
 
-function readEnabledAgents(instanceId: string): Record<string, any> {
+/**
+ * BUG-013 fix: validate enabled-agents.json on read instead of silently
+ * returning {} on any error. The original implementation hid two real failure
+ * modes from the user:
+ *   1. Corrupt JSON (file exists but won't parse) → silently empty, then
+ *      writeEnabledAgents() overwrites the corrupt file with {}, destroying
+ *      the user's enable state with no warning.
+ *   2. Wrong shape (file exists, parses to an array/null/string) → same
+ *      silent destruction.
+ *
+ * The fix backs the bad file up as `enabled-agents.json.broken-<timestamp>`,
+ * logs a clear warning to stderr, and returns {} only after preserving the
+ * original. Users can recover from a backup, and they know WHY their agents
+ * disappeared.
+ */
+export function readEnabledAgents(instanceId: string): Record<string, any> {
   const path = getEnabledAgentsPath(instanceId);
+  if (!existsSync(path)) return {}; // legit: no file = empty state, not an error
+
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(path, 'utf-8'));
-  } catch {
+    raw = readFileSync(path, 'utf-8');
+  } catch (err) {
+    console.error(`[enable] Failed to read ${path}: ${err}`);
     return {};
   }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    const backup = `${path}.broken-${Date.now()}`;
+    try { writeFileSync(backup, raw); } catch { /* ignore backup failure */ }
+    console.error(`[enable] WARNING: ${path} contains invalid JSON. Backed up to ${backup}. Treating as empty.`);
+    return {};
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const backup = `${path}.broken-${Date.now()}`;
+    try { writeFileSync(backup, raw); } catch { /* ignore backup failure */ }
+    console.error(`[enable] WARNING: ${path} is not a JSON object (got ${parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed}). Backed up to ${backup}. Treating as empty.`);
+    return {};
+  }
+
+  return parsed as Record<string, any>;
 }
 
 /**
@@ -65,7 +127,7 @@ export const enableAgentCommand = new Command('enable')
     // Becky bug preflight: verify .env has BOT_TOKEN and CHAT_ID before registering.
     // Without this, the agent starts, inherits parent-process credentials silently,
     // appears alive on the dashboard but cannot receive any Telegram messages.
-    const projectRoot = process.env.CTX_FRAMEWORK_ROOT || process.env.CTX_PROJECT_ROOT || process.cwd();
+    const projectRoot = discoverProjectRoot();
 
     // Auto-detect org if not specified by scanning orgs/ for this agent
     if (!options.org) {
@@ -100,7 +162,14 @@ export const enableAgentCommand = new Command('enable')
     }
 
     if (!agentEnvPath) {
-      console.error(`Error: No .env found for agent "${agent}". Create one with BOT_TOKEN and CHAT_ID before enabling.`);
+      // BUG-035 fix: list the paths we actually checked so users can debug
+      // path-discovery failures without reading the source code.
+      console.error(`Error: No .env found for agent "${agent}". Checked:`);
+      if (orgDir) console.error(`  - ${join(orgDir, 'agents', agent, '.env')}`);
+      console.error(`  - ${join(projectRoot, 'agents', agent, '.env')}`);
+      console.error(`Project root: ${projectRoot}`);
+      console.error(`(Set CTX_FRAMEWORK_ROOT to override path discovery, or run from inside ~/cortextos.)`);
+      console.error(`Create the .env with BOT_TOKEN and CHAT_ID before enabling.`);
       process.exit(1);
     }
 

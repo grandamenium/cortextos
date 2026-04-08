@@ -32,6 +32,10 @@ async function main(): Promise<void> {
     // does not get a false 🚨 CRASH alarm when they themselves shut the agent down.
     { file: '.user-disable', type: 'user-disable' },
     { file: '.user-stop', type: 'user-stop' },
+    // BUG-034 partial: distinguish daemon shutdown (e.g., `pm2 restart`,
+    // `pm2 stop cortextos-daemon`) from a real agent crash. Written by
+    // AgentManager.stopAll() before each agent's PTY is killed.
+    { file: '.daemon-stop', type: 'daemon-stop' },
   ];
 
   for (const marker of markers) {
@@ -99,6 +103,10 @@ async function main(): Promise<void> {
       break;
     case 'user-stop':
       message = `⏹️ ${agentName} stopped by user.`;
+      if (reason) message += ` (${reason})`;
+      break;
+    case 'daemon-stop':
+      message = `🛑 ${agentName} stopped (daemon shutdown).`;
       if (reason) message += ` (${reason})`;
       break;
     case 'crash':

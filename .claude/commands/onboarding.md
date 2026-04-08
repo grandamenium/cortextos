@@ -289,9 +289,11 @@ Walk through step by step:
 
 After token paste:
 
-7. "Now send any message to your new bot on Telegram (just 'hi' is fine). This lets me detect your chat ID so that only you can message your agent. You can configure other chat IDs later so other members of your team can use cortextOS as well."
+7. Tell the user: "Now send any message to your new bot on Telegram (just 'hi' is fine). This lets me detect your chat ID so that only you can message your agent. You can configure other chat IDs later so other members of your team can use cortextOS as well."
 
-Wait for confirmation, then auto-detect. Use long polling (timeout=30) so Telegram holds the connection open until a message arrives instead of returning empty immediately. This is critical for newly created bots where there's propagation delay:
+**CRITICAL — BUG-033 fix**: Do NOT wait for the user to type a confirmation in chat before running the polling curl below. Start the long-poll IMMEDIATELY after delivering the instruction. The poll uses `timeout=30` which blocks for up to 30 seconds waiting for a Telegram message — that IS the user's confirmation. If you wait for typed confirmation first, the poll starts too late and may miss the very first message a user sends to a brand-new bot (Telegram's `getUpdates` first-message-lost trap, BUG-023). The correct sequence is: deliver the instruction, then immediately run the curl loop in the same response.
+
+Use long polling (timeout=30) so Telegram holds the connection open until a message arrives instead of returning empty immediately. This is critical for newly created bots where there's propagation delay:
 
 ```bash
 ORCH_BOT_TOKEN="<pasted token>"
