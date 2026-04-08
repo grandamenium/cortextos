@@ -493,19 +493,23 @@ Wait 5-10 seconds for the daemon to initialize, then save:
 pm2 save
 ```
 
-### 9b. Set up auto-start (survives reboots)
+### 9b. Capture reboot-survival command (BUG-021 — DEFERRED, NOT mid-flow)
+
+**IMPORTANT — BUG-021 fix**: Run `pm2 startup` and capture its output, but DO NOT prompt the user to do anything mid-flow. The sudo paste step is friction in the critical path. Save the captured command for the end-of-onboarding summary in Phase 10 instead. The user can run it later (or never — cortextOS works fine without reboot persistence).
 
 ```bash
-pm2 startup 2>&1
+PM2_STARTUP_OUTPUT=$(pm2 startup 2>&1)
+echo "$PM2_STARTUP_OUTPUT"
 ```
 
-If the output contains "already configured" or an existing launch daemon, skip:
-> "PM2 auto-start is already configured."
+Then extract the sudo command if present (it starts with `sudo env PATH=`):
+```bash
+PM2_SUDO_CMD=$(echo "$PM2_STARTUP_OUTPUT" | grep -E '^sudo env PATH=' | head -1)
+```
 
-If it outputs a `sudo env PATH=...` command:
-> "One more step - PM2 needs to register itself so your agents survive reboots. It printed a command below. Copy it, open a new terminal, paste it, and hit Enter."
->
-> "It will ask for your Mac password (the one you use to log in). When you type it, nothing appears on screen - that's normal. Just type and press Enter. This is a one-time setup."
+- If `PM2_SUDO_CMD` is non-empty: stash it for the end of onboarding (Phase 10's summary). DO NOT prompt the user.
+- If the output says "already configured" or contains an existing launch daemon: log "PM2 auto-start is already configured" and continue.
+- Either way: do NOT block or prompt the user.
 
 ### 9c. Verify and hand off to Telegram
 
@@ -529,6 +533,24 @@ Deliver verbatim:
 > "Go to Telegram and wait for your Orchestrator to message you. It will walk you through its personality, goals, crons, and creating your Analyst agent."
 >
 > "If anything breaks, come back here and run `pm2 logs cortextos-daemon --lines 30`."
+
+### BUG-021 fix — Optional reboot survival (DEFERRED — non-blocking)
+
+If `PM2_SUDO_CMD` from Phase 9b is non-empty, deliver this verbatim AT THE END (not mid-flow):
+
+> "**OPTIONAL — enable reboot survival**:
+>
+> Your daemon is running fine right now, but it won't auto-restart after a reboot of your machine. If you want reboot persistence (recommended for any real production use), run this command in another terminal:
+>
+> ```
+> <PM2_SUDO_CMD>
+> ```
+>
+> It will ask for your Mac password (the one you use to log in). When you type it, nothing appears on screen — that's normal. Just type and press Enter. This is a one-time setup. cortextOS works fine without it; you can do this anytime."
+
+If `PM2_SUDO_CMD` is empty (PM2 startup is already configured, or the system doesn't need it), skip this section silently.
+
+**DO NOT block onboarding waiting for the user to run this command.** The whole point of BUG-021's fix is to keep the user moving forward. They can do reboot setup later when they're not in the middle of onboarding.
 
 ---
 

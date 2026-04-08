@@ -209,7 +209,7 @@ export const enableAgentCommand = new Command('enable')
     const ipc = new IPCClient(options.instance);
     const running = await ipc.isDaemonRunning();
     if (running) {
-      const response = await ipc.send({ type: 'start-agent', agent });
+      const response = await ipc.send({ type: 'start-agent', agent, source: 'cortextos enable' });
       if (response.success) {
         console.log(`  Started via daemon: ${response.data}`);
       }
@@ -240,7 +240,7 @@ export const disableAgentCommand = new Command('disable')
       // Pattern matches src/cli/bus.ts:1285-1289.
       writeDisableMarker(options.instance, agent, 'disabled via cortextos disable');
 
-      const response = await ipc.send({ type: 'stop-agent', agent });
+      const response = await ipc.send({ type: 'stop-agent', agent, source: 'cortextos disable' });
       if (response.success) {
         console.log(`Agent "${agent}" disabled and stopped.`);
       } else {

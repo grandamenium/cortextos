@@ -106,6 +106,13 @@ export class IPCServer {
    * Handle an incoming IPC request.
    */
   private handleRequest(request: IPCRequest, socket: Socket): void {
+    // BUG-015: log every incoming IPC request with its source so we can
+    // trace which CLI command triggered which daemon action. The source
+    // field is populated by CLI clients (cortextos enable / disable / stop
+    // / bus / etc.); older or untracked callers fall back to 'unknown'.
+    const agentTag = request.agent ? ` ${request.agent}` : '';
+    console.log(`[ipc] ${request.type}${agentTag} from ${request.source || 'unknown'}`);
+
     let response: IPCResponse;
 
     try {

@@ -318,6 +318,13 @@ export interface IPCRequest {
   type: IPCCommandType;
   agent?: string;
   data?: Record<string, unknown>;
+  /**
+   * BUG-015: human-readable identifier of the caller (e.g. 'cortextos enable',
+   * 'cortextos bus soft-restart-all'). Logged by the daemon on every incoming
+   * IPC request so we can trace which CLI command triggered which daemon action.
+   * Optional for backwards compatibility — older clients fall back to 'unknown'.
+   */
+  source?: string;
 }
 
 // Worker Types

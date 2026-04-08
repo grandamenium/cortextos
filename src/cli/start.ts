@@ -168,14 +168,14 @@ export const startCommand = new Command('start')
       }
 
       console.log(`Starting agent: ${agent}`);
-      const response = await ipc.send({ type: 'start-agent', agent });
+      const response = await ipc.send({ type: 'start-agent', agent, source: 'cortextos start' });
       if (response.success) {
         console.log(`  ${response.data}`);
       } else {
         console.error(`  Error: ${response.error}`);
       }
     } else {
-      const response = await ipc.send({ type: 'status' });
+      const response = await ipc.send({ type: 'status', source: 'cortextos start' });
       if (response.success) {
         const statuses = response.data as any[];
         if (statuses.length === 0) {

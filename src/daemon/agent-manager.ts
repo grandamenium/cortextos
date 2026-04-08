@@ -84,10 +84,21 @@ export class AgentManager {
    */
   async startAgent(name: string, agentDir: string, config?: AgentConfig): Promise<void> {
     if (this.agents.has(name)) {
-      // Agent is registered but may be mid-stop (race: restart-all sends stop+start simultaneously).
-      // Queue the start so stopAgent() will re-launch it once cleanup finishes.
+      // BUG-031: this branch was the workaround for the BUG-011 PTY race
+      // (restart-all could send stop+start simultaneously, and the new
+      // start would arrive while the old stop's PTY exit was still in
+      // flight). PR #11 closed BUG-011 by making `AgentProcess.stop()`
+      // await the actual PTY exit before resolving — which means this
+      // branch should NEVER fire under normal restart paths.
+      //
+      // We log a regression warning here instead of deleting the branch
+      // entirely, so we'll know IMMEDIATELY if BUG-011 ever regresses
+      // (a future change accidentally breaks the exit-await). Phase 4 of
+      // the core stability test plan + cycle 2 of PR #13 both confirmed
+      // this branch is dormant. Once we have weeks of zero-warning
+      // production data, we can delete the queue mechanism entirely.
+      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
       this.pendingRestarts.add(name);
-      console.log(`[agent-manager] Agent ${name} is stopping — queued restart`);
       return;
     }
 
@@ -344,8 +355,13 @@ export class AgentManager {
     await entry.process.stop();
     this.agents.delete(name);
 
-    // Honor any restart that was queued while we were stopping.
+    // BUG-031: honor any restart that was queued while we were stopping.
+    // After PR #11 (BUG-011 fix) this branch should never fire — see the
+    // matching warning comment in startAgent(). The honor logic is preserved
+    // as a safety net in case BUG-011 regresses; the warn line tells us
+    // immediately if it ever does.
     if (this.pendingRestarts.has(name)) {
+      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: pendingRestarts fired for ${name} — race condition leaked through. Honoring queued restart as safety net.`);
       this.pendingRestarts.delete(name);
       console.log(`[agent-manager] Honoring queued restart for ${name}`);
       this.startAgent(name, '').catch(err =>

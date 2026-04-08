@@ -135,10 +135,18 @@ export class AgentProcess {
 
     if (pty) {
       try {
+        // BUG-032 fix: use CRLF (not lone CR) so Claude Code's REPL actually
+        // recognizes the /exit line as a complete command, AND wait long
+        // enough (5s, was 3s) for the child to flush + exit cleanly. Without
+        // these the child often dies from SIGHUP (exit code 129) when the
+        // PTY is torn down before /exit has been processed. PR #11's
+        // BUG-011 fix already ensured the daemon doesn't misinterpret 129
+        // as a real crash, but the underlying graceful-shutdown sequence
+        // still wasn't graceful — this PR makes it so.
         pty.write('\x03'); // Ctrl-C
         await sleep(1000);
-        pty.write('/exit\r');
-        await sleep(3000);
+        pty.write('/exit\r\n');
+        await sleep(5000);
       } catch {
         // Ignore write errors during shutdown
       }

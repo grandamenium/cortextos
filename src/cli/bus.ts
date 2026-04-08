@@ -405,7 +405,7 @@ busCommand
     const ipc = new IPCClient(env.instanceId);
     const daemonRunning = await ipc.isDaemonRunning();
     if (daemonRunning) {
-      const resp = await ipc.send({ type: 'restart-agent', agent: env.agentName });
+      const resp = await ipc.send({ type: 'restart-agent', agent: env.agentName, source: 'cortextos bus self-restart' });
       if (resp.success) {
         console.log(`Restarting ${env.agentName} via daemon IPC`);
       } else {
@@ -1099,7 +1099,7 @@ busCommand
     const runningAgents = new Set<string>();
     const ipc = new IPCClient(env.instanceId);
     try {
-      const resp = await ipc.send({ type: 'status' });
+      const resp = await ipc.send({ type: 'status', source: 'cortextos bus' });
       if (resp.success && Array.isArray(resp.data)) {
         for (const a of resp.data as Array<{ name: string; status: string }>) {
           if (a.status === 'running') runningAgents.add(a.name);
@@ -1293,7 +1293,7 @@ busCommand
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (daemonRunning) {
-      const resp = await ipc.send({ type: 'restart-agent', agent: targetAgent });
+      const resp = await ipc.send({ type: 'restart-agent', agent: targetAgent, source: 'cortextos bus soft-restart' });
       if (resp.success) {
         console.log(`Restarted ${targetAgent} via daemon IPC`);
       } else {
@@ -1358,7 +1358,7 @@ busCommand
       writeFileSync(join(stateDir, '.user-restart'), opts.reason);
 
       // Send IPC restart signal
-      const resp = await ipc.send({ type: 'restart-agent', agent });
+      const resp = await ipc.send({ type: 'restart-agent', agent, source: 'cortextos bus soft-restart-all' });
       if (resp.success) {
         console.log(`[${i + 1}/${targets.length}] Restarted ${agent}`);
       } else {

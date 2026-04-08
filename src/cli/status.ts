@@ -15,7 +15,7 @@ export const statusCommand = new Command('status')
 
     if (daemonRunning) {
       // Get live status from daemon
-      const response = await ipc.send({ type: 'status' });
+      const response = await ipc.send({ type: 'status', source: 'cortextos status' });
       if (response.success) {
         const statuses = response.data as AgentStatus[];
         displayStatuses(statuses);
