@@ -14,6 +14,18 @@ import { homedir, platform } from 'os';
 
 const REPO_URL = process.env.CORTEXTOS_REPO || 'https://github.com/grandamenium/cortextos.git';
 const INSTALL_DIR = process.env.CORTEXTOS_DIR || join(homedir(), 'cortextos');
+
+// CORTEXTOS_BRANCH lets you install a specific branch instead of `main`. Useful
+// for testing fixes before they merge:
+//   CORTEXTOS_BRANCH=fix/foo curl -fsSL .../fix/foo/install.mjs | node
+// Branch name is restricted to standard git ref characters to avoid shell injection.
+const REPO_BRANCH_RAW = process.env.CORTEXTOS_BRANCH || 'main';
+if (!/^[a-zA-Z0-9._/-]+$/.test(REPO_BRANCH_RAW)) {
+  console.error(`Invalid CORTEXTOS_BRANCH value: ${REPO_BRANCH_RAW}`);
+  console.error('Branch names may only contain letters, digits, dot, underscore, slash, or dash.');
+  process.exit(1);
+}
+const REPO_BRANCH = REPO_BRANCH_RAW;
 const IS_WINDOWS = platform() === 'win32';
 const IS_MAC = platform() === 'darwin';
 const IS_LINUX = platform() === 'linux';
@@ -389,8 +401,8 @@ if (existsSync(INSTALL_DIR)) {
     fail(`${INSTALL_DIR} exists but is not a git repo. Remove it or set CORTEXTOS_DIR to a different path.`);
   }
 } else {
-  log(`Cloning cortextOS to ${INSTALL_DIR}...`);
-  runVisible(`git clone ${REPO_URL} ${JSON.stringify(INSTALL_DIR)}`);
+  log(`Cloning cortextOS (branch: ${REPO_BRANCH}) to ${INSTALL_DIR}...`);
+  runVisible(`git clone --branch ${REPO_BRANCH} ${REPO_URL} ${JSON.stringify(INSTALL_DIR)}`);
   ok('Cloned');
 
   // Rename origin → upstream so check-upstream and upstream-sync work out of the box
