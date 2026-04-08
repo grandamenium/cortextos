@@ -146,19 +146,33 @@ cortextos install
 **Do not ask the user about instance names.** Auto-assign one silently:
 
 ```bash
-# Find next available instance name
-INSTANCE_NUM=1
-while [ -d "${HOME}/.cortextos/cortextos${INSTANCE_NUM}" ]; do
-  INSTANCE_NUM=$((INSTANCE_NUM + 1))
-done
-INSTANCE_ID="cortextos${INSTANCE_NUM}"
+# Reuse the 'default' instance dir if it exists and is empty (the typical
+# fresh-install state — `cortextos install` always creates default/ with an
+# empty enabled-agents.json). Otherwise pick the next free `cortextosN` slot.
+if [ -d "${HOME}/.cortextos/default" ] && \
+   [ "$(cat "${HOME}/.cortextos/default/config/enabled-agents.json" 2>/dev/null | tr -d '[:space:]')" = "{}" ]; then
+  INSTANCE_ID="default"
+else
+  INSTANCE_NUM=1
+  while [ -d "${HOME}/.cortextos/cortextos${INSTANCE_NUM}" ]; do
+    INSTANCE_NUM=$((INSTANCE_NUM + 1))
+  done
+  INSTANCE_ID="cortextos${INSTANCE_NUM}"
+fi
 ```
 
-**Note on environment variables:** `CTX_INSTANCE_ID`, `CTX_ROOT`, `CTX_ORG`, and `CTX_AGENT_NAME` are set automatically by the framework based on where commands are run from. You do not need to set these manually - they are referenced in the examples below for clarity.
+**IMPORTANT:** Every `node dist/cli.js <subcommand>` call below MUST include
+`--instance "${INSTANCE_ID}"` (and `--org "${ORG_NAME}"` where the command
+takes one). The CLI subcommands default the instance to literal `'default'` if
+neither the flag nor the `CTX_INSTANCE_ID` env var is set. Forgetting the flag
+silently writes to the wrong instance dir, splitting the agent registration
+across multiple `~/.cortextos/<instance>/` trees. Always pass the flags.
 
-Set variables for the rest of onboarding:
+Also export the env vars so any indirect subprocess (e.g. PM2 reading `ecosystem.config.js`) inherits them:
+
 ```bash
-CTX_ROOT="${HOME}/.cortextos/${INSTANCE_ID}"
+export CTX_INSTANCE_ID="${INSTANCE_ID}"
+export CTX_ROOT="${HOME}/.cortextos/${INSTANCE_ID}"
 ```
 
 ---
@@ -297,7 +311,7 @@ If ORCH_CHAT_ID is empty after 3 retries, tell user to send another message and 
 ### 6b. Create Agent Directory
 
 ```bash
-node dist/cli.js add-agent "${ORCH_NAME}" --template orchestrator --org "${ORG_NAME}"
+node dist/cli.js add-agent "${ORCH_NAME}" --template orchestrator --org "${ORG_NAME}" --instance "${INSTANCE_ID}"
 ```
 
 Write `.env` with credentials:
@@ -330,7 +344,7 @@ jq --arg model "claude-opus-4-6" '.model = $model' "${ORCH_CONFIG}" > "${TMPDIR:
 ### 6d. Enable Orchestrator
 
 ```bash
-node dist/cli.js enable "${ORCH_NAME}" --org "${ORG_NAME}"
+node dist/cli.js enable "${ORCH_NAME}" --org "${ORG_NAME}" --instance "${INSTANCE_ID}"
 ```
 
 Verify:
@@ -467,7 +481,7 @@ Everything is configured. Now start the agents.
 ### 9a. Generate PM2 config and start
 
 ```bash
-node dist/cli.js ecosystem
+node dist/cli.js ecosystem --instance "${INSTANCE_ID}" --org "${ORG_NAME}"
 pm2 start ecosystem.config.js
 ```
 
