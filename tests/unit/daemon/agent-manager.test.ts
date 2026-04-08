@@ -135,3 +135,58 @@ describe('AgentManager.discoverAndStart - BUG-028 fix', () => {
     expect(startSpy).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-restart-test-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('delegates to stopAgent then startAgent (in order)', async () => {
+    // BUG-007: previously restartAgent only stopped/started the AgentProcess and
+    // FastChecker inline, leaving the TelegramPoller from the previous incarnation
+    // running. The fix delegates to stopAgent (which DOES clean up the poller) and
+    // startAgent (which builds a fresh poller from the agent's .env). This test
+    // pins that delegation in place so a future regression to inline cleanup
+    // would fail loudly.
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    // Inject a fake agent so restartAgent's existence check passes without
+    // actually running the full startAgent flow
+    (am as any).agents.set('alice', { process: {}, checker: {}, poller: { stop() {} } });
+
+    const stopSpy = vi.spyOn(am, 'stopAgent').mockResolvedValue();
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.restartAgent('alice');
+
+    expect(stopSpy).toHaveBeenCalledWith('alice');
+    expect(startSpy).toHaveBeenCalledWith('alice', '');
+    // Verify call order: stop must complete before start, so the old poller
+    // is fully torn down before the new one is constructed
+    const stopOrder = stopSpy.mock.invocationCallOrder[0];
+    const startOrder = startSpy.mock.invocationCallOrder[0];
+    expect(stopOrder).toBeLessThan(startOrder);
+  });
+
+  it('is a no-op when the agent does not exist', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const stopSpy = vi.spyOn(am, 'stopAgent').mockResolvedValue();
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.restartAgent('nonexistent');
+
+    expect(stopSpy).not.toHaveBeenCalled();
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+});
