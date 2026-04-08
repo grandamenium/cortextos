@@ -56,7 +56,14 @@ export const ecosystemCommand = new Command('ecosystem')
     const distDir = join(projectRoot, 'dist');
     const daemonScript = join(distDir, 'daemon.js');
     const dashboardDir = join(projectRoot, 'dashboard');
-    const hasDashboard = existsSync(join(dashboardDir, 'package.json'));
+    // BUG-019 + cycle-2 finding: require BOTH package.json AND node_modules/.bin/next.
+    // Without the second check, running `cortextos ecosystem` before
+    // `npm install` in dashboard/ produces a crash-looped PM2 entry that the
+    // user sees as "dashboard keeps restarting". Better to silently skip the
+    // dashboard entry if its deps aren't installed yet — the user can re-run
+    // `cortextos ecosystem` after `npm install` to add it.
+    const hasDashboard = existsSync(join(dashboardDir, 'package.json')) &&
+      existsSync(join(dashboardDir, 'node_modules', '.bin', 'next'));
 
     // BUG-002 fix: emit ecosystem.config.js as raw JS that resolves
     // process.env.CTX_INSTANCE_ID at PM2-startup time, not at generation time.
