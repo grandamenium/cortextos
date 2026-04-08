@@ -26,6 +26,12 @@ export class AgentProcess {
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
+  // BUG-011 fix: stop() awaits this promise (resolved by the onExit handler in start())
+  // to guarantee the PTY exit has fired before stopping=false is reset. Without
+  // this, the exit handler can fire after stopping=false and trigger spurious
+  // crash recovery for an agent we just stopped intentionally.
+  private exitPromise: Promise<void> | null = null;
+  private resolveExit: (() => void) | null = null;
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
@@ -77,10 +83,20 @@ export class AgentProcess {
     this.log(`Log path: ${logPath}`);
     this.pty = new AgentPTY(this.env, this.config, logPath);
 
+    // BUG-011 fix: create a fresh exit signal for this run. resolveExit is
+    // called from the onExit handler below; stop() awaits exitPromise to
+    // guarantee the exit handler has fired before clearing stopping.
+    this.exitPromise = new Promise<void>((resolve) => {
+      this.resolveExit = resolve;
+    });
+
     // Handle exit
     this.pty.onExit((exitCode, signal) => {
       this.log(`Exited with code ${exitCode} signal ${signal}`);
       this.handleExit(exitCode);
+      // Signal anyone awaiting this PTY's exit (e.g. stop() — BUG-011 fix)
+      this.resolveExit?.();
+      this.resolveExit = null;
     });
 
     try {
@@ -113,6 +129,9 @@ export class AgentProcess {
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
     const pty = this.pty;
     this.pty = null;
+    // Capture the exit promise before any awaits — we'll wait on this AFTER
+    // pty.kill() to guarantee the exit handler has run before stopping=false.
+    const exitPromise = this.exitPromise;
 
     if (pty) {
       try {
@@ -128,6 +147,15 @@ export class AgentProcess {
       } catch {
         // PTY may have already exited — ignore
       }
+
+      // BUG-011 fix: AWAIT the exit handler before resolving stop().
+      // Without this, stop() returns while the PTY exit is still in flight,
+      // and the exit handler may fire AFTER stopping=false (set below),
+      // triggering spurious crash recovery for an agent we just stopped.
+      // 5-second timeout guards against a hung PTY.
+      if (exitPromise) {
+        await Promise.race([exitPromise, sleep(5000)]);
+      }
     }
 
     this.stopping = false;
@@ -138,45 +166,18 @@ export class AgentProcess {
 
   /**
    * Restart with --continue (session refresh).
+   *
+   * Delegates to stop() + start() so it inherits the BUG-011 race fix
+   * automatically. This also eliminates a separate bug in the previous
+   * inline implementation where the OLD pty's exit handler could fire
+   * AFTER the NEW pty was set up, nulling out the wrong reference.
+   * `start()` will pick up `continue` mode automatically because the
+   * conversation directory still has .jsonl files (shouldContinue() is true).
    */
   async sessionRefresh(): Promise<void> {
     this.log('Session refresh (--continue restart)');
-    this.stopping = true;
-    this.clearSessionTimer();
-
-    // Capture and null out pty before awaits (same race-condition guard as stop()).
-    const pty = this.pty;
-    this.pty = null;
-
-    if (pty) {
-      try {
-        pty.write('\x03'); // Ctrl-C
-        await sleep(1000);
-        pty.write('/exit\r');
-        await sleep(3000);
-      } catch {
-        // Ignore
-      }
-      try {
-        pty.kill();
-      } catch {
-        // PTY may have already exited — ignore
-      }
-    }
-
-    this.stopping = false;
-
-    // Relaunch with continue mode
-    const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
-    this.pty = new AgentPTY(this.env, this.config, logPath);
-
-    this.pty.onExit((exitCode) => {
-      this.handleExit(exitCode);
-    });
-
-    const prompt = this.buildContinuePrompt();
-    await this.pty.spawn('continue', prompt);
-    this.startSessionTimer();
+    await this.stop();
+    await this.start();
     this.log('Session refreshed');
   }
 
