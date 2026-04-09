@@ -26,6 +26,22 @@ export class AgentProcess {
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
+  // BUG-040 fix: persists across stop() return until handleExit clears it.
+  // Required because BUG-032's CRLF + 5s wait can cause graceful shutdown to
+  // exceed the 5s Promise.race timeout in stop(), which would otherwise reset
+  // `stopping=false` BEFORE the PTY actually exits, then handleExit would fire
+  // with stopping=false and trigger spurious crash recovery (a partial regression
+  // of BUG-011). stopRequested survives the timeout and is only cleared either
+  // by handleExit when an intentional exit fires, or by start() at the beginning
+  // of a new lifecycle.
+  private stopRequested: boolean = false;
+  // BUG-040 fix: monotonic generation counter incremented on each successful
+  // start(). Each PTY's onExit closure captures the generation at spawn time
+  // and bails out if the generation doesn't match — i.e. a NEW PTY has been
+  // spawned since this old one was created. Without this guard, a late exit
+  // from an old PTY can race past stopRequested and trigger crash recovery on
+  // the new agent.
+  private lifecycleGeneration: number = 0;
   // BUG-011 fix: stop() awaits this promise (resolved by the onExit handler in start())
   // to guarantee the PTY exit has fired before stopping=false is reset. Without
   // this, the exit handler can fire after stopping=false and trigger spurious
@@ -77,6 +93,16 @@ export class AgentProcess {
     this.log(`Starting in ${mode} mode`);
     this.status = 'starting';
 
+    // BUG-040 fix: clear any stale stop request from a previous lifecycle
+    // (e.g. if the previous stop() timed out before the PTY actually exited).
+    // We're starting fresh — the new PTY has no pending stop.
+    this.stopRequested = false;
+    // BUG-040 fix: bump generation. The onExit closure below captures THIS
+    // value and uses it to detect "I'm an old PTY whose exit fired after a
+    // new lifecycle began" — in which case it bails out without touching
+    // handleExit, preventing spurious crash recovery on the new agent.
+    const myGeneration = ++this.lifecycleGeneration;
+
     // Create PTY
     const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
     ensureDir(join(this.env.ctxRoot, 'logs', this.name));
@@ -92,6 +118,14 @@ export class AgentProcess {
 
     // Handle exit
     this.pty.onExit((exitCode, signal) => {
+      // BUG-040 fix: if the lifecycle has moved on (a new start() incremented
+      // the generation since this PTY was spawned), this is an old PTY's late
+      // exit. Ignore it entirely — we don't want it to trigger handleExit on
+      // the current PTY's state.
+      if (myGeneration !== this.lifecycleGeneration) {
+        this.log(`Ignoring late exit from previous lifecycle gen ${myGeneration} (current: ${this.lifecycleGeneration})`);
+        return;
+      }
       this.log(`Exited with code ${exitCode} signal ${signal}`);
       this.handleExit(exitCode);
       // Signal anyone awaiting this PTY's exit (e.g. stop() — BUG-011 fix)
@@ -122,6 +156,10 @@ export class AgentProcess {
   async stop(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
+    // BUG-040 fix: stopRequested persists ACROSS stop()'s return until
+    // handleExit clears it. This is the safety net for the case where the
+    // PTY exits later than the Promise.race timeout below.
+    this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
 
@@ -157,16 +195,20 @@ export class AgentProcess {
       }
 
       // BUG-011 fix: AWAIT the exit handler before resolving stop().
-      // Without this, stop() returns while the PTY exit is still in flight,
-      // and the exit handler may fire AFTER stopping=false (set below),
-      // triggering spurious crash recovery for an agent we just stopped.
-      // 5-second timeout guards against a hung PTY.
+      // BUG-040 fix: bumped timeout from 5s to 15s to give the PTY plenty of
+      // time to exit cleanly even when BUG-032's slow graceful shutdown stacks
+      // on top of pty.kill() lag. The functional correctness no longer depends
+      // on this timeout (stopRequested handles late exits), but a generous
+      // timeout reduces "Ignoring late exit from previous lifecycle" log noise.
       if (exitPromise) {
-        await Promise.race([exitPromise, sleep(5000)]);
+        await Promise.race([exitPromise, sleep(15000)]);
       }
     }
 
     this.stopping = false;
+    // NOTE: this.stopRequested is intentionally NOT cleared here. It is
+    // cleared by handleExit when the intentional exit fires (or by start()
+    // when a new lifecycle begins). See BUG-040 fix in handleExit().
     this.status = 'stopped';
     this.notifyStatusChange();
     this.log('Stopped');
@@ -260,8 +302,22 @@ export class AgentProcess {
     this.pty = null;
     this.clearSessionTimer();
 
-    // If stop() is in progress, this exit was intentional — skip crash recovery.
-    if (this.stopping) return;
+    // BUG-040 fix: check stopRequested instead of (only) stopping. The
+    // stopping flag is cleared inside stop() after a 15s timeout window —
+    // which means a slow PTY shutdown can fire handleExit AFTER stopping is
+    // already false, leading to spurious crash recovery. stopRequested is
+    // set by stop() at the START of the shutdown sequence and persists across
+    // stop()'s return until handleExit clears it (right here). This guarantees
+    // that the FIRST exit after a stop() call is treated as intentional, no
+    // matter how delayed it is.
+    //
+    // Also keep the legacy `stopping` check for in-progress detection during
+    // the (most common) case where the exit fires while stop() is still
+    // awaiting. Either flag short-circuits crash recovery.
+    if (this.stopRequested || this.stopping) {
+      this.stopRequested = false;
+      return;
+    }
 
     // Check crash limit
     this.crashCount++;
