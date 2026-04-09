@@ -47,7 +47,7 @@ export class AgentManager {
     // re-discover and re-start any agent dir on disk regardless of user intent.
     const instanceEnabled = this.readInstanceEnableList();
 
-    for (const { name, dir, config } of agentDirs) {
+    for (const { name, dir, org, config } of agentDirs) {
       // Per-agent config.json `enabled: false` (existing behavior, unchanged)
       if (config.enabled === false) {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (per-agent config.json)`);
@@ -59,7 +59,9 @@ export class AgentManager {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
         continue;
       }
-      await this.startAgent(name, dir, config);
+      // BUG-043 fix: pass the per-agent org so startAgent can use it instead
+      // of falling back to `this.org` (the daemon's startup org).
+      await this.startAgent(name, dir, config, org);
     }
   }
 
@@ -80,9 +82,62 @@ export class AgentManager {
   }
 
   /**
-   * Start a specific agent.
+   * BUG-043 fix: resolve the canonical org for a given agent without
+   * defaulting to the daemon's startup `this.org`.
+   *
+   * Resolution order:
+   *   1. Explicit `org` argument (e.g. from `discoverAgents()` which knows
+   *      which org a dir lives under)
+   *   2. `enabled-agents.json[name].org` — set by `cortextos enable`/`add-agent`
+   *   3. Filesystem scan: walk `frameworkRoot/orgs/*` looking for a dir
+   *      named `name` — handles legacy enabled-agents.json entries that
+   *      were written before the `org` field was added
+   *   4. Legacy fallback: `this.org` (preserves single-org install behavior)
+   *
+   * Before this fix, all six `this.org` sites in `agent-manager.ts` would
+   * short-circuit to the daemon's startup `CTX_ORG`, which silently broke
+   * multi-org installs — agents in `lifeos` or `cointally` were invisible
+   * to a daemon started with `CTX_ORG=testorg`.
    */
-  async startAgent(name: string, agentDir: string, config?: AgentConfig): Promise<void> {
+  private resolveAgentOrg(name: string, explicitOrg?: string): string {
+    if (explicitOrg) return explicitOrg;
+
+    const enabledAgents = this.readInstanceEnableList();
+    const entry = enabledAgents[name];
+    if (entry?.org) return entry.org;
+
+    // Legacy fallback: scan all orgs on disk for a dir named `name`.
+    // Handles enabled-agents.json entries missing the `org` field, or
+    // agents that were created via raw filesystem operations.
+    const orgsBase = join(this.frameworkRoot, 'orgs');
+    if (existsSync(orgsBase)) {
+      try {
+        const orgs = readdirSync(orgsBase, { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => d.name);
+        for (const org of orgs) {
+          if (existsSync(join(orgsBase, org, 'agents', name))) {
+            return org;
+          }
+        }
+      } catch { /* ignore read errors */ }
+    }
+
+    // Ultimate fallback: daemon's startup org (single-org install behavior)
+    return this.org;
+  }
+
+  /**
+   * Start a specific agent.
+   *
+   * BUG-043 fix: accepts an optional `org` parameter and uses
+   * `resolveAgentOrg()` to find the correct org for path/env lookups
+   * instead of falling back to `this.org`. This makes the daemon
+   * multi-org aware — an install with lifeos + cointally + testorg will
+   * spawn each agent in its correct org dir regardless of what
+   * `CTX_ORG` the daemon was started with.
+   */
+  async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
     if (this.agents.has(name)) {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
       // (restart-all could send stop+start simultaneously, and the new
@@ -102,9 +157,12 @@ export class AgentManager {
       return;
     }
 
+    // BUG-043 fix: resolve the agent's true org instead of using `this.org`.
+    const resolvedOrg = this.resolveAgentOrg(name, org);
+
     // Auto-discover agent directory if not provided (e.g. when started via IPC)
     if (!agentDir || !existsSync(agentDir)) {
-      const discovered = join(this.frameworkRoot, 'orgs', this.org, 'agents', name);
+      const discovered = join(this.frameworkRoot, 'orgs', resolvedOrg, 'agents', name);
       if (existsSync(discovered)) {
         agentDir = discovered;
       } else {
@@ -123,11 +181,11 @@ export class AgentManager {
       frameworkRoot: this.frameworkRoot,
       agentName: name,
       agentDir,
-      org: this.org,
+      org: resolvedOrg,
       projectRoot: this.frameworkRoot,
     };
 
-    const paths = resolvePaths(name, this.instanceId, this.org);
+    const paths = resolvePaths(name, this.instanceId, resolvedOrg);
 
     const log = (msg: string) => {
       console.log(`[${name}] ${msg}`);
@@ -544,26 +602,50 @@ export class AgentManager {
 
   /**
    * Discover agents from the organization directory structure.
+   *
+   * BUG-043 fix: iterate over EVERY org under `frameworkRoot/orgs/*`,
+   * not just `this.org`. Before this fix, a daemon started with
+   * `CTX_ORG=testorg` would only discover agents in `orgs/testorg/agents/`
+   * — agents in `orgs/lifeos/agents/` and `orgs/cointally/agents/` were
+   * effectively invisible to the daemon and could never be auto-spawned
+   * from a cold start. Multi-org installs silently half-worked.
+   *
+   * The returned tuple now includes an `org` field so `discoverAndStart()`
+   * can pass the correct org to `startAgent()` and downstream path
+   * lookups via `resolveAgentOrg()`.
    */
-  private discoverAgents(): Array<{ name: string; dir: string; config: AgentConfig }> {
-    const agents: Array<{ name: string; dir: string; config: AgentConfig }> = [];
+  private discoverAgents(): Array<{ name: string; dir: string; org: string; config: AgentConfig }> {
+    const agents: Array<{ name: string; dir: string; org: string; config: AgentConfig }> = [];
 
-    // Look for agents in orgs/{org}/agents/
-    const agentsBase = join(this.frameworkRoot, 'orgs', this.org, 'agents');
-    if (!existsSync(agentsBase)) return agents;
+    const orgsBase = join(this.frameworkRoot, 'orgs');
+    if (!existsSync(orgsBase)) return agents;
 
+    let orgNames: string[] = [];
     try {
-      const dirs = readdirSync(agentsBase, { withFileTypes: true })
+      orgNames = readdirSync(orgsBase, { withFileTypes: true })
         .filter(d => d.isDirectory())
         .map(d => d.name);
-
-      for (const name of dirs) {
-        const dir = join(agentsBase, name);
-        const config = this.loadAgentConfig(dir);
-        agents.push({ name, dir, config });
-      }
     } catch {
-      // Ignore read errors
+      return agents; // unreadable orgs dir — treat as empty
+    }
+
+    for (const org of orgNames) {
+      const agentsBase = join(orgsBase, org, 'agents');
+      if (!existsSync(agentsBase)) continue;
+
+      try {
+        const dirs = readdirSync(agentsBase, { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => d.name);
+
+        for (const name of dirs) {
+          const dir = join(agentsBase, name);
+          const config = this.loadAgentConfig(dir);
+          agents.push({ name, dir, org, config });
+        }
+      } catch {
+        // Ignore read errors for this org — continue scanning others
+      }
     }
 
     return agents;
