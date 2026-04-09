@@ -44,6 +44,19 @@ describe('validateAgentName', () => {
     expect(() => validateAgentName('../traversal')).toThrow(); // path traversal
     expect(() => validateAgentName('agent/path')).toThrow(); // slash
   });
+
+  it('rejects mixed-case / PascalCase / CamelCase (BUG-041 regression)', () => {
+    // BUG-041: these names passed through `cortextos add-agent` before the fix,
+    // got written to disk, and then failed every `cortextos bus *` command at
+    // runtime because `resolveEnv()` validates with the same regex. Lock in
+    // the rejection at the validator level so add-agent can rely on it.
+    expect(() => validateAgentName('CortextDesigner')).toThrow();
+    expect(() => validateAgentName('MyAgent')).toThrow();
+    expect(() => validateAgentName('camelCase')).toThrow();
+    expect(() => validateAgentName('Agent1')).toThrow();
+    expect(() => validateAgentName('tally-Bot')).toThrow();
+    expect(() => validateAgentName('snake_Case')).toThrow();
+  });
 });
 
 describe('validatePriority', () => {

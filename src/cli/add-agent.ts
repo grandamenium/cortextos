@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFi
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
+import { validateAgentName } from '../utils/validate';
 
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
@@ -11,6 +12,24 @@ export const addAgentCommand = new Command('add-agent')
   .option('--instance <id>', 'Instance ID', 'default')
   .description('Add a new agent to the organization')
   .action(async (name: string, options: { template: string; org?: string; instance: string }) => {
+    // BUG-041 fix: validate the agent name BEFORE creating anything on disk.
+    // Without this, mixed-case names like 'CortextDesigner' pass through
+    // add-agent, get written to disk, and THEN fail every `cortextos bus *`
+    // command at runtime because `src/utils/env.ts:resolveEnv()` strictly
+    // validates CTX_AGENT_NAME via the same `validateAgentName()` function.
+    // The mismatch made affected agents half-functional — daemon-managed
+    // fine but unable to use any bus command (including send-telegram).
+    // Canonical rule lives in `src/utils/validate.ts`:
+    //   AGENT_NAME_REGEX = /^[a-z0-9_-]+$/
+    try {
+      validateAgentName(name);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      console.error(`Agent names must match /^[a-z0-9_-]+$/ (lowercase letters, numbers, underscores, hyphens).`);
+      console.error(`Examples of valid names: paul, sentinel, cortext-designer, m2c1-worker, agent_1`);
+      process.exit(1);
+    }
+
     const projectRoot = process.env.CTX_FRAMEWORK_ROOT || process.env.CTX_PROJECT_ROOT || process.cwd();
 
     // Auto-detect org if not specified
