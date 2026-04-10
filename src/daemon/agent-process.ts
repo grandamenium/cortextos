@@ -1475,6 +1475,7 @@ export class AgentProcess {
     const maxWaitMs = 10 * 60 * 1000;
     const pollMs = 15_000;
     const startTime = Date.now();
+    let foundIdle = false;
 
     while (Date.now() - startTime < maxWaitMs) {
       // Bail if this lifecycle is stale (agent restarted or stopped)
@@ -1489,10 +1490,18 @@ export class AgentProcess {
           const currentIdleTs = parseInt(readFileSync(flagPath, 'utf-8').trim(), 10);
           if (currentIdleTs > bootIdleTs) {
             // Agent has gone idle after boot — safe to inject
+            foundIdle = true;
             break;
           }
         }
       } catch { /* ignore read errors, keep polling */ }
+    }
+
+    // If the loop timed out without detecting an idle transition, do not inject:
+    // the agent never finished its startup turn (e.g. stuck on a very long boot).
+    if (!foundIdle) {
+      this.log('Cron verification: timed out waiting for idle flag, skipping injection');
+      return;
     }
 
     // Final stale check

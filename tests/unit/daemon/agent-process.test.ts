@@ -707,4 +707,55 @@ describe('AgentProcess - cron auto-verification', () => {
     // Verification is waiting for idle flag — no immediate injection
     expect(mockInjectMessage).not.toHaveBeenCalled();
   });
+
+  it('verifyCronsAfterIdle: injects prompt containing cron names once idle flag appears newer than boot', async () => {
+    const fs = await import('fs');
+    const mockExistsSync = vi.mocked(fs.existsSync);
+    const mockReadFileSync = vi.mocked(fs.readFileSync);
+
+    const bootTs = 1000;
+    const idleTs = 2000;
+
+    // Track calls so the first read (boot snapshot) returns bootTs,
+    // subsequent reads (poll) return idleTs (agent went idle)
+    let readCount = 0;
+    mockExistsSync.mockImplementation((p) => {
+      if (typeof p === 'string' && p.endsWith('last_idle.flag')) return true;
+      return false;
+    });
+    mockReadFileSync.mockImplementation((p) => {
+      if (typeof p === 'string' && p.endsWith('last_idle.flag')) {
+        readCount++;
+        return readCount === 1 ? String(bootTs) : String(idleTs);
+      }
+      return '';
+    });
+
+    vi.useFakeTimers();
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {
+        crons: [
+          { name: 'heartbeat', interval: '4h', prompt: 'check in' },
+          { name: 'daily-report', interval: '24h', prompt: 'report' },
+        ],
+      });
+      await ap.start();
+
+      ap.scheduleCronVerification();
+
+      // Advance past the 15s poll interval so the background loop wakes,
+      // reads the newer flag timestamp, and injects the verification prompt
+      await vi.advanceTimersByTimeAsync(16_000);
+    } finally {
+      vi.useRealTimers();
+      // Restore default fs mock behaviour for other tests
+      mockExistsSync.mockReturnValue(false);
+      mockReadFileSync.mockReset();
+    }
+
+    expect(mockInjectMessage).toHaveBeenCalledOnce();
+    const promptArg: string = mockInjectMessage.mock.calls[0][1] as string;
+    expect(promptArg).toContain('heartbeat');
+    expect(promptArg).toContain('daily-report');
+  });
 });
