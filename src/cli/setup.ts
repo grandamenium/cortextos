@@ -14,6 +14,7 @@ import { existsSync, writeFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { spawnSync } from 'child_process';
+import { TelegramAPI, formatValidateError } from '../telegram/api.js';
 
 function rl(): Interface {
   return createInterface({ input: process.stdin, output: process.stdout });
@@ -101,6 +102,67 @@ function fetchChatId(botToken: string): string {
   }
   console.log('  Could not auto-detect chat ID.');
   return '';
+}
+
+/**
+ * Probe a BOT_TOKEN + CHAT_ID pair against the live Telegram API before
+ * writing the .env to disk. Interactively prompts the user to re-enter the
+ * chat id on a hard failure (bad_token is not recoverable here — they need
+ * to fix the token outside the wizard and re-run setup).
+ *
+ * Returns the validated chat id (possibly re-entered) on success, or null
+ * if the user gave up. Network errors and rate limits print a WARNING and
+ * continue with the original chat id — the enable preflight will re-probe
+ * once connectivity is restored.
+ */
+async function validateTelegramCredsInteractive(
+  iface: Interface,
+  botToken: string,
+  initialChatId: string,
+  label: string,
+): Promise<string | null> {
+  let chatId = initialChatId;
+  // Allow up to 3 re-entry attempts before giving up.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const api = new TelegramAPI(botToken);
+    let result;
+    try {
+      result = await api.validateCredentials(chatId);
+    } catch (err) {
+      console.log(`  Warning: Telegram validator crashed: ${err instanceof Error ? err.message : String(err)}. Writing .env anyway.`);
+      return chatId;
+    }
+
+    if (result.ok) {
+      const titleHint = result.chatTitle ? ` (${result.chatTitle})` : '';
+      console.log(`  Validated ${label}: bot=@${result.botUsername} chat=${chatId} type=${result.chatType}${titleHint}`);
+      return chatId;
+    }
+
+    if (result.reason === 'network_error' || result.reason === 'rate_limited') {
+      console.log(`  Warning: ${formatValidateError(result)}`);
+      console.log('  Writing .env with unvalidated values. Re-run cortextos enable later to confirm.');
+      return chatId;
+    }
+
+    console.log(`  Validation failed: ${formatValidateError(result)}`);
+
+    if (result.reason === 'bad_token') {
+      // Can't recover from a bad token inside the wizard loop — the user
+      // needs to fix the token at @BotFather and re-run setup. Bail.
+      console.log('  Re-run cortextos setup after fixing the bot token.');
+      return null;
+    }
+
+    const answer = await ask(iface, `  Enter a different chat_id for ${label} (or blank to give up): `);
+    if (!answer) {
+      console.log('  Giving up on validation. No .env will be written for this agent.');
+      return null;
+    }
+    chatId = answer;
+  }
+  console.log(`  Too many failed attempts — giving up on ${label}.`);
+  return null;
 }
 
 function validateAgentName(name: string): boolean {
@@ -228,6 +290,22 @@ export const setupCommand = new Command('setup')
       orchChatId = await askRequired(iface, '  Enter your Telegram chat ID manually: ', 'Chat ID is required.');
     }
 
+    // self-chat trap preflight: validate credentials against the live Telegram API
+    // BEFORE writing .env. Catches bad tokens, unreachable chats, bot
+    // recipients, and the self_chat trap (CHAT_ID == bot's own user id).
+    const validatedOrchChatId = await validateTelegramCredsInteractive(
+      iface,
+      orchToken,
+      orchChatId,
+      `orchestrator ${orchName}`,
+    );
+    if (!validatedOrchChatId) {
+      console.error('\n  Cannot continue without validated orchestrator credentials.');
+      iface.close();
+      process.exit(1);
+    }
+    orchChatId = validatedOrchChatId;
+
     // Create orchestrator agent
     const addOrchOk = runCli(
       projectRoot,
@@ -299,6 +377,19 @@ export const setupCommand = new Command('setup')
       if (!agentChatId) {
         agentChatId = await askRequired(iface, `  Enter chat ID for ${agentName} manually: `, 'Chat ID is required.');
       }
+
+      // self-chat trap preflight (see validateTelegramCredsInteractive above).
+      const validatedAgentChatId = await validateTelegramCredsInteractive(
+        iface,
+        agentToken,
+        agentChatId,
+        `agent ${agentName}`,
+      );
+      if (!validatedAgentChatId) {
+        console.log(`  Skipping ${agentName} — fix the credentials and re-run cortextos setup or cortextos enable ${agentName}.`);
+        continue;
+      }
+      agentChatId = validatedAgentChatId;
 
       const addOk = runCli(
         projectRoot,
