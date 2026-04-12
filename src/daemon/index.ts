@@ -113,9 +113,15 @@ class Daemon {
   }
 }
 
-// Start daemon
-const daemon = new Daemon();
-daemon.start().catch(err => {
-  console.error('[daemon] Fatal error:', err);
-  process.exit(1);
-});
+// Only auto-start when run directly (e.g. `node dist/daemon.js` or via PM2).
+// Guarding with require.main prevents accidental daemon spawn when the module
+// is require()'d for testing or class imports — which would start a full daemon
+// with TelegramPollers, IPC server, and Claude PTY processes as a side effect.
+// See: https://github.com/grandamenium/cortextos/issues/44
+if (require.main === module) {
+  const daemon = new Daemon();
+  daemon.start().catch(err => {
+    console.error('[daemon] Fatal error:', err);
+    process.exit(1);
+  });
+}
