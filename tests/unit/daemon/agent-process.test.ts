@@ -107,7 +107,7 @@ beforeEach(() => {
   fsMocks.statSync.mockReset();
 });
 
-describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
+describe('AgentProcess - stop awaits PTY exit', () => {
   it('stop() awaits the PTY exit handler before resolving', async () => {
     const ap = new AgentProcess('alice', mockEnv, {});
     await ap.start();
@@ -133,7 +133,7 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     expect(ap.getStatus().status).toBe('stopped');
   }, 10000);
 
-  it('stop() does NOT trigger crash recovery on intentional stop (the BUG-011 regression)', async () => {
+  it('stop() does NOT trigger crash recovery on intentional stop', async () => {
     const ap = new AgentProcess('alice', mockEnv, {});
     await ap.start();
 
@@ -418,8 +418,8 @@ describe('AgentProcess - injectMessage bootstrap guard (fast-checker reliability
     const ap = new AgentProcess('alice', mockEnv, {});
     await ap.start();
 
-    // Stop the agent — the BUG-011 fix means stop() awaits the PTY exit
-    // handler, so we have to fire it manually against the mock PTY.
+    // Stop the agent — stop() awaits the PTY exit handler, so we have
+    // to fire it manually against the mock PTY.
     const stopPromise = ap.stop();
     await new Promise(r => setTimeout(r, 10));
     capturedOnExit!(0, 0);
