@@ -115,23 +115,15 @@ export async function GET(
 
   // Include Telegram messages for this pair.
   //
-  // Voice transcript dedup — this is the fix for "voice messages render as
-  // [Voice message] placeholder" that surfaced across multiple sessions.
-  // Every incoming voice note writes TWO entries to inbound-messages.jsonl
-  // with the same Telegram message_id:
+  // Voice transcript dedup — Telegram voice notes produce two log entries
+  // with the same message_id: a stub (empty text, written immediately on
+  // delivery) and a transcript (full text + media_type, written after
+  // Whisper/Gemini transcription completes). A naive iteration keeps
+  // whichever entry appears first, which is the empty stub.
   //
-  //   1. Stub at T+0     — text: "", no media_type, written the instant
-  //                         Telegram delivers the raw envelope
-  //   2. Content at T+3s — text: "full transcript...", media_type: voice,
-  //                         file_path: ..., written after Whisper/Gemini
-  //                         finishes transcribing
-  //
-  // A naive top-to-bottom iteration dedupes on msgId and keeps whichever
-  // entry hit first — which is the stub. The transcript entry is silently
-  // skipped and the UI has nothing to render. Two-pass fix: first pass
-  // builds a bestByMsgId map where entries with non-empty text always beat
-  // empty stubs with the same id, second pass pushes the winners to the
-  // messages array. Applies to both inbound and outbound logs.
+  // Two-pass approach: first pass builds a bestByMsgId map where entries
+  // with non-empty text always beat empty stubs sharing the same id.
+  // Second pass emits only the winners. Applies to inbound and outbound.
   const logsBase = path.join(ctxRoot, 'logs');
   if (fs.existsSync(logsBase)) {
     interface RawTelegramEntry {

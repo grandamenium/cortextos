@@ -75,11 +75,9 @@ export async function GET(request: NextRequest) {
         .map(d => d.name);
     } catch { agentLogDirs = []; }
 
-    // Voice transcript dedup — see channel/[pair]/route.ts for the full
-    // explanation. Two-pass bestByMsgId map so that transcript-bearing
-    // entries beat empty stubs with the same Telegram message_id. Without
-    // this, the channel list last_message previews show "[Voice message]"
-    // or fall through with empty text.
+    // Voice transcript dedup — two-pass bestByMsgId map so transcript
+    // entries beat empty stubs with the same Telegram message_id.
+    // See channel/[pair]/route.ts for the full explanation.
     for (const agent of agentLogDirs) {
       for (const logFile of ['inbound-messages.jsonl', 'outbound-messages.jsonl']) {
         const filePath = path.join(logsBase, agent, logFile);

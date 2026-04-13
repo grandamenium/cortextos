@@ -247,11 +247,9 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
-  // Ask 4 — clipboard paste. When the user pastes into the textarea, scan
-  // the clipboard items for image types and attach the first one found. Text
-  // paste still works as normal (the paste event is not prevented unless an
-  // image is found). Lets the user take a screenshot and Ctrl+V directly into
-  // the message instead of using the file picker.
+  // Clipboard paste: scan for image types and attach the first one found.
+  // Text paste still works normally (the paste event is not prevented unless
+  // an image is found).
   function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const items = e.clipboardData?.items;
     if (!items) return;
