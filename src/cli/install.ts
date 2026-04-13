@@ -207,6 +207,26 @@ export const installCommand = new Command('install')
       }
     }
 
+    // pm2-windows-startup — required for fleet auto-resurrection on Windows
+    // boot. Mac/Linux users get `pm2 startup` for free; Windows users need
+    // a separate package. Skip silently if pm2 itself is not available.
+    if (IS_WINDOWS && commandExists('pm2')) {
+      if (!commandExists('pm2-startup')) {
+        console.log('  - pm2-windows-startup: not found. Installing...');
+        if (tryInstallGlobal('pm2-windows-startup')) {
+          console.log('  ✓ pm2-windows-startup: installed');
+          console.log('    To enable auto-resurrect on boot, run after install:');
+          console.log('      pm2-startup install');
+          console.log('      pm2 save');
+        } else {
+          console.log('  ! pm2-windows-startup: could not auto-install.');
+          console.log('    Run manually: npm install -g pm2-windows-startup');
+        }
+      } else {
+        console.log('  ✓ pm2-windows-startup: installed');
+      }
+    }
+
     // jq — required for bus scripts
     if (!commandExists('jq')) {
       console.log('  - jq: not found. Installing...');
@@ -363,6 +383,43 @@ export const installCommand = new Command('install')
     } else {
       console.log('  ! npm link failed. Run manually: npm link (from the cortextOS directory)');
       console.log('    Without this, agents cannot use bus commands in PTY sessions.');
+    }
+
+    // Bash shim for Windows hooks: npm globals directory is not on Git Bash's
+    // default PATH, so hooks that call `cortextos` from bash return 127.
+    // This creates a shim at ~/bin/cortextos that forwards to the npm global CLI.
+    if (IS_WINDOWS) {
+      let bashCanFindIt = false;
+      try {
+        const result = spawnSync('bash', ['-c', 'which cortextos'], { stdio: 'pipe' });
+        bashCanFindIt = result.status === 0;
+      } catch { /* bash not installed */ }
+
+      if (bashCanFindIt) {
+        console.log('  ✓ cortextos: findable from bash (no shim needed)');
+      } else {
+        let cliPath: string | null = null;
+        try {
+          const npmRoot = execSync('npm root -g', { encoding: 'utf-8', stdio: 'pipe' }).trim();
+          cliPath = join(npmRoot, 'cortextos', 'dist', 'cli.js').replace(/\\/g, '/');
+        } catch { /* npm root -g failed */ }
+
+        if (cliPath && existsSync(cliPath)) {
+          const binDir = join(homedir(), 'bin');
+          const shimPath = join(binDir, 'cortextos');
+          mkdirSync(binDir, { recursive: true });
+          writeFileSync(shimPath, [
+            '#!/bin/sh',
+            '# Shim: forwards to cortextos CLI at the npm global install location',
+            `exec node "${cliPath}" "$@"`,
+            '',
+          ].join('\n'), 'utf-8');
+          try { chmodSync(shimPath, 0o755); } catch { /* ignore on Windows */ }
+          console.log(`  ✓ cortextos: bash shim created at ${shimPath}`);
+        } else {
+          console.log('  ! cortextos: could not locate dist/cli.js to create bash shim');
+        }
+      }
     }
 
     console.log('\n  Installation complete.');

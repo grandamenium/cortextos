@@ -16,12 +16,16 @@ import { discoverProjectRoot, readEnabledAgents } from '../../../src/cli/enable-
 describe('BUG-035 + BUG-013: enable-agent validation', () => {
   let tmpHome: string;
   const origHome = process.env.HOME;
+  const origUserProfile = process.env.USERPROFILE;
   const origFw = process.env.CTX_FRAMEWORK_ROOT;
   const origPr = process.env.CTX_PROJECT_ROOT;
 
   beforeEach(() => {
     tmpHome = mkdtempSync(join(tmpdir(), 'cortextos-batch-'));
     process.env.HOME = tmpHome;
+    // On Windows, os.homedir() reads USERPROFILE (not HOME).
+    // Both must be overridden for test isolation to work cross-platform.
+    process.env.USERPROFILE = tmpHome;
     delete process.env.CTX_FRAMEWORK_ROOT;
     delete process.env.CTX_PROJECT_ROOT;
   });
@@ -29,6 +33,8 @@ describe('BUG-035 + BUG-013: enable-agent validation', () => {
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME;
     else process.env.HOME = origHome;
+    if (origUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = origUserProfile;
     if (origFw === undefined) delete process.env.CTX_FRAMEWORK_ROOT;
     else process.env.CTX_FRAMEWORK_ROOT = origFw;
     if (origPr === undefined) delete process.env.CTX_PROJECT_ROOT;

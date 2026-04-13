@@ -6,15 +6,13 @@ First, run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+> **Note:** On Windows, `npm run dev` automatically falls back to webpack instead of Turbopack. Turbopack panics when creating NTFS junction points for native modules under `.next/dev/node_modules` (notably `better-sqlite3`, which the auth layer requires). Webpack does not use junction points and works on every platform. Mac and Linux still get Turbopack speed by default.
+>
+> Force a specific bundler with `npm run dev:turbopack` or `npm run dev:webpack` if you want to override the platform default.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

@@ -24,6 +24,19 @@ module.exports = {
         CTX_FRAMEWORK_ROOT: FRAMEWORK_ROOT,
         CTX_PROJECT_ROOT: PROJECT_ROOT,
         CTX_ORG: CTX_ORG,
+        // Ensure claude.exe (~/.local/bin), npm globals (~/AppData/Roaming/npm),
+        // and the cortextos bash shim (~/bin) are findable on Windows. PM2
+        // spawns with a minimal environment; without these, agent PTY spawns
+        // fail AND agent hooks (which shell to `cortextos ...`) fail with
+        // "command not found", causing crash-loops. The directories that don't
+        // exist on Mac/Linux are silently ignored, so this override is safe
+        // cross-platform.
+        PATH: [
+          path.join(os.homedir(), 'bin'),
+          path.join(os.homedir(), '.local', 'bin'),
+          path.join(os.homedir(), 'AppData', 'Roaming', 'npm'),
+          process.env.PATH || '',
+        ].join(path.delimiter),
       },
       max_restarts: 10,
       restart_delay: 5000,

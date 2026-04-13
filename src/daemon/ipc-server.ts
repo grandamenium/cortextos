@@ -1,6 +1,6 @@
 import { createServer, Server, Socket } from 'net';
 import { existsSync, unlinkSync, chmodSync } from 'fs';
-import { resolve as pathResolve } from 'path';
+import { resolve as pathResolve, sep } from 'path';
 import type { IPCRequest, IPCResponse } from '../types/index.js';
 import { AgentManager } from './agent-manager.js';
 import { getIpcPath } from '../utils/paths.js';
@@ -189,8 +189,12 @@ export class IPCServer {
             const resolvedDir = pathResolve(d.dir);
             const ctxRoot = process.env.CTX_ROOT ? pathResolve(process.env.CTX_ROOT) : '';
             const cwd = pathResolve(process.cwd());
-            const underCtxRoot = ctxRoot && (resolvedDir === ctxRoot || resolvedDir.startsWith(ctxRoot + '/'));
-            const underCwd = resolvedDir === cwd || resolvedDir.startsWith(cwd + '/');
+            // Uses path.sep so the under-directory check is correct on Windows
+            // where pathResolve returns backslash-separated paths. Hardcoding
+            // '/' here caused every spawn-worker request from a valid dir to
+            // fail with "Invalid worker dir" on Windows.
+            const underCtxRoot = ctxRoot && (resolvedDir === ctxRoot || resolvedDir.startsWith(ctxRoot + sep));
+            const underCwd = resolvedDir === cwd || resolvedDir.startsWith(cwd + sep);
             if (!underCtxRoot && !underCwd) {
               response = { success: false, error: 'Invalid worker dir' };
             } else {

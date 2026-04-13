@@ -247,6 +247,15 @@ export class AgentProcess {
       return false;
     }
 
+    // Do not inject before the session is ready to accept input. Without this
+    // guard, content written to a not-yet-bootstrapped PTY queues in stdin
+    // behind the active startup turn (5-20 min) and is invisible to Claude
+    // until that turn finishes. Returning false here keeps the message in
+    // inflight; the 5-min recovery loop retries once isBootstrapped() is true.
+    if (!this.isBootstrapped()) {
+      return false;
+    }
+
     if (this.dedup.isDuplicate(content)) {
       this.log('Dedup: skipping duplicate message');
       return false;
@@ -333,19 +342,14 @@ export class AgentProcess {
       return;
     }
 
-    // BUG-040 fix: check stopRequested instead of (only) stopping. The
-    // stopping flag is cleared inside stop() after a 15s timeout window —
-    // which means a slow PTY shutdown can fire handleExit AFTER stopping is
-    // already false, leading to spurious crash recovery. stopRequested is
-    // set by stop() at the START of the shutdown sequence and persists across
-    // stop()'s return until handleExit clears it (right here). This guarantees
-    // that the FIRST exit after a stop() call is treated as intentional, no
-    // matter how delayed it is.
-    //
-    // Also keep the legacy `stopping` check for in-progress detection during
-    // the (most common) case where the exit fires while stop() is still
-    // awaiting. Either flag short-circuits crash recovery.
-    if (this.stopRequested || this.stopping) {
+    // Skip crash recovery for any intentional or already-stopped exit.
+    // Three complementary guards cover the full timing window:
+    //   - stopRequested: set at the START of stop(), cleared here on first exit
+    //   - stopping: true while stop() is actively in flight
+    //   - status === 'stopped': catches LATE exits that arrive after stop()
+    //     has resolved and cleared both flags (Windows PTY death can lag by
+    //     hundreds of milliseconds past pty.kill())
+    if (this.stopRequested || this.stopping || this.status === 'stopped') {
       this.stopRequested = false;
       return;
     }
@@ -436,14 +440,14 @@ export class AgentProcess {
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
     const deliverablesBlock = this.buildDeliverablesBlock();
-    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. Run CronList first to avoid duplicates.${reminderBlock}${deliverablesBlock} After setting up crons, send a Telegram message to the user saying you are back online.${onboardingAppend}`;
+    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. Run CronList first to avoid duplicates.${reminderBlock}${deliverablesBlock} After setting up crons, immediately update your heartbeat: cortextos bus update-heartbeat "online — crons restored". Then send a Telegram message to the user saying you are back online.${onboardingAppend}`;
   }
 
   private buildContinuePrompt(): string {
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
     const deliverablesBlock = this.buildDeliverablesBlock();
-    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. Restore your crons from config.json: recurring entries use /loop, once entries use CronCreate only if fire_at is still in the future (delete expired ones from config.json). Run CronList first — no duplicates.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations. After restoring crons and checking inbox, send a Telegram message to the user saying you are back online.`;
+    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. Restore your crons from config.json: recurring entries use /loop, once entries use CronCreate only if fire_at is still in the future (delete expired ones from config.json). Run CronList first — no duplicates.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations. After restoring crons and checking inbox, update your heartbeat: cortextos bus update-heartbeat "online — session continued". Then send a Telegram message to the user saying you are back online.`;
   }
 
   /**
