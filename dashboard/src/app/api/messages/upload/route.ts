@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
   // Write to agent inbox as a media message
   const epochMs = Date.now();
   const rand = Math.random().toString(36).slice(2, 7);
-  const from = 'mobile-user';
+  const from = (process.env.ADMIN_USERNAME ?? 'user').toLowerCase();
   const messageId = `${epochMs}-${from}-${rand}`;
   const inboxFilename = `2-${epochMs}-from-${from}-${rand}.json`;
 

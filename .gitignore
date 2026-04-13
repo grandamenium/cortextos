@@ -51,3 +51,5 @@ WINDOWS-IMPLEMENTATION-PLAN.md
 WINDOWS-SUPPORT-INVESTIGATION.md
 BRAINDUMP*.md
 AGENTS.md
+dashboard/screenshots/
+dashboard/test-*.py

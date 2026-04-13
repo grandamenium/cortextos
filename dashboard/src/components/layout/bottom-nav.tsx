@@ -12,6 +12,7 @@ import {
   IconDotsVertical,
   IconRobot,
   IconActivity,
+  IconMessages,
   IconBook2,
   IconFlask,
   IconPuzzle,
@@ -31,6 +32,7 @@ const mainTabs = [
 
 const morePages = [
   { label: 'Agents', href: '/agents', icon: IconRobot },
+  { label: 'Comms', href: '/comms', icon: IconMessages },
   { label: 'Activity', href: '/activity', icon: IconActivity },
   { label: 'Knowledge Base', href: '/knowledge-base', icon: IconBook2 },
   { label: 'Workflows', href: '/workflows', icon: IconClock },
