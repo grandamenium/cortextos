@@ -54,3 +54,6 @@ BRAINDUMP*.md
 AGENTS.md
 dashboard/screenshots/
 dashboard/test-*.py
+# Added by code-review-graph
+.code-review-graph/
+
