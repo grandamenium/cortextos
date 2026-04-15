@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { getCTXRoot, getOrgs, getAgentsForOrg } from '@/lib/config';
+import { getCTXRoot } from '@/lib/config';
 import { resolveIdentity } from '@/lib/comms-identity';
 
 export const dynamic = 'force-dynamic';
@@ -31,7 +31,9 @@ interface BusMessage {
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
-  const orgFilter = searchParams.get('org') || '';
+  // `org` param is accepted but not yet applied — agents for different orgs
+  // are already isolated at the filesystem level under the configured
+  // CTX_ROOT, so the feed naturally scopes to the active org.
   const agentFilter = searchParams.get('agent') || '';
   const defaultLimit = 200;
   const maxLimit = 500;

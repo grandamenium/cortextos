@@ -6,13 +6,27 @@ import { getCTXRoot } from '@/lib/config';
 export const dynamic = 'force-dynamic';
 
 const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+
+// Whitelist by MIME type AND by extension. SVG is intentionally excluded:
+// SVGs can carry inline <script> and embedded event handlers, which turns
+// any "view the image" link into an XSS vector when served from the same
+// origin as the dashboard.
 const ALLOWED_TYPES = new Set([
   'image/jpeg',
   'image/png',
   'image/gif',
   'image/webp',
-  'image/svg+xml',
 ]);
+
+// Canonical extension per MIME type. The server IGNORES the user-supplied
+// filename's extension and chooses the extension from the validated MIME
+// type, so an attacker cannot upload `evil.html` with `image/png` content-type.
+const EXT_FOR_TYPE: Record<string, string> = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+};
 
 /**
  * POST /api/comms/upload — Upload an image for the chat interface.
@@ -39,7 +53,7 @@ export async function POST(request: NextRequest) {
 
   if (!ALLOWED_TYPES.has(file.type)) {
     return Response.json(
-      { error: `Unsupported file type: ${file.type}. Allowed: JPEG, PNG, GIF, WebP, SVG` },
+      { error: `Unsupported file type: ${file.type}. Allowed: JPEG, PNG, GIF, WebP` },
       { status: 400 },
     );
   }
@@ -56,17 +70,35 @@ export async function POST(request: NextRequest) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
 
-    // Sanitize filename: keep extension, replace unsafe chars. Clipboard paste
-    // delivers an anonymous File with name "image.png" most of the time, so
-    // the timestamp prefix is what makes entries unique.
-    const ext = path.extname(file.name || 'upload.png').toLowerCase();
-    const baseName = path
-      .basename(file.name || 'upload', ext)
+    // Sanitize filename. We keep only the basename of the client-supplied
+    // name, strip any extension/path separators, and then append a
+    // server-chosen extension derived from the validated MIME type.
+    // This prevents attackers from smuggling `evil.html.png` or
+    // `../../etc/passwd` through the upload endpoint.
+    const rawName = file.name || 'upload';
+    const rawBase = path.basename(rawName);
+    const baseNoExt = rawBase.replace(/\.[^.]*$/, '');
+    const baseName = baseNoExt
       .replace(/[^a-zA-Z0-9_-]/g, '_')
-      .slice(0, 50);
+      .slice(0, 50) || 'upload';
+    const ext = EXT_FOR_TYPE[file.type];
+    if (!ext) {
+      // Defense-in-depth: ALLOWED_TYPES already gated this, but if someone
+      // widens the set without updating EXT_FOR_TYPE we refuse rather than
+      // fall through to an empty extension.
+      return Response.json({ error: 'Unsupported file type' }, { status: 400 });
+    }
     const timestamp = Date.now();
     const filename = `${timestamp}-${baseName}${ext}`;
     const filePath = path.join(uploadDir, filename);
+
+    // Defense-in-depth: ensure the resolved path is still inside uploadDir.
+    // The sanitizer above should already guarantee this, but we verify.
+    const resolvedUploadDir = path.resolve(uploadDir);
+    const resolvedFilePath = path.resolve(filePath);
+    if (!resolvedFilePath.startsWith(resolvedUploadDir + path.sep)) {
+      return Response.json({ error: 'Invalid filename' }, { status: 400 });
+    }
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const tmpPath = filePath + '.tmp';

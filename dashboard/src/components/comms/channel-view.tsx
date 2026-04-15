@@ -7,7 +7,15 @@ import { IconSend, IconPhoto, IconX, IconMicrophone } from '@tabler/icons-react'
 
 // Polling cadence for the visible-tab live feed. Paused when the tab is
 // backgrounded so inactive dashboards do not accumulate network traffic.
-const POLL_MS = 2000;
+//
+// Configurable via NEXT_PUBLIC_COMMS_POLL_MS (read at build time by Next.js).
+// Default: 10000ms (10s). Enforced minimum: 2000ms so an accidental misconfig
+// cannot hammer the filesystem-backed API routes.
+const POLL_MS = (() => {
+  const raw = parseInt(process.env.NEXT_PUBLIC_COMMS_POLL_MS ?? '', 10);
+  if (!Number.isFinite(raw) || raw <= 0) return 10000;
+  return Math.max(raw, 2000);
+})();
 
 interface BusMessage {
   id: string;
@@ -138,8 +146,8 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
     forceScrollRef.current = true;
   }, [sortOrder]);
 
-  // Live 2s polling — paused when the tab is backgrounded so inactive
-  // dashboards do not accumulate network traffic.
+  // Live polling (cadence from POLL_MS) — paused when the tab is backgrounded
+  // so inactive dashboards do not accumulate network traffic.
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
 
