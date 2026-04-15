@@ -97,6 +97,7 @@ export class TelegramAPI {
       const response = await fetch(`${this.baseUrl}/sendPhoto`, {
         method: 'POST',
         body: formData,
+        signal: AbortSignal.timeout(60000),
       });
       const result = await response.json() as any;
       if (!result.ok) {
@@ -106,6 +107,9 @@ export class TelegramAPI {
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('Telegram API error')) {
         throw err;
+      }
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(`Telegram API request timed out after 60s: sendPhoto`);
       }
       throw new Error(`Telegram API request failed: ${err}`);
     }
@@ -144,6 +148,7 @@ export class TelegramAPI {
       const response = await fetch(`${this.baseUrl}/sendDocument`, {
         method: 'POST',
         body: formData,
+        signal: AbortSignal.timeout(60000),
       });
       const result = await response.json() as any;
       if (!result.ok) {
@@ -153,6 +158,9 @@ export class TelegramAPI {
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('Telegram API error')) {
         throw err;
+      }
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(`Telegram API request timed out after 60s: sendDocument`);
       }
       throw new Error(`Telegram API request failed: ${err}`);
     }
