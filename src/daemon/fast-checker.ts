@@ -1,9 +1,10 @@
 import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync } from 'fs';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
+import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
@@ -94,7 +95,7 @@ export class FastChecker {
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      exec(`cortextos bus update-heartbeat "[watchdog] ${agentName} alive — idle session ${ts}"`, (err) => {
+      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
         if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
       });
     }, HEARTBEAT_INTERVAL_MS);
@@ -379,6 +380,96 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
+   * Handle a callback from the org's activity-channel bot.
+   *
+   * Runs alongside the agent's primary bot callback handler when the agent
+   * is the org's orchestrator (see agent-manager.ts for the wiring). Only
+   * appr_(allow|deny)_<approvalId> prefixes are accepted here — the
+   * activity-channel bot only ever posts approval buttons, so any other
+   * callback is rejected. The responding API must be the activity-channel
+   * API (not the agent's own bot) so answerCallbackQuery + editMessageText
+   * target the right message on the right bot.
+   */
+  async handleActivityCallback(query: TelegramCallbackQuery, activityApi: TelegramAPI): Promise<void> {
+    const data = stripControlChars(query.data || '');
+    const callbackQueryId = query.id;
+
+    // SECURITY: callbacks must come from the whitelisted user. Identical
+    // check to handleCallback — approval clicks are as sensitive as
+    // permission clicks and the same gate applies.
+    if (this.allowedUserId !== undefined) {
+      const fromUserId = query.from?.id;
+      if (fromUserId !== this.allowedUserId) {
+        this.log(`SECURITY: activity-channel callback from unauthorized user ${fromUserId} - rejecting`);
+        try { await activityApi.answerCallbackQuery(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
+        return;
+      }
+    }
+
+    const apprMatch = data.match(/^appr_(allow|deny)_(approval_\d+_[a-zA-Z0-9]+)$/);
+    if (!apprMatch) {
+      this.log(`activity-channel callback ignored (unknown prefix): ${data.slice(0, 40)}`);
+      try { await activityApi.answerCallbackQuery(callbackQueryId, 'Unknown button'); } catch { /* ignore */ }
+      return;
+    }
+
+    await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, activityApi);
+  }
+
+  /**
+   * Shared approval-callback resolution path. Called by both handleCallback
+   * (agent's own bot) and handleActivityCallback (activity-channel bot).
+   *
+   * Resolves the approval via updateApproval (which moves the file from
+   * pending/ to resolved/ and notifies the requesting agent via inbox),
+   * answers the Telegram callback so the spinner stops, and edits the
+   * original message to show who approved/denied for the audit trail.
+   *
+   * `api` is the TelegramAPI that owns the bot the callback came from —
+   * answerCallbackQuery and editMessageText must target the same bot.
+   */
+  private async routeApprovalCallback(
+    decision: 'allow' | 'deny',
+    approvalId: string,
+    query: TelegramCallbackQuery,
+    api: TelegramAPI | undefined,
+  ): Promise<void> {
+    const chatId = query.message?.chat?.id;
+    const messageId = query.message?.message_id;
+    const callbackQueryId = query.id;
+    const status = decision === 'allow' ? 'approved' : 'rejected';
+
+    // Build a friendly audit-trail suffix: "by Alice (@alice)" or just
+    // "by Alice" if no username. Falls back to the Telegram user id if
+    // both are missing (shouldn't happen in practice but guards edge).
+    const firstName = query.from?.first_name;
+    const username = query.from?.username;
+    const auditWho = firstName && username
+      ? `${firstName} (@${username})`
+      : firstName ?? (username ? `@${username}` : `user ${query.from?.id ?? 'unknown'}`);
+    const auditNote = `via Telegram activity channel by ${auditWho}`;
+
+    try {
+      updateApproval(this.paths, approvalId, status, auditNote);
+    } catch (err) {
+      this.log(`Approval callback: updateApproval failed for ${approvalId}: ${err}`);
+      if (api) {
+        try { await api.answerCallbackQuery(callbackQueryId, 'Approval not found or already resolved'); } catch { /* ignore */ }
+      }
+      return;
+    }
+
+    if (api) {
+      try { await api.answerCallbackQuery(callbackQueryId, decision === 'allow' ? 'Approved' : 'Denied'); } catch { /* ignore */ }
+      if (chatId && messageId) {
+        const label = decision === 'allow' ? `✅ Approved by ${auditWho}` : `❌ Denied by ${auditWho}`;
+        try { await api.editMessageText(chatId, messageId, label); } catch { /* ignore */ }
+      }
+    }
+    this.log(`Approval callback: ${decision} for ${approvalId} by ${auditWho}`);
+  }
+
+  /**
    * Handle a Telegram inline button callback query.
    * Routes to permission, restart, or AskUserQuestion handlers.
    */
@@ -396,6 +487,17 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         this.log(`SECURITY: callback from unauthorized user ${fromUserId} - rejecting`);
         return;
       }
+    }
+
+    // Approval callbacks: appr_(allow|deny)_{approvalId}
+    // These originate from the org's activity channel bot (see
+    // handleActivityCallback) but may also arrive here if an operator
+    // ever routes an approval button through the agent's own bot. The
+    // prefix check is cheap and routing-agnostic.
+    const apprMatch = data.match(/^appr_(allow|deny)_(approval_\d+_[a-zA-Z0-9]+)$/);
+    if (apprMatch) {
+      await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, this.telegramApi);
+      return;
     }
 
     // Permission callbacks: perm_(allow|deny|continue)_{hexId}

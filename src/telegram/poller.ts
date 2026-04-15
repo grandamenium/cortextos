@@ -16,14 +16,32 @@ export class TelegramPoller {
   private offset: number = 0;
   private running: boolean = false;
   private stateDir: string;
+  private offsetFileName: string;
   private messageHandlers: MessageHandler[] = [];
   private callbackHandlers: CallbackHandler[] = [];
   private pollInterval: number;
 
-  constructor(api: TelegramAPI, stateDir: string, pollInterval: number = 1000) {
+  /**
+   * @param api Telegram API client scoped to a single bot token.
+   * @param stateDir Directory for persisted poller state (offset, dedup).
+   * @param pollInterval Milliseconds between getUpdates calls.
+   * @param offsetFileSuffix Optional distinct suffix for the offset file.
+   *   When omitted (default), offset persists to `.telegram-offset`. When
+   *   provided, offset persists to `.telegram-offset-<suffix>`. Use this
+   *   when running a second poller in the same stateDir against a
+   *   different bot token (e.g. an activity-channel bot alongside the
+   *   agent's own bot), so the two pollers do not clobber each other's
+   *   offsets. Without this, two pollers sharing a stateDir would both
+   *   write to `.telegram-offset` and lose track of which bot each
+   *   offset belonged to.
+   */
+  constructor(api: TelegramAPI, stateDir: string, pollInterval: number = 1000, offsetFileSuffix?: string) {
     this.api = api;
     this.stateDir = stateDir;
     this.pollInterval = pollInterval;
+    this.offsetFileName = offsetFileSuffix
+      ? `.telegram-offset-${offsetFileSuffix}`
+      : '.telegram-offset';
     this.loadOffset();
   }
 
@@ -121,7 +139,7 @@ export class TelegramPoller {
    * Load persisted offset from state file.
    */
   private loadOffset(): void {
-    const offsetFile = join(this.stateDir, '.telegram-offset');
+    const offsetFile = join(this.stateDir, this.offsetFileName);
     try {
       if (existsSync(offsetFile)) {
         const content = readFileSync(offsetFile, 'utf-8').trim();
@@ -140,7 +158,7 @@ export class TelegramPoller {
    */
   private saveOffset(): void {
     ensureDir(this.stateDir);
-    const offsetFile = join(this.stateDir, '.telegram-offset');
+    const offsetFile = join(this.stateDir, this.offsetFileName);
     try {
       writeFileSync(offsetFile, String(this.offset), 'utf-8');
     } catch {

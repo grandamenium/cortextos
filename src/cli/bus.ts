@@ -13,6 +13,7 @@ import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunity
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
+import { updateCronFire } from '../bus/cron-state.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
@@ -474,7 +475,7 @@ busCommand
   .option('--surface <path>', 'Surface file path')
   .option('--direction <dir>', 'Direction: higher or lower', 'higher')
   .option('--window <dur>', 'Measurement window', '24h')
-  .action((metric: string, hypothesis: string, opts: { surface?: string; direction?: string; window?: string }) => {
+  .action(async (metric: string, hypothesis: string, opts: { surface?: string; direction?: string; window?: string }) => {
     const env = resolveEnv();
     const agentDir = env.agentDir || process.cwd();
     const id = createExperiment(agentDir, env.agentName, metric, hypothesis, {
@@ -488,13 +489,14 @@ busCommand
     const config = loadExperimentConfig(agentDir);
     if (config.approval_required) {
       const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-      const approvalId = createApproval(
+      const approvalId = await createApproval(
         paths,
         env.agentName,
         env.org,
         `Run experiment: ${metric} — ${hypothesis.slice(0, 80)}`,
         'other',
         `Experiment ID: ${id}\nMetric: ${metric}\nHypothesis: ${hypothesis}`,
+        env.frameworkRoot,
       );
       console.log(`approval_required: ${approvalId}`);
     }
@@ -782,7 +784,7 @@ busCommand
   .argument('<title>', 'What you are requesting approval for')
   .argument('<category>', 'Category: external-comms, financial, deployment, data-deletion, other')
   .argument('[context]', 'Additional context')
-  .action((title: string, category: string, context?: string) => {
+  .action(async (title: string, category: string, context?: string) => {
     const validCategories: ApprovalCategory[] = ['external-comms', 'financial', 'deployment', 'data-deletion', 'other'];
     if (!validCategories.includes(category as ApprovalCategory)) {
       console.error(`Invalid category '${category}'. Must be one of: ${validCategories.join(', ')}`);
@@ -790,7 +792,13 @@ busCommand
     }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const id = createApproval(paths, env.agentName, env.org, title, category as ApprovalCategory, context || '');
+    // await — createApproval fan-out posts to the activity channel, which
+    // must complete before the CLI process exits or the post silently
+    // never sends. env.frameworkRoot is passed so the activity-channel
+    // orgDir resolves to where activity-channel.env actually lives (the
+    // framework repo path, NOT the runtime state path — see
+    // src/bus/approval.ts:postApprovalToActivityChannel for the history).
+    const id = await createApproval(paths, env.agentName, env.org, title, category as ApprovalCategory, context || '', env.frameworkRoot);
     console.log(id);
   });
 
@@ -1519,6 +1527,18 @@ busCommand
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const pruned = pruneReminders(paths, parseInt(opts.days ?? '7', 10));
     console.log(`Pruned ${pruned} acked reminder(s)`);
+  });
+
+busCommand
+  .command('update-cron-fire')
+  .argument('<cron-name>', 'Name of the cron as defined in config.json')
+  .option('--interval <interval>', 'Expected interval, e.g. "6h", "24h", "30m"')
+  .description('Record that a named cron just fired (enables daemon gap detection for dead zones)')
+  .action((cronName: string, opts: { interval?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    updateCronFire(paths.stateDir, cronName, opts.interval);
+    console.log(`Recorded fire for cron "${cronName}"`);
   });
 
 busCommand

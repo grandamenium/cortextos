@@ -1,4 +1,5 @@
 import { appendFileSync } from 'fs';
+import { redactSecrets } from './redact.js';
 
 // Dynamic import for strip-ansi (ESM module)
 let stripAnsi: (text: string) => string;
@@ -27,9 +28,18 @@ export class OutputBuffer {
   /**
    * Push new output data into the buffer.
    * Also streams to log file if configured.
+   *
+   * Secret redaction runs once at the top via `redactSecrets` and the
+   * scrubbed string is used for BOTH the in-memory ring buffer AND the
+   * disk log. Without this, any JWT or session cookie an agent's shell
+   * happens to print (e.g. curl -v against an authenticated endpoint)
+   * would end up persisted to stdout.log verbatim. See src/pty/redact.ts
+   * for the rationale + the known chunk-boundary limitation.
    */
   push(data: string): void {
-    this.chunks.push(data);
+    const safe = redactSecrets(data);
+
+    this.chunks.push(safe);
     if (this.chunks.length > this.maxChunks) {
       this.chunks.shift();
     }
@@ -37,7 +47,7 @@ export class OutputBuffer {
     // Stream to log file (replaces tmux pipe-pane)
     if (this.logPath) {
       try {
-        appendFileSync(this.logPath, data, 'utf-8');
+        appendFileSync(this.logPath, safe, 'utf-8');
       } catch {
         // Ignore log write errors
       }

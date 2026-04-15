@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -7,6 +7,7 @@ import { MessageDedup, injectMessage } from '../pty/inject.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
+import { readCronState, parseDurationMs } from '../bus/cron-state.js';
 import { resolvePaths } from '../utils/paths.js';
 
 type LogFn = (msg: string) => void;
@@ -309,6 +310,29 @@ export class AgentProcess {
     this.pty = null;
     this.clearSessionTimer();
 
+    // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
+    // the whole process group and reaches each PTY's Claude Code child
+    // BEFORE the daemon's stopAll() loop has a chance to call stopAgent() on
+    // it. Those children exit cleanly (code 0) but arrive at handleExit with
+    // stopRequested=false, which used to classify the exit as a crash and
+    // inflate .crash_count_today by one per agent, per PM2 restart.
+    //
+    // agent-manager.ts:stopAll() already writes a `.daemon-stop` marker in
+    // every agent's state dir at the START of its shutdown loop for an
+    // unrelated reason (SessionEnd crash-alert hook). We reuse that marker
+    // here as the authoritative "the daemon is going down" signal. If the
+    // marker exists AND is recent (written within the last 60s), any PTY
+    // exit is a shutdown casualty, not a real crash — swallow it.
+    //
+    // The 60s window guards against a stale marker from a previous shutdown
+    // that wasn't cleaned up: we do NOT want an old marker to silently mask
+    // a genuine crash days later. handleExit does NOT delete the marker —
+    // cleanup stays with agent-manager / hook-crash-alert per the existing
+    // separation of concerns.
+    if (this.isDaemonShuttingDown()) {
+      return;
+    }
+
     // BUG-040 fix: check stopRequested instead of (only) stopping. The
     // stopping flag is cleared inside stop() after a 15s timeout window —
     // which means a slow PTY shutdown can fire handleExit AFTER stopping is
@@ -333,6 +357,7 @@ export class AgentProcess {
 
     if (this.crashCount >= this.maxCrashesPerDay) {
       this.log(`HALTED: exceeded ${this.maxCrashesPerDay} crashes today`);
+      this.appendCrashToRestartsLog(exitCode, 0, 'HALTED');
       this.status = 'halted';
       this.notifyStatusChange();
       return;
@@ -341,6 +366,11 @@ export class AgentProcess {
     // Exponential backoff restart
     const backoff = Math.min(5000 * Math.pow(2, this.crashCount - 1), 300000);
     this.log(`Crash recovery: restart in ${backoff / 1000}s (crash #${this.crashCount})`);
+    // Persist the crash to restarts.log so operators have a durable audit
+    // trail. Previously only planned SELF-RESTART / HARD-RESTART from
+    // bus/system.ts wrote here, which left daemon-classified crashes
+    // invisible outside the rotating PM2 daemon stdout log.
+    this.appendCrashToRestartsLog(exitCode, backoff, 'CRASH');
     this.status = 'crashed';
     this.notifyStatusChange();
 
@@ -479,6 +509,56 @@ export class AgentProcess {
     }
   }
 
+  /**
+   * Check whether the daemon is currently in its shutdown sequence.
+   *
+   * Returns true iff a `.daemon-stop` marker exists in this agent's state
+   * dir AND was written within the last 60 seconds. The marker is written
+   * by AgentManager.stopAll() before it begins iterating stopAgent() calls.
+   * A stale marker older than 60s is treated as leftover from a prior
+   * shutdown and ignored — real crashes must not be masked indefinitely.
+   */
+  private isDaemonShuttingDown(): boolean {
+    const marker = join(this.env.ctxRoot, 'state', this.name, '.daemon-stop');
+    try {
+      if (!existsSync(marker)) return false;
+      const ageMs = Date.now() - statSync(marker).mtimeMs;
+      return ageMs < 60_000;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Append an unplanned-exit entry to restarts.log. Complements the planned
+   * SELF-RESTART / HARD-RESTART entries written by src/bus/system.ts so that
+   * a single file gives the complete restart history for an agent.
+   *
+   * Format matches bus/system.ts: `[ISO] <KIND>: <details>`. appendFileSync
+   * uses write(2) with O_APPEND on Linux, which is atomic for writes under
+   * PIPE_BUF (~4KB) — each CRASH line fits comfortably. All errors are
+   * swallowed: logging must never break crash recovery.
+   */
+  private appendCrashToRestartsLog(
+    exitCode: number,
+    backoffMs: number,
+    kind: 'CRASH' | 'HALTED',
+  ): void {
+    try {
+      const logDir = join(this.env.ctxRoot, 'logs', this.name);
+      ensureDir(logDir);
+      const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const details =
+        kind === 'HALTED'
+          ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
+          : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+      const logLine = `[${timestamp}] ${kind}: ${details}\n`;
+      appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
+    } catch {
+      /* swallow — never break crash recovery on a logging failure */
+    }
+  }
+
   private resetCrashCountIfNewDay(today: string): void {
     const crashFile = join(this.env.ctxRoot, 'logs', this.name, '.crash_count_today');
     try {
@@ -530,6 +610,80 @@ export class AgentProcess {
     this.verifyCronsAfterIdle(recurringNames, generation).catch(err => {
       this.log(`Cron verification failed (non-fatal): ${err}`);
     });
+  }
+
+  /**
+   * Starts a background gap-detection loop for recurring interval-based crons.
+   * Reads cron-state.json every 10 minutes; injects a nudge if any cron has
+   * been silent for >2x its expected interval.
+   *
+   * Fire-and-forget: errors are logged but never propagated.
+   */
+  scheduleGapDetection(): void {
+    const crons = this.config.crons;
+    if (!crons || crons.length === 0) return;
+
+    // Only monitor recurring crons with a parseable interval (skip cron expressions)
+    const monitorable = crons.filter(
+      c => c.type !== 'once' && c.interval && !isNaN(parseDurationMs(c.interval)),
+    );
+    if (monitorable.length === 0) return;
+
+    const generation = this.lifecycleGeneration;
+
+    this.runGapDetectionLoop(monitorable, generation).catch(err => {
+      this.log(`Cron gap detection failed (non-fatal): ${err}`);
+    });
+  }
+
+  private async runGapDetectionLoop(
+    crons: Array<{ name: string; interval?: string }>,
+    generation: number,
+  ): Promise<void> {
+    const GAP_POLL_MS = 10 * 60 * 1000;   // poll every 10 minutes
+    const GAP_MULTIPLIER = 2.0;            // nudge when gap > 2x expected interval
+
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+
+    // Initial wait — give the agent time to boot and register crons before first check
+    await sleep(GAP_POLL_MS);
+
+    while (true) {
+      if (generation !== this.lifecycleGeneration || this.status !== 'running') return;
+
+      const now = Date.now();
+      const state = readCronState(stateDir);
+
+      for (const cronDef of crons) {
+        const intervalMs = parseDurationMs(cronDef.interval!);
+
+        const record = state.crons.find(r => r.name === cronDef.name);
+        if (!record) {
+          // No fire record yet — cron may not have fired once. Skip to avoid
+          // false positives on freshly started agents.
+          continue;
+        }
+
+        const lastFireMs = Date.parse(record.last_fire);
+        if (isNaN(lastFireMs)) continue;
+
+        const gapMs = now - lastFireMs;
+        const threshold = intervalMs * GAP_MULTIPLIER;
+
+        if (gapMs > threshold) {
+          const gapMin = Math.round(gapMs / 60_000);
+          const expectedMin = Math.round(intervalMs / 60_000);
+          const nudge = `[SYSTEM] Cron gap detected for "${cronDef.name}": last fired ${gapMin} minutes ago (expected every ${expectedMin} minutes). Run CronList to verify the cron is still active. If missing, restore it from config.json: /loop ${cronDef.interval} <cron prompt>.`;
+
+          this.log(`Gap nudge: ${cronDef.name} silent ${gapMin}min (threshold: ${Math.round(threshold / 60_000)}min)`);
+          if (this.pty && this.status === 'running') {
+            injectMessage((data) => this.pty!.write(data), nudge);
+          }
+        }
+      }
+
+      await sleep(GAP_POLL_MS);
+    }
   }
 
   private async verifyCronsAfterIdle(

@@ -199,10 +199,10 @@ describe('E2E Lifecycle', () => {
   });
 
   describe('Approval workflow', () => {
-    it('create and update approval', () => {
+    it('create and update approval', async () => {
       const paths = makePaths('nick');
 
-      const approvalId = createApproval(
+      const approvalId = await createApproval(
         paths, 'nick', 'test-org',
         'Post to Skool community',
         'external-comms',

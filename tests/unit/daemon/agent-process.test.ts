@@ -42,14 +42,40 @@ vi.mock('../../../src/utils/paths.js', () => ({
   resolvePaths: vi.fn().mockReturnValue({}),
 }));
 
+const fsMocks = {
+  existsSync: vi.fn().mockReturnValue(false),
+  readFileSync: vi.fn(),
+  writeFileSync: vi.fn(),
+  appendFileSync: vi.fn(),
+  statSync: vi.fn(),
+};
+
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
+  // Getter-based exposure of the fsMocks vi.fn()s. Two consumer patterns
+  // need to coexist on this file:
+  //   (1) `fsMocks.X.mockReset()` — used by the BUG-040 / restarts.log
+  //       tests added by this patch
+  //   (2) `vi.mocked(fs.X).mockImplementation(...)` — used by the
+  //       verifyCronsAfterIdle tests + BUG-048 reschedule tests
+  // For (2) to work, `fs.X` MUST resolve to the same vi.fn() instance as
+  // `fsMocks.X`. Naive direct reference (`existsSync: fsMocks.existsSync`)
+  // breaks because vi.mock factories are hoisted + executed BEFORE the
+  // `const fsMocks = {...}` initializer — so the lookup captures
+  // `undefined`. Arrow wrappers (`(...args) => fsMocks.X(...args)`) keep
+  // (1) working but break (2) because `fs.X` is no longer a vi.fn — it's
+  // a plain arrow function, and `vi.mocked()` does not recognize it as
+  // mockable. Getters thread the needle: the lookup is deferred until
+  // call time (after fsMocks is initialized), and the value returned IS
+  // the underlying vi.fn so `vi.mocked()` recognizes it.
   return {
     ...actual,
     mkdirSync: vi.fn(),
-    existsSync: vi.fn().mockReturnValue(false),
-    readFileSync: vi.fn(),
-    writeFileSync: vi.fn(),
+    get existsSync() { return fsMocks.existsSync; },
+    get readFileSync() { return fsMocks.readFileSync; },
+    get writeFileSync() { return fsMocks.writeFileSync; },
+    get appendFileSync() { return fsMocks.appendFileSync; },
+    get statSync() { return fsMocks.statSync; },
   };
 });
 
@@ -74,6 +100,11 @@ beforeEach(() => {
   mockPty.isAlive.mockReturnValue(true);
   mockPty.onExit.mockClear();
   mockInjectMessage.mockClear();
+  fsMocks.existsSync.mockReset().mockReturnValue(false);
+  fsMocks.readFileSync.mockReset();
+  fsMocks.writeFileSync.mockReset();
+  fsMocks.appendFileSync.mockReset();
+  fsMocks.statSync.mockReset();
 });
 
 describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
@@ -129,6 +160,75 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
 
     // The agent should be in 'crashed' state (crash recovery scheduled)
     expect(ap.getStatus().status).toBe('crashed');
+  });
+
+  it('unexpected PTY exit persists a CRASH line to restarts.log', async () => {
+    // Default fs mocks: no .daemon-stop marker, no .crash_count_today file.
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // Fire exit handler WITHOUT calling stop() first — simulates a real crash.
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    // restarts.log must have received a CRASH entry with the exit code and
+    // crash counter. Before the fix, daemon-classified crashes only wrote
+    // to stdout and left restarts.log empty.
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    const [logPath, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logPath)).toContain('/logs/alice/restarts.log');
+    expect(String(logLine)).toMatch(/\] CRASH: exit_code=1 crash_count=1 backoff_s=5\b/);
+    expect(String(logLine).endsWith('\n')).toBe(true);
+  });
+
+  it('PTY exit during daemon shutdown is NOT classified as a crash', async () => {
+    // Simulate agent-manager.ts:stopAll() having written a fresh .daemon-stop
+    // marker moments ago. handleExit should recognize the shutdown-in-progress
+    // signal and bail out before touching the crash counter or restarts.log.
+    fsMocks.existsSync.mockImplementation((p: any) => {
+      const path = String(p);
+      return path.endsWith('/state/alice/.daemon-stop');
+    });
+    fsMocks.statSync.mockImplementation((p: any) => ({ mtimeMs: Date.now() - 2_000 }));
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // PM2 SIGTERM propagated to the PTY's Claude Code child: it exits
+    // cleanly with code 0 before its own stopAgent() call has a chance to
+    // set stopRequested. Before the fix, this produced a phantom crash
+    // and incremented .crash_count_today.
+    capturedOnExit!(0, 0);
+
+    // Agent state is 'running' still — handleExit returned early without
+    // toggling status. No crash write, no log append, no restart scheduled.
+    expect(ap.getStatus().status).toBe('running');
+    expect(fsMocks.appendFileSync).not.toHaveBeenCalled();
+    expect(fsMocks.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('.crash_count_today'),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('stale .daemon-stop marker (>60s old) does NOT mask a real crash', async () => {
+    // Regression guard: if a prior shutdown failed to clean up its marker,
+    // we do NOT want it to silently swallow genuine crashes hours later.
+    // The 60s window in isDaemonShuttingDown() is the load-bearing check.
+    fsMocks.existsSync.mockImplementation((p: any) =>
+      String(p).endsWith('/state/alice/.daemon-stop'),
+    );
+    fsMocks.statSync.mockImplementation((p: any) => ({ mtimeMs: Date.now() - 3_600_000 })); // 1h old
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    expect(String(fsMocks.appendFileSync.mock.calls[0][1])).toMatch(/\] CRASH: /);
   });
 
   it('sessionRefresh() delegates to stop() then start() (in order)', async () => {

@@ -375,7 +375,16 @@ export function checkGoalStaleness(
 
 /**
  * Post a message to the org's Telegram activity channel.
- * Returns false if not configured (silent fail).
+ *
+ * Returns false if not configured (silent fail — callers can ignore the
+ * return value and treat activity-channel posting as best-effort).
+ *
+ * `replyMarkup` is an optional Telegram inline keyboard (or any reply
+ * markup shape). When provided, the message ships with the keyboard
+ * attached — used for interactive workflows like approval Approve/Deny
+ * buttons posted alongside approval creation. Leaving it undefined
+ * preserves the prior one-way notification shape exactly.
+ *
  * Mirrors bash bus/post-activity.sh.
  */
 export async function postActivity(
@@ -383,6 +392,7 @@ export async function postActivity(
   ctxRoot: string,
   org: string,
   message: string,
+  replyMarkup?: object,
 ): Promise<boolean> {
   // Look for activity-channel.env
   const candidates = [
@@ -428,7 +438,7 @@ export async function postActivity(
 
   try {
     const api = new TelegramAPI(botToken);
-    await api.sendMessage(chatId, message);
+    await api.sendMessage(chatId, message, replyMarkup);
     return true;
   } catch {
     return false;

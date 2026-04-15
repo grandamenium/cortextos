@@ -467,9 +467,9 @@ test.describe('Message JSONL format (dashboard API compatibility)', () => {
 // ============================================================================
 
 test.describe('Approval JSON format (dashboard sync compatibility)', () => {
-  test('approval has all fields the dashboard sync expects', () => {
+  test('approval has all fields the dashboard sync expects', async () => {
     const paths = makePaths('testbot');
-    const approvalId = createApproval(
+    const approvalId = await createApproval(
       paths, 'testbot', 'test-org',
       'Post to social media',
       'external-comms',
@@ -513,9 +513,9 @@ test.describe('Approval JSON format (dashboard sync compatibility)', () => {
     expect(approval.resolved_by).toBeNull();
   });
 
-  test('approval file is in pending/ subdirectory', () => {
+  test('approval file is in pending/ subdirectory', async () => {
     const paths = makePaths('testbot');
-    createApproval(paths, 'testbot', 'test-org', 'Test', 'other', 'desc');
+    await createApproval(paths, 'testbot', 'test-org', 'Test', 'other', 'desc');
 
     // Dashboard scans both pending/ and resolved/ subdirectories
     const pendingDir = join(paths.approvalDir, 'pending');
@@ -524,9 +524,9 @@ test.describe('Approval JSON format (dashboard sync compatibility)', () => {
     expect(files).toHaveLength(1);
   });
 
-  test('approval ID format', () => {
+  test('approval ID format', async () => {
     const paths = makePaths('testbot');
-    const id = createApproval(paths, 'testbot', 'test-org', 'Test', 'other');
+    const id = await createApproval(paths, 'testbot', 'test-org', 'Test', 'other');
     // ID format: approval_{epoch}_{rand}
     expect(id).toMatch(/^approval_\d+_[a-z0-9]+$/);
   });
@@ -822,7 +822,7 @@ test.describe('Org context JSON format', () => {
 // ============================================================================
 
 test.describe('Cross-format consistency', () => {
-  test('timestamps are consistently ISO 8601 across all formats', () => {
+  test('timestamps are consistently ISO 8601 across all formats', async () => {
     const paths = makePaths('testbot');
 
     // Create items across all formats
@@ -830,7 +830,7 @@ test.describe('Cross-format consistency', () => {
     logEvent(paths, 'testbot', 'test-org', 'action', 'test', 'info');
     updateHeartbeat(paths, 'testbot', 'alive');
     logOutboundMessage(ctxRoot, 'testbot', '12345', 'test', 1);
-    createApproval(paths, 'testbot', 'test-org', 'Approve', 'other');
+    await createApproval(paths, 'testbot', 'test-org', 'Approve', 'other');
 
     // Read back all timestamps
     const taskFile = readdirSync(paths.taskDir).filter(f => f.endsWith('.json'))[0];
