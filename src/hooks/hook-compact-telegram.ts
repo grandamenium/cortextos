@@ -5,6 +5,10 @@
  *
  * This hook fires and returns immediately — it never blocks the compaction.
  * Registered in settings.json under the "PreCompact" event.
+ *
+ * Safety: fetch is raced against a 5s abort signal so this process always
+ * exits well within the 10s settings.json timeout. A timed-out or failed
+ * Telegram call must never abort compaction.
  */
 
 import { loadEnv } from './index.js';
@@ -16,6 +20,9 @@ async function main(): Promise<void> {
 
   const agentName = env.agentName || 'agent';
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+
   try {
     const url = `https://api.telegram.org/bot${env.botToken}/sendMessage`;
     await fetch(url, {
@@ -25,9 +32,12 @@ async function main(): Promise<void> {
         chat_id: env.chatId,
         text: `[${agentName}] Context compacting... resuming shortly`,
       }),
+      signal: controller.signal,
     });
   } catch {
     // Never fail — compaction must not be blocked
+  } finally {
+    clearTimeout(timer);
   }
 }
 
