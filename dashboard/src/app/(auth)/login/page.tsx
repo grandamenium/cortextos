@@ -101,7 +101,7 @@ export default function LoginPage() {
           setLoading(false);
           return;
         }
-        window.location.href = res.url;
+        window.location.href = '/';
         return;
       }
       if (res.ok) {

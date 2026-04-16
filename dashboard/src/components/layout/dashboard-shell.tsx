@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter, usePathname, useSearchParams } from 'next/navigation';
 import { Sidebar } from './sidebar';
 import { Topbar } from './topbar';
 import { BottomNav } from './bottom-nav';
@@ -16,6 +17,10 @@ interface DashboardShellProps {
 }
 
 export function DashboardShell({ orgs, children }: DashboardShellProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [currentOrg, setCurrentOrg] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('cortextos-org');
@@ -29,6 +34,24 @@ export function DashboardShell({ orgs, children }: DashboardShellProps) {
   useEffect(() => {
     localStorage.setItem('cortextos-org', currentOrg);
   }, [currentOrg]);
+
+  // On mount, sync URL to match the saved org so the server re-renders with
+  // the correct filter. Without this, the selector shows the saved org but
+  // the page renders with all agents (no ?org= param in the URL).
+  useEffect(() => {
+    const urlOrg = searchParams.get('org');
+    if (currentOrg === 'all' && !urlOrg) return; // both mean "all", no navigation needed
+    if (currentOrg !== 'all' && urlOrg === currentOrg) return; // already in sync
+    const params = new URLSearchParams(searchParams.toString());
+    if (currentOrg === 'all') {
+      params.delete('org');
+    } else {
+      params.set('org', currentOrg);
+    }
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // run once on mount only
 
   return (
     <OrgContext.Provider value={{ currentOrg, setCurrentOrg, orgs }}>
