@@ -254,6 +254,23 @@ export class TelegramAPI {
           );
         }
       }
+      // self_chat safety net: a 403 "bots can't send messages to bots" at
+      // sendMessage time means CHAT_ID likely equals the bot's own user id
+      // (pasted from the BOT_TOKEN prefix during setup). Emit a one-time
+      // diagnostic per chat_id per process so operators see a clear pointer
+      // even when the agent was provisioned before the config-time probe
+      // (validateCredentials) landed. Does NOT change throw behavior.
+      if (/bots can'?t send messages to bots/i.test(msg)) {
+        const key = String(chatId);
+        if (!this.warnedSelfChat.has(key)) {
+          this.warnedSelfChat.add(key);
+          console.warn(
+            `[telegram] self_chat trap likely: chat_id=${key} resolved to another bot. ` +
+            `Check .env — CHAT_ID must be YOUR Telegram user id, not the BOT_TOKEN prefix. ` +
+            `Fix by sending /start to the bot from your own account and reading the chat id via getUpdates.`,
+          );
+        }
+      }
       throw err;
     }
   }

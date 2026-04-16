@@ -275,3 +275,90 @@ describe('TelegramAPI.sendMessage self_chat runtime safety net', () => {
     expect(caught?.message).toMatch(/bots can'?t send messages to bots/i);
   });
 });
+
+describe('TelegramAPI.sendMessage self_chat runtime safety net', () => {
+  it('emits a one-time console.warn when Telegram returns the bot-recipient 403', async () => {
+    queue({
+      status: 403,
+      body: { ok: false, error_code: 403, description: "Forbidden: bots can't send messages to bots" },
+    });
+
+    const api = new TelegramAPI('111:AAA');
+    await expect(api.sendMessage('777', 'hello')).rejects.toThrow(/bots can'?t send messages to bots/i);
+
+    expect(warnLog).toHaveLength(1);
+    const warn = warnLog[0];
+    expect(warn).toContain('[telegram]');
+    expect(warn).toContain('self_chat');
+    expect(warn).toContain('chat_id=777');
+    expect(warn).toContain('CHAT_ID');
+    expect(warn).toContain('/start');
+    // Must not leak any portion of the bot token.
+    expect(warn).not.toContain('AAA');
+    expect(warn).not.toContain('111:AAA');
+  });
+
+  it('does not re-warn for the same chat_id across repeated sendMessage calls in one process', async () => {
+    for (let i = 0; i < 3; i++) {
+      queue({
+        status: 403,
+        body: { ok: false, error_code: 403, description: "Forbidden: bots can't send messages to bots" },
+      });
+    }
+
+    const api = new TelegramAPI('111:AAA');
+    for (let i = 0; i < 3; i++) {
+      await expect(api.sendMessage('777', `msg${i}`)).rejects.toThrow();
+    }
+
+    expect(warnLog).toHaveLength(1);
+  });
+
+  it('warns separately for distinct chat_ids', async () => {
+    queue({
+      status: 403,
+      body: { ok: false, error_code: 403, description: "Forbidden: bots can't send messages to bots" },
+    });
+    queue({
+      status: 403,
+      body: { ok: false, error_code: 403, description: "Forbidden: bots can't send messages to bots" },
+    });
+
+    const api = new TelegramAPI('111:AAA');
+    await expect(api.sendMessage('777', 'a')).rejects.toThrow();
+    await expect(api.sendMessage('888', 'b')).rejects.toThrow();
+
+    expect(warnLog).toHaveLength(2);
+    expect(warnLog[0]).toContain('chat_id=777');
+    expect(warnLog[1]).toContain('chat_id=888');
+  });
+
+  it('does NOT warn on unrelated 403s', async () => {
+    queue({
+      status: 403,
+      body: { ok: false, error_code: 403, description: 'Forbidden: user is deactivated' },
+    });
+
+    const api = new TelegramAPI('111:AAA');
+    await expect(api.sendMessage('777', 'hi')).rejects.toThrow();
+
+    expect(warnLog).toHaveLength(0);
+  });
+
+  it('throw behavior unchanged — the 403 still propagates to the caller', async () => {
+    queue({
+      status: 403,
+      body: { ok: false, error_code: 403, description: "Forbidden: bots can't send messages to bots" },
+    });
+
+    const api = new TelegramAPI('111:AAA');
+    let caught: Error | null = null;
+    try {
+      await api.sendMessage('777', 'x');
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught?.message).toMatch(/bots can'?t send messages to bots/i);
+  });
+});
