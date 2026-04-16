@@ -101,7 +101,15 @@ export default function LoginPage() {
           setLoading(false);
           return;
         }
-        window.location.href = '/';
+        // Navigate to the original destination the user tried to reach, or /
+        // if none was recorded. Use window.location.origin to build a safe
+        // relative-only target — res.url can be http://localhost:3000/ behind
+        // a reverse proxy (when AUTH_URL is not set), which would send the
+        // browser to the wrong host.
+        const callbackParam = new URL(window.location.href).searchParams.get('callbackUrl');
+        // Validate same-origin: must start with / but not // (which is a protocol-relative URL)
+        const safeTarget = callbackParam && callbackParam.startsWith('/') && !callbackParam.startsWith('//') ? callbackParam : '/';
+        window.location.href = safeTarget;
         return;
       }
       if (res.ok) {
