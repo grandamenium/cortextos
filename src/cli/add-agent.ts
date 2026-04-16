@@ -120,7 +120,8 @@ export const addAgentCommand = new Command('add-agent')
         '',
         '# Claude Code v2.1.111+ gives Sonnet 4.6 a 1M context window by default.',
         '# Without "extra usage" billing enabled, compaction fails at 100% ctx.',
-        '# This reverts to standard 200k context so compaction always works.',
+        '# Keep this for Sonnet and Haiku agents. Remove it for Opus agents on Max/Team/Enterprise',
+        '# (Opus 1M context is included in those plans and does not need the billing gate).',
         'CLAUDE_CODE_DISABLE_1M_CONTEXT=true',
         '',
       ].join('\n'), 'utf-8');
