@@ -24,6 +24,11 @@ export class AgentManager {
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
   private pendingRestarts: Set<string> = new Set();
+  // Per-agent "starting" mutex. Prevents double-spawn if startAgent() is
+  // called concurrently for the same name — the second call bails before
+  // reaching spawn. Cleared in a finally block so a failed start does not
+  // leave the agent permanently unstartable.
+  private starting: Set<string> = new Set();
   private instanceId: string;
   private ctxRoot: string;
   private frameworkRoot: string;
@@ -158,6 +163,16 @@ export class AgentManager {
       this.pendingRestarts.add(name);
       return;
     }
+
+    // Defensive starting-set mutex: if a second concurrent startAgent() lands
+    // for the same name, bail rather than racing to a parallel spawn.
+    if (this.starting.has(name)) {
+      console.log(`[agent-manager] Agent ${name} is already starting — skipping duplicate start request`);
+      return;
+    }
+    this.starting.add(name);
+
+    try {
 
     // BUG-043 fix: resolve the agent's true org instead of using `this.org`.
     const resolvedOrg = this.resolveAgentOrg(name, org);
@@ -425,6 +440,12 @@ export class AgentManager {
       // singleton or Telegram webhook if the coupling ever causes real
       // operator pain. Non-orchestrator agents skip this entirely.
       await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+    }
+
+    } finally {
+      // Always clear the starting flag so a failed start does not leave
+      // the agent permanently unstartable.
+      this.starting.delete(name);
     }
   }
 

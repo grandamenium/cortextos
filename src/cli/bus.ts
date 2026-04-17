@@ -648,7 +648,10 @@ busCommand
   .argument('<message>', 'Message to post')
   .action(async (message: string) => {
     const env = resolveEnv();
-    const orgDir = env.agentDir ? env.agentDir.replace(/\/agents\/.*$/, '') : '';
+    // Cross-platform separator class: on Windows env.agentDir is backslash-
+    // separated and a forward-slash-only regex would never match, leaving
+    // orgDir empty. Allow either slash type in both positions.
+    const orgDir = env.agentDir ? env.agentDir.replace(/[/\\]agents[/\\].*$/, '') : '';
     const success = await postActivity(orgDir, env.ctxRoot, env.org, message);
     if (success) {
       console.log('Activity posted');

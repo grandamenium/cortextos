@@ -277,6 +277,78 @@ export const doctorCommand = new Command('doctor')
       fix: !existsSync(catalogPath) ? 'Run: cortextos bus check-upstream --apply to fetch the latest catalog' : undefined,
     });
 
+    // ── Windows commit-charge / pagefile headroom check ──────────────────
+    //
+    // Windows manages process memory via the "commit charge" = sum of all
+    // process working sets and reservations. The hard ceiling on commit
+    // charge is `Total Physical RAM + Pagefile Size`. When commit charge
+    // approaches this limit, Windows kills processes with STATUS_BREAKPOINT
+    // or refuses new allocations with ERROR_COMMITMENT_LIMIT (1455).
+    //
+    // The default Windows pagefile is often only 8 GB regardless of RAM.
+    // On a 32 GB machine that gives a commit ceiling of 40 GB — easily
+    // exceeded by 5 always-on Claude Code agents (Opus 1m + Sonnet) plus
+    // a Next.js dashboard plus VS Code. Symptoms: agents killed with
+    // STATUS_BREAKPOINT, daemon crash-loops, system hits ERROR_COMMITMENT_LIMIT
+    // during process spawn. Cascade. Hard system crash.
+    //
+    // Most users never look at virtual memory totals because Task Manager
+    // shows "physical RAM free" not "commit charge headroom". This check
+    // surfaces the silent landmine before it bites.
+    if (process.platform === 'win32') {
+      try {
+        // Read enabled agents to gate the warning. A fresh install with 0
+        // agents enabled doesn't need a warning — the user is just checking
+        // their environment. Warn only when scale is high enough that
+        // pagefile undersizing actually bites.
+        let enabledCount = 0;
+        const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
+        if (existsSync(enabledPath)) {
+          try {
+            const parsed = JSON.parse(readFileSync(enabledPath, 'utf-8'));
+            if (Array.isArray(parsed)) enabledCount = parsed.length;
+            else if (typeof parsed === 'object' && parsed !== null) enabledCount = Object.keys(parsed).length;
+          } catch { /* malformed file — treat as 0 */ }
+        }
+
+        // Query Windows commit-charge totals via PowerShell + CIM.
+        // TotalVisibleMemorySize  = physical RAM in KB
+        // TotalVirtualMemorySize  = physical RAM + current pagefile commit ceiling, in KB
+        const psOut = execSync(
+          'powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select TotalVisibleMemorySize, TotalVirtualMemorySize | ConvertTo-Json"',
+          { encoding: 'utf-8', stdio: 'pipe', timeout: 10000 }
+        );
+        const mem = JSON.parse(psOut.trim()) as { TotalVisibleMemorySize: number; TotalVirtualMemorySize: number };
+        const totalPhysicalGB = Math.round((mem.TotalVisibleMemorySize / 1048576) * 10) / 10;
+        const totalVirtualGB = Math.round((mem.TotalVirtualMemorySize / 1048576) * 10) / 10;
+        const pagefileGB = Math.round((totalVirtualGB - totalPhysicalGB) * 10) / 10;
+        const ratio = totalVirtualGB / totalPhysicalGB;
+
+        const sizeFmt = `${totalPhysicalGB}GB RAM + ${pagefileGB}GB pagefile = ${totalVirtualGB}GB commit ceiling (${enabledCount} agents enabled)`;
+
+        // Warn when virtual is below 1.5x physical AND the user is running
+        // a non-trivial agent count. 3 always-on agents is the threshold
+        // where the cascade starts to bite on the default 8 GB pagefile.
+        const undersized = ratio < 1.5;
+        const wantsHeadroom = enabledCount >= 3;
+
+        if (undersized && wantsHeadroom) {
+          checks.push({
+            name: 'Windows commit-charge headroom',
+            status: 'warn',
+            message: `${sizeFmt} — pagefile is undersized for ${enabledCount} agents`,
+            fix: 'Open System Properties → Advanced → Performance Settings → Advanced → Virtual Memory → Change. Uncheck "Automatically manage", select Custom size, set initial to 1.5x RAM, maximum to 2x RAM. Reboot.',
+          });
+        } else {
+          checks.push({
+            name: 'Windows commit-charge headroom',
+            status: 'pass',
+            message: sizeFmt,
+          });
+        }
+      } catch { /* PowerShell not available, query failed, or non-Windows path — skip silently */ }
+    }
+
     // Check GEMINI_API_KEY for Knowledge Base (semantic search / RAG)
     const orgsDir = join(frameworkRoot, 'orgs');
     let geminiConfigured = false;

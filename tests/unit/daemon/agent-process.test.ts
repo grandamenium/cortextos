@@ -107,7 +107,7 @@ beforeEach(() => {
   fsMocks.statSync.mockReset();
 });
 
-describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
+describe('AgentProcess - stop awaits PTY exit', () => {
   it('stop() awaits the PTY exit handler before resolving', async () => {
     const ap = new AgentProcess('alice', mockEnv, {});
     await ap.start();
@@ -133,7 +133,7 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     expect(ap.getStatus().status).toBe('stopped');
   }, 10000);
 
-  it('stop() does NOT trigger crash recovery on intentional stop (the BUG-011 regression)', async () => {
+  it('stop() does NOT trigger crash recovery on intentional stop', async () => {
     const ap = new AgentProcess('alice', mockEnv, {});
     await ap.start();
 
@@ -387,5 +387,115 @@ describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
 
     // sessionRefresh must NOT have been called — config said 1h, not 1s
     expect(refreshSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentProcess - injectMessage bootstrap guard (fast-checker reliability fix)', () => {
+  it('returns false when not bootstrapped, even if pty is running', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // Force isBootstrapped() to false — simulates startup turn still in flight
+    vi.spyOn(ap, 'isBootstrapped').mockReturnValue(false);
+
+    expect(ap.injectMessage('hello')).toBe(false);
+    // PTY should not have been written to
+    expect(mockPty.write).not.toHaveBeenCalled();
+  });
+
+  it('returns true and writes to pty when bootstrapped', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // Force isBootstrapped() to true — simulates session ready for input
+    vi.spyOn(ap, 'isBootstrapped').mockReturnValue(true);
+
+    expect(ap.injectMessage('hello')).toBe(true);
+  });
+
+  it('returns false when status is not running, regardless of bootstrap state', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // Stop the agent — stop() awaits the PTY exit handler, so we have
+    // to fire it manually against the mock PTY.
+    const stopPromise = ap.stop();
+    await new Promise(r => setTimeout(r, 10));
+    capturedOnExit!(0, 0);
+    await stopPromise;
+    expect(ap.getStatus().status).toBe('stopped');
+
+    vi.spyOn(ap, 'isBootstrapped').mockReturnValue(true);
+
+    expect(ap.injectMessage('hello')).toBe(false);
+  }, 10000);
+
+  it('checks bootstrap BEFORE dedup — startup-time messages do not poison dedup state', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // First call: not yet bootstrapped → should return false WITHOUT consulting dedup
+    const isBootstrappedSpy = vi.spyOn(ap, 'isBootstrapped');
+    isBootstrappedSpy.mockReturnValue(false);
+
+    expect(ap.injectMessage('hello')).toBe(false);
+
+    // Now session is bootstrapped — same content should still be injectable
+    // (would not be true if the previous call had marked it as seen in dedup)
+    isBootstrappedSpy.mockReturnValue(true);
+
+    expect(ap.injectMessage('hello')).toBe(true);
+  });
+});
+
+describe('AgentProcess - handleExit guards against late PTY exit on Windows', () => {
+  it('LATE exit (arriving AFTER stop() completes) does NOT trigger crash recovery', async () => {
+    // On Windows, the PTY death event can arrive after stop() has already
+    // resolved and cleared this.stopping. Without the status === 'stopped'
+    // guard, the late exit is misclassified as a crash. This test simulates
+    // the late-exit timing and asserts the status stays 'stopped'.
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // Stop with the in-flight exit firing during stop() — same as the
+    // stop-awaits-exit test, but we will also fire ANOTHER exit AFTER stop
+    // resolves to simulate the late-exit scenario.
+    const stopPromise = ap.stop();
+    await new Promise(r => setTimeout(r, 100));
+    capturedOnExit!(0, 0);
+    await stopPromise;
+    expect(ap.getStatus().status).toBe('stopped');
+
+    // The PTY's exit handler may fire AGAIN at this point on Windows
+    // (the OS-level process death event can lag the kill() return).
+    // Simulate that late exit arriving with the crash-typical -1 exit code.
+    // PRE-FIX: this would increment crashCount and move status to 'crashed'.
+    // POST-FIX: handleExit checks status === 'stopped' and returns silently.
+    if (capturedOnExit) {
+      capturedOnExit(-1, 0);
+    }
+
+    // The agent should STILL be 'stopped', NOT 'crashed'.
+    expect(ap.getStatus().status).toBe('stopped');
+    // Crash count should remain 0 (the late exit was not counted as a crash)
+    expect(ap.getStatus().crashCount).toBe(0);
+  }, 10000);
+
+  it('crash recovery STILL fires when an exit arrives on a running agent (regression check)', async () => {
+    // Make sure the late-exit guard did not over-correct and break the
+    // legitimate crash recovery path. An exit arriving on a 'running' agent
+    // (status !== 'stopped' and !stopping) should still count as a crash.
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // Fire an unintentional exit
+    capturedOnExit!(-1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(1);
   });
 });

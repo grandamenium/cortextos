@@ -18,13 +18,17 @@ vi.mock('../../../src/daemon/agent-process.js', () => ({
     async stop() { /* no-op */ }
     getStatus() { return { name: this.name, status: 'stopped' }; }
     onExit() { /* no-op */ }
+    scheduleCronVerification() { /* no-op */ }
   },
 }));
 
 // Mock FastChecker so it doesn't try to spawn anything either.
+// start() must be async because the real FastChecker.start() is async and
+// agent-manager.ts:235 calls .catch() on the return value. A sync no-op
+// returns undefined, which throws TypeError when .catch is invoked.
 vi.mock('../../../src/daemon/fast-checker.js', () => ({
   FastChecker: class {
-    start() { /* no-op */ }
+    async start() { /* no-op */ }
     stop() { /* no-op */ }
     wake() { /* no-op */ }
   },
@@ -346,5 +350,74 @@ describe('buildReplyContext - Telegram reply context (BUG fix: media replies los
     const msg = { message_id: 11, chat: { id: 1 }, text: 'Hello\x00world' };
     const result = buildReplyContext(msg);
     expect(result).not.toContain('\x00');
+  });
+});
+
+describe('AgentManager.startAgent - starting-set mutex (double-spawn prevention)', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-starting-test-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    mkdirSync(join(ctxRoot, 'logs', 'alice'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('clears the starting flag after a successful start', async () => {
+    // After startAgent resolves successfully, the starting set should NOT
+    // contain the agent name — otherwise a subsequent legitimate restart
+    // would be rejected as a duplicate.
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    await am.startAgent('alice', join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'));
+    expect((am as any).starting.has('alice')).toBe(false);
+  });
+
+  it('clears the starting flag even when startAgent throws', async () => {
+    // The finally block must clear the flag on error so a failed start does
+    // not leave the agent permanently unstartable. Force a throw by pointing
+    // at a nonexistent agent dir AND no auto-discovery — startAgent will
+    // exit via the early-return error path.
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    await am.startAgent('nonexistent', '/no/such/dir').catch(() => { /* expected */ });
+    expect((am as any).starting.has('nonexistent')).toBe(false);
+  });
+
+  it('rejects a re-entrant call for the same agent while starting is in flight', async () => {
+    // Simulates the race window: call 1 enters startAgent and adds 'alice' to
+    // the starting set. Before call 1 reaches the final agents.set(), call 2
+    // arrives. Call 2 should bail at the starting-set check.
+    //
+    // We construct this directly by manipulating the starting set, since the
+    // synchronous-up-to-first-await property makes the natural race
+    // unreproducible in a single-threaded test. The test pins the GUARD
+    // behavior, not the timing.
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    (am as any).starting.add('alice');
+
+    // The startAgent call should bail immediately without ever touching the
+    // agents map. We assert no entry was added.
+    await am.startAgent('alice', join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'));
+    expect((am as any).agents.has('alice')).toBe(false);
+  });
+
+  it('does NOT bail on a re-entrant call for a DIFFERENT agent', async () => {
+    // The starting set is per-agent, not global. A different agent name
+    // should still be allowed to start while another agent is mid-start.
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob'), { recursive: true });
+    mkdirSync(join(ctxRoot, 'logs', 'bob'), { recursive: true });
+    (am as any).starting.add('alice');
+
+    // Bob's start should proceed normally even though alice is in starting set
+    await am.startAgent('bob', join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob'));
+    expect((am as any).agents.has('bob')).toBe(true);
   });
 });
