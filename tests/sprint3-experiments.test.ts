@@ -307,6 +307,22 @@ describe('Sprint 3: Experiment Framework', () => {
       expect(cycles).toHaveLength(2);
     });
 
+    it("list with agent filter returns only that agent's cycles", () => {
+      manageCycle(testDir, 'create', { name: 'c1', agent: 'alice', metric: 'm1' });
+      manageCycle(testDir, 'create', { name: 'c2', agent: 'alice', metric: 'm2' });
+      manageCycle(testDir, 'create', { name: 'c3', agent: 'widgetbot', metric: 'm3' });
+
+      const aliceCycles = manageCycle(testDir, 'list', { agent: 'alice' });
+      expect(aliceCycles.map((c) => c.name).sort()).toEqual(['c1', 'c2']);
+
+      const widgetCycles = manageCycle(testDir, 'list', { agent: 'widgetbot' });
+      expect(widgetCycles.map((c) => c.name)).toEqual(['c3']);
+
+      // No filter still returns all (back-compat)
+      const all = manageCycle(testDir, 'list', {});
+      expect(all).toHaveLength(3);
+    });
+
     it('throws when modifying non-existent cycle', () => {
       expect(() => manageCycle(testDir, 'modify', { name: 'ghost' })).toThrow('not found');
     });

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# pre-push hook — installed by scripts/setup-hooks.sh
+#
+# Runs npm run build && npm test before any push.
+# Fails the push if either step fails, so broken code never reaches CI.
+#
+# To bypass in an emergency (last resort):
+#   git push --no-verify
+# Do NOT use --no-verify routinely. Fix the error instead.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "[pre-push] Running build..."
+if ! npm run build --silent; then
+  echo ""
+  echo "[pre-push] Build failed. Fix the error before pushing." >&2
+  echo "[pre-push] Push aborted." >&2
+  exit 1
+fi
+
+echo "[pre-push] Running tests..."
+if ! npm test --silent; then
+  echo ""
+  echo "[pre-push] Tests failed. Fix the failing tests before pushing." >&2
+  echo "[pre-push] Push aborted." >&2
+  exit 1
+fi
+
+echo "[pre-push] Build and tests passed. Pushing..."

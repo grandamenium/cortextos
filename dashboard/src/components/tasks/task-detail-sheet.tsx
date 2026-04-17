@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Sheet,
   SheetContent,
@@ -27,8 +27,9 @@ import {
   OrgBadge,
   TimeAgo,
 } from '@/components/shared';
-import { IconPencil } from '@tabler/icons-react';
-import type { Task, TaskStatus, TaskPriority } from '@/lib/types';
+import { IconPencil, IconFile, IconPhoto, IconFileText, IconCode } from '@tabler/icons-react';
+import { DeliverablePreview } from '@/components/tasks/deliverable-preview';
+import type { Task, TaskOutput, TaskStatus, TaskPriority } from '@/lib/types';
 
 export interface TaskDetailSheetProps {
   task: Task | null;
@@ -58,6 +59,14 @@ const STATUS_TRANSITIONS: Record<TaskStatus, { label: string; status: TaskStatus
   ],
 };
 
+function getOutputIcon(filePath: string) {
+  const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return IconPhoto;
+  if (ext === 'md') return IconFileText;
+  if (['ts', 'tsx', 'js', 'jsx', 'json', 'html', 'css', 'sh', 'py'].includes(ext)) return IconCode;
+  return IconFile;
+}
+
 export function TaskDetailSheet({
   task,
   open,
@@ -77,6 +86,39 @@ export function TaskDetailSheet({
   const [editAssignee, setEditAssignee] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Deliverables state
+  const [outputs, setOutputs] = useState<TaskOutput[]>([]);
+  const [deliverablesEnabled, setDeliverablesEnabled] = useState(false);
+  const [previewOutput, setPreviewOutput] = useState<TaskOutput | null>(null);
+
+  // Fetch outputs and deliverables setting when task detail opens
+  const fetchTaskOutputs = useCallback(async (taskId: string, org: string) => {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setOutputs(Array.isArray(data.outputs) ? data.outputs : []);
+      }
+    } catch { /* non-fatal */ }
+
+    try {
+      const res = await fetch(`/api/org/config?org=${encodeURIComponent(org)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDeliverablesEnabled(!!data.config?.require_deliverables);
+      }
+    } catch { /* non-fatal */ }
+  }, []);
+
+  useEffect(() => {
+    if (open && task) {
+      fetchTaskOutputs(task.id, task.org);
+    } else {
+      setOutputs([]);
+      setPreviewOutput(null);
+    }
+  }, [open, task?.id, task?.org, fetchTaskOutputs, task]);
 
   if (!task) return null;
 
@@ -138,7 +180,8 @@ export function TaskDetailSheet({
   }
 
   return (
-    <Sheet open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setEditing(false); setConfirmDelete(false); setError(null); } }}>
+    <>
+    <Sheet open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setEditing(false); setConfirmDelete(false); setError(null); setPreviewOutput(null); } }}>
       <SheetContent side="right" className="sm:max-w-lg overflow-y-auto">
         <SheetHeader>
           {editing ? (
@@ -274,6 +317,51 @@ export function TaskDetailSheet({
             </>
           )}
 
+          {/* Deliverables section — visible when require_deliverables is enabled */}
+          {!editing && deliverablesEnabled && (
+            <>
+              <Separator />
+              <div>
+                <p className="text-sm text-muted-foreground mb-2">
+                  Deliverables{outputs.length > 0 && ` (${outputs.length})`}
+                </p>
+                {outputs.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">No deliverables attached.</p>
+                ) : (
+                  <div className="space-y-1">
+                    {outputs.map((output, idx) => {
+                      const Icon = getOutputIcon(output.value);
+                      const filename = output.value.split('/').pop() ?? output.value;
+                      return (
+                        <button
+                          key={idx}
+                          onClick={() => setPreviewOutput(output)}
+                          className="flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 transition-colors"
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.cursor = 'pointer';
+                            const label = e.currentTarget.querySelector('[data-deliverable-label]') as HTMLElement | null;
+                            if (label) label.style.textDecoration = 'underline';
+                          }}
+                          onMouseLeave={(e) => {
+                            const label = e.currentTarget.querySelector('[data-deliverable-label]') as HTMLElement | null;
+                            if (label) label.style.textDecoration = 'none';
+                          }}
+                          style={{ cursor: 'pointer' } as React.CSSProperties}
+                        >
+                          <Icon size={16} className="shrink-0 text-primary" />
+                          <div className="min-w-0 flex-1">
+                            <p data-deliverable-label className="font-medium text-sm text-primary break-words">{output.label ?? filename}</p>
+                            <p className="text-xs text-muted-foreground break-all">{filename}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
           {!editing && (
             <>
               <Separator />
@@ -350,5 +438,30 @@ export function TaskDetailSheet({
         )}
       </SheetContent>
     </Sheet>
+
+    {/* Deliverable preview — fixed-position sibling outside the Sheet.
+        Three responsive breakpoints match the reference layout. */}
+    {open && previewOutput && (
+      <>
+        {/* Desktop: full height panel, left edge to sheet edge */}
+        <div className="hidden lg:block fixed inset-y-0 left-0 right-96 z-[55] animate-in slide-in-from-left-4 duration-200">
+          <DeliverablePreview output={previewOutput} onClose={() => setPreviewOutput(null)} />
+        </div>
+
+        {/* Tablet: centered modal with backdrop */}
+        <div className="hidden md:block lg:hidden fixed inset-0 z-[60]">
+          <div className="fixed inset-0 bg-black/40" onClick={() => setPreviewOutput(null)} />
+          <div className="fixed inset-4 z-[61] bg-background rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            <DeliverablePreview output={previewOutput} onClose={() => setPreviewOutput(null)} />
+          </div>
+        </div>
+
+        {/* Mobile: full takeover */}
+        <div className="block md:hidden fixed inset-0 z-[60] bg-background animate-in slide-in-from-bottom duration-200">
+          <DeliverablePreview output={previewOutput} onClose={() => setPreviewOutput(null)} />
+        </div>
+      </>
+    )}
+    </>
   );
 }

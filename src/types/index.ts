@@ -29,6 +29,15 @@ export interface InboxMessage {
 
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled';
 
+export interface TaskOutput {
+  /** Output kind. "file" links to a saved deliverable; other shapes reserved. */
+  type: 'file';
+  /** For type:"file", the path to the file relative to CTX_ROOT (forward-slash separated). */
+  value: string;
+  /** Optional human-readable label shown in dashboard task detail. */
+  label?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -48,6 +57,17 @@ export interface Task {
   due_date: string | null;
   archived: boolean;
   result?: string;
+  /** Linked deliverables (files saved via `cortextos bus save-output`). */
+  outputs?: TaskOutput[];
+  /**
+   * Dependency DAG edges (beads-inspired). Optional so existing task
+   * files remain valid with these fields absent. `blocked_by` lists
+   * task IDs that must reach `completed` before this task can
+   * progress; `blocks` is the reverse view, maintained symmetrically
+   * at create-time so queries in either direction are cheap.
+   */
+  blocks?: string[];
+  blocked_by?: string[];
 }
 
 // Event Types
@@ -179,6 +199,11 @@ export interface OrgContext {
   default_approval_categories?: string[];
   communication_style?: string;
   dashboard_url?: string;
+  /** When true, agents are instructed at startup that every task submitted
+   *  for review must have at least one file deliverable attached via
+   *  save-output. The instruction is injected into the boot prompt
+   *  dynamically — no agent markdown files are modified. */
+  require_deliverables?: boolean;
 }
 
 // Telegram Types
@@ -187,6 +212,34 @@ export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
   callback_query?: TelegramCallbackQuery;
+  message_reaction?: TelegramMessageReaction;
+}
+
+/**
+ * One item in a Telegram message's reaction list. Telegram supports
+ * `type: 'emoji'` (standard emoji, the only shape we handle today) and
+ * `type: 'custom_emoji'` (premium custom emoji, carrying a `custom_emoji_id`
+ * instead of an `emoji` character). Shaped as a tagged union so call sites
+ * can narrow safely.
+ */
+export type TelegramReactionType =
+  | { type: 'emoji'; emoji: string }
+  | { type: 'custom_emoji'; custom_emoji_id: string };
+
+/**
+ * A `message_reaction` update fires when a user adds or removes an
+ * emoji reaction on a chat message the bot can see. `old_reaction` and
+ * `new_reaction` are the reaction state before/after — empty means "no
+ * reaction", so the diff is (new) minus (old). Requires
+ * `allowed_updates: ['message_reaction']` in the getUpdates call.
+ */
+export interface TelegramMessageReaction {
+  chat: TelegramChat;
+  user?: TelegramUser;
+  message_id: number;
+  date: number;
+  old_reaction: TelegramReactionType[];
+  new_reaction: TelegramReactionType[];
 }
 
 export interface TelegramMessage {
@@ -298,6 +351,12 @@ export interface BusPaths {
   taskDir: string;
   approvalDir: string;
   analyticsDir: string;
+  /**
+   * Per-org deliverables root: {ctxRoot}/orgs/{org}/deliverables/.
+   * Files saved here are servable by the dashboard's /api/media route because
+   * they live under CTX_ROOT.
+   */
+  deliverablesDir: string;
 }
 
 // IPC Types

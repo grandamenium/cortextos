@@ -140,10 +140,12 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 
 ## Tools Available in This Session
 
-### Playwright (Browser Automation)
-- `playwright` Python binary, Chromium installed (headless)
-- `from playwright.sync_api import sync_playwright` in Python scripts
-- Or use Playwright MCP if configured
+### agent-browser (Browser Automation — replaces Playwright)
+- `agent-browser` CLI (Rust binary, npm-installed globally) drives Chrome via CDP
+- Snapshot-then-ref interaction pattern: `agent-browser snapshot` returns an a11y tree with refs (e1, e2, ...), then `agent-browser click @e1` / `fill @e2 "text"` operate by ref
+- Loaded via `.claude/skills/agent-browser/SKILL.md` — that skill says to run `agent-browser skills get <name>` for current command syntax (workflow docs are versioned with the binary, so always fetch fresh)
+- Quick verify: `agent-browser open https://example.com && agent-browser get title && agent-browser close`
+- Dashboard E2E tests still use Playwright DIRECTLY (different surface) — agent-browser only replaces the agent-facing browser MCP layer that was previously `mcp__plugin_playwright_*`
 
 ### Peekaboo (macOS Desktop Automation)
 - `peekaboo image` (screenshot), `peekaboo list` (apps), `peekaboo run <script>`

@@ -159,8 +159,8 @@ describe('Sprint 4: Community Catalog', () => {
       expect(result.version).toBe('1.0.0');
       expect(result.file_count).toBe(2);
 
-      // Verify files were copied
-      const targetSkillMd = join(agentDir, 'skills', 'claude-api-helper', 'SKILL.md');
+      // Verify files were copied to the Claude Code harness location
+      const targetSkillMd = join(agentDir, '.claude', 'skills', 'claude-api-helper', 'SKILL.md');
       expect(existsSync(targetSkillMd)).toBe(true);
 
       // Verify installed record

@@ -47,6 +47,12 @@ export interface Heartbeat {
 export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
 export type TaskPriority = 'critical' | 'urgent' | 'high' | 'normal' | 'low';
 
+export interface TaskOutput {
+  type: 'file';
+  value: string;
+  label?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -62,6 +68,7 @@ export interface Task {
   completed_at?: string;
   notes?: string;
   source_file?: string;
+  outputs?: TaskOutput[];
 }
 
 // -- Approval Types --

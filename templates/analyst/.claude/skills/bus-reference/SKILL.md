@@ -454,12 +454,13 @@ cortextos bus submit-community-item <item-name> <item-type> "<description>" [--d
 | Check for updates                 | `check-upstream`          |
 
 
-### Playwright (Browser Automation)
-- **Binary**: `playwright` (Python)
-- **Use for**: Scraping websites, browser-based automation
-- **Chromium installed**: Yes (headless)
-- **Usage**: Write Python scripts using `from playwright.sync_api import sync_playwright` or use Playwright MCP if configured
-- **Env**: Service credentials available via environment variables if configured
+### agent-browser (Browser Automation — replaces Playwright)
+- **Binary**: `agent-browser` (Rust CLI, npm-installed globally; Chrome auto-downloaded by `agent-browser install`)
+- **Use for**: Scraping websites, browser-based automation, OSINT, form filling, screenshots, login flows — anything previously done via the Playwright MCP server
+- **Skill loaded**: `.claude/skills/agent-browser/SKILL.md` — that skill instructs running `agent-browser skills get <name>` to fetch current per-version command syntax from the CLI itself
+- **Quick verify**: `agent-browser open https://example.com && agent-browser get title && agent-browser close`
+- **Snapshot-ref pattern**: prefer `agent-browser snapshot` (returns a11y tree with refs e1/e2/...) then `agent-browser click @e1` / `fill @e2 "text"` — more reliable than text-search selectors for AI-driven flows
+- **NOT to be confused with**: dashboard E2E tests under `dashboard/` which use Playwright DIRECTLY (not via MCP). agent-browser only replaces the agent-facing browser MCP layer that was previously `mcp__plugin_playwright_*`. The dashboard's Playwright dependency stays
 
 
 ### Peekaboo (macOS Desktop Automation)

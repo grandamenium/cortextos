@@ -4,6 +4,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { TelegramTab } from '@/components/settings/telegram-tab';
 import { SystemTab } from '@/components/settings/system-tab';
 import { UsersTab } from '@/components/settings/users-tab';
+import { AllowedRootsTab } from '@/components/settings/allowed-roots-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { OrganizationTab } from '@/components/settings/organization-tab';
 
@@ -23,6 +24,7 @@ export default function SettingsPage() {
           <TabsTrigger value="telegram">Telegram</TabsTrigger>
           <TabsTrigger value="system">System</TabsTrigger>
           <TabsTrigger value="users">Users</TabsTrigger>
+          <TabsTrigger value="allowed-roots">Allowed Roots</TabsTrigger>
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
         </TabsList>
 
@@ -47,6 +49,12 @@ export default function SettingsPage() {
         <TabsContent value="users">
           <div className="mt-4 max-w-2xl">
             <UsersTab />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="allowed-roots">
+          <div className="mt-4 max-w-3xl">
+            <AllowedRootsTab />
           </div>
         </TabsContent>
 

@@ -488,6 +488,12 @@ export function manageCycle(
     }
 
     case 'list': {
+      // When an agent filter is supplied, return only that agent's cycles.
+      // Omitting the agent returns the full list (back-compat for callers
+      // that explicitly want a global view).
+      if (options.agent) {
+        return config.cycles.filter((c) => c.agent === options.agent);
+      }
       return config.cycles;
     }
 

@@ -23,6 +23,7 @@ interface OrgConfig {
   day_mode_end?: string;
   communication_style?: string;
   default_approval_categories?: string[];
+  require_deliverables?: boolean;
 }
 
 interface OrgGoals {
@@ -85,6 +86,7 @@ export function OrganizationTab() {
             day_mode_end: d.config.day_mode_end || '',
             communication_style: d.config.communication_style || '',
             default_approval_categories: d.config.default_approval_categories || [],
+            require_deliverables: !!d.config.require_deliverables,
           });
         }
         setOpLoading(false);
@@ -354,6 +356,23 @@ export function OrganizationTab() {
                       </label>
                     ))}
                   </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs text-muted-foreground">Task Deliverables</Label>
+                  <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!opConfig.require_deliverables}
+                      onChange={e => setOpConfig(p => ({ ...p, require_deliverables: e.target.checked }))}
+                      className="rounded"
+                    />
+                    <span className="text-sm">Require file deliverables on task completion</span>
+                  </label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    When enabled, agents must attach at least one file via save-output before completing a task.
+                    The deliverables section appears on task detail cards in the dashboard.
+                  </p>
                 </div>
 
                 {opMessage && (

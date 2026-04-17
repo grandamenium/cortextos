@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { spawnSync } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import { getTaskById } from '@/lib/data/tasks';
 import { getFrameworkRoot, getCTXRoot } from '@/lib/config';
@@ -52,6 +53,17 @@ export async function GET(
     if (!task) {
       return Response.json({ error: 'Task not found' }, { status: 404 });
     }
+
+    // Enrich with outputs from the source JSON file (outputs are not synced to SQLite)
+    if (task.source_file && fs.existsSync(task.source_file)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(task.source_file, 'utf-8'));
+        if (Array.isArray(raw.outputs)) {
+          task.outputs = raw.outputs;
+        }
+      } catch { /* non-fatal — outputs are optional */ }
+    }
+
     return Response.json(task);
   } catch (err) {
     console.error('[api/tasks/[id]] GET error:', err);

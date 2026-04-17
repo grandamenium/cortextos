@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 import { revalidatePath } from 'next/cache';
-import { CTX_ROOT, getOrgs, getAgentsForOrg, getAgentDir, getOrgContextPath, getOrgBrandVoicePath } from '@/lib/config';
+import { CTX_ROOT, getOrgs, getAgentsForOrg, getAgentDir, getOrgContextPath, getOrgBrandVoicePath, getAllowedRootsConfigPath } from '@/lib/config';
 import { db } from '@/lib/db';
 import type { ActionResult, User } from '@/lib/types';
 
@@ -320,4 +320,158 @@ export async function fetchOrgMetadata() {
   }
 
   return { context, brandVoice };
+}
+
+// ---------------------------------------------------------------------------
+// Allowed Roots — controls which directories the /api/media route can serve
+// ---------------------------------------------------------------------------
+
+interface AllowedRootsView {
+  ctx_root: string;
+  additional_roots: AllowedRootEntry[];
+}
+
+interface AllowedRootEntry {
+  path: string;
+  exists: boolean;
+}
+
+const SYSTEM_BLOCKLIST: string[] = [
+  '/',
+  'C:/',
+  'D:/',
+  'E:/',
+  '/usr',
+  '/etc',
+  '/var',
+  '/sys',
+  '/proc',
+  '/boot',
+  '/dev',
+  '/root',
+  '/System',
+  'C:/Windows',
+  'C:/Program Files',
+  'C:/Program Files (x86)',
+];
+
+function normalizeFsPath(p: string): string {
+  let n = p.replace(/\\/g, '/');
+  if (n.length > 1 && n.endsWith('/') && !/^[A-Za-z]:\/$/.test(n)) {
+    n = n.slice(0, -1);
+  }
+  return n;
+}
+
+export async function fetchAllowedRoots(): Promise<AllowedRootsView> {
+  const ctxRoot = normalizeFsPath(CTX_ROOT);
+  const configPath = getAllowedRootsConfigPath();
+
+  let additional: string[] = [];
+  if (fs.existsSync(configPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      if (Array.isArray(parsed.additional_roots)) {
+        additional = parsed.additional_roots
+          .filter((r: unknown): r is string => typeof r === 'string')
+          .map((r: string) => normalizeFsPath(r));
+      }
+    } catch { /* malformed file — treat as empty */ }
+  }
+
+  return {
+    ctx_root: ctxRoot,
+    additional_roots: additional.map((p) => ({
+      path: p,
+      exists: fs.existsSync(p),
+    })),
+  };
+}
+
+export async function addAllowedRoot(rawPath: string): Promise<ActionResult> {
+  const trimmed = rawPath.trim();
+  if (!trimmed) return { success: false, error: 'Path is required' };
+  if (!path.isAbsolute(trimmed)) {
+    return { success: false, error: 'Path must be absolute (start with / or a drive letter)' };
+  }
+
+  const normalized = normalizeFsPath(trimmed);
+
+  for (const blocked of SYSTEM_BLOCKLIST) {
+    if (normalized === normalizeFsPath(blocked)) {
+      return { success: false, error: `Cannot add system directory: ${normalized}. This path is on the security blocklist.` };
+    }
+  }
+
+  if (!fs.existsSync(normalized)) {
+    return { success: false, error: `Path does not exist: ${normalized}` };
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(normalized);
+  } catch {
+    return { success: false, error: `Path is not readable: ${normalized}` };
+  }
+  if (!stat.isDirectory()) {
+    return { success: false, error: `Path is not a directory: ${normalized}` };
+  }
+
+  const configPath = getAllowedRootsConfigPath();
+  let current: { additional_roots: string[] } = { additional_roots: [] };
+  if (fs.existsSync(configPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      if (Array.isArray(parsed.additional_roots)) {
+        current.additional_roots = parsed.additional_roots
+          .filter((r: unknown): r is string => typeof r === 'string')
+          .map((r: string) => normalizeFsPath(r));
+      }
+    } catch { /* malformed — treat as empty */ }
+  }
+
+  if (current.additional_roots.includes(normalized)) {
+    return { success: false, error: `Path is already in the allowed roots list: ${normalized}` };
+  }
+
+  const updated = { additional_roots: [...current.additional_roots, normalized] };
+  const configDir = path.dirname(configPath);
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+  const tmpPath = configPath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(updated, null, 2));
+  fs.renameSync(tmpPath, configPath);
+
+  revalidatePath('/settings');
+  return { success: true };
+}
+
+export async function removeAllowedRoot(rawPath: string): Promise<ActionResult> {
+  const normalized = normalizeFsPath(rawPath.trim());
+  const configPath = getAllowedRootsConfigPath();
+
+  let current: { additional_roots: string[] } = { additional_roots: [] };
+  if (fs.existsSync(configPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      if (Array.isArray(parsed.additional_roots)) {
+        current.additional_roots = parsed.additional_roots
+          .filter((r: unknown): r is string => typeof r === 'string')
+          .map((r: string) => normalizeFsPath(r));
+      }
+    } catch { /* malformed — treat as empty */ }
+  }
+
+  const updated = { additional_roots: current.additional_roots.filter((r) => r !== normalized) };
+  const configDir = path.dirname(configPath);
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+  const tmpPath = configPath + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(updated, null, 2));
+  fs.renameSync(tmpPath, configPath);
+
+  revalidatePath('/settings');
+  return { success: true };
 }

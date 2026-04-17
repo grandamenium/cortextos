@@ -73,8 +73,14 @@ async function main(): Promise<void> {
   const env = loadEnv();
 
   try {
-    // Read PreCompact payload from stdin
-    const raw = await readStdin();
+    // Read PreCompact payload from stdin with a 10s timeout — if Claude Code
+    // does not close stdin, readStdin() hangs and hits the settings.json
+    // 15s timeout, which aborts compaction. Race against a timer so we always
+    // exit cleanly with whatever data arrived.
+    const raw = await Promise.race([
+      readStdin(),
+      new Promise<string>(resolve => setTimeout(() => resolve(''), 10_000)),
+    ]);
     let payload: PreCompactPayload = {};
 
     if (raw.trim()) {

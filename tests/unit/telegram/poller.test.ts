@@ -168,4 +168,58 @@ describe('TelegramPoller — offset-after-handler', () => {
       expect(persisted).toBe('0');
     }
   });
+
+  it('routes message_reaction updates to registered reaction handlers and advances offset', async () => {
+    const reactionUpdate: TelegramUpdate = {
+      update_id: 500,
+      message_reaction: {
+        chat: { id: 42, type: 'private' },
+        user: { id: 7, first_name: 'alice' },
+        message_id: 123,
+        date: 1700000000,
+        old_reaction: [],
+        new_reaction: [{ type: 'emoji', emoji: '👍' }],
+      },
+    };
+    const { api } = makeStubApi([reactionUpdate]);
+    const poller = new TelegramPoller(api, stateDir);
+
+    const received: Array<{ msgId: number; emoji: string }> = [];
+    poller.onReaction((r) => {
+      const emoji = r.new_reaction[0]?.type === 'emoji' ? r.new_reaction[0].emoji : '?';
+      received.push({ msgId: r.message_id, emoji });
+    });
+
+    await poller.pollOnce();
+
+    expect(received).toEqual([{ msgId: 123, emoji: '👍' }]);
+    const persisted = readFileSync(join(stateDir, '.telegram-offset'), 'utf-8').trim();
+    expect(persisted).toBe('501');
+  });
+
+  it('does NOT advance offset if a reaction handler throws', async () => {
+    const reactionUpdate: TelegramUpdate = {
+      update_id: 600,
+      message_reaction: {
+        chat: { id: 42, type: 'private' },
+        user: { id: 7, first_name: 'alice' },
+        message_id: 999,
+        date: 1700000000,
+        old_reaction: [],
+        new_reaction: [{ type: 'emoji', emoji: '🔥' }],
+      },
+    };
+    const { api } = makeStubApi([reactionUpdate]);
+    const poller = new TelegramPoller(api, stateDir);
+
+    poller.onReaction(() => { throw new Error('reaction broke'); });
+
+    await poller.pollOnce();
+
+    const offsetFile = join(stateDir, '.telegram-offset');
+    if (existsSync(offsetFile)) {
+      const persisted = readFileSync(offsetFile, 'utf-8').trim();
+      expect(persisted).toBe('0');
+    }
+  });
 });

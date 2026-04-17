@@ -40,8 +40,25 @@ The script fetches from upstream and returns a JSON summary categorizing changes
 cortextos bus check-upstream --apply
 ```
 
-### Step 4: Post-apply
+### Step 4: Security audit gate
 
+After the merge applies, run the security gate BEFORE verifying build/tests:
+
+```bash
+npm install
+npm audit --audit-level=moderate
+```
+
+If `npm audit` reports any moderate+ vulnerability:
+- **BLOCK** — do not proceed to build/test
+- Record advisory IDs, affected packages, and severity
+- Report to orchestrator: "Upstream merge blocked by npm audit: [details]. Manual resolution required."
+
+This catches upstream merges that silently downgrade a dependency that was previously security-patched.
+
+### Step 5: Post-apply verification
+
+- Run `npm run build` and `npm test` — both must pass
 - Verify the merge was clean
 - Check if any agent bootstrap files need updating (template changes)
 - Report results to orchestrator

@@ -48,10 +48,11 @@ export async function POST(request: NextRequest) {
 
   const ctxRoot = getCTXRoot();
 
-  // Generate unique message ID and filename (same format as bus/send-message.sh)
+  // Sender identity: use the dashboard admin username so chat bar messages
+  // land in the same channel as Telegram messages for the same user.
   const epochMs = Date.now();
   const rand = Math.random().toString(36).slice(2, 7);
-  const from = 'mobile-user';
+  const from = (process.env.ADMIN_USERNAME ?? 'user').toLowerCase();
   const messageId = `${epochMs}-${from}-${rand}`;
 
   // Priority 2 = normal (matches bus/send-message.sh mapping)
@@ -108,7 +109,8 @@ export async function POST(request: NextRequest) {
       direction: 'inbound',
       type: type || 'text',
       text,
-      source: 'mobile',
+      from_name: from,
+      source: 'dashboard',
     });
     fs.appendFileSync(logFile, logEntry + '\n');
 

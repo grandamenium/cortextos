@@ -14,7 +14,7 @@ goalsCommand
   .action((options: { agent: string; org: string }) => {
     const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || process.cwd();
 
-    if (!/^[a-z0-9_-]+$/.test(options.agent) || !/^[a-z0-9_-]+$/.test(options.org)) {
+    if (!/^[A-Za-z0-9_-]+$/.test(options.agent) || !/^[A-Za-z0-9_-]+$/.test(options.org)) {
       process.stderr.write('Error: agent and org must be alphanumeric/dash/underscore only\n');
       process.exit(1);
     }

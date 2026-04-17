@@ -239,20 +239,20 @@ Before the worker starts building, ask yourself:
 ```bash
 # 1. Create or update the worker's MCP config
 mkdir -p "$PROJECT_DIR/.claude"
-node -e "
-const fs = require('fs');
-const path = '$PROJECT_DIR/.claude/settings.json';
-const cfg = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path)) : {};
-cfg.mcpServers = cfg.mcpServers || {};
-cfg.mcpServers.playwright = { command: 'npx', args: ['@anthropic-ai/mcp-playwright'] };
-fs.writeFileSync(path, JSON.stringify(cfg, null, 2));
-console.log('MCP config updated');
-"
+# For browser automation, use the agent-browser CLI (replaces the
+# previous Playwright MCP server). Install once on the worker host:
+which agent-browser || npm install -g agent-browser
+agent-browser install   # Downloads Chrome from Chrome for Testing
 
-# 2. Worker must restart to pick up MCP config
-# Send via bus message:
+# Copy the agent-browser SKILL.md into the worker's .claude/skills/ so
+# it is teachable to the worker session:
+mkdir -p "$PROJECT_DIR/.claude/skills/agent-browser"
+cp "$CTX_FRAMEWORK_ROOT/templates/agent/.claude/skills/agent-browser/SKILL.md" \
+   "$PROJECT_DIR/.claude/skills/agent-browser/SKILL.md"
+
+# 2. Worker can use agent-browser via Bash (no MCP restart required):
 cortextos bus send-message <worker-name> normal \
-  'MCP config updated at .claude/settings.json. Please restart your session with --continue to pick it up, then test Playwright by taking a screenshot of google.com.'
+  'agent-browser is available globally. Test by running: agent-browser open https://example.com && agent-browser get title && agent-browser close. Use snapshot-then-ref pattern for AI-driven flows. The .claude/skills/agent-browser/SKILL.md was added — invoke `agent-browser skills get <name>` for current per-version command syntax.'
 ```
 
 ### Iterative Tool Verification
@@ -285,8 +285,9 @@ cortextos bus send-message <worker-name> normal 'Source .env in your project dir
 
 Copy relevant cortextOS skills to the worker's project:
 ```bash
-# If the worker needs browser automation knowledge, install via community catalog:
-cortextos bus install-community-item playwright-automation
+# If the worker needs browser automation knowledge, the agent-browser skill
+# is already in templates/agent/.claude/skills/agent-browser/SKILL.md and
+# was copied into $PROJECT_DIR above during MCP/tool setup.
 ```
 
 ---

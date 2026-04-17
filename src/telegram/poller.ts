@@ -1,11 +1,12 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import type { TelegramUpdate, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
+import type { TelegramUpdate, TelegramMessage, TelegramCallbackQuery, TelegramMessageReaction } from '../types/index.js';
 import { TelegramAPI } from './api.js';
 import { ensureDir } from '../utils/atomic.js';
 
 export type MessageHandler = (msg: TelegramMessage) => void;
 export type CallbackHandler = (query: TelegramCallbackQuery) => void;
+export type ReactionHandler = (reaction: TelegramMessageReaction) => void;
 
 /**
  * Telegram polling loop. Replaces the Telegram portion of fast-checker.sh.
@@ -19,6 +20,7 @@ export class TelegramPoller {
   private offsetFileName: string;
   private messageHandlers: MessageHandler[] = [];
   private callbackHandlers: CallbackHandler[] = [];
+  private reactionHandlers: ReactionHandler[] = [];
   private pollInterval: number;
 
   /**
@@ -57,6 +59,16 @@ export class TelegramPoller {
    */
   onCallback(handler: CallbackHandler): void {
     this.callbackHandlers.push(handler);
+  }
+
+  /**
+   * Register a handler for message_reaction updates. These fire when a
+   * user adds or removes an emoji reaction on a chat message the bot can
+   * see. Requires the bot's getUpdates call to include `message_reaction`
+   * in allowed_updates (handled by TelegramAPI.getUpdates).
+   */
+  onReaction(handler: ReactionHandler): void {
+    this.reactionHandlers.push(handler);
   }
 
   /**
@@ -118,6 +130,18 @@ export class TelegramPoller {
             handler(update.callback_query);
           } catch (err) {
             console.error('[telegram-poller] Callback handler error:', err);
+            handlerFailed = true;
+            break;
+          }
+        }
+      }
+
+      if (!handlerFailed && update.message_reaction) {
+        for (const handler of this.reactionHandlers) {
+          try {
+            handler(update.message_reaction);
+          } catch (err) {
+            console.error('[telegram-poller] Reaction handler error:', err);
             handlerFailed = true;
             break;
           }

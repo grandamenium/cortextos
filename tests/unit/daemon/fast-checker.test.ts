@@ -648,6 +648,55 @@ describe('FastChecker', () => {
     });
   });
 
+  describe('formatTelegramReaction', () => {
+    it('formats a newly-added emoji reaction with user, chat, and message ids', () => {
+      const result = FastChecker.formatTelegramReaction(
+        'Alice',
+        '123456789',
+        42,
+        [],
+        [{ type: 'emoji', emoji: '👍' }],
+      );
+      expect(result).toContain('=== REACTION from [USER: Alice] (chat_id:123456789) on message 42: 👍 ===');
+    });
+
+    it('renders multiple concurrent emojis joined by spaces', () => {
+      const result = FastChecker.formatTelegramReaction(
+        'Alice',
+        '1',
+        7,
+        [],
+        [
+          { type: 'emoji', emoji: '👍' },
+          { type: 'emoji', emoji: '🔥' },
+        ],
+      );
+      expect(result).toContain('on message 7: 👍 🔥 ===');
+    });
+
+    it('marks a cleared reaction as "removed <old>" when new_reaction is empty', () => {
+      const result = FastChecker.formatTelegramReaction(
+        'Alice',
+        '1',
+        9,
+        [{ type: 'emoji', emoji: '❤️' }],
+        [],
+      );
+      expect(result).toContain('on message 9: removed ❤️ ===');
+    });
+
+    it('renders custom_emoji as [custom_emoji] placeholder', () => {
+      const result = FastChecker.formatTelegramReaction(
+        'Alice',
+        '1',
+        11,
+        [],
+        [{ type: 'custom_emoji', custom_emoji_id: '5123456789012345678' }],
+      );
+      expect(result).toContain('on message 11: [custom_emoji] ===');
+    });
+  });
+
   describe('formatTelegramPhotoMessage', () => {
     it('formats photo message with caption and local_file', () => {
       const result = FastChecker.formatTelegramPhotoMessage(

@@ -56,7 +56,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const headers = (request as Request | undefined)?.headers;
         const ip = trustProxy
           ? (headers?.get('x-forwarded-for')?.split(',')[0]?.trim() ?? '0.0.0.0')
-          : (headers?.get('x-real-ip') ?? '0.0.0.0');
+          // CF-Connecting-IP is set by Cloudflare and is not spoofable from outside CF
+          : (headers?.get('x-real-ip') ?? headers?.get('cf-connecting-ip') ?? '0.0.0.0');
 
         const { allowed } = checkRateLimit(ip);
         if (!allowed) {

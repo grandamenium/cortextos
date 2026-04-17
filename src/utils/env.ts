@@ -93,10 +93,12 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
     }
   }
   if (org) {
-    try {
-      validateOrgName(org);
-    } catch (err) {
-      throw new Error(`CTX_ORG is invalid: ${(err as Error).message}`);
+    // Org names from the env may use mixed-case (e.g. AcmeCorp) when the
+    // org directory was created before strict lowercase validation was enforced.
+    // Only reject values that contain path-traversal characters or whitespace;
+    // lowercase enforcement is a CLI-layer concern, not an env-resolution concern.
+    if (/[./\\<>|;'"(){}[\] ]/.test(org) || org.includes('..')) {
+      throw new Error(`CTX_ORG is invalid: contains unsafe characters`);
     }
   }
 

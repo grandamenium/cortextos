@@ -44,7 +44,7 @@ export async function PATCH(request: NextRequest) {
   }
 
   // Validate editable fields
-  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'default_approval_categories', 'communication_style', 'name', 'description', 'industry', 'icp', 'value_prop'];
+  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'default_approval_categories', 'communication_style', 'name', 'description', 'industry', 'icp', 'value_prop', 'require_deliverables'];
   const timeRegex = /^\d{2}:\d{2}$/;
 
   if (body.day_mode_start && !timeRegex.test(body.day_mode_start as string)) {
@@ -52,6 +52,9 @@ export async function PATCH(request: NextRequest) {
   }
   if (body.day_mode_end && !timeRegex.test(body.day_mode_end as string)) {
     return Response.json({ error: 'day_mode_end must be HH:MM' }, { status: 400 });
+  }
+  if (body.require_deliverables !== undefined && typeof body.require_deliverables !== 'boolean') {
+    return Response.json({ error: 'require_deliverables must be a boolean' }, { status: 400 });
   }
   if (body.default_approval_categories !== undefined) {
     const dac = body.default_approval_categories;

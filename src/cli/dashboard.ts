@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, chmodSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, openSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
 import { randomBytes } from 'crypto';
@@ -154,25 +154,48 @@ export const dashboardCommand = new Command('dashboard')
     }
     console.log('');
 
+    // Route child stdout/stderr to a survivable log file instead of the
+    // TTY. With stdio:'inherit', TTY close tears down the pipe and any
+    // child write fails; with detached+unref the child stays alive past
+    // the parent, so the log file is the only record it can produce.
+    const logDir = join(ctxRoot, 'logs', 'dashboard');
+    mkdirSync(logDir, { recursive: true });
+    const logPath = join(logDir, 'dashboard.log');
+    const logFd = openSync(logPath, 'a');
+
     // On Windows, npx is a .cmd wrapper requiring shell resolution.
     // Pass as single string to avoid Node.js DEP0190 deprecation warning.
     const child = IS_WINDOWS
-      ? spawn(['npx', ...startArgs].join(' '), { cwd: dashboardDir, stdio: 'inherit', env: dashEnv, shell: true })
-      : spawn('npx', startArgs, { cwd: dashboardDir, stdio: 'inherit', env: dashEnv });
+      ? spawn(['npx', ...startArgs].join(' '), { cwd: dashboardDir, stdio: ['ignore', logFd, logFd], env: dashEnv, shell: true, detached: true })
+      : spawn('npx', startArgs, { cwd: dashboardDir, stdio: ['ignore', logFd, logFd], env: dashEnv, detached: true });
+
+    // Detach the child from our event loop so parent exit does not take
+    // it down. SIGHUP at the parent (tty close) then just terminates the
+    // parent cleanly; the detached child keeps serving.
+    child.unref();
+
+    console.log(`  Log: ${logPath}`);
+    console.log(`  PID: ${child.pid}`);
 
     child.on('error', (err: Error) => {
       console.error('Failed to start dashboard:', err.message);
       process.exit(1);
     });
 
-    child.on('exit', (code: number) => {
-      process.exit(code || 0);
-    });
+    // SIGHUP (tty close) — exit the parent quietly. The detached child
+    // is already independent of our process group.
+    process.on('SIGHUP', () => { process.exit(0); });
 
-    const cleanup = () => { try { child.kill('SIGTERM'); } catch { /* already dead */ } };
-    process.on('SIGINT', cleanup);
-    process.on('SIGTERM', cleanup);
-    process.on('exit', cleanup);
+    // SIGINT/SIGTERM on the parent are operator-initiated foreground
+    // stops; forward them to the child so `cortextos dashboard` started
+    // in the foreground still behaves like a regular `npm run dev`
+    // under Ctrl-C.
+    const forwardAndExit = (sig: NodeJS.Signals) => {
+      try { child.kill(sig); } catch { /* already dead */ }
+      process.exit(0);
+    };
+    process.on('SIGINT', () => forwardAndExit('SIGINT'));
+    process.on('SIGTERM', () => forwardAndExit('SIGTERM'));
   });
 
 function findDashboardDir(): string | null {

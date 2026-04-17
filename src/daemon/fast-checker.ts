@@ -246,6 +246,37 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
+   * Format a Telegram message_reaction update for PTY injection.
+   * Reactions are emoji additions/removals on existing messages — they
+   * surface to the agent so it can follow up on positive acknowledgements
+   * or clarify after a negative reaction.
+   *
+   * `newReaction` is the current reaction state (an empty list means the
+   * user REMOVED their reaction). `oldReaction` lets the formatter
+   * distinguish "added X" from "removed Y". Custom emoji (type=custom_emoji)
+   * render as [custom_emoji] since we don't resolve the custom_emoji_id.
+   */
+  static formatTelegramReaction(
+    from: string,
+    chatId: string | number,
+    messageId: number,
+    oldReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
+    newReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
+  ): string {
+    const render = (list: typeof newReaction): string =>
+      list.length === 0
+        ? '(none)'
+        : list.map((r) => (r.type === 'emoji' ? r.emoji : '[custom_emoji]')).join(' ');
+
+    const removed = newReaction.length === 0 && oldReaction.length > 0;
+    const label = removed ? `removed ${render(oldReaction)}` : render(newReaction);
+
+    return `=== REACTION from [USER: ${from}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
+
+`;
+  }
+
+  /**
    * Format a Telegram photo message for injection.
    * Matches bash fast-checker.sh format.
    */

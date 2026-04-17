@@ -49,6 +49,22 @@ function loadSecretsEnv(frameworkRoot: string, org: string): Record<string, stri
 }
 
 /**
+ * Check whether the knowledge base config file exists for a given env.
+ *
+ * The Python MMRAG tool loads its config from env.MMRAG_CONFIG
+ * (`knowledge-base/config.json` under the org's state dir) and exits with
+ * "Config not found. Run setup first" if the file is absent. When that
+ * happens, execFileSync throws a non-zero-exit error which — if not caught
+ * — produces a user-facing unhandled-throw stack dump on top of the
+ * already-printed Python error. This helper lets callers detect the
+ * missing-config state UP FRONT and respond gracefully (warn + return)
+ * instead of relying on brittle stderr string matching after the throw.
+ */
+function kbConfigured(env: Record<string, string>): boolean {
+  return existsSync(env.MMRAG_CONFIG);
+}
+
+/**
  * Build the full env object needed by mmrag.py calls.
  */
 function buildKBEnv(
@@ -108,6 +124,21 @@ export function queryKnowledgeBase(
   const { org, agent, scope = 'all', topK = 5, threshold = 0.5, frameworkRoot, instanceId } = options;
 
   const env = buildKBEnv(frameworkRoot, org, instanceId, agent);
+
+  // UX safety net: if the KB is not configured for this org (no config.json
+  // on disk yet), skip the python probe entirely and return empty results
+  // with a visible warning. Previously the inner runQuery() try/catch would
+  // swallow the Config-not-found error silently and the operator would see
+  // "0 results" with no hint about WHY — indistinguishable from a legitimate
+  // empty query against a configured KB. The warn-and-empty shape makes the
+  // distinction obvious and actionable.
+  if (!kbConfigured(env)) {
+    console.warn(
+      `[kb] Knowledge base not configured for org ${org}. Returning empty results — run setup to enable.`,
+    );
+    return { results: [], total: 0, query: question, collection: `shared-${org}` };
+  }
+
   const pythonPath = getVenvPython(frameworkRoot);
   const mmragPath = join(frameworkRoot, 'knowledge-base', 'scripts', 'mmrag.py');
 
@@ -211,6 +242,23 @@ export function ingestKnowledgeBase(
   const { org, agent, scope = 'shared', force, frameworkRoot, instanceId } = options;
 
   const env = buildKBEnv(frameworkRoot, org, instanceId, agent);
+
+  // Correctness fix: if the KB is not configured for this org, the underlying
+  // python MMRAG tool exits with "Config not found. Run setup first" and
+  // execFileSync (below, stdio: inherit) throws a non-zero-exit error. That
+  // throw used to bubble up through the CLI action handler as an unhandled
+  // exception, dumping a full Node stack trace on top of the python error
+  // message — ugly and alarming for operators who were just running ingest
+  // without setting up the KB first. Detect the missing-config state
+  // up-front and warn-and-skip instead of letting execFileSync crash.
+  if (!kbConfigured(env)) {
+    console.warn(
+      `[kb] Knowledge base not configured for org ${org}. Skipping ingest — ` +
+      `run setup to enable (see HEARTBEAT.md step 10 for the config path).`,
+    );
+    return;
+  }
+
   const pythonPath = getVenvPython(frameworkRoot);
   const mmragPath = join(frameworkRoot, 'knowledge-base', 'scripts', 'mmrag.py');
 
