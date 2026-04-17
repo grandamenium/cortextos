@@ -97,7 +97,12 @@ export default function LoginPage() {
         const target = new URL(res.url);
         if (target.pathname.startsWith('/login')) {
           const code = target.searchParams.get('error') || 'Unknown';
-          setError(`Sign-in failed: ${code}`);
+          // CallbackRouteError usually means the rate limiter blocked the request.
+          // Show a human-readable message instead of the raw error code.
+          const msg = code === 'CallbackRouteError'
+            ? 'Too many attempts. Please wait a few minutes and try again.'
+            : `Sign-in failed: ${code}`;
+          setError(msg);
           setLoading(false);
           return;
         }
