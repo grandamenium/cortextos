@@ -89,6 +89,57 @@ cortextos bus complete-task "$TASK_ID" --result "<what was produced>"
 
 ---
 
+## Phase 0E: Services Health Check
+
+Probe each configured external service BEFORE the briefing. Auth failures discovered here get into the briefing as actionable items — not discovered 3 hours later when the user needs the service.
+
+**For each service, run the probe. If it fails, create a [HUMAN] task immediately.**
+
+### Google Calendar
+```bash
+# Try listing 1 event via MCP. If the tool errors or returns auth failure:
+gcal_list_events (limit 1)
+```
+- **OK**: note "GCal OK" for the briefing
+- **FAIL**: create a human task and flag it:
+  ```bash
+  cortextos bus create-task "[HUMAN] Google Calendar reauth needed — OAuth token expired or revoked" \
+    --desc "GCal probe failed during morning review. Reauth at https://accounts.google.com. Agents cannot create/read calendar events until fixed." \
+    --priority high --assignee human
+  ```
+
+### Notion
+```bash
+# Try a trivial search via MCP
+notion-search (query: "test", page_size: 1)
+```
+- **OK**: note "Notion OK"
+- **FAIL**: create human task with reauth instructions
+
+### Knowledge Base
+```bash
+cortextos bus kb-query "health check" --org $CTX_ORG
+```
+- **OK or empty results**: note "KB configured"
+- **Not configured warning**: note "KB not configured" (informational, not a failure)
+
+### Telegram
+Already implicitly validated by the boot message in Phase 0. If the boot message failed to send, the agent would not have reached this phase.
+
+### Briefing integration
+Include a **Services** line in Message 1 of the briefing:
+```
+Services: GCal OK | Notion OK | KB configured
+```
+Or if any failed:
+```
+Services: GCal FAILED (reauth needed — task created) | Notion OK | KB not configured
+```
+
+Auth failures are the "silent productivity killer" class — everything looks healthy on the dashboard but the agent can't do real work. This check surfaces them proactively.
+
+---
+
 ## Phase 1: Goals Cascade (MANDATORY — before task scheduling)
 
 ### 1A: Read org goals
