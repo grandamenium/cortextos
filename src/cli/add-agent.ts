@@ -1,17 +1,19 @@
 import { Command } from 'commander';
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName } from '../utils/validate';
+import { mergeAgentSettingsIntoWorkingDir, ClaudeSettings } from '../utils/merge-settings';
 
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
   .option('--template <type>', 'Agent template (orchestrator, analyst, agent)', 'agent')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
+  .option('--working-directory <path>', 'External cwd where Claude Code should run. Installs cortextOS hooks into <path>/.claude/settings.local.json so the agent stays instrumented even when running outside its agent dir.')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; workingDirectory?: string }) => {
     // BUG-041 fix: validate the agent name BEFORE creating anything on disk.
     // Without this, mixed-case names like 'CortextDesigner' pass through
     // add-agent, get written to disk, and THEN fail every `cortextos bus *`
@@ -244,6 +246,75 @@ export const addAgentCommand = new Command('add-agent')
       };
       writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
       console.log(`  Registered in enabled-agents.json`);
+    }
+
+    // --- --working-directory: install cortextOS hooks into external cwd ---
+    // When an agent runs with a cwd OUTSIDE its agent dir, Claude Code reads
+    // `.claude/settings.json` from the cwd and never sees the hooks we wrote
+    // into the agent dir. We merge them into the cwd's `settings.local.json`
+    // (gitignored, non-destructive) so the hooks still fire.
+    if (options.workingDirectory) {
+      const workingDir = resolve(options.workingDirectory);
+
+      if (!existsSync(workingDir)) {
+        console.error(`\nError: --working-directory "${workingDir}" does not exist.`);
+        console.error('Create the directory first, then re-run `cortextos add-agent`.');
+        process.exit(1);
+      }
+      if (!statSync(workingDir).isDirectory()) {
+        console.error(`\nError: --working-directory "${workingDir}" is not a directory.`);
+        process.exit(1);
+      }
+      if (resolve(workingDir) === resolve(agentDir)) {
+        console.error(`\nError: --working-directory equals the agent directory. Drop the flag — this is the default.`);
+        process.exit(1);
+      }
+
+      // Persist to agent's config.json so daemon spawns Claude Code with this cwd.
+      try {
+        const agentConfigPath = join(agentDir, 'config.json');
+        const agentCfg = JSON.parse(readFileSync(agentConfigPath, 'utf-8'));
+        agentCfg.working_directory = workingDir;
+        writeFileSync(agentConfigPath, JSON.stringify(agentCfg, null, 2) + '\n', 'utf-8');
+      } catch (err) {
+        console.error(`\nError writing working_directory to agent config.json: ${(err as Error).message}`);
+        process.exit(1);
+      }
+
+      // Read the agent's .claude/settings.json (just produced by the template
+      // copy) and merge it into <workingDir>/.claude/settings.local.json.
+      const agentSettingsPath = join(agentDir, '.claude', 'settings.json');
+      if (!existsSync(agentSettingsPath)) {
+        console.log(`\n  Skipped hook install: ${agentSettingsPath} not found. Template may not include settings.json.`);
+      } else {
+        try {
+          const agentSettings = JSON.parse(readFileSync(agentSettingsPath, 'utf-8')) as ClaudeSettings;
+          const merge = mergeAgentSettingsIntoWorkingDir(workingDir, agentSettings);
+
+          console.log(`\n  Working directory: ${workingDir}`);
+          console.log(`  Installed cortextOS hooks into ${merge.target}`);
+          console.log(`    ${merge.fileExistedBefore ? 'Merged into existing file' : 'Created new file'}`);
+          console.log(`    Hooks installed: ${merge.hooksInstalled}, already present: ${merge.hooksAlreadyPresent}, skipped (conflict): ${merge.hooksSkipped}`);
+          if (merge.permissionsAdded) {
+            console.log(`    Permissions added: ${merge.permissionsAdded}`);
+          }
+          if (merge.statusLineInstalled) {
+            console.log(`    statusLine installed`);
+          } else if (merge.statusLineKept) {
+            console.log(`    statusLine: kept existing (see warning)`);
+          }
+
+          if (merge.warnings.length) {
+            console.log('');
+            for (const w of merge.warnings) {
+              console.log(`  WARNING: ${w}`);
+            }
+          }
+        } catch (err) {
+          console.error(`\nError installing hooks into ${workingDir}: ${(err as Error).message}`);
+          process.exit(1);
+        }
+      }
     }
 
     console.log(`\n  Agent "${name}" created.`);
