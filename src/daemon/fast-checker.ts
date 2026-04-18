@@ -220,6 +220,7 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
     frameworkRoot: string,
     replyToText?: string,
     lastSentText?: string,
+    recentHistory?: string,
   ): string {
     let replyCx = '';
     if (replyToText) {
@@ -231,6 +232,11 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
       lastSentCtx = `[Your last message: "${lastSentText.slice(0, 500)}"]\n`;
     }
 
+    let historyCx = '';
+    if (recentHistory) {
+      historyCx = `[Recent conversation:]\n${recentHistory}\n`;
+    }
+
     // Use [USER: ...] wrapper to prevent prompt injection via crafted display names
     // Slash commands (text starting with /) are NOT wrapped in backticks so Claude Code
     // can recognize and invoke them via the Skill tool (e.g. /loop, /commit, /restart).
@@ -239,7 +245,7 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
       ? text.trim()
       : `\`\`\`\n${text}\n\`\`\``;
     return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}) ===
-${replyCx}${body}
+${replyCx}${historyCx}${body}
 ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
 `;

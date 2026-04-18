@@ -120,26 +120,34 @@ export function getAgentDir(name: string, org?: string): string {
 // -- Discovery functions --
 
 export function getOrgs(): string[] {
-  const orgs = new Set<string>();
-
-  // Check state dir (CTX_ROOT/orgs/)
-  const stateOrgsDir = path.join(CTX_ROOT, 'orgs');
-  if (fs.existsSync(stateOrgsDir)) {
-    for (const d of fs.readdirSync(stateOrgsDir, { withFileTypes: true })) {
-      if (d.isDirectory()) orgs.add(d.name);
-    }
-  }
-
-  // Also check project/framework root (CTX_FRAMEWORK_ROOT/orgs/)
-  // This is where CLI creates org config files (context.json, knowledge.md)
+  // Read framework root FIRST — it is the source of truth for org naming.
+  // When the same org exists in both dirs with drifted casing (e.g. a ghost
+  // `acmecorp/` in state + canonical `AcmeCorp/` in framework),
+  // we keep the framework casing and discard the state-dir variant. Without
+  // this, dashboard sync hits both names and floods the log with lookup
+  // failures against the non-existent lowercase dir.
   const frameworkOrgsDir = path.join(CTX_FRAMEWORK_ROOT, 'orgs');
-  if (frameworkOrgsDir !== stateOrgsDir && fs.existsSync(frameworkOrgsDir)) {
+  const stateOrgsDir = path.join(CTX_ROOT, 'orgs');
+
+  // Map lowercase key -> canonical casing. Framework entries win over state
+  // entries. Within a single dir, we trust fs.readdirSync uniqueness.
+  const byLower = new Map<string, string>();
+
+  if (fs.existsSync(frameworkOrgsDir)) {
     for (const d of fs.readdirSync(frameworkOrgsDir, { withFileTypes: true })) {
-      if (d.isDirectory()) orgs.add(d.name);
+      if (d.isDirectory()) byLower.set(d.name.toLowerCase(), d.name);
     }
   }
 
-  return Array.from(orgs);
+  if (frameworkOrgsDir !== stateOrgsDir && fs.existsSync(stateOrgsDir)) {
+    for (const d of fs.readdirSync(stateOrgsDir, { withFileTypes: true })) {
+      if (d.isDirectory() && !byLower.has(d.name.toLowerCase())) {
+        byLower.set(d.name.toLowerCase(), d.name);
+      }
+    }
+  }
+
+  return Array.from(byLower.values());
 }
 
 export function getAgentsForOrg(org: string): string[] {

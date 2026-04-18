@@ -8,7 +8,7 @@ import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
-import { logInboundMessage, cacheLastSent, logOutboundMessage } from '../telegram/logging.js';
+import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
@@ -382,6 +382,7 @@ export class AgentManager {
         // Build reply context from the replied-to message.
         const replyToText = buildReplyContext(msg.reply_to_message);
 
+        const recentHistory = buildRecentHistory(this.ctxRoot, name, effectiveChatId, 6) ?? undefined;
         const formatted = FastChecker.formatTelegramTextMessage(
           from,
           effectiveChatId,
@@ -389,6 +390,7 @@ export class AgentManager {
           this.frameworkRoot,
           replyToText,
           lastSent ?? undefined,
+          recentHistory,
         );
 
         if (checker.isDuplicate(formatted)) {

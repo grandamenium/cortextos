@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import type { BusPaths } from '../types/index.js';
+import { normalizeOrgName } from '../utils/org.js';
 
 /**
  * Knowledge base integration — calls mmrag.py directly (cross-platform,
@@ -73,12 +74,18 @@ function buildKBEnv(
   instanceId: string,
   agent?: string,
 ): Record<string, string> {
-  const kbRoot = join(homedir(), '.cortextos', instanceId, 'orgs', org, 'knowledge-base');
-  const secrets = loadSecretsEnv(frameworkRoot, org);
+  // Normalize org to its canonical filesystem casing BEFORE touching any
+  // paths. Without this, a lowercase --org arg produces a ghost state dir
+  // (~/.cortextos/<instance>/orgs/<lowercase>/knowledge-base/) with its own
+  // MMRAG config.json, splitting KB state across two directories and
+  // polluting dashboard sync with hits against a non-existent org.
+  const canonicalOrg = normalizeOrgName(frameworkRoot, org);
+  const kbRoot = join(homedir(), '.cortextos', instanceId, 'orgs', canonicalOrg, 'knowledge-base');
+  const secrets = loadSecretsEnv(frameworkRoot, canonicalOrg);
   return {
     ...process.env as Record<string, string>,
     ...secrets,
-    CTX_ORG: org,
+    CTX_ORG: canonicalOrg,
     CTX_AGENT_NAME: agent || '',
     CTX_INSTANCE_ID: instanceId,
     CTX_FRAMEWORK_ROOT: frameworkRoot,
@@ -121,7 +128,13 @@ export function queryKnowledgeBase(
     instanceId: string;
   },
 ): KBQueryResponse {
-  const { org, agent, scope = 'all', topK = 5, threshold = 0.5, frameworkRoot, instanceId } = options;
+  const { agent, scope = 'all', topK = 5, threshold = 0.5, frameworkRoot, instanceId } = options;
+  // Normalize once at the top so every downstream path join, env var, and
+  // ChromaDB collection name uses the canonical filesystem casing. Without
+  // this, `shared-acmecorp` and `shared-AcmeCorp` become two
+  // distinct ChromaDB collections and a case-drifted query silently hits
+  // the wrong one.
+  const org = normalizeOrgName(frameworkRoot, options.org);
 
   const env = buildKBEnv(frameworkRoot, org, instanceId, agent);
 
@@ -239,7 +252,9 @@ export function ingestKnowledgeBase(
     instanceId: string;
   },
 ): void {
-  const { org, agent, scope = 'shared', force, frameworkRoot, instanceId } = options;
+  const { agent, scope = 'shared', force, frameworkRoot, instanceId } = options;
+  // Normalize once (see queryKnowledgeBase for rationale).
+  const org = normalizeOrgName(frameworkRoot, options.org);
 
   const env = buildKBEnv(frameworkRoot, org, instanceId, agent);
 
@@ -298,9 +313,15 @@ export function ingestKnowledgeBase(
 
 /**
  * Ensure the knowledge base directories exist for an org.
+ *
+ * `frameworkRoot` is required so the org name can be normalized to its
+ * canonical filesystem casing — without that, a caller passing a drifted
+ * name (e.g. "acmecorp") would create a ghost state dir identical
+ * to the one this module was written to prevent.
  */
-export function ensureKBDirs(instanceId: string, org: string): void {
-  const kbRoot = join(homedir(), '.cortextos', instanceId, 'orgs', org, 'knowledge-base');
+export function ensureKBDirs(instanceId: string, frameworkRoot: string, org: string): void {
+  const canonicalOrg = normalizeOrgName(frameworkRoot, org);
+  const kbRoot = join(homedir(), '.cortextos', instanceId, 'orgs', canonicalOrg, 'knowledge-base');
   const chromaDir = join(kbRoot, 'chromadb');
   if (!existsSync(chromaDir)) {
     mkdirSync(chromaDir, { recursive: true });
