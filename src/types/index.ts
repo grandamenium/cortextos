@@ -199,6 +199,8 @@ export interface AgentConfig {
   stale_watchdog_enabled?: boolean;
   /** Minutes before a heartbeat is considered stale. Default: 15 */
   stale_threshold_minutes?: number;
+  /** Restart priority after rate-limit resets. Lower = restarts first. Default: 5 */
+  restart_priority?: number;
   /** Agent role — determines which skill pack is auto-installed. */
   role?: AgentRole;
 }

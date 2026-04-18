@@ -11,6 +11,7 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { readCrashCount, incrementCrashCount } from './crash-counter.js';
 
 type LogFn = (msg: string) => void;
 
@@ -68,6 +69,14 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
+
+    // Restore crash count from disk so it survives daemon restarts.
+    // Without this, a PM2 restart resets the in-memory counter to 0
+    // and the max_crashes_per_day limit is never enforced.
+    this.crashCount = readCrashCount(env.ctxRoot, name);
+    if (this.crashCount > 0) {
+      this.log(`Restored crash count from disk: ${this.crashCount}/${this.maxCrashesPerDay}`);
+    }
   }
 
   /**
@@ -420,10 +429,9 @@ export class AgentProcess {
       return;
     }
 
-    // Check crash limit
-    this.crashCount++;
-    const today = new Date().toISOString().split('T')[0];
-    this.resetCrashCountIfNewDay(today);
+    // Increment persisted crash counter (shared with watchdog)
+    const { count } = incrementCrashCount(this.env.ctxRoot, this.name);
+    this.crashCount = count;
 
     if (this.crashCount >= this.maxCrashesPerDay) {
       this.log(`HALTED: exceeded ${this.maxCrashesPerDay} crashes today`);
@@ -731,21 +739,16 @@ export class AgentProcess {
     }
   }
 
-  private resetCrashCountIfNewDay(today: string): void {
-    const crashFile = join(this.env.ctxRoot, 'logs', this.name, '.crash_count_today');
-    try {
-      if (existsSync(crashFile)) {
-        const content = readFileSync(crashFile, 'utf-8').trim();
-        const [storedDate, count] = content.split(':');
-        if (storedDate === today) {
-          this.crashCount = parseInt(count, 10) + 1;
-        } else {
-          this.crashCount = 1;
-        }
-      }
-      ensureDir(join(this.env.ctxRoot, 'logs', this.name));
-      writeFileSync(crashFile, `${today}:${this.crashCount}`, 'utf-8');
-    } catch { /* ignore */ }
+  /**
+   * Get the current crash count. Used by the watchdog to check if an agent
+   * has exceeded its daily crash limit before restarting.
+   */
+  getCrashCount(): number {
+    return this.crashCount;
+  }
+
+  getMaxCrashesPerDay(): number {
+    return this.maxCrashesPerDay;
   }
 
   private notifyStatusChange(): void {

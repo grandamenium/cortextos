@@ -9,6 +9,7 @@ import { CronsTab } from './crons-tab';
 import { SettingsTab } from './settings-tab';
 import { GoalsTab } from './goals-tab';
 import { SkillsTab } from './skills-tab';
+import { OpsTab } from './ops-tab';
 import type {
   AgentDetail,
   IdentityFields,
@@ -39,6 +40,7 @@ export function AgentDetailTabs({
     <Tabs defaultValue="profile">
       <TabsList variant="line">
         <TabsTrigger value="profile">Profile</TabsTrigger>
+        <TabsTrigger value="ops">Ops</TabsTrigger>
         <TabsTrigger value="tasks">Tasks</TabsTrigger>
         <TabsTrigger value="crons">Crons</TabsTrigger>
         <TabsTrigger value="memory">Memory</TabsTrigger>
@@ -55,6 +57,10 @@ export function AgentDetailTabs({
           identity={identityFields}
           soul={soulFields}
         />
+      </TabsContent>
+
+      <TabsContent value="ops">
+        <OpsTab agentName={detail.systemName ?? detail.name} />
       </TabsContent>
 
       <TabsContent value="tasks">

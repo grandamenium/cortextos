@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AgentCard, type AgentCardData } from './agent-card';
+import { AgentCard, type AgentCardData, type AgentOpsData } from './agent-card';
 import { AddAgentCard } from './add-agent-card';
 import { CreateAgentDialog } from './create-agent-dialog';
 import { HealthDot } from '@/components/shared/health-dot';
@@ -18,6 +18,29 @@ export function AgentsGrid({ initialAgents }: AgentsGridProps) {
   const router = useRouter();
   const [agents, setAgents] = useState<AgentCardData[]>(initialAgents);
   const [createOpen, setCreateOpen] = useState(false);
+
+  // Fetch operational data (crashes, rate limits, usage) and refresh every 60s
+  useEffect(() => {
+    async function fetchOps() {
+      try {
+        const res = await fetch('/api/agents/ops');
+        if (!res.ok) return;
+        const opsMap: Record<string, AgentOpsData> = await res.json();
+        setAgents(prev =>
+          prev.map(a => ({
+            ...a,
+            ops: opsMap[a.systemName] ?? a.ops,
+          })),
+        );
+      } catch {
+        // ignore fetch errors
+      }
+    }
+
+    fetchOps();
+    const interval = setInterval(fetchOps, 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleSSEEvent = useCallback((event: SSEEvent) => {
     if (event.type !== 'heartbeat') return;
@@ -44,11 +67,23 @@ export function AgentsGrid({ initialAgents }: AgentsGridProps) {
   return (
     <div className="space-y-4">
       {/* Health summary row */}
-      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
         <span className="flex items-center gap-1.5">
           <HealthDot status="healthy" />
-          {agents.filter((a) => a.health === 'healthy').length} healthy
+          {agents.filter((a) => a.health === 'healthy' && !a.ops?.halted && !a.ops?.rateLimited).length} healthy
         </span>
+        {agents.filter((a) => a.ops?.rateLimited).length > 0 && (
+          <span className="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+            <span className="h-2 w-2 rounded-full bg-amber-500" />
+            {agents.filter((a) => a.ops?.rateLimited).length} rate limited
+          </span>
+        )}
+        {agents.filter((a) => a.ops?.halted).length > 0 && (
+          <span className="flex items-center gap-1.5 text-red-600 dark:text-red-400">
+            <span className="h-2 w-2 rounded-full bg-red-500" />
+            {agents.filter((a) => a.ops?.halted).length} halted
+          </span>
+        )}
         <span className="flex items-center gap-1.5">
           <HealthDot status="stale" />
           {agents.filter((a) => a.health === 'stale').length} stale
