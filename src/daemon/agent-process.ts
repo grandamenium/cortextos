@@ -433,6 +433,17 @@ export class AgentProcess {
       return;
     }
 
+    // Check if the agent was rate-limited before crashing.
+    // If so, don't auto-restart — the watchdog will handle restart after the
+    // limit resets. This prevents crash loops where a rate-limited agent boots,
+    // burns tokens on startup, hits the limit again, and crashes in an endless cycle.
+    if (this.isRateLimitedFromLog()) {
+      this.log(`Crash recovery DEFERRED: agent is rate-limited (crash #${this.crashCount}). Watchdog will restart after limit resets.`);
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      return;
+    }
+
     // Exponential backoff restart
     const backoff = Math.min(5000 * Math.pow(2, this.crashCount - 1), 300000);
     this.log(`Crash recovery: restart in ${backoff / 1000}s (crash #${this.crashCount})`);
@@ -449,6 +460,31 @@ export class AgentProcess {
         this.start().catch(err => this.log(`Restart failed: ${err}`));
       }
     }, backoff);
+  }
+
+  /**
+   * Check if the agent's stdout.log tail shows rate-limit patterns.
+   * Used by crash recovery to defer restart when the agent hit token limits.
+   */
+  private isRateLimitedFromLog(): boolean {
+    const SCAN_BYTES = 16384;
+    const PATTERNS = ["You've hit your limit", 'hit your limit', '/rate-limit-options'];
+    const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
+    try {
+      if (!existsSync(logPath)) return false;
+      const { statSync, openSync, readSync, closeSync } = require('fs');
+      const stats = statSync(logPath);
+      if (stats.size === 0) return false;
+      const readSize = Math.min(stats.size, SCAN_BYTES);
+      const fd = openSync(logPath, 'r');
+      const buffer = Buffer.alloc(readSize);
+      readSync(fd, buffer, 0, readSize, stats.size - readSize);
+      closeSync(fd);
+      const tail = buffer.toString('utf-8').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      return PATTERNS.some(p => tail.includes(p));
+    } catch {
+      return false;
+    }
   }
 
   private shouldContinue(): boolean {

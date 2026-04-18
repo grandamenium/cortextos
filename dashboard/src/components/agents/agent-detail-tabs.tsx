@@ -8,6 +8,7 @@ import { LogsTab } from './logs-tab';
 import { CronsTab } from './crons-tab';
 import { SettingsTab } from './settings-tab';
 import { GoalsTab } from './goals-tab';
+import { SkillsTab } from './skills-tab';
 import type {
   AgentDetail,
   IdentityFields,
@@ -43,6 +44,7 @@ export function AgentDetailTabs({
         <TabsTrigger value="memory">Memory</TabsTrigger>
         <TabsTrigger value="logs">Logs</TabsTrigger>
         <TabsTrigger value="goals">Goals</TabsTrigger>
+        <TabsTrigger value="skills">Skills</TabsTrigger>
         <TabsTrigger value="settings">Settings</TabsTrigger>
       </TabsList>
 
@@ -82,6 +84,10 @@ export function AgentDetailTabs({
 
       <TabsContent value="goals">
         <GoalsTab agentName={detail.systemName ?? detail.name} org={detail.org} />
+      </TabsContent>
+
+      <TabsContent value="skills">
+        <SkillsTab agentName={detail.systemName ?? detail.name} />
       </TabsContent>
 
       <TabsContent value="settings">

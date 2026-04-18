@@ -248,6 +248,78 @@ After workflows and tools are configured:
 
     Ingest any additional files the user specified in their answers.
 
+## Part 2d: Role-Specific Setup
+
+After knowledge base, check if this agent was created with a role and ensure role skills are properly installed:
+
+13b. **Check agent role and verify skills:**
+    ```bash
+    AGENT_ROLE=$(cat "${CTX_AGENT_DIR}/config.json" 2>/dev/null | jq -r '.role // empty')
+    echo "Role: ${AGENT_ROLE:-none}"
+    ```
+
+    **If no role is set**, ask:
+    > "What's my specialty? cortextOS supports role-based skill packs that auto-install relevant tools.
+    >
+    > Available roles: `frontend` (design system, animations, UI craft), `backend` (API design, database), `data` (analytics, pipelines), `devops` (CI/CD, infrastructure), `design` (visual design, branding), `research` (analysis, reports), `content` (writing, editing), `qa` (testing, quality).
+    >
+    > Pick a role, or say 'skip' if I'm a generalist."
+
+    **END YOUR TURN.** Wait for the user's answer.
+
+    If the user picks a role:
+    ```bash
+    # Update config.json with the role
+    jq --arg role "<chosen_role>" '.role = $role' "${CTX_AGENT_DIR}/config.json" > /tmp/cfg.tmp && mv /tmp/cfg.tmp "${CTX_AGENT_DIR}/config.json"
+    ```
+
+    Then check if role skills are installed:
+    ```bash
+    # Check for role skill pack
+    ROLE_DIR="${CTX_FRAMEWORK_ROOT}/templates/roles/${AGENT_ROLE}"
+    if [ -d "$ROLE_DIR/skills/active" ]; then
+      for skill_file in "$ROLE_DIR/skills/active"/*.md; do
+        skill_name=$(basename "$skill_file")
+        dest="${CTX_AGENT_DIR}/skills/active/$skill_name"
+        if [ ! -f "$dest" ]; then
+          echo "MISSING: $skill_name"
+        fi
+      done
+    fi
+    ```
+
+    If any role skills are missing, copy them:
+    ```bash
+    mkdir -p "${CTX_AGENT_DIR}/skills/active"
+    cp "${CTX_FRAMEWORK_ROOT}/templates/roles/${AGENT_ROLE}/skills/active/"*.md "${CTX_AGENT_DIR}/skills/active/"
+    ```
+
+    If CLAUDE_APPEND.md exists for the role and hasn't been applied yet:
+    ```bash
+    APPEND_FILE="${CTX_FRAMEWORK_ROOT}/templates/roles/${AGENT_ROLE}/CLAUDE_APPEND.md"
+    if [ -f "$APPEND_FILE" ] && ! grep -q "Design System & Frontend Standards" "${CTX_AGENT_DIR}/CLAUDE.md" 2>/dev/null; then
+      cat "$APPEND_FILE" >> "${CTX_AGENT_DIR}/CLAUDE.md"
+      echo "Appended role-specific CLAUDE.md sections"
+    fi
+    ```
+
+    **For `frontend` role specifically**, check for DESIGN.md:
+    ```bash
+    [ -f "${CTX_AGENT_DIR}/DESIGN.md" ] && echo "DESIGN.md exists" || echo "DESIGN.md MISSING"
+    ```
+
+    If DESIGN.md is missing:
+    > "I'm a frontend agent but I don't have a DESIGN.md yet. This file defines the org's visual identity — colors, typography, spacing, component styles. Without it, I'll be making design decisions without a system.
+    >
+    > Options:
+    > 1. **Share a design system** — paste a URL, Figma link, or describe your brand
+    > 2. **I'll create one** — I'll ask you questions and generate a design system
+    > 3. **Skip for now** — I'll use sensible defaults and we'll formalize later"
+
+    **END YOUR TURN.** Wait for their choice.
+
+    If they choose option 2, interview them about: primary colors, font preferences, button style, card style, spacing grid, dark/light mode, brand personality. Then generate DESIGN.md.
+
 ## Part 3: Context Import
 
 14. **Ask for external context:**

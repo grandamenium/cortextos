@@ -153,6 +153,12 @@ export interface EcosystemConfig {
   community_publish?: EcosystemFeatureConfig;
 }
 
+/**
+ * Known agent roles. Each role maps to a skill pack under `templates/roles/<role>/`
+ * that gets merged into the agent directory during `add-agent --role <role>`.
+ */
+export type AgentRole = 'frontend' | 'backend' | 'data' | 'devops' | 'design' | 'research' | 'content' | 'qa';
+
 export interface AgentConfig {
   startup_delay?: number;
   max_session_seconds?: number;
@@ -189,6 +195,12 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /** Enable stale-heartbeat watchdog auto-restart. Default: true */
+  stale_watchdog_enabled?: boolean;
+  /** Minutes before a heartbeat is considered stale. Default: 15 */
+  stale_threshold_minutes?: number;
+  /** Agent role — determines which skill pack is auto-installed. */
+  role?: AgentRole;
 }
 
 export interface CronEntry {

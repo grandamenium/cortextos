@@ -82,3 +82,14 @@ export function readAllHeartbeats(paths: BusPaths): Heartbeat[] {
 
   return heartbeats;
 }
+
+/**
+ * Check if a heartbeat is stale (older than thresholdMs).
+ * Returns false if heartbeat has no parseable timestamp.
+ */
+export function isHeartbeatStale(heartbeat: Heartbeat, thresholdMs: number): boolean {
+  const ts = heartbeat.last_heartbeat ?? heartbeat.timestamp;
+  if (!ts) return false;
+  const age = Date.now() - new Date(ts).getTime();
+  return age > thresholdMs;
+}

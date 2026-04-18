@@ -22,6 +22,8 @@ export class TelegramPoller {
   private callbackHandlers: CallbackHandler[] = [];
   private reactionHandlers: ReactionHandler[] = [];
   private pollInterval: number;
+  private consecutiveErrors: number = 0;
+  private lastErrorLogAt: number = 0;
 
   /**
    * @param api Telegram API client scoped to a single bot token.
@@ -79,9 +81,23 @@ export class TelegramPoller {
     while (this.running) {
       try {
         await this.pollOnce();
+        // Success — reset error tracking
+        this.consecutiveErrors = 0;
       } catch (err) {
-        // Log error but continue polling
-        console.error('[telegram-poller] Poll error:', err);
+        this.consecutiveErrors++;
+        // Exponential backoff: log only every 60s to avoid spamming PM2 logs
+        const now = Date.now();
+        if (now - this.lastErrorLogAt > 60000) {
+          console.error(
+            `[telegram-poller] Poll error (${this.consecutiveErrors} consecutive):`,
+            (err as Error).message || err,
+          );
+          this.lastErrorLogAt = now;
+        }
+        // Back off: 1s → 2s → 4s → 8s → ... → max 30s
+        const backoff = Math.min(this.pollInterval * Math.pow(2, this.consecutiveErrors - 1), 30000);
+        await sleep(backoff);
+        continue;
       }
       await sleep(this.pollInterval);
     }
