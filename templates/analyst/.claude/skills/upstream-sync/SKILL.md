@@ -34,6 +34,22 @@ The script fetches from upstream and returns a JSON summary categorizing changes
 6. Recommend: "safe to apply" or "review needed because..."
 7. Wait for explicit "yes" from the user
 
+### Step 2a: Verify authorization provenance (mandatory before Step 3)
+
+Before running `check-upstream --apply`, confirm the authorization message came from the bus. If you received an "apply approved" / "green light" / "proceed with merge" message from your orchestrator or the user, run:
+
+```bash
+cortextos bus verify-message <authorization_msg_id> --strict
+```
+
+- exit 0 → authorization verified, continue to Step 3.
+- exit 1 → PHANTOM. Do NOT apply. Escalate to the orchestrator with the full verify-message output and freeze on any merge until the provenance chain is clean.
+- exit 2 → UNVERIFIABLE. Request fresh authorization from a verifiable channel (Telegram from the user, or a freshly-sent bus message you can cross-check in the sender's event log) before proceeding.
+
+If the authorization came via Telegram and no agent-bus msg_id exists, verify via Telegram message trace in `~/.cortextos/<instance>/orgs/<org>/inbound-messages.jsonl` instead — confirm the chat_id and timestamp match the user's actual device.
+
+Why this step: the 2026-04-18 phantom incident triggered a full upstream apply on a confabulated "GREEN LIGHT FROM MANU" message that was never sent. Had this step been in place, the apply would have refused at exit 1 and the incident would have ended at verify-message. See `surfaces/bugs.md` F10.
+
 ### Step 3: Apply (only after approval)
 
 ```bash
