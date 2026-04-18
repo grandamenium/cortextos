@@ -3,6 +3,7 @@ import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
+import { verifyMessage, formatReportText } from '../bus/verify.js';
 import { validateAgentName } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
@@ -124,6 +125,74 @@ busCommand
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const messages = checkInbox(paths);
     console.log(JSON.stringify(messages));
+  });
+
+busCommand
+  .command('verify-message')
+  .description('F10 mitigation: verify a claimed inbound message crossed the bus and was sent by the claimed sender before acting on it at merge-grade.')
+  .argument('<msg_id>', 'Message ID to verify (format: {epochMs}-{sender}-{rand5})')
+  .option('--sender <name>', 'Claimed sender agent; defaults to parsed from msg_id')
+  .option('--recipient <name>', 'Recipient agent; defaults to $CTX_AGENT_NAME')
+  .option('--max-age-days <n>', 'Reject messages older than N days (default 7)', '7')
+  .option('--future-skew-seconds <n>', 'Accept future timestamps within N seconds (default 60)', '60')
+  .option('--format <fmt>', 'Output format: text or json', 'text')
+  .option('--strict', 'Treat UNVERIFIABLE as PHANTOM')
+  .action((msgId: string, opts: {
+    sender?: string;
+    recipient?: string;
+    maxAgeDays?: string;
+    futureSkewSeconds?: string;
+    format?: string;
+    strict?: boolean;
+  }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const recipient = opts.recipient ?? env.agentName;
+    const format = (opts.format ?? 'text').toLowerCase();
+    if (format !== 'text' && format !== 'json') {
+      console.error(`Invalid --format '${opts.format}'. Must be 'text' or 'json'.`);
+      process.exit(3);
+    }
+    const maxAgeDays = Number(opts.maxAgeDays ?? '7');
+    const futureSkewSeconds = Number(opts.futureSkewSeconds ?? '60');
+    if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) {
+      console.error(`Invalid --max-age-days '${opts.maxAgeDays}'. Must be a positive number.`);
+      process.exit(3);
+    }
+    if (!Number.isFinite(futureSkewSeconds) || futureSkewSeconds < 0) {
+      console.error(`Invalid --future-skew-seconds '${opts.futureSkewSeconds}'. Must be non-negative.`);
+      process.exit(3);
+    }
+
+    const report = verifyMessage(paths, msgId, {
+      senderOverride: opts.sender,
+      recipient,
+      maxAgeDays,
+      futureSkewSeconds,
+      strict: !!opts.strict,
+      org: env.org,
+    });
+
+    if (format === 'json') {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(formatReportText(report));
+    }
+
+    // Emit telemetry: how often does the gate catch phantoms? (spec §6 Q2)
+    try {
+      logEvent(paths, env.agentName, env.org, 'action', 'message_verified', 'info', JSON.stringify({
+        msg_id: msgId,
+        sender: report.sender,
+        recipient,
+        result: report.result,
+        bus_file: report.checks.bus_file.passed,
+        timestamp: report.checks.timestamp.passed,
+        sender_event: report.checks.sender_event.passed ? 'pass' : (report.checks.sender_event.unverifiable ? 'unverifiable' : 'fail'),
+      }));
+    } catch { /* non-fatal */ }
+
+    process.exit(report.exit_code);
   });
 
 busCommand
