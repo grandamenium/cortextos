@@ -170,6 +170,11 @@ export interface AgentConfig {
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
+  quota?: {
+    daily_budget_usd?: number;
+    soft_pct?: number;
+    hard_pct?: number;
+  };
 }
 
 export interface CronEntry {
