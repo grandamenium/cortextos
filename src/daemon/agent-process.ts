@@ -9,6 +9,7 @@ import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { readCronState, parseDurationMs } from '../bus/cron-state.js';
 import { resolvePaths } from '../utils/paths.js';
+import { ContextMonitor } from './context-monitor.js';
 
 type LogFn = (msg: string) => void;
 
@@ -55,6 +56,7 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  private contextMonitor: ContextMonitor | null = null;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -146,6 +148,10 @@ export class AgentProcess {
       // Start session timer
       this.startSessionTimer();
 
+      // Start context monitor — estimates context usage and fires
+      // preemptive continuation at configurable thresholds.
+      this.startContextMonitor(logPath);
+
       this.notifyStatusChange();
     } catch (err) {
       this.log(`Failed to start: ${err}`);
@@ -160,6 +166,7 @@ export class AgentProcess {
   async stop(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
+    if (this.contextMonitor) { this.contextMonitor.stop(); this.contextMonitor = null; }
     // BUG-040 fix: stopRequested persists ACROSS stop()'s return until
     // handleExit clears it. This is the safety net for the case where the
     // PTY exits later than the Promise.race timeout below.
@@ -532,6 +539,44 @@ export class AgentProcess {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
     }
+  }
+
+  private startContextMonitor(logPath: string): void {
+    const maxSessionS = this.config.max_session_seconds || 255600;
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    this.contextMonitor = new ContextMonitor(this.name, stateDir, logPath, maxSessionS);
+
+    // Provide burn-classification context so the monitor can distinguish
+    // legitimate large-task burns from runaway loops.
+    const paths = resolvePaths(this.name, this.env.instanceId, this.env.org);
+    this.contextMonitor.setBurnContext({
+      taskDir: paths.taskDir,
+      heartbeatDir: join(this.env.ctxRoot, 'state'),
+    });
+
+    this.contextMonitor.setOnWarn((est, burn) => {
+      this.log(`Context monitor: ${est.pct}% — ${burn.classification} (${burn.reasons.join(', ')})`);
+    });
+
+    this.contextMonitor.setOnAlert((est, burn) => {
+      const eventType = burn.classification === 'runaway' ? 'context_runaway' : 'context_large_task';
+      this.log(`Context monitor: ${est.pct}% — ${eventType} (${burn.reasons.join(', ')})`);
+      try {
+        const { logEvent } = require('../bus/event.js');
+        logEvent(paths, this.name, this.env.org, 'action', eventType, 'warning', {
+          agent: this.name, pct: est.pct, tokens_est: est.tokens_est, signal: est.signal,
+          burn_classification: burn.classification, has_active_task: burn.has_active_task,
+          heartbeat_fresh: burn.heartbeat_fresh, log_entropy_low: burn.log_entropy_low,
+        });
+      } catch { /* best-effort */ }
+    });
+
+    this.contextMonitor.setOnCritical((est, burn) => {
+      this.log(`Context monitor: ${est.pct}% — triggering self-restart (${burn.classification}: ${burn.reasons.join(', ')})`);
+      this.sessionRefresh().catch((err) => this.log(`Context-triggered refresh failed: ${err}`));
+    });
+
+    this.contextMonitor.start();
   }
 
   /**
