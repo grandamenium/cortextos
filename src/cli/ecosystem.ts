@@ -97,7 +97,7 @@ export const ecosystemCommand = new Command('ecosystem')
       // Dashboard reads its real config from dashboard/.env.local — populated
       // by /onboarding Phase 7. PM2 just supervises the npm process.
       max_restarts: 50,
-      restart_delay: 5000,
+      restart_delay: 15000,
       autorestart: true,
     }`
       : '';
@@ -123,7 +123,7 @@ module.exports = {
         CTX_ORG: process.env.CTX_ORG || ${JSON.stringify(detectedOrg)},
       },
       max_restarts: 50,
-      restart_delay: 5000,
+      restart_delay: 15000,
       autorestart: true,
     }${dashboardAppBlock},
   ],

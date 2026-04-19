@@ -4,7 +4,7 @@
  * and last-sent cache (lines 111-113).
  */
 
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 
 /**
@@ -83,6 +83,44 @@ export function logInboundMessage(
 }
 
 /**
+ * Append a parse-fallback event to telegram-parse-failures.jsonl (BUG-067).
+ *
+ * Fires when sendMessage retries with plain text after a Telegram parse-entity
+ * error. Provides a durable, queryable record separate from outbound-messages.jsonl
+ * so parse-failure rates can be tracked as a theta-wave metric.
+ *
+ * final_status:
+ *   - "sent_plain"  — fallback succeeded; message delivered as plain text
+ *   - "failed_both" — both Markdown and plain-text attempts failed; message lost
+ *
+ * Path: {ctxRoot}/logs/{agentName}/telegram-parse-failures.jsonl
+ */
+export function logParseFallback(
+  ctxRoot: string,
+  agentName: string,
+  chatId: string | number,
+  originalText: string,
+  errorMessage: string,
+  finalStatus: 'sent_plain' | 'failed_both',
+): void {
+  try {
+    const logDir = join(ctxRoot, 'logs', agentName);
+    mkdirSync(logDir, { recursive: true });
+    const entry = JSON.stringify({
+      ts: new Date().toISOString(),
+      agent: agentName,
+      chat_id: String(chatId),
+      error_message: errorMessage,
+      final_status: finalStatus,
+      original_text_preview: originalText.slice(0, 200),
+    });
+    appendFileSync(join(logDir, 'telegram-parse-failures.jsonl'), entry + '\n', 'utf-8');
+  } catch {
+    // Non-critical — never block message sending on log write failures
+  }
+}
+
+/**
  * Cache the last-sent text for a given chat.
  * Path: {ctxRoot}/state/{agentName}/last-telegram-{chatId}.txt
  */
@@ -95,6 +133,76 @@ export function cacheLastSent(
   const stateDir = join(ctxRoot, 'state', agentName);
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(join(stateDir, `last-telegram-${chatId}.txt`), text, 'utf-8');
+}
+
+/**
+ * Log a message that failed to send because Telegram was unreachable (BUG-066).
+ * Path: {ctxRoot}/logs/{agentName}/narration-fallback.jsonl
+ *
+ * final_status:
+ *   "pending"  — not yet retried
+ *   "replayed" — successfully sent on recovery
+ */
+export function logNarrationFallback(
+  ctxRoot: string,
+  agentName: string,
+  chatId: string | number,
+  text: string,
+  errorMessage: string,
+): void {
+  try {
+    const logDir = join(ctxRoot, 'logs', agentName);
+    mkdirSync(logDir, { recursive: true });
+    const entry = JSON.stringify({
+      ts: new Date().toISOString(),
+      agent: agentName,
+      chat_id: String(chatId),
+      error_message: errorMessage,
+      final_status: 'pending',
+      text,
+    });
+    appendFileSync(join(logDir, 'narration-fallback.jsonl'), entry + '\n', 'utf-8');
+  } catch {
+    // Non-critical — never block on log write failures
+  }
+}
+
+export interface NarrationFallbackEntry {
+  ts: string;
+  agent: string;
+  chat_id: string;
+  error_message: string;
+  final_status: 'pending' | 'replayed';
+  text: string;
+}
+
+/**
+ * Read all pending narration fallback entries for an agent.
+ */
+export function readNarrationFallback(ctxRoot: string, agentName: string): NarrationFallbackEntry[] {
+  const filePath = join(ctxRoot, 'logs', agentName, 'narration-fallback.jsonl');
+  if (!existsSync(filePath)) return [];
+  try {
+    return readFileSync(filePath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as NarrationFallbackEntry)
+      .filter((e) => e.final_status === 'pending');
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Clear all pending narration fallback entries (after successful replay).
+ */
+export function clearNarrationFallback(ctxRoot: string, agentName: string): void {
+  try {
+    const filePath = join(ctxRoot, 'logs', agentName, 'narration-fallback.jsonl');
+    if (existsSync(filePath)) unlinkSync(filePath);
+  } catch {
+    // Non-critical
+  }
 }
 
 /**

@@ -8,15 +8,44 @@ import { join } from 'path';
 import { homedir } from 'os';
 import * as crypto from 'crypto';
 
+/** Maximum stdin bytes buffered before truncation (10 MB). BUG-080. */
+const MAX_STDIN_SIZE = 10 * 1024 * 1024;
+
 /**
  * Read all data from stdin as a string.
+ * Enforces a 10 MB hard cap (BUG-080): if the incoming payload exceeds
+ * MAX_STDIN_SIZE the stream is immediately destroyed, a warning is written to
+ * stderr, and only the bytes received up to that point are returned (already
+ * truncated). This prevents hooks from OOM-ing the process on runaway inputs.
  */
 export function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer<ArrayBufferLike>[] = [];
-    process.stdin.on('data', (chunk: Buffer<ArrayBufferLike>) => chunks.push(chunk));
-    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-    process.stdin.on('error', reject);
+    let totalSize = 0;
+    let truncated = false;
+
+    process.stdin.on('data', (chunk: Buffer<ArrayBufferLike>) => {
+      if (truncated) return;
+      totalSize += chunk.byteLength;
+      if (totalSize > MAX_STDIN_SIZE) {
+        truncated = true;
+        // Keep everything accumulated so far — discard the overflowing chunk
+        process.stderr.write(
+          `[cortextos hook] WARNING: stdin exceeded ${MAX_STDIN_SIZE} bytes; truncating input (BUG-080)\n`,
+        );
+        // Destroy the stream so no further data events fire
+        try { process.stdin.destroy(); } catch { /* already closed */ }
+        resolve(Buffer.concat(chunks).toString('utf-8'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    process.stdin.on('end', () => {
+      if (!truncated) resolve(Buffer.concat(chunks).toString('utf-8'));
+    });
+    process.stdin.on('error', (err) => {
+      if (!truncated) reject(err);
+    });
   });
 }
 

@@ -118,6 +118,35 @@ export class OutputBuffer {
   }
 
   /**
+   * Check whether the recent PTY output contains signatures of an Anthropic
+   * API rate-limit or overload response. Used by the daemon to distinguish
+   * rate-limit exits from real crashes so it can apply an extended pause
+   * instead of the normal crash-backoff cycle.
+   *
+   * Patterns matched (case-insensitive, ANSI stripped):
+   *   - "overloaded_error" / "overloaded" (HTTP 529 body)
+   *   - "rate_limit_error" / "rate limit" / "rate-limit"
+   *   - "too many requests"
+   *   - "quota exceeded" / "usage limit"
+   *   - "529"
+   */
+  hasRateLimitSignature(): boolean {
+    // Only scan the last 200 chunks — rate-limit messages appear near session end
+    const text = this.chunks.slice(-200).join('').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').toLowerCase();
+    return (
+      text.includes('overloaded_error') ||
+      text.includes('rate_limit_error') ||
+      text.includes('rate limit') ||
+      text.includes('rate-limit') ||
+      text.includes('too many requests') ||
+      text.includes('quota exceeded') ||
+      text.includes('usage limit') ||
+      // HTTP 529 status line or JSON error code
+      (text.includes('529') && (text.includes('overload') || text.includes('error')))
+    );
+  }
+
+  /**
    * Clear the buffer.
    */
   clear(): void {

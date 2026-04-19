@@ -91,8 +91,16 @@ export async function GET(
   const { filepath } = await params;
   const ctxRoot = getCTXRoot();
 
-  // Reconstruct the relative path from the URL segments.
-  const relativePath = filepath.join('/');
+  let relativePath: string;
+  try {
+    relativePath = filepath.map((segment) => decodeURIComponent(segment)).join('/');
+  } catch {
+    return Response.json({ error: 'invalid_path' }, { status: 400 });
+  }
+  if (relativePath.includes('..')) {
+    return Response.json({ error: 'invalid_path' }, { status: 400 });
+  }
+
   const frameworkRoot = getFrameworkRoot();
   const additionalRoots = readAllowedRoots();
   const validRoots = [ctxRoot, frameworkRoot, ...additionalRoots];

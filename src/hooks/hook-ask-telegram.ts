@@ -15,7 +15,7 @@ import {
   buildAskMultiSelectKeyboard,
   formatQuestionMessage,
 } from './index';
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, mkdirSync, chmodSync } from 'fs';
 import { join } from 'path';
 
 async function main(): Promise<void> {
@@ -38,6 +38,7 @@ async function main(): Promise<void> {
   const stateFile = join(env.stateDir, 'ask-state.json');
   const state = buildAskState(questions);
   writeFileSync(stateFile, JSON.stringify(state), 'utf-8');
+  try { chmodSync(stateFile, 0o600); } catch { /* ignore on unsupported platforms */ }
 
   // Send first question
   const q = questions[0];

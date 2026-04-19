@@ -68,7 +68,19 @@ export async function PATCH(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'communication_style', 'approval_rules', 'max_session_seconds', 'max_crashes_per_day', 'startup_delay', 'model'];
+  const allowed = [
+    'timezone',
+    'day_mode_start',
+    'day_mode_end',
+    'communication_style',
+    'approval_rules',
+    'max_session_seconds',
+    'max_crashes_per_day',
+    'startup_delay',
+    'model',
+    'narration_silence_threshold_minutes',
+    'narration_inject_cooldown_minutes',
+  ];
   const timeRegex = /^\d{2}:\d{2}$/;
   if (body.day_mode_start && !timeRegex.test(body.day_mode_start as string)) {
     return Response.json({ error: 'day_mode_start must be HH:MM' }, { status: 400 });
@@ -99,6 +111,18 @@ export async function PATCH(
       if (typeof val !== 'number' || !Number.isInteger(val) || val < 0) {
         return Response.json(
           { error: `${numField} must be a non-negative integer` },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
+  for (const numField of ['narration_silence_threshold_minutes', 'narration_inject_cooldown_minutes'] as const) {
+    if (body[numField] !== undefined) {
+      const val = body[numField];
+      if (typeof val !== 'number' || !Number.isFinite(val) || val <= 0) {
+        return Response.json(
+          { error: `${numField} must be a positive number` },
           { status: 400 },
         );
       }

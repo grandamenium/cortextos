@@ -4,7 +4,8 @@
   "description": "Persistent 24/7 Claude Code agents with multi-agent orchestration",
   "main": "dist/daemon.js",
   "bin": {
-    "cortextos": "dist/cli.js"
+    "cortextos": "dist/cli.js",
+    "ascendops": "dist/ascendops.js"
   },
   "scripts": {
     "build": "tsup",

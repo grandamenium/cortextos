@@ -81,6 +81,7 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `list-agents [--org O] [--format json\|text]` | All agents in system |
 | `list-skills [--format text\|json]` | Skills available to this agent |
 | `check-goal-staleness [--threshold DAYS]` | Flag agents with stale GOALS.md |
+| `interrupt-agent <name>` | Send an interrupt signal to another agent |
 
 ### Lifecycle
 | Command | What it does |

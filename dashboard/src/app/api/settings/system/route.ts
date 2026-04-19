@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { randomBytes } from 'crypto';
 import { CTX_ROOT } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
@@ -9,6 +10,7 @@ interface SystemConfig {
   heartbeatStalenessThreshold: number;
   maxCrashesPerDay: number;
   sessionRefreshInterval: number;
+  brand_name?: string;
 }
 
 const DEFAULT: SystemConfig = {
@@ -45,9 +47,14 @@ export async function PUT(request: NextRequest) {
       heartbeatStalenessThreshold: Math.max(10, Math.min(3600, Math.round(body.heartbeatStalenessThreshold ?? current.heartbeatStalenessThreshold))),
       maxCrashesPerDay: Math.max(1, Math.min(100, Math.round(body.maxCrashesPerDay ?? current.maxCrashesPerDay))),
       sessionRefreshInterval: Math.max(30, Math.min(3600, Math.round(body.sessionRefreshInterval ?? current.sessionRefreshInterval))),
+      ...(body.brand_name !== undefined && { brand_name: String(body.brand_name).trim().slice(0, 100) || undefined }),
     };
-    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2), 'utf-8');
+    // Atomic write: temp file + rename prevents corrupt settings on crash
+    const dir = path.dirname(CONFIG_PATH);
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = path.join(dir, `.tmp.${randomBytes(6).toString('hex')}`);
+    fs.writeFileSync(tmp, JSON.stringify(updated, null, 2) + '\n', 'utf-8');
+    fs.renameSync(tmp, CONFIG_PATH);
     return Response.json({ success: true, config: updated });
   } catch (err) {
     console.error('[api/settings/system] PUT error:', err);

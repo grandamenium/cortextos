@@ -13,6 +13,7 @@ import {
   CardDescription,
 } from '@/components/ui/card';
 import { SplashScreen } from '@/components/layout/splash-screen';
+import { resolveSafeSameOriginCallbackUrl } from '@/lib/url-security';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -112,8 +113,10 @@ export default function LoginPage() {
         // a reverse proxy (when AUTH_URL is not set), which would send the
         // browser to the wrong host.
         const callbackParam = new URL(window.location.href).searchParams.get('callbackUrl');
-        // Validate same-origin: must start with / but not // (which is a protocol-relative URL)
-        const safeTarget = callbackParam && callbackParam.startsWith('/') && !callbackParam.startsWith('//') ? callbackParam : '/';
+        const safeTarget = resolveSafeSameOriginCallbackUrl(
+          callbackParam,
+          window.location.origin,
+        );
         window.location.href = safeTarget;
         return;
       }

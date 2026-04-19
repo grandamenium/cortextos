@@ -348,3 +348,57 @@ describe('buildReplyContext - Telegram reply context (BUG fix: media replies los
     expect(result).not.toContain('\x00');
   });
 });
+
+// BUG-083: interruptAgent tests
+describe('AgentManager.interruptAgent - BUG-083', () => {
+  it('returns null when agent is not registered', () => {
+    const manager = new AgentManager('test', '/tmp/ctx', '/tmp/fw', 'org');
+    // No agents registered — should return null without throwing
+    expect(manager.interruptAgent('nonexistent')).toBeNull();
+  });
+
+  it('returns null when agent is registered but stopped (no PID)', () => {
+    // The mock AgentProcess.getStatus() returns { name, status: 'stopped' } with no pid.
+    // We need to manually inject a mock agent entry to test this path.
+    const manager = new AgentManager('test', '/tmp/ctx', '/tmp/fw', 'org');
+    // Access private map via cast to any
+    const mockProcess = {
+      getStatus: () => ({ name: 'agent1', status: 'stopped', pid: undefined }),
+    };
+    (manager as any).agents.set('agent1', { process: mockProcess, checker: null });
+    expect(manager.interruptAgent('agent1')).toBeNull();
+  });
+
+  it('sends SIGINT and returns PID when agent is running with a known PID', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+
+    const manager = new AgentManager('test', '/tmp/ctx', '/tmp/fw', 'org');
+    const mockProcess = {
+      getStatus: () => ({ name: 'agent2', status: 'running', pid: 12345 }),
+    };
+    (manager as any).agents.set('agent2', { process: mockProcess, checker: null });
+
+    const result = manager.interruptAgent('agent2');
+    expect(result).toBe(12345);
+    expect(killSpy).toHaveBeenCalledWith(12345, 'SIGINT');
+
+    killSpy.mockRestore();
+  });
+
+  it('returns null when process.kill throws (PID already gone)', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw new Error('ESRCH: no such process');
+    });
+
+    const manager = new AgentManager('test', '/tmp/ctx', '/tmp/fw', 'org');
+    const mockProcess = {
+      getStatus: () => ({ name: 'agent3', status: 'running', pid: 99999 }),
+    };
+    (manager as any).agents.set('agent3', { process: mockProcess, checker: null });
+
+    const result = manager.interruptAgent('agent3');
+    expect(result).toBeNull();
+
+    killSpy.mockRestore();
+  });
+});

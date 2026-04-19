@@ -1,8 +1,21 @@
 import { createHash } from 'crypto';
+import { stripControlChars } from '../utils/validate.js';
 
 // Bracketed paste mode escape sequences
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
+
+// Pattern for valid inbox message IDs: {epochMs}-{agentName}-{rand5}
+// e.g. "1713400000000-sage-ab12c"
+const INBOX_MSG_ID_REGEX = /^\d{13}-[a-z0-9_-]+-[a-z0-9]{5}$/;
+
+/**
+ * Validate that an inbox message ID matches the expected pattern.
+ * Returns true if valid, false otherwise.
+ */
+export function isValidInboxMsgId(msgId: string): boolean {
+  return INBOX_MSG_ID_REGEX.test(msgId);
+}
 
 // Key escape sequences for TUI navigation
 export const KEYS = {
@@ -65,16 +78,23 @@ export function injectMessage(
   content: string,
   enterDelay: number = 300,
 ): void {
+  // BUG-079: Strip control characters (except \n and \t) to prevent PTY corruption
+  // from crafted inbox message bodies. \r (0x0d) is also stripped here because PTY
+  // injection uses bracketed paste mode — a bare CR inside the paste block would
+  // submit the input prematurely and corrupt the terminal state.
+  const safe = stripControlChars(content)
+    .replace(/\r/g, '');  // also strip \r — CR inside bracketed paste submits early
+
   // For very large messages, chunk the write to avoid overwhelming the PTY buffer
   const MAX_CHUNK = 4096;
 
-  if (content.length <= MAX_CHUNK) {
-    write(PASTE_START + content + PASTE_END);
+  if (safe.length <= MAX_CHUNK) {
+    write(PASTE_START + safe + PASTE_END);
   } else {
     // Chunked write for large messages
     write(PASTE_START);
-    for (let i = 0; i < content.length; i += MAX_CHUNK) {
-      write(content.slice(i, i + MAX_CHUNK));
+    for (let i = 0; i < safe.length; i += MAX_CHUNK) {
+      write(safe.slice(i, i + MAX_CHUNK));
     }
     write(PASTE_END);
   }

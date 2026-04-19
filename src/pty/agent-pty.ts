@@ -2,6 +2,7 @@ import { join } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
+import { resolveModel } from '../utils/model-tiers.js';
 import { OutputBuffer } from './output-buffer.js';
 
 // node-pty types
@@ -201,8 +202,9 @@ export class AgentPTY {
 
     args.push('--dangerously-skip-permissions');
 
-    if (this.config.model) {
-      args.push('--model', this.config.model);
+    const model = resolveModel(this.config);
+    if (model) {
+      args.push('--model', model);
     }
 
     // Local override pattern (feat #20): concatenate {agentDir}/local/*.md files

@@ -9,11 +9,23 @@
  * route modules pick them up at evaluation time.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { NextRequest } from 'next/server';
+
+vi.mock('marked', () => ({
+  marked: {
+    parse: (value: string) => value,
+  },
+}));
+
+vi.mock('isomorphic-dompurify', () => ({
+  default: {
+    sanitize: (value: string) => value,
+  },
+}));
 
 // ---------------------------------------------------------------------------
 // Global setup — one shared tmp root across all tests in this file.
@@ -33,12 +45,14 @@ let feed: FeedRoute;
 let channels: ChannelsRoute;
 let channel: ChannelRoute;
 let upload: UploadRoute;
+let media: typeof import('../../media/[...filepath]/route');
 
 beforeAll(async () => {
   feed = await import('../feed/route');
   channels = await import('../channels/route');
   channel = await import('../channel/[pair]/route');
   upload = await import('../upload/route');
+  media = await import('../../media/[...filepath]/route');
 });
 
 afterAll(() => {
@@ -223,6 +237,17 @@ describe('POST /api/comms/upload', () => {
     expect(fs.existsSync(absPath)).toBe(true);
   });
 
+  it('accepts a valid image even when the client-supplied MIME type is wrong', async () => {
+    const png = new File([new Uint8Array([0x89, 0x50, 0x4E, 0x47])], 'shot.png', {
+      type: 'text/plain',
+    });
+
+    const res = await upload.POST(uploadRequest(png));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.filename.endsWith('.png')).toBe(true);
+  });
+
   it('rejects unsupported MIME types (including SVG)', async () => {
     // SVG is now explicitly disallowed because it can carry inline <script>.
     const svg = new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], 'evil.svg', {
@@ -234,6 +259,17 @@ describe('POST /api/comms/upload', () => {
     const html = new File(['<html></html>'], 'page.html', { type: 'text/html' });
     const htmlRes = await upload.POST(uploadRequest(html));
     expect(htmlRes.status).toBe(400);
+  });
+
+  it('rejects MIME-spoofed uploads when the magic bytes do not match', async () => {
+    const spoofed = new File(['not really a png'], 'spoofed.png', {
+      type: 'image/png',
+    });
+
+    const res = await upload.POST(uploadRequest(spoofed));
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(String(data.error)).toContain('Unsupported file type');
   });
 
   it('forces the server-chosen extension regardless of the uploaded filename', async () => {
@@ -264,5 +300,16 @@ describe('POST /api/comms/upload', () => {
     expect(res.status).toBe(400);
     const data = await res.json();
     expect(String(data.error).toLowerCase()).toContain('too large');
+  });
+});
+
+describe('GET /api/media/[...filepath]', () => {
+  it('rejects encoded path traversal before resolution', async () => {
+    const res = await media.GET(makeRequest('/api/media/%2e%2e/secret.txt'), {
+      params: Promise.resolve({ filepath: ['%2e%2e', 'secret.txt'] }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_path' });
   });
 });

@@ -16,16 +16,27 @@ const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains",
 });
 
-export const metadata: Metadata = {
-  title: "cortextOS Dashboard",
-  description: "cortextOS agent orchestration dashboard",
-  viewport: "width=device-width, initial-scale=1, viewport-fit=cover",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "default",
-    title: "cortextOS",
-  },
-};
+// Brand-aware metadata: set ASCENDOPS_BRAND=1 in the dashboard's environment
+// (e.g. via .env.local in the dashboard directory) to show AscendOps branding.
+// Uses generateMetadata() instead of a static `metadata` export so that
+// process.env.ASCENDOPS_BRAND is evaluated at request time on the server,
+// not baked in at build time (Next.js static metadata evaluation would always
+// read an empty string if the var is set only in the runtime environment).
+export async function generateMetadata(): Promise<Metadata> {
+  const isAscendOps = process.env.ASCENDOPS_BRAND === "1";
+  return {
+    title: isAscendOps ? "AscendOps Dashboard" : "cortextOS Dashboard",
+    description: isAscendOps
+      ? "AscendOps property management AI platform"
+      : "cortextOS agent orchestration dashboard",
+    viewport: "width=device-width, initial-scale=1, viewport-fit=cover",
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: "default",
+      title: isAscendOps ? "AscendOps" : "cortextOS",
+    },
+  };
+}
 
 export default function RootLayout({
   children,

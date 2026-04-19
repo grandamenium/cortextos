@@ -13,6 +13,7 @@ export interface AutoCommitReport {
   staged: string[];
   blocked: string[];
   diff_stat?: string;
+  gitignore_enforced?: boolean;
 }
 
 export interface AgentGoalStatus {
@@ -43,11 +44,83 @@ const EXCLUDED_DIR_PREFIXES = [
   '.venv/',
 ];
 
-const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-|ghp_|xoxb-|AKIA)/;
+// BUG-078: expanded credential patterns for non-script files.
+// Covers: original generic keywords (token=, key=, password=, secret=),
+// well-known env var names assigned to real values, and secret prefixes.
+// Scripts (.sh, .py, .js) are still exempt — they legitimately reference
+// env vars (e.g. token=get_from_env) rather than embed actual secrets.
+const CREDENTIAL_PATTERNS =
+  /(?:token=|key=|password=|secret=|sk-|ghp_|ghs_|xoxb-|xoxs-|AKIA)|(?:BOT_TOKEN|API_KEY|AUTH_TOKEN|ACCESS_TOKEN|SECRET_KEY|PRIVATE_KEY|DATABASE_URL|REDIS_URL|POSTGRES_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|STRIPE_SECRET|GITHUB_TOKEN|GH_TOKEN|AWS_SECRET_ACCESS_KEY|CLOUDFLARE_API_TOKEN)[\s]*=[\s]*\S|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE/;
 
 const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
 
+// BUG-078: sensitive filenames blocked regardless of content.
+// Matches: .env, secrets.env, .env.local, .env.production, *.pem, *.key,
+// id_rsa, id_ed25519, service-account*.json, credentials.json, *.p12, *.pfx
+const SENSITIVE_FILENAME_PATTERNS = [
+  /^\.env$/,
+  /\.env(\.|$)/,        // .env.local, .env.production, secrets.env, etc.
+  /secrets?\.env$/,
+  /\.pem$/,
+  /\.key$/,
+  /\.p12$/,
+  /\.pfx$/,
+  /\.keystore$/,
+  /^id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/,
+  /credentials\.json$/,
+  /service.?account.*\.json$/,
+  /\.cortextos-env$/,
+];
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// BUG-078: .gitignore patterns that must be present in any repo where
+// autoCommit runs. ensureGitignore() appends missing entries.
+const REQUIRED_GITIGNORE_ENTRIES = [
+  '.env',
+  '*.env',
+  'secrets.env',
+  '*.pem',
+  '*.key',
+  '*.p12',
+  '*.pfx',
+  '*.keystore',
+  'credentials.json',
+  'service-account*.json',
+];
+
+/**
+ * BUG-078: Ensure the project's .gitignore contains all required secret
+ * exclusion patterns. Appends any missing entries with a header comment.
+ */
+function ensureGitignore(projectDir: string): void {
+  const gitignorePath = join(projectDir, '.gitignore');
+  let existing = '';
+  try {
+    existing = existsSync(gitignorePath) ? readFileSync(gitignorePath, 'utf-8') : '';
+  } catch {
+    return;
+  }
+  const missing = REQUIRED_GITIGNORE_ENTRIES.filter(
+    (entry) => !existing.split('\n').some((line) => line.trim() === entry),
+  );
+  if (missing.length === 0) return;
+  const block = '\n# cortextOS security: auto-added sensitive file exclusions\n' + missing.join('\n') + '\n';
+  try {
+    const { appendFileSync: append } = require('fs');
+    append(gitignorePath, block, 'utf-8');
+  } catch {
+    // Non-critical — log but don't block
+  }
+}
+
+/**
+ * BUG-078: Check if a file path matches any sensitive filename pattern.
+ */
+function isSensitiveFilename(file: string): boolean {
+  const basename = file.split('/').pop() ?? file;
+  return SENSITIVE_FILENAME_PATTERNS.some((re) => re.test(basename));
+}
 
 // --- Functions ---
 
@@ -117,6 +190,9 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
     return { status: 'clean', staged: [], blocked: [] };
   }
 
+  // BUG-078: enforce .gitignore contains all required secret exclusion patterns
+  ensureGitignore(projectDir);
+
   const changedFiles = porcelainOutput
     .split('\n')
     .filter(line => line.trim())
@@ -128,15 +204,10 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
   for (const file of changedFiles) {
     if (!file) continue;
 
-    // Block .env files
-    if (file.endsWith('.env') || file.includes('/.env')) {
-      blocked.push(`${file}:contains_credentials`);
-      continue;
-    }
-
-    // Block .cortextos-env
-    if (file === '.cortextos-env' || file.endsWith('/.cortextos-env')) {
-      blocked.push(`${file}:runtime_env`);
+    // BUG-078: block any file matching sensitive filename patterns
+    // (.env, secrets.env, *.pem, *.key, id_rsa, credentials.json, etc.)
+    if (isSensitiveFilename(file)) {
+      blocked.push(`${file}:sensitive_filename`);
       continue;
     }
 
@@ -168,7 +239,9 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
       }
     }
 
-    // Check credential patterns in non-script file content
+    // Check credential patterns in non-script file content.
+    // Scripts (.sh, .py, .js) are exempt: they typically reference env vars
+    // (token=get_from_env) rather than embed actual secret values.
     if (existsSync(fullPath) && !SCRIPT_EXTENSIONS.has(ext)) {
       try {
         const stat = statSync(fullPath);
@@ -180,7 +253,7 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
           }
         }
       } catch {
-        // Binary files may throw on utf-8 read - skip credential check
+        // Binary files may throw on utf-8 read — skip credential check
       }
     }
 

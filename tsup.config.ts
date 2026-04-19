@@ -3,6 +3,7 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: {
     cli: 'src/cli/index.ts',
+    ascendops: 'src/cli/ascendops.ts',
     daemon: 'src/daemon/index.ts',
     'hooks/hook-permission-telegram': 'src/hooks/hook-permission-telegram.ts',
     'hooks/hook-ask-telegram': 'src/hooks/hook-ask-telegram.ts',
@@ -11,6 +12,9 @@ export default defineConfig({
     'hooks/hook-compact-telegram': 'src/hooks/hook-compact-telegram.ts',
     'hooks/hook-extract-facts': 'src/hooks/hook-extract-facts.ts',
     'hooks/hook-idle-flag': 'src/hooks/hook-idle-flag.ts',
+    'hooks/hook-session-restore': 'src/hooks/hook-session-restore.ts',
+    'hooks/hook-loop-detector': 'src/hooks/hook-loop-detector.ts',
+    'hooks/hook-skill-autopr': 'src/hooks/hook-skill-autopr.ts',
   },
   format: ['cjs'],
   target: 'node20',

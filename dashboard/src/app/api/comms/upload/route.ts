@@ -28,6 +28,44 @@ const EXT_FOR_TYPE: Record<string, string> = {
   'image/webp': '.webp',
 };
 
+const VIDEO_EXTENSIONS: Record<string, Set<string>> = {
+  'video/mp4': new Set(['.mp4']),
+  'video/quicktime': new Set(['.mov']),
+};
+
+function hasPrefix(bytes: Uint8Array, expected: number[]): boolean {
+  return expected.every((value, index) => bytes[index] === value);
+}
+
+export function detectImageType(bytes: Uint8Array): string | null {
+  if (bytes.length >= 3 && hasPrefix(bytes, [0xff, 0xd8, 0xff])) {
+    return 'image/jpeg';
+  }
+  if (bytes.length >= 4 && hasPrefix(bytes, [0x89, 0x50, 0x4e, 0x47])) {
+    return 'image/png';
+  }
+  if (bytes.length >= 4 && hasPrefix(bytes, [0x47, 0x49, 0x46, 0x38])) {
+    return 'image/gif';
+  }
+  if (
+    bytes.length >= 12 &&
+    hasPrefix(bytes, [0x52, 0x49, 0x46, 0x46]) &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
+
+export function isValidVideoUpload(fileName: string, fileType: string): boolean {
+  const ext = path.extname(fileName || '').toLowerCase();
+  const allowedExts = VIDEO_EXTENSIONS[fileType];
+  return Boolean(allowedExts && allowedExts.has(ext));
+}
+
 /**
  * POST /api/comms/upload — Upload an image for the chat interface.
  *
@@ -51,13 +89,6 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'No file provided' }, { status: 400 });
   }
 
-  if (!ALLOWED_TYPES.has(file.type)) {
-    return Response.json(
-      { error: `Unsupported file type: ${file.type}. Allowed: JPEG, PNG, GIF, WebP` },
-      { status: 400 },
-    );
-  }
-
   if (file.size > MAX_SIZE) {
     return Response.json({ error: 'File too large (max 10 MB)' }, { status: 400 });
   }
@@ -68,6 +99,19 @@ export async function POST(request: NextRequest) {
   try {
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const detectedType = detectImageType(buffer.subarray(0, 12));
+    const isAllowedVideo = isValidVideoUpload(file.name, file.type);
+    if (!detectedType && !isAllowedVideo) {
+      return Response.json(
+        { error: `Unsupported file type: ${file.type}. Allowed: JPEG, PNG, GIF, WebP` },
+        { status: 400 },
+      );
+    }
+    if (detectedType && !ALLOWED_TYPES.has(detectedType)) {
+      return Response.json({ error: 'Unsupported file type' }, { status: 400 });
     }
 
     // Sanitize filename. We keep only the basename of the client-supplied
@@ -81,7 +125,7 @@ export async function POST(request: NextRequest) {
     const baseName = baseNoExt
       .replace(/[^a-zA-Z0-9_-]/g, '_')
       .slice(0, 50) || 'upload';
-    const ext = EXT_FOR_TYPE[file.type];
+    const ext = detectedType ? EXT_FOR_TYPE[detectedType] : path.extname(file.name || 'upload');
     if (!ext) {
       // Defense-in-depth: ALLOWED_TYPES already gated this, but if someone
       // widens the set without updating EXT_FOR_TYPE we refuse rather than
@@ -100,7 +144,6 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'Invalid filename' }, { status: 400 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
     const tmpPath = filePath + '.tmp';
     fs.writeFileSync(tmpPath, buffer);
     fs.renameSync(tmpPath, filePath);

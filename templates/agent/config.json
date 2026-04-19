@@ -1,11 +1,19 @@
 {
+  "model": "claude-sonnet-4-6",
   "agent_name": "{{agent_name}}",
   "enabled": true,
   "startup_delay": 0,
   "max_session_seconds": 255600,
   "max_crashes_per_day": 10,
   "working_directory": "",
-  "timezone": "",
+  "timezone": "America/Los_Angeles",
+  "day_mode_start": "09:00",
+  "day_mode_end": "18:00",
+  "communication_style": "casual",
+  "approval_rules": {
+    "always_ask": ["external-comms", "financial", "deployment", "data-deletion"],
+    "never_ask": []
+  },
   "crons": [
     {
       "name": "heartbeat",

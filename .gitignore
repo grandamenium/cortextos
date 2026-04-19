@@ -3,6 +3,8 @@ node_modules/
 !.claude/commands/
 !.claude/commands/**
 !.claude/orchestration-cortextos-node/
+!.claude/skills/
+!.claude/skills/**
 # Include template .claude dirs (needed for agent settings.json)
 !templates/**/.claude/
 !templates/**/.claude/**
@@ -26,6 +28,7 @@ orgs/*/agents/*/memory/
 agents/*/local/
 agents/*/telegram-images/
 agents/*/memory/
+state/
 
 # macOS metadata
 .DS_Store
@@ -53,3 +56,15 @@ BRAINDUMP*.md
 AGENTS.md
 dashboard/screenshots/
 dashboard/test-*.py
+.gstack/
+
+# cortextOS security: auto-added sensitive file exclusions
+*.env
+secrets.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+credentials.json
+service-account*.json

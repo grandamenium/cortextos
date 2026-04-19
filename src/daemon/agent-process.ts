@@ -9,6 +9,16 @@ import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { readCronState, parseDurationMs } from '../bus/cron-state.js';
 import { resolvePaths } from '../utils/paths.js';
+import {
+  findGitRoot,
+  recordFailure,
+  markHealthy,
+  shouldRollback,
+  performRollback,
+  readRecoveryNote,
+  deleteRecoveryNote,
+  MIN_HEALTHY_SECONDS,
+} from './watchdog.js';
 
 type LogFn = (msg: string) => void;
 
@@ -55,6 +65,14 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // Watchdog: git repo root for crash-loop detection and rollback
+  private repoRoot: string | null = null;
+  // Watchdog: timer to mark the current commit healthy after MIN_HEALTHY_SECONDS
+  private healthTimer: ReturnType<typeof setTimeout> | null = null;
+  // Rate-limit recovery: pending restart timer. Stored so it can be cancelled
+  // if a second rate-limit exit fires before the first timer elapses (preventing
+  // two overlapping timers from racing and triggering a premature restart).
+  private rateLimitTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -65,6 +83,12 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
+
+    // Resolve the git root once at construction time. Used by the watchdog for
+    // commit-stability tracking and rollback. Null if not inside a git repo.
+    if (env.agentDir) {
+      this.repoRoot = findGitRoot(env.agentDir);
+    }
   }
 
   /**
@@ -90,9 +114,16 @@ export class AgentProcess {
 
     // Determine start mode
     const mode = this.shouldContinue() ? 'continue' : 'fresh';
+    // Read the recovery note and rate-limit marker before building the prompt
+    // but do NOT delete them yet. Both are deleted only after pty.spawn() succeeds
+    // so that a spawn failure doesn't permanently swallow the recovery context
+    // (mirrors the watchdog Bug-1 fix pattern).
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    const recoveryNote = readRecoveryNote(stateDir);
+    const hadRateLimit = this.hasRateLimitMarker(stateDir);
     const prompt = mode === 'fresh'
-      ? this.buildStartupPrompt()
-      : this.buildContinuePrompt();
+      ? this.buildStartupPrompt(recoveryNote)
+      : this.buildContinuePrompt(recoveryNote);
 
     this.log(`Starting in ${mode} mode`);
     this.status = 'starting';
@@ -143,14 +174,80 @@ export class AgentProcess {
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
 
+      // Delete markers only after spawn succeeds so a spawn failure doesn't
+      // permanently lose the recovery context (Bug-1 fix pattern).
+      if (recoveryNote) deleteRecoveryNote(stateDir);
+      if (hadRateLimit) this.deleteRateLimitMarker(stateDir);
+
       // Start session timer
       this.startSessionTimer();
+
+      // Start watchdog health timer — marks commit healthy after MIN_HEALTHY_SECONDS
+      this.startHealthTimer();
 
       this.notifyStatusChange();
     } catch (err) {
       this.log(`Failed to start: ${err}`);
+
+      // BUG-063 fix: replicate handleExit crash recovery on spawn failure.
+      //
+      // Previously, a pty.spawn() throw left the agent in 'crashed' state with
+      // no restart scheduled — the daemon would never attempt recovery. Now we
+      // mirror handleExit's behaviour: increment the crash counter, respect the
+      // daily crash limit, apply exponential backoff, and schedule a restart.
+      //
+      // Double-trigger guard: some PTY implementations emit an exit event even
+      // when spawn() throws. We bump lifecycleGeneration below so the onExit
+      // closure captured above finds myGeneration !== this.lifecycleGeneration
+      // and bails out without calling handleExit a second time.
+      this.pty = null;
+      // BUG-063: bump the generation counter so the onExit closure captured
+      // above will find `myGeneration !== this.lifecycleGeneration` and bail
+      // out early without calling handleExit. This is the authoritative guard
+      // against double-counting crashes when a PTY implementation emits an
+      // exit event even after spawn() throws.
+      this.lifecycleGeneration++;
+
+      // Mirror handleExit: increment first, then let resetCrashCountIfNewDay
+      // apply the day-boundary reset. Without the pre-increment, crashCount
+      // stays 0 when no .crash_count_today file exists (the file's existsSync
+      // guard skips the assignment) so the halt check below would never fire.
+      this.crashCount++;
+      const today = new Date().toISOString().split('T')[0];
+      this.resetCrashCountIfNewDay(today);
+
+      if (this.crashCount >= this.maxCrashesPerDay) {
+        this.log(`HALTED: exceeded ${this.maxCrashesPerDay} crashes today (spawn failure)`);
+        this.appendCrashToRestartsLog(-1, 0, 'HALTED');
+        this.status = 'halted';
+        this.notifyStatusChange();
+        return;
+      }
+
+      const stateDir2 = join(this.env.ctxRoot, 'state', this.name);
+      recordFailure(stateDir2, this.repoRoot);
+
+      if (this.repoRoot && shouldRollback(stateDir2, this.repoRoot)) {
+        this.log(`Watchdog: commit unstable after spawn failure — performing git rollback`);
+        const result = performRollback(stateDir2, this.repoRoot);
+        if (result.success) {
+          this.log(`Watchdog: rolled back to ${result.rolledBackTo.slice(0, 12)}${result.stashRef ? `, stash: ${result.stashRef}` : ''}`);
+        } else {
+          this.log(`Watchdog: rollback failed — ${result.reason}`);
+        }
+      }
+
+      const backoff = Math.min(5000 * Math.pow(2, this.crashCount - 1), 300000);
+      this.log(`Spawn failure crash recovery: restart in ${backoff / 1000}s (crash #${this.crashCount})`);
+      this.appendCrashToRestartsLog(-1, backoff, 'CRASH');
       this.status = 'crashed';
       this.notifyStatusChange();
+
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(e => this.log(`Restart after spawn failure failed: ${e}`));
+        }
+      }, backoff);
     }
   }
 
@@ -166,6 +263,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearHealthTimer();
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -310,8 +408,35 @@ export class AgentProcess {
   // --- Private methods ---
 
   private handleExit(exitCode: number): void {
+    // Capture the output buffer BEFORE nulling this.pty — needed for rate-limit
+    // detection below (hasRateLimitSignature reads from the buffer).
+    const outputBuffer = this.pty?.getOutputBuffer();
     this.pty = null;
     this.clearSessionTimer();
+    this.clearHealthTimer();
+
+    // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
+    // the whole process group and reaches each PTY's Claude Code child
+    // BEFORE the daemon's stopAll() loop has a chance to call stopAgent() on
+    // it. Those children exit cleanly (code 0) but arrive at handleExit with
+    // stopRequested=false, which used to classify the exit as a crash and
+    // inflate .crash_count_today by one per agent, per PM2 restart.
+    //
+    // agent-manager.ts:stopAll() already writes a `.daemon-stop` marker in
+    // every agent's state dir at the START of its shutdown loop for an
+    // unrelated reason (SessionEnd crash-alert hook). We reuse that marker
+    // here as the authoritative "the daemon is going down" signal. If the
+    // marker exists AND is recent (written within the last 60s), any PTY
+    // exit is a shutdown casualty, not a real crash — swallow it.
+    //
+    // The 60s window guards against a stale marker from a previous shutdown
+    // that wasn't cleaned up: we do NOT want an old marker to silently mask
+    // a genuine crash days later. handleExit does NOT delete the marker —
+    // cleanup stays with agent-manager / hook-crash-alert per the existing
+    // separation of concerns.
+    if (this.isDaemonShuttingDown()) {
+      return;
+    }
 
     // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
     // the whole process group and reaches each PTY's Claude Code child
@@ -353,6 +478,39 @@ export class AgentProcess {
       return;
     }
 
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+
+    // Rate-limit detection: if the PTY output contains Anthropic rate-limit or
+    // overload signatures, treat this as a planned pause rather than a crash.
+    // Rate-limit pauses do NOT count toward max_crashes_per_day and do NOT
+    // trigger the git watchdog — they are expected operational events tied to
+    // Anthropic's 5-hour rolling rate-limit window.
+    if (outputBuffer?.hasRateLimitSignature()) {
+      const pauseSeconds = this.config.rate_limit_pause_seconds ?? 18000;
+      this.log(`Rate-limit detected — pausing ${pauseSeconds}s before restart (not counted as crash)`);
+      this.status = 'rate-limited';
+      this.notifyStatusChange();
+      // Write a marker so the next boot prompt informs the agent it's recovering
+      // from a rate-limit pause rather than a normal crash.
+      try {
+        writeFileSync(join(stateDir, '.rate-limited'), pauseSeconds.toString(), 'utf-8');
+      } catch { /* ignore write errors */ }
+      // Cancel any prior rate-limit timer before scheduling a new one (Bug-1 fix).
+      // Without this, two sequential rate-limit exits leave two timers running;
+      // the first fires into the second pause window and triggers an early restart.
+      if (this.rateLimitTimer) {
+        clearTimeout(this.rateLimitTimer);
+        this.rateLimitTimer = null;
+      }
+      this.rateLimitTimer = setTimeout(() => {
+        this.rateLimitTimer = null;
+        if (this.status === 'rate-limited') {
+          this.start().catch(err => this.log(`Rate-limit restart failed: ${err}`));
+        }
+      }, pauseSeconds * 1000);
+      return;
+    }
+
     // Check crash limit
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];
@@ -364,6 +522,20 @@ export class AgentProcess {
       this.status = 'halted';
       this.notifyStatusChange();
       return;
+    }
+
+    // Watchdog: record this crash against the current commit, then check
+    // whether the commit has been crashing repeatedly and needs a rollback.
+    recordFailure(stateDir, this.repoRoot);
+
+    if (this.repoRoot && shouldRollback(stateDir, this.repoRoot)) {
+      this.log(`Watchdog: commit unstable after ${this.crashCount} crashes — performing git rollback`);
+      const result = performRollback(stateDir, this.repoRoot);
+      if (result.success) {
+        this.log(`Watchdog: rolled back to ${result.rolledBackTo.slice(0, 12)}${result.stashRef ? `, stash: ${result.stashRef}` : ''}`);
+      } else {
+        this.log(`Watchdog: rollback failed — ${result.reason}`);
+      }
     }
 
     // Exponential backoff restart
@@ -382,6 +554,27 @@ export class AgentProcess {
         this.start().catch(err => this.log(`Restart failed: ${err}`));
       }
     }, backoff);
+  }
+
+  /**
+   * Check whether the rate-limit recovery marker exists (read-only).
+   * The caller is responsible for deleting it after a successful spawn via
+   * deleteRateLimitMarker(), so a failed spawn doesn't permanently swallow
+   * the recovery context (mirrors the watchdog readRecoveryNote pattern).
+   */
+  private hasRateLimitMarker(stateDir: string): boolean {
+    return existsSync(join(stateDir, '.rate-limited'));
+  }
+
+  /**
+   * Delete the rate-limit recovery marker.
+   * Call only after pty.spawn() succeeds.
+   */
+  private deleteRateLimitMarker(stateDir: string): void {
+    try {
+      const { unlinkSync } = require('fs');
+      unlinkSync(join(stateDir, '.rate-limited'));
+    } catch { /* ignore */ }
   }
 
   private shouldContinue(): boolean {
@@ -410,17 +603,86 @@ export class AgentProcess {
     );
 
     try {
-      const files = require('fs').readdirSync(convDir);
-      return files.some((f: string) => f.endsWith('.jsonl'));
+      const fs = require('fs') as typeof import('fs');
+      const files: string[] = fs.readdirSync(convDir);
+      const jsonlFiles = files.filter((f: string) => f.endsWith('.jsonl'));
+      if (jsonlFiles.length === 0) return false;
+
+      // BUG-086: guard against bloated transcripts that cause infinite
+      // compaction loops at boot. If the largest .jsonl exceeds the threshold,
+      // force a fresh session instead of --continue.
+      const thresholdMb: number =
+        typeof this.config.max_continue_transcript_mb === 'number'
+          ? this.config.max_continue_transcript_mb
+          : 5;
+      if (thresholdMb > 0) {
+        const thresholdBytes = thresholdMb * 1024 * 1024;
+        for (const file of jsonlFiles) {
+          try {
+            const { size } = fs.statSync(join(convDir, file));
+            if (size > thresholdBytes) {
+              console.error(
+                `[agent-process/${this.name}] BUG-086: transcript ${file} is ${(size / 1024 / 1024).toFixed(1)}MB > ${thresholdMb}MB limit — forcing fresh session to prevent compaction loop`,
+              );
+              return false;
+            }
+          } catch { /* ignore stat errors */ }
+        }
+      }
+
+      // BUG-DIALOG: detect stuck permission/write dialogs in stdout tail.
+      // When an agent is killed mid-dialog and restarted with --continue, it
+      // reloads the same conversation and the dialog re-appears immediately,
+      // creating an infinite freeze→kill→reload→freeze loop. Detect these
+      // patterns in the last 10KB of stdout and force a fresh session instead.
+      if (this.hasStuckDialogInStdout()) {
+        console.error(
+          `[agent-process/${this.name}] BUG-DIALOG: stuck permission dialog detected in stdout tail — forcing fresh session to break loop`,
+        );
+        return false;
+      }
+
+      return true;
     } catch {
       return false;
     }
   }
 
-  private buildStartupPrompt(): string {
-    const onboardedPath = join(this.env.ctxRoot, 'state', this.name, '.onboarded');
+  /**
+   * Scan the last 10KB of stdout.log for Claude Code interactive dialog signatures.
+   * These dialogs (file-creation confirmations, permission prompts) block the agent
+   * indefinitely when replayed via --continue. Detecting them here lets us break the
+   * freeze→kill→reload→freeze loop by forcing a fresh session instead.
+   */
+  private hasStuckDialogInStdout(): boolean {
+    const stdoutPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
+    try {
+      const { statSync, openSync, readSync, closeSync } = require('fs') as typeof import('fs');
+      const { size } = statSync(stdoutPath);
+      if (size === 0) return false;
+      const readBytes = Math.min(size, 10 * 1024);
+      const fd = openSync(stdoutPath, 'r');
+      const buf = Buffer.alloc(readBytes);
+      readSync(fd, buf, 0, readBytes, size - readBytes);
+      closeSync(fd);
+      // Strip ANSI escape codes for clean pattern matching
+      const tail = buf.toString('utf-8').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      return (
+        tail.includes('Esc to cancel') ||
+        (tail.includes('Tab to amend') && tail.includes('Yes')) ||
+        /Do you want to (create|overwrite|edit)\b/.test(tail) ||
+        /ctrl\+b to run in background/.test(tail)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private buildStartupPrompt(recoveryNote: string | null): string {
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    const onboardedPath = join(stateDir, '.onboarded');
     const onboardingPath = join(this.env.agentDir, 'ONBOARDING.md');
-    const heartbeatPath = join(this.env.ctxRoot, 'state', this.name, 'heartbeat.json');
+    const heartbeatPath = join(stateDir, 'heartbeat.json');
     let onboardingAppend = '';
 
     // If agent has a heartbeat but no .onboarded marker, they completed onboarding but
@@ -438,13 +700,26 @@ export class AgentProcess {
 
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
+    const recoveryBlock = recoveryNote
+      ? ` WATCHDOG RECOVERY: The daemon rolled back your git repository due to repeated crashes. Before doing anything else, read this recovery note and investigate the root cause:\n\n${recoveryNote}\n\nAfter reviewing, write your findings to memory and notify the operator.`
+      : '';
+    const rateLimitBlock = this.hasRateLimitMarker(stateDir)
+      ? ' RATE-LIMIT RECOVERY: Your previous session was paused by the daemon due to an Anthropic rate-limit or overload response. You have been restarted after the configured recovery window. Resume normal operations — this was not a crash.'
+      : '';
     const deliverablesBlock = this.buildDeliverablesBlock();
     return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. CRITICAL DEDUP: Always call CronList BEFORE creating any cron. For each config.json entry, search the CronList output for its prompt text — if the prompt already appears, SKIP that cron entirely. Only call /loop or CronCreate for entries whose prompt text is NOT already listed. This prevents rapid --continue restarts from accumulating duplicate schedules.${reminderBlock}${deliverablesBlock} After setting up crons, send a Telegram message to the user saying you are back online.${onboardingAppend}`;
   }
 
-  private buildContinuePrompt(): string {
+  private buildContinuePrompt(recoveryNote: string | null): string {
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
+    const recoveryBlock = recoveryNote
+      ? ` WATCHDOG RECOVERY: The daemon rolled back your git repository due to repeated crashes. Before doing anything else, read this recovery note and investigate the root cause:\n\n${recoveryNote}\n\nAfter reviewing, write your findings to memory and notify the operator.`
+      : '';
+    const rateLimitBlock = this.hasRateLimitMarker(stateDir)
+      ? ' RATE-LIMIT RECOVERY: Your previous session was paused by the daemon due to an Anthropic rate-limit or overload response. You have been restarted after the configured recovery window. Resume normal operations — this was not a crash.'
+      : '';
     const deliverablesBlock = this.buildDeliverablesBlock();
     return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. Restore your crons from config.json ONLY if missing. CRITICAL DEDUP: Call CronList FIRST. For each config.json entry, search the CronList output for its prompt text — if the prompt already appears, SKIP that cron. Only call /loop (recurring) or CronCreate (once, if fire_at is in the future) for entries whose prompt text is NOT already listed. Rapid --continue restarts must not accumulate duplicates.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations. After restoring crons and checking inbox, send a Telegram message to the user saying you are back online.`;
   }
@@ -531,6 +806,23 @@ export class AgentProcess {
     if (this.sessionTimer) {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
+    }
+  }
+
+  private startHealthTimer(): void {
+    this.healthTimer = setTimeout(() => {
+      const stateDir = join(this.env.ctxRoot, 'state', this.name);
+      markHealthy(stateDir, this.repoRoot);
+      if (this.repoRoot) {
+        this.log(`Watchdog: commit marked healthy after ${MIN_HEALTHY_SECONDS}s`);
+      }
+    }, MIN_HEALTHY_SECONDS * 1000);
+  }
+
+  private clearHealthTimer(): void {
+    if (this.healthTimer) {
+      clearTimeout(this.healthTimer);
+      this.healthTimer = null;
     }
   }
 
@@ -793,6 +1085,31 @@ export class AgentProcess {
     if (this.pty) {
       injectMessage((data) => this.pty!.write(data), verifyPrompt);
     }
+  }
+
+  /**
+   * Hard-restart (fresh session, no --continue).
+   * Writes the force-fresh marker, then stop()+start(). shouldContinue() sees
+   * the marker on next start and boots fresh.
+   */
+  async hardRestartSelf(reason: string): Promise<void> {
+    try {
+      const stateDir = join(this.env.ctxRoot, 'state', this.name);
+      ensureDir(stateDir);
+      writeFileSync(join(stateDir, '.force-fresh'), reason + '\n', 'utf-8');
+      writeFileSync(join(stateDir, '.restart-planned'), reason + '\n', 'utf-8');
+      const logDir = join(this.env.ctxRoot, 'logs', this.name);
+      ensureDir(logDir);
+      appendFileSync(
+        join(logDir, 'restarts.log'),
+        `[${new Date().toISOString()}] WATCHDOG-HARD-RESTART: ${reason}\n`,
+      );
+    } catch (e) {
+      this.log(`Failed to write restart markers: ${e}`);
+    }
+    this.log(`Hard-restart initiated: ${reason}`);
+    await this.stop();
+    await this.start();
   }
 }
 

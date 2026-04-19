@@ -13,7 +13,6 @@ import {
   loadEnv,
   outputDecision,
   generateId,
-  waitForResponseFile,
   formatToolSummary,
   isClaudeDirOperation,
   sanitizeCodeBlock,
@@ -21,7 +20,7 @@ import {
   cleanupResponseFile,
 } from './index';
 import { join } from 'path';
-import { mkdirSync } from 'fs';
+import { mkdirSync, existsSync, readFileSync } from 'fs';
 
 async function main(): Promise<void> {
   const input = await readStdin();
@@ -77,9 +76,36 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Poll for response (30 min timeout)
+  // Poll for response (30 min timeout) with exponential backoff
+  // Starts at 500ms, doubles each poll up to a cap of 5000ms, then stays at 5s
   const TIMEOUT_MS = 1800 * 1000;
-  const content = await waitForResponseFile(responseFile, TIMEOUT_MS);
+  const POLL_START_MS = 500;
+  const POLL_CAP_MS = 5000;
+  const content = await new Promise<string | null>((resolve) => {
+    let elapsed = 0;
+    let delay = POLL_START_MS;
+
+    const poll = () => {
+      if (elapsed >= TIMEOUT_MS) {
+        resolve(null);
+        return;
+      }
+      try {
+        if (existsSync(responseFile)) {
+          resolve(readFileSync(responseFile, 'utf-8'));
+          return;
+        }
+      } catch {
+        // File might be mid-write, retry on next poll
+      }
+      elapsed += delay;
+      const next = Math.min(delay * 2, POLL_CAP_MS);
+      delay = next;
+      setTimeout(poll, delay);
+    };
+
+    poll();
+  });
 
   if (content !== null) {
     try {

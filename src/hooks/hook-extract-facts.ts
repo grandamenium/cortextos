@@ -13,7 +13,7 @@
  * — never blocks compaction.
  */
 
-import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, appendFileSync, mkdirSync, existsSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { loadEnv, readStdin } from './index.js';
 
@@ -126,6 +126,7 @@ async function main(): Promise<void> {
 
     const factsFile = join(factsDir, `${dateStr}.jsonl`);
     appendFileSync(factsFile, JSON.stringify(entry) + '\n', 'utf-8');
+    try { chmodSync(factsFile, 0o600); } catch { /* ignore on unsupported platforms */ }
 
   } catch {
     // Never fail — compaction must not be blocked

@@ -105,7 +105,18 @@ export class TelegramPoller {
    * update so a crash mid-batch does not drop confirmed state.
    */
   async pollOnce(): Promise<void> {
-    const result = await this.api.getUpdates(this.offset, 1);
+    let result;
+    try {
+      result = await this.api.getUpdates(this.offset, 1);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Conflict') || msg.includes('terminated by other getUpdates')) {
+        console.error('[telegram-poller] Conflict detected (another poller active), backing off 10s');
+        await sleep(10_000);
+        return;
+      }
+      throw err;
+    }
     if (!result?.result?.length) return;
 
     for (const update of result.result as TelegramUpdate[]) {

@@ -11,6 +11,7 @@ import { resolveEnv } from '../utils/env.js';
 import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
+import { validateAgentSettingsForDir } from '../utils/validate-settings.js';
 import { processMediaMessage } from '../telegram/media.js';
 
 type LogFn = (msg: string) => void;
@@ -175,6 +176,27 @@ export class AgentManager {
 
     if (!config) {
       config = this.loadAgentConfig(agentDir);
+    }
+
+    // Validate settings.json before launching — catches FM21 (invalid hook events),
+    // FM22 (bad permission patterns), FM23 (invalid matcher regex). Errors block
+    // launch to prevent the "Settings Warning / Exit and fix manually" boot dialog.
+    const settingsDir = config.working_directory || agentDir;
+    if (settingsDir) {
+      const settingsValidation = validateAgentSettingsForDir(settingsDir);
+      if (settingsValidation.errors.length > 0) {
+        console.error(`[agent-manager] settings.json validation FAILED for ${name}:`);
+        for (const err of settingsValidation.errors) {
+          console.error(`[agent-manager]   ERROR: ${err}`);
+        }
+        console.error(`[agent-manager] Fix settings.json before starting ${name}. Agent will not launch.`);
+        return;
+      }
+      if (settingsValidation.warnings.length > 0) {
+        for (const warn of settingsValidation.warnings) {
+          console.warn(`[agent-manager] settings.json warning for ${name}: ${warn}`);
+        }
+      }
     }
 
     const env: CtxEnv = {
@@ -668,6 +690,26 @@ export class AgentManager {
    */
   getAgentNames(): string[] {
     return [...this.agents.keys()];
+  }
+
+  /**
+   * Send SIGINT to the PTY process of a running agent (BUG-083).
+   * Returns the PID that was signalled, or null when the agent is not running
+   * or has no known PID.
+   */
+  interruptAgent(name: string): number | null {
+    const entry = this.agents.get(name);
+    if (!entry) return null;
+    const status = entry.process.getStatus();
+    if (status.status !== 'running' || !status.pid) return null;
+    try {
+      process.kill(status.pid, 'SIGINT');
+      console.log(`[agent-manager] Sent SIGINT to ${name} (pid ${status.pid})`);
+      return status.pid;
+    } catch (err) {
+      console.error(`[agent-manager] Failed to send SIGINT to ${name} (pid ${status.pid}):`, err);
+      return null;
+    }
   }
 
   // --- Worker management ---

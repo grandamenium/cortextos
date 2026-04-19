@@ -813,6 +813,8 @@ describe('FastChecker', () => {
     });
   });
 
+
+
   describe('formatTelegramVideoMessage', () => {
     it('formats video message with all fields', () => {
       const result = FastChecker.formatTelegramVideoMessage(
@@ -833,4 +835,7 @@ describe('FastChecker', () => {
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
+
+
+
 });

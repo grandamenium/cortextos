@@ -158,6 +158,24 @@ export interface AgentConfig {
   max_session_seconds?: number;
   max_crashes_per_day?: number;
   model?: string;
+  /**
+   * Cost tier for model routing: 'haiku' | 'sonnet' | 'opus'.
+   * Ignored when `model` is set (explicit model takes precedence).
+   * Resolved to a concrete model ID via model_tiers (or DEFAULT_MODEL_TIERS).
+   */
+  tier?: 'haiku' | 'sonnet' | 'opus';
+  /**
+   * Per-agent overrides for the tier→model ID mapping.
+   * Merges on top of DEFAULT_MODEL_TIERS — only specify the tiers you want to override.
+   */
+  model_tiers?: { haiku?: string; sonnet?: string; opus?: string };
+  /**
+   * How long to pause (seconds) when an Anthropic rate-limit exit is detected,
+   * before restarting the agent. Defaults to 18000 (5 hours) — the standard
+   * Anthropic rolling rate-limit window. Rate-limit pauses do NOT count toward
+   * max_crashes_per_day and do NOT trigger the git watchdog.
+   */
+  rate_limit_pause_seconds?: number;
   working_directory?: string;
   enabled?: boolean;
   crons?: CronEntry[];
@@ -165,11 +183,41 @@ export interface AgentConfig {
   day_mode_start?: string;
   day_mode_end?: string;
   communication_style?: string;
+  /**
+   * Display name for the business or team operating this agent.
+   * When set, the dashboard sidebar and title show this name instead of "cortextOS".
+   * Typically set by the onboarding wizard from the user's company name.
+   */
+  brand_name?: string;
   approval_rules?: {
     always_ask: string[];
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
+  /**
+   * BUG-086: Maximum transcript size (MB) before shouldContinue() forces a
+   * fresh session. Bloated transcripts cause infinite compaction loops at boot.
+   * Defaults to 5MB. Set to 0 to disable the guard (not recommended).
+   */
+  max_continue_transcript_mb?: number;
+  /**
+   * BUG-064: How long (seconds) the fast-checker waits after bootstrap before
+   * the watchdog starts monitoring stdout for frozen output or ctx exhaustion.
+   * Defaults to 120s (2 minutes). Increase for complex onboarding agents that
+   * take longer to complete their first boot sequence.
+   */
+  bootstrap_grace_seconds?: number;
+  /**
+   * Narration watchdog silence window in minutes before the daemon injects
+   * a mandatory progress-update prompt when stdout is still active.
+   * Defaults to 2 minutes.
+   */
+  narration_silence_threshold_minutes?: number;
+  /**
+   * Minimum cooldown in minutes between narration watchdog injections.
+   * Defaults to 5 minutes.
+   */
+  narration_inject_cooldown_minutes?: number;
 }
 
 export interface CronEntry {
@@ -371,7 +419,8 @@ export type IPCCommandType =
   | 'spawn-worker'
   | 'terminate-worker'
   | 'list-workers'
-  | 'inject-worker';
+  | 'inject-worker'
+  | 'interrupt-agent';
 
 export interface IPCRequest {
   type: IPCCommandType;
@@ -424,7 +473,7 @@ export interface AgentInfo {
 
 export interface AgentStatus {
   name: string;
-  status: 'running' | 'stopped' | 'crashed' | 'starting' | 'halted';
+  status: 'running' | 'stopped' | 'crashed' | 'starting' | 'halted' | 'rate-limited';
   pid?: number;
   uptime?: number; // seconds
   lastHeartbeat?: string;

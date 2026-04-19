@@ -35,6 +35,23 @@ export function getFrameworkRoot(): string {
   return CTX_FRAMEWORK_ROOT;
 }
 
+/**
+ * Read the brand_name from dashboard-settings.json, if set.
+ * Returns undefined when not configured (callers fall back to the default name).
+ * Safe to call from server components — reads directly from the filesystem.
+ */
+export function getBrandName(): string | undefined {
+  const configPath = path.join(CTX_ROOT, 'config', 'dashboard-settings.json');
+  try {
+    if (fs.existsSync(configPath)) {
+      const data = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      const name = typeof data.brand_name === 'string' ? data.brand_name.trim() : '';
+      return name || undefined;
+    }
+  } catch { /* ignore read errors */ }
+  return undefined;
+}
+
 // -- Org-scoped paths --
 
 export function getOrgDir(org: string): string {

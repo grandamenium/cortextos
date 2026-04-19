@@ -5,6 +5,7 @@ import DOMPurify from 'isomorphic-dompurify';
 import { Button } from '@/components/ui/button';
 import { IconX, IconFolderOpen, IconZoomIn, IconZoomOut, IconCode, IconBrowser } from '@tabler/icons-react';
 import type { TaskOutput } from '@/lib/types';
+import { isSafeHttpUrl } from '@/lib/url-security';
 
 interface DeliverablePreviewProps {
   output: TaskOutput;
@@ -194,7 +195,15 @@ function RenderedMdPreview({
         const href = (el.getAttribute('href') || '').trim();
         if (!href) return;
         const kind = classifyFileRef(href);
-        if (kind === 'skip') return;
+        if (kind === 'skip') {
+          if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href) && !isSafeHttpUrl(href)) {
+            el.removeAttribute('href');
+            el.removeAttribute('target');
+            el.removeAttribute('rel');
+            el.title = `Blocked unsafe link: ${href}`;
+          }
+          return;
+        }
 
         const label = (el.textContent || href).trim() || href;
         el.title = `Click to open ${href}`;

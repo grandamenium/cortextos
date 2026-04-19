@@ -232,6 +232,24 @@ export class IPCServer {
           break;
         }
 
+        case 'interrupt-agent': {
+          // BUG-083: send SIGINT to the agent's PTY process PID
+          if (!request.agent) {
+            response = { success: false, error: 'Agent name required' };
+          } else {
+            const pid = this.agentManager.interruptAgent(request.agent);
+            if (pid !== null) {
+              response = { success: true, data: { agent: request.agent, pid } };
+            } else {
+              response = {
+                success: false,
+                error: `Agent ${request.agent} is not running or has no PID`,
+              };
+            }
+          }
+          break;
+        }
+
         default:
           response = { success: false, error: `Unknown command: ${request.type}` };
       }
