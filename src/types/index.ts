@@ -68,6 +68,13 @@ export interface Task {
    */
   blocks?: string[];
   blocked_by?: string[];
+  /**
+   * Free-form correlation metadata. Set at create-time via `--meta '<json>'`
+   * so callers can attach context (e.g. originating cron name, source msg_id,
+   * upstream request id) without polluting the strict schema. Opaque to the
+   * bus — the dashboard surfaces it as-is.
+   */
+  meta?: Record<string, unknown>;
 }
 
 // Event Types

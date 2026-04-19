@@ -59,6 +59,23 @@ describe('Task Management', () => {
       expect(content.completed_at).toBeNull();
       expect(content.due_date).toBeNull();
       expect(content.archived).toBe(false);
+      expect(content.meta).toBeUndefined();
+    });
+
+    it('attaches meta when provided as a non-empty object', () => {
+      const meta = { cron: 'poll-codex-outbox', source_msg_id: 'abc123', count: 7 };
+      const taskId = createTask(paths, 'paul', 'acme', 'Task with meta', { meta });
+      const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
+      expect(content.meta).toEqual(meta);
+    });
+
+    it('omits meta key when meta option is empty or absent', () => {
+      const idNoMeta = createTask(paths, 'paul', 'acme', 'No meta');
+      const idEmptyMeta = createTask(paths, 'paul', 'acme', 'Empty meta', { meta: {} });
+      const noMeta = JSON.parse(readFileSync(join(paths.taskDir, `${idNoMeta}.json`), 'utf-8'));
+      const emptyMeta = JSON.parse(readFileSync(join(paths.taskDir, `${idEmptyMeta}.json`), 'utf-8'));
+      expect('meta' in noMeta).toBe(false);
+      expect('meta' in emptyMeta).toBe(false);
     });
   });
 
