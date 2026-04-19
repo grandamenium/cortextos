@@ -9,6 +9,7 @@ import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { readCronState, parseDurationMs } from '../bus/cron-state.js';
 import { resolvePaths } from '../utils/paths.js';
+import { ContextMonitor } from './context-monitor.js';
 
 type LogFn = (msg: string) => void;
 
@@ -55,6 +56,7 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  private contextMonitor: ContextMonitor | null = null;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -146,6 +148,10 @@ export class AgentProcess {
       // Start session timer
       this.startSessionTimer();
 
+      // Start context monitor — estimates context usage and fires
+      // preemptive continuation at configurable thresholds.
+      this.startContextMonitor(logPath);
+
       this.notifyStatusChange();
     } catch (err) {
       this.log(`Failed to start: ${err}`);
@@ -160,6 +166,7 @@ export class AgentProcess {
   async stop(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
+    if (this.contextMonitor) { this.contextMonitor.stop(); this.contextMonitor = null; }
     // BUG-040 fix: stopRequested persists ACROSS stop()'s return until
     // handleExit clears it. This is the safety net for the case where the
     // PTY exits later than the Promise.race timeout below.
@@ -532,6 +539,34 @@ export class AgentProcess {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
     }
+  }
+
+  private startContextMonitor(logPath: string): void {
+    const maxSessionS = this.config.max_session_seconds || 255600;
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    this.contextMonitor = new ContextMonitor(this.name, stateDir, logPath, maxSessionS);
+
+    this.contextMonitor.setOnWarn((est) => {
+      this.log(`Context monitor: ${est.pct}% — writing continuation file (${est.signal})`);
+    });
+
+    this.contextMonitor.setOnAlert((est) => {
+      this.log(`Context monitor: ${est.pct}% — alerting orchestrator (${est.signal})`);
+      try {
+        const paths = resolvePaths(this.name, this.env.instanceId, this.env.org);
+        const { logEvent } = require('../bus/event.js');
+        logEvent(paths, this.name, this.env.org, 'action', 'context_alert', 'warning', {
+          agent: this.name, pct: est.pct, tokens_est: est.tokens_est, signal: est.signal,
+        });
+      } catch { /* best-effort */ }
+    });
+
+    this.contextMonitor.setOnCritical((est) => {
+      this.log(`Context monitor: ${est.pct}% — triggering graceful self-restart (${est.signal})`);
+      this.sessionRefresh().catch((err) => this.log(`Context-triggered refresh failed: ${err}`));
+    });
+
+    this.contextMonitor.start();
   }
 
   /**
