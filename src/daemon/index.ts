@@ -276,8 +276,12 @@ class Daemon {
     this.watchdog.start();
 
     // Start sleep scheduler: stops agents outside their active hours, wakes on inbox message
-    this.sleepScheduler = new SleepScheduler(this.agentManager, this.ctxRoot, frameworkRoot);
-    this.sleepScheduler.start();
+    try {
+      this.sleepScheduler = new SleepScheduler(this.agentManager, this.ctxRoot, frameworkRoot);
+      this.sleepScheduler.start();
+    } catch (err) {
+      console.error(`[daemon] Sleep scheduler failed to start: ${(err as Error).message}`);
+    }
 
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
