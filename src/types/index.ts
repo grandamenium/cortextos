@@ -201,6 +201,12 @@ export interface AgentConfig {
   stale_threshold_minutes?: number;
   /** Restart priority after rate-limit resets. Lower = restarts first. Default: 5 */
   restart_priority?: number;
+  /** Sleep schedule: 'always' (24/7), 'day' (active during hours), 'on-demand' (wake on message). Default: 'day' */
+  schedule?: 'always' | 'day' | 'on-demand';
+  /** Custom active-hours start (HH:MM). Defaults to day_mode_start or '09:00'. */
+  schedule_start?: string;
+  /** Custom active-hours end (HH:MM). Defaults to day_mode_end or '22:00'. */
+  schedule_end?: string;
   /** Agent role — determines which skill pack is auto-installed. */
   role?: AgentRole;
 }
