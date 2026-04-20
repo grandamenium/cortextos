@@ -979,6 +979,13 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const handoffPrompt = `[CONTEXT HANDOFF REQUIRED] Context is at ${Math.round(effectivePct)}%. Write a handoff document to memory/handoffs/handoff-${ts}.md with these sections: ## Current Tasks, ## Next Actions, ## Active Crons, ## Key Context, ## Files Modified This Session. Then run: cortextos bus hard-restart --reason "context handoff at ${Math.round(effectivePct)}%" --handoff-doc <absolute path to the handoff doc you just wrote>. Do this NOW before the context window is exhausted.`;
       this.agent.injectMessage(handoffPrompt);
       this.log(`Handoff prompt injected at ${Math.round(effectivePct)}%`);
+      // Pre-arm .force-fresh so the next restart is always a clean fresh session.
+      // If the agent cooperates and calls hard-restart, it also writes .force-fresh — no-op.
+      // If context exhausts naturally before the agent acts, .force-fresh is already set,
+      // preventing a --continue restart that would loop at the same high context level.
+      try {
+        writeFileSync(join(this.paths.stateDir, '.force-fresh'), '');
+      } catch { /* non-fatal */ }
     }
   }
 
