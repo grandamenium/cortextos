@@ -275,10 +275,13 @@ class Daemon {
     this.watchdog = new StaleAgentWatchdog(this.agentManager, this.ctxRoot, frameworkRoot);
     this.watchdog.start();
 
-    // Start sleep scheduler: stops agents outside their active hours, wakes on inbox message
+    // Start sleep scheduler: suppresses cron nudges outside active hours (agents stay alive)
     try {
       this.sleepScheduler = new SleepScheduler(this.agentManager, this.ctxRoot, frameworkRoot);
       this.sleepScheduler.start();
+      // Wire quiet-hours check into all agent processes so gap-detection
+      // nudges are suppressed during quiet hours without stopping agents.
+      this.agentManager.setQuietCheck((name) => this.sleepScheduler!.isQuiet(name));
     } catch (err) {
       console.error(`[daemon] Sleep scheduler failed to start: ${(err as Error).message}`);
     }
