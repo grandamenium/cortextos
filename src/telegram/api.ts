@@ -6,6 +6,140 @@
 import { existsSync, readFileSync } from 'fs';
 import { basename } from 'path';
 
+/**
+ * Telegram message size limit in UTF-16 code units. Telegram counts in
+ * code units, so we do too — this matches what the API rejects at.
+ */
+export const TELEGRAM_MAX_LEN = 4096;
+
+/**
+ * Split `text` into chunks no longer than `maxLen` characters, preferring
+ * natural boundaries in this order:
+ *
+ *   1. Paragraph break (\n\n)
+ *   2. Single newline (\n)
+ *   3. Sentence end (. ! ? followed by whitespace)
+ *   4. Word boundary (whitespace)
+ *   5. Hard cut at maxLen
+ *
+ * Never splits inside an unbalanced Markdown v1 entity (*, _, backtick,
+ * or a [ without its matching ]). If the best boundary lands on an
+ * unbalanced split, it keeps walking back to the next candidate. Only
+ * when every candidate is unbalanced does it fall back to a hard cut at
+ * maxLen — the old behavior, preserved for pathological inputs.
+ */
+export function splitForTelegram(text: string, maxLen: number = TELEGRAM_MAX_LEN): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const chunks: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const remaining = text.length - i;
+    if (remaining <= maxLen) {
+      chunks.push(text.slice(i));
+      break;
+    }
+
+    const windowEnd = i + maxLen;
+    // Back half of the window — keeps chunks from collapsing to tiny fragments.
+    const minSplit = i + Math.floor(maxLen / 2);
+
+    const candidates: number[] = [];
+
+    // Paragraph break — split lands AFTER the "\n\n" so both newlines
+    // stay with the prior chunk.
+    const paraIdx = text.lastIndexOf('\n\n', windowEnd - 1);
+    if (paraIdx >= minSplit && paraIdx + 2 <= windowEnd) candidates.push(paraIdx + 2);
+
+    // Single newline.
+    const nlIdx = text.lastIndexOf('\n', windowEnd - 1);
+    if (nlIdx >= minSplit) candidates.push(nlIdx + 1);
+
+    // Sentence end — scan the window for "[.!?] " and take the last match.
+    let sentSplit = -1;
+    for (let j = windowEnd - 2; j >= minSplit; j--) {
+      const c = text.charCodeAt(j);
+      const n = text.charCodeAt(j + 1);
+      if ((c === 46 || c === 33 || c === 63) && (n === 32 || n === 9 || n === 10)) {
+        sentSplit = j + 2;
+        break;
+      }
+    }
+    if (sentSplit >= minSplit) candidates.push(sentSplit);
+
+    // Word boundary — last whitespace in the window.
+    let wsSplit = -1;
+    for (let j = windowEnd - 1; j >= minSplit; j--) {
+      const c = text.charCodeAt(j);
+      if (c === 32 || c === 9 || c === 10) { wsSplit = j + 1; break; }
+    }
+    if (wsSplit >= minSplit) candidates.push(wsSplit);
+
+    // Pick the best candidate (earliest in the preference order) whose
+    // resulting chunk has balanced markdown entities.
+    let splitAt = -1;
+    for (const c of candidates) {
+      if (isMarkdownBalanced(text.slice(i, c))) { splitAt = c; break; }
+    }
+
+    // Fallback: no natural-boundary candidate was balanced. Scan the
+    // window with a running delimiter tally and remember the latest
+    // position inside [minSplit, windowEnd] at which all entities are
+    // balanced. One O(maxLen) pass — cheap compared to the network
+    // round-trip. If no balanced position exists (pathological input
+    // whose entity spans more than maxLen), fall through to a hard cut
+    // at windowEnd — no worse than the pre-patch behavior.
+    if (splitAt < 0) {
+      let asterisk = 0, underscore = 0, backtick = 0, bracket = 0;
+      let bestBalanced = -1;
+      for (let j = i; j < windowEnd; j++) {
+        const c = text.charCodeAt(j);
+        if (c === 42) asterisk++;
+        else if (c === 95) underscore++;
+        else if (c === 96) backtick++;
+        else if (c === 91) bracket++;
+        else if (c === 93 && bracket > 0) bracket--;
+        if (
+          j + 1 >= minSplit &&
+          asterisk % 2 === 0 &&
+          underscore % 2 === 0 &&
+          backtick % 2 === 0 &&
+          bracket === 0
+        ) {
+          bestBalanced = j + 1;
+        }
+      }
+      splitAt = bestBalanced >= 0 ? bestBalanced : windowEnd;
+    }
+
+    chunks.push(text.slice(i, splitAt));
+    i = splitAt;
+  }
+  return chunks;
+}
+
+/**
+ * Returns true iff every `*`, `_`, backtick, and `[` in `text` has a
+ * closing match. Used by splitForTelegram to reject candidate split
+ * points that would leave half a bold/italic/code span dangling in one
+ * chunk. Conservative — a backslash-escaped delimiter is still counted
+ * here; sanitizeMarkdown strips most of those before we see the text,
+ * so this is safe in practice. Cost of being conservative: a few inputs
+ * fall through to the hard-cut fallback.
+ */
+function isMarkdownBalanced(text: string): boolean {
+  let asterisk = 0, underscore = 0, backtick = 0, bracket = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c === 42) asterisk++;              // *
+    else if (c === 95) underscore++;       // _
+    else if (c === 96) backtick++;         // `
+    else if (c === 91) bracket++;          // [
+    else if (c === 93 && bracket > 0) bracket--; // ]
+  }
+  return asterisk % 2 === 0 && underscore % 2 === 0 && backtick % 2 === 0 && bracket === 0;
+}
+
 export class TelegramAPI {
   private baseUrl: string;
   private lastSendTime: Map<string, number> = new Map();
@@ -69,17 +203,11 @@ export class TelegramAPI {
 
     const requestedParseMode: 'Markdown' | null = opts?.parseMode === null ? null : 'Markdown';
 
-    // Split long messages. Always produces at least one chunk (even if the
-    // input is empty, which preserves the old behavior of POSTing once).
-    const maxLen = 4096;
-    const chunks: string[] = [];
-    if (sanitized.length <= maxLen) {
-      chunks.push(sanitized);
-    } else {
-      for (let i = 0; i < sanitized.length; i += maxLen) {
-        chunks.push(sanitized.slice(i, i + maxLen));
-      }
-    }
+    // Split long messages at natural boundaries (paragraph > newline >
+    // sentence > word > hard cut). splitForTelegram guarantees at least
+    // one chunk — even for empty input — preserving the old behavior of
+    // POSTing once for a short message.
+    const chunks = sanitized.length === 0 ? [''] : splitForTelegram(sanitized, TELEGRAM_MAX_LEN);
 
     let lastResult: any;
     for (let i = 0; i < chunks.length; i++) {
