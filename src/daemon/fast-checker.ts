@@ -1012,6 +1012,27 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     this.ctxCircuitRestarts.push(now);
     this.saveCtxCircuit();
 
+    // If the agent wrote a handoff doc in the last 15 minutes but didn't get to call
+    // hard-restart --handoff-doc (e.g. Tier 3 force-restart cut it short), pick it up
+    // so the new session still receives handoff context.
+    try {
+      const handoffsDir = join(this.agent.getAgentDir(), 'memory', 'handoffs');
+      if (existsSync(handoffsDir)) {
+        const cutoff = now - 15 * 60_000;
+        const recent = readdirSync(handoffsDir)
+          .filter(f => f.startsWith('handoff-') && f.endsWith('.md'))
+          .map(f => ({ f, mtime: statSync(join(handoffsDir, f)).mtimeMs }))
+          .filter(({ mtime }) => mtime >= cutoff)
+          .sort((a, b) => b.mtime - a.mtime);
+        if (recent.length > 0) {
+          const docPath = join(handoffsDir, recent[0].f);
+          const markerPath = join(this.paths.stateDir, '.handoff-doc-path');
+          writeFileSync(markerPath, docPath, 'utf-8');
+          this.log(`Tier 3 restart: found recent handoff doc, writing marker → ${docPath}`);
+        }
+      }
+    } catch { /* non-fatal — proceed without handoff context */ }
+
     // Reset per-session context state for the new session
     this.ctxHandoffFiredAt = 0;
     this.ctxHandoffDeadlineAt = 0;
