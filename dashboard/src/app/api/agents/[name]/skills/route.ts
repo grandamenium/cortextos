@@ -32,13 +32,32 @@ function resolveAgentConfig(frameworkRoot: string, name: string): { configPath: 
 
 function extractFirstDescription(filePath: string): string {
   try {
-    const content = readFileSync(filePath, 'utf-8');
+    let content = readFileSync(filePath, 'utf-8');
+
+    // Strip YAML frontmatter (--- ... ---)
+    if (content.startsWith('---')) {
+      const endIdx = content.indexOf('---', 3);
+      if (endIdx !== -1) {
+        // Check if there's a description in the frontmatter
+        const frontmatter = content.slice(3, endIdx);
+        const descMatch = frontmatter.match(/description:\s*["']?(.+?)["']?\s*$/m);
+        if (descMatch) {
+          const desc = descMatch[1].trim();
+          return desc.length > 120 ? desc.slice(0, 117) + '...' : desc;
+        }
+        content = content.slice(endIdx + 3);
+      }
+    }
+
     const lines = content.split('\n');
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
       if (trimmed.startsWith('#')) continue;
-      // Return first non-empty, non-heading line, truncated
+      if (trimmed === '---') continue;
+      // Skip markdown metadata lines
+      if (trimmed.startsWith('name:') || trimmed.startsWith('triggers:')) continue;
+      // Return first non-empty, non-heading, non-frontmatter line, truncated
       return trimmed.length > 120 ? trimmed.slice(0, 117) + '...' : trimmed;
     }
   } catch {
