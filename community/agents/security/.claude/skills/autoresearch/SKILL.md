@@ -94,7 +94,7 @@ RATE=$(echo "scale=2; $COMPLETED / $TOTAL * 100" | bc)
 ### Qualitative (subjective)
 You evaluate output quality on a 1-10 scale. You MUST write a justification.
 ```bash
-cortextos bus evaluate-experiment <id> 0 --score 7 --justification "Output is more concise and actionable than baseline, but loses some nuance"
+cortextos bus evaluate-experiment <id> --score 7 --justification "Output is more concise and actionable than baseline, but loses some nuance"
 ```
 
 ### Qualitative (comparative)

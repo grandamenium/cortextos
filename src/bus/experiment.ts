@@ -17,6 +17,7 @@ export interface Experiment {
   status: 'proposed' | 'running' | 'completed';
   baseline_value: number;
   result_value: number | null;
+  score: number | null;
   decision: 'keep' | 'discard' | null;
   learning: string;
   experiment_commit: string | null;
@@ -108,7 +109,13 @@ function loadExperiment(agentDir: string, experimentId: string): Experiment {
   if (!existsSync(filePath)) {
     throw new Error(`Experiment ${experimentId} not found`);
   }
-  return JSON.parse(readFileSync(filePath, 'utf-8').trim());
+  const parsed = JSON.parse(readFileSync(filePath, 'utf-8').trim()) as Experiment & {
+    score?: number | null;
+  };
+  if (!('score' in parsed) || parsed.score === undefined) {
+    parsed.score = null;
+  }
+  return parsed;
 }
 
 function saveExperiment(agentDir: string, experiment: Experiment): void {
@@ -163,6 +170,7 @@ export function createExperiment(
     status: 'proposed',
     baseline_value: 0,
     result_value: null,
+    score: null,
     decision: null,
     learning: '',
     experiment_commit: null,
@@ -209,12 +217,17 @@ export function runExperiment(
 }
 
 /**
- * Evaluate a running experiment with a measured value.
+ * Evaluate a running experiment with a measured value and/or a 1-10 score.
+ *
+ * Quantitative metrics pass `measuredValue` (the real number). Qualitative
+ * metrics pass `undefined` for `measuredValue` and supply `options.score`,
+ * in which case the score doubles as the result value for keep/discard.
+ * At least one of the two must be defined.
  */
 export function evaluateExperiment(
   agentDir: string,
   experimentId: string,
-  measuredValue: number,
+  measuredValue: number | undefined,
   options?: ExperimentEvaluateOptions,
 ): Experiment {
   const experiment = loadExperiment(agentDir, experimentId);
@@ -223,31 +236,34 @@ export function evaluateExperiment(
     throw new Error(`Experiment ${experimentId} is '${experiment.status}', expected 'running'`);
   }
 
-  // Compare measured vs baseline using direction
+  const score = options?.score;
+  if (measuredValue === undefined && score === undefined) {
+    throw new Error(
+      `Experiment ${experimentId} evaluate needs a measured value or --score (received neither)`,
+    );
+  }
+
+  // Qualitative metrics pass only --score; the score then stands in for the
+  // measured value too so decision logic has a number to compare.
+  const effectiveValue = measuredValue ?? (score as number);
+
+  // Compare effectiveValue vs baseline using direction
   let decision: 'keep' | 'discard';
   if (experiment.direction === 'higher') {
-    decision = measuredValue > experiment.baseline_value ? 'keep' : 'discard';
+    decision = effectiveValue > experiment.baseline_value ? 'keep' : 'discard';
   } else {
-    decision = measuredValue < experiment.baseline_value ? 'keep' : 'discard';
+    decision = effectiveValue < experiment.baseline_value ? 'keep' : 'discard';
   }
 
   experiment.status = 'completed';
   experiment.completed_at = nowISO();
-  experiment.result_value = measuredValue;
+  experiment.result_value = effectiveValue;
   experiment.decision = decision;
 
-  // For qualitative metrics: if score is provided, use it as the measured value
-  // (agent passes 0 as placeholder measuredValue and --score 7 as the actual value)
-  if (options?.score !== undefined) {
-    measuredValue = options.score;
-    // Re-evaluate decision with the correct measured value
-    if (experiment.direction === 'higher') {
-      decision = measuredValue > experiment.baseline_value ? 'keep' : 'discard';
-    } else {
-      decision = measuredValue < experiment.baseline_value ? 'keep' : 'discard';
-    }
-    experiment.result_value = measuredValue;
-    experiment.decision = decision;
+  // --score is a 1-10 rubric stored in its own field. It is preserved even
+  // when a separate quantitative measured value was also provided.
+  if (score !== undefined) {
+    experiment.score = score;
   }
 
   // Build learning from options
@@ -258,9 +274,10 @@ export function evaluateExperiment(
     experiment.learning = learningParts.join(' — ');
   }
 
-  // If keep, baseline becomes the measured value
+  // If keep, baseline becomes the effective value so subsequent runs compare
+  // against the new bar.
   if (decision === 'keep') {
-    experiment.baseline_value = measuredValue;
+    experiment.baseline_value = effectiveValue;
   }
 
   saveExperiment(agentDir, experiment);
@@ -272,7 +289,7 @@ export function evaluateExperiment(
   if (!existsSync(tsvPath)) {
     appendFileSync(
       tsvPath,
-      'experiment_id\tagent\tmetric\tmeasured_value\tbaseline\tdecision\thypothesis\ttimestamp\n',
+      'experiment_id\tagent\tmetric\tmeasured_value\tscore\tbaseline\tdecision\thypothesis\ttimestamp\n',
       'utf-8',
     );
   }
@@ -280,8 +297,9 @@ export function evaluateExperiment(
     experiment.id,
     experiment.agent,
     experiment.metric,
-    String(measuredValue),
-    String(decision === 'keep' ? measuredValue : experiment.baseline_value),
+    String(effectiveValue),
+    experiment.score === null || experiment.score === undefined ? '' : String(experiment.score),
+    String(decision === 'keep' ? effectiveValue : experiment.baseline_value),
     decision,
     experiment.hypothesis,
     experiment.completed_at,
@@ -293,11 +311,16 @@ export function evaluateExperiment(
   if (!existsSync(learningsPath)) {
     appendFileSync(learningsPath, '# Experiment Learnings\n\n', 'utf-8');
   }
+  const scoreLine =
+    experiment.score !== null && experiment.score !== undefined
+      ? `- **Score:** ${experiment.score}/10`
+      : '';
   const learningEntry = [
     `## ${experiment.id} (${decision})`,
     `- **Metric:** ${experiment.metric}`,
     `- **Hypothesis:** ${experiment.hypothesis}`,
-    `- **Result:** ${measuredValue} (baseline: ${decision === 'keep' ? measuredValue : experiment.baseline_value})`,
+    `- **Result:** ${effectiveValue} (baseline: ${decision === 'keep' ? effectiveValue : experiment.baseline_value})`,
+    scoreLine,
     experiment.learning ? `- **Learning:** ${experiment.learning}` : '',
     '',
   ]
@@ -337,7 +360,11 @@ export function listExperiments(
   for (const file of files) {
     try {
       const content = readFileSync(join(dir, file), 'utf-8').trim();
-      experiments.push(JSON.parse(content));
+      const parsed = JSON.parse(content) as Experiment & { score?: number | null };
+      if (!('score' in parsed) || parsed.score === undefined) {
+        parsed.score = null;
+      }
+      experiments.push(parsed);
     } catch {
       // skip corrupt files
     }

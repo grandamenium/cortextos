@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -148,6 +148,78 @@ describe('Sprint 3: Experiment Framework', () => {
     it('throws if experiment is not running', () => {
       const id = createExperiment(testDir, 'testbot', 'ctr', 'test');
       expect(() => evaluateExperiment(testDir, id, 10)).toThrow("expected 'running'");
+    });
+
+    it('stores --score in score field without overwriting measured value', () => {
+      const id = createExperiment(testDir, 'testbot', 'pricing_score_range', 'baseline', {
+        direction: 'higher',
+      });
+      runExperiment(testDir, id);
+      const result = evaluateExperiment(testDir, id, 76.9, { score: 5, justification: 'baseline' });
+
+      expect(result.result_value).toBe(76.9);
+      expect(result.baseline_value).toBe(76.9);
+      expect(result.score).toBe(5);
+      expect(result.decision).toBe('keep');
+      expect(result.learning).toBe('baseline');
+    });
+
+    it('leaves score null when --score is not provided', () => {
+      const id = createExperiment(testDir, 'testbot', 'engagement', 'hyp', {
+        direction: 'higher',
+      });
+      runExperiment(testDir, id);
+      const result = evaluateExperiment(testDir, id, 42);
+
+      expect(result.result_value).toBe(42);
+      expect(result.score).toBeNull();
+    });
+
+    it('qualitative path: score stands in as result_value when measuredValue is undefined', () => {
+      const id = createExperiment(testDir, 'testbot', 'writing_quality', 'punchier intros', {
+        direction: 'higher',
+      });
+      runExperiment(testDir, id);
+      const result = evaluateExperiment(testDir, id, undefined, {
+        score: 7,
+        justification: 'self-rated',
+      });
+
+      expect(result.result_value).toBe(7);
+      expect(result.baseline_value).toBe(7);
+      expect(result.score).toBe(7);
+      expect(result.decision).toBe('keep');
+
+      // TSV row carries both measured value and score
+      const tsv = readFileSync(join(testDir, 'experiments', 'results.tsv'), 'utf-8');
+      expect(tsv).toContain('experiment_id\tagent\tmetric\tmeasured_value\tscore\tbaseline');
+      expect(tsv).toMatch(new RegExp(`${id}\\t[^\\t]+\\twriting_quality\\t7\\t7\\t7\\tkeep`));
+
+      // Learnings entry includes Score line
+      const learnings = readFileSync(join(testDir, 'experiments', 'learnings.md'), 'utf-8');
+      expect(learnings).toContain('**Score:** 7/10');
+    });
+
+    it('throws when both measured value and score are missing', () => {
+      const id = createExperiment(testDir, 'testbot', 'ctr', 'x');
+      runExperiment(testDir, id);
+      expect(() => evaluateExperiment(testDir, id, undefined)).toThrow(
+        /needs a measured value or --score/,
+      );
+    });
+
+    it('normalizes score=null on legacy JSON that predates the field', () => {
+      const id = createExperiment(testDir, 'testbot', 'ctr', 'x');
+      runExperiment(testDir, id);
+      // Simulate a legacy JSON by stripping the score field from disk.
+      const fp = join(testDir, 'experiments', 'history', `${id}.json`);
+      const raw = JSON.parse(readFileSync(fp, 'utf-8'));
+      delete raw.score;
+      writeFileSync(fp, JSON.stringify(raw, null, 2), 'utf-8');
+
+      const result = evaluateExperiment(testDir, id, 10);
+      expect(result.score).toBeNull();
+      expect(result.result_value).toBe(10);
     });
   });
 

@@ -221,3 +221,168 @@ describe('consumeHandoffBlock', () => {
     expect(docExists).toBe(false);
   });
 });
+
+// --- Tier 0 autoreset threshold selection ---
+
+describe('Tier 0 autoreset tier selection', () => {
+  // Mirrors FastChecker.checkContextStatus ordering: Tier 3 (deadline) is
+  // evaluated before Tier 0, but Tier 0 is evaluated before Tier 1/2 so a
+  // silent auto-reset takes priority over the graceful handoff prompt.
+  function selectTier(
+    pct: number,
+    exceeds: boolean,
+    opts: {
+      autoreset?: number;       // 0 = disabled (absent or explicit 0)
+      autoresetFiredAt?: number;
+      handoffFiredAt?: number;
+      warningFiredAt?: number;
+      handoffDeadlineAt?: number;
+      now?: number;
+      restartPlanned?: boolean;
+    } = {},
+  ): 'tier0' | 'tier0_skipped_already_planned' | 'tier3' | 'handoff' | 'warning' | 'none' {
+    const WARN = 70;
+    const HANDOFF = 80;
+    const now = opts.now ?? Date.now();
+    const autoreset = typeof opts.autoreset === 'number' && opts.autoreset > 0 ? opts.autoreset : 0;
+
+    const effectivePct = pct !== null ? pct : (exceeds ? 101 : null);
+    if (effectivePct === null) return 'none';
+
+    if (opts.handoffDeadlineAt && opts.handoffDeadlineAt > 0 && now > opts.handoffDeadlineAt) {
+      return 'tier3';
+    }
+
+    if (autoreset > 0 && effectivePct >= autoreset && (opts.autoresetFiredAt ?? 0) === 0) {
+      return opts.restartPlanned ? 'tier0_skipped_already_planned' : 'tier0';
+    }
+
+    if (effectivePct >= HANDOFF && (opts.handoffFiredAt ?? 0) === 0) return 'handoff';
+
+    if (effectivePct >= WARN && now - (opts.warningFiredAt ?? 0) > 15 * 60_000) return 'warning';
+
+    return 'none';
+  }
+
+  it('55% with autoreset=55 triggers tier0', () => {
+    expect(selectTier(55, false, { autoreset: 55 })).toBe('tier0');
+  });
+
+  it('54% with autoreset=55 does nothing', () => {
+    expect(selectTier(54, false, { autoreset: 55 })).toBe('none');
+  });
+
+  it('autoreset=0 (disabled) at 55% does nothing at tier0 and stays below warn', () => {
+    expect(selectTier(55, false, { autoreset: 0 })).toBe('none');
+  });
+
+  it('autoreset=0 (disabled) at 72% falls through to warning', () => {
+    expect(selectTier(72, false, { autoreset: 0 })).toBe('warning');
+  });
+
+  it('autoreset undefined (unset) at 55% does nothing (observe-only)', () => {
+    expect(selectTier(55, false, {})).toBe('none');
+  });
+
+  it('tier0 already fired in this session does not re-fire', () => {
+    expect(selectTier(90, false, { autoreset: 55, autoresetFiredAt: Date.now() - 1000 }))
+      .toBe('handoff'); // falls through
+  });
+
+  it('tier0 fires before handoff even when both thresholds cross on same tick', () => {
+    expect(selectTier(95, false, { autoreset: 55 })).toBe('tier0');
+  });
+
+  it('tier0 skipped when .restart-planned marker already present', () => {
+    expect(selectTier(60, false, { autoreset: 55, restartPlanned: true }))
+      .toBe('tier0_skipped_already_planned');
+  });
+
+  it('tier3 deadline fires before tier0 (hard rescue always wins)', () => {
+    expect(selectTier(90, false, {
+      autoreset: 55,
+      handoffDeadlineAt: Date.now() - 1000,
+    })).toBe('tier3');
+  });
+
+  it('exceeds_200k_tokens with null pct triggers tier0 (effectivePct = 101)', () => {
+    expect(selectTier(null as unknown as number, true, { autoreset: 55 })).toBe('tier0');
+  });
+
+  it('negative or NaN autoreset is treated as disabled', () => {
+    expect(selectTier(55, false, { autoreset: -10 })).toBe('none');
+    expect(selectTier(55, false, { autoreset: Number.NaN })).toBe('none');
+  });
+});
+
+// --- Tier 0 boot-window guard ---
+//
+// Tier 0 must NOT fire within 60s of session start. Otherwise a fresh boot
+// that lands above the threshold (bloated CLAUDE.md, pre-loaded handoff doc)
+// will enter a restart loop: each new session crosses the threshold within
+// the first tick and immediately triggers another restart.
+
+describe('Tier 0 boot-window guard', () => {
+  function shouldFire(sessionStartedAtMs: number, now: number): boolean {
+    const sessionAge = sessionStartedAtMs > 0 ? now - sessionStartedAtMs : Infinity;
+    if (sessionAge >= 0 && sessionAge < 60_000) return false; // boot window
+    return true;
+  }
+
+  it('skips when session just booted (age 0s)', () => {
+    const now = Date.now();
+    expect(shouldFire(now, now)).toBe(false);
+  });
+
+  it('skips when session is 59s old', () => {
+    const now = Date.now();
+    expect(shouldFire(now - 59_000, now)).toBe(false);
+  });
+
+  it('fires once session is 60s old', () => {
+    const now = Date.now();
+    expect(shouldFire(now - 60_000, now)).toBe(true);
+  });
+
+  it('fires when session is many minutes old', () => {
+    const now = Date.now();
+    expect(shouldFire(now - 10 * 60_000, now)).toBe(true);
+  });
+
+  it('fires when we never saw a session_id (sessionStartedAt never set)', () => {
+    // Legacy agents without session_id in context_status.json fall back
+    // to Infinity age → always past the boot window.
+    expect(shouldFire(0, Date.now())).toBe(true);
+  });
+});
+
+// --- .restart-planned staleness, clock-skew safe ---
+
+describe('.restart-planned staleness check', () => {
+  function markerIsFresh(markerMtimeMs: number, now: number): boolean {
+    const markerAge = now - markerMtimeMs;
+    return markerAge >= 0 && markerAge < 2 * 60_000;
+  }
+
+  it('fresh marker (30s old) blocks Tier 0', () => {
+    const now = Date.now();
+    expect(markerIsFresh(now - 30_000, now)).toBe(true);
+  });
+
+  it('stale marker (3min old) does not block Tier 0', () => {
+    const now = Date.now();
+    expect(markerIsFresh(now - 3 * 60_000, now)).toBe(false);
+  });
+
+  it('marker exactly 2min old does not block Tier 0 (boundary)', () => {
+    const now = Date.now();
+    expect(markerIsFresh(now - 120_000, now)).toBe(false);
+  });
+
+  it('clock skew: marker mtime in the future is treated as stale', () => {
+    // Negative markerAge = system clock jumped backward. Do not trust the
+    // marker — treat as leaked and proceed with Tier 0.
+    const now = Date.now();
+    expect(markerIsFresh(now + 5 * 60_000, now)).toBe(false);
+  });
+});
