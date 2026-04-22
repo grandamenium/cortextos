@@ -184,6 +184,63 @@ Once approved, `review_status` will be set to `"approved"` and the item will app
 
 ---
 
+## Contributing to upstream
+
+If you work on a personal fork and want changes to the **core framework** to flow back to `grandamenium/cortextos` automatically, use the upstream auto-PR flow.
+
+### Core framework paths
+
+Pushes that touch any of these open a PR to upstream:
+
+- `src/`
+- `dashboard/`
+- `templates/`
+- `.claude/hooks/`
+- `scripts/`
+
+Anything else (community skills, catalog entries, local notes) is ignored.
+
+### One-time setup
+
+```bash
+# 1. Configure fork + remotes. Creates the fork on GitHub if it doesn't exist.
+bash scripts/setup-upstream-pr.sh
+
+# 2. Install the git hooks that drive the flow.
+bash scripts/setup-hooks.sh
+```
+
+After that:
+
+- `pre-push` runs build + tests, then (in the background) calls `scripts/auto-pr-upstream.sh`. If the branch touches any core path and no PR is already open for that head, it runs `gh pr create --repo grandamenium/cortextos --base main --head <fork-owner>:<branch>`.
+- `post-merge` runs `scripts/auto-deploy-supabase.sh` after a merge to `main` lands locally. If the merge touched `supabase/functions/<name>/`, the function is deployed via `supabase functions deploy <name> --project-ref $SUPABASE_PROJECT_REF` (default `baidaaansxrfdislmgyx`).
+
+### Usage
+
+Day-to-day: just push branches like normal. If the branch touches core paths, a PR to upstream appears automatically. If it only touches your own `community/` entries or notes, nothing extra happens.
+
+Logs:
+
+- `$TMPDIR/cortextos-auto-pr.log` — upstream PR creation
+- `$TMPDIR/cortextos-auto-deploy.log` — supabase function deploys
+
+### Kill switches
+
+- `AUTO_PR_BRANCH=''` (empty) forces the branch detection back to `git rev-parse`.
+- `AUTO_DEPLOY_SKIP=1` disables supabase auto-deploy for that shell.
+- `git push --no-verify` bypasses the pre-push hook entirely (don't use routinely).
+
+### Failure modes (designed to never block)
+
+Every failure path in both scripts exits 0 so your push or merge proceeds:
+
+- `gh` not installed / not authed → log warning, skip
+- `upstream` remote missing → skip, prompt to run `setup-upstream-pr.sh`
+- Network error talking to GitHub/Supabase → log warning, continue
+- PR already open for the head ref → skip, no duplicate
+
+---
+
 ## Questions
 
 Open a GitHub issue or message the cortextOS community channel.

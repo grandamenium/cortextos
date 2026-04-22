@@ -8,7 +8,7 @@ import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTa
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
-import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
+import { selfRestart, hardRestart, autoCommit, autoCompactAgent, checkGoalStaleness, postActivity } from '../bus/system.js';
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
@@ -638,6 +638,49 @@ busCommand
       fsWrite(join(paths.stateDir, '.handoff-doc-path'), opts.handoffDoc + '\n', 'utf-8');
     }
     console.log('Hard restart planned');
+  });
+
+busCommand
+  .command('auto-compact-agent')
+  .description('Silently snapshot an agent and trigger a fresh restart (manual ops hatch; daemon fires the same chain at ctx_autoreset_threshold)')
+  .argument('[agent]', 'Agent name (defaults to $CTX_AGENT_NAME)')
+  .option('--reason <why>', 'Reason recorded in the snapshot + restart log', 'manual auto-compact')
+  .option('--notify', 'Send Telegram notification (default is silent)')
+  .option('--no-ipc', 'Arm markers only; skip the daemon IPC restart signal (markers still consume on the next restart triggered elsewhere)')
+  .action(async (agentArg: string | undefined, opts: { reason: string; notify?: boolean; ipc?: boolean }) => {
+    const env = resolveEnv();
+    const target = agentArg || env.agentName;
+    if (!target) {
+      console.error('ERROR: agent name required (pass as argument or set CTX_AGENT_NAME)');
+      process.exit(1);
+    }
+    validateAgentName(target);
+    const paths = resolvePaths(target, env.instanceId, env.org);
+    const frameworkRoot = env.frameworkRoot || process.cwd();
+    const report = autoCompactAgent(paths, target, frameworkRoot, {
+      reason: opts.reason,
+      silent: !opts.notify,
+    });
+    // Trigger the actual restart unless --no-ipc was passed. Without this,
+    // markers are written but the agent keeps running until someone else
+    // restarts it — which defeats the point of the manual hatch.
+    let restartTriggered = false;
+    let ipcError: string | undefined;
+    if (opts.ipc !== false && !report.already_in_flight) {
+      const ipc = new IPCClient(env.instanceId);
+      if (await ipc.isDaemonRunning()) {
+        const resp = await ipc.send({ type: 'restart-agent', agent: target, source: 'cortextos bus auto-compact-agent' });
+        if (resp.success) {
+          restartTriggered = true;
+        } else {
+          ipcError = resp.error || 'restart-agent IPC call failed';
+        }
+      } else {
+        ipcError = 'daemon is not running — markers armed but no restart fired';
+      }
+    }
+    console.log(JSON.stringify({ ...report, restart_triggered: restartTriggered, ipc_error: ipcError }));
+    if (ipcError) process.exit(1);
   });
 
 busCommand
