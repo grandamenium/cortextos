@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
-import { selfRestart, autoCommit, checkGoalStaleness, postActivity } from '../../../src/bus/system';
+import { selfRestart, autoCommit, autoCompactAgent, checkGoalStaleness, postActivity } from '../../../src/bus/system';
 import type { BusPaths } from '../../../src/types';
 
 function makePaths(testDir: string, agent: string = 'test-agent'): BusPaths {
@@ -265,6 +265,149 @@ describe('Bus System', () => {
 
       const result = await postActivity(orgDir, testDir, 'myorg', 'hello');
       expect(result).toBe(false);
+    });
+  });
+
+  describe('autoCompactAgent', () => {
+    let frameworkRoot: string;
+    let scriptPath: string;
+    let agentDir: string;
+    let sentinelPath: string;
+
+    beforeEach(() => {
+      frameworkRoot = mkdtempSync(join(tmpdir(), 'cortextos-autocompact-fw-'));
+      mkdirSync(join(frameworkRoot, 'scripts'), { recursive: true });
+      scriptPath = join(frameworkRoot, 'scripts', 'snapshot-agent.sh');
+
+      // Build a stub snapshot-agent.sh that:
+      //  - Writes a sentinel recording the args AND env it was invoked with
+      //  - Honors --silent (sentinel records whether --silent appeared)
+      //  - Exits 0 so the chain proceeds (real script matches this guarantee)
+      //  - Reads sentinel path from $SNAPSHOT_SENTINEL (tests set this in process.env)
+      sentinelPath = join(frameworkRoot, 'snapshot-sentinel.json');
+      const stub = [
+        '#!/usr/bin/env bash',
+        'set +e',
+        'AGENT=""',
+        'SILENT=0',
+        'REASON=""',
+        'while [[ $# -gt 0 ]]; do',
+        '  case "$1" in',
+        '    --silent) SILENT=1; shift ;;',
+        '    --reason) REASON="$2"; shift 2 ;;',
+        '    *) if [[ -z "$AGENT" ]]; then AGENT="$1"; shift; else shift; fi ;;',
+        '  esac',
+        'done',
+        'if [[ -z "${SNAPSHOT_SENTINEL:-}" ]]; then exit 0; fi',
+        'printf \'{"agent":"%s","silent":%d,"reason":"%s","env_agent_name":"%s","env_agent_dir":"%s","env_framework_root":"%s"}\' "$AGENT" "$SILENT" "$REASON" "${CTX_AGENT_NAME:-}" "${CTX_AGENT_DIR:-}" "${CTX_FRAMEWORK_ROOT:-}" > "$SNAPSHOT_SENTINEL"',
+        'exit 0',
+        '',
+      ].join('\n');
+      writeFileSync(scriptPath, stub);
+      execSync(`chmod +x '${scriptPath}'`, { stdio: 'pipe' });
+
+      // Agent dir — not directly used by autoCompactAgent but fixture for realism.
+      agentDir = join(frameworkRoot, 'orgs', 'testorg', 'agents', 'test-agent');
+      mkdirSync(agentDir, { recursive: true });
+    });
+
+    afterEach(() => {
+      rmSync(frameworkRoot, { recursive: true, force: true });
+      delete process.env.SNAPSHOT_SENTINEL;
+    });
+
+    it('silent mode runs snapshot with --silent and arms restart markers', () => {
+      process.env.SNAPSHOT_SENTINEL = sentinelPath;
+      const paths = makePaths(testDir);
+      const report = autoCompactAgent(paths, 'test-agent', frameworkRoot, {
+        reason: 'unit test',
+        silent: true,
+      });
+
+      expect(report.agent).toBe('test-agent');
+      expect(report.already_in_flight).toBe(false);
+      expect(report.snapshot_ok).toBe(true);
+      expect(report.restart_planned).toBe(true);
+
+      // Snapshot ran silently
+      const sentinel = JSON.parse(readFileSync(sentinelPath, 'utf-8'));
+      expect(sentinel.agent).toBe('test-agent');
+      expect(sentinel.silent).toBe(1);
+      expect(sentinel.reason).toBe('unit test');
+
+      // hardRestart wrote .force-fresh + .restart-planned AND .silent-restart
+      expect(existsSync(join(paths.stateDir, '.force-fresh'))).toBe(true);
+      expect(existsSync(join(paths.stateDir, '.restart-planned'))).toBe(true);
+      expect(existsSync(join(paths.stateDir, '.silent-restart'))).toBe(true);
+    });
+
+    it('env scrubbing: caller CTX_AGENT_DIR / CTX_AGENT_NAME do not leak to snapshot', () => {
+      process.env.SNAPSHOT_SENTINEL = sentinelPath;
+      // Simulate a CALLER agent running auto-compact for a DIFFERENT agent.
+      process.env.CTX_AGENT_NAME = 'caller-agent';
+      process.env.CTX_AGENT_DIR = '/fake/caller/dir';
+
+      try {
+        const paths = makePaths(testDir, 'target-agent');
+        autoCompactAgent(paths, 'target-agent', frameworkRoot, { reason: 'cross-agent', silent: true });
+
+        const sentinel = JSON.parse(readFileSync(sentinelPath, 'utf-8'));
+        expect(sentinel.env_agent_name).toBe('target-agent');       // overridden
+        expect(sentinel.env_agent_dir).toBe('');                     // scrubbed
+        expect(sentinel.env_framework_root).toBe(frameworkRoot);
+      } finally {
+        delete process.env.CTX_AGENT_NAME;
+        delete process.env.CTX_AGENT_DIR;
+      }
+    });
+
+    it('notify mode drops --silent flag so user-facing notification can fire', () => {
+      process.env.SNAPSHOT_SENTINEL = sentinelPath;
+      const paths = makePaths(testDir);
+      autoCompactAgent(paths, 'test-agent', frameworkRoot, { silent: false, reason: 'manual' });
+
+      const sentinel = JSON.parse(readFileSync(sentinelPath, 'utf-8'));
+      expect(sentinel.silent).toBe(0);
+    });
+
+    it('idempotency: skips when .restart-planned already present', () => {
+      process.env.SNAPSHOT_SENTINEL = sentinelPath;
+      const paths = makePaths(testDir);
+      mkdirSync(paths.stateDir, { recursive: true });
+      writeFileSync(join(paths.stateDir, '.restart-planned'), 'earlier restart\n', 'utf-8');
+
+      const report = autoCompactAgent(paths, 'test-agent', frameworkRoot, { reason: 'second call' });
+
+      expect(report.already_in_flight).toBe(true);
+      expect(report.restart_planned).toBe(false);
+      expect(report.snapshot_ok).toBe(false);
+      expect(existsSync(sentinelPath)).toBe(false); // snapshot never ran
+      // Original marker preserved (first reason wins)
+      expect(readFileSync(join(paths.stateDir, '.restart-planned'), 'utf-8').trim()).toBe('earlier restart');
+    });
+
+    it('proceeds with restart even if snapshot script is missing', () => {
+      rmSync(scriptPath);
+      const paths = makePaths(testDir);
+      const report = autoCompactAgent(paths, 'test-agent', frameworkRoot, { reason: 'script gone' });
+
+      expect(report.snapshot_ok).toBe(false);
+      expect(report.restart_planned).toBe(true);
+      expect(existsSync(join(paths.stateDir, '.force-fresh'))).toBe(true);
+    });
+
+    it('proceeds with restart even if snapshot script fails (exit code non-zero)', () => {
+      // Overwrite with a stub that fails mid-chain
+      writeFileSync(scriptPath, '#!/usr/bin/env bash\nexit 7\n');
+      execSync(`chmod +x '${scriptPath}'`, { stdio: 'pipe' });
+
+      const paths = makePaths(testDir);
+      const report = autoCompactAgent(paths, 'test-agent', frameworkRoot, { reason: 'script broken' });
+
+      expect(report.snapshot_ok).toBe(false);
+      expect(report.restart_planned).toBe(true);
+      expect(existsSync(join(paths.stateDir, '.force-fresh'))).toBe(true);
+      expect(existsSync(join(paths.stateDir, '.restart-planned'))).toBe(true);
     });
   });
 });
