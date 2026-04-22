@@ -473,16 +473,23 @@ export class AgentProcess {
     const deliverablesBlock = this.buildDeliverablesBlock();
     const handoffBlock = this.consumeHandoffBlock();
     const isHandoffRestart = handoffBlock.length > 0;
+    const isSilentRestart = this.consumeSilentRestartMarker();
     // HANDOFF UX: the pickup message MUST be the first action after reading the handoff doc —
     // before cron restoration, before heartbeat, before anything else. Placing this instruction
     // immediately after the handoffBlock in the prompt ensures it is not buried.
     const handoffUxOverride = isHandoffRestart
       ? ' HANDOFF UX: This is a context handoff restart — your memory is intact via the handoff doc. CRITICAL: After reading the handoff document, your VERY FIRST tool call MUST be a Bash call running: cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID \'back — [what you were just working on]\' — replace the brackets with one brief plain-English sentence about your current state. Do this BEFORE restoring crons, BEFORE running heartbeat, BEFORE any other tool call. No cron IDs, no status report, no cold-boot phrasing. Do NOT send "Booting up... one moment" (skip AGENTS.md step 1 entirely).'
       : '';
-    const onlineMessage = isHandoffRestart
+    // SILENT AUTO-RESET UX: Tier 0 context auto-reset fires silently by design.
+    // The agent should pick up work without any Telegram noise (no boot message,
+    // no "back online" message). Crons, inbox, and memory still get restored.
+    const silentUxOverride = isSilentRestart && !isHandoffRestart
+      ? ' SILENT AUTO-RESET: This session was automatically reset by the daemon at the configured ctx_autoreset_threshold. Do NOT send any Telegram messages about booting, being back online, or restarting — the reset is internal and the user did not ask for it. Skip AGENTS.md step 1 (boot message) and step 14 (online status message) entirely. Restore crons, check inbox, pick up the highest-priority task silently.'
+      : '';
+    const onlineMessage = isHandoffRestart || isSilentRestart
       ? ''
       : ' After setting up crons, send a Telegram message to the user saying you are back online.';
-    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. CRITICAL DEDUP: Always call CronList BEFORE creating any cron. For each config.json entry, search the CronList output for its prompt text — if the prompt already appears, SKIP that cron entirely. Only call /loop or CronCreate for entries whose prompt text is NOT already listed. This prevents rapid --continue restarts from accumulating duplicate schedules.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onlineMessage}${onboardingAppend}`;
+    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. Then restore your crons from config.json: for each entry with type "recurring" (or no type field), call /loop {interval} {prompt}; for each entry with type "once", compare fire_at against the current UTC time above — if fire_at is still in the future recreate the CronCreate, if fire_at is in the past delete that entry from config.json. CRITICAL DEDUP: Always call CronList BEFORE creating any cron. For each config.json entry, search the CronList output for its prompt text — if the prompt already appears, SKIP that cron entirely. Only call /loop or CronCreate for entries whose prompt text is NOT already listed. This prevents rapid --continue restarts from accumulating duplicate schedules.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${silentUxOverride}${onlineMessage}${onboardingAppend}`;
   }
 
   private buildContinuePrompt(): string {
@@ -550,6 +557,23 @@ export class AgentProcess {
     } catch {
       return '';
     }
+  }
+
+  /**
+   * Consume the `.silent-restart` marker (written by the FastChecker Tier 0
+   * auto-reset or the `cortextos bus auto-compact-agent` manual hatch).
+   * Returns true when the marker was present — signaling the boot prompt
+   * builder to suppress the "booting" and "back online" Telegram messages.
+   * Unlinks the marker so the effect lasts exactly one restart.
+   */
+  private consumeSilentRestartMarker(): boolean {
+    const markerPath = join(this.env.ctxRoot, 'state', this.name, '.silent-restart');
+    if (!existsSync(markerPath)) return false;
+    try {
+      const { unlinkSync } = require('fs');
+      unlinkSync(markerPath);
+    } catch { /* ignore — we still treat it as silent */ }
+    return true;
   }
 
   private startSessionTimer(): void {

@@ -181,6 +181,93 @@ describe('queryKnowledgeBase — graceful missing-config', () => {
   });
 });
 
+describe('ingestKnowledgeBase — timeout behavior (SIGTERM regression)', () => {
+  // Regression: previously the ingest wrapper hard-coded `timeout: 120000` on
+  // execFileSync. Against a collection with 1000+ chunks, the python child
+  // takes longer than 2 minutes (network-bound embedding API calls) and Node
+  // sent SIGTERM, killing an otherwise-healthy ingest. The fix is to drop the
+  // hard default; operators can still cap it via CORTEXTOS_KB_INGEST_TIMEOUT_MS.
+  const originalEnv = process.env.CORTEXTOS_KB_INGEST_TIMEOUT_MS;
+  afterEach(() => {
+    if (originalEnv === undefined) delete process.env.CORTEXTOS_KB_INGEST_TIMEOUT_MS;
+    else process.env.CORTEXTOS_KB_INGEST_TIMEOUT_MS = originalEnv;
+  });
+
+  it('passes NO timeout to execFileSync by default', () => {
+    mockConfiguredKb();
+    delete process.env.CORTEXTOS_KB_INGEST_TIMEOUT_MS;
+    execFileSyncMock.mockReturnValue('');
+
+    ingestKnowledgeBase(['/some/file.md'], baseOptions);
+
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    const opts = execFileSyncMock.mock.calls[0][2] as Record<string, unknown>;
+    expect(opts.timeout).toBeUndefined();
+  });
+
+  it('respects CORTEXTOS_KB_INGEST_TIMEOUT_MS override when set to a positive number', () => {
+    mockConfiguredKb();
+    process.env.CORTEXTOS_KB_INGEST_TIMEOUT_MS = '600000';
+    execFileSyncMock.mockReturnValue('');
+
+    ingestKnowledgeBase(['/some/file.md'], baseOptions);
+
+    const opts = execFileSyncMock.mock.calls[0][2] as Record<string, unknown>;
+    expect(opts.timeout).toBe(600000);
+  });
+
+  it('reads override from merged env (.env / secrets.env), not just process.env', () => {
+    // Simulate an .env file that sets the override. readFileSync feeds the
+    // value through loadSecretsEnv into the merged env that buildKBEnv returns.
+    // The wrapper must read from that merged env, not directly from process.env,
+    // so operators can keep the override out of their shell profile.
+    delete process.env.CORTEXTOS_KB_INGEST_TIMEOUT_MS;
+    fsMocks.existsSync.mockImplementation(() => true);
+    fsMocks.readFileSync.mockImplementation((p: any) => {
+      if (String(p).endsWith('.env')) return 'CORTEXTOS_KB_INGEST_TIMEOUT_MS=900000\n';
+      return '';
+    });
+    execFileSyncMock.mockReturnValue('');
+
+    ingestKnowledgeBase(['/some/file.md'], baseOptions);
+
+    const opts = execFileSyncMock.mock.calls[0][2] as Record<string, unknown>;
+    expect(opts.timeout).toBe(900000);
+  });
+
+  it('ignores invalid or non-positive CORTEXTOS_KB_INGEST_TIMEOUT_MS values', () => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue('');
+
+    for (const bad of ['', 'abc', '0', '-5', 'NaN']) {
+      execFileSyncMock.mockClear();
+      process.env.CORTEXTOS_KB_INGEST_TIMEOUT_MS = bad;
+      ingestKnowledgeBase(['/some/file.md'], baseOptions);
+      const opts = execFileSyncMock.mock.calls[0][2] as Record<string, unknown>;
+      expect(opts.timeout).toBeUndefined();
+    }
+  });
+
+  it('does not SIGTERM a slow python subprocess under default config (simulated 5-minute run)', () => {
+    mockConfiguredKb();
+    delete process.env.CORTEXTOS_KB_INGEST_TIMEOUT_MS;
+    // Simulate a long-running python subprocess that completes successfully
+    // after the old 120s ceiling would have fired. With the old timeout,
+    // execFileSync would have thrown ETIMEDOUT here; with the fix it returns clean.
+    execFileSyncMock.mockImplementation((_py, _args, opts: { timeout?: number }) => {
+      // The wrapper must NOT have asked Node to kill after 2 minutes.
+      if (opts.timeout !== undefined && opts.timeout < 5 * 60 * 1000) {
+        const err = new Error('ETIMEDOUT: node killed python subprocess') as Error & { signal?: string };
+        err.signal = 'SIGTERM';
+        throw err;
+      }
+      return '';
+    });
+
+    expect(() => ingestKnowledgeBase(['/big-file.md'], baseOptions)).not.toThrow();
+  });
+});
+
 describe('kb warn messages — UX invariants', () => {
   it('both warn messages name the org and suggest "run setup"', () => {
     // Drive ingest path

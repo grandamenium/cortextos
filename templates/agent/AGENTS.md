@@ -80,6 +80,47 @@ MEMEOF
 
 ---
 
+## Context Discipline
+
+The daemon guards your context window so you never hit the hard 80% graceful-handoff tier unless you opt in. Three tiers sit on top of the per-poll context monitor:
+
+| Tier | Default % | Behavior | User-visible? |
+|------|-----------|----------|---------------|
+| Tier 0 (auto-reset) | `ctx_autoreset_threshold` (disabled) | Snapshots memory + Neon episode, arms `.force-fresh`, force-restarts. Silent. | No |
+| Tier 1 (warning) | `ctx_warning_threshold` (70) | PTY injection asking you to wrap up. | You only |
+| Tier 2 (handoff) | `ctx_handoff_threshold` (80) | Injects handoff prompt + pre-arms `.force-fresh`. | You only |
+| Tier 3 (deadline) | handoff + 5min | Force restart if you ignored the Tier 2 prompt. | Logged |
+
+**Enabling Tier 0** — add to your `config.json`:
+```json
+{ "ctx_autoreset_threshold": 55 }
+```
+Any positive number arms it. `0` or absent disables it. Typical value is `55` so the daemon resets you well before the graceful tier.
+
+**What Tier 0 does:**
+1. Runs `scripts/snapshot-agent.sh <agent> --silent --reason "ctx auto-reset at N%"` synchronously (10s cap).
+2. Writes `.force-fresh` + `.restart-planned` via `hardRestart`.
+3. Resets `context_status.json` so the fresh session does not re-fire.
+4. Calls `sessionRefresh()` — the agent process stops and respawns with `--force-fresh` consumed on boot.
+
+**Guarantees:**
+- Silent: no Telegram to the user. The only exception is the context circuit breaker (3 restarts in 15 min → one Telegram ping so the operator knows a restart loop is happening).
+- Idempotent: if `.restart-planned` is already present and < 2 min old, Tier 0 skips. Stale markers (> 2 min) are ignored.
+- Fires once per session — the `session_id` change detection resets the fired flag on the next fresh session.
+- Snapshot failure does NOT block the restart. Losing a snapshot is better than drifting past 80%.
+
+**Manual ops hatch:**
+```bash
+# Same chain as Tier 0, on demand. Silent by default.
+cortextos bus auto-compact-agent <agent_name> --reason "manual"
+
+# With notification
+cortextos bus auto-compact-agent <agent_name> --notify --reason "debugging"
+```
+Returns JSON: `{agent, snapshot_ok, restart_planned, already_in_flight, reason}`.
+
+---
+
 ## Time Awareness
 
 You are always time-aware. Your timezone is set in `config.json` and injected as `CTX_TIMEZONE` and `TZ` at startup.
@@ -342,6 +383,44 @@ TARGET: Query before every task. Ingest every significant output. Memory collect
 
 ---
 
+## Publishing to the Vault
+
+Logan lives in Obsidian. Agent outputs in ChromaDB are searchable but invisible in his daily note-taking surface. Bridge that gap: when you produce a strategic deliverable, publish it to the Vault so it shows up alongside Logan's own notes, wikilinked back to the originating task.
+
+```bash
+cortextos bus publish-to-vault <source_file> \
+  --vault-dir <subdir> \
+  [--task-id <task_id>] \
+  [--summary "<one-liner>"] \
+  [--tags "a,b,c"]
+```
+
+**Publish (strategic outputs):**
+- Research reports and iteration summaries — `--vault-dir Research/<topic>`
+- E2E verification reports, audit writeups — `--vault-dir Reports`
+- Approved content drafts — `--vault-dir Marketing/Drafts`
+- Decision briefs the user needs to review — `--vault-dir Reports`
+
+**Do NOT publish:**
+- Ephemeral status updates (use activity channel instead)
+- Raw logs, heartbeat checkpoints, debug dumps
+- Binary files (rejected — vault is for markdown / text)
+- In-progress scratch files
+
+**Behavior:**
+- File lands in `<VAULT_ROOT>/<vault-dir>/<YYYY-MM-DD>-<name>.md` (date prepended if missing)
+- Frontmatter injected with `published_by`, `published_at`, `source_task`, `source_path`, `summary`, `tags`
+- If `--task-id` is given, a `Source: [[task_id]]` wikilink is appended to the body
+- Collisions resolved via `-v2`, `-v3` — never overwrites existing vault files
+- Emits `output_published_to_vault` event in the activity feed
+
+**Defaults:** `VAULT_ROOT` env var, then the `vault_root` key in `orgs/<org>/context.json`, then the org-wide default.
+
+CONSEQUENCE: Without publishing, your strategic output is invisible in Logan's daily workflow. He reads the Vault.
+TARGET: Every deliverable with lasting value (report, research, draft) → one `publish-to-vault` call at task completion.
+
+---
+
 ## Mandatory Event Logging
 
 Log significant events so the Activity feed shows what you are doing. When in doubt, log it.
@@ -364,6 +443,7 @@ cortextos bus log-event <category> <event> <severity> --meta '<json>'
 | Cron fired and completed | action | cron_completed | info |
 | Workflow run completed | action | workflow_completed | info |
 | Significant output created | action | output_created | info |
+| Output published to Vault | action | output_published_to_vault | info |
 | Research completed and ingested to KB | action | research_completed | info |
 | Error or failure | error | <error_type> | error |
 | Significant decision made | action | decision_made | info |
