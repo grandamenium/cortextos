@@ -146,6 +146,103 @@ describe('parseIdentityMd / serializeIdentityMd', () => {
     expect(fields.name).toBe('');
     expect(fields.role).toBe('');
   });
+
+  it('strips html comment placeholders from extracted fields', () => {
+    const input = `## Name
+<!-- Agent name (set during onboarding) -->
+
+## Role
+<!-- What this agent does -->
+
+## Emoji
+<!-- Optional emoji identifier -->
+
+## Vibe
+Focused
+
+## Work Style
+<!-- TODO -->
+- Ship fast
+`;
+    const { fields } = parseIdentityMd(input);
+    expect(fields.name).toBe('');
+    expect(fields.role).toBe('');
+    expect(fields.emoji).toBe('');
+    expect(fields.vibe).toBe('Focused');
+    // Mixed: comment plus real content — keep the real content.
+    expect(fields.workStyle).toContain('Ship fast');
+    expect(fields.workStyle).not.toContain('<!--');
+  });
+
+  it('preserves template comments when user does not edit any field', () => {
+    const input = `## Name
+<!-- Agent name -->
+
+## Role
+<!-- What this agent does -->
+
+## Emoji
+<!-- Optional -->
+
+## Vibe
+<!-- Personality -->
+
+## Work Style
+<!-- How they work -->
+`;
+    const { fields, parsed } = parseIdentityMd(input);
+    // User never edits — save should not wipe the placeholder comments.
+    const output = serializeIdentityMd(fields, parsed);
+    expect(output).toBe(input);
+  });
+
+  it('preserves html comments inside fenced code blocks', () => {
+    const input = `## Vibe
+Some context.
+
+\`\`\`
+<!-- example markup -->
+\`\`\`
+
+Real prose after.
+`;
+    const { fields } = parseIdentityMd(input);
+    expect(fields.vibe).toContain('<!-- example markup -->');
+    expect(fields.vibe).toContain('Real prose after.');
+  });
+
+  it('writes user edit without disturbing other template comments', () => {
+    const input = `## Name
+<!-- Agent name -->
+
+## Role
+<!-- What this agent does -->
+
+## Emoji
+<!-- Optional -->
+
+## Vibe
+<!-- Personality -->
+
+## Work Style
+<!-- How they work -->
+`;
+    const { fields, parsed } = parseIdentityMd(input);
+    fields.name = 'Atlas';
+    const output = serializeIdentityMd(fields, parsed);
+    expect(output).toContain('## Name\nAtlas\n');
+    expect(output).toContain('<!-- What this agent does -->');
+    expect(output).toContain('<!-- Personality -->');
+  });
+
+  it('collapses whitespace left by inline comment strip', () => {
+    const input = `## Role
+Hello <!-- note --> World
+`;
+    const { fields } = parseIdentityMd(input);
+    // Double space artifact must not leak to the UI.
+    expect(fields.role).toBe('Hello World');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -301,9 +301,22 @@ export function ingestKnowledgeBase(
   const args = [mmragPath, 'ingest', ...paths, '--collection', collection];
   if (force) args.push('--force');
 
+  // No default timeout: ingest runtime scales with file size AND existing
+  // collection size (incremental dedup + embedding API calls are network-bound).
+  // A fixed 2-minute ceiling made Node SIGTERM the python child on collections
+  // with ~1000+ chunks, even though direct python invocation finished fine.
+  // Operators can still cap runtime via CORTEXTOS_KB_INGEST_TIMEOUT_MS for
+  // CI/automation. Read from the merged `env` so .env / secrets.env overrides
+  // work the same way MMRAG_CONFIG and other KB env vars do.
+  // Ingest is interactive (stdio: inherit) — the operator sees progress and can Ctrl-C.
+  const rawTimeout = Number(env.CORTEXTOS_KB_INGEST_TIMEOUT_MS);
+  const ingestTimeout = Number.isFinite(rawTimeout) && rawTimeout > 0
+    ? rawTimeout
+    : undefined;
+
   execFileSync(pythonPath, args, {
     encoding: 'utf-8',
-    timeout: 120000,
+    ...(ingestTimeout !== undefined ? { timeout: ingestTimeout } : {}),
     env,
     stdio: 'inherit',
   });

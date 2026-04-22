@@ -51,11 +51,9 @@ export function AgentCard({ agent }: AgentCardProps) {
                     {agent.systemName}
                   </p>
                 )}
-                {agent.role && (
-                  <p className="text-[11px] text-muted-foreground truncate max-w-[180px] mt-0.5">
-                    {agent.role}
-                  </p>
-                )}
+                <p className="text-[11px] text-muted-foreground truncate max-w-[180px] mt-0.5">
+                  {agent.role || <span className="italic opacity-60">(not set)</span>}
+                </p>
               </div>
             </div>
             <AgentActions

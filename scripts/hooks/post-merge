@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# post-merge — installed by scripts/setup-hooks.sh
+#
+# Fires after a successful `git merge` or `git pull` finishes applying.
+# Delegates to scripts/auto-deploy-supabase.sh which deploys any supabase
+# functions touched by the merge. Runs in the background so interactive
+# pulls aren't blocked by the deploy step.
+#
+# Never blocks. All failure paths in the deploy script exit 0.
+
+set -uo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "")"
+[[ -z "$REPO_ROOT" ]] && exit 0
+cd "$REPO_ROOT"
+
+if [[ -x "$REPO_ROOT/scripts/auto-deploy-supabase.sh" ]]; then
+  log_dir="${TMPDIR:-/tmp}"
+  (
+    "$REPO_ROOT/scripts/auto-deploy-supabase.sh"
+  ) </dev/null >>"$log_dir/cortextos-auto-deploy.log" 2>&1 &
+  disown 2>/dev/null || true
+  echo "[post-merge] auto-deploy-supabase scheduled (log: $log_dir/cortextos-auto-deploy.log)"
+fi
+
+exit 0

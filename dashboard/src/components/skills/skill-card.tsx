@@ -102,9 +102,9 @@ export function SkillCard({ skill, agents, onRefresh }: SkillCardProps) {
 
       <CardFooter>
         <div className="flex w-full flex-col gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Select value={selectedAgent} onValueChange={(v) => setSelectedAgent(v ?? '')}>
-              <SelectTrigger className="flex-1">
+              <SelectTrigger className="min-w-0 flex-1 basis-40">
                 <SelectValue placeholder="Select agent..." />
               </SelectTrigger>
               <SelectContent>
@@ -123,6 +123,7 @@ export function SkillCard({ skill, agents, onRefresh }: SkillCardProps) {
               size="sm"
               onClick={handleInstall}
               disabled={loading || !selectedAgent}
+              className="shrink-0"
             >
               Install
             </Button>

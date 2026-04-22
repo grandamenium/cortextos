@@ -103,6 +103,7 @@ export function ProfileForm({
                 id="identity-name"
                 value={identity.name}
                 onChange={(e) => updateIdentity('name', e.target.value)}
+                placeholder="Agent display name"
               />
             </div>
             <div className="space-y-1.5">
@@ -111,6 +112,7 @@ export function ProfileForm({
                 id="identity-emoji"
                 value={identity.emoji}
                 onChange={(e) => updateIdentity('emoji', e.target.value)}
+                placeholder="🤖"
               />
             </div>
           </div>
@@ -121,6 +123,7 @@ export function ProfileForm({
               id="identity-role"
               value={identity.role}
               onChange={(e) => updateIdentity('role', e.target.value)}
+              placeholder="What this agent does (e.g. content creator, devops)"
             />
           </div>
 
@@ -131,6 +134,7 @@ export function ProfileForm({
               value={identity.vibe}
               onChange={(e) => updateIdentity('vibe', e.target.value)}
               rows={2}
+              placeholder="Personality: casual, formal, technical, creative"
             />
           </div>
 
@@ -141,6 +145,7 @@ export function ProfileForm({
               value={identity.workStyle}
               onChange={(e) => updateIdentity('workStyle', e.target.value)}
               rows={2}
+              placeholder="How this agent approaches tasks"
             />
           </div>
         </CardContent>
@@ -161,6 +166,7 @@ export function ProfileForm({
               value={soul.autonomyRules}
               onChange={(e) => updateSoul('autonomyRules', e.target.value)}
               rows={3}
+              placeholder="What this agent can do without asking"
             />
           </div>
 
@@ -173,6 +179,7 @@ export function ProfileForm({
                 updateSoul('communicationStyle', e.target.value)
               }
               rows={3}
+              placeholder="How this agent talks to you"
             />
           </div>
 
@@ -184,6 +191,7 @@ export function ProfileForm({
                 value={soul.dayMode}
                 onChange={(e) => updateSoul('dayMode', e.target.value)}
                 rows={2}
+                placeholder="Behavior during business hours"
               />
             </div>
             <div className="space-y-1.5">
@@ -193,6 +201,7 @@ export function ProfileForm({
                 value={soul.nightMode}
                 onChange={(e) => updateSoul('nightMode', e.target.value)}
                 rows={2}
+                placeholder="Behavior after hours"
               />
             </div>
           </div>
@@ -204,6 +213,7 @@ export function ProfileForm({
               value={soul.coreTruths}
               onChange={(e) => updateSoul('coreTruths', e.target.value)}
               rows={3}
+              placeholder="Non-negotiable principles for this agent"
             />
           </div>
         </CardContent>

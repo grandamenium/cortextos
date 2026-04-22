@@ -30,3 +30,17 @@ if ! npm test --silent; then
 fi
 
 echo "[pre-push] Build and tests passed. Pushing..."
+
+# Schedule upstream auto-PR check. Runs in the background after a short delay
+# so the push has time to land on origin before gh pr create resolves the
+# head ref. Never blocks the push — all failure paths inside the script exit 0.
+if [[ -x "$REPO_ROOT/scripts/auto-pr-upstream.sh" ]]; then
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+  log_dir="${TMPDIR:-/tmp}"
+  (
+    sleep 5
+    AUTO_PR_BRANCH="$branch" "$REPO_ROOT/scripts/auto-pr-upstream.sh"
+  ) </dev/null >>"$log_dir/cortextos-auto-pr.log" 2>&1 &
+  disown 2>/dev/null || true
+  echo "[pre-push] auto-pr-upstream scheduled (log: $log_dir/cortextos-auto-pr.log)"
+fi

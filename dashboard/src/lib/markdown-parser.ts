@@ -1,6 +1,7 @@
 // cortextOS Dashboard - Markdown parser for agent config files
 // Round-trip safe: unknown sections preserved through edit cycles
 
+import { stripHtmlComments } from '@/lib/utils';
 import type {
   MarkdownSection,
   ParsedMarkdown,
@@ -139,6 +140,28 @@ function updateSection(
   return { ...parsed, sections };
 }
 
+/**
+ * True when the new field value matches the comment-stripped content of the
+ * matching section in the original markdown. Lets serialize skip a write for
+ * untouched fields so template placeholder comments (<!-- ... -->) survive
+ * saves where the user only edited other fields.
+ */
+function sectionUnchanged(
+  original: ParsedMarkdown,
+  headingMap: Record<string, string>,
+  fieldKey: string,
+  newValue: string,
+): boolean {
+  const normalized = newValue.trim();
+  const section = original.sections.find(
+    (s) => headingMap[s.heading.toLowerCase()] === fieldKey,
+  );
+  // No such section yet. Treat empty input as "unchanged" so we don't append
+  // a blank `## Heading\n` block on save.
+  if (!section) return normalized === '';
+  return stripHtmlComments(section.content) === normalized;
+}
+
 // ---------------------------------------------------------------------------
 // IDENTITY.md
 // ---------------------------------------------------------------------------
@@ -174,7 +197,7 @@ export function parseIdentityMd(
   for (const section of parsed.sections) {
     const key = IDENTITY_HEADINGS[section.heading.toLowerCase()];
     if (key) {
-      fields[key] = section.content.trim();
+      fields[key] = stripHtmlComments(section.content);
     }
   }
 
@@ -187,9 +210,11 @@ export function serializeIdentityMd(
 ): string {
   let result = original;
   for (const [fieldKey, heading] of Object.entries(IDENTITY_MAP)) {
-    if (fields[fieldKey] !== undefined) {
-      result = updateSection(result, heading, fields[fieldKey] + '\n');
+    if (fields[fieldKey] === undefined) continue;
+    if (sectionUnchanged(original, IDENTITY_HEADINGS, fieldKey, fields[fieldKey])) {
+      continue;
     }
+    result = updateSection(result, heading, fields[fieldKey] + '\n');
   }
   return serializeMarkdown(result);
 }
@@ -231,7 +256,7 @@ export function parseSoulMd(
   for (const section of parsed.sections) {
     const key = SOUL_HEADINGS[section.heading.toLowerCase()];
     if (key) {
-      fields[key] = section.content.trim();
+      fields[key] = stripHtmlComments(section.content);
     }
   }
 
@@ -244,9 +269,11 @@ export function serializeSoulMd(
 ): string {
   let result = original;
   for (const [fieldKey, heading] of Object.entries(SOUL_MAP)) {
-    if (fields[fieldKey] !== undefined) {
-      result = updateSection(result, heading, fields[fieldKey] + '\n');
+    if (fields[fieldKey] === undefined) continue;
+    if (sectionUnchanged(original, SOUL_HEADINGS, fieldKey, fields[fieldKey])) {
+      continue;
     }
+    result = updateSection(result, heading, fields[fieldKey] + '\n');
   }
   return serializeMarkdown(result);
 }
@@ -274,7 +301,7 @@ export function parseGoalsMd(
   for (const section of parsed.sections) {
     const key = GOALS_HEADINGS[section.heading.toLowerCase()];
     if (key) {
-      fields[key] = section.content.trim();
+      fields[key] = stripHtmlComments(section.content);
     }
   }
 
@@ -286,14 +313,15 @@ export function serializeGoalsMd(
   original: ParsedMarkdown,
 ): string {
   let result = original;
-  if (fields.bottleneck !== undefined) {
-    // Try to match existing heading
+  if (fields.bottleneck !== undefined
+      && !sectionUnchanged(original, GOALS_HEADINGS, 'bottleneck', fields.bottleneck)) {
     const bottleneckHeading =
       original.sections.find((s) => GOALS_HEADINGS[s.heading.toLowerCase()] === 'bottleneck')
         ?.heading ?? 'Bottleneck';
     result = updateSection(result, bottleneckHeading, fields.bottleneck + '\n');
   }
-  if (fields.goals !== undefined) {
+  if (fields.goals !== undefined
+      && !sectionUnchanged(original, GOALS_HEADINGS, 'goals', fields.goals)) {
     const goalsHeading =
       original.sections.find((s) => GOALS_HEADINGS[s.heading.toLowerCase()] === 'goals')
         ?.heading ?? 'Goals';

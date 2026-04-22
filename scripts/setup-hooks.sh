@@ -34,4 +34,9 @@ install_hook() {
 
 echo "Installing cortextOS git hooks..."
 install_hook pre-push
+install_hook post-merge
 echo "Done. Hooks active for this repo clone."
+echo ""
+echo "Installed:"
+echo "  pre-push    → build + test + auto-PR-upstream check"
+echo "  post-merge  → auto-deploy supabase functions touched by the merge"

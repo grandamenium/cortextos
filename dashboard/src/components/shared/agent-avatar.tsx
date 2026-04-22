@@ -24,7 +24,7 @@ export function AgentAvatar({
   showName = false,
   className,
 }: AgentAvatarProps) {
-  const fallbackText = emoji ?? name.charAt(0).toUpperCase();
+  const fallbackText = emoji || name.charAt(0).toUpperCase();
 
   return (
     <span className={cn('inline-flex items-center gap-2', className)}>

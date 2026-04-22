@@ -68,7 +68,9 @@ export default async function AgentDetailPage({
               <HealthDot status={detail.health} showLabel />
             </div>
             <p className="text-sm text-muted-foreground">
-              {detail.identity.role || 'No role set'}
+              {detail.identity.role || (
+                <span className="italic opacity-70">(not set)</span>
+              )}
             </p>
             {detail.org && (
               <OrgBadge org={detail.org} className="mt-1" />
