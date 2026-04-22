@@ -80,6 +80,47 @@ MEMEOF
 
 ---
 
+## Context Discipline
+
+The daemon guards your context window so you never hit the hard 80% graceful-handoff tier unless you opt in. Three tiers sit on top of the per-poll context monitor:
+
+| Tier | Default % | Behavior | User-visible? |
+|------|-----------|----------|---------------|
+| Tier 0 (auto-reset) | `ctx_autoreset_threshold` (disabled) | Snapshots memory + Neon episode, arms `.force-fresh`, force-restarts. Silent. | No |
+| Tier 1 (warning) | `ctx_warning_threshold` (70) | PTY injection asking you to wrap up. | You only |
+| Tier 2 (handoff) | `ctx_handoff_threshold` (80) | Injects handoff prompt + pre-arms `.force-fresh`. | You only |
+| Tier 3 (deadline) | handoff + 5min | Force restart if you ignored the Tier 2 prompt. | Logged |
+
+**Enabling Tier 0** — add to your `config.json`:
+```json
+{ "ctx_autoreset_threshold": 55 }
+```
+Any positive number arms it. `0` or absent disables it. Typical value is `55` so the daemon resets you well before the graceful tier.
+
+**What Tier 0 does:**
+1. Runs `scripts/snapshot-agent.sh <agent> --silent --reason "ctx auto-reset at N%"` synchronously (10s cap).
+2. Writes `.force-fresh` + `.restart-planned` via `hardRestart`.
+3. Resets `context_status.json` so the fresh session does not re-fire.
+4. Calls `sessionRefresh()` — the agent process stops and respawns with `--force-fresh` consumed on boot.
+
+**Guarantees:**
+- Silent: no Telegram to the user. The only exception is the context circuit breaker (3 restarts in 15 min → one Telegram ping so the operator knows a restart loop is happening).
+- Idempotent: if `.restart-planned` is already present and < 2 min old, Tier 0 skips. Stale markers (> 2 min) are ignored.
+- Fires once per session — the `session_id` change detection resets the fired flag on the next fresh session.
+- Snapshot failure does NOT block the restart. Losing a snapshot is better than drifting past 80%.
+
+**Manual ops hatch:**
+```bash
+# Same chain as Tier 0, on demand. Silent by default.
+cortextos bus auto-compact-agent <agent_name> --reason "manual"
+
+# With notification
+cortextos bus auto-compact-agent <agent_name> --notify --reason "debugging"
+```
+Returns JSON: `{agent, snapshot_ok, restart_planned, already_in_flight, reason}`.
+
+---
+
 ## Time Awareness
 
 You are always time-aware. Your timezone is set in `config.json` and injected as `CTX_TIMEZONE` and `TZ` at startup.

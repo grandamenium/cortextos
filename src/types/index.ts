@@ -175,6 +175,12 @@ export interface AgentConfig {
   /** Context window % at which to inject handoff prompt and hard-restart. Default: 80. */
   ctx_handoff_threshold?: number;
   /**
+   * Context window % at which to snapshot memory and silently force-restart the agent,
+   * BEFORE the graceful-handoff threshold. 0 or absent = disabled (no auto-reset).
+   * Typical: 55. Never-Telegram, never-interactive, used to keep agents from hitting 80%+.
+   */
+  ctx_autoreset_threshold?: number;
+  /**
    * Agent runtime. Defaults to 'claude-code' when absent.
    * 'hermes' selects the HermesPTY spawn path (Python persistent REPL,
    * NousResearch/hermes-agent) with Hermes-specific bootstrap, session
