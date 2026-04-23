@@ -122,6 +122,10 @@ async function main(): Promise<void> {
     { file: '.user-restart', type: 'user-restart' },
     { file: '.user-disable', type: 'user-disable' },
     { file: '.user-stop', type: 'user-stop' },
+    // .daemon-crashed wins over .daemon-stop when both are present — a crash
+    // during shutdown is the more important signal. Written by the daemon's
+    // uncaughtException handler in src/daemon/index.ts.
+    { file: '.daemon-crashed', type: 'daemon-crashed' },
     { file: '.daemon-stop', type: 'daemon-stop' },
   ];
 
@@ -217,6 +221,16 @@ async function main(): Promise<void> {
     case 'daemon-stop':
       message = `🛑 ${agentName} stopped (daemon shutdown).`;
       if (reason) message += ` (${reason})`;
+      break;
+    case 'daemon-crashed':
+      // Deliberately NOT suppressed during quiet hours — a daemon crash at
+      // 3am is genuinely worth waking for (historically it has preceded
+      // fleet-wide restart storms). Crash-loop alerts from the daemon
+      // itself add operator-level urgency; this is the per-agent variant
+      // that replaces the misleading "🚨 agent crashed" message users
+      // were getting on every daemon respawn.
+      message = `🚨 ${agentName} — daemon crashed, session was interrupted. Resuming.`;
+      if (reason) message += `\nCrash time: ${reason}`;
       break;
     case 'rate-limited':
       message = `⏳ ${agentName} paused — Anthropic rate limit hit. Will resume when the window resets.`;

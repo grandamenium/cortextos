@@ -24,7 +24,26 @@ module.exports = {
         CTX_FRAMEWORK_ROOT: FRAMEWORK_ROOT,
         CTX_PROJECT_ROOT: PROJECT_ROOT,
         CTX_ORG: CTX_ORG,
+        // Debug-only: set to '1' to enable SIGUSR2 signal → controlled
+        // uncaughtException for testing the crash-visibility path
+        // (.daemon-crashed markers + crash-loop operator Telegram alert).
+        // Leave '0' in production; enable temporarily to reproduce crash
+        // paths during development. `kill -SIGUSR2 $(pm2 pid cortextos-daemon)`
+        // then watch the operator chat for "🚨 CRITICAL: daemon crash-looping"
+        // after 3 crashes in 15 min.
+        CTX_DEBUG_ALLOW_CRASH_TRIGGER: '0',
       },
+      // max_restarts + restart_delay is the ultimate crash-storm circuit
+      // breaker. If the daemon dies 10 times faster than 5s apart, PM2
+      // gives up — the fleet goes fully dead, requiring a manual
+      // `pm2 restart cortextos-daemon`. That is intentional: storm
+      // protection > fleet uptime during a pathological crash loop.
+      // The daemon's uncaughtException handler (src/daemon/index.ts)
+      // fires a Telegram alert to the operator at 3+ crashes in 15 min —
+      // well before this circuit trips. Do NOT raise these values without
+      // also strengthening the upstream fix; the 2026-04-22 storm is a
+      // reminder that unchecked auto-restart amplifies one bug into a
+      // fleet-wide outage.
       max_restarts: 10,
       restart_delay: 5000,
       autorestart: true,
