@@ -153,9 +153,40 @@ export class AgentPTY {
 
     this._alive = true;
 
-    // Set up output capture
+    // Track which interactive prompts we've already responded to.
+    let bypassAccepted = false;
+    let trustAccepted = false;
+
+    // Set up output capture + inline prompt detection.
+    //
+    // IMPORTANT: Raw PTY data contains ANSI escape codes between words, so multi-word
+    // substring matching ("Bypass Permissions", "No, exit") fails silently.
+    // Use single-word substrings that are never split by ANSI codes.
+    //
+    // Prompts handled:
+    //   1. Bypass Permissions warning (CC 2.1+) — identified by raw "Bypass" in data.
+    //      Default selection is "No, exit". Send down-arrow (move to "Yes, I accept")
+    //      then Enter. bypassAccepted is set SYNCHRONOUSLY before any setTimeout so
+    //      the trust handler below cannot fire on the same data chunk.
+    //   2. "trust this folder?" prompt — identified by "trust" (only fires if no bypass
+    //      prompt was detected in this data chunk). Enter accepts (default is Yes).
     this.pty.onData((data: string) => {
       this.outputBuffer.push(data);
+      if (!this.pty) return;
+
+      // Bypass Permissions prompt — "Bypass" is always a continuous substring in raw PTY data
+      if (!bypassAccepted && data.includes('Bypass')) {
+        bypassAccepted = true;   // set synchronously — blocks trust handler below
+        this.pty.write('\x1b[B'); // down arrow → move to "Yes, I accept"
+        setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 300);
+        return;
+      }
+
+      // Trust folder prompt — only fires if bypass wasn't detected in this chunk
+      if (!trustAccepted && data.includes('trust')) {
+        trustAccepted = true;
+        this.pty.write('\r');
+      }
     });
 
     // Set up exit handler
@@ -167,25 +198,22 @@ export class AgentPTY {
       }
     });
 
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+    // Fallback probes: re-scan recent buffer in case the onData handler missed
+    // a prompt that arrived before registration.
+    const acceptPromptFallback = () => {
+      if (!this.pty) return;
+      const recent = this.outputBuffer.getRecent();
+      if (!bypassAccepted && recent.includes('Bypass')) {
+        bypassAccepted = true;
+        this.pty.write('\x1b[B');
+        setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 300);
+      } else if (!trustAccepted && recent.includes('trust')) {
+        trustAccepted = true;
+        this.pty.write('\r');
       }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 8000);
+    };
+    setTimeout(acceptPromptFallback, 2000);
+    setTimeout(acceptPromptFallback, 5000);
   }
 
   /**
@@ -208,7 +236,9 @@ export class AgentPTY {
       args.push('--continue');
     }
 
-    args.push('--dangerously-skip-permissions');
+    // --permission-mode bypassPermissions is equivalent to --dangerously-skip-permissions
+    // but does not show the interactive confirmation prompt added in CC 2.1+.
+    args.push('--permission-mode', 'bypassPermissions');
 
     if (this.config.model) {
       args.push('--model', this.config.model);
