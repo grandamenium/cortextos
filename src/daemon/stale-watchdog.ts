@@ -11,6 +11,28 @@ const DEFAULT_STALE_THRESHOLD_MS = 15 * 60 * 1000;  // 15 minutes
 const RESTART_COOLDOWN_MS = 3 * 60 * 1000;           // 3 minutes between restarts
 
 /**
+ * When we detect a rate limit but can't parse a reset time, wait this long
+ * before retrying. Previously 30 min, which was way too short — Anthropic's
+ * daily usage cap typically doesn't reset for hours, and repeated restarts
+ * just burn more tokens on bootstrap in a crash loop.
+ */
+const RATE_LIMIT_BLIND_WAIT_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+/**
+ * If an agent gets rate-limited AGAIN within this window after a restart
+ * attempt, mark it as halted (don't keep retrying). The quota is clearly
+ * still exhausted — user needs to decide when to resume.
+ */
+const RATE_LIMIT_RELAPSE_WINDOW_MS = 30 * 60 * 1000;  // 30 min
+
+/**
+ * Max rate-limit-triggered restarts per 24h window. After this, halt the
+ * agent and require manual intervention. Prevents burning a full day's
+ * quota on restart overhead.
+ */
+const MAX_RATE_LIMIT_RESTARTS_PER_DAY = 3;
+
+/**
  * Stagger delay between agents restarting after a shared rate limit resets.
  * Prevents all 6 agents from slamming the API simultaneously and immediately
  * re-triggering the rate limit. Agent with restart_priority=1 goes first,
@@ -69,6 +91,12 @@ export class StaleAgentWatchdog {
   private rateLimitResetsAt: Map<string, number> = new Map();
   /** Scheduled staggered restart time per agent (epoch ms) */
   private scheduledRestartAt: Map<string, number> = new Map();
+  /** Last rate-limit-triggered restart per agent (epoch ms) */
+  private lastRateLimitRestartAt: Map<string, number> = new Map();
+  /** Rate-limit restart count within rolling 24h window */
+  private rateLimitRestartCount: Map<string, { count: number; windowStart: number }> = new Map();
+  /** Agents halted due to repeated rate-limit relapses — needs manual resume */
+  private haltedForRateLimit: Set<string> = new Set();
 
   constructor(
     agentManager: AgentManager,
@@ -143,11 +171,51 @@ export class StaleAgentWatchdog {
 
       // Heartbeat is stale. Check WHY before deciding to restart.
 
+      // Skip agents explicitly halted due to repeated rate-limit relapses.
+      // User has to manually resume via `cortextos start <agent>`.
+      if (this.haltedForRateLimit.has(name)) {
+        const lastLog = this.lastLogAt.get(`halted-${name}`) ?? 0;
+        if (Date.now() - lastLog > 60 * 60 * 1000) {
+          console.log(
+            `[watchdog] ${name} HALTED for rate-limit protection — ` +
+            `manual restart required (cortextos start ${name})`,
+          );
+          this.lastLogAt.set(`halted-${name}`, Date.now());
+        }
+        continue;
+      }
+
       // --- Rate-limit detection ---
       const rateLimitInfo = this.getRateLimitInfo(name);
 
       if (rateLimitInfo.isLimited) {
         const now = Date.now();
+
+        // Relapse check: if this agent was just restarted due to rate-limit
+        // and is NOW rate-limited again within the relapse window, the quota
+        // clearly isn't available yet. Halt instead of retrying.
+        const lastRestart = this.lastRateLimitRestartAt.get(name);
+        if (lastRestart && (now - lastRestart) < RATE_LIMIT_RELAPSE_WINDOW_MS) {
+          console.log(
+            `[watchdog] ${name} RELAPSED into rate-limit ${Math.round((now - lastRestart) / 60000)}m after last restart — halting`,
+          );
+          this.haltedForRateLimit.add(name);
+          this.sendHaltAlert(name, 'relapse');
+          continue;
+        }
+
+        // Daily budget check: cap rate-limit-triggered restarts per 24h window
+        const budget = this.rateLimitRestartCount.get(name);
+        if (budget && (now - budget.windowStart) < 24 * 60 * 60 * 1000) {
+          if (budget.count >= MAX_RATE_LIMIT_RESTARTS_PER_DAY) {
+            console.log(
+              `[watchdog] ${name} hit max rate-limit restarts (${budget.count}/24h) — halting`,
+            );
+            this.haltedForRateLimit.add(name);
+            this.sendHaltAlert(name, 'budget');
+            continue;
+          }
+        }
 
         // Do we have a known reset time?
         if (rateLimitInfo.resetsAtMs) {
@@ -197,18 +265,21 @@ export class StaleAgentWatchdog {
           this.lastLogAt.delete(name);
           // Fall through to restart logic below
         } else {
-          // Rate-limited but can't parse reset time — use fallback backoff
+          // Rate-limited but can't parse reset time — use a LONG fallback.
+          // Anthropic daily caps typically don't reset for hours. Previous
+          // 30-min fallback was causing crash loops that burned more quota
+          // on bootstrap overhead than the agents did useful work.
           const knownReset = this.rateLimitResetsAt.get(name);
           if (knownReset && now < knownReset) {
             continue; // Still waiting for a previously parsed reset
           }
-          // No reset time at all — back off 30 min, then retry
           if (!this.rateLimitResetsAt.has(name)) {
-            this.rateLimitResetsAt.set(name, now + 30 * 60 * 1000);
+            this.rateLimitResetsAt.set(name, now + RATE_LIMIT_BLIND_WAIT_MS);
             const ageMin = Math.round((now - new Date(hb.last_heartbeat).getTime()) / 60000);
+            const waitH = Math.round(RATE_LIMIT_BLIND_WAIT_MS / 3600000);
             console.log(
               `[watchdog] ${name} stale (${ageMin}m) and rate-limited (no parseable reset time) — ` +
-              `fallback: waiting 30m before retry`,
+              `fallback: waiting ${waitH}h before retry (protects daily quota)`,
             );
             continue;
           }
@@ -218,6 +289,18 @@ export class StaleAgentWatchdog {
           this.lastLogAt.delete(name);
           // Fall through to restart
         }
+
+        // Record this as a rate-limit-triggered restart attempt
+        const budgetNow = this.rateLimitRestartCount.get(name);
+        if (!budgetNow || (now - budgetNow.windowStart) >= 24 * 60 * 60 * 1000) {
+          this.rateLimitRestartCount.set(name, { count: 1, windowStart: now });
+        } else {
+          this.rateLimitRestartCount.set(name, {
+            count: budgetNow.count + 1,
+            windowStart: budgetNow.windowStart,
+          });
+        }
+        this.lastRateLimitRestartAt.set(name, now);
       } else {
         // Not rate-limited — clear tracking
         this.rateLimitResetsAt.delete(name);
@@ -365,6 +448,47 @@ export class StaleAgentWatchdog {
    * Append a watchdog-triggered crash/halt entry to the agent's restarts.log.
    * Format matches AgentProcess.appendCrashToRestartsLog for consistency.
    */
+  /**
+   * Send a halt alert to logs (and eventually Telegram via a future helper).
+   * For now: just appends to restarts.log so the cause is visible.
+   */
+  private sendHaltAlert(agentName: string, reason: 'relapse' | 'budget'): void {
+    try {
+      const logDir = join(this.ctxRoot, 'logs', agentName);
+      ensureDir(logDir);
+      const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const reasonMsg =
+        reason === 'relapse'
+          ? 'rate-limit relapsed within 30min of restart'
+          : `exceeded ${MAX_RATE_LIMIT_RESTARTS_PER_DAY} rate-limit restarts in 24h`;
+      const logLine = `[${timestamp}] HALTED_RATE_LIMIT: ${reasonMsg} — manual resume required\n`;
+      appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
+      console.error(
+        `[watchdog] ALERT: ${agentName} halted for quota protection (${reason}). ` +
+        `User must manually restart with: cortextos start ${agentName}`,
+      );
+    } catch {
+      /* swallow */
+    }
+  }
+
+  /**
+   * External API: user-visible list of halted agents.
+   */
+  getHaltedAgents(): string[] {
+    return Array.from(this.haltedForRateLimit);
+  }
+
+  /**
+   * External API: clear halt state when user manually resumes an agent.
+   */
+  clearHalt(agentName: string): void {
+    this.haltedForRateLimit.delete(agentName);
+    this.rateLimitRestartCount.delete(agentName);
+    this.lastRateLimitRestartAt.delete(agentName);
+    this.rateLimitResetsAt.delete(agentName);
+  }
+
   private appendCrashToRestartsLog(
     agentName: string,
     crashCount: number,
