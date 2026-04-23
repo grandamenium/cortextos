@@ -745,8 +745,15 @@ export class AgentProcess {
   ): Promise<void> {
     const GAP_POLL_MS = 10 * 60 * 1000;   // poll every 10 minutes
     const GAP_MULTIPLIER = 2.0;            // nudge when gap > 2x expected interval
+    // Nudge-gating thresholds (issue #200 — gap-nudge-starves-scheduler).
+    // Rationale: injecting a nudge into the PTY keeps the Claude Code session busy,
+    // which prevents its internal CronCreate scheduler from firing. Back-to-back
+    // nudges across multiple stale crons cascade this starvation fleet-wide.
+    const IDLE_WINDOW_MS = 60 * 1000;          // agent must have been idle in the last 60s
+    const CRON_STATE_FRESH_MS = 2 * 60 * 1000; // skip entire poll if cron-state was just written
 
     const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    const idleFlagPath = join(stateDir, 'last_idle.flag');
 
     // Initial wait — give the agent time to boot and register crons before first check
     await sleep(GAP_POLL_MS);
@@ -756,6 +763,34 @@ export class AgentProcess {
 
       const now = Date.now();
       const state = readCronState(stateDir);
+
+      // Gate 1 — cron-state freshness: if the agent wrote cron-state.json within
+      // the last CRON_STATE_FRESH_MS, its cron scheduler is demonstrably working.
+      // Skip the entire poll to avoid piling nudges on top of live cron cycles.
+      const stateUpdatedAt = Date.parse(state.updated_at);
+      if (!isNaN(stateUpdatedAt) && (now - stateUpdatedAt) < CRON_STATE_FRESH_MS) {
+        this.log(`Gap detector: cron-state fresh (${Math.round((now - stateUpdatedAt) / 1000)}s old), skipping nudges`);
+        await sleep(GAP_POLL_MS);
+        continue;
+      }
+
+      // Gate 2 — idle check: last_idle.flag is written (in Unix seconds) by the
+      // Stop hook when Claude Code finishes a turn. If the flag is missing or
+      // stale, the agent is actively processing — nudging now would extend the
+      // busy window, prevent internal cron scheduling, and compound the problem.
+      let lastIdleMs = 0;
+      try {
+        if (existsSync(idleFlagPath)) {
+          const sec = parseInt(readFileSync(idleFlagPath, 'utf-8').trim(), 10);
+          if (!isNaN(sec)) lastIdleMs = sec * 1000;
+        }
+      } catch { /* ignore */ }
+      if (lastIdleMs === 0 || (now - lastIdleMs) > IDLE_WINDOW_MS) {
+        const idleAge = lastIdleMs ? `${Math.round((now - lastIdleMs) / 1000)}s` : 'never';
+        this.log(`Gap detector: agent not idle (last idle ${idleAge}), skipping nudges`);
+        await sleep(GAP_POLL_MS);
+        continue;
+      }
 
       for (const cronDef of crons) {
         const intervalMs = parseDurationMs(cronDef.interval!);
