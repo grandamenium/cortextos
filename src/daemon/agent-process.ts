@@ -749,6 +749,11 @@ export class AgentProcess {
     // Rationale: injecting a nudge into the PTY keeps the Claude Code session busy,
     // which prevents its internal CronCreate scheduler from firing. Back-to-back
     // nudges across multiple stale crons cascade this starvation fleet-wide.
+    //
+    // NOTE: both thresholds are tuned for ≥4h cron cadences (current fleet norm).
+    // If sub-minute crons are introduced, revisit: a short-turn agent may never
+    // hit a 60s idle window, and a cron with interval < CRON_STATE_FRESH_MS would
+    // be suppressed on every poll even when genuinely dead.
     const IDLE_WINDOW_MS = 60 * 1000;          // agent must have been idle in the last 60s
     const CRON_STATE_FRESH_MS = 2 * 60 * 1000; // skip entire poll if cron-state was just written
 
@@ -775,9 +780,10 @@ export class AgentProcess {
       }
 
       // Gate 2 — idle check: last_idle.flag is written (in Unix seconds) by the
-      // Stop hook when Claude Code finishes a turn. If the flag is missing or
-      // stale, the agent is actively processing — nudging now would extend the
-      // busy window, prevent internal cron scheduling, and compound the problem.
+      // Stop hook (src/hooks/hook-idle-flag.ts) when Claude Code finishes a turn.
+      // If the flag is missing or stale, the agent is actively processing — nudging
+      // now would extend the busy window, prevent internal cron scheduling, and
+      // compound the problem.
       let lastIdleMs = 0;
       try {
         if (existsSync(idleFlagPath)) {
