@@ -337,21 +337,11 @@ export function TaskDetailSheet({
                         <button
                           key={idx}
                           onClick={() => setPreviewOutput(output)}
-                          className="flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 transition-colors"
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.cursor = 'pointer';
-                            const label = e.currentTarget.querySelector('[data-deliverable-label]') as HTMLElement | null;
-                            if (label) label.style.textDecoration = 'underline';
-                          }}
-                          onMouseLeave={(e) => {
-                            const label = e.currentTarget.querySelector('[data-deliverable-label]') as HTMLElement | null;
-                            if (label) label.style.textDecoration = 'none';
-                          }}
-                          style={{ cursor: 'pointer' } as React.CSSProperties}
+                          className="group flex items-center gap-2 w-full rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 transition-colors cursor-pointer"
                         >
                           <Icon size={16} className="shrink-0 text-primary" />
                           <div className="min-w-0 flex-1">
-                            <p data-deliverable-label className="font-medium text-sm text-primary break-words">{output.label ?? filename}</p>
+                            <p className="font-medium text-sm text-primary break-words group-hover:underline">{output.label ?? filename}</p>
                             <p className="text-xs text-muted-foreground break-all">{filename}</p>
                           </div>
                         </button>
