@@ -3,6 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { IconSend, IconPhoto, IconX, IconMicrophone } from '@tabler/icons-react';
 
 // Polling cadence for the visible-tab live feed. Paused when the tab is
@@ -46,33 +54,89 @@ function formatTime(iso: string): string {
   } catch { return iso; }
 }
 
-// Inline image rendering: if the message text contains a /api/media/ URL
-// matching an image extension, render it as an inline <img> instead of
-// leaving it as a raw link. Enables the paste-image flow where the sender
-// attached a pasted screenshot and the URL was appended to the message body.
-const IMAGE_URL_PATTERN = /\/api\/media\/[^\s]+\.(?:png|jpg|jpeg|gif|webp)/gi;
+// Inline media rendering: detect /api/media/ URLs in message text and render
+// the best element for the file type. Images and audio render inline; every
+// other file type (documents, SQL, PDF, video, unknown extensions) renders
+// as a download link so the user can still open what the agent sent.
+//
+// Use a greedy `\S+` and anchor on the LAST extension in the URL so filenames
+// containing intra-name dots (e.g. combined-v1.4-v1.5.sql) match through to
+// the final `.sql`. `.` intentionally NOT in the lookahead class — otherwise
+// an internal dot truncates the match.
+const MEDIA_URL_PATTERN = /\/api\/media\/\S+\.[A-Za-z0-9]{1,6}(?=[\s,;!?)\]]|$)/g;
+
+function isImageUrl(url: string): boolean {
+  return /\.(png|jpg|jpeg|gif|webp)$/i.test(url);
+}
+function isAudioUrl(url: string): boolean {
+  return /\.(mp3|ogg|m4a|wav|opus)$/i.test(url);
+}
+function isVideoUrl(url: string): boolean {
+  return /\.(mp4|mov)$/i.test(url);
+}
+function fileLabel(url: string): string {
+  const name = url.split('/').pop() ?? url;
+  return name.length > 60 ? name.slice(0, 57) + '…' : name;
+}
 
 function MessageContent({ text }: { text: string }) {
+
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  for (const match of text.matchAll(IMAGE_URL_PATTERN)) {
+  for (const match of text.matchAll(MEDIA_URL_PATTERN)) {
     const idx = match.index ?? 0;
     if (idx > lastIndex) {
       const before = text.slice(lastIndex, idx).trim();
       if (before) parts.push(<p key={`t-${lastIndex}`} className="whitespace-pre-wrap break-words">{before}</p>);
     }
-    parts.push(
-      <a key={`i-${idx}`} href={match[0]} target="_blank" rel="noopener noreferrer">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={match[0]}
-          alt="Shared image"
-          className="mt-1 mb-1 max-h-64 max-w-full rounded-md"
-          loading="lazy"
+    const url = match[0];
+    if (isAudioUrl(url)) {
+      parts.push(
+        <audio
+          key={`a-${idx}`}
+          src={url}
+          controls
+          className="mt-1 mb-1 w-full max-w-xs rounded-md"
+          preload="metadata"
         />
-      </a>
-    );
-    lastIndex = idx + match[0].length;
+      );
+    } else if (isImageUrl(url)) {
+      parts.push(
+        <a key={`i-${idx}`} href={url} target="_blank" rel="noopener noreferrer">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt="Shared image"
+            className="mt-1 mb-1 max-h-64 max-w-full rounded-md"
+            loading="lazy"
+          />
+        </a>
+      );
+    } else if (isVideoUrl(url)) {
+      parts.push(
+        <video
+          key={`v-${idx}`}
+          src={url}
+          controls
+          className="mt-1 mb-1 max-h-64 max-w-full rounded-md"
+          preload="metadata"
+        />
+      );
+    } else {
+      parts.push(
+        <a
+          key={`f-${idx}`}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 mb-1 inline-flex items-center gap-1.5 rounded-md border bg-muted/30 px-2 py-1 text-xs text-foreground hover:bg-muted/60"
+        >
+          <span aria-hidden="true">📎</span>
+          <span className="truncate">{fileLabel(url)}</span>
+        </a>
+      );
+    }
+    lastIndex = idx + url.length;
   }
 
   if (lastIndex < text.length) {
@@ -87,6 +151,8 @@ function MessageContent({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
+type ReplyMode = 'text' | 'voice' | 'both';
+
 export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelViewProps) {
   const [messages, setMessages] = useState<BusMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +160,9 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
   const [sendError, setSendError] = useState('');
   const [attachment, setAttachment] = useState<File | null>(null);
   const [attachPreview, setAttachPreview] = useState<string | null>(null);
+  const [replyMode, setReplyMode] = useState<ReplyMode>('text');
+  const [replyModeSaving, setReplyModeSaving] = useState(false);
+  const [pendingMode, setPendingMode] = useState<ReplyMode | null>(null);
   const agents = pair.split('--');
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -140,6 +209,52 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
     forceScrollRef.current = true;
     fetchMessages();
   }, [pair, fetchMessages]);
+
+  // Load the persisted reply-mode preference for the target agent each time
+  // the channel switches. The preference is stored server-side so Telegram
+  // replies (which run outside this browser) honor it too.
+  useEffect(() => {
+    if (!isUserChannel || !targetAgent) return;
+    let cancelled = false;
+    fetch(`/api/comms/reply-mode?agent=${encodeURIComponent(targetAgent)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        if (data.mode === 'text' || data.mode === 'voice' || data.mode === 'both') {
+          setReplyMode(data.mode);
+        }
+      })
+      .catch(() => { /* fall back to 'text' default */ });
+    return () => { cancelled = true; };
+  }, [pair, isUserChannel, targetAgent]);
+
+  function requestReplyModeChange(next: ReplyMode) {
+    if (!targetAgent) return;
+    if (next === replyMode) return;
+    setPendingMode(next);
+  }
+
+  async function confirmReplyModeChange() {
+    const next = pendingMode;
+    if (!next || !targetAgent) {
+      setPendingMode(null);
+      return;
+    }
+    setReplyModeSaving(true);
+    try {
+      const res = await fetch('/api/comms/reply-mode', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent: targetAgent, mode: next }),
+      });
+      if (res.ok) {
+        setReplyMode(next);
+      }
+    } finally {
+      setReplyModeSaving(false);
+      setPendingMode(null);
+    }
+  }
 
   // Sort order change — re-anchor without refetching.
   useEffect(() => {
@@ -378,13 +493,45 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
           semantics (users can message agents, agents message via the bus). */}
       {isUserChannel && (
         <div className="border-t bg-background p-2">
+          <div className="mb-2 flex items-center gap-1.5 px-1">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Reply mode</span>
+            <div className="inline-flex rounded-md border bg-muted/30 p-0.5 text-[11px]" role="group" aria-label="Reply mode">
+              {(['text', 'voice', 'both'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => requestReplyModeChange(m)}
+                  disabled={replyModeSaving}
+                  aria-pressed={replyMode === m}
+                  data-reply-mode={m}
+                  className={`rounded px-2 py-0.5 transition-colors ${
+                    replyMode === m
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted/60'
+                  } ${replyModeSaving ? 'cursor-wait' : ''}`}
+                >
+                  {m === 'text' ? 'Text' : m === 'voice' ? 'Voice' : 'Both'}
+                </button>
+              ))}
+            </div>
+            <span className="text-[10px] text-muted-foreground/70">
+              Applies to Telegram + bus replies from {targetAgent}.
+            </span>
+          </div>
           {sendError && (
             <p className="mb-1 px-1 text-xs text-destructive">{sendError}</p>
           )}
-          {attachPreview && (
+          {attachPreview && attachment && (
             <div className="relative mb-2 inline-block">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={attachPreview} alt="Attachment preview" className="max-h-24 rounded-md border" />
+              {attachment.type.startsWith('audio/') ? (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-2 py-1.5 pr-6">
+                  <IconMicrophone size={14} className="shrink-0 text-muted-foreground" />
+                  <audio src={attachPreview} controls className="h-7 max-w-[240px]" preload="metadata" />
+                </div>
+              ) : (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img src={attachPreview} alt="Attachment preview" className="max-h-24 rounded-md border" />
+              )}
               <button
                 onClick={clearAttachment}
                 className="absolute -right-1.5 -top-1.5 rounded-full bg-destructive p-0.5 text-destructive-foreground shadow-sm hover:bg-destructive/90"
@@ -398,7 +545,7 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/gif,image/webp"
+              accept="image/jpeg,image/png,image/gif,image/webp,audio/mpeg,audio/mp4,audio/ogg,audio/wav,.mp3,.m4a,.ogg,.wav"
               className="hidden"
               onChange={handleFileSelect}
             />
@@ -407,8 +554,8 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
               size="sm"
               className="shrink-0 self-end"
               onClick={() => fileInputRef.current?.click()}
-              title="Attach image"
-              aria-label="Attach image"
+              title="Attach image or audio"
+              aria-label="Attach image or audio"
             >
               <IconPhoto size={16} />
             </Button>
@@ -444,6 +591,33 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
           </div>
         </div>
       )}
+
+      <Dialog open={pendingMode !== null} onOpenChange={(open) => { if (!open) setPendingMode(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Switch reply mode?</DialogTitle>
+            <DialogDescription>
+              {pendingMode && (
+                <>
+                  {targetAgent} will switch to{' '}
+                  <span className="font-semibold text-foreground">
+                    {pendingMode === 'text' ? 'Text only' : pendingMode === 'voice' ? 'Voice only' : 'Voice + Text'}
+                  </span>{' '}
+                  for every reply (Telegram and this chat) until you change it. The next reply will use the new mode.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setPendingMode(null)} disabled={replyModeSaving}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={confirmReplyModeChange} disabled={replyModeSaving}>
+              {replyModeSaving ? 'Saving…' : 'Confirm'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

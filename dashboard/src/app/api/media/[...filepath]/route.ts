@@ -76,6 +76,8 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']);
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.m4a', '.wav', '.ogg', '.opus']);
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov']);
 const INLINE_EXTENSIONS = new Set(['.md', '.html', '.htm', '.txt', '.ts', '.tsx', '.js', '.css', '.sh', '.json', '.csv']);
 
 /**
@@ -198,7 +200,12 @@ export async function GET(
     'Cache-Control': 'private, max-age=3600',
   };
 
-  if (IMAGE_EXTENSIONS.has(ext) || INLINE_EXTENSIONS.has(ext)) {
+  if (
+    IMAGE_EXTENSIONS.has(ext) ||
+    AUDIO_EXTENSIONS.has(ext) ||
+    VIDEO_EXTENSIONS.has(ext) ||
+    INLINE_EXTENSIONS.has(ext)
+  ) {
     headers['Content-Disposition'] = `inline; filename="${path.basename(realFullPath)}"`;
   } else {
     headers['Content-Disposition'] = `attachment; filename="${path.basename(realFullPath)}"`;

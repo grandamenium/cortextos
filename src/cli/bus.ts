@@ -63,6 +63,137 @@ function checkDeliverableRequirement(taskId: string, frameworkRoot: string, org:
 export const busCommand = new Command('bus')
   .description('Bus commands for agent messaging, tasks, and events');
 
+// ---------------------------------------------------------------------------
+// Reply-mode helpers
+//
+// Reply mode is a per-agent user preference set via the dashboard at
+// /comms. Values: 'text' (default), 'voice', 'both'. It controls how agents
+// deliver replies TO THE USER — not to other agents. The logic is baked
+// into send-message so agents do not need to know it exists.
+// ---------------------------------------------------------------------------
+type ReplyMode = 'text' | 'voice' | 'both';
+
+function readReplyMode(ctxRoot: string, agent: string): ReplyMode {
+  try {
+    const v = readFileSync(join(ctxRoot, 'state', agent, 'reply-mode'), 'utf-8').trim();
+    if (v === 'voice' || v === 'both' || v === 'text') return v;
+  } catch { /* default */ }
+  return 'text';
+}
+
+function readAgentEnvVar(agentDir: string | undefined, key: string): string {
+  if (!agentDir) return '';
+  const envPath = join(agentDir, '.env');
+  if (!existsSync(envPath)) return '';
+  const line = readFileSync(envPath, 'utf-8').split('\n').find(l => l.startsWith(`${key}=`));
+  return line ? line.slice(key.length + 1).trim().replace(/^["']|["']$/g, '') : '';
+}
+
+function readAgentVoice(agentDir: string | undefined): string {
+  if (!agentDir) return 'en-US-AndrewNeural';
+  const configPath = join(agentDir, 'config.json');
+  if (!existsSync(configPath)) return 'en-US-AndrewNeural';
+  try {
+    const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+    return typeof cfg.voice === 'string' && cfg.voice ? cfg.voice : 'en-US-AndrewNeural';
+  } catch {
+    return 'en-US-AndrewNeural';
+  }
+}
+
+/**
+ * Generate MP3 via edge-tts and publish to {ctxRoot}/dashboard-uploads so
+ * the dashboard /comms channel can embed it as an inline audio player.
+ * Returns { tmpFile, audioUrl } or null if generation fails.
+ * Caller is responsible for deleting tmpFile when done.
+ */
+function generateAgentMp3(
+  ctxRoot: string,
+  agentName: string | undefined,
+  agentDir: string | undefined,
+  text: string,
+): { tmpFile: string; audioUrl: string } | null {
+  const os = require('os') as typeof import('os');
+  const { mkdirSync, copyFileSync } = require('fs') as typeof import('fs');
+  const voice = readAgentVoice(agentDir);
+  const tmpFile = join(os.tmpdir(), `reply-voice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.mp3`);
+  try {
+    execFileSync('python3', ['-m', 'edge_tts', '--voice', voice, '--text', text, '--write-media', tmpFile], {
+      stdio: 'pipe',
+    });
+  } catch {
+    return null;
+  }
+  if (!existsSync(tmpFile)) return null;
+
+  try {
+    const uploadsDir = join(ctxRoot, 'dashboard-uploads');
+    mkdirSync(uploadsDir, { recursive: true });
+    const safeAgent = (agentName || 'agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const audioFilename = `${Date.now()}-voice-${safeAgent}.mp3`;
+    copyFileSync(tmpFile, join(uploadsDir, audioFilename));
+    return { tmpFile, audioUrl: `/api/media/dashboard-uploads/${audioFilename}` };
+  } catch {
+    return null;
+  }
+}
+
+function isRegisteredAgent(frameworkRoot: string, target: string): boolean {
+  const orgsDir = join(frameworkRoot, 'orgs');
+  if (!existsSync(orgsDir)) return false;
+  try {
+    const { readdirSync } = require('fs') as typeof import('fs');
+    for (const org of readdirSync(orgsDir)) {
+      if (existsSync(join(orgsDir, org, 'agents', target))) return true;
+    }
+  } catch { /* fall through */ }
+  return false;
+}
+
+// Extensions that are safe to publish to {ctxRoot}/dashboard-uploads so the
+// dashboard bus channel can link or render them. Media types render inline
+// (image/audio/video); document types render as a download chip. We avoid
+// publishing HTML/SVG/XML — they could execute script when the /api/media/
+// route serves them inline (same-origin XSS vector).
+const DASHBOARD_PUBLISHABLE_EXTS = new Set([
+  // Media — channel-view renders inline
+  '.png', '.jpg', '.jpeg', '.gif', '.webp',
+  '.mp3', '.m4a', '.wav', '.ogg', '.opus',
+  '.mp4', '.mov',
+  // Documents — channel-view renders as a download chip
+  '.pdf', '.csv', '.tsv', '.sql', '.zip', '.log',
+  // Plain text — safe to serve as text/plain
+  '.md', '.txt', '.json', '.yaml', '.yml',
+]);
+
+/**
+ * Copy a local file into {ctxRoot}/dashboard-uploads so the dashboard
+ * /comms view can render it inline via /api/media/... Returns the
+ * resulting media URL, or null if the source can't be published (missing
+ * file, disallowed extension, copy error).
+ */
+function publishFileToDashboardUploads(
+  ctxRoot: string,
+  agentName: string | undefined,
+  srcPath: string,
+): string | null {
+  try {
+    const { copyFileSync, mkdirSync } = require('fs') as typeof import('fs');
+    const { extname } = require('path') as typeof import('path');
+    if (!existsSync(srcPath)) return null;
+    const ext = extname(srcPath).toLowerCase();
+    if (!DASHBOARD_PUBLISHABLE_EXTS.has(ext)) return null;
+    const uploadsDir = join(ctxRoot, 'dashboard-uploads');
+    mkdirSync(uploadsDir, { recursive: true });
+    const safeAgent = (agentName || 'agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const destName = `${Date.now()}-tg-${safeAgent}${ext}`;
+    copyFileSync(srcPath, join(uploadsDir, destName));
+    return `/api/media/dashboard-uploads/${destName}`;
+  } catch {
+    return null;
+  }
+}
+
 busCommand
   .command('send-message')
   .argument('<to>', 'Target agent')
@@ -70,7 +201,7 @@ busCommand
   .argument('<text>', 'Message text')
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
-  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string }) => {
+  .action(async (to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string }) => {
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
@@ -89,31 +220,92 @@ busCommand
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
 
-    // Warn if target agent doesn't exist (check project dir)
-    const { existsSync } = require('fs');
-    const { join } = require('path');
     const projectRoot = env.projectRoot || env.frameworkRoot || process.cwd();
-    const orgsDir = join(projectRoot, 'orgs');
-    let agentExists = false;
-    if (existsSync(orgsDir)) {
-      const { readdirSync } = require('fs');
-      try {
-        for (const org of readdirSync(orgsDir)) {
-          if (existsSync(join(orgsDir, org, 'agents', to))) {
-            agentExists = true;
-            break;
-          }
-        }
-      } catch { /* skip */ }
-    }
+    const agentExists = isRegisteredAgent(projectRoot, to);
     if (!agentExists) {
-      console.error(`Warning: agent '${to}' not found in project. Message will be queued but may never be read.`);
+      // If target isn't a known agent, it's the user (dashboard/Telegram identity).
+      // Fall through to user-destination handling below — no warning.
     }
 
-    const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo);
+    // -----------------------------------------------------------------------
+    // User-destination handling (non-agent target)
+    //
+    // When the target name does not match a registered agent we treat it as
+    // the dashboard/Telegram user identity. In that case the reply is
+    // delivered on BOTH surfaces — the dashboard /comms channel (via inbox)
+    // and Telegram (via mirror below) — honoring the reply-mode the user
+    // set via the dashboard toggle.
+    //
+    // The logic lives here so agents do not need any CLAUDE.md knowledge of
+    // reply-mode. They just call send-message like before — the CLI handles
+    // the voice/text/telegram fan-out automatically.
+    // -----------------------------------------------------------------------
+    let bodyText = text;
+    let tmpAudioFile: string | null = null;
+    let audioUrl = '';
+    let mode: ReplyMode = 'text';
+
+    if (!agentExists && env.ctxRoot && env.agentName) {
+      mode = readReplyMode(env.ctxRoot, env.agentName);
+      if (mode === 'voice' || mode === 'both') {
+        const gen = generateAgentMp3(env.ctxRoot, env.agentName, env.agentDir, text);
+        if (gen) {
+          tmpAudioFile = gen.tmpFile;
+          audioUrl = gen.audioUrl;
+          bodyText = mode === 'voice' ? audioUrl : `${text}\n${audioUrl}`;
+        } else {
+          // edge-tts failed; fall back to text so we never block the reply.
+          console.error('[send-message] voice generation failed; delivering text only.');
+        }
+      }
+    }
+
+    const msgId = sendMessage(paths, env.agentName, to, priority as Priority, bodyText, effectiveReplyTo);
     try {
-      logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null }));
+      logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null, mode: agentExists ? null : mode }));
     } catch { /* non-fatal */ }
+
+    // -----------------------------------------------------------------------
+    // Telegram mirror — when replying to the user, also deliver on Telegram
+    // so the user sees the same reply in both places. Reads BOT_TOKEN +
+    // CHAT_ID from the calling agent's .env. If either is missing, skip
+    // silently (agent continues to behave normally for Telegram-less setups).
+    // -----------------------------------------------------------------------
+    if (!agentExists) {
+      const botToken = readAgentEnvVar(env.agentDir, 'BOT_TOKEN') || process.env.BOT_TOKEN || '';
+      const chatId = readAgentEnvVar(env.agentDir, 'CHAT_ID') || process.env.CHAT_ID || '';
+      if (botToken && chatId) {
+        try {
+          const api = new TelegramAPI(botToken);
+          let sentMessageId = 0;
+          if (tmpAudioFile && (mode === 'voice' || mode === 'both')) {
+            const caption = mode === 'both' ? text : '';
+            const result = await api.sendDocument(chatId, tmpAudioFile, caption);
+            sentMessageId = result?.result?.message_id ?? 0;
+          } else {
+            const result = await api.sendMessage(chatId, text, undefined, { parseMode: 'Markdown' });
+            sentMessageId = result?.result?.message_id ?? 0;
+          }
+          if (env.ctxRoot && env.agentName) {
+            // IMPORTANT: don't call logOutboundMessage here. The inbox JSON
+            // we already wrote via sendMessage() is what the dashboard
+            // /comms channel endpoint renders; adding an outbound-messages.jsonl
+            // entry for the same reply makes the channel view show it twice
+            // (once from inbox, once from the telegram log). cacheLastSent is
+            // kept because it feeds agent context injection, not the UI.
+            const dashText = audioUrl && mode === 'both' ? `${text}\n${audioUrl}` : audioUrl && mode === 'voice' ? audioUrl : text;
+            cacheLastSent(env.ctxRoot, env.agentName, chatId, dashText);
+          }
+        } catch (err: any) {
+          console.error(`[send-message] Telegram mirror failed: ${err.message || err}`);
+        }
+      }
+    }
+
+    if (tmpAudioFile) {
+      try { require('fs').unlinkSync(tmpAudioFile); } catch { /* ignore */ }
+    }
+
     console.log(msgId);
   });
 
@@ -996,15 +1188,30 @@ busCommand
         sentMessageId = result?.result?.message_id ?? 0;
       }
 
-      // Log outbound and cache last-sent for context injection
+      // Log outbound and cache last-sent for context injection.
+      //
+      // When the send included --image or --file, publish the same file to
+      // {ctxRoot}/dashboard-uploads/ and append its /api/media/... URL to
+      // the logged text. The dashboard /comms channel-view detects media
+      // URLs in message text and renders inline images / audio players,
+      // so this is what makes the Telegram attachment visible in the bus
+      // terminal. The Telegram send above is unchanged.
       const env = resolveEnv();
       if (env.agentName && env.ctxRoot) {
-        logOutboundMessage(env.ctxRoot, env.agentName, chatId, message, sentMessageId, {
+        let dashText = message;
+        const attachmentPath = opts.image || opts.file;
+        if (attachmentPath) {
+          const mediaUrl = publishFileToDashboardUploads(env.ctxRoot, env.agentName, attachmentPath);
+          if (mediaUrl) {
+            dashText = message ? `${message}\n${mediaUrl}` : mediaUrl;
+          }
+        }
+        logOutboundMessage(env.ctxRoot, env.agentName, chatId, dashText, sentMessageId, {
           parseMode: opts.plainText ? 'none' : 'markdown',
           parseFallback: parseFallbackReason !== null,
           parseFallbackReason: parseFallbackReason ?? undefined,
         });
-        cacheLastSent(env.ctxRoot, env.agentName, chatId, message);
+        cacheLastSent(env.ctxRoot, env.agentName, chatId, dashText);
         // Auto-emit activity event so dashboard sees every Telegram send,
         // even from agents that never call log-event directly.
         try {
@@ -1019,6 +1226,171 @@ busCommand
       console.error(`Failed to send: ${err.message || err}`);
       process.exit(1);
     }
+  });
+
+busCommand
+  .command('voice-reply')
+  .description("Generate an MP3 from text using the agent's configured voice (edge-tts), send to Telegram, and post text+audio to the dashboard chat")
+  .argument('<chat-id>', 'Telegram chat ID')
+  .argument('<text>', 'Text to speak')
+  .option('--voice <name>', 'Override voice (e.g. en-US-AndrewNeural). Defaults to the voice field in config.json.')
+  .option('--local', 'Also play through Mac speakers via afplay after sending')
+  .action(async (chatId: string, text: string, opts: { voice?: string; local?: boolean }) => {
+    const { execFileSync: execFile, spawnSync: spawnCmd } = require('child_process') as typeof import('child_process');
+    const { unlinkSync, existsSync: fsExists, readFileSync: fsRead, mkdirSync: fsMkdir, copyFileSync: fsCopy } = require('fs') as typeof import('fs');
+    const { join: pathJoin } = require('path') as typeof import('path');
+    const os = require('os') as typeof import('os');
+
+    const env = resolveEnv();
+
+    // Resolve bot token
+    let botToken = '';
+    if (env.agentDir) {
+      const agentEnv = pathJoin(env.agentDir, '.env');
+      if (fsExists(agentEnv)) {
+        const content = fsRead(agentEnv, 'utf-8');
+        const match = content.match(/^BOT_TOKEN=(.+)$/m);
+        if (match?.[1]?.trim()) botToken = match[1].trim();
+      }
+    }
+    if (!botToken) botToken = process.env.BOT_TOKEN || '';
+    if (!botToken) {
+      console.error('Error: BOT_TOKEN not configured.');
+      process.exit(1);
+    }
+
+    // Resolve voice: CLI flag > config.json > fallback
+    let voice = opts.voice || '';
+    if (!voice && env.agentDir) {
+      const configPath = pathJoin(env.agentDir, 'config.json');
+      if (fsExists(configPath)) {
+        try {
+          const cfg = JSON.parse(fsRead(configPath, 'utf-8'));
+          if (cfg.voice) voice = cfg.voice;
+        } catch { /* use fallback */ }
+      }
+    }
+    if (!voice) voice = 'en-US-AndrewNeural';
+
+    // Generate MP3 to a temp file
+    const tmpFile = pathJoin(os.tmpdir(), `voice-reply-${Date.now()}.mp3`);
+    try {
+      execFile('python3', ['-m', 'edge_tts', '--voice', voice, '--text', text, '--write-media', tmpFile], {
+        stdio: 'pipe',
+      });
+    } catch (err: any) {
+      console.error(`edge-tts failed: ${err.message || err}`);
+      process.exit(1);
+    }
+
+    if (!fsExists(tmpFile)) {
+      console.error('edge-tts did not produce output file');
+      process.exit(1);
+    }
+
+    try {
+      // Play locally if requested
+      if (opts.local) {
+        spawnCmd('afplay', [tmpFile], { stdio: 'inherit' });
+      }
+
+      // Publish the MP3 under {ctxRoot}/dashboard-uploads so /api/media/...
+      // can serve it back to the dashboard chat UI. We write the file directly
+      // instead of POSTing to /api/comms/upload because that endpoint sits
+      // behind the dashboard's session-cookie middleware — a CLI curl with
+      // no cookie gets 401 and the audio URL silently goes missing from the
+      // outbound log (the whole reason voice replies only showed text).
+      let audioUrl = '';
+      if (env.ctxRoot) {
+        try {
+          const uploadsDir = pathJoin(env.ctxRoot, 'dashboard-uploads');
+          fsMkdir(uploadsDir, { recursive: true });
+          const safeAgent = (env.agentName || 'agent').replace(/[^a-zA-Z0-9_-]/g, '_');
+          const audioFilename = `${Date.now()}-voice-${safeAgent}.mp3`;
+          fsCopy(tmpFile, pathJoin(uploadsDir, audioFilename));
+          audioUrl = `/api/media/dashboard-uploads/${audioFilename}`;
+        } catch (err: any) {
+          console.error(`[voice-reply] publish to dashboard-uploads failed: ${err.message || err}`);
+          // Non-fatal — Telegram send still proceeds below.
+        }
+      }
+
+      // Send via Telegram
+      const api = new TelegramAPI(botToken);
+      await api.sendDocument(chatId, tmpFile, '');
+
+      // Log to outbound-messages.jsonl so the dashboard chat shows text + audio player.
+      // The text field contains the spoken text; the audio URL is appended on a new line
+      // so the MessageContent component detects it as a /api/media/ URL and renders
+      // an <audio controls> element inline beneath the text.
+      if (env.agentName && env.ctxRoot) {
+        const dashboardText = audioUrl ? `${text}\n${audioUrl}` : text;
+        logOutboundMessage(env.ctxRoot, env.agentName, chatId, dashboardText, 0, {});
+        cacheLastSent(env.ctxRoot, env.agentName, chatId, dashboardText);
+        try {
+          const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+          logEvent(paths, env.agentName, env.org, 'message', 'voice_sent', 'info',
+            JSON.stringify({ chat_id: chatId, voice, chars: text.length, audio_url: audioUrl || null }));
+        } catch { /* non-fatal */ }
+      }
+
+      console.log('Voice message sent');
+    } finally {
+      try { unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// Reply-mode preference
+//
+// The dashboard user can choose how an agent should reply: text only,
+// voice only, or both. The preference is stored per-agent at
+// {ctxRoot}/state/{agent}/reply-mode so the same preference applies whether
+// the reply goes out over Telegram or into a bus channel.
+//
+// Default is "text" — agents should ONLY switch to voice/both when the file
+// explicitly asks for it.
+// ---------------------------------------------------------------------------
+busCommand
+  .command('reply-mode')
+  .description("Read or set the user's preferred reply mode for this agent (text | voice | both). Default is text.")
+  .argument('[mode]', 'Set the mode. Omit to read the current mode.')
+  .option('--agent <name>', 'Agent name (default: current agent from CTX_AGENT_NAME)')
+  .action((mode: string | undefined, opts: { agent?: string }) => {
+    const { readFileSync: fsRead, writeFileSync: fsWrite, mkdirSync: fsMkdir, renameSync: fsRename } = require('fs') as typeof import('fs');
+    const { join: pathJoin } = require('path') as typeof import('path');
+    const env = resolveEnv();
+    const agent = opts.agent || env.agentName;
+    if (!agent) {
+      console.error('ERROR: --agent or CTX_ARGENT_NAME required');
+      process.exit(1);
+    }
+    if (!env.ctxRoot) {
+      console.error('ERROR: CTX_ROOT not resolvable');
+      process.exit(1);
+    }
+    const stateDir = pathJoin(env.ctxRoot, 'state', agent);
+    const file = pathJoin(stateDir, 'reply-mode');
+    if (mode === undefined) {
+      try {
+        const v = fsRead(file, 'utf-8').trim();
+        if (v === 'voice' || v === 'both' || v === 'text') {
+          console.log(v);
+          return;
+        }
+      } catch { /* fall through to default */ }
+      console.log('text');
+      return;
+    }
+    if (mode !== 'text' && mode !== 'voice' && mode !== 'both') {
+      console.error('ERROR: mode must be one of text | voice | both');
+      process.exit(1);
+    }
+    fsMkdir(stateDir, { recursive: true });
+    const tmp = file + '.tmp';
+    fsWrite(tmp, mode);
+    fsRename(tmp, file);
+    console.log(mode);
   });
 
 busCommand

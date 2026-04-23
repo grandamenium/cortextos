@@ -16,6 +16,10 @@ const ALLOWED_TYPES = new Set([
   'image/png',
   'image/gif',
   'image/webp',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/mp4',
+  'audio/wav',
 ]);
 
 // Canonical extension per MIME type. The server IGNORES the user-supplied
@@ -26,6 +30,10 @@ const EXT_FOR_TYPE: Record<string, string> = {
   'image/png': '.png',
   'image/gif': '.gif',
   'image/webp': '.webp',
+  'audio/mpeg': '.mp3',
+  'audio/ogg': '.ogg',
+  'audio/mp4': '.m4a',
+  'audio/wav': '.wav',
 };
 
 /**
@@ -53,7 +61,7 @@ export async function POST(request: NextRequest) {
 
   if (!ALLOWED_TYPES.has(file.type)) {
     return Response.json(
-      { error: `Unsupported file type: ${file.type}. Allowed: JPEG, PNG, GIF, WebP` },
+      { error: `Unsupported file type: ${file.type}. Allowed: JPEG, PNG, GIF, WebP, MP3, OGG, M4A, WAV` },
       { status: 400 },
     );
   }
@@ -63,7 +71,9 @@ export async function POST(request: NextRequest) {
   }
 
   const ctxRoot = getCTXRoot();
-  const uploadDir = path.join(ctxRoot, 'media', 'dashboard-uploads');
+  // Store under {ctxRoot}/dashboard-uploads/ so the media URL is a clean
+  // /api/media/dashboard-uploads/... path with no duplicated segment.
+  const uploadDir = path.join(ctxRoot, 'dashboard-uploads');
 
   try {
     if (!fs.existsSync(uploadDir)) {
@@ -105,7 +115,7 @@ export async function POST(request: NextRequest) {
     fs.writeFileSync(tmpPath, buffer);
     fs.renameSync(tmpPath, filePath);
 
-    const relativePath = `media/dashboard-uploads/${filename}`;
+    const relativePath = `dashboard-uploads/${filename}`;
     const mediaUrl = `/api/media/${relativePath}`;
 
     return Response.json({
