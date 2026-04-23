@@ -29,6 +29,7 @@ import {
 } from '@/components/shared';
 import { IconPencil, IconFile, IconPhoto, IconFileText, IconCode } from '@tabler/icons-react';
 import { DeliverablePreview } from '@/components/tasks/deliverable-preview';
+import { renderMarkdown } from '@/lib/render-markdown';
 import type { Task, TaskOutput, TaskStatus, TaskPriority } from '@/lib/types';
 
 export interface TaskDetailSheetProps {
@@ -290,7 +291,7 @@ export function TaskDetailSheet({
           ) : task.description ? (
             <div>
               <p className="text-sm text-muted-foreground mb-1">Description</p>
-              <p className="text-sm whitespace-pre-wrap">{task.description}</p>
+              <div className="text-sm">{renderMarkdown(task.description)}</div>
             </div>
           ) : null}
 
@@ -312,7 +313,7 @@ export function TaskDetailSheet({
               <Separator />
               <div>
                 <p className="text-sm text-muted-foreground mb-1">Notes</p>
-                <p className="text-sm whitespace-pre-wrap">{task.notes}</p>
+                <div className="text-sm">{renderMarkdown(task.notes)}</div>
               </div>
             </>
           )}

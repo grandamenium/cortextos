@@ -933,9 +933,11 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       }
     } catch { return; }
 
-    // Check PTY output for hard API overflow errors (always act regardless of threshold config)
+    // Check PTY output for hard API overflow errors (always act regardless of threshold config).
+    // Scoped to real overflow signals only — NOT billing errors like "Extra usage is required
+    // for 1M context" which require config changes (CLAUDE_CODE_DISABLE_1M_CONTEXT=true), not restarts.
     const recentOutput = this.agent.getOutputBuffer()?.getRecent(8000) ?? '';
-    if (/extra usage.*?1[Mm] context|conversation too long.*?compaction/i.test(recentOutput)) {
+    if (/API Error.*?prompt is too long|conversation too long.*?compact/i.test(recentOutput)) {
       this.log('Context overflow error detected in PTY output — force restarting');
       this.forceContextRestart('API overflow error in PTY output');
       return;
