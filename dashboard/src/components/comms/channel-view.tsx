@@ -54,13 +54,24 @@ function formatTime(iso: string): string {
   } catch { return iso; }
 }
 
-// Inline media rendering: detect /api/media/ URLs and render images inline or
-// audio files as an HTML5 player. Enables both the paste-image flow and
-// agent voice messages sent via the dashboard chat.
-const MEDIA_URL_PATTERN = /\/api\/media\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|mp3|ogg|m4a|wav)/gi;
+// Inline media rendering: detect /api/media/ URLs in message text and render
+// the best element for the file type. Images and audio render inline; every
+// other file type (documents, SQL, PDF, video, unknown extensions) renders
+// as a download link so the user can still open what the agent sent.
+const MEDIA_URL_PATTERN = /\/api\/media\/[^\s]+?\.[A-Za-z0-9]{1,6}(?=[\s.,;!?]|$)/g;
 
+function isImageUrl(url: string): boolean {
+  return /\.(png|jpg|jpeg|gif|webp)$/i.test(url);
+}
 function isAudioUrl(url: string): boolean {
-  return /\.(mp3|ogg|m4a|wav)$/i.test(url);
+  return /\.(mp3|ogg|m4a|wav|opus)$/i.test(url);
+}
+function isVideoUrl(url: string): boolean {
+  return /\.(mp4|mov)$/i.test(url);
+}
+function fileLabel(url: string): string {
+  const name = url.split('/').pop() ?? url;
+  return name.length > 60 ? name.slice(0, 57) + '…' : name;
 }
 
 function MessageContent({ text }: { text: string }) {
@@ -73,30 +84,54 @@ function MessageContent({ text }: { text: string }) {
       const before = text.slice(lastIndex, idx).trim();
       if (before) parts.push(<p key={`t-${lastIndex}`} className="whitespace-pre-wrap break-words">{before}</p>);
     }
-    if (isAudioUrl(match[0])) {
+    const url = match[0];
+    if (isAudioUrl(url)) {
       parts.push(
         <audio
           key={`a-${idx}`}
-          src={match[0]}
+          src={url}
           controls
           className="mt-1 mb-1 w-full max-w-xs rounded-md"
           preload="metadata"
         />
       );
-    } else {
+    } else if (isImageUrl(url)) {
       parts.push(
-        <a key={`i-${idx}`} href={match[0]} target="_blank" rel="noopener noreferrer">
+        <a key={`i-${idx}`} href={url} target="_blank" rel="noopener noreferrer">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={match[0]}
+            src={url}
             alt="Shared image"
             className="mt-1 mb-1 max-h-64 max-w-full rounded-md"
             loading="lazy"
           />
         </a>
       );
+    } else if (isVideoUrl(url)) {
+      parts.push(
+        <video
+          key={`v-${idx}`}
+          src={url}
+          controls
+          className="mt-1 mb-1 max-h-64 max-w-full rounded-md"
+          preload="metadata"
+        />
+      );
+    } else {
+      parts.push(
+        <a
+          key={`f-${idx}`}
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 mb-1 inline-flex items-center gap-1.5 rounded-md border bg-muted/30 px-2 py-1 text-xs text-foreground hover:bg-muted/60"
+        >
+          <span aria-hidden="true">📎</span>
+          <span className="truncate">{fileLabel(url)}</span>
+        </a>
+      );
     }
-    lastIndex = idx + match[0].length;
+    lastIndex = idx + url.length;
   }
 
   if (lastIndex < text.length) {

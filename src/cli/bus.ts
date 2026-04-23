@@ -150,14 +150,20 @@ function isRegisteredAgent(frameworkRoot: string, target: string): boolean {
   return false;
 }
 
-// Extensions the dashboard channel-view can render inline. Kept in sync with
-// MEDIA_URL_PATTERN in components/comms/channel-view.tsx + ALLOWED_TYPES in
-// api/comms/upload/route.ts. Anything outside this list falls back to text
-// and the file is still delivered over Telegram by the caller.
-const DASHBOARD_INLINE_EXTS = new Set([
+// Extensions that are safe to publish to {ctxRoot}/dashboard-uploads so the
+// dashboard bus channel can link or render them. Media types render inline
+// (image/audio/video); document types render as a download chip. We avoid
+// publishing HTML/SVG/XML — they could execute script when the /api/media/
+// route serves them inline (same-origin XSS vector).
+const DASHBOARD_PUBLISHABLE_EXTS = new Set([
+  // Media — channel-view renders inline
   '.png', '.jpg', '.jpeg', '.gif', '.webp',
   '.mp3', '.m4a', '.wav', '.ogg', '.opus',
   '.mp4', '.mov',
+  // Documents — channel-view renders as a download chip
+  '.pdf', '.csv', '.tsv', '.sql', '.zip', '.log',
+  // Plain text — safe to serve as text/plain
+  '.md', '.txt', '.json', '.yaml', '.yml',
 ]);
 
 /**
@@ -176,7 +182,7 @@ function publishFileToDashboardUploads(
     const { extname } = require('path') as typeof import('path');
     if (!existsSync(srcPath)) return null;
     const ext = extname(srcPath).toLowerCase();
-    if (!DASHBOARD_INLINE_EXTS.has(ext)) return null;
+    if (!DASHBOARD_PUBLISHABLE_EXTS.has(ext)) return null;
     const uploadsDir = join(ctxRoot, 'dashboard-uploads');
     mkdirSync(uploadsDir, { recursive: true });
     const safeAgent = (agentName || 'agent').replace(/[^a-zA-Z0-9_-]/g, '_');
