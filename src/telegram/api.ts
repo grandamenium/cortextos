@@ -308,6 +308,24 @@ export class TelegramAPI {
   }
 
   /**
+   * React to a message with a single emoji. Passing an empty emoji (or an
+   * empty reactions array) clears any prior reaction. Used by the daemon to
+   * ack inbound user messages the moment they arrive, before the agent has
+   * begun processing — the user sees 👍 within ~1s of sending.
+   */
+  async setMessageReaction(
+    chatId: string | number,
+    messageId: number,
+    emoji: string = '👍',
+  ): Promise<any> {
+    return this.post('setMessageReaction', {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: emoji ? [{ type: 'emoji', emoji }] : [],
+    });
+  }
+
+  /**
    * Get file info for downloading.
    */
   async getFile(fileId: string): Promise<any> {

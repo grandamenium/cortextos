@@ -12,6 +12,7 @@ import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistor
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+import { ackTelegramReceipt } from '../telegram/receipt-ack.js';
 
 type LogFn = (msg: string) => void;
 
@@ -298,6 +299,11 @@ export class AgentManager {
       const stateDir = join(this.ctxRoot, 'state', name);
       const poller = new TelegramPoller(telegramApi, stateDir);
 
+      // Per-bot set of message_ids we've already 👍'd. Lives for the agent's
+      // lifetime so Telegram redeliveries after a handler exception don't
+      // trigger a second reaction API call.
+      const ackedMessageIds = new Set<number>();
+
       poller.onMessage((msg) => {
         // ALLOWED_USER gate: if configured, ignore messages from other users.
         // Use numeric comparison to avoid string coercion issues.
@@ -313,6 +319,11 @@ export class AgentManager {
         const msgChatId = msg.chat?.id;
         const effectiveChatId = msgChatId ?? chatId ?? '';
         const stateDir = join(this.ctxRoot, 'state', name);
+
+        // Acknowledge receipt immediately — 👍 + typing indicator. Runs before
+        // dedup and media download so the user sees the ack within ~1s of
+        // sending, even when downstream processing is slow. Fire-and-forget.
+        ackTelegramReceipt(telegramApi, effectiveChatId, msg.message_id, ackedMessageIds, log);
 
         // Log inbound message to JSONL
         logInboundMessage(this.ctxRoot, name, {
