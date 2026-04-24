@@ -82,6 +82,32 @@ describe('Task Management', () => {
       expect(content.completed_at).toBeTruthy();
       expect(content.result).toBe('Landing page done, committed at abc123');
     });
+
+    it('emits a task/task_completed activity event for the assignee', () => {
+      const taskId = createTask(paths, 'paul', 'acme', 'Complete-event task', {
+        assignee: 'boris',
+      });
+      completeTask(paths, taskId, 'shipped');
+
+      // Event file: <analyticsDir>/events/boris/<YYYY-MM-DD>.jsonl
+      const today = new Date().toISOString().split('T')[0];
+      const eventFile = join(paths.analyticsDir, 'events', 'boris', `${today}.jsonl`);
+      expect(existsSync(eventFile)).toBe(true);
+
+      const events = readFileSync(eventFile, 'utf-8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const completedEvents = events.filter((e) => e.event === 'task_completed');
+      expect(completedEvents).toHaveLength(1);
+      const evt = completedEvents[0];
+      expect(evt.agent).toBe('boris');
+      expect(evt.org).toBe('acme');
+      expect(evt.category).toBe('task');
+      expect(evt.severity).toBe('info');
+      expect(evt.metadata.task_id).toBe(taskId);
+      expect(evt.metadata.result).toBe('shipped');
+    });
   });
 
   describe('listTasks', () => {
