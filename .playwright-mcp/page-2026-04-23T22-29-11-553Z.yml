@@ -1,0 +1,150 @@
+- generic [active] [ref=e1]:
+  - link "Zum Hauptinhalt springen" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]:
+        - link "PhytoMedic · Clinic" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e8]: PhytoMedic
+          - generic [ref=e9]: · Clinic
+        - navigation "Hauptnavigation" [ref=e10]:
+          - link "Produkte" [ref=e11] [cursor=pointer]:
+            - /url: /medizin/produkte
+          - link "Sorten" [ref=e12] [cursor=pointer]:
+            - /url: /medizin/sorten
+          - link "Vergleich" [ref=e13] [cursor=pointer]:
+            - /url: /medizin/sorten/vergleich
+          - link "Arzt finden" [ref=e14] [cursor=pointer]:
+            - /url: /medizin/arzt-finden
+          - link "Apotheke finden" [ref=e15] [cursor=pointer]:
+            - /url: /medizin/apotheke-finden
+          - link "Wissen" [ref=e16] [cursor=pointer]:
+            - /url: /wissen
+        - generic [ref=e18]:
+          - link "Anmelden" [ref=e19] [cursor=pointer]:
+            - /url: /login
+            - button "Anmelden" [ref=e20]
+          - link "Registrieren" [ref=e21] [cursor=pointer]:
+            - /url: /registrieren
+            - button "Registrieren" [ref=e22]
+      - generic [ref=e24]:
+        - 'heading "Eignungstest: Bin ich für Cannabis geeignet?" [level=1] [ref=e25]'
+        - paragraph [ref=e26]: Finden Sie in 5 Schritten heraus, ob eine Cannabis-Therapie für Sie in Frage kommt. Der Test ist kostenlos, anonym und dauert nur wenige Minuten.
+        - generic [ref=e27]:
+          - generic [ref=e28]:
+            - generic [ref=e29]:
+              - generic [ref=e30]:
+                - img [ref=e31]
+                - text: Schritt 1 von 5 — Diagnose
+              - generic [ref=e35]: 20%
+            - 'progressbar "Fortschritt: 20%" [ref=e36]'
+          - generic [ref=e45]:
+            - generic [ref=e46]:
+              - generic [ref=e47]: Welche Beschwerden oder Diagnosen liegen bei Ihnen vor?
+              - generic [ref=e48]: Wählen Sie alle zutreffenden Optionen. Mehrfachauswahl möglich.
+            - generic [ref=e50]:
+              - generic [ref=e51] [cursor=pointer]:
+                - checkbox "Chronische Schmerzen" [ref=e52]
+                - generic [ref=e53]: Chronische Schmerzen
+              - generic [ref=e54] [cursor=pointer]:
+                - checkbox "Spastik / Multiple Sklerose" [ref=e55]
+                - generic [ref=e56]: Spastik / Multiple Sklerose
+              - generic [ref=e57] [cursor=pointer]:
+                - checkbox "Übelkeit / Chemotherapie" [ref=e58]
+                - generic [ref=e59]: Übelkeit / Chemotherapie
+              - generic [ref=e60] [cursor=pointer]:
+                - checkbox "Epilepsie" [ref=e61]
+                - generic [ref=e62]: Epilepsie
+              - generic [ref=e63] [cursor=pointer]:
+                - checkbox "ADHS" [ref=e64]
+                - generic [ref=e65]: ADHS
+              - generic [ref=e66] [cursor=pointer]:
+                - checkbox "Depression / Angststörung" [ref=e67]
+                - generic [ref=e68]: Depression / Angststörung
+              - generic [ref=e69] [cursor=pointer]:
+                - checkbox "Schlafstörungen" [ref=e70]
+                - generic [ref=e71]: Schlafstörungen
+              - generic [ref=e72] [cursor=pointer]:
+                - checkbox "PTBS" [ref=e73]
+                - generic [ref=e74]: PTBS
+              - generic [ref=e75] [cursor=pointer]:
+                - checkbox "Migräne" [ref=e76]
+                - generic [ref=e77]: Migräne
+              - generic [ref=e78] [cursor=pointer]:
+                - checkbox "Sonstige" [ref=e79]
+                - generic [ref=e80]: Sonstige
+          - generic [ref=e82]:
+            - button "Weiter" [disabled]:
+              - text: Weiter
+              - img
+      - generic [ref=e84]:
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - text: PhytoMedic
+            - paragraph [ref=e87]: Medizinisches Cannabis. Einfach. Sicher. Digital.
+          - generic [ref=e88]:
+            - link "LinkedIn" [ref=e89] [cursor=pointer]:
+              - /url: https://linkedin.com
+              - img [ref=e90]
+            - link "Instagram" [ref=e94] [cursor=pointer]:
+              - /url: https://instagram.com
+              - img [ref=e95]
+        - navigation "Footer-Navigation" [ref=e98]:
+          - generic [ref=e99]:
+            - heading "Patienten" [level=4] [ref=e100]
+            - list [ref=e101]:
+              - listitem [ref=e102]:
+                - link "Produktkatalog" [ref=e103] [cursor=pointer]:
+                  - /url: /medizin/produkte
+              - listitem [ref=e104]:
+                - link "Arzt finden" [ref=e105] [cursor=pointer]:
+                  - /url: /medizin/arzt-finden
+              - listitem [ref=e106]:
+                - link "Apotheke finden" [ref=e107] [cursor=pointer]:
+                  - /url: /medizin/apotheke-finden
+              - listitem [ref=e108]:
+                - link "Eignungstest" [ref=e109] [cursor=pointer]:
+                  - /url: /medizin/eignungstest
+          - generic [ref=e110]:
+            - heading "Wissen" [level=4] [ref=e111]
+            - list [ref=e112]:
+              - listitem [ref=e113]:
+                - link "Sorten-Datenbank" [ref=e114] [cursor=pointer]:
+                  - /url: /medizin/sorten
+              - listitem [ref=e115]:
+                - link "Krankheitsbilder" [ref=e116] [cursor=pointer]:
+                  - /url: /krankheiten
+              - listitem [ref=e117]:
+                - link "Ratgeber" [ref=e118] [cursor=pointer]:
+                  - /url: /wissen
+              - listitem [ref=e119]:
+                - link "THC-Rechner" [ref=e120] [cursor=pointer]:
+                  - /url: /medizin/thc-rechner
+          - generic [ref=e121]:
+            - heading "Fachleute" [level=4] [ref=e122]
+            - list [ref=e123]:
+              - listitem [ref=e124]:
+                - link "Online-Rezept" [ref=e125] [cursor=pointer]:
+                  - /url: /medizin/online-rezept
+              - listitem [ref=e126]:
+                - link "Standorte" [ref=e127] [cursor=pointer]:
+                  - /url: /medizin/standorte
+              - listitem [ref=e128]:
+                - link "Registrierung" [ref=e129] [cursor=pointer]:
+                  - /url: /registrieren
+          - generic [ref=e130]:
+            - heading "PhytoMedic" [level=4] [ref=e131]
+            - list [ref=e132]:
+              - listitem [ref=e133]:
+                - link "Impressum" [ref=e134] [cursor=pointer]:
+                  - /url: /impressum
+              - listitem [ref=e135]:
+                - link "Datenschutz" [ref=e136] [cursor=pointer]:
+                  - /url: /datenschutz
+              - listitem [ref=e137]:
+                - link "AGB" [ref=e138] [cursor=pointer]:
+                  - /url: /agb
+        - paragraph [ref=e139]: © 2026 PhytoMedic. Alle Rechte vorbehalten.
+  - region "Notifications alt+T"
+  - alert [ref=e140]
