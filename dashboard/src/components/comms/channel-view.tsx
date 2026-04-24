@@ -163,6 +163,8 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
   const [replyMode, setReplyMode] = useState<ReplyMode>('text');
   const [replyModeSaving, setReplyModeSaving] = useState(false);
   const [pendingMode, setPendingMode] = useState<ReplyMode | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const dragDepthRef = useRef(0);
   const agents = pair.split('--');
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -388,6 +390,40 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
     }
   }
 
+  // Drag-and-drop: mirror the paste behavior for files dropped onto the
+  // compose area. Uses a depth counter because dragenter/leave fire on
+  // every child element, which otherwise causes the overlay to flicker.
+  function handleDragEnter(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setDragActive(true);
+  }
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+  function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragActive(false);
+  }
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setDragActive(false);
+    const files = Array.from(e.dataTransfer.files || []);
+    const match = files.find((f) => f.type.startsWith('image/') || f.type.startsWith('audio/'));
+    if (match) {
+      applyAttachment(match);
+    } else if (files.length > 0) {
+      setSendError('Only images and audio files can be attached.');
+    }
+  }
+
   async function handleSend() {
     // Ref-based in-flight lock — see comment on sendingRef above.
     if (sendingRef.current) return;
@@ -492,7 +528,22 @@ export function ChannelView({ pair, knownAgents, sortOrder = 'asc' }: ChannelVie
           channels are read-only so no chat bar, matching the conversation
           semantics (users can message agents, agents message via the bus). */}
       {isUserChannel && (
-        <div className="border-t bg-background p-2">
+        <div
+          className={`relative border-t bg-background p-2 transition-colors ${
+            dragActive ? 'bg-primary/5 ring-2 ring-inset ring-primary/40' : ''
+          }`}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {dragActive && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-background/60 backdrop-blur-[1px]">
+              <span className="rounded-md border border-primary/40 bg-background px-3 py-1.5 text-xs font-medium text-primary shadow-sm">
+                Drop image or audio to attach
+              </span>
+            </div>
+          )}
           <div className="mb-2 flex items-center gap-1.5 px-1">
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Reply mode</span>
             <div className="inline-flex rounded-md border bg-muted/30 p-0.5 text-[11px]" role="group" aria-label="Reply mode">
