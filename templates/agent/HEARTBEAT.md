@@ -11,6 +11,14 @@ cortextos bus update-heartbeat "<1-sentence summary of current work>"
 
 If this fails, your agent shows as DEAD on the dashboard. Fix it before anything else.
 
+## Step 1b: Record cron fire (prevents gap-detector false positives)
+
+```bash
+cortextos bus update-cron-fire heartbeat --interval 4h
+```
+
+Without this call, the daemon gap-detection loop reads cron-state.json and injects `[SYSTEM] Cron gap detected` PTY nudges every ~10 minutes even when the cron is firing on schedule.
+
 ## Step 2: Sweep inbox for un-ACK'd messages
 
 Messages arrive in real time via the fast-checker daemon — you don't need to poll for them. This step is a safety sweep for anything that wasn't ACK'd (e.g. a crash mid-processing).

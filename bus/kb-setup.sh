@@ -97,10 +97,10 @@ else
   echo "  [OK] mmrag config.json already exists"
 
   # Migrate stale embedding model names (text-embedding-004 was shut down 2026-01-14)
-  if grep -qE '"embedding_model"\s*:\s*"(models/text-embedding-004|text-embedding-004)"' "$CONFIG_FILE" 2>/dev/null; then
-    sed -i.bak 's/"models\/text-embedding-004"/"gemini-embedding-001"/g; s/"text-embedding-004"/"gemini-embedding-001"/g' "$CONFIG_FILE"
+  if grep -qE '"embedding_model"\s*:\s*"(models/text-embedding-004|text-embedding-004|gemini-embedding-001)"' "$CONFIG_FILE" 2>/dev/null; then
+    sed -i.bak 's/"models\/text-embedding-004"/"gemini-embedding-2-preview"/g; s/"text-embedding-004"/"gemini-embedding-2-preview"/g; s/"gemini-embedding-001"/"gemini-embedding-2-preview"/g' "$CONFIG_FILE"
     rm -f "${CONFIG_FILE}.bak"
-    echo "  [MIGRATED] embedding_model updated to gemini-embedding-001 (text-embedding-004 was shut down)"
+    echo "  [MIGRATED] embedding_model updated to gemini-embedding-2-preview (text-embedding-004 was shut down)"
   fi
 fi
 

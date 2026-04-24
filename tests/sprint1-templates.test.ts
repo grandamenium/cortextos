@@ -75,11 +75,12 @@ describe('Sprint 1: Template Completeness', () => {
       expect(content).toContain('Day/Night Mode');
     });
 
-    it('HEARTBEAT.md has 9 steps', () => {
+    it('HEARTBEAT.md has 9 steps and cron-fire instruction', () => {
       const content = readFileSync(join(agentDir, 'HEARTBEAT.md'), 'utf-8');
       expect(content).toContain('Step 1');
       expect(content).toContain('Step 9');
       expect(content).toContain('SKIP NOTHING');
+      expect(content).toContain('update-cron-fire');
     });
 
     it('TOOLS.md has complete script inventory', () => {

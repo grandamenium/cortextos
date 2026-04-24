@@ -94,7 +94,6 @@ Reply using: cortextos bus send-telegram <chat_id> "<reply>"
 Photos include a `local_file:` path. Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
 
 **Telegram formatting:** Uses Telegram's regular Markdown (not MarkdownV2). Do NOT escape characters like `!`, `.`, `(`, `)`, `-` with backslashes. Just write plain natural text. Only `_`, `*`, `` ` ``, and `[` have special meaning.
-
 ---
 
 ## Agent-to-Agent Messages

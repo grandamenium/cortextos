@@ -32,6 +32,19 @@ Reply using: cortextos bus send-message <agent> normal '<your reply>' <msg_id>
 - `urgent` priority inbox messages: handle immediately, save current work state first
 - Callback queries (inline button presses): process the callback_data and acknowledge via `send-telegram`
 - Photos: local file path is provided, use it directly
+- Voice messages: see `.claude/skills/voice-transcription/SKILL.md` — transcribe with Whisper before acting
+
+## Voice Message Format
+
+```
+=== TELEGRAM from <name> (chat_id:<id>) ===
+[Voice message]
+local_file: /tmp/cortextos-voice-<hash>.ogg
+Duration: <N>s
+Reply using: cortextos bus send-telegram <chat_id> "<reply>"
+```
+
+Transcribe using the voice-transcription skill, then treat the transcript as a typed message.
 
 ## Waiting for a Response
 

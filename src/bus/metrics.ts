@@ -326,11 +326,27 @@ export function checkUpstream(
     return { status: 'up_to_date', message: 'No upstream changes available' };
   }
 
-  // Count changes
+  // Count changes — commits_behind = upstream has commits we don't; commits_ahead = we have commits upstream doesn't
   let commitCount = 0;
+  let commitsAhead = 0;
   try {
     commitCount = parseInt(execSync('git rev-list HEAD..upstream/main --count', { ...execOpts, stdio: 'pipe' }).trim(), 10);
   } catch { /* default 0 */ }
+  try {
+    commitsAhead = parseInt(execSync('git rev-list upstream/main..HEAD --count', { ...execOpts, stdio: 'pipe' }).trim(), 10);
+  } catch { /* default 0 */ }
+
+  // If we are not behind upstream, we have nothing to apply — don't report updates_available
+  if (commitCount === 0) {
+    return {
+      status: 'up_to_date',
+      commits_behind: 0,
+      commits_ahead: commitsAhead,
+      message: commitsAhead > 0
+        ? `No upstream changes. Local branch is ${commitsAhead} commit(s) ahead of upstream.`
+        : 'No upstream changes available',
+    };
+  }
 
   let diffStat = '';
   try {
@@ -424,6 +440,8 @@ export function checkUpstream(
   return {
     status: 'updates_available',
     commits: commitCount,
+    commits_behind: commitCount,
+    commits_ahead: commitsAhead,
     diff_stat: diffStat,
     commit_log: commitLog,
     changes,
