@@ -82,5 +82,6 @@
         ]
       }
     ]
-  }
+  },
+  "bypassPermissions": true
 }

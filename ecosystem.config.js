@@ -24,6 +24,12 @@ module.exports = {
         CTX_FRAMEWORK_ROOT: FRAMEWORK_ROOT,
         CTX_PROJECT_ROOT: PROJECT_ROOT,
         CTX_ORG: CTX_ORG,
+        // Debug-only: set to '1' to enable SIGUSR2 signal → controlled
+        // uncaughtException for testing the crash-visibility path
+        // (.daemon-crashed markers, crash-loop Telegram alert). Leave off
+        // in production; set to '1' temporarily to reproduce crash paths
+        // during development. See docs/debugging.md.
+        CTX_DEBUG_ALLOW_CRASH_TRIGGER: '0',
       },
       max_restarts: 10,
       restart_delay: 5000,

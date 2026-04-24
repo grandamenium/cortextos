@@ -69,11 +69,18 @@ export async function middleware(request: NextRequest) {
 
   // Allow public paths
   // Security (H7): SSE endpoints require ?token=<jwt> auth — removed from public whitelist
+  // Forms: /forms/[slug] and /api/forms/[slug]/submit are public so Skool members
+  // can fill them from DM'd links without logging into the dashboard. Submit is
+  // IP-rate-limited via the rate_limits table; no auth on read (form is what
+  // the URL encodes).
   if (
     pathname.startsWith('/login') ||
     pathname.startsWith('/api/auth') ||
+    pathname.startsWith('/forms/') ||
+    pathname.startsWith('/api/forms/') ||
     pathname.startsWith('/_next') ||
-    pathname === '/favicon.ico'
+    pathname === '/favicon.ico' ||
+    pathname.endsWith('.html')
   ) {
     const response = NextResponse.next();
     response.headers.set('Access-Control-Allow-Origin', corsOrigin);

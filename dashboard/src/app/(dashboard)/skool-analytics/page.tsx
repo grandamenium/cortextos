@@ -9,9 +9,11 @@ import {
   getDataMaturity,
   getUpcomingOutreach,
   getWeekOverWeekDeltas,
+  getSourceCohortRetention,
   type SkoolRange,
 } from '@/lib/data/skool';
 import { OutreachQueue } from '@/components/skool/outreach-queue';
+import { SourceCohortHeatmap } from '@/components/skool/source-cohort-heatmap';
 import { HeroKpis } from '@/components/skool/hero-kpis';
 import { MrrTimeline } from '@/components/skool/mrr-timeline';
 import { MemberCountsTimeline } from '@/components/skool/member-counts-timeline';
@@ -40,7 +42,7 @@ export default async function SkoolAnalyticsPage({
   const params = await searchParams;
   const range = normalizeRange(params.range);
 
-  const [kpis, series, ltv, funnel, cohort, cancelling, tiers, maturity, outreach, wow] = await Promise.all([
+  const [kpis, series, ltv, funnel, cohort, cancelling, tiers, maturity, outreach, wow, sourceCohort] = await Promise.all([
     getCurrentKpis(),
     getDailyTimeSeries(range),
     getAcquisitionLtv(),
@@ -51,6 +53,7 @@ export default async function SkoolAnalyticsPage({
     getDataMaturity(),
     getUpcomingOutreach(200),
     getWeekOverWeekDeltas(),
+    getSourceCohortRetention(3),
   ]);
 
   return (
@@ -83,6 +86,8 @@ export default async function SkoolAnalyticsPage({
         <CohortRetentionHeatmap rows={cohort} />
         <ChurnFunnelChart rows={funnel} />
       </div>
+
+      <SourceCohortHeatmap rows={sourceCohort} />
 
       <AtRiskMembersTable members={cancelling} />
 

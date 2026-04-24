@@ -18,6 +18,11 @@ import {
   IconClock,
   IconTarget,
   IconMessages,
+  IconUsersGroup,
+  IconNotebook,
+  IconBrandGithub,
+  IconChartBar,
+  IconMailForward,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +42,7 @@ const navItems: NavItem[] = [
   { label: 'Agents', href: '/agents', icon: IconRobot, section: 'core' },
   { label: 'Tasks', href: '/tasks', icon: IconListCheck, section: 'core' },
   { label: 'Activity', href: '/activity', icon: IconActivity, section: 'core' },
+  { label: 'Context', href: '/context', icon: IconNotebook, section: 'core' },
 
   // Operations
   { label: 'Comms', href: '/comms', icon: IconMessages, section: 'ops' },
@@ -44,6 +50,12 @@ const navItems: NavItem[] = [
   { label: 'Workflows', href: '/workflows', icon: IconClock, section: 'ops' },
   { label: 'Strategy', href: '/strategy', icon: IconTarget, section: 'ops' },
   { label: 'Analytics', href: '/analytics', icon: IconChartDots3, section: 'ops' },
+  { label: 'Skool', href: '/skool-analytics', icon: IconUsersGroup, section: 'ops' },
+  { label: 'Members', href: '/members', icon: IconUsersGroup, section: 'ops' },
+  { label: 'CRM Templates', href: '/crm-templates', icon: IconPuzzle, section: 'ops' },
+  { label: 'Outreach', href: '/outreach', icon: IconMailForward, section: 'ops' },
+  { label: 'Funnel', href: '/funnel-analytics', icon: IconChartBar, section: 'ops' },
+  { label: 'Repo', href: '/repo', icon: IconBrandGithub, section: 'ops' },
 
   // Intelligence
   { label: 'Knowledge Base', href: '/knowledge-base', icon: IconBook2, section: 'intel' },
