@@ -24,6 +24,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { UpstreamStatusWidget } from '@/components/upstream-status-widget';
 
 interface NavItem {
   label: string;
@@ -207,6 +208,13 @@ export function Sidebar({
           <IconSettings size={16} className="shrink-0" />
           <span>Settings</span>
         </Link>
+
+        {/* Framework upstream status — User-Direktive 2026-04-25:
+            "ich sehe auch nicht ob das github dazu ein neues update mit verbesserungen hat".
+            Self-checks every page load, shows pending commits + GitHub link. */}
+        <div className="mt-3 px-1.5">
+          <UpstreamStatusWidget />
+        </div>
       </div>
     </aside>
   );
