@@ -46,6 +46,9 @@ export class AgentProcess {
   // from an old PTY can race past stopRequested and trigger crash recovery on
   // the new agent.
   private lifecycleGeneration: number = 0;
+  // Guard: only one cron verification waiter in-flight per agent at a time.
+  // Rapid --continue restarts must not stack duplicate waiters. (Issue #182)
+  private cronVerificationPending: boolean = false;
   // BUG-011 fix: stop() awaits this promise (resolved by the onExit handler in start())
   // to guarantee the PTY exit has fired before stopping=false is reset. Without
   // this, the exit handler can fire after stopping=false and trigger spurious

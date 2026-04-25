@@ -223,8 +223,6 @@ function handleFatal(
 class Daemon {
   private agentManager: AgentManager | null = null;
   private ipcServer: IPCServer | null = null;
-  private watchdog: StaleAgentWatchdog | null = null;
-  private sleepScheduler: SleepScheduler | null = null;
   private instanceId: string;
   private ctxRoot: string;
 
@@ -271,21 +269,6 @@ class Daemon {
     // Discover and start agents
     await this.agentManager.discoverAndStart();
 
-    // Start stale-agent watchdog: checks every 5m, restarts agents with heartbeats >15m old
-    this.watchdog = new StaleAgentWatchdog(this.agentManager, this.ctxRoot, frameworkRoot);
-    this.watchdog.start();
-
-    // Start sleep scheduler: suppresses cron nudges outside active hours (agents stay alive)
-    try {
-      this.sleepScheduler = new SleepScheduler(this.agentManager, this.ctxRoot, frameworkRoot);
-      this.sleepScheduler.start();
-      // Wire quiet-hours check into all agent processes so gap-detection
-      // nudges are suppressed during quiet hours without stopping agents.
-      this.agentManager.setQuietCheck((name) => this.sleepScheduler!.isQuiet(name));
-    } catch (err) {
-      console.error(`[daemon] Sleep scheduler failed to start: ${(err as Error).message}`);
-    }
-
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
     // Handle shutdown signals
@@ -297,12 +280,6 @@ class Daemon {
         }
       } catch (err) {
         console.error('[daemon] Error during shutdown:', err);
-      }
-      if (this.watchdog) {
-        this.watchdog.stop();
-      }
-      if (this.sleepScheduler) {
-        this.sleepScheduler.stop();
       }
       if (this.ipcServer) {
         this.ipcServer.stop();

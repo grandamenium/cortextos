@@ -2372,6 +2372,11 @@ busCommand
   .action(() => runHook('hook-context-status'));
 
 busCommand
+  .command('hook-context-status')
+  .description('StatusLine hook: writes context window % to state/context_status.json')
+  .action(() => runHook('hook-context-status'));
+
+busCommand
   .command('hook-ask-telegram')
   .description('PreToolUse hook: forward AskUserQuestion to Telegram (cross-platform)')
   .action(() => runHook('hook-ask-telegram'));

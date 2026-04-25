@@ -102,6 +102,11 @@ Then continue from step 8.
 
    Do NOT use `/loop` to create recurring crons — use `cortextos bus add-cron` so the cron persists across restarts.
 
+   - Create a `/loop` cron: `/loop <interval> <prompt>`
+   - Add the entry to `config.json` under the `crons` array:
+     ```json
+     {"name": "<workflow-name>", "interval": "<interval>", "prompt": "<prompt>"}
+     ```
 10. **Ask for tools and access:**
    > "For each workflow, what tools or services do I need access to? GitHub repos, APIs, databases, Slack, email accounts, specific websites.
    >
@@ -457,6 +462,13 @@ fi
     Then add the experiment cron immediately via the bus:
     ```bash
     cortextos bus add-cron $CTX_AGENT_NAME experiment-<metric> <cron_frequency> "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."
+    Then set up the experiment cron immediately (outside the bash block - execute this as a Claude command):
+
+    `/loop <cron_frequency> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.`
+
+    Then add to `config.json` crons array:
+    ```json
+    {"name": "experiment-<metric>", "interval": "<cron_frequency>", "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."}
     ```
 
     If user set approval_required to false, update `experiments/config.json`:
