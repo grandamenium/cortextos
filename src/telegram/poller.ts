@@ -3,6 +3,7 @@ import { join } from 'path';
 import type { TelegramUpdate, TelegramMessage, TelegramCallbackQuery, TelegramMessageReaction } from '../types/index.js';
 import { TelegramAPI } from './api.js';
 import { ensureDir } from '../utils/atomic.js';
+import { withRetry, isTransientError } from '../utils/retry.js';
 
 export type MessageHandler = (msg: TelegramMessage) => void;
 export type CallbackHandler = (query: TelegramCallbackQuery) => void;
@@ -105,7 +106,24 @@ export class TelegramPoller {
    * update so a crash mid-batch does not drop confirmed state.
    */
   async pollOnce(): Promise<void> {
-    const result = await this.api.getUpdates(this.offset, 1);
+    const isConflict = (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      return msg.includes('Conflict') || msg.includes('terminated by other getUpdates');
+    };
+    const result = await withRetry(
+      () => this.api.getUpdates(this.offset, 1),
+      {
+        maxAttempts: 3,
+        baseDelayMs: 8_000,
+        maxDelayMs: 30_000,
+        isRetryable: (err) => isConflict(err) || isTransientError(err),
+        onRetry: (attempt, err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          const reason = isConflict(err) ? 'Conflict (another poller active)' : 'transient error';
+          console.warn(`[${this.label}] getUpdates attempt ${attempt} failed (${reason}), retrying: ${msg}`);
+        },
+      },
+    );
     if (!result?.result?.length) return;
 
     for (const update of result.result as TelegramUpdate[]) {
