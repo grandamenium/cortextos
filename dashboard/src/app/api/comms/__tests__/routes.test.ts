@@ -75,14 +75,21 @@ function makeRequest(url: string): NextRequest {
   return new NextRequest(new URL(url, 'http://localhost'));
 }
 
+// Timestamps must stay inside the 7-day archive window or the channels
+// endpoint hides them by default. Using fixed dates rotted the test once
+// 7 days passed since they were written.
+function recentIso(minutesAgo: number): string {
+  return new Date(Date.now() - minutesAgo * 60_000).toISOString();
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/comms/feed
 // ---------------------------------------------------------------------------
 describe('GET /api/comms/feed', () => {
   it('returns messages from history log sorted newest-first', async () => {
     writeHistory([
-      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: '2026-04-15T09:00:00Z', text: 'hello', reply_to: null },
-      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: '2026-04-15T10:00:00Z', text: 'world', reply_to: null },
+      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: recentIso(60), text: 'hello', reply_to: null },
+      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: recentIso(30), text: 'world', reply_to: null },
     ]);
 
     const res = await feed.GET(makeRequest('/api/comms/feed'));
@@ -106,8 +113,8 @@ describe('GET /api/comms/feed', () => {
 
   it('applies the search filter to message text', async () => {
     writeHistory([
-      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: '2026-04-15T09:00:00Z', text: 'hello world', reply_to: null },
-      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: '2026-04-15T10:00:00Z', text: 'unrelated', reply_to: null },
+      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: recentIso(60), text: 'hello world', reply_to: null },
+      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: recentIso(30), text: 'unrelated', reply_to: null },
     ]);
 
     const res = await feed.GET(makeRequest('/api/comms/feed?search=hello'));
@@ -124,8 +131,8 @@ describe('GET /api/comms/feed', () => {
 describe('GET /api/comms/channels', () => {
   it('groups messages by pair and reports last-message metadata', async () => {
     writeHistory([
-      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: '2026-04-15T09:00:00Z', text: 'hi', reply_to: null },
-      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: '2026-04-15T10:00:00Z', text: 'reply', reply_to: null },
+      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: recentIso(60), text: 'hi', reply_to: null },
+      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: recentIso(30), text: 'reply', reply_to: null },
     ]);
 
     const res = await channels.GET(makeRequest('/api/comms/channels'));
@@ -159,9 +166,9 @@ describe('GET /api/comms/channels', () => {
 describe('GET /api/comms/channel/[pair]', () => {
   it('returns only messages matching the pair, oldest-first', async () => {
     writeHistory([
-      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: '2026-04-15T09:00:00Z', text: 'first', reply_to: null },
-      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: '2026-04-15T10:00:00Z', text: 'second', reply_to: null },
-      { id: 'm3', from: 'boris', to: 'james', priority: 'normal', timestamp: '2026-04-15T11:00:00Z', text: 'other pair', reply_to: null },
+      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: recentIso(60), text: 'first', reply_to: null },
+      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: recentIso(30), text: 'second', reply_to: null },
+      { id: 'm3', from: 'boris', to: 'james', priority: 'normal', timestamp: recentIso(15), text: 'other pair', reply_to: null },
     ]);
 
     const res = await channel.GET(

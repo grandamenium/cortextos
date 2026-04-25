@@ -8,3 +8,4 @@ export {
 } from './logging.js';
 export { sanitizeFilename, processMediaMessage } from './media.js';
 export type { ProcessedMedia } from './media.js';
+export { transcribeVoice } from './transcribe.js';

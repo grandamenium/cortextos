@@ -12,6 +12,7 @@ import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistor
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+import { transcribeVoice } from '../telegram/transcribe.js';
 
 type LogFn = (msg: string) => void;
 
@@ -329,7 +330,7 @@ export class AgentManager {
 
         if (isMedia && telegramApi) {
           const downloadDir = join(agentDir, 'telegram-images');
-          processMediaMessage(msg, telegramApi, downloadDir).then((media) => {
+          processMediaMessage(msg, telegramApi, downloadDir).then(async (media) => {
             if (!media) {
               log('Media processing returned null - falling back to text format');
               const text = stripControlChars(msg.caption || '');
@@ -355,7 +356,10 @@ export class AgentManager {
             } else if (media.type === 'document') {
               formatted = FastChecker.formatTelegramDocumentMessage(from, effectiveChatId, media.text, relFilePath, media.file_name!);
             } else if (media.type === 'voice' || media.type === 'audio') {
-              formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relFilePath, media.duration);
+              // Daemon needs the absolute path; the inbox payload uses relFilePath.
+              const transcript = media.file_path ? await transcribeVoice(media.file_path, media.duration) : '';
+              if (!transcript) log(`Voice transcribe failed or daemon down for ${media.file_path} - delivering path-only`);
+              formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relFilePath, media.duration, transcript);
             } else {
               // video or video_note
               formatted = FastChecker.formatTelegramVideoMessage(from, effectiveChatId, media.text, relFilePath, media.file_name || '', media.duration);

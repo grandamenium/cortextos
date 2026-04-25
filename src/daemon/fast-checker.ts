@@ -354,12 +354,20 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     chatId: string | number,
     filePath: string,
     duration: number | undefined,
+    transcript?: string,
   ): string {
     const dur = duration !== undefined ? duration : 'unknown';
+    const transcriptBlock = transcript && transcript.length > 0
+      ? `transcript:
+\`\`\`
+${transcript}
+\`\`\`
+`
+      : '';
     return `=== TELEGRAM VOICE from ${from} (chat_id:${chatId}) ===
 duration: ${dur}s
 local_file: ${filePath}
-Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
+${transcriptBlock}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
 `;
   }
