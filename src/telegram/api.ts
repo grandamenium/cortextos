@@ -5,6 +5,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { basename } from 'path';
+import { withRetry, isTransientError } from '../utils/retry.js';
 
 /**
  * Result of TelegramAPI.validateCredentials. Tagged union so callers can
@@ -228,25 +229,44 @@ export class TelegramAPI {
     const payload =
       parseMode === null ? basePayload : { ...basePayload, parse_mode: parseMode };
 
-    try {
-      return await this.post('sendMessage', payload);
-    } catch (err) {
-      // self_chat safety net: a 403 "bots can't send messages to bots" at
-      // sendMessage time means CHAT_ID likely equals the bot's own user id.
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/bots can'?t send messages to bots/i.test(msg)) {
-        const key = String(chatId);
-        if (!this.warnedSelfChat.has(key)) {
-          this.warnedSelfChat.add(key);
-          console.warn(
-            `[telegram] self_chat trap likely: chat_id=${key} resolved to another bot. ` +
-            `Check .env — CHAT_ID must be YOUR Telegram user id, not the BOT_TOKEN prefix. ` +
-            `Fix by sending /start to the bot from your own account and reading the chat id via getUpdates.`,
-          );
+    // Retry transient failures (network errors, 429, 5xx) with jittered
+    // exponential backoff. Non-retryable errors (400 bad request, 403
+    // self_chat, etc.) throw immediately on the first attempt.
+    // sendMessage is idempotent-safe for retries: Telegram deduplicates
+    // messages by (chat_id, text, parse_mode) within a short window.
+    return withRetry(
+      async () => {
+        try {
+          return await this.post('sendMessage', payload);
+        } catch (err) {
+          // self_chat safety net: a 403 "bots can't send messages to bots"
+          // means CHAT_ID equals the bot's own user id — not retryable.
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/bots can'?t send messages to bots/i.test(msg)) {
+            const key = String(chatId);
+            if (!this.warnedSelfChat.has(key)) {
+              this.warnedSelfChat.add(key);
+              console.warn(
+                `[telegram] self_chat trap likely: chat_id=${key} resolved to another bot. ` +
+                `Check .env — CHAT_ID must be YOUR Telegram user id, not the BOT_TOKEN prefix. ` +
+                `Fix by sending /start to the bot from your own account and reading the chat id via getUpdates.`,
+              );
+            }
+          }
+          throw err;
         }
-      }
-      throw err;
-    }
+      },
+      {
+        maxAttempts: 3,
+        baseDelayMs: 1000,
+        maxDelayMs: 10_000,
+        isRetryable: isTransientError,
+        onRetry: (attempt, err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[telegram] sendMessage attempt ${attempt} failed, retrying: ${msg}`);
+        },
+      },
+    );
   }
 
   /**
