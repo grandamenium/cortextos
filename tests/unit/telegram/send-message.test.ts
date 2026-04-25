@@ -49,13 +49,8 @@ afterEach(() => {
   console.warn = originalWarn;
 });
 
-// Strip out the mandatory rate-limit delay so the test suite stays fast.
-// sendMessage() calls rateLimit() which sleeps 0-1000ms per send. Since we
-// only make small test messages the per-chat memory happens not to trip the
-// limit after the first call, but the first call still takes ~0ms.
-
-describe('TelegramAPI.sendMessage parse-mode retry', () => {
-  it('happy path: well-formed markdown sends once with parse_mode=Markdown, no retry, no warning', async () => {
+describe('TelegramAPI.sendMessage HTML mode', () => {
+  it('sends with parse_mode=HTML by default', async () => {
     queue({ status: 200, body: { ok: true, result: { message_id: 111 } } });
 
     const api = new TelegramAPI('111:AAA');
@@ -64,82 +59,79 @@ describe('TelegramAPI.sendMessage parse-mode retry', () => {
     expect(result?.result?.message_id).toBe(111);
     expect(callLog).toHaveLength(1);
     expect(callLog[0].url).toContain('/sendMessage');
-    expect(callLog[0].body.parse_mode).toBe('Markdown');
-    expect(callLog[0].body.text).toBe('hello world');
+    expect(callLog[0].body.parse_mode).toBe('HTML');
     expect(warnLog).toHaveLength(0);
   });
 
-  it('parse-entity error triggers one-shot retry with parse_mode omitted', async () => {
-    // First call: Telegram parse failure. Second call: success.
-    queue({
-      status: 400,
-      body: {
-        ok: false,
-        error_code: 400,
-        description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 42",
-      },
-    });
-    queue({ status: 200, body: { ok: true, result: { message_id: 222 } } });
-
-    const fallbackReasons: string[] = [];
+  it('converts *bold* to <b>bold</b>', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
     const api = new TelegramAPI('111:AAA');
-    const result = await api.sendMessage('chat1', 'prose with a dangling _underscore', undefined, {
-      onParseFallback: (reason) => fallbackReasons.push(reason),
-    });
-
-    expect(result?.result?.message_id).toBe(222);
-    expect(callLog).toHaveLength(2);
-    // First attempt used Markdown:
-    expect(callLog[0].body.parse_mode).toBe('Markdown');
-    // Retry attempt has NO parse_mode field:
-    expect(callLog[1].body).not.toHaveProperty('parse_mode');
-    // Same chat_id and text on both attempts:
-    expect(callLog[1].body.chat_id).toBe('chat1');
-    expect(callLog[1].body.text).toBe('prose with a dangling _underscore');
-    // Exactly one warning emitted, plus the caller's hook fired once:
-    expect(warnLog).toHaveLength(1);
-    expect(warnLog[0]).toMatch(/parse-mode fallback for chat chat1/);
-    expect(fallbackReasons).toHaveLength(1);
-    expect(fallbackReasons[0]).toMatch(/can'?t parse entities/i);
+    await api.sendMessage('chat1', '*hello world*');
+    expect(callLog[0].body.text).toBe('<b>hello world</b>');
   });
 
-  it('parse-entity error AND retry also fails: sendMessage rethrows, no infinite loop', async () => {
-    queue({
-      status: 400,
-      body: { ok: false, error_code: 400, description: "Bad Request: can't parse entities" },
-    });
-    queue({
-      status: 500,
-      body: { ok: false, error_code: 500, description: 'Internal Server Error' },
-    });
-
+  it('converts `inline code` to <code>inline code</code>', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
     const api = new TelegramAPI('111:AAA');
-    await expect(api.sendMessage('chat1', 'bad text')).rejects.toThrow(/Internal Server Error/);
-
-    // Exactly 2 calls — the initial attempt and one retry. Never more.
-    expect(callLog).toHaveLength(2);
-    // Warning was still emitted before the retry attempt (observability).
-    expect(warnLog).toHaveLength(1);
+    await api.sendMessage('chat1', 'run `--runtime` flag');
+    expect(callLog[0].body.text).toBe('run <code>--runtime</code> flag');
   });
 
-  it('non-parse error (401 unauthorized) does NOT trigger retry, fails fast', async () => {
+  it('converts fenced code blocks to <pre><code>', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', '```\nnpm install\n```');
+    expect(callLog[0].body.text).toContain('<pre><code>');
+    expect(callLog[0].body.text).toContain('npm install');
+    expect(callLog[0].body.text).toContain('</code></pre>');
+  });
+
+  it('HTML-escapes & < > in raw text', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', 'cost is $100 & more <info>');
+    expect(callLog[0].body.text).toBe('cost is $100 &amp; more &lt;info&gt;');
+  });
+
+  it('$ signs and numbers are not dropped', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', '$50 budget at $100 hard-block');
+    expect(callLog[0].body.text).toBe('$50 budget at $100 hard-block');
+  });
+
+  it('converts [text](url) to <a href="url">text</a>', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', 'check [the docs](https://example.com/docs)');
+    expect(callLog[0].body.text).toBe('check <a href="https://example.com/docs">the docs</a>');
+  });
+
+  it('underscores in filenames/flags are not dropped', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', 'file_name.ts and CTX_ROOT env');
+    // snake_case should NOT be converted to italic
+    expect(callLog[0].body.text).toBe('file_name.ts and CTX_ROOT env');
+  });
+
+  it('non-parse error (401 unauthorized) fails fast, no retry', async () => {
     queue({ status: 401, body: { ok: false, error_code: 401, description: 'Unauthorized' } });
 
     const api = new TelegramAPI('999:BAD');
     await expect(api.sendMessage('chat1', 'test')).rejects.toThrow(/Unauthorized/);
 
-    // Only ONE call — 401 is not recoverable via parse-mode removal.
     expect(callLog).toHaveLength(1);
     expect(warnLog).toHaveLength(0);
   });
 
-  it('opt-in plain-text mode: first call has no parse_mode, no retry, no warning', async () => {
+  it('opt-in plain-text mode: no parse_mode field, no Markdown conversion', async () => {
     queue({ status: 200, body: { ok: true, result: { message_id: 333 } } });
 
     const api = new TelegramAPI('111:AAA');
     const result = await api.sendMessage(
       'chat1',
-      'literal _underscores_ and *asterisks* all over',
+      '*not bold* `not code`',
       undefined,
       { parseMode: null },
     );
@@ -147,91 +139,53 @@ describe('TelegramAPI.sendMessage parse-mode retry', () => {
     expect(result?.result?.message_id).toBe(333);
     expect(callLog).toHaveLength(1);
     expect(callLog[0].body).not.toHaveProperty('parse_mode');
+    // Content is HTML-escaped but not Markdown-converted
+    expect(callLog[0].body.text).toBe('*not bold* `not code`');
     expect(warnLog).toHaveLength(0);
   });
 
-  it('opt-in plain-text mode does NOT retry even if Telegram returns a parse-like error string', async () => {
-    // Edge case: if the caller is in plain-text mode and Telegram still
-    // returns an error that mentions "parse entities" (shouldn't happen
-    // in practice but guards the logic), we must NOT retry — there's no
-    // further parse_mode to strip.
-    queue({
-      status: 400,
-      body: { ok: false, error_code: 400, description: "Bad Request: can't parse entities (weird edge case)" },
-    });
-
-    const api = new TelegramAPI('111:AAA');
-    await expect(
-      api.sendMessage('chat1', 'weird', undefined, { parseMode: null }),
-    ).rejects.toThrow(/parse entities/);
-
-    expect(callLog).toHaveLength(1);
-    expect(warnLog).toHaveLength(0);
-  });
-
-  it('chunked long messages: every chunk respects parseMode=null when opted in', async () => {
-    // 9000-char message → 3 chunks at 4096-char boundary.
-    const longText = 'x'.repeat(9000);
+  it('chunked long messages: splits at newline boundaries, not raw char offsets', async () => {
+    // Build a message with clear paragraph structure so we can verify split point
+    const para = 'x'.repeat(2000) + '\n\n';
+    const longText = para + para + 'z'.repeat(500); // ~4500 chars total
     queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
     queue({ status: 200, body: { ok: true, result: { message_id: 2 } } });
-    queue({ status: 200, body: { ok: true, result: { message_id: 3 } } });
 
     const api = new TelegramAPI('111:AAA');
     const result = await api.sendMessage('chat1', longText, undefined, { parseMode: null });
 
-    expect(callLog).toHaveLength(3);
+    expect(callLog).toHaveLength(2);
+    // Verify the split happened at a newline (first chunk ends with \n\n or similar)
+    expect(callLog[0].body.text.endsWith('\n\n') || callLog[0].body.text.endsWith('\n')).toBe(true);
+    expect(result?.result?.message_id).toBe(2);
+  });
+
+  it('chunked long messages: all chunks use parse_mode=HTML when not plain-text', async () => {
+    const longText = 'a'.repeat(5000);
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    queue({ status: 200, body: { ok: true, result: { message_id: 2 } } });
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', longText);
+
+    expect(callLog).toHaveLength(2);
+    for (const call of callLog) {
+      expect(call.body.parse_mode).toBe('HTML');
+    }
+  });
+
+  it('chunked long messages: all chunks omit parse_mode when plain-text', async () => {
+    const longText = 'b'.repeat(5000);
+    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
+    queue({ status: 200, body: { ok: true, result: { message_id: 2 } } });
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', longText, undefined, { parseMode: null });
+
+    expect(callLog).toHaveLength(2);
     for (const call of callLog) {
       expect(call.body).not.toHaveProperty('parse_mode');
     }
-    // Result is the last chunk's response (backwards-compatible with the
-    // pre-patch behavior).
-    expect(result?.result?.message_id).toBe(3);
-  });
-
-  it('chunked long messages: parse error on chunk 2 triggers retry for that chunk only', async () => {
-    const longText = 'y'.repeat(9000);
-    // chunk 1 ok, chunk 2 parse-fails then ok, chunk 3 ok.
-    queue({ status: 200, body: { ok: true, result: { message_id: 1 } } });
-    queue({
-      status: 400,
-      body: { ok: false, error_code: 400, description: "Bad Request: can't parse entities" },
-    });
-    queue({ status: 200, body: { ok: true, result: { message_id: 2 } } });
-    queue({ status: 200, body: { ok: true, result: { message_id: 3 } } });
-
-    const api = new TelegramAPI('111:AAA');
-    const result = await api.sendMessage('chat1', longText);
-
-    // 4 total calls: chunk1, chunk2-fail, chunk2-retry, chunk3
-    expect(callLog).toHaveLength(4);
-    expect(callLog[0].body.parse_mode).toBe('Markdown');
-    expect(callLog[1].body.parse_mode).toBe('Markdown');
-    expect(callLog[2].body).not.toHaveProperty('parse_mode'); // retry chunk 2
-    expect(callLog[3].body.parse_mode).toBe('Markdown'); // chunk 3 still Markdown
-    expect(result?.result?.message_id).toBe(3);
-    // One warning for the one fallback.
-    expect(warnLog).toHaveLength(1);
-  });
-
-  it('onParseFallback hook is called exactly once per fallback with the Telegram error message', async () => {
-    queue({
-      status: 400,
-      body: {
-        ok: false,
-        error_code: 400,
-        description: "Bad Request: can't parse entities at byte 99",
-      },
-    });
-    queue({ status: 200, body: { ok: true, result: { message_id: 5 } } });
-
-    const reasons: string[] = [];
-    const api = new TelegramAPI('111:AAA');
-    await api.sendMessage('chat1', 'bad', undefined, {
-      onParseFallback: (r) => reasons.push(r),
-    });
-
-    expect(reasons).toHaveLength(1);
-    expect(reasons[0]).toContain("can't parse entities at byte 99");
   });
 });
 
