@@ -5,7 +5,8 @@
  * prepare-submission.sh, submit-community-item.sh.
  */
 
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, cpSync, rmSync, chmodSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, cpSync, rmSync, chmodSync } from 'fs';
+import { atomicWriteSync } from '../utils/atomic.js';
 import { join, resolve, relative } from 'path';
 import { execSync, execFileSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
@@ -138,7 +139,7 @@ function readInstalled(ctxRoot: string): Record<string, { version: string; type:
 function writeInstalled(ctxRoot: string, data: Record<string, unknown>): void {
   const p = getInstalledPath(ctxRoot);
   ensureDir(ctxRoot);
-  writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+  atomicWriteSync(p, JSON.stringify(data, null, 2));
 }
 
 // --- browseCatalog ---
@@ -502,7 +503,7 @@ export function submitCommunityItem(
     submitted_at: timestamp,
   });
 
-  writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + '\n', 'utf-8');
+  atomicWriteSync(catalogPath, JSON.stringify(catalog, null, 2));
 
   // Clean up staging
   rmSync(stagingDir, { recursive: true, force: true });
