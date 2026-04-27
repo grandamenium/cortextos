@@ -303,7 +303,14 @@ export class AgentPTY {
     const keepVars = [
       'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
       'TMPDIR', 'TEMP', 'TMP', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY',
-      'NODE_PATH', 'COMSPEC', 'SystemRoot', 'USERPROFILE',
+      'NODE_PATH', 'COMSPEC', 'USERPROFILE',
+      // Windows path-expansion essentials. Stripping these causes phantom
+      // %SystemDrive% directories from inherited Search Indexer processes
+      // and Unity batchmode UPM IPC crashes (path.join(undefined,...)).
+      'SystemDrive', 'SystemRoot', 'windir',
+      'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ALLUSERSPROFILE',
+      'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432',
+      'HOMEDRIVE', 'HOMEPATH', 'PUBLIC',
     ];
     for (const key of keepVars) {
       if (process.env[key]) {
