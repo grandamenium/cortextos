@@ -1,9 +1,10 @@
 import { createServer, Server, Socket } from 'net';
-import { existsSync, unlinkSync, chmodSync } from 'fs';
-import { resolve as pathResolve } from 'path';
+import { existsSync, unlinkSync, chmodSync, writeFileSync } from 'fs';
+import { resolve as pathResolve, join } from 'path';
 import type { IPCRequest, IPCResponse } from '../types/index.js';
 import { AgentManager } from './agent-manager.js';
 import { getIpcPath } from '../utils/paths.js';
+import { ensureDir } from '../utils/atomic.js';
 
 const WORKER_NAME_REGEX = /^[a-z0-9_-]+$/;
 
@@ -16,9 +17,11 @@ export class IPCServer {
   private server: Server | null = null;
   private socketPath: string;
   private agentManager: AgentManager;
+  private instanceId: string;
 
   constructor(agentManager: AgentManager, instanceId: string = 'default') {
     this.agentManager = agentManager;
+    this.instanceId = instanceId;
     this.socketPath = getIpcPath(instanceId);
   }
 
@@ -78,6 +81,10 @@ export class IPCServer {
           }
         }
         console.log(`[ipc] Listening on ${this.socketPath}`);
+        // Signal dispatcher-ready: write a marker file that agents can check
+        // This solves the race condition where agents call CronCreate before
+        // the dispatcher thread has started (issue #210).
+        this.writeDispatcherReadyMarker();
         resolve();
       });
     });
@@ -99,6 +106,25 @@ export class IPCServer {
       } catch {
         // Ignore
       }
+    }
+  }
+
+  /**
+   * Write dispatcher-ready marker so agents know the IPC server is listening.
+   * Solves the CronCreate-on-boot race condition (issue #210) by signaling
+   * when agents can safely register crons with the daemon's dispatcher.
+   */
+  private writeDispatcherReadyMarker(): void {
+    try {
+      const ctxRoot = process.env.CTX_ROOT || '';
+      if (!ctxRoot) return;
+      const markerDir = join(ctxRoot, 'state');
+      const markerFile = join(markerDir, '.dispatcher-ready');
+      ensureDir(markerDir);
+      writeFileSync(markerFile, new Date().toISOString(), 'utf-8');
+      console.log(`[ipc] Dispatcher-ready marker written: ${markerFile}`);
+    } catch (err) {
+      console.error(`[ipc] Failed to write dispatcher-ready marker:`, err);
     }
   }
 
