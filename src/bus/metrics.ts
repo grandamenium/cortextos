@@ -74,6 +74,29 @@ export interface RegisterCommandsResult {
 
 // --- collectMetrics ---
 
+/**
+ * Decide whether a single JSONL event line should be counted as an error
+ * for the daily errors_today metric. Returns false on malformed JSON
+ * rather than throwing — bad lines should not break the report.
+ *
+ * An event qualifies only when BOTH:
+ *   - category === 'error', AND
+ *   - severity ∈ {'error', 'critical'}
+ * 'warning' is intentionally not counted toward errors_today; it has its
+ * own meaning in the severity ladder. 'info' events with category=error
+ * (the original false-positive class) are filtered out here.
+ */
+function isErrorEvent(line: string): boolean {
+  let evt: { category?: unknown; severity?: unknown };
+  try {
+    evt = JSON.parse(line);
+  } catch {
+    return false;
+  }
+  if (evt.category !== 'error') return false;
+  return evt.severity === 'error' || evt.severity === 'critical';
+}
+
 export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
   const timestamp = new Date().toISOString();
   const today = timestamp.split('T')[0];
@@ -130,7 +153,14 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
     }
     totalCompleted += completed;
 
-    // Count errors today from event logs
+    // Count errors today from event logs.
+    // Both category AND severity must match — early agents emitted
+    // category=error events at severity=info for things like
+    // `gap_detector_false_positive` (Frank had 7 of these in a single day,
+    // all classified as "errors" by the previous substring check). Filter
+    // on parsed JSON to skip false positives that happen to contain
+    // `"category":"error"` inside a metadata payload, and only count
+    // events where severity is genuinely error-level.
     let errorsToday = 0;
     const eventPaths = [
       join(ctxRoot, 'analytics', 'events', agent, `${today}.jsonl`),
@@ -142,7 +172,7 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       if (existsSync(eventFile)) {
         try {
           const lines = readFileSync(eventFile, 'utf-8').split('\n').filter(Boolean);
-          errorsToday += lines.filter(l => l.includes('"category":"error"')).length;
+          errorsToday += lines.filter(line => isErrorEvent(line)).length;
         } catch { /* skip */ }
       }
     }
