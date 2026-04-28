@@ -95,26 +95,129 @@ export function parseDurationMs(interval: string): number {
 }
 
 /**
- * Estimate the minimum expected firing interval for a 5-field cron expression.
- * Handles common patterns (every-N-minutes, every-N-hours, daily) without an
- * external library. Returns a conservative 48h fallback for anything else.
+ * Estimate the maximum expected gap between consecutive fires for a 5-field
+ * cron expression. The gap-detector multiplies this by 2 to derive its nudge
+ * threshold, so the value must reflect the worst-case real-world gap — not
+ * the typical case — or restricted crons get false-positive nudges.
+ *
+ * Coverage (using "[/]" to denote the cron step operator without confusing
+ * this JSDoc block):
+ *   - every-N-minutes:           "[/]N * * * *"          → N min
+ *   - every-N-hours:             "<m> [/]N * * *"        → N h
+ *   - daily fixed-hour:          "<m> <h> * * *"         → 24 h
+ *   - day-of-week restricted:    "<m> <h> * * <dow>"     → max gap between
+ *                                                          active weekdays
+ *                                                          (1-5 → 72 h,
+ *                                                          Sun-only → 168 h)
+ *   - day-of-month every N:      "<m> <h> [/]N * *"      → N d
+ *   - day-of-month fixed:        "<m> <h> <D> * *"       → 31 d (monthly)
+ *   - month + day-of-month:      "<m> <h> <D> <M> *"     → 365 d (yearly)
+ *   - month-only restriction:    "<m> <h> * <M> *"       → 365 d
+ *   - anything else (lists,                              → 31 d fallback
+ *     mixed restrictions)                                  (safer over-estimate;
+ *                                                          only double-fires
+ *                                                          would false-positive,
+ *                                                          never missed crons)
+ *
+ * Returning the max gap (rather than the typical fire frequency) is correct
+ * for gap-detection: the nudge fires on dead zones, not on rate.
  */
 export function cronExpressionMinIntervalMs(expr: string): number {
-  const FALLBACK_MS = 48 * 3_600_000;
+  const MIN = 60_000;
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  const FALLBACK_MS = 31 * DAY;
+
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) return FALLBACK_MS;
-  const [minute, hour] = parts;
+  const [minute, hour, dom, month, dow] = parts;
 
-  // Every N minutes: */N * * * *
+  const monthRestricted = month !== '*';
+  const domRestricted = dom !== '*';
+  const dowRestricted = dow !== '*';
+
+  // Every-N-minutes (no other restrictions): */N * * * *
   const everyMin = /^\*\/(\d+)$/.exec(minute);
-  if (everyMin && hour === '*') return parseInt(everyMin[1], 10) * 60_000;
+  if (everyMin && hour === '*' && !domRestricted && !monthRestricted && !dowRestricted) {
+    return parseInt(everyMin[1], 10) * MIN;
+  }
 
-  // Every N hours: <fixed-minute> */N * * *
+  // Every-N-hours (no date-level restrictions): <m> */N * * *
   const everyHour = /^\*\/(\d+)$/.exec(hour);
-  if (everyHour) return parseInt(everyHour[1], 10) * 3_600_000;
+  if (everyHour && !domRestricted && !monthRestricted && !dowRestricted) {
+    return parseInt(everyHour[1], 10) * HOUR;
+  }
 
-  // Fixed hour — fires daily (or on restricted days; 24h is the minimum gap)
-  if (/^\d+$/.test(hour)) return 24 * 3_600_000;
+  // Specific month + specific day-of-month → fires once per matching combo,
+  // worst case is yearly (one month per year × one day per month).
+  if (monthRestricted && domRestricted) return 365 * DAY;
+
+  // Specific day-of-month, any month → max gap is the longest month (31d),
+  // or N days when given as */N.
+  if (domRestricted) {
+    const everyDom = /^\*\/(\d+)$/.exec(dom);
+    if (everyDom) return parseInt(everyDom[1], 10) * DAY;
+    return 31 * DAY;
+  }
+
+  // Specific months, any day → daily within those months but max gap
+  // spans the unselected months. Conservatively yearly.
+  if (monthRestricted) return 365 * DAY;
+
+  // Day-of-week restricted (no DoM/Mon restrictions) — max gap is the
+  // longest stretch between active weekdays.
+  if (dowRestricted) {
+    const maxGapDays = computeDayOfWeekMaxGap(dow);
+    return maxGapDays * DAY;
+  }
+
+  // Fixed hour, no date restrictions → daily.
+  if (/^\d+$/.test(hour)) return 24 * HOUR;
 
   return FALLBACK_MS;
+}
+
+/**
+ * For a day-of-week field — single number, range ("1-5"), comma list
+ * ("1,3,5"), or step expression — return the maximum number of days
+ * between two consecutive active weekdays (cyclic across the week
+ * boundary). Returns 7 on any unparseable shape; 7 is the worst-case
+ * for any DoW restriction so it's a safe fallback.
+ */
+function computeDayOfWeekMaxGap(dow: string): number {
+  const days = new Set<number>();
+
+  for (const part of dow.split(',')) {
+    const everyN = /^\*\/(\d+)$/.exec(part);
+    if (everyN) {
+      const step = parseInt(everyN[1], 10);
+      if (step <= 0) return 7;
+      for (let i = 0; i < 7; i += step) days.add(i);
+      continue;
+    }
+    const range = /^(\d+)-(\d+)$/.exec(part);
+    if (range) {
+      const a = parseInt(range[1], 10);
+      const b = parseInt(range[2], 10);
+      if (a > b) return 7;
+      for (let i = a; i <= b; i++) days.add(i % 7);
+      continue;
+    }
+    if (/^\d+$/.test(part)) {
+      days.add(parseInt(part, 10) % 7);
+      continue;
+    }
+    return 7;
+  }
+
+  if (days.size === 0) return 7;
+
+  const sorted = [...days].sort((a, b) => a - b);
+  let maxGap = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const next = i + 1 < sorted.length ? sorted[i + 1] : sorted[0] + 7;
+    const gap = next - sorted[i];
+    if (gap > maxGap) maxGap = gap;
+  }
+  return maxGap;
 }
