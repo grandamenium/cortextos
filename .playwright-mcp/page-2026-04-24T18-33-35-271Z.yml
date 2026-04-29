@@ -1,0 +1,408 @@
+- generic [active] [ref=e1]:
+  - link "Zum Hauptinhalt springen" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]:
+        - link "PhytoMedic · Clinic" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e8]: PhytoMedic
+          - generic [ref=e9]: · Clinic
+        - navigation "Hauptnavigation" [ref=e10]:
+          - link "Produkte" [ref=e11] [cursor=pointer]:
+            - /url: /medizin/produkte
+          - link "Sorten" [ref=e12] [cursor=pointer]:
+            - /url: /medizin/sorten
+          - link "Vergleich" [ref=e13] [cursor=pointer]:
+            - /url: /medizin/sorten/vergleich
+          - link "Arzt finden" [ref=e14] [cursor=pointer]:
+            - /url: /medizin/arzt-finden
+          - link "Apotheke finden" [ref=e15] [cursor=pointer]:
+            - /url: /medizin/apotheke-finden
+          - link "Wissen" [ref=e16] [cursor=pointer]:
+            - /url: /wissen
+      - generic [ref=e21]:
+        - generic [ref=e22]:
+          - paragraph [ref=e23]: Medizinisches Cannabis
+          - heading "Produktkatalog" [level=1] [ref=e24]
+          - paragraph [ref=e25]: Blüten, Extrakte und mehr. Preise und Verfügbarkeit bei Partner-Apotheken vergleichen.
+        - generic [ref=e26]:
+          - generic [ref=e27]:
+            - generic [ref=e28]:
+              - generic [ref=e29]:
+                - generic [ref=e30]: Kategorie
+                - button "Alle" [ref=e31]
+                - button "Blüten" [ref=e32]
+                - button "Extrakte" [ref=e33]
+                - button "Zubehör" [ref=e34]
+                - button "Sonstige" [ref=e35]
+              - generic [ref=e36]:
+                - generic [ref=e37]: Genetik
+                - button "Alle" [ref=e38]
+                - button "Indica" [ref=e39]
+                - button "Sativa" [ref=e40]
+                - button "Hybrid" [ref=e41]
+            - generic [ref=e42]:
+              - textbox "Produkt suchen" [ref=e43]:
+                - /placeholder: Produkt suchen...
+              - button "Suchen" [ref=e44]
+          - paragraph [ref=e45]: 24+ Produkte
+          - generic [ref=e46]:
+            - link "Indica 420 Evolution 22/1 CA MAC Four 20 Pharma THC 22.0% CBD 0.9%" [ref=e47] [cursor=pointer]:
+              - /url: /medizin/produkte/420-evolution-22-1-ca-mac
+              - generic [ref=e48]:
+                - generic [ref=e49]:
+                  - img [ref=e51]
+                  - generic [ref=e54]: Indica
+                - generic [ref=e55]:
+                  - heading "420 Evolution 22/1 CA MAC" [level=3] [ref=e56]
+                  - paragraph [ref=e57]: Four 20 Pharma
+                  - generic [ref=e58]:
+                    - generic [ref=e59]: THC 22.0%
+                    - generic [ref=e60]: CBD 0.9%
+            - link "Hybrid 420 Evolution 27/1 CA ICC Ice Cream Cake Four 20 Pharma THC 27.0% CBD 0.9%" [ref=e61] [cursor=pointer]:
+              - /url: /medizin/produkte/420-evolution-27-1-ca-icc-ice-cream-cake
+              - generic [ref=e62]:
+                - generic [ref=e63]:
+                  - img [ref=e65]
+                  - generic [ref=e68]: Hybrid
+                - generic [ref=e69]:
+                  - heading "420 Evolution 27/1 CA ICC Ice Cream Cake" [level=3] [ref=e70]
+                  - paragraph [ref=e71]: Four 20 Pharma
+                  - generic [ref=e72]:
+                    - generic [ref=e73]: THC 27.0%
+                    - generic [ref=e74]: CBD 0.9%
+            - link "Sativa 420 Evolution 27/1 FLM CA Frozen Lemon Mints Four 20 Pharma THC 27.0% CBD 10.0%" [ref=e75] [cursor=pointer]:
+              - /url: /medizin/produkte/420-evolution-27-1-flm-ca-frozen-lemon-mints
+              - generic [ref=e76]:
+                - generic [ref=e77]:
+                  - img [ref=e79]
+                  - generic [ref=e82]: Sativa
+                - generic [ref=e83]:
+                  - heading "420 Evolution 27/1 FLM CA Frozen Lemon Mints" [level=3] [ref=e84]
+                  - paragraph [ref=e85]: Four 20 Pharma
+                  - generic [ref=e86]:
+                    - generic [ref=e87]: THC 27.0%
+                    - generic [ref=e88]: CBD 10.0%
+            - link "Indica 420 Evolution 30/1 CA GMO Cookies Four 20 Pharma THC 30.0% CBD 0.9%" [ref=e89] [cursor=pointer]:
+              - /url: /medizin/produkte/420-evolution-30-1-ca-gmo-cookies
+              - generic [ref=e90]:
+                - generic [ref=e91]:
+                  - img [ref=e93]
+                  - generic [ref=e96]: Indica
+                - generic [ref=e97]:
+                  - heading "420 Evolution 30/1 CA GMO Cookies" [level=3] [ref=e98]
+                  - paragraph [ref=e99]: Four 20 Pharma
+                  - generic [ref=e100]:
+                    - generic [ref=e101]: THC 30.0%
+                    - generic [ref=e102]: CBD 0.9%
+            - link "Hybrid 420 Evolution 30/1 CA ICC Ice Cream Cake Four 20 Pharma THC 30.0% CBD 10.0%" [ref=e103] [cursor=pointer]:
+              - /url: /medizin/produkte/420-evolution-30-1-ca-icc-ice-cream-cake
+              - generic [ref=e104]:
+                - generic [ref=e105]:
+                  - img [ref=e107]
+                  - generic [ref=e110]: Hybrid
+                - generic [ref=e111]:
+                  - heading "420 Evolution 30/1 CA ICC Ice Cream Cake" [level=3] [ref=e112]
+                  - paragraph [ref=e113]: Four 20 Pharma
+                  - generic [ref=e114]:
+                    - generic [ref=e115]: THC 30.0%
+                    - generic [ref=e116]: CBD 10.0%
+            - link "Hybrid 420 Evolution 30/1 CA PCH Peach Chementine Four 20 Pharma THC 30.0% CBD 0.9%" [ref=e117] [cursor=pointer]:
+              - /url: /medizin/produkte/420-evolution-30-1-ca-pch-peach-chementine
+              - generic [ref=e118]:
+                - generic [ref=e119]:
+                  - img [ref=e121]
+                  - generic [ref=e124]: Hybrid
+                - generic [ref=e125]:
+                  - heading "420 Evolution 30/1 CA PCH Peach Chementine" [level=3] [ref=e126]
+                  - paragraph [ref=e127]: Four 20 Pharma
+                  - generic [ref=e128]:
+                    - generic [ref=e129]: THC 30.0%
+                    - generic [ref=e130]: CBD 0.9%
+            - link "Hybrid 420 Natural 20/1 CA GG4 Gorilla Glue Four 20 Pharma THC 20.0% CBD 0.9%" [ref=e131] [cursor=pointer]:
+              - /url: /medizin/produkte/420-natural-20-1-ca-gg4-gorilla-glue
+              - generic [ref=e132]:
+                - generic [ref=e133]:
+                  - img [ref=e135]
+                  - generic [ref=e138]: Hybrid
+                - generic [ref=e139]:
+                  - heading "420 Natural 20/1 CA GG4 Gorilla Glue" [level=3] [ref=e140]
+                  - paragraph [ref=e141]: Four 20 Pharma
+                  - generic [ref=e142]:
+                    - generic [ref=e143]: THC 20.0%
+                    - generic [ref=e144]: CBD 0.9%
+            - link "Hybrid 420 Natural 22/1 CA GG4 Gorilla Glue Four 20 Pharma THC 22.0% CBD 0.9%" [ref=e145] [cursor=pointer]:
+              - /url: /medizin/produkte/420-natural-22-1-ca-gg4-gorilla-glue
+              - generic [ref=e146]:
+                - generic [ref=e147]:
+                  - img [ref=e149]
+                  - generic [ref=e152]: Hybrid
+                - generic [ref=e153]:
+                  - heading "420 Natural 22/1 CA GG4 Gorilla Glue" [level=3] [ref=e154]
+                  - paragraph [ref=e155]: Four 20 Pharma
+                  - generic [ref=e156]:
+                    - generic [ref=e157]: THC 22.0%
+                    - generic [ref=e158]: CBD 0.9%
+            - link "Hybrid AMP Classic 18/1 White Widow AMP THC 18.0% CBD 0.9%" [ref=e159] [cursor=pointer]:
+              - /url: /medizin/produkte/amp-classic-18-1-white-widow
+              - generic [ref=e160]:
+                - generic [ref=e161]:
+                  - img [ref=e163]
+                  - generic [ref=e166]: Hybrid
+                - generic [ref=e167]:
+                  - heading "AMP Classic 18/1 White Widow" [level=3] [ref=e168]
+                  - paragraph [ref=e169]: AMP
+                  - generic [ref=e170]:
+                    - generic [ref=e171]: THC 18.0%
+                    - generic [ref=e172]: CBD 0.9%
+            - link "Hybrid AMP Classic 25/1 Frosted Lemon Angel AMP THC 25.0% CBD 0.9%" [ref=e173] [cursor=pointer]:
+              - /url: /medizin/produkte/amp-classic-25-1-frosted-lemon-angel
+              - generic [ref=e174]:
+                - generic [ref=e175]:
+                  - img [ref=e177]
+                  - generic [ref=e180]: Hybrid
+                - generic [ref=e181]:
+                  - heading "AMP Classic 25/1 Frosted Lemon Angel" [level=3] [ref=e182]
+                  - paragraph [ref=e183]: AMP
+                  - generic [ref=e184]:
+                    - generic [ref=e185]: THC 25.0%
+                    - generic [ref=e186]: CBD 0.9%
+            - link "Hybrid avaay 12/8 CAN Cannatonic avaay THC 12.2% CBD 7.7%" [ref=e187] [cursor=pointer]:
+              - /url: /medizin/produkte/avaay-12-8-can-cannatonic
+              - generic [ref=e188]:
+                - generic [ref=e189]:
+                  - img [ref=e191]
+                  - generic [ref=e194]: Hybrid
+                - generic [ref=e195]:
+                  - heading "avaay 12/8 CAN Cannatonic" [level=3] [ref=e196]
+                  - paragraph [ref=e197]: avaay
+                  - generic [ref=e198]:
+                    - generic [ref=e199]: THC 12.2%
+                    - generic [ref=e200]: CBD 7.7%
+            - link "Hybrid avaay 23/1 CK Critical Kush avaay THC 23.0% CBD 0.9%" [ref=e201] [cursor=pointer]:
+              - /url: /medizin/produkte/avaay-23-1-ck-critical-kush
+              - generic [ref=e202]:
+                - generic [ref=e203]:
+                  - img [ref=e205]
+                  - generic [ref=e208]: Hybrid
+                - generic [ref=e209]:
+                  - heading "avaay 23/1 CK Critical Kush" [level=3] [ref=e210]
+                  - paragraph [ref=e211]: avaay
+                  - generic [ref=e212]:
+                    - generic [ref=e213]: THC 23.0%
+                    - generic [ref=e214]: CBD 0.9%
+            - link "Indica avaay 23/1 PYC Peyote Critical avaay THC 23.0% CBD 10.0%" [ref=e215] [cursor=pointer]:
+              - /url: /medizin/produkte/avaay-23-1-pyc-peyote-critical
+              - generic [ref=e216]:
+                - generic [ref=e217]:
+                  - img [ref=e219]
+                  - generic [ref=e222]: Indica
+                - generic [ref=e223]:
+                  - heading "avaay 23/1 PYC Peyote Critical" [level=3] [ref=e224]
+                  - paragraph [ref=e225]: avaay
+                  - generic [ref=e226]:
+                    - generic [ref=e227]: THC 23.0%
+                    - generic [ref=e228]: CBD 10.0%
+            - link "Indica avaay Signature 28/1 WB Waffle Bites avaay THC 28.0% CBD 10.0%" [ref=e229] [cursor=pointer]:
+              - /url: /medizin/produkte/avaay-signature-28-1-wb-waffle-bites
+              - generic [ref=e230]:
+                - generic [ref=e231]:
+                  - img [ref=e233]
+                  - generic [ref=e236]: Indica
+                - generic [ref=e237]:
+                  - heading "avaay Signature 28/1 WB Waffle Bites" [level=3] [ref=e238]
+                  - paragraph [ref=e239]: avaay
+                  - generic [ref=e240]:
+                    - generic [ref=e241]: THC 28.0%
+                    - generic [ref=e242]: CBD 10.0%
+            - link "Indica Bedica Cannabis Flos 14/1 (Granuliert) Bedrocan THC 14.0% CBD 0.9%" [ref=e243] [cursor=pointer]:
+              - /url: /medizin/produkte/bedica-cannabis-flos-14-1-granuliert
+              - generic [ref=e244]:
+                - generic [ref=e245]:
+                  - img [ref=e247]
+                  - generic [ref=e250]: Indica
+                - generic [ref=e251]:
+                  - heading "Bedica Cannabis Flos 14/1 (Granuliert)" [level=3] [ref=e252]
+                  - paragraph [ref=e253]: Bedrocan
+                  - generic [ref=e254]:
+                    - generic [ref=e255]: THC 14.0%
+                    - generic [ref=e256]: CBD 0.9%
+            - link "Sativa Bediol (granuliert) Bedrocan THC 6.3% CBD 8.0%" [ref=e257] [cursor=pointer]:
+              - /url: /medizin/produkte/bediol-granuliert
+              - generic [ref=e258]:
+                - generic [ref=e259]:
+                  - img [ref=e261]
+                  - generic [ref=e264]: Sativa
+                - generic [ref=e265]:
+                  - heading "Bediol (granuliert)" [level=3] [ref=e266]
+                  - paragraph [ref=e267]: Bedrocan
+                  - generic [ref=e268]:
+                    - generic [ref=e269]: THC 6.3%
+                    - generic [ref=e270]: CBD 8.0%
+            - link "Sativa Bedrocan Cannabis Flos 22/1 Bedrocan THC 22.0% CBD 0.9%" [ref=e271] [cursor=pointer]:
+              - /url: /medizin/produkte/bedrocan-cannabis-flos-22-1
+              - generic [ref=e272]:
+                - generic [ref=e273]:
+                  - img [ref=e275]
+                  - generic [ref=e278]: Sativa
+                - generic [ref=e279]:
+                  - heading "Bedrocan Cannabis Flos 22/1" [level=3] [ref=e280]
+                  - paragraph [ref=e281]: Bedrocan
+                  - generic [ref=e282]:
+                    - generic [ref=e283]: THC 22.0%
+                    - generic [ref=e284]: CBD 0.9%
+            - link "Hybrid BOTANICS Purple Cream 22/1 Purple Ice Water Nimbus Health THC 22.0% CBD 10.0%" [ref=e285] [cursor=pointer]:
+              - /url: /medizin/produkte/botanics-purple-cream-22-1-purple-ice-water
+              - generic [ref=e286]:
+                - generic [ref=e287]:
+                  - img [ref=e289]
+                  - generic [ref=e292]: Hybrid
+                - generic [ref=e293]:
+                  - heading "BOTANICS Purple Cream 22/1 Purple Ice Water" [level=3] [ref=e294]
+                  - paragraph [ref=e295]: Nimbus Health
+                  - generic [ref=e296]:
+                    - generic [ref=e297]: THC 22.0%
+                    - generic [ref=e298]: CBD 10.0%
+            - link "Indica Canify Cannabis flos 23/1 PRT Ku. Black Cherry Pie Canify THC 21.7% CBD 10.0%" [ref=e299] [cursor=pointer]:
+              - /url: /medizin/produkte/canify-cannabis-flos-23-1-prt-ku-black-cherry-pie
+              - generic [ref=e300]:
+                - generic [ref=e301]:
+                  - img [ref=e303]
+                  - generic [ref=e306]: Indica
+                - generic [ref=e307]:
+                  - heading "Canify Cannabis flos 23/1 PRT Ku. Black Cherry Pie" [level=3] [ref=e308]
+                  - paragraph [ref=e309]: Canify
+                  - generic [ref=e310]:
+                    - generic [ref=e311]: THC 21.7%
+                    - generic [ref=e312]: CBD 10.0%
+            - link "Hybrid All Nations GM 104 Mac Doughnut Cantourage THC 24.0% CBD 10.0%" [ref=e313] [cursor=pointer]:
+              - /url: /medizin/produkte/all-nations-gm-104-mac-doughnut
+              - generic [ref=e314]:
+                - generic [ref=e315]:
+                  - img [ref=e317]
+                  - generic [ref=e320]: Hybrid
+                - generic [ref=e321]:
+                  - heading "All Nations GM 104 Mac Doughnut" [level=3] [ref=e322]
+                  - paragraph [ref=e323]: Cantourage
+                  - generic [ref=e324]:
+                    - generic [ref=e325]: THC 24.0%
+                    - generic [ref=e326]: CBD 10.0%
+            - link "Indica Cannamedical Indica forte MA LLY Legendary Larry Cannamedical THC 24.0% CBD 0.9%" [ref=e327] [cursor=pointer]:
+              - /url: /medizin/produkte/cannamedical-indica-forte-ma-lly-legendary-larry
+              - generic [ref=e328]:
+                - generic [ref=e329]:
+                  - img [ref=e331]
+                  - generic [ref=e334]: Indica
+                - generic [ref=e335]:
+                  - heading "Cannamedical Indica forte MA LLY Legendary Larry" [level=3] [ref=e336]
+                  - paragraph [ref=e337]: Cannamedical
+                  - generic [ref=e338]:
+                    - generic [ref=e339]: THC 24.0%
+                    - generic [ref=e340]: CBD 0.9%
+            - link "Indica Cannamedical Indica classic Crazy Rntz Cannamedical THC 20.0% CBD 0.9%" [ref=e341] [cursor=pointer]:
+              - /url: /medizin/produkte/cannamedical-indica-classic-crazy-rntz
+              - generic [ref=e342]:
+                - generic [ref=e343]:
+                  - img [ref=e345]
+                  - generic [ref=e348]: Indica
+                - generic [ref=e349]:
+                  - heading "Cannamedical Indica classic Crazy Rntz" [level=3] [ref=e350]
+                  - paragraph [ref=e351]: Cannamedical
+                  - generic [ref=e352]:
+                    - generic [ref=e353]: THC 20.0%
+                    - generic [ref=e354]: CBD 0.9%
+            - link "Indica Cannamedical Indica forte El Jefe Cannamedical THC 24.0% CBD 0.9%" [ref=e355] [cursor=pointer]:
+              - /url: /medizin/produkte/cannamedical-indica-forte-el-jefe
+              - generic [ref=e356]:
+                - generic [ref=e357]:
+                  - img [ref=e359]
+                  - generic [ref=e362]: Indica
+                - generic [ref=e363]:
+                  - heading "Cannamedical Indica forte El Jefe" [level=3] [ref=e364]
+                  - paragraph [ref=e365]: Cannamedical
+                  - generic [ref=e366]:
+                    - generic [ref=e367]: THC 24.0%
+                    - generic [ref=e368]: CBD 0.9%
+            - link "Indica Cannamedical Indica ultra AU El Jefe Cannamedical THC 28.0% CBD 0.9%" [ref=e369] [cursor=pointer]:
+              - /url: /medizin/produkte/cannamedical-indica-ultra-au-el-jefe
+              - generic [ref=e370]:
+                - generic [ref=e371]:
+                  - img [ref=e373]
+                  - generic [ref=e376]: Indica
+                - generic [ref=e377]:
+                  - heading "Cannamedical Indica ultra AU El Jefe" [level=3] [ref=e378]
+                  - paragraph [ref=e379]: Cannamedical
+                  - generic [ref=e380]:
+                    - generic [ref=e381]: THC 28.0%
+                    - generic [ref=e382]: CBD 0.9%
+      - generic [ref=e385]:
+        - generic [ref=e386]:
+          - generic [ref=e387]:
+            - text: PhytoMedic
+            - paragraph [ref=e388]: Medizinisches Cannabis. Einfach. Sicher. Digital.
+          - generic [ref=e389]:
+            - link "LinkedIn" [ref=e390] [cursor=pointer]:
+              - /url: https://linkedin.com
+              - img [ref=e391]
+            - link "Instagram" [ref=e395] [cursor=pointer]:
+              - /url: https://instagram.com
+              - img [ref=e396]
+        - navigation "Footer-Navigation" [ref=e399]:
+          - generic [ref=e400]:
+            - heading "Patienten" [level=4] [ref=e401]
+            - list [ref=e402]:
+              - listitem [ref=e403]:
+                - link "Produktkatalog" [ref=e404] [cursor=pointer]:
+                  - /url: /medizin/produkte
+              - listitem [ref=e405]:
+                - link "Arzt finden" [ref=e406] [cursor=pointer]:
+                  - /url: /medizin/arzt-finden
+              - listitem [ref=e407]:
+                - link "Apotheke finden" [ref=e408] [cursor=pointer]:
+                  - /url: /medizin/apotheke-finden
+              - listitem [ref=e409]:
+                - link "Eignungstest" [ref=e410] [cursor=pointer]:
+                  - /url: /medizin/eignungstest
+          - generic [ref=e411]:
+            - heading "Wissen" [level=4] [ref=e412]
+            - list [ref=e413]:
+              - listitem [ref=e414]:
+                - link "Sorten-Datenbank" [ref=e415] [cursor=pointer]:
+                  - /url: /medizin/sorten
+              - listitem [ref=e416]:
+                - link "Krankheitsbilder" [ref=e417] [cursor=pointer]:
+                  - /url: /krankheiten
+              - listitem [ref=e418]:
+                - link "Ratgeber" [ref=e419] [cursor=pointer]:
+                  - /url: /wissen
+              - listitem [ref=e420]:
+                - link "THC-Rechner" [ref=e421] [cursor=pointer]:
+                  - /url: /medizin/thc-rechner
+          - generic [ref=e422]:
+            - heading "Fachleute" [level=4] [ref=e423]
+            - list [ref=e424]:
+              - listitem [ref=e425]:
+                - link "Online-Rezept" [ref=e426] [cursor=pointer]:
+                  - /url: /medizin/online-rezept
+              - listitem [ref=e427]:
+                - link "Standorte" [ref=e428] [cursor=pointer]:
+                  - /url: /medizin/standorte
+              - listitem [ref=e429]:
+                - link "Registrierung" [ref=e430] [cursor=pointer]:
+                  - /url: /registrieren
+          - generic [ref=e431]:
+            - heading "PhytoMedic" [level=4] [ref=e432]
+            - list [ref=e433]:
+              - listitem [ref=e434]:
+                - link "Impressum" [ref=e435] [cursor=pointer]:
+                  - /url: /impressum
+              - listitem [ref=e436]:
+                - link "Datenschutz" [ref=e437] [cursor=pointer]:
+                  - /url: /datenschutz
+              - listitem [ref=e438]:
+                - link "AGB" [ref=e439] [cursor=pointer]:
+                  - /url: /agb
+        - paragraph [ref=e440]: © 2026 PhytoMedic. Alle Rechte vorbehalten.
+  - region "Notifications alt+T"
+  - alert [ref=e441]
