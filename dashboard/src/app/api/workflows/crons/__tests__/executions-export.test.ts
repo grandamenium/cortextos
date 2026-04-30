@@ -18,7 +18,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { NextRequest } from 'next/server';
-import type { CronExecutionLogEntry } from '../../../../../../../../../src/types/index';
+import type { CronExecutionLogEntry } from '../../../../../../../src/types/index';
 
 // ---------------------------------------------------------------------------
 // Global setup

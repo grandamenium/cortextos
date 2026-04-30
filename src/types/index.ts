@@ -336,6 +336,17 @@ export interface CronDefinition {
   fire_count?: number;
 
   /**
+   * ISO 8601 UTC timestamp for one-shot crons — when the cron should fire once
+   * and then be deleted. Mutually exclusive with recurring `schedule` semantics:
+   * if `fire_at` is set, the daemon treats this as a one-shot regardless of
+   * `schedule`. Used by `cron-health.ts` to flag never-fired one-shots that
+   * are still inside their grace window as healthy rather than stale.
+   *
+   * @example "2026-05-15T14:00:00.000Z"
+   */
+  fire_at?: string;
+
+  /**
    * Human-readable description of what this cron does.
    * Optional — for operator documentation and dashboard display.
    *
