@@ -14,7 +14,7 @@ import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunity
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
-import { updateCronFire, parseDurationMs } from '../bus/cron-state.js';
+import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
@@ -1934,8 +1934,29 @@ busCommand
 
     const crons = readCrons(agent);
 
+    // BUG 1 fix: merge cron-state.json's `last_fire` records into the displayed
+    // last-fire timestamp. The daemon writes fire timestamps to two surfaces:
+    //   - crons.json `last_fired_at` (via cron-scheduler.updateCron)
+    //   - cron-state.json `last_fire` (via bus update-cron-fire from agent skills)
+    // For a single source of truth in the CLI, take the most recent of the two.
+    const env = resolveEnv();
+    const paths = resolvePaths(agent, env.instanceId, env.org);
+    const stateRecords = readCronState(paths.stateDir).crons;
+    const fireByName = new Map<string, string>();
+    for (const rec of stateRecords) fireByName.set(rec.name, rec.last_fire);
+
+    const mostRecent = (a?: string, b?: string): string | undefined => {
+      if (!a) return b;
+      if (!b) return a;
+      return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
+    };
+
     if (opts.json) {
-      console.log(JSON.stringify(crons, null, 2));
+      const enriched = crons.map(c => ({
+        ...c,
+        last_fired_at: mostRecent(c.last_fired_at, fireByName.get(c.name)),
+      }));
+      console.log(JSON.stringify(enriched, null, 2));
       return;
     }
 
@@ -1947,10 +1968,11 @@ busCommand
     // Compute next_fire_at for each cron so the table is informative
     const now = Date.now();
     const rows = crons.map(c => {
+      const lastFire = mostRecent(c.last_fired_at, fireByName.get(c.name));
       let nextFire = '-';
       const dms = parseDurationMs(c.schedule);
       if (!isNaN(dms)) {
-        const refMs = c.last_fired_at ? new Date(c.last_fired_at).getTime() : now;
+        const refMs = lastFire ? new Date(lastFire).getTime() : now;
         nextFire = fmtTs(new Date(refMs + dms).toISOString());
       } else {
         const nf = nextFireFromCron(c.schedule, now);
@@ -1961,7 +1983,7 @@ busCommand
         name: c.name,
         schedule: c.schedule,
         enabled: c.enabled ? 'yes' : 'no',
-        last_fire: fmtTs(c.last_fired_at),
+        last_fire: fmtTs(lastFire),
         next_fire: nextFire,
         prompt: promptPreview,
       };
