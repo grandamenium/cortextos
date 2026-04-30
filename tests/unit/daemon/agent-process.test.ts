@@ -408,4 +408,48 @@ describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
     // sessionRefresh must NOT have been called — config said 1h, not 1s
     expect(refreshSpy).not.toHaveBeenCalled();
   });
+
+  it('does not loop when max_session_seconds overflows int32 setTimeout (regression)', async () => {
+    // Without the clamp, max_session_seconds: 3600000 (1000h = 3.6T ms) would
+    // exceed Node's int32 setTimeout max (~2.147B ms), get coerced to 1ms,
+    // fire immediately, re-read the same overflow value, reschedule, and loop
+    // tightly — locking the daemon. Clamp at the call site prevents this.
+    const fs = await import('fs');
+    const mockExistsSync = vi.mocked(fs.existsSync);
+    const mockReadFileSync = vi.mocked(fs.readFileSync);
+
+    const refreshSpy = vi.fn().mockResolvedValue(undefined);
+    const logSpy = vi.fn();
+
+    mockExistsSync.mockImplementation((p: unknown) =>
+      typeof p === 'string' && p.endsWith('config.json'),
+    );
+    mockReadFileSync.mockImplementation((p: unknown) => {
+      if (typeof p === 'string' && p.endsWith('config.json')) {
+        return JSON.stringify({ max_session_seconds: 3_600_000 });
+      }
+      return '';
+    });
+
+    vi.useFakeTimers();
+    try {
+      const ap = new AgentProcess('alice', mockEnv, { max_session_seconds: 3_600_000 });
+      vi.spyOn(ap, 'sessionRefresh').mockImplementation(refreshSpy);
+      vi.spyOn(ap as unknown as { log: (m: string) => void }, 'log').mockImplementation(logSpy);
+      await ap.start();
+      // Advance past the int32 setTimeout cap. Without clamp this would log
+      // thousands of "rescheduling" lines as the 1ms-coerced timer keeps firing.
+      await vi.advanceTimersByTimeAsync(5000);
+    } finally {
+      vi.useRealTimers();
+      mockExistsSync.mockReturnValue(false);
+      mockReadFileSync.mockReset();
+    }
+
+    const rescheduleCount = logSpy.mock.calls.filter(
+      ([msg]) => typeof msg === 'string' && msg.includes('rescheduling'),
+    ).length;
+    expect(rescheduleCount).toBeLessThan(5);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
 });

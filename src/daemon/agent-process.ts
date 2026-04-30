@@ -554,6 +554,11 @@ export class AgentProcess {
 
   private startSessionTimer(): void {
     const DEFAULT_MAX_SESSION_S = 255600;
+    // Node setTimeout uses int32 ms internally. Values > 2^31-1 (~24.8d) silently
+    // coerce to 1ms, which combined with the BUG-048 reschedule loop below causes
+    // an infinite tight loop. Clamp at the call site so any future misconfigured
+    // max_session_seconds (e.g. a stray 3600000s = 1000h) cannot wedge the daemon.
+    const MAX_SETTIMEOUT_MS = 2_147_483_647;
     const startedAt = Date.now();
     const initialMs = (this.config.max_session_seconds || DEFAULT_MAX_SESSION_S) * 1000;
 
@@ -585,7 +590,7 @@ export class AgentProcess {
 
         this.log(`Session timer fired after ${Math.round(elapsedMs / 1000)}s (limit: ${currentMaxMs / 1000}s)`);
         this.sessionRefresh().catch(err => this.log(`Session refresh failed: ${err}`));
-      }, delayMs);
+      }, Math.min(delayMs, MAX_SETTIMEOUT_MS));
     };
 
     scheduleCheck(initialMs);
