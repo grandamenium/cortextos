@@ -287,15 +287,6 @@ export class AgentManager {
     // external cron system — agents no longer need to call CronCreate on boot.
     this.startAgentCronScheduler(name);
 
-    // Schedule background cron verification: waits for the agent to finish
-    // its startup turn (idle flag), then injects a prompt to verify CronList
-    // matches config.json. Handles both fresh and --continue restarts safely.
-    agentProcess.scheduleCronVerification();
-
-    // Schedule background cron gap detection: polls cron-state.json every 10 min
-    // and nudges the agent if any cron has been silent >2x its expected interval.
-    agentProcess.scheduleGapDetection();
-
     // Start fast checker in background
     checker.start().catch(err => {
       console.error(`[${name}] Fast checker error:`, err);
@@ -830,8 +821,12 @@ export class AgentManager {
 
     const onFire = async (cron: CronDefinition): Promise<void> => {
       const prompt = cron.prompt ?? `[cron] ${cron.name} fired`;
-      // Build the same injection format the agent's session expects from a fired cron
-      const injection = `[CRON FIRED] ${cron.name}: ${prompt}`;
+      // Salt with the fire timestamp so MessageDedup (which hashes the last 100
+      // injects) does not reject identical cron prompts on subsequent fires.
+      // Without the salt, every recurring cron after its first fire would be
+      // dedup-rejected and treated as a dispatch failure.
+      const firedAt = new Date().toISOString();
+      const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
       const injected = this.injectAgent(agentName, injection);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);

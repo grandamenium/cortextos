@@ -452,8 +452,24 @@ export class CronScheduler {
           this.logger(`[cron-scheduler] WARNING: removed "${name}" from schedule after fire — schedule unparseable`);
           continue; // sc is gone, skip clearing firing flag
         }
+      } else {
+        // Dispatch failed (all retries exhausted). Advance nextFireAt anyway so
+        // we don't re-fire the same scheduled slot on every subsequent tick —
+        // that produced a busy-loop when an agent was unreachable. Treat the
+        // failed window as a missed slot and schedule the next normal fire.
+        const next = computeNextFireAt(cron, now);
+        if (!isNaN(next)) {
+          sc.nextFireAt = next;
+          this.logger(
+            `[cron-scheduler] WARNING: "${name}" dispatch failed — advancing to next slot ${new Date(next).toISOString()} ` +
+            `to avoid busy-loop (no last_fired_at update; failure recorded in execution log)`
+          );
+        } else {
+          this.scheduled.delete(name);
+          this.logger(`[cron-scheduler] WARNING: removed "${name}" from schedule after failure — schedule unparseable`);
+          continue;
+        }
       }
-      // If not successful, keep existing nextFireAt so we retry next tick
       sc.firing = false;
     }
   }
