@@ -17,9 +17,14 @@ triggers: ["coding standards", "greptile patterns", "recurring findings", "code 
 
 ## When to run
 
-- **Weekly cron** (Sunday 14:00) — main mining cycle
-- **On-demand** when user notices "you keep making the same mistake"
-- **Triggered** when Greptile flags a pattern that already exists in the standards file (regression signal)
+- **Real-time poll** (every 15 min) — fast lane: only mine PRs with new
+  Greptile activity. If a P0/P1 graduates: immediate proactive push to
+  agent GUARDRAILS so the NEXT PR can't repeat the same mistake.
+- **Sunday weekly cycle** (14:00) — full re-cluster, regression report,
+  weekly digest.
+- **On-demand** when user says "run mining cycle now"
+- **Triggered** when Greptile flags a pattern that already exists in
+  the standards file (regression signal — alert immediately)
 
 ---
 
@@ -132,17 +137,94 @@ called `.collect()` on offers table — no row limit despite comment
 Each rule has: name, rule, why (mechanism), example (PR ref), detection
 (Greptile label OR custom lint).
 
-### Step 5 — Distribute (5 min)
+### Step 5 — Proactive Distribute (5 min) ⚠️ CRITICAL
 
-After updating `CODING_STANDARDS.md`:
+After updating `CODING_STANDARDS.md`, the rule must be VISIBLE to coding
+agents BEFORE they open their next PR. Pure markdown isn't enough — they
+won't read it autonomously. **Push it into their working context:**
 
-1. Update `agent/GUARDRAILS.md` red-flag table with new patterns
-2. Update `feature-completeness-checklist/SKILL.md` if pattern is checkable in browser
-3. Bump version of `CODING_STANDARDS.md` (date in header)
-4. Telegram digest: "Added 3 new coding standards from this week's
-   Greptile mining. Rules now: 27 (vs 24 last week). Iteration rate
-   dropped from 2.3 to 1.9 last week."
-5. Commit `tests/quality/CODING_STANDARDS.md` + updated guardrails
+#### 5.1 — Update agent GUARDRAILS.md (frontend-dev + backend-architect)
+
+Append to the Red Flag Table in each agent's `GUARDRAILS.md`:
+
+```markdown
+| Trigger | Red Flag Thought | Required Action |
+|---------|-----------------|-----------------|
+| About to add metadata.title with brand suffix | "I'll just add ` \| PhytoMedic`" | STOP. Check src/app/layout.tsx for title.template. If set: NEVER manually suffix. See P1-07 in tests/quality/CODING_STANDARDS.md. |
+```
+
+One row per new graduated rule. The rule's `Trigger` is the moment the
+agent might violate it; `Red Flag Thought` is the rationalization;
+`Required Action` includes the rule ID + file reference.
+
+#### 5.2 — Update PR template (.github/pull_request_template.md)
+
+Append a checkbox per critical rule. Example:
+
+```markdown
+## Pre-merge self-check
+
+- [ ] No `.collect()` without limit (P1-02)
+- [ ] No N+1 query loops (P1-01)
+- [ ] No manual `| PhytoMedic` suffix in metadata.title (P1-07)
+- [ ] All filter fields have an index (P1-03)
+- [ ] No hardcoded URLs (P1-05)
+- [ ] No race conditions on shared state (P1-04)
+- [ ] Filter BEFORE .take() (P1-06)
+- [ ] German UI consistency (P2-01)
+```
+
+When agent opens a PR, this checklist is in the description. They can't
+miss it.
+
+#### 5.3 — Generate machine-checkable lint rule
+
+Append to `tests/quality/lint-rules.yaml`:
+
+```yaml
+- id: P1-07-no-manual-brand-suffix
+  pattern: 'title:\s*"[^"]+\|\s*PhytoMedic"'
+  files: ["src/app/**/page.tsx", "src/app/**/layout.tsx"]
+  severity: error
+  message: "Don't manually suffix '| PhytoMedic' — root layout title.template handles it. See P1-07."
+```
+
+Wire `lint-rules.yaml` to pre-commit hook (separate task — once wired,
+patterns die at commit time, never reach Greptile).
+
+#### 5.4 — Telegram digest (via platform-director, not own channel)
+
+For weekly cycles only (don't spam on every real-time graduate):
+
+```
+📊 Coding Standards W18 — cortextos-improver
+
+🆕 P1-07 graduated (caught live on PR #364)
+⚠️ 5 regressing patterns: P1-01..P1-05
+📈 Iteration rate: 2.1 (vs 2.3 W17, vs target 1.5)
+
+Standards now: 9 rules
+PR template updated.
+GUARDRAILS distributed to frontend-dev + backend-architect.
+```
+
+For real-time graduates (single rule), only Telegram if SEVERITY=P0
+(critical bugs that are live in prod or could ship next).
+
+#### 5.5 — Commit + branch
+
+```bash
+cd /Users/arndt/phytomedic-saas
+git checkout -b auto/coding-standards-$(date +%Y-%m-%d-%H%M)
+git add tests/quality/ .github/pull_request_template.md \
+  $(find orgs/$CTX_ORG/agents/{frontend-dev,backend-architect}/GUARDRAILS.md 2>/dev/null)
+git commit -m "feat(quality): real-time pattern graduation — P1-XX (PR #N)"
+git push -u origin auto/coding-standards-...
+gh pr create --title "feat(quality): auto-distribute coding-standards update" \
+  --body "Auto-curated by cortextos-improver. Real-time graduation from PR #N Greptile finding."
+```
+
+Self-merge after Greptile review of the standards-PR itself passes.
 
 ---
 
