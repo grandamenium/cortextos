@@ -70,6 +70,14 @@ Wired in 8 call sites: checkout.ts, submitPrescriptionToCannaleo.ts (×4), proce
 ## Pharmacy map geodata — COMPLETE (2026-04-29)
 GOOGLE_GEOCODING_API_KEY set in Convex env. geocodePharmacyBatch ran — 316/316 pharmacies geocoded. Pharmacy map pin coverage is now full. PR #277 (Karte tab re-enable) pending merge. PR #281 contains geocoding action code.
 
+## PR #311 — 13 unbounded .collect() take limits fixed (2026-04-29)
+backend-architect added .take() limits to 13 user-facing Convex queries. Previously these were unbounded — could return arbitrarily large result sets. Now capped. Merged to main. Important security/performance fix.
+
+## Open PRs as of 2026-04-29 ~20:35 CEST
+- fix/product-imageurl-null: REOPEN-QA-01 — HiGreen imageUrl fix + prevent sync clearing existing images + checkout staleness guard fix. Active.
+- fix/price-snapshot-pagination: backfillPriceSnapshots redesign — paginates _ingestProviderPriceSnapshots to fix 32k read limit. Active (cannametrics-data).
+- feat/design-polish-p1-p2: P1+P2 monochromatic design polish pass. Active.
+
 ## /onboarding/arzt + /onboarding/apotheke — auth bypass (2026-04-29)
 Both routes render profile creation forms (doctor: Praxis-Name/Fachrichtung/Kassenart; pharmacy: Apotheken-Name/Stadt/PLZ) without auth redirect. /onboarding root is intentionally public; sub-routes were not protected by middleware. PR #313 by frontend-dev — middleware fix in progress.
 

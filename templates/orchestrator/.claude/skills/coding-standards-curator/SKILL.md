@@ -25,24 +25,43 @@ triggers: ["coding standards", "greptile patterns", "recurring findings", "code 
 
 ## The 5-step cycle
 
-### Step 1 — Mine (15 min)
+### Step 1 — Mine (incremental, 5–15 min)
 
-Pull Greptile reviews from the last 30 PRs, regardless of merge state:
+Pull Greptile reviews from EVERY PR we haven't seen yet. We persist the
+last-mined number in `tests/quality/.last-mined-pr` so future cycles
+only process new PRs (~1-5 per cycle vs 293 first-time).
 
 ```bash
 REPO=syntasticstudios/phytomedic-saas
 mkdir -p tests/quality/greptile-cache
 
-for pr in $(gh pr list --repo $REPO --state all --limit 30 --json number --jq '.[].number'); do
-  gh pr view $pr --repo $REPO --json comments \
-    > tests/quality/greptile-cache/pr-$pr.json
+LAST_MINED=$(cat tests/quality/.last-mined-pr 2>/dev/null || echo 0)
+LATEST=$(gh pr list --repo $REPO --state all --limit 1 --json number --jq '.[0].number')
+
+if [ "$LATEST" -le "$LAST_MINED" ]; then
+  echo "No new PRs since #$LAST_MINED."
+  exit 0
+fi
+
+# Mine new PRs only (cache hit if already on disk)
+for pr in $(gh pr list --repo $REPO --state all --limit 1000 --json number --jq '.[].number'); do
+  if [ "$pr" -gt "$LAST_MINED" ] && [ ! -f "tests/quality/greptile-cache/pr-$pr.json" ]; then
+    gh pr view $pr --repo $REPO \
+      --json comments,reviews \
+      --jq '{comments: [.comments[] | select(.author.login | startswith("greptile"))],
+             reviews:  [.reviews[]  | select(.author.login | startswith("greptile"))]}' \
+      > tests/quality/greptile-cache/pr-$pr.json
+  fi
 done
 
-# Extract finding bodies tagged with severity
-jq -r '.comments[] | select(.author.login | startswith("greptile")) | .body' \
-  tests/quality/greptile-cache/*.json \
-  > tests/quality/greptile-cache/all-bodies.txt
+echo "$LATEST" > tests/quality/.last-mined-pr
 ```
+
+**First-time bootstrap:** mine ALL existing PRs (set `LAST_MINED=0`).
+This was done once on 2026-04-29 — produced the initial seed of 293
+cached PRs and 8 graduated rules.
+
+**Incremental:** every Sunday only processes new PRs since the last cycle.
 
 ### Step 2 — Cluster patterns (10 min)
 
