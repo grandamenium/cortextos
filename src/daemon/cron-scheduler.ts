@@ -25,7 +25,9 @@
  * New or modified crons get a freshly computed nextFireAt.
  */
 
-import { parseDurationMs } from '../bus/cron-state.js';
+import { homedir } from 'os';
+import { join } from 'path';
+import { parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { readCrons, updateCron } from '../bus/crons.js';
 import type { CronDefinition } from '../types/index.js';
 import { appendExecutionLog } from './cron-execution-log.js';
@@ -332,6 +334,25 @@ export class CronScheduler {
     const defs = readCrons(this.agentName);
     const nextScheduled = new Map<string, ScheduledCron>();
 
+    // Read cron-state.json so catch-up sees fires recorded by `bus update-cron-fire`
+    // (e.g. agent heartbeat skills). Without this, a cron that pre-dates the
+    // external-cron migration shows last_fire only in cron-state.json — the
+    // scheduler would otherwise compute referenceMs=now and skip catch-up,
+    // silently dropping the overdue fire.
+    //
+    // Resolve stateDir from CTX_ROOT so test sandboxes (which override CTX_ROOT
+    // but not homedir) don't accidentally read production state.
+    const ctxRoot = process.env.CTX_ROOT ||
+      join(homedir(), '.cortextos', process.env.CTX_INSTANCE_ID || 'default');
+    const stateDir = join(ctxRoot, 'state', this.agentName);
+    let stateLastFireByName = new Map<string, string>();
+    try {
+      const stateFile = readCronState(stateDir);
+      for (const rec of stateFile.crons) stateLastFireByName.set(rec.name, rec.last_fire);
+    } catch {
+      // Malformed file / missing dir — fall back to crons.json only
+    }
+
     for (const def of defs) {
       if (!def.enabled) {
         // Disabled — silently skip
@@ -348,11 +369,14 @@ export class CronScheduler {
       }
 
       // New or modified cron — compute fresh nextFireAt.
-      // Base: if the cron has a recorded last_fired_at, count forward from there;
-      // otherwise count forward from now.
-      const referenceMs = def.last_fired_at
-        ? new Date(def.last_fired_at).getTime()
-        : now;
+      // Base: take the most recent of crons.json.last_fired_at and
+      // cron-state.json.last_fire (either may be more current depending on
+      // which write path recorded the fire). Fall back to now.
+      const stateFire = stateLastFireByName.get(def.name);
+      const candidates: number[] = [];
+      if (def.last_fired_at) candidates.push(new Date(def.last_fired_at).getTime());
+      if (stateFire) candidates.push(new Date(stateFire).getTime());
+      const referenceMs = candidates.length > 0 ? Math.max(...candidates) : now;
 
       let nextFireAt = computeNextFireAt(def, referenceMs);
 
