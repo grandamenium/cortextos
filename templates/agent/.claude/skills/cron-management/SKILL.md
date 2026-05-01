@@ -37,6 +37,27 @@ Restore all crons from config.json:
 
 ---
 
+## Gap-Detector Reset (on every cron fire)
+
+Every named cron in `config.json` must reset the daemon's gap detector when it fires:
+
+```bash
+cortextos bus update-cron-fire <cron-name> --interval <interval>
+```
+
+Where `<cron-name>` is the `name` field from `config.json` and `<interval>` matches the declared interval (e.g. `4h`, `2d`).
+
+The daemon has an independent cron-gap detector that does NOT watch `update-heartbeat` or `log-event` — it ONLY resets on `update-cron-fire <name>`. If you skip it, the detector fires false "cron gap detected" alerts with lag that grows monotonically each cycle, even though `CronList` shows the cron is healthy.
+
+**Required for every scheduled cron.** Include it as the first line of the cron's prompt (right after `update-heartbeat`, if applicable). Examples:
+
+- `heartbeat` (interval `4h`) → `cortextos bus update-cron-fire heartbeat --interval 4h`
+- `autoresearch-loop` (interval `2d`) → `cortextos bus update-cron-fire autoresearch-loop --interval 2d`
+
+See also: the `heartbeat` skill, which already embeds this call in the heartbeat cycle.
+
+---
+
 ## Creating a Recurring Cron
 
 1. Write to `config.json` first:

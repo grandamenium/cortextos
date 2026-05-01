@@ -7,9 +7,12 @@ Skipping steps = broken system. The dashboard monitors your compliance.
 
 ```bash
 cortextos bus update-heartbeat "<1-sentence summary of current work>"
+cortextos bus update-cron-fire heartbeat --interval 4h
 ```
 
-If this fails, your agent shows as DEAD on the dashboard. Fix it before anything else.
+The first call updates the agent-alive signal on the dashboard. The second call registers with the daemon's cron-gap detector that the heartbeat cron just fired — without it, the daemon fires false "cron gap" alerts even though the cron is running fine (the detector tracks this registration, not the in-memory CronCreate job). Both are required every heartbeat cycle.
+
+If either fails, your agent shows as DEAD on the dashboard. Fix before anything else.
 
 ## Step 2: Check inbox
 
