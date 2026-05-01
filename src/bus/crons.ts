@@ -14,11 +14,12 @@
  * Write always goes through atomicWriteSync (mkdir + tmp rename).
  */
 
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 import type { CronDefinition, CronExecutionLogEntry } from '../types/index.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME, cronExecutionLogPathFor } from './crons-schema.js';
 import { atomicWriteSync } from '../utils/atomic.js';
+import { withFileLockSync } from '../utils/lock.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -40,6 +41,23 @@ interface CronsFile {
 function cronsFilePath(agentName: string): string {
   const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
   return join(ctxRoot, CRONS_DIRECTORY, agentName, CRONS_FILENAME);
+}
+
+/**
+ * Per-agent lock directory for the read-modify-write helpers below.
+ *
+ * `acquireLock` (utils/lock.ts) creates a `.lock.d` mkdir inside this
+ * dir, so the dir itself must exist.  We mkdir-recursive on first use
+ * — same idempotent path that atomicWriteSync uses.
+ *
+ * Using the agent's directory (parent of crons.json) means different
+ * agents don't block each other; only writers to the SAME agent's
+ * crons.json serialize.
+ */
+function lockDirFor(agentName: string): string {
+  const dir = dirname(cronsFilePath(agentName));
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,12 +209,14 @@ export function writeCrons(agentName: string, crons: CronDefinition[]): void {
  * @throws {Error} if a cron with the same name already exists for the agent.
  */
 export function addCron(agentName: string, cron: CronDefinition): void {
-  const existing = readCrons(agentName);
-  const collision = existing.find(c => c.name === cron.name);
-  if (collision !== undefined) {
-    throw new Error(`cron "${cron.name}" already exists for agent "${agentName}"`);
-  }
-  writeCrons(agentName, [...existing, cron]);
+  withFileLockSync(lockDirFor(agentName), () => {
+    const existing = readCrons(agentName);
+    const collision = existing.find(c => c.name === cron.name);
+    if (collision !== undefined) {
+      throw new Error(`cron "${cron.name}" already exists for agent "${agentName}"`);
+    }
+    writeCrons(agentName, [...existing, cron]);
+  });
 }
 
 /**
@@ -206,14 +226,16 @@ export function addCron(agentName: string, cron: CronDefinition): void {
  *          Never throws (idempotent).
  */
 export function removeCron(agentName: string, name: string): boolean {
-  const existing = readCrons(agentName);
-  const idx = existing.findIndex(c => c.name === name);
-  if (idx === -1) {
-    return false;
-  }
-  const updated = [...existing.slice(0, idx), ...existing.slice(idx + 1)];
-  writeCrons(agentName, updated);
-  return true;
+  return withFileLockSync(lockDirFor(agentName), () => {
+    const existing = readCrons(agentName);
+    const idx = existing.findIndex(c => c.name === name);
+    if (idx === -1) {
+      return false;
+    }
+    const updated = [...existing.slice(0, idx), ...existing.slice(idx + 1)];
+    writeCrons(agentName, updated);
+    return true;
+  });
 }
 
 /**
@@ -230,16 +252,18 @@ export function updateCron(
   name: string,
   patch: Partial<CronDefinition>
 ): boolean {
-  const existing = readCrons(agentName);
-  const idx = existing.findIndex(c => c.name === name);
-  if (idx === -1) {
-    return false;
-  }
-  const updated = existing.map((c, i) =>
-    i === idx ? { ...c, ...patch, name: c.name } : c
-  );
-  writeCrons(agentName, updated);
-  return true;
+  return withFileLockSync(lockDirFor(agentName), () => {
+    const existing = readCrons(agentName);
+    const idx = existing.findIndex(c => c.name === name);
+    if (idx === -1) {
+      return false;
+    }
+    const updated = existing.map((c, i) =>
+      i === idx ? { ...c, ...patch, name: c.name } : c
+    );
+    writeCrons(agentName, updated);
+    return true;
+  });
 }
 
 /**
