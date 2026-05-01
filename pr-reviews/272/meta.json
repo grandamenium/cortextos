@@ -1,0 +1,25 @@
+{
+  "pr_number": 272,
+  "title": "feat(bus): hooks framework — Day-1 stub + Day-2 per-handler wiring + telemetry",
+  "author": "noogalabs",
+  "head_branch": "feat/bus-hooks-framework",
+  "additions": 600,
+  "deletions": 0,
+  "changed_files": 2,
+  "files": ["src/bus/hooks.ts", "tests/unit/bus/hooks.test.ts"],
+  "risk_tier": "LOW",
+  "iterations_run": 1,
+  "started_at": "2026-04-30T11:17Z",
+  "completed_at": "2026-04-30T11:30Z",
+  "stages": {
+    "stage1_static_gates": "pass",
+    "stage2_risk_triage": "pass",
+    "stage3_test_plan": "complete",
+    "stage4_sandbox_exec": "complete",
+    "stage5_delivery": "complete"
+  },
+  "incidents": [
+    "Smoke harness leaked 3 events to default/testorg analytics (no CTX_INSTANCE_ID set)",
+    "Cleanup of those events corrupted the daily analytics jsonl due to rtk grep rewrite — lost ~4 legitimate events for cortext-designer/default/testorg/2026-04-30"
+  ]
+}

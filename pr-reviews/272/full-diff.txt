@@ -1,0 +1,211 @@
+
+src/bus/hooks.ts
+  @@ -0,0 +1,343 @@
+  +// added 2026-04-29 by collie via dane dispatch — RFC #15 minimal stub; dispatcher wiring pending Aussie/Codex Thu execution
+  +//
+  +// Bus hook framework — registry loader, event matcher, dispatcher stub.
+  +// Schema lives at orgs/<org>/hooks.json. Per RFC #15 §4, this file is the
+  +// in-process surface that fast-checker will eventually call on every logged
+  +// event. Today nothing is wired — loadHookRegistry + matchHooks return data,
+  +// dispatchHook only logs the would-be invocation.
+  +
+  +import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'fs';
+  +import { join, dirname } from 'path';
+  +import { execFile } from 'child_process';
+  +import type { Event, EventCategory, EventSeverity } from '../types/index.js';
+  +
+  +// ── Schema types — mirror RFC #15 §4 ─────────────────────────────────────────
+  +
+  +export type HandlerType = 'log_event' | 'send_message' | 'bash' | 'webhook';
+  +
+  +/**
+  + * Pattern that an Event must match for a hook to fire.
+  + * Matching is partial — only the fields present in the pattern are checked.
+  + * `metadata` keys (when present) require deep equality on the listed keys only.
+  + */
+  +export interface HookPattern {
+  +  category?: EventCategory;
+  +  type?: string;
+  +  severity?: EventSeverity;
+  +  metadata?: Record<string, unknown>;
+  +}
+  +
+  +/**
+  + * Handler payload. Shape varies by HandlerType but is a flat object at the
+  + * registry level — the dispatcher narrows by `handler_type` at runtime.
+  + */
+  +export interface Handler {
+  +  category?: EventCategory;
+  +  type?: string;
+  +  severity?: EventSeverity;
+  +  meta?: Record<string, unknown>;
+  +  to?: string;
+  +  priority?: 'urgent' | 'high' | 'normal' | 'low';
+  +  template?: string;
+  +  command?: string;
+  +  url?: string;
+  +}
+  +
+  +export interface HookEntry {
+  +  id: string;
+  +  event_pattern: HookPattern;
+  +  handler_type: HandlerType;
+  +  handler: Handler;
+  +  agent_filter?: string[];
+  +  priority: number;
+  +  enabled: boolean;
+  +  notes?: string;
+  +}
+  +
+  +export interface HookRegistry {
+  +  schema_version: string;
+  +  comment?: string;
+  +  hooks: HookEntry[];
+  +}
+  +
+  +const EMPTY_REGISTRY: HookRegistry = { schema_version: '0.1', hooks: [] };
+  +
+  +// added 2026-04-29 by collie via dane dispatch — Day-2 per-handler wiring: handler-result contract
+  +/**
+  + * Result a handler can return to influence which bus event the dispatcher emits.
+  + *
+  + * - `fire` → handler ran (or implicitly accepts); dispatcher emits `hook_fire`.
+  + * - `block` → handler refused the action this hook was invoked for; dispatcher emits `hook_block`.
+  + * - `escalate` → handler bumped severity / re-routed to a higher-priority surface; dispatcher emits `hook_escalate`.
+  + *
+  + * `reason` is a short slug intended to slot into the bus event meta `outcome` field.
+  + * `meta` is merged into the bus event meta, never used to override the dispatcher's own bookkeeping fields.
+  + */
+  +export interface HandlerResult {
+  +  action: 'fire' | 'block' | 'escalate';
+  +  reason?: string;
+  +  meta?: Record<string, unknown>;
+  +}
+  +
+  +/**
+  + * Synchronous or async handler function. Returns a HandlerResult, or undefined/void
+  + * for the implicit "fire" default. Throws are caught by the dispatcher and treated
+  + * as `{action: 'block', reason: 'handler_threw'}` so a buggy handler never breaks the loop.
+  + */
+  +export type HandlerFn = (
+  +  hook: HookEntry,
+  +  event: Event,
+  +) => Promise<HandlerResult | void | undefined> | HandlerResult | void | undefined;
+  +
+  +// added 2026-04-29 by collie via dane dispatch — Day-2 per-handler wiring: in-process handler registry.
+  +// Day-1 stub had a single static `dispatchHook` that always logged-and-fired. Day-2 lets callers
+  +// (Codex Thu / Aussie's Day-3 wiring / future skill-side handlers) register handler implementations
+  +// per HandlerType. If no handler is registered for a hook's handler_type, dispatcher falls back to
+  +// the Day-1 stub behavior (log + emit `hook_fire`). This is backwards-compatible.
+  +const _handlerRegistry: Map<HandlerType, HandlerFn> = new Map();
+  +
+  +/**
+  + * Register a handler function for a given HandlerType. Replaces any existing handler.
+  ... (243 lines truncated)
+  +343 -0
+
+tests/unit/bus/hooks.test.ts
+  @@ -0,0 +1,257 @@
+  +// added 2026-04-29 by collie via dane dispatch — RFC #15 Day-2 per-handler wiring tests.
+  +// Covers HandlerResult-driven dispatch (fire / block / escalate / undefined / throw) and
+  +// the basic loadHookRegistry + matchHooks paths so a regression in either surface is caught.
+  +
+  +import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+  +import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+  +import { join } from 'path';
+  +import { tmpdir } from 'os';
+  +import type { Event } from '../../../src/types/index';
+  +
+  +// Capture every execFile invocation so we can assert which bus event was emitted.
+  +// The dispatcher uses execFile('cortextos', ['bus', 'log-event', 'action', <name>, 'info', '--meta', <json>])
+  +// fire-and-forget — we intercept before it spawns anything.
+  +const execFileCalls: Array<{ cmd: string; args: string[] }> = [];
+  +vi.mock('child_process', () => ({
+  +  execFile: (cmd: string, args: string[], _opts: unknown, cb?: () => void) => {
+  +    execFileCalls.push({ cmd, args: [...args] });
+  +    if (typeof cb === 'function') cb();
+  +    return { unref: () => {} };
+  +  },
+  +}));
+  +
+  +// Imported AFTER vi.mock so the mocked execFile is in effect.
+  +import {
+  +  loadHookRegistry,
+  +  matchHooks,
+  +  dispatchHook,
+  +  registerHandler,
+  +  clearHandlerRegistry,
+  +  _getRegisteredHandler,
+  +  type HookEntry,
+  +  type HandlerResult,
+  +} from '../../../src/bus/hooks';
+  +
+  +function makeEvent(overrides: Partial<Event> = {}): Event {
+  +  return {
+  +    id: 'evt-1',
+  +    agent: 'collie',
+  +    org: 'ascendops',
+  +    timestamp: '2026-04-29T20:00:00Z',
+  +    category: 'action',
+  +    event: 'pm_meld_completed',
+  +    severity: 'info',
+  +    metadata: {},
+  +    ...overrides,
+  +  };
+  +}
+  +
+  +function makeHook(overrides: Partial<HookEntry> = {}): HookEntry {
+  +  return {
+  +    id: 'h1',
+  +    event_pattern: { category: 'action', type: 'pm_meld_completed' },
+  +    handler_type: 'log_event',
+  +    handler: { category: 'action', type: 'demo', severity: 'info', meta: {} },
+  +    agent_filter: [],
+  +    priority: 100,
+  +    enabled: true,
+  +    ...overrides,
+  +  };
+  +}
+  +
+  +// Helper: read the meta JSON from the most recent execFile call.
+  +function lastEmittedEvent(): { name: string; meta: Record<string, unknown> } | null {
+  +  if (execFileCalls.length === 0) return null;
+  +  const args = execFileCalls[execFileCalls.length - 1].args;
+  +  // shape: [bus, log-event, action, <name>, info, --meta, <json>]
+  +  const name = args[3];
+  +  const metaIdx = args.indexOf('--meta');
+  +  const meta = metaIdx >= 0 && metaIdx + 1 < args.length ? JSON.parse(args[metaIdx + 1]) : {};
+  +  return { name, meta };
+  +}
+  +
+  +describe('src/bus/hooks — Day-2 per-handler wiring', () => {
+  +  beforeEach(() => {
+  +    execFileCalls.length = 0;
+  +    clearHandlerRegistry();
+  +  });
+  +
+  +  describe('loadHookRegistry', () => {
+  +    let tmp: string;
+  +
+  +    beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'cx-hooks-')); });
+  +    afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+  +
+  +    it('returns empty registry when hooks.json is missing', () => {
+  +      const reg = loadHookRegistry(tmp);
+  +      expect(reg.hooks).toEqual([]);
+  +      expect(reg.schema_version).toBe('0.1');
+  +    });
+  +
+  +    it('returns empty registry on malformed JSON (fail-open)', () => {
+  +      writeFileSync(join(tmp, 'hooks.json'), '{not json');
+  +      const reg = loadHookRegistry(tmp);
+  +      expect(reg.hooks).toEqual([]);
+  +    });
+  +
+  +    it('parses a valid registry', () => {
+  +      const valid = {
+  +        schema_version: '1.0',
+  +        hooks: [makeHook({ id: 'a' }), makeHook({ id: 'b' })],
+  ... (157 lines truncated)
+  +257 -0
+[full diff: rtk git diff --no-compact]
