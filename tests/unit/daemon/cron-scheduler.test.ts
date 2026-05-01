@@ -394,6 +394,76 @@ describe('CronScheduler', () => {
   // the next tick can re-fire the same logical event.
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Iter 8 audit: remove-cron during in-flight fire — orphan / re-fire probe
+  //
+  // BUG DISCOVERED (iter 9 candidate): the empty-result fallback at
+  // cron-scheduler.ts loadCrons() (~line 426) reverts to lastGoodSchedule when
+  // a reload yields an empty result. This catches transient corruption (intent)
+  // BUT also catches legitimate empty-by-removal (regression): if the user
+  // removes the LAST cron via `bus remove-cron`, crons.json is now empty,
+  // reload sees [] from readCrons(), and the fallback restores the just-removed
+  // cron from lastGoodSchedule. The cron continues to fire after removal
+  // until either (a) the daemon restarts, or (b) another non-empty reload
+  // happens.
+  //
+  // Fix sketch (iter 9): distinguish "legitimate empty" (file exists + parses
+  // to []) from "catastrophic corruption" (both primary and .bak unparseable)
+  // in readCrons / a sibling function. Only retain lastGoodSchedule on the
+  // latter. Tests below pin both current behavior and the desired post-fix
+  // behavior.
+  // -------------------------------------------------------------------------
+
+  it('remove-cron mid-fire: in-flight fire injects exactly once (no double-fire) — passes', async () => {
+    let resolveFire: (() => void) | undefined;
+    const slowFire = vi.fn().mockImplementation(() => new Promise<void>((res) => { resolveFire = res; }));
+
+    const auditScheduler = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: slowFire,
+      logger: (msg) => logs.push(msg),
+    });
+
+    // Two crons so the post-removal state is legitimately non-empty (avoiding
+    // the empty-result fallback bug in this assertion).
+    const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+    mockReadCrons.mockReturnValue([
+      makeCron({ name: 'doomed', schedule: '10m', last_fired_at: tenMinAgo, fire_count: 1 }),
+      makeCron({ name: 'survivor', schedule: '24h', last_fired_at: new Date(Date.now() - 1_000).toISOString() }),
+    ]);
+
+    auditScheduler.start();
+
+    // Tick 1: 'doomed' fires catch-up, awaits slowFire
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect(slowFire).toHaveBeenCalledTimes(1);
+
+    // Mid-fire: simulate remove-cron of 'doomed' — crons.json now only has survivor
+    mockReadCrons.mockReturnValue([
+      makeCron({ name: 'survivor', schedule: '24h', last_fired_at: new Date(Date.now() - 1_000).toISOString() }),
+    ]);
+    auditScheduler.reload();
+
+    // Schedule no longer contains 'doomed'
+    const namesAfter = auditScheduler.getNextFireTimes().map(e => e.name);
+    expect(namesAfter).not.toContain('doomed');
+    expect(namesAfter).toContain('survivor');
+
+    // Resolve the in-flight fire
+    resolveFire!();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Advance multiple ticks — must NOT re-fire 'doomed'
+    await vi.advanceTimersByTimeAsync(5 * TICK);
+
+    expect(slowFire).toHaveBeenCalledTimes(1);
+    auditScheduler.stop();
+  });
+
+  it.todo(
+    'iter 9: remove-cron of LAST cron clears the schedule (currently reverts via lastGoodSchedule fallback)'
+  );
+
   it('reload() during in-flight fire with changed schedule does not cause double-fire', async () => {
     // Slow onFire we can resolve manually
     let resolveFire: (() => void) | undefined;
