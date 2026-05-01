@@ -450,8 +450,12 @@ describe('FM-3: Cascading failures — daemon + agent + corruption; independent 
     }, failureLogs);
     recoveryScheduler.start();
 
-    // Catch-up fires within 1 tick
-    await vi.advanceTimersByTimeAsync(TICK_MS + ONE_MIN);
+    // Iter 11 semantic: pre-fire persists of last_fire_attempted_at shifted
+    // .bak's "one write back" snapshot to a state where each cron's
+    // attempted_at is current — so catch-up is suppressed on recovery.
+    // Advance through the next scheduled slot to verify normal forward
+    // scheduling resumes.  cascade-30m (the shorter interval) fires first.
+    await advanceSim(31 * ONE_MIN);
     const recoveredFires = fired.filter(f => f.startsWith('recovered-'));
     expect(recoveredFires.length).toBeGreaterThan(0);
 
@@ -472,10 +476,14 @@ describe('FM-3: Cascading failures — daemon + agent + corruption; independent 
     recoveryScheduler.stop();
   });
 
-  it('daemon restart after retry interruption — cron fires catch-up on next start', async () => {
+  it('daemon restart after retry interruption — cron fires next scheduled slot (iter 11: no catch-up because attempted_at was persisted)', async () => {
     // Tests FM-6 in the cascade context: daemon restarts while fireWithRetry is
-    // mid-backoff. The in-flight retry is lost (daemon died), but on restart the
-    // cron is seen as overdue (last_fired_at is old/unset) and fires a catch-up.
+    // mid-backoff.  Iter 11 changed the semantic: the pre-fire persist of
+    // last_fire_attempted_at now records the dispatch attempt BEFORE the
+    // retry loop.  On restart, loadCrons sees the attempt timestamp and
+    // suppresses the catch-up — preventing potential double-fire (the agent
+    // may have actually received the prompt before the daemon crashed).
+    // The cron fires at the NEXT scheduled slot instead of immediately.
     const agent = 'fm-retry-interrupt';
     ensureAgentDir(agent);
 
@@ -518,16 +526,18 @@ describe('FM-3: Cascading failures — daemon + agent + corruption; independent 
     shouldFail = false;
     callCount = 0;
 
-    // The cron's last_fired_at is the old past time (no successful fire happened),
-    // so nextFireAt = last_fired_at + 1h = past time + 1h, which is still in the past.
-    // On restart, loadCrons() will see nextFireAt <= now and schedule a catch-up.
+    // Iter 11: last_fire_attempted_at was persisted before the failed retry
+    // loop began.  loadCrons sees attempted_at ≈ "now" and computes
+    // nextFireAt = attempted_at + 1h — i.e. the next scheduled slot is one
+    // full interval out, NOT a catch-up.  Verify the cron resumes firing
+    // at that next slot.
     const restartScheduler = buildScheduler(agent, (c) => {
       fired.push(`post-restart:${c.name}`);
     }, logs);
     restartScheduler.start();
 
-    // Catch-up fires on first tick
-    await vi.advanceTimersByTimeAsync(TICK_MS + ONE_MIN);
+    // Advance one full interval + a tick so the next scheduled fire happens.
+    await advanceSim(ONE_HOUR + TICK_MS + ONE_MIN);
 
     const postRestartFires = fired.filter(f => f.startsWith('post-restart:'));
     expect(postRestartFires.length).toBeGreaterThan(0);

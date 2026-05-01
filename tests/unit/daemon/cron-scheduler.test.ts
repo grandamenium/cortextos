@@ -303,8 +303,21 @@ describe('CronScheduler', () => {
     // Scheduler must NOT crash — the log should contain a give-up message
     expect(retryLogs.some(l => l.includes('giving up'))).toBe(true);
 
-    // No updateCron call because all attempts failed
-    expect(mockUpdateCron).not.toHaveBeenCalled();
+    // updateCron is called exactly once with last_fire_attempted_at (iter 11
+    // pre-fire persist), but NEVER with last_fired_at because all attempts
+    // failed.  This matches the iter 11 invariant: attempted_at is recorded
+    // even on failed dispatches so a crash mid-fire cannot double-fire.
+    expect(mockUpdateCron).toHaveBeenCalledTimes(1);
+    expect(mockUpdateCron).toHaveBeenCalledWith(
+      'test-agent',
+      'test-cron',
+      expect.objectContaining({ last_fire_attempted_at: expect.any(String) })
+    );
+    expect(mockUpdateCron).not.toHaveBeenCalledWith(
+      'test-agent',
+      'test-cron',
+      expect.objectContaining({ last_fired_at: expect.any(String) })
+    );
 
     retryScheduler.stop();
   });
@@ -330,7 +343,19 @@ describe('CronScheduler', () => {
     await vi.advanceTimersByTimeAsync(60_000 + TICK + 1_000 + 500);
 
     expect(flakyFire).toHaveBeenCalledTimes(2);
-    expect(mockUpdateCron).toHaveBeenCalledTimes(1);
+    // 2 updateCron calls: 1 pre-fire attempted_at (iter 11) + 1 post-success
+    // last_fired_at/fire_count.
+    expect(mockUpdateCron).toHaveBeenCalledTimes(2);
+    expect(mockUpdateCron).toHaveBeenCalledWith(
+      'test-agent',
+      'test-cron',
+      expect.objectContaining({ last_fire_attempted_at: expect.any(String) })
+    );
+    expect(mockUpdateCron).toHaveBeenCalledWith(
+      'test-agent',
+      'test-cron',
+      expect.objectContaining({ last_fired_at: expect.any(String), fire_count: expect.any(Number) })
+    );
 
     retryScheduler.stop();
   });
@@ -576,41 +601,45 @@ describe('CronScheduler', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Iter 10 audit: daemon-crash mid-fire double-fire risk
+  // Iter 10 audit / iter 11 fix: daemon-crash mid-fire MUST NOT double-fire
   //
-  // BUG (pinned below; fix candidate iter 11): if the daemon crashes between
-  // sc.firing=true (cron-scheduler.ts:466) and the post-success updateCron
-  // persist (cron-scheduler.ts:480), nothing on disk records that the fire
-  // happened. On restart, loadCrons computes referenceMs from the STALE
-  // crons.json.last_fired_at and cron-state.json.last_fire (neither was
-  // updated for the in-flight fire). The catch-up gate (line 408) sees
-  // nextFireAt in the past and fires AGAIN — same logical scheduled tick,
-  // two prompt injections.
+  // BUG (iter 10 audit): if the daemon crashes between sc.firing=true and
+  // the post-success updateCron persist, nothing on disk records that the
+  // fire happened. On restart, loadCrons computes referenceMs from the
+  // STALE crons.json.last_fired_at and cron-state.json.last_fire. The
+  // catch-up gate sees nextFireAt in the past and fires AGAIN — same
+  // logical scheduled tick, two prompt injections.
   //
-  // sc.firing is in-memory only — there is no firing_started_at /
-  // last_fire_attempted_at field on disk that loadCrons could check. The
-  // reload-while-firing guard at line 377 protects against IPC reloads
-  // mid-fire but NOT against process-level crashes.
-  //
-  // Fix sketch (iter 11): persist `last_fire_attempted_at` to crons.json
-  // BEFORE awaiting onFire, and include it in loadCrons's `candidates` for
-  // referenceMs. Crash mid-fire → restart sees attempted_at = "now" → no
-  // catch-up. Tradeoff: a fire whose dispatch genuinely failed before the
-  // current process crashed will be skipped one window — acceptable
+  // FIX (iter 11): persist `last_fire_attempted_at` to crons.json BEFORE
+  // awaiting onFire, and include it in loadCrons's `candidates` for
+  // referenceMs. Crash mid-fire → restart sees attempted_at = "now" →
+  // referenceMs is current → nextFireAt is in the future → no catch-up
+  // fire. Tradeoff: a fire whose dispatch genuinely failed before the
+  // current process crashed will be skipped one window — acceptable,
   // because the alternative (double-fire on every crash) is worse.
   // -------------------------------------------------------------------------
 
-  it('iter 10 audit: daemon crash mid-fire causes double-fire on restart (pinned)', async () => {
+  it('iter 11: daemon crash mid-fire does NOT double-fire on restart (last_fire_attempted_at persisted before onFire)', async () => {
     const oneHourAgo = new Date(Date.now() - 60 * 60_000).toISOString();
-    mockReadCrons.mockReturnValue([
-      makeCron({ name: 'daily-job', schedule: '1h', last_fired_at: oneHourAgo, fire_count: 5 }),
-    ]);
+
+    // Mutable disk-state mock: the cron starts with last_fired_at=1h ago
+    // and no attempted_at.  When the scheduler calls updateCron, we apply
+    // the patch to this object so subsequent reads see the in-progress
+    // attempt — same semantics as the real atomicWriteSync persist.
+    let diskCron = makeCron({
+      name: 'daily-job',
+      schedule: '1h',
+      last_fired_at: oneHourAgo,
+      fire_count: 5,
+    });
+    mockReadCrons.mockImplementation(() => [diskCron]);
+    mockUpdateCron.mockImplementation((_agent: string, _name: string, patch: Partial<CronDefinition>) => {
+      diskCron = { ...diskCron, ...patch };
+    });
 
     // Slow onFire we never resolve — simulates "fire began, agent received
-    // the prompt, daemon crashed before the persist call could write
-    // last_fired_at = T."
-    let _resolveFire: (() => void) | undefined;
-    const slowFire = vi.fn().mockImplementation(() => new Promise<void>((res) => { _resolveFire = res; }));
+    // the prompt, daemon crashed before completion."
+    const slowFire = vi.fn().mockImplementation(() => new Promise<void>(() => { /* never resolves */ }));
 
     const scheduler1 = new CronScheduler({
       agentName: 'test-agent',
@@ -621,12 +650,22 @@ describe('CronScheduler', () => {
     scheduler1.start();
     await vi.advanceTimersByTimeAsync(TICK);
     expect(slowFire).toHaveBeenCalledTimes(1);
-    // Crash before the persist runs: updateCron has NOT been called.
-    expect(mockUpdateCron).not.toHaveBeenCalled();
+    // Iter 11 invariant: updateCron MUST be called with last_fire_attempted_at
+    // BEFORE the slow onFire resolves (i.e. before the post-success persist).
+    expect(mockUpdateCron).toHaveBeenCalledWith(
+      'test-agent',
+      'daily-job',
+      expect.objectContaining({ last_fire_attempted_at: expect.any(String) })
+    );
+    expect(diskCron.last_fire_attempted_at).toBeDefined();
+    // The post-success persist (last_fired_at, fire_count) must NOT have
+    // run — the fire is still in flight.
+    expect(diskCron.last_fired_at).toBe(oneHourAgo);
+    expect(diskCron.fire_count).toBe(5);
 
     // Simulate the crash: stop scheduler 1 without resolving the in-flight
-    // fire.  Disk state is unchanged (mockReadCrons still returns the stale
-    // last_fired_at = 1h ago).
+    // fire.  Disk state now has last_fire_attempted_at ≈ now but stale
+    // last_fired_at.
     scheduler1.stop();
 
     // Restart: build a fresh scheduler with the same mocked disk state.
@@ -638,18 +677,13 @@ describe('CronScheduler', () => {
     scheduler2.start();
     await vi.advanceTimersByTimeAsync(TICK);
 
-    // CURRENT (buggy) BEHAVIOR: scheduler 2 catch-up fires the same logical
-    // tick — onFire is called a SECOND time.  Pinned here so iter 11's fix
-    // can flip the assertion.
-    expect(slowFire).toHaveBeenCalledTimes(2);
+    // FIXED BEHAVIOR: scheduler 2's loadCrons sees attempted_at ≈ now in
+    // the referenceMs candidates → nextFireAt = now + 1h → not in past →
+    // no catch-up → onFire is NOT called a second time.
+    expect(slowFire).toHaveBeenCalledTimes(1);
 
     scheduler2.stop();
   });
-
-  it.todo(
-    'iter 11: daemon crash mid-fire does NOT double-fire on restart ' +
-    '(persist last_fire_attempted_at before onFire so loadCrons sees the in-progress fire)'
-  );
 
   // -------------------------------------------------------------------------
   // Catch-up on start

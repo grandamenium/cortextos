@@ -529,8 +529,13 @@ describe('Scenario 3: Agent crash — PTY unavailable, graceful failure, recover
     const s2 = buildScheduler(agent, onFire, logs);
     s2.start();
 
-    // Should catch up and fire again
-    await vi.advanceTimersByTimeAsync(TICK_MS);
+    // Iter 11 semantic: each failed fire above persisted last_fire_attempted_at,
+    // so on restart loadCrons computes nextFireAt = attempted_at + interval —
+    // i.e. the catch-up gate is intentionally suppressed (attempts were made,
+    // so re-firing them risks double-fire if the agent actually received the
+    // prompt before the failure).  Advance to the NEXT scheduled slot to
+    // verify normal forward scheduling resumes.
+    await advanceSim(ONE_HOUR + TICK_MS);
     await vi.advanceTimersByTimeAsync(22_000);
 
     s2.stop();
@@ -582,10 +587,15 @@ describe('Scenario 3: Agent crash — PTY unavailable, graceful failure, recover
     expect(afterCrash?.fire_count ?? 0).toBe(fireCountAfterPhase1);
 
     // Phase 3: recovery
+    // Iter 11 semantic: Phase 2's failed fire persisted last_fire_attempted_at,
+    // so loadCrons sees referenceMs = attempted_at and nextFireAt is in the
+    // FUTURE (one full interval out) — no catch-up.  Advance through one
+    // more scheduled slot to verify normal forward scheduling resumes and
+    // increments fire_count.
     agentOnline = true;
     const s3 = buildScheduler(agent, onFire);
     s3.start();
-    await vi.advanceTimersByTimeAsync(TICK_MS + 1_000);
+    await advanceSim(ONE_HOUR + TICK_MS + 1_000);
     s3.stop();
 
     const afterRecovery = getCronByName(agent, 'monitor');

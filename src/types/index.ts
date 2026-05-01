@@ -329,6 +329,16 @@ export interface CronDefinition {
   last_fired_at?: string;
 
   /**
+   * ISO 8601 UTC timestamp set by the scheduler IMMEDIATELY before it awaits
+   * the onFire dispatch — i.e. before the agent has acked. On daemon crash
+   * mid-fire, this lets `loadCrons` recompute `referenceMs` from the attempt
+   * timestamp instead of the stale `last_fired_at`, preventing a double-fire
+   * via the catch-up gate. Tradeoff: a fire whose dispatch genuinely failed
+   * pre-crash will be skipped one window — preferable to guaranteed re-fire.
+   */
+  last_fire_attempted_at?: string;
+
+  /**
    * Total number of times this cron has successfully fired.
    * Incremented by the daemon on each successful PTY injection.
    * Absent (or 0) when the cron has never fired.

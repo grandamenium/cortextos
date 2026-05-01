@@ -384,12 +384,15 @@ export class CronScheduler {
       }
 
       // New or modified cron — compute fresh nextFireAt.
-      // Base: take the most recent of crons.json.last_fired_at and
-      // cron-state.json.last_fire (either may be more current depending on
-      // which write path recorded the fire). Fall back to now.
+      // Base: take the most recent of crons.json.last_fired_at,
+      // crons.json.last_fire_attempted_at (set pre-onFire to detect crash
+      // mid-fire — iter 11), and cron-state.json.last_fire (either may be
+      // more current depending on which write path recorded the fire).
+      // Fall back to now.
       const stateFire = stateLastFireByName.get(def.name);
       const candidates: number[] = [];
       if (def.last_fired_at) candidates.push(new Date(def.last_fired_at).getTime());
+      if (def.last_fire_attempted_at) candidates.push(new Date(def.last_fire_attempted_at).getTime());
       if (stateFire) candidates.push(new Date(stateFire).getTime());
       const referenceMs = candidates.length > 0 ? Math.max(...candidates) : now;
 
@@ -466,6 +469,23 @@ export class CronScheduler {
       sc.firing = true;
       const cron = sc.definition;
       this.logger(`[cron-scheduler] firing cron "${name}" (was due ${new Date(sc.nextFireAt).toISOString()})`);
+
+      // Persist last_fire_attempted_at to disk BEFORE awaiting the dispatch.
+      // If the daemon crashes between this point and the post-success
+      // updateCron below, loadCrons() on restart will see this attempt
+      // timestamp in the referenceMs candidates and avoid re-firing the
+      // same slot via the catch-up gate. (See iter 10/11 audit.)
+      const attemptIso = new Date(now).toISOString();
+      try {
+        updateCron(this.agentName, name, { last_fire_attempted_at: attemptIso });
+        sc.definition = { ...cron, last_fire_attempted_at: attemptIso };
+      } catch (err) {
+        this.logger(
+          `[cron-scheduler] WARNING: failed to persist last_fire_attempted_at for "${name}" — ` +
+          `${err instanceof Error ? err.message : String(err)}. ` +
+          `Continuing dispatch; crash mid-fire could double-fire on restart.`
+        );
+      }
 
       const success = await fireWithRetry(cron, this.agentName, this.onFire, this.logger);
 
