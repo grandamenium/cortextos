@@ -1,9 +1,11 @@
-import { readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { Approval, ApprovalCategory, ApprovalStatus, BusPaths } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { parseEnvFile } from '../utils/env.js';
 import { randomString } from '../utils/random.js';
 import { validateApprovalCategory } from '../utils/validate.js';
+import { TelegramAPI } from '../telegram/api.js';
 import { sendMessage } from './message.js';
 import { postActivity } from './system.js';
 
@@ -96,6 +98,68 @@ function postApprovalToActivityChannel(
 }
 
 /**
+ * Best-effort: ping the requesting agent's own Telegram chat (the operator's
+ * 1:1 conversation with the agent's bot) when a new approval is created.
+ * The activity-channel post handles "Approve / Deny" inline routing for the
+ * operator-via-orchestrator UX, but operators on a per-agent bot would
+ * otherwise miss approvals entirely — that's the source of the observed
+ * 50h+ Repo-B-style stalls. This pings them on the bot they're actually
+ * watching so they can hop to the orchestrator chat or dashboard to act.
+ *
+ * Reads BOT_TOKEN + CHAT_ID from `<agentDir>/.env`. Skips silently with a
+ * single warn line when either is missing — approvals from a bot-less
+ * agent (e.g. a hermes runtime, or pre-onboarding) must still succeed.
+ *
+ * Errors from the network round-trip are suppressed: a Telegram outage
+ * must not block approval creation.
+ */
+function pingAgentChatId(
+  agentDir: string | undefined,
+  approvalId: string,
+  title: string,
+  category: ApprovalCategory,
+  agentName: string,
+  context: string | undefined,
+): Promise<void> {
+  if (!agentDir) {
+    console.warn(
+      `[approval] No agentDir available for ${approvalId} — skipping agent-bot Telegram ping.`,
+    );
+    return Promise.resolve();
+  }
+  const envPath = join(agentDir, '.env');
+  if (!existsSync(envPath)) {
+    return Promise.resolve();
+  }
+  const env = parseEnvFile(envPath);
+  const botToken = env.BOT_TOKEN;
+  const chatId = env.CHAT_ID;
+  if (!botToken || !chatId) {
+    console.warn(
+      `[approval] BOT_TOKEN or CHAT_ID missing in ${envPath} — skipping agent-bot Telegram ping for ${approvalId}.`,
+    );
+    return Promise.resolve();
+  }
+
+  const lines = [
+    `🔔 Approval needed: ${title}`,
+    `Category: ${category}`,
+    `Requested by: ${agentName}`,
+  ];
+  if (context) {
+    lines.push('', context);
+  }
+  lines.push('', `id: ${approvalId}`);
+  lines.push('', 'Approve via the orchestrator chat (Approve/Deny buttons) or the dashboard.');
+  const message = lines.join('\n');
+
+  const api = new TelegramAPI(botToken);
+  return api.sendMessage(chatId, message, undefined, { parseMode: null })
+    .then(() => undefined)
+    .catch(() => undefined); // Telegram outage must not fail approval creation.
+}
+
+/**
  * Create an approval request.
  * Identical to bash create-approval.sh format.
  *
@@ -119,6 +183,7 @@ export async function createApproval(
   category: ApprovalCategory,
   context?: string,
   frameworkRoot?: string,
+  agentDir?: string,
 ): Promise<string> {
   validateApprovalCategory(category);
 
@@ -153,6 +218,12 @@ export async function createApproval(
   // via the orchestrator's activity-channel poller (see
   // daemon/agent-manager.ts).
   await postApprovalToActivityChannel(paths, org, approvalId, title, category, agentName, context, frameworkRoot);
+
+  // Best-effort ping to the requesting agent's own Telegram bot (the
+  // operator's 1:1 conversation with the agent). Closes the gap where
+  // operators not in the activity channel would miss approvals entirely
+  // (the 50h+ Repo-B-style stall). Errors suppressed — see helper.
+  await pingAgentChatId(agentDir, approvalId, title, category, agentName, context);
 
   return approvalId;
 }
