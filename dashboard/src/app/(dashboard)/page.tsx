@@ -6,6 +6,7 @@ import { getGoals } from '@/lib/data/goals';
 import { getHealthSummary, getAllHeartbeats } from '@/lib/data/heartbeats';
 import { getRecentEvents, getMilestones } from '@/lib/data/events';
 import { discoverAgents } from '@/lib/data/agents';
+import { getMomentum } from '@/lib/data/momentum';
 
 import { ActionRequired } from '@/components/overview/action-required';
 import { CurrentFocus } from '@/components/overview/current-focus';
@@ -13,6 +14,7 @@ import { TodaysProgress } from '@/components/overview/todays-progress';
 import { LiveActivity } from '@/components/overview/live-activity';
 import { SystemHealth } from '@/components/overview/system-health';
 import { MetricCards } from '@/components/overview/metric-cards';
+import { MomentumStrip } from '@/components/overview/momentum-strip';
 import { AgentStatusGrid } from '@/components/overview/agent-status-grid';
 
 export const dynamic = 'force-dynamic';
@@ -40,6 +42,7 @@ export default async function OverviewPage({
     milestones,
     agents,
     heartbeatsList,
+    momentum,
   ] = await Promise.all([
     Promise.resolve(getPendingCount(org || undefined)),
     Promise.resolve(getTasks({ status: 'blocked', org: org || undefined })),
@@ -51,6 +54,7 @@ export default async function OverviewPage({
     Promise.resolve(getMilestones(org || undefined)),
     discoverAgents(org || undefined),
     getAllHeartbeats(),
+    getMomentum(),
   ]);
 
   // Convert heartbeats array to lookup map
@@ -96,6 +100,9 @@ export default async function OverviewPage({
         pendingApprovals={pendingCount}
         blockedTasks={blockedTasks.length}
       />
+
+      {/* Momentum Strip - Phil's streak + fleet wins (misty's coaching widgets) */}
+      <MomentumStrip data={momentum} />
 
       {/* Action Required - only show if there are actions */}
       {totalActions > 0 && (
