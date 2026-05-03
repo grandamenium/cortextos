@@ -9,6 +9,7 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { readCronState, parseDurationMs, cronExpressionMinIntervalMs, intervalToCronExpression } from '../bus/cron-state.js';
+import { readCronList, findMissingCrons } from '../bus/cron-list.js';
 import { resolvePaths } from '../utils/paths.js';
 
 type LogFn = (msg: string) => void;
@@ -742,6 +743,84 @@ export class AgentProcess {
     this.runGapDetectionLoop(monitorable, generation, loopStartedAt).catch(err => {
       this.log(`Cron gap detection failed (non-fatal): ${err}`);
     });
+  }
+
+  /**
+   * Starts a background loop that detects crons present in config.json but
+   * missing from the agent's last-dumped CronList output. Catches the case
+   * where a cron silently drops off (7-day CronCreate auto-expiry, an
+   * unobserved restart, or compaction) BEFORE the gap-detection 2x-interval
+   * threshold has had time to elapse — on a weekly cron that is otherwise
+   * 14 days of silent failure.
+   *
+   * Fire-and-forget: errors are logged but never propagated.
+   */
+  scheduleCronListMismatchDetection(): void {
+    const crons = this.config.crons;
+    if (!crons || crons.length === 0) return;
+
+    const generation = this.lifecycleGeneration;
+    this.runCronListMismatchLoop(generation).catch(err => {
+      this.log(`Cron-list mismatch detection failed (non-fatal): ${err}`);
+    });
+  }
+
+  private async runCronListMismatchLoop(generation: number): Promise<void> {
+    const POLL_MS = 10 * 60 * 1000;       // poll every 10 minutes
+    const STALE_MAX_AGE_MS = 60 * 60 * 1000; // skip dumps older than 1h
+
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    let warnedMissingFile = false;
+
+    // Initial wait — give the agent time to boot and dump its first CronList
+    // (heartbeat fires the dump on every cycle; first dump may not arrive
+    // until the first heartbeat after startup).
+    await sleep(POLL_MS);
+
+    while (true) {
+      if (generation !== this.lifecycleGeneration || this.status !== 'running') return;
+
+      const liveList = readCronList(stateDir, STALE_MAX_AGE_MS);
+      if (!liveList) {
+        // null covers: missing file, malformed JSON, stale (>1h). Log the
+        // missing-file case once so a never-dumping agent surfaces visibly,
+        // then skip until the next heartbeat refreshes the file.
+        if (!warnedMissingFile) {
+          this.log('Cron-list mismatch: cron-list.json missing or stale — agent has not dumped CronList yet (or it is >1h old). Skipping until next heartbeat.');
+          warnedMissingFile = true;
+        }
+        await sleep(POLL_MS);
+        continue;
+      }
+      warnedMissingFile = false;
+
+      const configCrons = (this.config.crons ?? []).map(c => ({
+        name: c.name,
+        prompt: c.prompt,
+        type: c.type,
+      }));
+      const missing = findMissingCrons(configCrons, liveList.crons);
+
+      for (const cfg of missing) {
+        const cronDef = this.config.crons!.find(c => c.name === cfg.name);
+        if (!cronDef) continue;
+        const cronExpr = cronDef.cron
+          ?? (cronDef.interval ? intervalToCronExpression(cronDef.interval) : null);
+        const recreateHint = cronExpr
+          ? `Recreate it NOW with CronCreate (do NOT use /loop): cron="${cronExpr}", recurring=true, prompt=${JSON.stringify(cronDef.prompt)}.`
+          : `Recreate it NOW from config.json — interval "${cronDef.interval ?? 'unknown'}" cannot be expressed as a clean cron, so use /loop with the verbatim prompt from config.json.`;
+        const nudge = `[SYSTEM] Cron "${cfg.name}" is in config.json but missing from your last CronList dump (likely silently dropped via 7-day auto-expiry). ${recreateHint}`;
+
+        this.log(`Mismatch nudge: ${cfg.name} missing from live CronList`);
+        if (this.pty && this.status === 'running') {
+          injectMessage((data) => this.pty?.write(data), nudge);
+          // Stagger so back-to-back missing-cron injections don't spike context.
+          await sleep(30_000);
+        }
+      }
+
+      await sleep(POLL_MS);
+    }
   }
 
   private async runGapDetectionLoop(

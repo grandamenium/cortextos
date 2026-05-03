@@ -277,6 +277,13 @@ export class AgentManager {
     // and nudges the agent if any cron has been silent >2x its expected interval.
     agentProcess.scheduleGapDetection();
 
+    // Schedule background cron-list mismatch detection: polls cron-list.json
+    // (the agent's last-dumped CronList output) every 10 min and injects a
+    // forced-recreate nudge when a cron in config.json is missing from the
+    // live list — catches the 7-day CronCreate auto-expiry cliff before the
+    // gap detector's 2x-interval threshold has had time to elapse.
+    agentProcess.scheduleCronListMismatchDetection();
+
     // Start fast checker in background
     checker.start().catch(err => {
       console.error(`[${name}] Fast checker error:`, err);

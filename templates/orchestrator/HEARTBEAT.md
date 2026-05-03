@@ -11,6 +11,28 @@ cortextos bus update-heartbeat "<1-sentence summary of current work>"
 
 If this fails, your agent shows as DEAD on the dashboard. Fix it before anything else.
 
+## Step 1b: Cron survival check + dump live CronList (CRITICAL — closes the 7-day silent cliff)
+
+CronCreate auto-expires after 7 days. Without this check, crons silently disappear and the agent goes DEAD until something nudges it. The daemon also polls `state/<agent>/cron-list.json` (your last dump) and injects a forced-recreate nudge when a cron in `config.json` is missing from your live list — so this dump every heartbeat is what closes the silent cliff.
+
+1. Call `CronList`. Cross-reference each live entry against `config.json`'s `crons[]` by prompt text.
+2. For ANY cron in `config.json` not in the live `CronList` output, recreate it with `CronCreate` using the **cron expression** (or interval converted to a cron expression) and the verbatim `prompt` from `config.json`. Do NOT use `/loop` — for intervals ≥60 minutes it pops `AskUserQuestion`, which you cannot answer in this context.
+3. Dump the live CronList to `cron-list.json` as a JSON array of `{name, prompt}` objects (one per live cron). Match each live entry's prompt back to a `config.json` name where possible; pass the verbatim prompt either way:
+
+```bash
+# Replace the inline array with the actual CronList contents you just observed.
+echo '[{"name":"<config-name>","prompt":"<verbatim cron prompt>"},...]' \
+  | cortextos bus update-cron-list
+```
+
+Log any recreation:
+
+```bash
+cortextos bus log-event action cron_recreated info --meta '{"agent":"'$CTX_AGENT_NAME'","cron":"<name>"}'
+```
+
+If `cron-list.json` is not refreshed for >1h, the daemon's mismatch detector skips silently — so don't miss this step.
+
 ## Step 2: Sweep inbox for un-ACK'd messages
 
 Messages arrive in real time via the fast-checker daemon — you don't need to poll for them. This step is a safety sweep for anything that wasn't ACK'd (e.g. a crash mid-processing).

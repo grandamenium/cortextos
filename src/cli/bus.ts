@@ -15,6 +15,7 @@ import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collec
 import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
 import { updateCronFire } from '../bus/cron-state.js';
+import { writeCronList, type CronListEntry } from '../bus/cron-list.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
@@ -1782,6 +1783,48 @@ busCommand
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     updateCronFire(paths.stateDir, cronName, opts.interval);
     console.log(`Recorded fire for cron "${cronName}"`);
+  });
+
+busCommand
+  .command('update-cron-list')
+  .description('Mirror the agent\'s current CronList output to state/<agent>/cron-list.json. Reads JSON array of {name, prompt} from stdin or --json. Used by the daemon to detect crons that have silently dropped out (closes the 7-day CronCreate auto-expiry cliff before gap accumulation).')
+  .option('--json <json>', 'CronList JSON array (alternative to stdin)')
+  .action(async (opts: { json?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+
+    let raw = opts.json;
+    if (!raw) {
+      raw = await new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        process.stdin.on('data', (c) => chunks.push(c));
+        process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+        process.stdin.on('error', reject);
+      });
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.trim() || '[]');
+    } catch (err) {
+      console.error(`Error: invalid JSON: ${err}`);
+      process.exit(1);
+    }
+    if (!Array.isArray(parsed)) {
+      console.error('Error: expected a JSON array of {name, prompt} objects');
+      process.exit(1);
+    }
+
+    const entries: CronListEntry[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') continue;
+      const obj = item as Record<string, unknown>;
+      if (typeof obj.name !== 'string' || typeof obj.prompt !== 'string') continue;
+      entries.push({ name: obj.name, prompt: obj.prompt });
+    }
+
+    writeCronList(paths.stateDir, entries);
+    console.log(`Wrote cron-list.json (${entries.length} entries)`);
   });
 
 busCommand
