@@ -8,7 +8,7 @@ import { MessageDedup, injectMessage } from '../pty/inject.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
-import { readCronState, parseDurationMs, cronExpressionMinIntervalMs } from '../bus/cron-state.js';
+import { readCronState, parseDurationMs, cronExpressionMinIntervalMs, intervalToCronExpression } from '../bus/cron-state.js';
 import { resolvePaths } from '../utils/paths.js';
 
 type LogFn = (msg: string) => void;
@@ -724,9 +724,12 @@ export class AgentProcess {
     const crons = this.config.crons;
     if (!crons || crons.length === 0) return;
 
-    // Monitor recurring crons with either a parseable interval or a cron expression
+    // Monitor recurring crons with either a parseable interval or a cron expression.
+    // Skip entries with missing prompts (malformed config) so the gap nudge can always
+    // include CronCreate-ready instructions.
     const monitorable = crons.filter(c => {
       if (c.type === 'once' || c.type === 'disabled') return false;
+      if (!c.prompt || typeof c.prompt !== 'string') return false;
       if (c.interval && !isNaN(parseDurationMs(c.interval))) return true;
       if (c.cron) return true;
       return false;
@@ -742,7 +745,7 @@ export class AgentProcess {
   }
 
   private async runGapDetectionLoop(
-    crons: Array<{ name: string; interval?: string; cron?: string }>,
+    crons: Array<{ name: string; interval?: string; cron?: string; prompt: string }>,
     generation: number,
     loopStartedAt: number,
   ): Promise<void> {
@@ -784,9 +787,11 @@ export class AgentProcess {
         if (gapMs > threshold) {
           const gapMin = Math.round(gapMs / 60_000);
           const expectedMin = Math.round(intervalMs / 60_000);
-          const restoreHint = cronDef.interval
-            ? `If missing, restore it from config.json: /loop ${cronDef.interval} <cron prompt>.`
-            : `If missing, restore it from config.json using the cron expression in your config.`;
+          const cronExpr = cronDef.cron
+            ?? (cronDef.interval ? intervalToCronExpression(cronDef.interval) : null);
+          const restoreHint = cronExpr
+            ? `If missing, recreate it directly with CronCreate (do NOT use /loop, which prompts for confirmation on long intervals): cron="${cronExpr}", recurring=true, prompt=${JSON.stringify(cronDef.prompt)}.`
+            : `If missing, recreate it from config.json — interval "${cronDef.interval ?? 'unknown'}" can't be expressed as a clean cron, so use /loop with the verbatim prompt from config.json.`;
           const nudge = `[SYSTEM] Cron gap detected for "${cronDef.name}": last fired ${gapMin} minutes ago (expected every ${expectedMin} minutes). Run CronList to verify the cron is still active. ${restoreHint}`;
 
           this.log(`Gap nudge: ${cronDef.name} silent ${gapMin}min (threshold: ${Math.round(threshold / 60_000)}min)`);

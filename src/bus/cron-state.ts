@@ -95,6 +95,41 @@ export function parseDurationMs(interval: string): number {
 }
 
 /**
+ * Convert a duration interval ("4h", "30m", "1d", "1w") into a 5-field cron
+ * expression. Returns null when the interval doesn't cleanly fit a recurring
+ * cron slot (e.g. "7m" leaves uneven gaps; "5w" has no clean weekly form).
+ *
+ * Mirrors the rounding rules in the /loop skill so daemon-injected nudges can
+ * give the agent a CronCreate-ready expression instead of a /loop command
+ * (which prompts AskUserQuestion for ≥60-minute intervals).
+ */
+export function intervalToCronExpression(interval: string): string | null {
+  const match = /^(\d+)(m|h|d|w)$/.exec(interval.trim());
+  if (!match) return null;
+  const n = parseInt(match[1], 10);
+  if (n <= 0) return null;
+  const unit = match[2];
+
+  if (unit === 'm') {
+    if (n <= 59) return 60 % n === 0 ? `*/${n} * * * *` : null;
+    if (n % 60 !== 0) return null;
+    const hours = n / 60;
+    return hours <= 23 && 24 % hours === 0 ? `0 */${hours} * * *` : null;
+  }
+  if (unit === 'h') {
+    if (n <= 23) return 24 % n === 0 ? `0 */${n} * * *` : null;
+    return null;
+  }
+  if (unit === 'd') {
+    return n >= 1 ? `0 0 */${n} * *` : null;
+  }
+  if (unit === 'w') {
+    return n === 1 ? '0 0 * * 0' : null;
+  }
+  return null;
+}
+
+/**
  * Estimate the minimum expected firing interval for a 5-field cron expression.
  * Handles common patterns (every-N-minutes, every-N-hours, daily) without an
  * external library. Returns a conservative 48h fallback for anything else.

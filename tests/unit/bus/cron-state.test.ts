@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { updateCronFire, readCronState, parseDurationMs } from '../../../src/bus/cron-state';
+import { updateCronFire, readCronState, parseDurationMs, intervalToCronExpression } from '../../../src/bus/cron-state';
 
 let tmpDir: string;
 
@@ -44,6 +44,60 @@ describe('parseDurationMs', () => {
   it('returns NaN for unknown unit', () => {
     expect(parseDurationMs('5y')).toBeNaN();
     expect(parseDurationMs('10s')).toBeNaN();
+  });
+});
+
+describe('intervalToCronExpression', () => {
+  it('converts sub-hour minute intervals that divide 60', () => {
+    expect(intervalToCronExpression('5m')).toBe('*/5 * * * *');
+    expect(intervalToCronExpression('15m')).toBe('*/15 * * * *');
+    expect(intervalToCronExpression('30m')).toBe('*/30 * * * *');
+  });
+
+  it('returns null for minute intervals that do not divide 60 cleanly', () => {
+    expect(intervalToCronExpression('7m')).toBeNull();
+    expect(intervalToCronExpression('45m')).toBeNull();
+  });
+
+  it('converts whole-hour minute intervals when hours divide 24', () => {
+    expect(intervalToCronExpression('60m')).toBe('0 */1 * * *');
+    expect(intervalToCronExpression('120m')).toBe('0 */2 * * *');
+    expect(intervalToCronExpression('240m')).toBe('0 */4 * * *');
+  });
+
+  it('returns null for whole-hour minute intervals that do not divide 24', () => {
+    expect(intervalToCronExpression('300m')).toBeNull(); // 5 hours doesn't divide 24
+    expect(intervalToCronExpression('420m')).toBeNull(); // 7 hours
+  });
+
+  it('converts hour intervals that divide 24', () => {
+    expect(intervalToCronExpression('1h')).toBe('0 */1 * * *');
+    expect(intervalToCronExpression('4h')).toBe('0 */4 * * *');
+    expect(intervalToCronExpression('12h')).toBe('0 */12 * * *');
+  });
+
+  it('returns null for hour intervals that do not divide 24', () => {
+    expect(intervalToCronExpression('5h')).toBeNull();
+    expect(intervalToCronExpression('7h')).toBeNull();
+    expect(intervalToCronExpression('25h')).toBeNull();
+  });
+
+  it('converts day intervals', () => {
+    expect(intervalToCronExpression('1d')).toBe('0 0 */1 * *');
+    expect(intervalToCronExpression('7d')).toBe('0 0 */7 * *');
+  });
+
+  it('converts 1w only', () => {
+    expect(intervalToCronExpression('1w')).toBe('0 0 * * 0');
+    expect(intervalToCronExpression('2w')).toBeNull();
+  });
+
+  it('returns null for malformed or unsupported intervals', () => {
+    expect(intervalToCronExpression('')).toBeNull();
+    expect(intervalToCronExpression('5y')).toBeNull();
+    expect(intervalToCronExpression('abc')).toBeNull();
+    expect(intervalToCronExpression('0h')).toBeNull();
+    expect(intervalToCronExpression('0 8 * * *')).toBeNull();
   });
 });
 
