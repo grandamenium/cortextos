@@ -290,7 +290,7 @@ export const setupCommand = new Command('setup')
       orchChatId = await askRequired(iface, '  Enter your Telegram chat ID manually: ', 'Chat ID is required.');
     }
 
-    // Bob-trap preflight: validate credentials against the live Telegram API
+    // self-chat trap preflight: validate credentials against the live Telegram API
     // BEFORE writing .env. Catches bad tokens, unreachable chats, bot
     // recipients, and the self_chat trap (CHAT_ID == bot's own user id).
     const validatedOrchChatId = await validateTelegramCredsInteractive(
@@ -378,7 +378,7 @@ export const setupCommand = new Command('setup')
         agentChatId = await askRequired(iface, `  Enter chat ID for ${agentName} manually: `, 'Chat ID is required.');
       }
 
-      // Bob-trap preflight (see validateTelegramCredsInteractive above).
+      // self-chat trap preflight (see validateTelegramCredsInteractive above).
       const validatedAgentChatId = await validateTelegramCredsInteractive(
         iface,
         agentToken,

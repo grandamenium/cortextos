@@ -18,7 +18,7 @@ import { basename } from 'path';
  *    && is_bot=true), or Telegram returned the 403 "bots can't send messages
  *    to bots" error at probe time. Bots cannot message bots.
  *  - self_chat: CHAT_ID matches the bot's OWN user id (getMe.id). This is the
- *    Bob-trap: someone pasted the BOT_TOKEN prefix into CHAT_ID. Caught without
+ *    self-chat trap: someone pasted the BOT_TOKEN prefix into CHAT_ID. Caught without
  *    needing a sendMessage probe — getMe alone is enough.
  *  - network_error: fetch() threw — DNS, timeout, or offline. Callers should
  *    treat as WARNING, not hard-fail.
@@ -92,68 +92,109 @@ export class TelegramAPI {
   }
 
   /**
-   * Strip MarkdownV2-style backslash escapes that Telegram Markdown v1 doesn't support.
-   * In v1, only *, _, `, [ are special. Everything else should not be backslash-escaped.
+   * Convert a Markdown-flavored string to Telegram HTML.
+   *
+   * Why HTML instead of Markdown v1: Telegram Markdown v1 silently drops
+   * content when it encounters an unclosed or unrecognised entity (backtick
+   * spans containing `--flags`, `$` before numbers, `_` inside filenames,
+   * etc.). HTML parse mode rejects the whole message with an explicit error
+   * instead — no silent data loss.
+   *
+   * Processing order (matters — do not reorder):
+   *   1. HTML-escape & < > in raw text (& first, then < >). Backticks, *,
+   *      _ are not HTML-special so they survive intact for step 2+.
+   *   2. Fenced code blocks (``` ... ```) → <pre><code>...</code></pre>
+   *   3. Inline code (`...`) → <code>...</code>
+   *   4. Bold (*...*) → <b>...</b>
+   *   5. Italic (_..._) — word-boundary aware to avoid snake_case false positives
+   *   6. Links ([text](url)) → <a href="url">text</a>
+   *
+   * Pass `plainText: true` to skip conversion (just HTML-escape and send raw).
    */
-  private sanitizeMarkdown(text: string): string {
-    // Remove backslash before any char that isn't a Markdown v1 special char or newline
-    return text.replace(/\\([^_*`\[\n])/g, '$1');
+  private markdownToHtml(text: string, plainText = false): string {
+    // Step 1: HTML-escape (& must be first to avoid double-escaping)
+    let html = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+
+    if (plainText) return html;
+
+    // Step 2: Fenced code blocks — multiline, processed before inline `
+    html = html.replace(/```(?:\w*\n?)?([\s\S]*?)```/g, (_, code) =>
+      `<pre><code>${code.trimEnd()}</code></pre>`,
+    );
+
+    // Step 3: Inline code — single backtick, no newlines inside
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+    // Step 4: Bold — *text* (no newlines, greedy-avoided)
+    html = html.replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
+
+    // Step 5: Italic — _text_ with word-boundary guard (no newlines)
+    html = html.replace(/(?<![_\w])_([^_\n]+)_(?![_\w])/g, '<i>$1</i>');
+
+    // Step 6: Links — [text](url). URL may contain HTML-escaped & (&amp;) which is fine.
+    html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2">$1</a>');
+
+    return html;
   }
 
   /**
-   * Send a text message. Splits long messages at 4096 chars.
+   * Split HTML text into chunks at paragraph/newline boundaries to avoid
+   * breaking mid-entity. Falls back to hard split only if a single line
+   * exceeds maxLen.
+   */
+  private splitHtml(text: string, maxLen: number): string[] {
+    if (text.length <= maxLen) return [text];
+
+    const chunks: string[] = [];
+    let remaining = text;
+    while (remaining.length > maxLen) {
+      const window = remaining.slice(0, maxLen);
+      // Prefer splitting at a paragraph break (\n\n), then a newline
+      let splitAt = window.lastIndexOf('\n\n');
+      if (splitAt > 0) {
+        splitAt += 2; // include the double-newline in the preceding chunk
+      } else {
+        splitAt = window.lastIndexOf('\n');
+        if (splitAt > 0) splitAt += 1;
+        else splitAt = maxLen; // no newline — hard split as last resort
+      }
+      chunks.push(remaining.slice(0, splitAt));
+      remaining = remaining.slice(splitAt);
+    }
+    if (remaining.length > 0) chunks.push(remaining);
+    return chunks;
+  }
+
+  /**
+   * Send a text message. Converts Markdown to HTML and sends with
+   * `parse_mode: "HTML"`. HTML mode never silently drops content — bad
+   * markup produces an explicit API error rather than invisible text.
    *
-   * Markdown parse behavior:
+   * Pass `{ parseMode: null }` to send plain text (no formatting, no
+   * conversion). Useful for raw log output or user-supplied text that
+   * should not be interpreted as Markdown.
    *
-   * - By default, each chunk is sent with `parse_mode: "Markdown"` (Telegram
-   *   v1 Markdown). If the Telegram API rejects the chunk with a
-   *   "can't parse entities" error — usually because the text contains an
-   *   unescaped `_`, `*`, backtick, or `[` that Telegram interprets as the
-   *   start of an entity it cannot close — sendMessage catches the error,
-   *   logs a one-line stderr warning, and automatically RETRIES that chunk
-   *   ONCE with `parse_mode` omitted (plain text). This is the safety net
-   *   for agents generating natural prose that happens to look like bad
-   *   markdown. If the retry also fails, the error is rethrown so callers
-   *   still see real failures.
-   *
-   * - Callers who KNOW their message contains unescaped special characters
-   *   can opt out of parsing entirely by passing `{ parseMode: null }`.
-   *   This skips the first Markdown attempt, avoids the retry roundtrip,
-   *   and suppresses the warning. Useful for `cortextos bus send-telegram
-   *   --plain-text` and any agent message known to carry literal code,
-   *   error output, or user-supplied text.
-   *
-   * - Other error classes (401 bad_token, 400 chat_not_found, 403
-   *   bot_recipient, network failures) do NOT trigger the retry. Only
-   *   parse-entity failures are recoverable here — everything else is a
-   *   real config problem that callers need to see.
+   * Long messages are split at paragraph/newline boundaries (not raw char
+   * offsets) so formatting entities are never cut mid-span.
    */
   async sendMessage(
     chatId: string | number,
     text: string,
     replyMarkup?: object,
     opts?: {
-      parseMode?: 'Markdown' | null;
+      parseMode?: 'HTML' | null;
       onParseFallback?: (reason: string) => void;
     },
   ): Promise<any> {
-    const sanitized = this.sanitizeMarkdown(text);
-    // Rate limit: 1 message per second per chat
+    const plainText = opts?.parseMode === null;
+    const html = this.markdownToHtml(text, plainText);
+
     await this.rateLimit(String(chatId));
 
-    const requestedParseMode: 'Markdown' | null = opts?.parseMode === null ? null : 'Markdown';
-
-    // Split long messages. Always produces at least one chunk (even if the
-    // input is empty, which preserves the old behavior of POSTing once).
-    const maxLen = 4096;
-    const chunks: string[] = [];
-    if (sanitized.length <= maxLen) {
-      chunks.push(sanitized);
-    } else {
-      for (let i = 0; i < sanitized.length; i += maxLen) {
-        chunks.push(sanitized.slice(i, i + maxLen));
-      }
-    }
+    const chunks = this.splitHtml(html, 4096);
 
     let lastResult: any;
     for (let i = 0; i < chunks.length; i++) {
@@ -162,31 +203,21 @@ export class TelegramAPI {
       lastResult = await this.sendChunk(
         chatId,
         chunk,
-        requestedParseMode,
+        plainText ? null : 'HTML',
         isLastChunk ? replyMarkup : undefined,
-        (reason) => {
-          // Default observability: one-line stderr warning, plus forward to
-          // the caller's hook if they supplied one (outbound log augmentation
-          // uses this path).
-          console.warn(`[telegram] parse-mode fallback for chat ${chatId}: ${reason}`);
-          opts?.onParseFallback?.(reason);
-        },
       );
     }
     return lastResult;
   }
 
   /**
-   * Send a single chunk with the given parse mode, with a one-shot retry
-   * on parse-entity failures. Extracted so the multi-chunk path can reuse
-   * the same retry logic without duplicating the try/catch.
+   * Send a single chunk with the given parse mode.
    */
   private async sendChunk(
     chatId: string | number,
     text: string,
-    parseMode: 'Markdown' | null,
+    parseMode: 'HTML' | null,
     replyMarkup: object | undefined,
-    onFallback: (reason: string) => void,
   ): Promise<any> {
     const basePayload: Record<string, unknown> = {
       chat_id: chatId,
@@ -194,27 +225,15 @@ export class TelegramAPI {
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
 
-    // First attempt: honor the caller's requested parse mode.
-    const firstPayload =
+    const payload =
       parseMode === null ? basePayload : { ...basePayload, parse_mode: parseMode };
 
     try {
-      return await this.post('sendMessage', firstPayload);
+      return await this.post('sendMessage', payload);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Only retry for Telegram parse-entity errors. Any other failure
-      // (401, 400, 403, network) must surface to the caller unchanged.
-      if (parseMode !== null && /can'?t parse entities|parse entit/i.test(msg)) {
-        onFallback(msg);
-        // Retry with parse_mode omitted (plain text).
-        return await this.post('sendMessage', basePayload);
-      }
       // self_chat safety net: a 403 "bots can't send messages to bots" at
-      // sendMessage time means CHAT_ID likely equals the bot's own user id
-      // (pasted from the BOT_TOKEN prefix during setup). Emit a one-time
-      // diagnostic per chat_id per process so operators see a clear pointer
-      // even when the agent was provisioned before the config-time probe
-      // (validateCredentials) landed. Does NOT change throw behavior.
+      // sendMessage time means CHAT_ID likely equals the bot's own user id.
+      const msg = err instanceof Error ? err.message : String(err);
       if (/bots can'?t send messages to bots/i.test(msg)) {
         const key = String(chatId);
         if (!this.warnedSelfChat.has(key)) {
@@ -393,7 +412,7 @@ export class TelegramAPI {
    *   3. bot_recipient — CHAT_ID resolves to another bot (403 at send time,
    *      or getChat returns type=private is_bot=true)
    *   4. self_chat — CHAT_ID equals getMe.id, meaning someone pasted the
-   *      BOT_TOKEN prefix into CHAT_ID (the "Bob trap")
+   *      BOT_TOKEN prefix into CHAT_ID (the "self_chat trap")
    *   5. network_error — fetch itself failed; caller should treat as WARN
    *   6. rate_limited — 429 from Telegram; caller should treat as WARN
    *
@@ -439,7 +458,7 @@ export class TelegramAPI {
 
     // Step 2: the self_chat check. If CHAT_ID matches the bot's own user id,
     // no further probing is needed — the config is broken no matter what
-    // getChat would return. This catches the Bob trap before any additional
+    // getChat would return. This catches the self-chat trap before any additional
     // API calls.
     if (botId !== undefined && String(botId) === chatIdStr) {
       return { ok: false, reason: 'self_chat', detail: chatIdStr };

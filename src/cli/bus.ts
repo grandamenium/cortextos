@@ -629,7 +629,7 @@ busCommand
   .description('Plan a hard restart (fresh session, no --continue)')
   .option('--reason <why>', 'Reason for restart')
   .option('--handoff-doc <path>', 'Path to handoff document to inject into next session boot prompt')
-  .action((opts: { reason?: string; handoffDoc?: string }) => {
+  .action(async (opts: { reason?: string; handoffDoc?: string }) => {
     const { writeFileSync: fsWrite, existsSync: fsExists, mkdirSync: fsMkdir } = require('fs');
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
@@ -638,7 +638,22 @@ busCommand
       fsMkdir(paths.stateDir, { recursive: true });
       fsWrite(join(paths.stateDir, '.handoff-doc-path'), opts.handoffDoc + '\n', 'utf-8');
     }
-    console.log('Hard restart planned');
+    // Send IPC restart-agent so the daemon terminates and restarts this session
+    // immediately. Without this the session keeps running — .force-fresh is only
+    // consumed on the NEXT restart, which never comes unless the daemon is notified.
+    const ipc = new IPCClient(env.instanceId);
+    const daemonRunning = await ipc.isDaemonRunning();
+    if (daemonRunning) {
+      const resp = await ipc.send({ type: 'restart-agent', agent: env.agentName, source: 'cortextos bus hard-restart' });
+      if (resp.success) {
+        console.log(`Hard restart triggered for ${env.agentName} — fresh session incoming`);
+      } else {
+        console.error(`Daemon restart failed: ${resp.error}`);
+        process.exit(1);
+      }
+    } else {
+      console.log('Hard restart planned (daemon not running — will take effect on next start)');
+    }
   });
 
 busCommand
@@ -965,7 +980,6 @@ busCommand
     const api = new TelegramAPI(botToken);
     try {
       let sentMessageId = 0;
-      let parseFallbackReason: string | null = null;
       if (opts.image) {
         const result = await api.sendPhoto(chatId, opts.image, message);
         sentMessageId = result?.result?.message_id ?? 0;
@@ -974,10 +988,7 @@ busCommand
         sentMessageId = result?.result?.message_id ?? 0;
       } else {
         const result = await api.sendMessage(chatId, message, undefined, {
-          parseMode: opts.plainText ? null : 'Markdown',
-          onParseFallback: (reason) => {
-            parseFallbackReason = reason;
-          },
+          parseMode: opts.plainText ? null : 'HTML',
         });
         sentMessageId = result?.result?.message_id ?? 0;
       }
@@ -986,9 +997,7 @@ busCommand
       const env = resolveEnv();
       if (env.agentName && env.ctxRoot) {
         logOutboundMessage(env.ctxRoot, env.agentName, chatId, message, sentMessageId, {
-          parseMode: opts.plainText ? 'none' : 'markdown',
-          parseFallback: parseFallbackReason !== null,
-          parseFallbackReason: parseFallbackReason ?? undefined,
+          parseMode: opts.plainText ? 'none' : 'html',
         });
         cacheLastSent(env.ctxRoot, env.agentName, chatId, message);
         // Auto-emit activity event so dashboard sees every Telegram send,

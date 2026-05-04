@@ -29,7 +29,7 @@ export function discoverProjectRoot(): string {
   return process.cwd();
 }
 
-export function parseEnvFile(path: string): Record<string, string> {
+function parseEnvFile(path: string): Record<string, string> {
   const vars: Record<string, string> = {};
   try {
     const lines = readFileSync(path, 'utf-8').split('\n');
@@ -182,7 +182,7 @@ export const enableAgentCommand = new Command('enable')
       process.exit(1);
     }
 
-    // Bob-trap preflight: validate BOT_TOKEN + CHAT_ID against the live
+    // self-chat trap preflight: validate BOT_TOKEN + CHAT_ID against the live
     // Telegram API before registering. Catches bad tokens, unreachable chats,
     // bot-recipient configs, and the self_chat trap (CHAT_ID == bot's own
     // user id) BEFORE the agent boots up on a silently broken config. Without

@@ -90,7 +90,7 @@ export class WorkerProcess {
    */
   inject(text: string): boolean {
     if (!this.pty || this.status !== 'running') return false;
-    injectMessage((data) => this.pty!.write(data), text);
+    injectMessage((data) => this.pty?.write(data), text);
     return true;
   }
 

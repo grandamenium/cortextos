@@ -1,8 +1,52 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TelegramAPI, formatValidateError } from '../../../src/telegram/api';
 
+// ---------------------------------------------------------------------------
+// Fetch timeout tests (from main — pre-existing)
+// ---------------------------------------------------------------------------
+describe('TelegramAPI fetch timeout', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('throws a timeout error when fetch hangs indefinitely', async () => {
+    globalThis.fetch = vi.fn(
+      (_input: any, init?: any) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const err = new Error('aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        }),
+    ) as any;
+
+    const api = new TelegramAPI('123:TEST');
+    await expect(api.getUpdates(0, 1)).rejects.toThrow(/timed out after 15s/);
+  }, 20000);
+
+  it('succeeds on normal fetch response', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true, result: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ) as any;
+
+    const api = new TelegramAPI('123:TEST');
+    const res = await api.getUpdates(0, 1);
+    expect(res.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateCredentials tests (from pr-58)
 // Minimal fetch mock — each test queues up 1 or 2 responses (one for getMe,
 // optionally one for getChat) and asserts the resulting ValidateCredentialsResult.
+// ---------------------------------------------------------------------------
 type MockResponse = { status: number; body: any } | { throws: Error };
 
 let responseQueue: MockResponse[] = [];
@@ -12,32 +56,32 @@ function queue(response: MockResponse): void {
   responseQueue.push(response);
 }
 
-beforeEach(() => {
-  responseQueue = [];
-  callLog = [];
-  vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
-    const body = init?.body ? JSON.parse(String(init.body)) : {};
-    callLog.push({ url, body });
-    const next = responseQueue.shift();
-    if (!next) {
-      throw new Error('fetch called with no queued response');
-    }
-    if ('throws' in next) {
-      throw next.throws;
-    }
-    return {
-      ok: next.status === 200,
-      status: next.status,
-      json: async () => next.body,
-    } as any;
-  }));
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
 describe('TelegramAPI.validateCredentials', () => {
+  beforeEach(() => {
+    responseQueue = [];
+    callLog = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      callLog.push({ url, body });
+      const next = responseQueue.shift();
+      if (!next) {
+        throw new Error('fetch called with no queued response');
+      }
+      if ('throws' in next) {
+        throw next.throws;
+      }
+      return {
+        ok: next.status === 200,
+        status: next.status,
+        json: async () => next.body,
+      } as any;
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('happy path: valid token + reachable user chat returns ok=true', async () => {
     queue({ status: 200, body: { ok: true, result: { id: 111, username: 'my_test_bot' } } });
     queue({
@@ -83,19 +127,19 @@ describe('TelegramAPI.validateCredentials', () => {
   });
 
   it('self_chat: CHAT_ID equals getMe.id -> reason=self_chat (no getChat call)', async () => {
-    queue({ status: 200, body: { ok: true, result: { id: 7994351034, username: 'bob_trap_bot' } } });
+    queue({ status: 200, body: { ok: true, result: { id: 1234567890, username: 'self_chat_test_bot' } } });
 
-    const api = new TelegramAPI('7994351034:AAF3-rr');
-    const result = await api.validateCredentials('7994351034');
+    const api = new TelegramAPI('1234567890:AAF3-rr');
+    const result = await api.validateCredentials('1234567890');
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe('self_chat');
-      expect(result.detail).toBe('7994351034');
+      expect(result.detail).toBe('1234567890');
       const msg = formatValidateError(result);
       // The error message must name the trap, point at the fix, and NOT
       // leak any part of the token.
-      expect(msg).toContain('7994351034');
+      expect(msg).toContain('1234567890');
       expect(msg).toContain('BOT_TOKEN prefix');
       expect(msg).toContain('/start');
       expect(msg).toContain('getUpdates');
@@ -241,8 +285,8 @@ describe('formatValidateError', () => {
   });
 
   it('self_chat: message includes concrete fix instructions', () => {
-    const msg = formatValidateError({ ok: false, reason: 'self_chat', detail: '7994351034' });
-    expect(msg).toContain('7994351034');
+    const msg = formatValidateError({ ok: false, reason: 'self_chat', detail: '1234567890' });
+    expect(msg).toContain('1234567890');
     expect(msg).toContain('BOT_TOKEN prefix');
     expect(msg).toContain('/start');
     expect(msg).toContain('getUpdates');
@@ -277,43 +321,5 @@ describe('formatValidateError', () => {
       detail: 'Too Many Requests: retry after 5',
     });
     expect(msg).toMatch(/retry/i);
-  });
-});
-
-describe('TelegramAPI fetch timeout', () => {
-  const originalFetch = globalThis.fetch;
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
-  });
-
-  it('throws a timeout error when fetch hangs indefinitely', async () => {
-    globalThis.fetch = vi.fn(
-      (_input: any, init?: any) =>
-        new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => {
-            const err = new Error('aborted');
-            err.name = 'AbortError';
-            reject(err);
-          });
-        }),
-    ) as any;
-
-    const api = new TelegramAPI('123:TEST');
-    await expect(api.getUpdates(0, 1)).rejects.toThrow(/timed out after 15s/);
-  }, 20000);
-
-  it('succeeds on normal fetch response', async () => {
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: true, result: [] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    ) as any;
-
-    const api = new TelegramAPI('123:TEST');
-    const res = await api.getUpdates(0, 1);
-    expect(res.ok).toBe(true);
   });
 });
