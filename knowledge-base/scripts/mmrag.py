@@ -732,20 +732,44 @@ def ingest_pdf(client, config, collection, file_path):
 
     print(f"  Analyzing PDF: {file_path.name}...")
 
-    # First pass: get page count and full extraction
-    response = client.models.generate_content(
-        model=config.get("gemini_model", "gemini-2.5-flash"),
-        contents=[
-            types.Part.from_bytes(data=data, mime_type="application/pdf"),
-            "Extract ALL content from this PDF. For each page, include:\n"
-            "1. Page number\n"
-            "2. All text content (headings, body, lists, footnotes)\n"
-            "3. Description of any images, charts, diagrams, or tables\n"
-            "4. Key concepts and topics on that page\n"
-            "Separate each page's content with '=== PAGE N ===' markers.\n"
-            "Be thorough - this will be used for search and retrieval.",
-        ],
+    # Gemini Flash returns 503 UNAVAILABLE during high-demand windows.
+    # Without retries, a single 503 kills the ingest. Retry up to 3 times
+    # with exponential backoff (5s, 15s, 45s). Re-raise on the last failure.
+    extraction_prompt = (
+        "Extract ALL content from this PDF. For each page, include:\n"
+        "1. Page number\n"
+        "2. All text content (headings, body, lists, footnotes)\n"
+        "3. Description of any images, charts, diagrams, or tables\n"
+        "4. Key concepts and topics on that page\n"
+        "Separate each page's content with '=== PAGE N ===' markers.\n"
+        "Be thorough - this will be used for search and retrieval."
     )
+    response = None
+    last_err = None
+    for attempt, backoff in enumerate([5, 15, 45], start=1):
+        try:
+            response = client.models.generate_content(
+                model=config.get("gemini_model", "gemini-2.5-flash"),
+                contents=[
+                    types.Part.from_bytes(data=data, mime_type="application/pdf"),
+                    extraction_prompt,
+                ],
+            )
+            break
+        except Exception as e:
+            err_str = str(e)
+            last_err = e
+            # Only retry transient failures (503 UNAVAILABLE, 429 rate limit,
+            # 500 internal). Auth / 4xx config errors fail fast.
+            if not any(code in err_str for code in ["503", "429", "500", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
+                raise
+            if attempt < 3:
+                print(f"    Transient error ({err_str[:80]}...); retrying in {backoff}s (attempt {attempt}/3)")
+                time.sleep(backoff)
+            else:
+                print(f"    Exhausted retries on transient error: {err_str[:200]}")
+    if response is None:
+        raise last_err if last_err else RuntimeError("PDF ingest failed without exception captured")
     if _tracker:
         _tracker.track_generation(response)
     text = response.text
