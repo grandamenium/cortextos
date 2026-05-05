@@ -735,6 +735,14 @@ def ingest_pdf(client, config, collection, file_path):
     # Gemini Flash returns 503 UNAVAILABLE during high-demand windows.
     # Without retries, a single 503 kills the ingest. Retry up to 3 times
     # with exponential backoff (5s, 15s, 45s). Re-raise on the last failure.
+    # Predicate uses google.genai.errors.APIError's structured .code (HTTP int)
+    # and .status (gRPC-style text). Substring matching on str(e) was rejected
+    # because it false-positived non-transient errors whose body text
+    # incidentally contained "500"/"503" (e.g. a 403 mentioning a resource id
+    # with "503" in it would have wrongly triggered the retry loop).
+    from google.genai import errors as _genai_errors
+    TRANSIENT_HTTP_CODES = {429, 500, 503}
+    TRANSIENT_STATUS_NAMES = {"UNAVAILABLE", "RESOURCE_EXHAUSTED"}
     extraction_prompt = (
         "Extract ALL content from this PDF. For each page, include:\n"
         "1. Page number\n"
@@ -756,18 +764,20 @@ def ingest_pdf(client, config, collection, file_path):
                 ],
             )
             break
-        except Exception as e:
-            err_str = str(e)
+        except _genai_errors.APIError as e:
             last_err = e
-            # Only retry transient failures (503 UNAVAILABLE, 429 rate limit,
-            # 500 internal). Auth / 4xx config errors fail fast.
-            if not any(code in err_str for code in ["503", "429", "500", "UNAVAILABLE", "RESOURCE_EXHAUSTED"]):
+            # Structured retry predicate: only retry on real transient
+            # SDK-level conditions. Auth / 4xx config errors fail fast even
+            # when their response body text incidentally contains digits like
+            # "503" — this was the false-positive class flagged in PR review.
+            is_transient = (e.code in TRANSIENT_HTTP_CODES) or (e.status in TRANSIENT_STATUS_NAMES)
+            if not is_transient:
                 raise
             if attempt < 3:
-                print(f"    Transient error ({err_str[:80]}...); retrying in {backoff}s (attempt {attempt}/3)")
+                print(f"    Transient error (HTTP {e.code} {e.status or ''}); retrying in {backoff}s (attempt {attempt}/3)")
                 time.sleep(backoff)
             else:
-                print(f"    Exhausted retries on transient error: {err_str[:200]}")
+                print(f"    Exhausted retries on transient error: HTTP {e.code} {e.status or ''}")
     if response is None:
         raise last_err if last_err else RuntimeError("PDF ingest failed without exception captured")
     if _tracker:
