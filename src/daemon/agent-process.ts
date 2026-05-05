@@ -8,7 +8,7 @@ import { MessageDedup, injectMessage } from '../pty/inject.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
-import { readCronState, parseDurationMs, cronExpressionMinIntervalMs } from '../bus/cron-state.js';
+import { readCronState, updateCronFire, parseDurationMs, cronExpressionMinIntervalMs } from '../bus/cron-state.js';
 import { resolvePaths } from '../utils/paths.js';
 
 type LogFn = (msg: string) => void;
@@ -792,6 +792,11 @@ export class AgentProcess {
           this.log(`Gap nudge: ${cronDef.name} silent ${gapMin}min (threshold: ${Math.round(threshold / 60_000)}min)`);
           if (this.pty && this.status === 'running') {
             injectMessage((data) => this.pty?.write(data), nudge);
+            // Record nudge injection as a fire event so the gap detector backs
+            // off for one full interval instead of re-nudging every 10 min.
+            // Agents that call update-cron-fire themselves will overwrite this
+            // with their own timestamp, which is fine.
+            updateCronFire(stateDir, cronDef.name);
             // Stagger: wait between nudges so the agent can process each one
             // before the next arrives. Without this, N simultaneous stale crons
             // fire N back-to-back injections, spiking context and triggering
