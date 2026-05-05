@@ -197,6 +197,224 @@ export interface CronEntry {
   type?: 'recurring' | 'once' | 'disabled';
 }
 
+// ---------------------------------------------------------------------------
+// External Persistent Cron System — Subtask 1.1
+// ---------------------------------------------------------------------------
+//
+// CronDefinition is the canonical record stored in per-agent crons.json files:
+//   .cortextOS/state/agents/{agent_name}/crons.json
+//
+// The file is an array of CronDefinition objects.  The daemon reads it, schedules
+// each enabled cron, and injects the prompt into the agent's PTY on schedule.
+//
+// Operators may edit crons.json by hand (it is intentionally human-readable).
+// Keep all field names lowercase-snake-case and all times as ISO 8601 UTC.
+//
+// Example records
+// ---------------
+//
+// Heartbeat — every 6 hours (interval shorthand):
+// {
+//   "name": "heartbeat",
+//   "schedule": "6h",
+//   "prompt": "Read HEARTBEAT.md and execute the heartbeat workflow.",
+//   "enabled": true,
+//   "created_at": "2026-04-01T00:00:00.000Z",
+//   "description": "Periodic health check and status update."
+// }
+//
+// Daily morning briefing — fixed local time via cron expression:
+// {
+//   "name": "morning-briefing",
+//   "schedule": "0 13 * * *",
+//   "prompt": "Prepare and send the morning briefing to James.",
+//   "enabled": true,
+//   "created_at": "2026-04-01T00:00:00.000Z",
+//   "description": "Daily 09:00 ET briefing (UTC offset applied in schedule).",
+//   "last_fired_at": "2026-04-28T13:00:01.042Z",
+//   "fire_count": 14
+// }
+//
+// Weekly report — cron expression with day-of-week restriction:
+// {
+//   "name": "weekly-report",
+//   "schedule": "0 16 * * 1",
+//   "prompt": "Compile and send the weekly performance report.",
+//   "enabled": true,
+//   "created_at": "2026-04-01T00:00:00.000Z",
+//   "description": "Every Monday at 12:00 ET (16:00 UTC).",
+//   "fire_count": 3
+// }
+
+/**
+ * A single persistent cron definition stored in an agent's crons.json.
+ *
+ * Stored at: `.cortextOS/state/agents/{agent_name}/crons.json`
+ *
+ * The `schedule` field accepts two formats:
+ *   - Interval shorthand: `"6h"`, `"30m"`, `"1d"`, `"2w"`
+ *     Parsed by `parseDurationMs()` from `src/bus/cron-state.ts`.
+ *   - Standard 5-field cron expression: `"0 8 * * *"`, `"0 0,6,12,18 * * *"` (every 6h)
+ *     Evaluated by the daemon scheduler (Subtask 1.3).
+ *
+ * The daemon fires the cron by injecting `[CRON: {name}] {prompt}` into
+ * the agent's PTY session.
+ */
+export interface CronDefinition {
+  // ------------------------------------------------------------------
+  // Required fields — must be present for the daemon to schedule this cron.
+  // ------------------------------------------------------------------
+
+  /**
+   * Unique identifier for this cron within the agent.
+   * Used as the key for lookups, updates, and deletions.
+   * Must be unique per agent; slugs like "heartbeat" or "morning-briefing" are recommended.
+   *
+   * @example "heartbeat"
+   * @example "morning-briefing"
+   */
+  name: string;
+
+  /**
+   * The prompt text injected into the agent PTY when the cron fires.
+   * The daemon prepends `[CRON: {name}] ` automatically for traceability.
+   *
+   * @example "Read HEARTBEAT.md and execute the heartbeat workflow."
+   */
+  prompt: string;
+
+  /**
+   * When and how often this cron fires.
+   *
+   * Accepted formats:
+   *   - Interval shorthand: `"6h"`, `"30m"`, `"1d"`, `"2w"`
+   *     The cron fires every N units after its previous fire (or after daemon start
+   *     if it has never fired).
+   *   - 5-field cron expression: `"0 8 * * *"`, `"0 0,6,12,18 * * *"`, `"0 16 * * 1"`
+   *     Evaluated against the daemon's wall clock (daemon timezone = server timezone).
+   *
+   * @example "6h"         — every six hours
+   * @example "0 13 * * *" — daily at 13:00 UTC
+   * @example "0 16 * * 1" — every Monday at 16:00 UTC
+   */
+  schedule: string;
+
+  /**
+   * Whether the daemon should fire this cron.
+   * Set to `false` to pause a cron without deleting it.
+   *
+   * @default true
+   */
+  enabled: boolean;
+
+  /**
+   * ISO 8601 UTC timestamp of when this cron definition was created.
+   * Set automatically by `cortextos bus add-cron`; operators should not modify this.
+   *
+   * @example "2026-04-01T00:00:00.000Z"
+   */
+  created_at: string;
+
+  // ------------------------------------------------------------------
+  // Optional fields — populated at runtime or by operators.
+  // ------------------------------------------------------------------
+
+  /**
+   * ISO 8601 UTC timestamp of the most recent successful fire.
+   * Updated by the daemon scheduler (Subtask 1.3) after each fire.
+   * Absent when the cron has never fired.
+   *
+   * @example "2026-04-28T13:00:01.042Z"
+   */
+  last_fired_at?: string;
+
+  /**
+   * ISO 8601 UTC timestamp set by the scheduler IMMEDIATELY before it awaits
+   * the onFire dispatch — i.e. before the agent has acked. On daemon crash
+   * mid-fire, this lets `loadCrons` recompute `referenceMs` from the attempt
+   * timestamp instead of the stale `last_fired_at`, preventing a double-fire
+   * via the catch-up gate. Tradeoff: a fire whose dispatch genuinely failed
+   * pre-crash will be skipped one window — preferable to guaranteed re-fire.
+   */
+  last_fire_attempted_at?: string;
+
+  /**
+   * Total number of times this cron has successfully fired.
+   * Incremented by the daemon on each successful PTY injection.
+   * Absent (or 0) when the cron has never fired.
+   */
+  fire_count?: number;
+
+  /**
+   * ISO 8601 UTC timestamp for one-shot crons — when the cron should fire once
+   * and then be deleted. Mutually exclusive with recurring `schedule` semantics:
+   * if `fire_at` is set, the daemon treats this as a one-shot regardless of
+   * `schedule`. Used by `cron-health.ts` to flag never-fired one-shots that
+   * are still inside their grace window as healthy rather than stale.
+   *
+   * @example "2026-05-15T14:00:00.000Z"
+   */
+  fire_at?: string;
+
+  /**
+   * Human-readable description of what this cron does.
+   * Optional — for operator documentation and dashboard display.
+   *
+   * @example "Periodic health check and status update."
+   */
+  description?: string;
+
+  /**
+   * Arbitrary key-value pairs for agent-specific context.
+   * Not interpreted by the daemon; surfaced in dashboard + execution logs.
+   *
+   * @example { "priority": "high", "source": "/loop" }
+   */
+  metadata?: Record<string, unknown>;
+
+  /**
+   * When true, the Test Fire button in the dashboard is disabled and the
+   * IPC fire-cron handler refuses manual-trigger requests.
+   *
+   * Use this for crons that must only run on their schedule (e.g. crons
+   * that do destructive operations or have strict rate-limit contracts).
+   *
+   * @default false (manual fire is allowed by default — opt-out model)
+   */
+  manualFireDisabled?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Cron Execution Log — Subtask 1.5
+// ---------------------------------------------------------------------------
+
+/**
+ * A single entry in the per-agent cron execution log
+ * (`$CTX_ROOT/.cortextOS/state/agents/{agent}/cron-execution.log`).
+ *
+ * The file is JSONL (one JSON object per line, newline-separated).
+ * It is append-only; log rotation prunes to the last 1 000 lines.
+ *
+ * Status semantics:
+ *   "fired"   — the fire attempt succeeded on this attempt.
+ *   "retried" — this attempt failed but more retries remain (see `error`).
+ *   "failed"  — final failure after exhausting all retries (see `error`).
+ */
+export interface CronExecutionLogEntry {
+  /** ISO 8601 UTC timestamp of the fire attempt. */
+  ts: string;
+  /** Cron name (matches CronDefinition.name). */
+  cron: string;
+  /** Outcome of this attempt. */
+  status: 'fired' | 'retried' | 'failed';
+  /** Attempt index (1-based). */
+  attempt: number;
+  /** Wall-clock duration of the fire attempt in milliseconds. */
+  duration_ms: number;
+  /** Error message if status is "retried" or "failed"; null otherwise. */
+  error: string | null;
+}
+
 export interface OrgContext {
   name?: string;
   description?: string;
@@ -382,7 +600,108 @@ export type IPCCommandType =
   | 'spawn-worker'
   | 'terminate-worker'
   | 'list-workers'
-  | 'inject-worker';
+  | 'inject-worker'
+  | 'reload-crons'
+  | 'fire-cron'
+  | 'inject-agent'
+  | 'list-all-crons'
+  | 'list-cron-executions'
+  | 'add-cron'
+  | 'update-cron'
+  | 'remove-cron'
+  | 'fleet-health';
+
+// ---------------------------------------------------------------------------
+// Execution log pagination response — Subtask 4.3
+// ---------------------------------------------------------------------------
+
+/**
+ * Paginated response for list-cron-executions IPC command.
+ */
+export interface CronExecutionLogPage {
+  entries: CronExecutionLogEntry[];
+  /** Total matching entries (after cronName + statusFilter applied). */
+  total: number;
+  /** True when there are more entries older than this page. */
+  hasMore: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// list-all-crons response shape — Subtask 4.1
+// ---------------------------------------------------------------------------
+
+/**
+ * One row returned by the `list-all-crons` IPC command.
+ * Combines the cron definition with runtime state (last fire, next fire, status).
+ */
+export interface CronSummaryRow {
+  /** Agent that owns this cron. */
+  agent: string;
+  /** Org the agent belongs to (from enabled-agents.json). */
+  org: string;
+  /** Full cron definition as stored in crons.json. */
+  cron: CronDefinition;
+  /**
+   * ISO 8601 timestamp of the most recent fire attempt.
+   * Null when the cron has never fired (no execution log entry).
+   */
+  lastFire: string | null;
+  /**
+   * Outcome of the most recent execution log entry.
+   * Null when the cron has never fired.
+   */
+  lastStatus: 'fired' | 'retried' | 'failed' | null;
+  /**
+   * ISO 8601 timestamp of the next scheduled fire.
+   * Computed from the cron's schedule + last_fired_at (or now).
+   */
+  nextFire: string;
+}
+
+// ---------------------------------------------------------------------------
+// Fleet Health — Subtask 4.4
+// ---------------------------------------------------------------------------
+
+export type CronHealthState = 'healthy' | 'warning' | 'failure' | 'never-fired';
+
+/** Health record for a single cron, returned by the fleet-health IPC command. */
+export interface CronHealthRow {
+  agent: string;
+  org: string;
+  cronName: string;
+  state: CronHealthState;
+  reason: string;
+  lastFire: number | null;
+  expectedIntervalMs: number;
+  gapMs: number | null;
+  successRate24h: number;
+  firesLast24h: number;
+  nextFire: string;
+}
+
+/** Per-agent breakdown in the fleet-health summary. */
+export interface AgentHealthSummary {
+  agent: string;
+  org: string;
+  total: number;
+  healthy: number;
+  warning: number;
+  failure: number;
+  neverFired: number;
+}
+
+/** Full response returned by the fleet-health IPC command. */
+export interface FleetHealthResponse {
+  rows: CronHealthRow[];
+  summary: {
+    total: number;
+    healthy: number;
+    warning: number;
+    failure: number;
+    neverFired: number;
+    agents: Record<string, AgentHealthSummary>;
+  };
+}
 
 export interface IPCRequest {
   type: IPCCommandType;
