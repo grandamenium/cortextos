@@ -61,6 +61,11 @@ EMBEDDING_PRICE_PER_M = 0.20
 FLASH_INPUT_PRICE_PER_M = 0.15
 FLASH_OUTPUT_PRICE_PER_M = 0.60
 
+# Retry classifier for the Gemini generate_content call inside ingest_pdf.
+# Module-level so a fault-injection test client can reference the same set.
+TRANSIENT_HTTP_CODES = {429, 500, 503}
+TRANSIENT_STATUS_NAMES = {"UNAVAILABLE", "RESOURCE_EXHAUSTED"}
+
 USAGE_FILE = MMRAG_DIR / "usage.json"
 
 # ---------------------------------------------------------------------------
@@ -172,9 +177,74 @@ def get_api_key(config):
 # ---------------------------------------------------------------------------
 # Gemini clients
 # ---------------------------------------------------------------------------
+def _load_factory(dotted_path):
+    """Resolve a dotted import path to a callable.
+
+    Accepts 'pkg.mod.attr' or 'pkg.mod:attr'. The colon form is unambiguous when
+    the attribute name collides with a submodule name, so it is preferred.
+    """
+    if ":" in dotted_path:
+        module_path, _, attr_path = dotted_path.partition(":")
+    else:
+        module_path, _, attr_path = dotted_path.rpartition(".")
+    if not module_path or not attr_path:
+        raise ValueError(
+            f"MMRAG_GEMINI_CLIENT_FACTORY {dotted_path!r} must be 'module.attr' or 'module:attr'"
+        )
+    import importlib
+    obj = importlib.import_module(module_path)
+    for part in attr_path.split("."):
+        obj = getattr(obj, part)
+    if not callable(obj):
+        raise TypeError(
+            f"MMRAG_GEMINI_CLIENT_FACTORY {dotted_path!r} resolved to non-callable {type(obj).__name__}"
+        )
+    return obj
+
+
 def get_genai_client(api_key):
+    """Construct a Gemini client.
+
+    Default returns google.genai.Client(api_key=api_key) — byte-identical to
+    the prior behavior. To inject a fake client (e.g. for testing the retry
+    loop in ingest_pdf), set the env-var MMRAG_GEMINI_CLIENT_FACTORY to a
+    dotted import path of a callable taking (api_key) and returning an object
+    with .models.generate_content / .models.embed_content compatible shape.
+    See knowledge-base/scripts/_test_clients/fault_injection.py for a reference.
+    """
+    factory_path = os.environ.get("MMRAG_GEMINI_CLIENT_FACTORY")
+    if factory_path:
+        return _load_factory(factory_path)(api_key)
     from google import genai
     return genai.Client(api_key=api_key)
+
+
+def _retry_generate_content(client, *, model, contents, backoffs=(5, 15, 45)):
+    """Call client.models.generate_content with bounded retries on transient APIErrors.
+
+    Retries on HTTP code in TRANSIENT_HTTP_CODES or status name in
+    TRANSIENT_STATUS_NAMES; re-raises immediately on any other APIError (auth,
+    malformed request, etc.); re-raises last_err after all attempts exhausted.
+
+    backoffs is a tuple of sleep seconds between attempts. len(backoffs) is the
+    attempt count. Tests pass (0, 0, 0) to skip sleeps.
+    """
+    from google.genai import errors as _genai_errors
+    last_err = None
+    for attempt, backoff in enumerate(backoffs, start=1):
+        try:
+            return client.models.generate_content(model=model, contents=contents)
+        except _genai_errors.APIError as e:
+            last_err = e
+            is_transient = (e.code in TRANSIENT_HTTP_CODES) or (e.status in TRANSIENT_STATUS_NAMES)
+            if not is_transient:
+                raise
+            if attempt < len(backoffs):
+                print(f"    Transient error (HTTP {e.code} {e.status or ''}); retrying in {backoff}s (attempt {attempt}/{len(backoffs)})")
+                time.sleep(backoff)
+            else:
+                print(f"    Exhausted retries on transient error: HTTP {e.code} {e.status or ''}")
+    raise last_err if last_err else RuntimeError("retry loop completed without response or error")
 
 
 def embed_content(client, config, content, task_type="RETRIEVAL_DOCUMENT"):
@@ -732,17 +802,10 @@ def ingest_pdf(client, config, collection, file_path):
 
     print(f"  Analyzing PDF: {file_path.name}...")
 
-    # Gemini Flash returns 503 UNAVAILABLE during high-demand windows.
-    # Without retries, a single 503 kills the ingest. Retry up to 3 times
-    # with exponential backoff (5s, 15s, 45s). Re-raise on the last failure.
-    # Predicate uses google.genai.errors.APIError's structured .code (HTTP int)
-    # and .status (gRPC-style text). Substring matching on str(e) was rejected
-    # because it false-positived non-transient errors whose body text
-    # incidentally contained "500"/"503" (e.g. a 403 mentioning a resource id
-    # with "503" in it would have wrongly triggered the retry loop).
-    from google.genai import errors as _genai_errors
-    TRANSIENT_HTTP_CODES = {429, 500, 503}
-    TRANSIENT_STATUS_NAMES = {"UNAVAILABLE", "RESOURCE_EXHAUSTED"}
+    # Gemini Flash returns 503 UNAVAILABLE during high-demand windows. Without
+    # retries, a single 503 kills the ingest. _retry_generate_content wraps the
+    # call with bounded retries on transient SDK conditions (HTTP 429/500/503,
+    # status UNAVAILABLE/RESOURCE_EXHAUSTED) and fails fast on everything else.
     extraction_prompt = (
         "Extract ALL content from this PDF. For each page, include:\n"
         "1. Page number\n"
@@ -752,34 +815,14 @@ def ingest_pdf(client, config, collection, file_path):
         "Separate each page's content with '=== PAGE N ===' markers.\n"
         "Be thorough - this will be used for search and retrieval."
     )
-    response = None
-    last_err = None
-    for attempt, backoff in enumerate([5, 15, 45], start=1):
-        try:
-            response = client.models.generate_content(
-                model=config.get("gemini_model", "gemini-2.5-flash"),
-                contents=[
-                    types.Part.from_bytes(data=data, mime_type="application/pdf"),
-                    extraction_prompt,
-                ],
-            )
-            break
-        except _genai_errors.APIError as e:
-            last_err = e
-            # Structured retry predicate: only retry on real transient
-            # SDK-level conditions. Auth / 4xx config errors fail fast even
-            # when their response body text incidentally contains digits like
-            # "503" — this was the false-positive class flagged in PR review.
-            is_transient = (e.code in TRANSIENT_HTTP_CODES) or (e.status in TRANSIENT_STATUS_NAMES)
-            if not is_transient:
-                raise
-            if attempt < 3:
-                print(f"    Transient error (HTTP {e.code} {e.status or ''}); retrying in {backoff}s (attempt {attempt}/3)")
-                time.sleep(backoff)
-            else:
-                print(f"    Exhausted retries on transient error: HTTP {e.code} {e.status or ''}")
-    if response is None:
-        raise last_err if last_err else RuntimeError("PDF ingest failed without exception captured")
+    response = _retry_generate_content(
+        client,
+        model=config.get("gemini_model", "gemini-2.5-flash"),
+        contents=[
+            types.Part.from_bytes(data=data, mime_type="application/pdf"),
+            extraction_prompt,
+        ],
+    )
     if _tracker:
         _tracker.track_generation(response)
     text = response.text
