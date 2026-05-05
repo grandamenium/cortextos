@@ -382,6 +382,42 @@ export interface CronDefinition {
    * @default false (manual fire is allowed by default — opt-out model)
    */
   manualFireDisabled?: boolean;
+
+  /**
+   * Execution engine for this cron. Determines how the prompt is dispatched.
+   *
+   *   - `"claude"` (default) — inject into the agent's Claude Code PTY session.
+   *   - `"ollama"` — run context commands, send prompt to a local Ollama model,
+   *     parse and execute any `cortextos bus` commands from the response.
+   *   - `"shell"` — execute the prompt as a shell script directly. No LLM.
+   *
+   * @default "claude"
+   */
+  engine?: 'claude' | 'ollama' | 'shell';
+
+  /**
+   * Ollama model to use when `engine` is `"ollama"`.
+   * Falls back to the daemon-level default (usually `"gemma4:e4b"`).
+   *
+   * @example "gemma4:e4b"
+   * @example "gemma4:e2b"
+   */
+  ollama_model?: string;
+
+  /**
+   * Shell commands to run before sending the prompt to Ollama.
+   * Their stdout is concatenated and included as context in the Ollama prompt.
+   * Only used when `engine` is `"ollama"`.
+   *
+   * @example ["cortextos bus read-all-heartbeats", "cortextos bus check-inbox"]
+   */
+  context_commands?: string[];
+
+  /**
+   * System prompt prepended to the Ollama request.
+   * Only used when `engine` is `"ollama"`.
+   */
+  system_prompt?: string;
 }
 
 // ---------------------------------------------------------------------------

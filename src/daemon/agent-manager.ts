@@ -15,6 +15,8 @@ import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistor
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+import { OllamaExecutor } from './ollama-executor.js';
+import { ShellExecutor } from './shell-executor.js';
 
 type LogFn = (msg: string) => void;
 
@@ -33,12 +35,17 @@ export class AgentManager {
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
+  private ollamaExecutor: OllamaExecutor;
+  private shellExecutor: ShellExecutor;
 
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+    const daemonLogger = (msg: string) => console.log(`[daemon] ${msg}`);
+    this.ollamaExecutor = new OllamaExecutor({ logger: daemonLogger });
+    this.shellExecutor = new ShellExecutor({ logger: daemonLogger });
   }
 
   /**
@@ -760,6 +767,33 @@ export class AgentManager {
   }
 
   /**
+   * Build env vars for Ollama/shell cron executors so bus commands work.
+   */
+  private buildCronEnv(agentName: string): Record<string, string> {
+    const entry = this.agents.get(agentName);
+    const agentDir = entry ? entry.process.getAgentDir() : '';
+    const resolvedOrg = this.resolveAgentOrg(agentName);
+    const env: Record<string, string> = {
+      CTX_INSTANCE_ID: this.instanceId,
+      CTX_ROOT: this.ctxRoot,
+      CTX_FRAMEWORK_ROOT: this.frameworkRoot,
+      CTX_AGENT_NAME: agentName,
+      CTX_ORG: resolvedOrg,
+      CTX_AGENT_DIR: agentDir,
+    };
+    // Pull CHAT_ID from agent .env so send-telegram works
+    if (agentDir) {
+      const dotEnvPath = join(agentDir, '.env');
+      if (existsSync(dotEnvPath)) {
+        const content = readFileSync(dotEnvPath, 'utf-8');
+        const chatMatch = content.match(/^CHAT_ID=(.+)$/m);
+        if (chatMatch) env.CTX_TELEGRAM_CHAT_ID = chatMatch[1].trim();
+      }
+    }
+    return env;
+  }
+
+  /**
    * Inject text directly into a running agent's PTY.
    * Used by `cortextos bus test-cron-fire` to fire a cron immediately for testing.
    * Returns true if the agent is running and the inject succeeded; false otherwise.
@@ -842,6 +876,21 @@ export class AgentManager {
     }
 
     const onFire = async (cron: CronDefinition): Promise<void> => {
+      const engine = cron.engine ?? 'claude';
+
+      if (engine === 'ollama') {
+        const cronEnv = this.buildCronEnv(agentName);
+        await this.ollamaExecutor.execute(cron, agentName, cronEnv);
+        return;
+      }
+
+      if (engine === 'shell') {
+        const cronEnv = this.buildCronEnv(agentName);
+        await this.shellExecutor.execute(cron, agentName, cronEnv);
+        return;
+      }
+
+      // Default: inject into Claude PTY
       const prompt = cron.prompt ?? `[cron] ${cron.name} fired`;
       // Salt with the fire timestamp so MessageDedup (which hashes the last 100
       // injects) does not reject identical cron prompts on subsequent fires.
