@@ -3,13 +3,19 @@
 This runs on your heartbeat cron (every 4 hours). Execute EVERY step in order.
 Skipping steps = broken system. The dashboard monitors your compliance.
 
-## Step 1: Update heartbeat (DO THIS FIRST)
+## Step 1: Update heartbeat + record cron fire (DO THIS FIRST)
 
 ```bash
 cortextos bus update-heartbeat "<1-sentence summary of current work>"
+cortextos bus update-cron-fire heartbeat --interval 2h
 ```
 
-If this fails, your agent shows as DEAD on the dashboard. Fix it before anything else.
+Two writes:
+
+- `update-heartbeat` refreshes the dashboard "alive" signal. If this fails, your agent shows as DEAD on the dashboard.
+- `update-cron-fire heartbeat` records that the heartbeat cron just fired. The daemon polls this file (`state/<agent>/cron-state.json`) and nudges you with `[SYSTEM] Cron gap detected` if the recorded fire is older than 2× the interval. Skipping this call leaves the daemon thinking the cron is broken and triggers the nudge loop, even when the cron is healthy.
+
+Pass the cron name and interval that match your `config.json`. `heartbeat` and `2h` are the defaults; substitute `4h`, `30m`, etc. if your config differs. Fix any failure before anything else.
 
 ## Step 2: Check inbox
 
