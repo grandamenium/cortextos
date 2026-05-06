@@ -17,6 +17,7 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { execFile } from 'child_process';
 
 const DEDUP_WINDOW_MS = 10 * 60 * 1000;         // 10 minutes
 const QUIET_HOUR_START_LA = 22;                 // 22:00 America/Los_Angeles
@@ -74,6 +75,54 @@ function detectRateLimitInLog(logPath: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+/**
+ * Read max_crashes_per_day from the agent's config.json. Returns null if the
+ * file is missing, malformed, or the field is not a number — caller treats
+ * null as "no limit configured" so a missing config never blocks the alert.
+ */
+export function readMaxCrashesPerDay(agentDir: string | undefined): number | null {
+  if (!agentDir) return null;
+  try {
+    const cfg = JSON.parse(readFileSync(join(agentDir, 'config.json'), 'utf-8')) as Record<string, unknown>;
+    return typeof cfg.max_crashes_per_day === 'number' ? cfg.max_crashes_per_day : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Send a crash notification via `cortextos bus send-message` to the listed
+ * recipient agents. Best-effort: failures are swallowed so an alert miss never
+ * cascades into a hook crash.
+ */
+export function notifyAgents(opts: {
+  agentName: string;
+  endType: string;
+  reason: string;
+  lastTask: string;
+  crashCount: number;
+  restartAttempted: boolean;
+  recipients: string[];
+}): void {
+  const body = [
+    `agent=${opts.agentName} crashed (type=${opts.endType})`,
+    `reason: ${opts.reason || 'none'}`,
+    `last status: ${opts.lastTask || 'unknown'}`,
+    `crashes today: ${opts.crashCount}`,
+    `restart attempted: ${opts.restartAttempted ? 'yes' : 'no (max_crashes_per_day reached)'}`,
+  ].join('\n');
+  for (const target of opts.recipients) {
+    try {
+      execFile(
+        'cortextos',
+        ['bus', 'send-message', target, 'high', body],
+        { timeout: 10_000 },
+        () => { /* fire-and-forget */ },
+      );
+    } catch { /* best-effort, never throw */ }
   }
 }
 
@@ -167,6 +216,15 @@ async function main(): Promise<void> {
     try {
       writeFileSync(countFile, `${today}:${crashCount}`, 'utf-8');
     } catch { /* ignore */ }
+  } else if (endType === 'daemon-crashed') {
+    // Read-only: surface today's count to chief/analyst without mutating it.
+    try {
+      const data = readFileSync(countFile, 'utf-8').trim();
+      const [date, count] = data.split(':');
+      crashCount = date === today ? parseInt(count, 10) : 0;
+    } catch {
+      crashCount = 0;
+    }
   }
 
   // Read last heartbeat for context
@@ -251,6 +309,25 @@ async function main(): Promise<void> {
         body: JSON.stringify({ chat_id: chatId, text: message }),
       });
     } catch { /* ignore send failures */ }
+  }
+
+  // Real-crash agent alerts: notify chief + analyst on crash and daemon-crashed
+  // so silent failures get visibility on the bus, not just on Telegram. Gated
+  // by the same dedup window as the Telegram send (handled above), and skipped
+  // for clean exits / planned restarts / rate-limit pauses.
+  if (endType === 'crash' || endType === 'daemon-crashed') {
+    const agentDir = process.env.CTX_AGENT_DIR || process.cwd();
+    const maxCrashes = readMaxCrashesPerDay(agentDir);
+    const restartAttempted = maxCrashes === null || crashCount < maxCrashes;
+    notifyAgents({
+      agentName,
+      endType,
+      reason,
+      lastTask,
+      crashCount,
+      restartAttempted,
+      recipients: ['chief', 'analyst'],
+    });
   }
 }
 
