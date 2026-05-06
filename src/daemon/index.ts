@@ -105,6 +105,10 @@ export function writeDaemonCrashedMarkers(ctxRoot: string): void {
   } catch { return; }
   const ts = new Date().toISOString();
   for (const name of names) {
+    // Synthetic / test agents (^test-) are ephemeral and may share a real bot
+    // token. Writing .daemon-crashed for them routes daemon-crash alerts to the
+    // operator chat via hook-crash-alert.ts — suppress to avoid false alarms.
+    if (/^test-/i.test(name)) continue;
     try {
       writeFileSync(join(stateDir, name, '.daemon-crashed'), ts, 'utf-8');
     } catch { /* swallow per-agent */ }

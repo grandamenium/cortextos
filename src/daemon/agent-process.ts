@@ -507,6 +507,28 @@ export class AgentProcess implements ManagedAgent {
       return;
     }
 
+    // Planned restart: the agent wrote .restart-planned via `cortextos bus hard-restart`
+    // (or `bus self-restart`) before the session ended. This is an intentional exit —
+    // skip crash counting entirely. The IPC restart-agent handler (triggered by the bus
+    // command) will call restartAgent() → stop() + start() to bring the agent back up.
+    // We do NOT unlink the marker here — hook-crash-alert.ts owns cleanup on next boot.
+    const restartPlannedPath = join(this.env.ctxRoot, 'state', this.name, '.restart-planned');
+    if (existsSync(restartPlannedPath)) {
+      this.log('Planned restart (.restart-planned) — skipping crash count');
+      return;
+    }
+
+    // ctx_autoreset (Tier 0): FastChecker writes .silent-restart before triggering
+    // forceContextRestart(). Normally stopRequested is set by sessionRefresh() → stop()
+    // before handleExit fires, but in edge cases (e.g. Claude Code exits before stop()
+    // is called) this marker is the canonical signal. Skip crash counting.
+    // Do NOT unlink — consumed by buildStartPrompt() on the next session boot.
+    const silentRestartPath = join(this.env.ctxRoot, 'state', this.name, '.silent-restart');
+    if (existsSync(silentRestartPath)) {
+      this.log('ctx_autoreset (.silent-restart) — skipping crash count, sessionRefresh handles restart');
+      return;
+    }
+
     // Check crash limit
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];

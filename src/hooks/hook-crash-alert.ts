@@ -34,7 +34,13 @@ const QUIET_SUPPRESSED_TYPES = new Set([
   'user-disable',
   'user-stop',
   'rate-limited',
+  'ctx-autoreset',   // Tier 0 context auto-reset — always silent by design
 ]);
+
+// Agent name patterns that must never route crash alerts to the operator chat.
+// Synthetic / test agents share the real bot token but are ephemeral — operator
+// alert noise from spawn-compact-stop cycles is a known false-alarm source.
+const SYNTHETIC_AGENT_PATTERNS = [/^test-/i];
 
 function isQuietHoursLA(now: Date): boolean {
   const laString = now.toLocaleString('en-US', {
@@ -165,9 +171,15 @@ async function main(): Promise<void> {
   let endType = 'crash';
   let reason = '';
 
-  const markers = [
+  const markers: Array<{ file: string; type: string; keepMarker?: boolean }> = [
     { file: '.restart-planned', type: 'planned-restart' },
     { file: '.session-refresh', type: 'session-refresh' },
+    // ctx_autoreset (Tier 0): FastChecker writes .silent-restart before triggering
+    // forceContextRestart(). Classified as ctx-autoreset so crash-counter and
+    // Telegram alert are both suppressed — this is planned context compaction,
+    // not a crash. keepMarker: true — buildStartPrompt() must consume this
+    // on the next boot to suppress the "back online" Telegram message.
+    { file: '.silent-restart', type: 'ctx-autoreset', keepMarker: true },
     { file: '.user-restart', type: 'user-restart' },
     { file: '.user-disable', type: 'user-disable' },
     { file: '.user-stop', type: 'user-stop' },
@@ -184,7 +196,9 @@ async function main(): Promise<void> {
       endType = marker.type;
       try {
         reason = readFileSync(markerPath, 'utf-8').trim();
-        unlinkSync(markerPath);
+        if (!marker.keepMarker) {
+          unlinkSync(markerPath);
+        }
       } catch { /* ignore */ }
       break;
     }
@@ -254,6 +268,13 @@ async function main(): Promise<void> {
   const botToken = process.env.BOT_TOKEN;
   const chatId = process.env.CHAT_ID;
   if (!botToken || !chatId) return;
+
+  // Synthetic / test agents (name matches ^test-) must never route crash alerts
+  // to the operator chat. These agents are ephemeral and may share a real bot
+  // token — their spawn-compact-stop cycles produce false alarms.
+  if (agentName && SYNTHETIC_AGENT_PATTERNS.some(re => re.test(agentName))) {
+    return;
+  }
 
   let message = '';
   switch (endType) {
