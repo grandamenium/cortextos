@@ -5,10 +5,14 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { IconExternalLink } from '@tabler/icons-react';
 interface SkillInfo {
   slug: string;
   name: string;
   description: string;
+  version?: string | null;
+  source?: string | null;
+  lastUpdated?: string | null;
   installed: boolean;
   installedFor: string[];
 }
@@ -66,11 +70,36 @@ export function SkillCard({ skill, agents, onRefresh }: SkillCardProps) {
     <Card>
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
-          <CardTitle>{skill.name}</CardTitle>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <CardTitle className="truncate">{skill.name}</CardTitle>
+              {skill.version && (
+                <span className="text-[10px] font-mono text-muted-foreground">
+                  v{skill.version}
+                </span>
+              )}
+            </div>
+            {skill.source && (
+              <a
+                href={skill.source}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground mt-0.5 truncate max-w-full"
+              >
+                <IconExternalLink size={10} aria-hidden="true" />
+                <span className="truncate">{skill.source.replace(/^https?:\/\//, '')}</span>
+              </a>
+            )}
+            {skill.lastUpdated && !skill.source && (
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                updated {skill.lastUpdated}
+              </p>
+            )}
+          </div>
           {skill.installed ? (
-            <Badge variant="secondary">Installed</Badge>
+            <Badge variant="secondary" className="shrink-0">Installed</Badge>
           ) : (
-            <Badge variant="outline">Available</Badge>
+            <Badge variant="outline" className="shrink-0">Available</Badge>
           )}
         </div>
         <CardDescription>{skill.description}</CardDescription>

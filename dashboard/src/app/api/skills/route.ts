@@ -4,22 +4,44 @@ import { getFrameworkRoot } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
-function parseSkillMd(content: string): { name: string; description: string } {
+function parseSkillMd(content: string): {
+  name: string;
+  description: string;
+  version: string | null;
+  source: string | null;
+  lastUpdated: string | null;
+} {
   const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
   let name = '';
   let description = '';
+  let version: string | null = null;
+  let source: string | null = null;
+  let lastUpdated: string | null = null;
+  const strip = (s: string) => s.trim().replace(/^["']|["']$/g, '');
   if (frontmatterMatch) {
     const fm = frontmatterMatch[1];
     const nm = fm.match(/^name:\s*(.+)$/m);
     const dm = fm.match(/^description:\s*(.+)$/m);
-    if (nm) name = nm[1].trim().replace(/^["']|["']$/g, '');
-    if (dm) description = dm[1].trim().replace(/^["']|["']$/g, '');
+    const vm = fm.match(/^version:\s*(.+)$/m);
+    const sm = fm.match(/^source:\s*(.+)$/m);
+    const lm = fm.match(/^last_updated:\s*(.+)$/m);
+    if (nm) name = strip(nm[1]);
+    if (dm) description = strip(dm[1]);
+    if (vm) version = strip(vm[1]);
+    if (sm) source = strip(sm[1]);
+    if (lm) lastUpdated = strip(lm[1]);
   }
   if (!name) {
     const h = content.match(/^#\s+(.+)$/m);
     if (h) name = h[1].trim();
   }
-  return { name: name || 'Unnamed Skill', description: description || '' };
+  return {
+    name: name || 'Unnamed Skill',
+    description: description || '',
+    version,
+    source,
+    lastUpdated,
+  };
 }
 
 function getInstalledAgents(frameworkRoot: string, slug: string): string[] {
@@ -64,13 +86,16 @@ export async function GET() {
       if (fs.existsSync(skillMd)) content = fs.readFileSync(skillMd, 'utf-8');
       else if (fs.existsSync(readme)) content = fs.readFileSync(readme, 'utf-8');
 
-      const { name, description } = parseSkillMd(content);
+      const { name, description, version, source, lastUpdated } = parseSkillMd(content);
       const installedFor = getInstalledAgents(frameworkRoot, slug);
 
       skills.push({
         slug,
         name: name || slug,
         description,
+        version,
+        source,
+        lastUpdated,
         installed: installedFor.length > 0,
         installedFor,
       });
