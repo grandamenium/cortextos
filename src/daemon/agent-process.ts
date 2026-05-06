@@ -333,6 +333,7 @@ export class AgentProcess implements ManagedAgent {
 
     await this.stop();
     await this.start();
+    this.updateRotationResumeSuccess().catch(() => {});
     this.log('Session refreshed');
   }
 
@@ -533,7 +534,9 @@ export class AgentProcess implements ManagedAgent {
 
     setTimeout(() => {
       if (this.status === 'crashed') {
-        this.start().catch(err => this.log(`Restart failed: ${err}`));
+        this.start()
+          .then(() => this.updateRotationResumeSuccess().catch(() => {}))
+          .catch(err => this.log(`Restart failed: ${err}`));
       }
     }, backoff);
   }
@@ -851,25 +854,35 @@ export class AgentProcess implements ManagedAgent {
    * Fail-open: all errors are swallowed. This must NEVER block a restart.
    * Called fire-and-forget from sessionRefresh() and handleExit().
    */
+  /**
+   * Read Supabase credentials and resolve the agent's UUID from orch_agents.
+   * Returns [url, key, agentUuid] or null if any step fails.
+   * Shared by writeRotationEvent() and updateRotationResumeSuccess().
+   */
+  private async resolveSupabaseAgent(): Promise<[string, string, string] | null> {
+    const envFile = join(this.env.agentDir, '.env');
+    if (!existsSync(envFile)) return null;
+    const envContent = readFileSync(envFile, 'utf-8');
+    const url = envContent.match(/^SUPABASE_RGOS_URL=(.+)$/m)?.[1]?.trim();
+    const key = envContent.match(/^SUPABASE_RGOS_SERVICE_KEY=(.+)$/m)?.[1]?.trim();
+    if (!url || !key) return null;
+
+    const lookupRes = await fetch(
+      `${url}/rest/v1/orch_agents?select=id&title=ilike.${encodeURIComponent(this.name)}&limit=1`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } },
+    );
+    if (!lookupRes.ok) return null;
+    const rows = (await lookupRes.json()) as Array<{ id: string }>;
+    const agentId = rows[0]?.id;
+    if (!agentId) return null;
+    return [url, key, agentId];
+  }
+
   private async writeRotationEvent(rotationType: string, reason: string): Promise<void> {
     try {
-      // Read Supabase credentials from agent's .env (not in daemon process.env)
-      const envFile = join(this.env.agentDir, '.env');
-      if (!existsSync(envFile)) return;
-      const envContent = readFileSync(envFile, 'utf-8');
-      const url = envContent.match(/^SUPABASE_RGOS_URL=(.+)$/m)?.[1]?.trim();
-      const key = envContent.match(/^SUPABASE_RGOS_SERVICE_KEY=(.+)$/m)?.[1]?.trim();
-      if (!url || !key) return;
-
-      // Look up agent UUID from orch_agents
-      const lookupRes = await fetch(
-        `${url}/rest/v1/orch_agents?select=id&title=ilike.${encodeURIComponent(this.name)}&limit=1`,
-        { headers: { apikey: key, Authorization: `Bearer ${key}` } },
-      );
-      if (!lookupRes.ok) return;
-      const rows = (await lookupRes.json()) as Array<{ id: string }>;
-      const agentId = rows[0]?.id;
-      if (!agentId) return;
+      const resolved = await this.resolveSupabaseAgent();
+      if (!resolved) return;
+      const [url, key, agentId] = resolved;
 
       // Compute session duration
       const sessionDurationMs = this.sessionStart
@@ -909,6 +922,50 @@ export class AgentProcess implements ManagedAgent {
       });
     } catch {
       /* swallow — must never break crash recovery */
+    }
+  }
+
+  /**
+   * Mark the most recent rotation event for this agent as successfully resumed.
+   * Called after start() completes in sessionRefresh() and crash recovery.
+   * Fail-open: all errors are swallowed — this must NEVER block a restart.
+   */
+  private async updateRotationResumeSuccess(): Promise<void> {
+    try {
+      const resolved = await this.resolveSupabaseAgent();
+      if (!resolved) return;
+      const [url, key, agentId] = resolved;
+
+      // Find the most recent rotation event for this agent that has not yet been
+      // marked as resumed (resume_success IS NULL = inserted by writeRotationEvent).
+      const selectRes = await fetch(
+        `${url}/rest/v1/orch_rotation_events?agent_id=eq.${agentId}&resume_success=is.null&order=rotation_at.desc&limit=1&select=id`,
+        { headers: { apikey: key, Authorization: `Bearer ${key}` } },
+      );
+      if (!selectRes.ok) return;
+      const rows = (await selectRes.json()) as Array<{ id: string }>;
+      const eventId = rows[0]?.id;
+      if (!eventId) return;
+
+      // Mark it resumed
+      await fetch(
+        `${url}/rest/v1/orch_rotation_events?id=eq.${eventId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+            'Content-Type': 'application/json',
+            Prefer: 'return=minimal',
+          },
+          body: JSON.stringify({
+            resume_success: true,
+            resume_at: new Date().toISOString(),
+          }),
+        },
+      );
+    } catch {
+      /* swallow — must never break restart */
     }
   }
 

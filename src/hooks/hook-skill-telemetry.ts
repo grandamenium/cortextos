@@ -2,9 +2,12 @@
  * hook-skill-telemetry.ts — PostToolUse hook (matcher: Skill).
  *
  * Fires after every Skill tool call. Extracts the skill slug from tool_input
- * and posts to the skill-telemetry edge function, which inserts a row into
- * orch_skill_invocations and increments orch_skills.total_invocations via
- * an AFTER INSERT trigger.
+ * and inserts a row into orch_skill_invocations via PostgREST (direct REST API).
+ *
+ * Previously this called a Supabase Edge Function (/functions/v1/skill-telemetry)
+ * that was never deployed, causing all agent-sourced skill invocations to be
+ * silently dropped (404). Now writes directly to orch_skill_invocations so
+ * the dashboard's "top skills" panel reflects real invocation counts.
  *
  * The hook always exits 0 — it never blocks the agent. All errors are
  * logged to stderr and silently ignored.
@@ -45,30 +48,62 @@ async function main(): Promise<void> {
     return;
   }
 
-  const agentId = process.env.CTX_AGENT_ID ?? undefined;
+  const agentRole = process.env.CTX_AGENT_NAME ?? undefined;
 
   try {
-    const res = await fetch(`${sbUrl}/functions/v1/skill-telemetry`, {
+    // Look up skill_id from orch_skills by slug (nullable — graceful if skill not in catalog)
+    let skillId: string | null = null;
+    const skillRes = await fetch(
+      `${sbUrl}/rest/v1/orch_skills?slug=eq.${encodeURIComponent(slug)}&select=id&limit=1`,
+      { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } },
+    );
+    if (skillRes.ok) {
+      const skillRows = (await skillRes.json()) as Array<{ id: string }>;
+      skillId = skillRows[0]?.id ?? null;
+    }
+
+    // Look up agent UUID from orch_agents by role_id or title
+    let agentId: string | null = null;
+    if (agentRole) {
+      const agentRes = await fetch(
+        `${sbUrl}/rest/v1/orch_agents?title=ilike.${encodeURIComponent(agentRole)}&select=id&limit=1`,
+        { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } },
+      );
+      if (agentRes.ok) {
+        const agentRows = (await agentRes.json()) as Array<{ id: string }>;
+        agentId = agentRows[0]?.id ?? null;
+      }
+    }
+
+    // Insert directly into orch_skill_invocations via PostgREST
+    const body: Record<string, unknown> = {
+      skill_slug: slug,
+      source: 'agent',
+      succeeded: true,
+    };
+    if (skillId) body.skill_id = skillId;
+    if (agentId) body.agent_id = agentId;
+    if (agentRole) body.agent_role = agentRole;
+
+    const res = await fetch(`${sbUrl}/rest/v1/orch_skill_invocations`, {
       method: 'POST',
       headers: {
+        apikey: sbKey,
         Authorization: `Bearer ${sbKey}`,
         'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
       },
-      body: JSON.stringify({
-        slug,
-        agent_id: agentId,
-        source: 'agent',
-        succeeded: true,
-      }),
+      body: JSON.stringify(body),
     });
+
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      process.stderr.write(`hook-skill-telemetry: telemetry POST failed (${res.status}): ${body}\n`);
+      const errBody = await res.text().catch(() => '');
+      process.stderr.write(`hook-skill-telemetry: INSERT failed (${res.status}): ${errBody}\n`);
     } else {
-      process.stderr.write(`hook-skill-telemetry: logged invocation for skill "${slug}"\n`);
+      process.stderr.write(`hook-skill-telemetry: logged invocation for skill "${slug}" (succeeded=true)\n`);
     }
   } catch (err) {
-    process.stderr.write(`hook-skill-telemetry: fetch error — ${err}\n`);
+    process.stderr.write(`hook-skill-telemetry: error — ${err}\n`);
   }
 }
 
