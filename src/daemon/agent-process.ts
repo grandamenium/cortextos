@@ -153,6 +153,16 @@ export class AgentProcess {
 
     try {
       await this.pty.spawn(mode, prompt);
+      // Codex exec-per-turn race: the new PTY's onExit can fire BEFORE this
+      // line if `codex exec` completes its prompt quickly (CodexPTY's spawn
+      // resolves once exec is launched, but the process may exit moments
+      // later as it finishes the bootstrap turn). handleExit() nulls
+      // this.pty and schedules crash recovery — we must not claim 'running'
+      // or call getPid() on null in that window.
+      if (!this.pty) {
+        this.log('PTY exited during spawn — handleExit will recover');
+        return;
+      }
       this.status = 'running';
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
