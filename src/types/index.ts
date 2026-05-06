@@ -170,6 +170,15 @@ export interface AgentConfig {
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
+  quota?: {
+    daily_budget_usd?: number;
+    soft_pct?: number;
+    hard_pct?: number;
+  };
+  crash_window?: {
+    seconds?: number;
+    max_crashes?: number;
+  };
   /** Context window % at which to warn agent + user. Default: 70. Absent = observe-only. */
   ctx_warning_threshold?: number;
   /** Context window % at which to inject handoff prompt and hard-restart. Default: 80. */

@@ -121,6 +121,13 @@ export const dashboardCommand = new Command('dashboard')
       `CTX_INSTANCE_ID=${options.instance}`,
       `PORT=${options.port}`,
     ];
+    // Pass through any extra vars from dashboard.env (e.g. NEXTAUTH_URL, DASHBOARD_URL)
+    const coreKeys = new Set(['AUTH_SECRET', 'ADMIN_USERNAME', 'ADMIN_PASSWORD']);
+    for (const [key, val] of Object.entries(dashCreds)) {
+      if (!coreKeys.has(key)) {
+        nextEnvLines.push(`${key}=${val}`);
+      }
+    }
     writeFileSync(nextEnvPath, nextEnvLines.join('\n') + '\n', 'utf-8');
     try { chmodSync(nextEnvPath, 0o600); } catch { /* ignore on Windows */ }
 
@@ -128,6 +135,7 @@ export const dashboardCommand = new Command('dashboard')
 
     const dashEnv = {
       ...process.env,
+      ...dashCreds,
       PORT: options.port,
       AUTH_SECRET: authSecret,
       ADMIN_USERNAME: adminUsername,
