@@ -1,223 +1,253 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { ContextMonitor } from '../../../src/daemon/context-monitor';
 
-/**
- * Unit tests for the context monitor logic in fast-checker.ts.
- * Tests the stateless helper functions and state machine in isolation.
- */
-
-// --- Helpers to simulate context_status.json ---
-
-function writeContextStatus(stateDir: string, pct: number | null, exceeds = false, ageMs = 0): void {
-  mkdirSync(stateDir, { recursive: true });
-  const written_at = new Date(Date.now() - ageMs).toISOString();
-  writeFileSync(
-    join(stateDir, 'context_status.json'),
-    JSON.stringify({ used_percentage: pct, exceeds_200k_tokens: exceeds, written_at }),
-    'utf-8',
-  );
-}
-
-// --- Staleness detection ---
-
-describe('context_status.json staleness detection', () => {
+describe('ContextMonitor — context usage estimation + threshold callbacks', () => {
   let stateDir: string;
+  let logPath: string;
 
   beforeEach(() => {
-    stateDir = join(tmpdir(), `ctx-test-${Date.now()}`);
-    mkdirSync(stateDir, { recursive: true });
+    stateDir = mkdtempSync(join(tmpdir(), 'ctx-monitor-'));
+    logPath = join(stateDir, 'stdout.log');
+    writeFileSync(logPath, '', 'utf-8');
   });
 
-  afterEach(() => {
-    try { unlinkSync(join(stateDir, 'context_status.json')); } catch { /* ignore */ }
+  afterEach(() => { rmSync(stateDir, { recursive: true, force: true }); });
+
+  it('starts at 0% with a fresh session and empty log', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 3600);
+    const est = cm.estimate();
+    expect(est.pct).toBeLessThan(1);
+    expect(cm.classify(est)).toBe('ok');
   });
 
-  it('fresh file (0ms) passes staleness check', () => {
-    writeContextStatus(stateDir, 72.4, false, 0);
-    const raw = JSON.parse(require('fs').readFileSync(join(stateDir, 'context_status.json'), 'utf-8'));
-    const age = Date.now() - new Date(raw.written_at).getTime();
-    expect(age).toBeLessThan(10 * 60_000);
+  it('estimates context from log growth (output_size signal)', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999, {
+      max_session_tokens: 1000,
+    });
+    // Write ~2000 chars → ~500 tokens → 50% of 1000
+    writeFileSync(logPath, 'x'.repeat(2000), 'utf-8');
+    const est = cm.estimate();
+    expect(est.pct).toBeGreaterThanOrEqual(45);
+    expect(est.pct).toBeLessThanOrEqual(55);
+    expect(est.signal).toBe('output_size');
   });
 
-  it('file older than 10min is considered stale', () => {
-    writeContextStatus(stateDir, 72.4, false, 11 * 60_000);
-    const raw = JSON.parse(require('fs').readFileSync(join(stateDir, 'context_status.json'), 'utf-8'));
-    const age = Date.now() - new Date(raw.written_at).getTime();
-    expect(age).toBeGreaterThan(10 * 60_000);
+  it('classify returns correct thresholds at each level', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 3600, {
+      warn_pct: 60, alert_pct: 80, critical_pct: 95,
+    });
+    expect(cm.classify({ pct: 50, tokens_est: 0, max_tokens: 1000, signal: 'time' })).toBe('ok');
+    expect(cm.classify({ pct: 65, tokens_est: 0, max_tokens: 1000, signal: 'time' })).toBe('warn');
+    expect(cm.classify({ pct: 85, tokens_est: 0, max_tokens: 1000, signal: 'time' })).toBe('alert');
+    expect(cm.classify({ pct: 96, tokens_est: 0, max_tokens: 1000, signal: 'time' })).toBe('critical');
   });
 
-  it('null used_percentage is handled gracefully', () => {
-    writeContextStatus(stateDir, null, false, 0);
-    const raw = JSON.parse(require('fs').readFileSync(join(stateDir, 'context_status.json'), 'utf-8'));
-    expect(raw.used_percentage).toBeNull();
+  it('fires onWarn callback at warn threshold and writes continuation file', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999, {
+      max_session_tokens: 100, warn_pct: 40, alert_pct: 50, critical_pct: 60,
+    });
+    const warns: number[] = [];
+    cm.setOnWarn((est) => warns.push(est.pct));
+
+    // Push past 40% of 100 tokens → 40+ chars / 4 chars per token
+    writeFileSync(logPath, 'x'.repeat(180), 'utf-8');
+    cm.check();
+
+    expect(warns.length).toBe(1);
+    expect(warns[0]).toBeGreaterThanOrEqual(40);
+    expect(existsSync(join(stateDir, 'continuation.md'))).toBe(true);
   });
 
-  it('exceeds_200k_tokens=true with null pct is a valid signal', () => {
-    writeContextStatus(stateDir, null, true, 0);
-    const raw = JSON.parse(require('fs').readFileSync(join(stateDir, 'context_status.json'), 'utf-8'));
-    expect(raw.exceeds_200k_tokens).toBe(true);
-  });
-});
+  it('fires onAlert at alert threshold', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999, {
+      max_session_tokens: 100, warn_pct: 40, alert_pct: 50, critical_pct: 60,
+    });
+    const alerts: number[] = [];
+    cm.setOnAlert((est) => alerts.push(est.pct));
 
-// --- Threshold tier selection ---
+    writeFileSync(logPath, 'x'.repeat(220), 'utf-8'); // ~55 tokens → 55%
+    cm.check(); // fires warn (40%)
+    cm.check(); // fires alert (50%)
 
-describe('context monitor tier selection', () => {
-  const WARN = 70;
-  const HANDOFF = 80;
-
-  function selectTier(pct: number, exceeds: boolean, warningFiredAt: number, handoffFiredAt: number, now: number) {
-    const effectivePct = pct !== null ? pct : (exceeds ? 101 : null);
-    if (effectivePct === null) return 'none';
-
-    // Tier 2 check (handoff) — must check before warning for edge cases
-    if (effectivePct >= HANDOFF && handoffFiredAt === 0) return 'handoff';
-
-    // Tier 1 check (warning) — 15min cooldown
-    if (effectivePct >= WARN && now - warningFiredAt > 15 * 60_000) return 'warning';
-
-    return 'none';
-  }
-
-  it('69% triggers no action', () => {
-    expect(selectTier(69, false, 0, 0, Date.now())).toBe('none');
+    expect(alerts.length).toBe(1);
   });
 
-  it('70% triggers warning', () => {
-    expect(selectTier(70, false, 0, 0, Date.now())).toBe('warning');
+  it('fires onCritical at critical threshold', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999, {
+      max_session_tokens: 100, warn_pct: 60, alert_pct: 80, critical_pct: 95,
+    });
+    const criticals: number[] = [];
+    cm.setOnCritical((est) => criticals.push(est.pct));
+
+    writeFileSync(logPath, 'x'.repeat(400), 'utf-8'); // ~100 tokens → 100%
+    cm.check();
+    cm.check();
+    cm.check();
+
+    expect(criticals.length).toBe(1);
   });
 
-  it('79% triggers warning (below handoff threshold)', () => {
-    expect(selectTier(79, false, 0, 0, Date.now())).toBe('warning');
+  it('each threshold fires only once (no re-fire on repeated checks)', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999, {
+      max_session_tokens: 100, warn_pct: 40, alert_pct: 50, critical_pct: 60,
+    });
+    const warns: number[] = [];
+    cm.setOnWarn((est) => warns.push(est.pct));
+
+    writeFileSync(logPath, 'x'.repeat(180), 'utf-8');
+    cm.check();
+    cm.check();
+    cm.check();
+
+    expect(warns.length).toBe(1);
   });
 
-  it('80% triggers handoff (first time)', () => {
-    expect(selectTier(80, false, 0, 0, Date.now())).toBe('handoff');
+  it('continuation file contains agent name + estimate', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999, {
+      max_session_tokens: 100, warn_pct: 60,
+    });
+    writeFileSync(logPath, 'x'.repeat(280), 'utf-8');
+    cm.check();
+
+    const content = readFileSync(join(stateDir, 'continuation.md'), 'utf-8');
+    expect(content).toContain('alice');
+    expect(content).toContain('Context estimate:');
+    expect(content).toContain('Tokens estimated:');
   });
 
-  it('90% triggers handoff (first time, above handoff threshold)', () => {
-    expect(selectTier(90, false, 0, 0, Date.now())).toBe('handoff');
-  });
+  it('start/stop manages the check interval', () => {
+    vi.useFakeTimers();
+    try {
+      const cm = new ContextMonitor('alice', stateDir, logPath, 99999, {
+        check_interval_ms: 100, max_session_tokens: 100, warn_pct: 40, alert_pct: 50, critical_pct: 60,
+      });
+      const warns: number[] = [];
+      cm.setOnWarn((est) => warns.push(est.pct));
 
-  it('80% with handoff already fired triggers warning (if cooldown elapsed)', () => {
-    const handoffFiredAt = Date.now() - 20 * 60_000; // 20min ago
-    expect(selectTier(80, false, 0, handoffFiredAt, Date.now())).toBe('warning');
-  });
-});
+      writeFileSync(logPath, 'x'.repeat(180), 'utf-8');
+      cm.start();
+      vi.advanceTimersByTime(150);
+      cm.stop();
 
-// --- Warning deduplication ---
-
-describe('warning deduplication', () => {
-  it('warning within 15min cooldown does not fire again', () => {
-    const warningFiredAt = Date.now() - 5 * 60_000; // 5min ago
-    const now = Date.now();
-    const cooldownElapsed = now - warningFiredAt > 15 * 60_000;
-    expect(cooldownElapsed).toBe(false);
-  });
-
-  it('warning after 15min cooldown fires again', () => {
-    const warningFiredAt = Date.now() - 16 * 60_000; // 16min ago
-    const now = Date.now();
-    const cooldownElapsed = now - warningFiredAt > 15 * 60_000;
-    expect(cooldownElapsed).toBe(true);
-  });
-});
-
-// --- Circuit breaker ---
-
-describe('context monitor circuit breaker', () => {
-  it('3 restarts within 15min window trips breaker', () => {
-    const now = Date.now();
-    const restarts = [now - 14 * 60_000, now - 10 * 60_000, now - 1 * 60_000];
-    const windowMs = 15 * 60_000;
-    const inWindow = restarts.filter(t => now - t < windowMs);
-    expect(inWindow.length).toBe(3);
-    expect(inWindow.length >= 3).toBe(true); // trips
-  });
-
-  it('2 restarts in 15min window does not trip', () => {
-    const now = Date.now();
-    const restarts = [now - 10 * 60_000, now - 5 * 60_000];
-    const inWindow = restarts.filter(t => now - t < 15 * 60_000);
-    expect(inWindow.length).toBeLessThan(3);
-  });
-
-  it('old restarts outside 15min window are excluded', () => {
-    const now = Date.now();
-    const restarts = [now - 20 * 60_000, now - 18 * 60_000, now - 1 * 60_000];
-    const inWindow = restarts.filter(t => now - t < 15 * 60_000);
-    expect(inWindow.length).toBe(1); // only the recent one counts
-  });
-
-  it('circuit breaker resets after 30min pause', () => {
-    const circuitBrokenAt = Date.now() - 31 * 60_000; // 31min ago
-    const shouldReset = Date.now() - circuitBrokenAt >= 30 * 60_000;
-    expect(shouldReset).toBe(true);
-  });
-
-  it('circuit breaker still active at 29min', () => {
-    const circuitBrokenAt = Date.now() - 29 * 60_000;
-    const shouldReset = Date.now() - circuitBrokenAt >= 30 * 60_000;
-    expect(shouldReset).toBe(false);
+      expect(warns.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
-// --- Handoff block consumption ---
-
-describe('consumeHandoffBlock', () => {
+describe('ContextMonitor — burn classification', () => {
   let stateDir: string;
-  let handoffDocPath: string;
+  let logPath: string;
+  let taskDir: string;
+  let heartbeatDir: string;
 
   beforeEach(() => {
-    stateDir = join(tmpdir(), `handoff-test-${Date.now()}`);
-    mkdirSync(stateDir, { recursive: true });
-    handoffDocPath = join(stateDir, 'handoff-doc.md');
-    writeFileSync(handoffDocPath, '# Handoff\n\n## Current Tasks\n- Working on X', 'utf-8');
+    stateDir = mkdtempSync(join(tmpdir(), 'ctx-burn-'));
+    logPath = join(stateDir, 'stdout.log');
+    taskDir = join(stateDir, 'tasks');
+    heartbeatDir = join(stateDir, 'heartbeats');
+    writeFileSync(logPath, '', 'utf-8');
+    const { mkdirSync } = require('fs');
+    mkdirSync(taskDir, { recursive: true });
+    mkdirSync(heartbeatDir, { recursive: true });
   });
 
-  afterEach(() => {
-    try { unlinkSync(join(stateDir, '.handoff-doc-path')); } catch { /* ignore */ }
-    try { unlinkSync(handoffDocPath); } catch { /* ignore */ }
+  afterEach(() => { rmSync(stateDir, { recursive: true, force: true }); });
+
+  it('classifies as large_task when agent has an in_progress task + fresh heartbeat', () => {
+    // Write a task file
+    writeFileSync(join(taskDir, 'task_123_001.json'), JSON.stringify({
+      id: 'task_123_001', status: 'in_progress', assigned_to: 'alice',
+    }));
+    // Write a fresh heartbeat
+    const { mkdirSync: mkd } = require('fs');
+    mkd(join(heartbeatDir, 'alice'), { recursive: true });
+    writeFileSync(join(heartbeatDir, 'alice', 'heartbeat.json'), JSON.stringify({
+      last_heartbeat: new Date().toISOString(),
+    }));
+
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999);
+    cm.setBurnContext({ taskDir, heartbeatDir });
+
+    const burn = cm.classifyBurn();
+    expect(burn.classification).toBe('large_task');
+    expect(burn.has_active_task).toBe(true);
+    expect(burn.heartbeat_fresh).toBe(true);
   });
 
-  it('returns empty string when no marker exists', () => {
-    // Simulate consumeHandoffBlock logic
-    const markerPath = join(stateDir, '.handoff-doc-path');
-    const exists = existsSync(markerPath);
-    expect(exists).toBe(false);
-    // result would be ''
+  it('classifies as runaway when no active task and stale heartbeat', () => {
+    // No tasks, stale heartbeat
+    const { mkdirSync: mkd } = require('fs');
+    mkd(join(heartbeatDir, 'alice'), { recursive: true });
+    writeFileSync(join(heartbeatDir, 'alice', 'heartbeat.json'), JSON.stringify({
+      last_heartbeat: '2020-01-01T00:00:00Z',
+    }));
+
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999);
+    cm.setBurnContext({ taskDir, heartbeatDir });
+
+    const burn = cm.classifyBurn();
+    expect(burn.classification).toBe('runaway');
+    expect(burn.has_active_task).toBe(false);
+    expect(burn.heartbeat_fresh).toBe(false);
   });
 
-  it('returns handoff block when marker exists and doc is present', () => {
-    const markerPath = join(stateDir, '.handoff-doc-path');
-    writeFileSync(markerPath, handoffDocPath + '\n', 'utf-8');
+  it('classifies as runaway when log output is repetitive (low entropy)', () => {
+    // Write repetitive log output (>40% duplicate lines)
+    const repeatedLine = 'ERROR: something went wrong in the loop\n';
+    writeFileSync(logPath, repeatedLine.repeat(200), 'utf-8');
 
-    // Simulate consumeHandoffBlock logic
-    const doc = require('fs').readFileSync(markerPath, 'utf-8').trim();
-    unlinkSync(markerPath);
-    const docExists = existsSync(doc);
-    expect(docExists).toBe(true);
-    expect(doc).toBe(handoffDocPath);
-    expect(existsSync(markerPath)).toBe(false); // consumed
+    // Even with active task, repetitive output signals runaway
+    writeFileSync(join(taskDir, 'task_123_001.json'), JSON.stringify({
+      id: 'task_123_001', status: 'in_progress', assigned_to: 'alice',
+    }));
+    const { mkdirSync: mkd } = require('fs');
+    mkd(join(heartbeatDir, 'alice'), { recursive: true });
+    writeFileSync(join(heartbeatDir, 'alice', 'heartbeat.json'), JSON.stringify({
+      last_heartbeat: new Date().toISOString(),
+    }));
+
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999);
+    cm.setBurnContext({ taskDir, heartbeatDir });
+
+    const burn = cm.classifyBurn();
+    expect(burn.classification).toBe('runaway');
+    expect(burn.log_entropy_low).toBe(true);
   });
 
-  it('marker file is unlinked after consumption', () => {
-    const markerPath = join(stateDir, '.handoff-doc-path');
-    writeFileSync(markerPath, handoffDocPath + '\n', 'utf-8');
-    expect(existsSync(markerPath)).toBe(true);
-    // consume
-    require('fs').readFileSync(markerPath, 'utf-8').trim();
-    unlinkSync(markerPath);
-    expect(existsSync(markerPath)).toBe(false);
+  it('returns unknown when no context dirs are configured', () => {
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999);
+    // No setBurnContext call
+    const burn = cm.classifyBurn();
+    expect(burn.classification).toBe('unknown');
   });
 
-  it('returns empty when marker points to nonexistent doc', () => {
-    const markerPath = join(stateDir, '.handoff-doc-path');
-    writeFileSync(markerPath, '/nonexistent/path/doc.md\n', 'utf-8');
-    const doc = require('fs').readFileSync(markerPath, 'utf-8').trim();
-    unlinkSync(markerPath);
-    const docExists = existsSync(doc);
-    expect(docExists).toBe(false);
+  it('check() passes burn analysis to callbacks', () => {
+    writeFileSync(join(taskDir, 'task_123_001.json'), JSON.stringify({
+      id: 'task_123_001', status: 'in_progress', assigned_to: 'alice',
+    }));
+    const { mkdirSync: mkd } = require('fs');
+    mkd(join(heartbeatDir, 'alice'), { recursive: true });
+    writeFileSync(join(heartbeatDir, 'alice', 'heartbeat.json'), JSON.stringify({
+      last_heartbeat: new Date().toISOString(),
+    }));
+
+    const cm = new ContextMonitor('alice', stateDir, logPath, 99999, {
+      max_session_tokens: 100, warn_pct: 40, alert_pct: 50, critical_pct: 60,
+    });
+    cm.setBurnContext({ taskDir, heartbeatDir });
+
+    let receivedBurn: any = null;
+    cm.setOnWarn((_est, burn) => { receivedBurn = burn; });
+
+    writeFileSync(logPath, 'x'.repeat(180), 'utf-8');
+    cm.check();
+
+    expect(receivedBurn).not.toBeNull();
+    expect(receivedBurn.classification).toBe('large_task');
   });
 });

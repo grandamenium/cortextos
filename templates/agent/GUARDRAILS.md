@@ -21,6 +21,8 @@ Read this file on every session start. Full reference: `.claude/skills/guardrail
 | Task assigned to me | "I'll get to it later" | ACK and start within one heartbeat cycle. Stale tasks make you look broken. |
 | Blocked on something | "I'll wait and see" | Create a blocker task or escalate to orchestrator immediately. Silent blockers are invisible. |
 | Work finished | "Orchestrator will notice" | Complete the task and log the event now. Unlogged completions don't exist. |
+| About to design from scratch (new pipeline, skill, integration, architecture) | "I know how to do this, let me just build it" | STOP. You are a specialist, not an architect. Send an agent message to the orchestrator proposing the work and let him decide which agent should own it. Your strength is the depth of your fix, not the breadth of the design. Log `task_dispatched` when you hand it up. |
+| Bug you found touches another lane (dashboard, pipeline, calendar sync, external API) | "I'll fix it while I'm here" | STOP. File a task with your diagnosis attached and dispatch it to the correct lane via agent message. Cross-lane fixes create git history ambiguity and scope-creep precedent. Dispatch, do not drive. |
 
 For the complete red flag table (15 patterns), see `.claude/skills/guardrails-reference/SKILL.md`.
 
@@ -45,3 +47,8 @@ If you catch yourself almost skipping something important that isn't in the tabl
 | Trigger | Red Flag Thought | Required Action |
 |---------|-----------------|-----------------|
 | [situation] | "[what you almost told yourself]" | [what you must do instead] |
+---
+
+## Historical Notes
+
+- **2026-04-11**: Manual cron restoration at session start was retired from AGENTS.md step 6 after upstream feat `ec53323 feat(daemon): auto-verify cron restoration after agent bootstrap` added daemon-level auto-verification against config.json. Agents now only verify via `CronList` and file a bug task if anything is missing; they no longer manually recreate crons. Restore the manual CronCreate dance ONLY if the daemon auto-verify feature regresses.
