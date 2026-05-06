@@ -183,19 +183,25 @@ NIGHT_HOUR=${NIGHT_HOUR:-18}
 echo "Day starts: ${DAY_HOUR}:00, Night starts: ${NIGHT_HOUR}:00"
 ```
 
-**Always set up this interval-based cron via `/loop`:**
+**Set up the heartbeat cron via `cortextos bus add-cron`:**
 
 - Heartbeat (every 4h): `Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task.`
 
-Run `/loop 4h <prompt>`, then verify `config.json` already has a `heartbeat` entry (it does by default - skip adding a duplicate).
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME heartbeat 4h "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+```
 
-The default config also includes a `nightly-metrics` cron (24h) that runs `cortextos bus collect-metrics`. Confirm it exists in config.json and leave it in place.
+Then verify with `cortextos bus list-crons $CTX_AGENT_NAME` — if a `heartbeat` entry already exists, skip adding a duplicate.
+
+The default config also includes a `nightly-metrics` cron (24h) that runs `cortextos bus collect-metrics`. Verify it exists: `cortextos bus list-crons $CTX_AGENT_NAME`.
+
+Do NOT use `/loop` for these — those crons are session-only and will not survive a restart.
 
 **Ask about additional crons:**
 > "I have a heartbeat cycle every 4 hours and nightly metrics collection. Want me to add any other recurring checks? For example: daily reports, integration health checks, custom monitoring."
 
 For each additional cron the user requests:
-- Interval-based → `/loop <interval> <prompt>`, add to config.json
+- Add via bus: `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval> "<prompt>"`
 - If complex, create a skill file at `.claude/skills/<workflow-name>/SKILL.md`
 
 ### Step 13: Ask for tools and access
@@ -410,36 +416,21 @@ NIGHT_HOUR=${NIGHT_HOUR:-18}
 DAILY_HOUR=$(( (NIGHT_HOUR + 1) % 24 ))
 ```
 
-For each enabled feature, create the cron and add to config.json:
+For each enabled feature, register the cron via `cortextos bus add-cron`. The daemon persists it to `crons.json` and dispatches automatically — do not edit config.json directly.
 
-**local_version_control** - use CronCreate directly (time-anchored):
-```
-cron: "0 ${DAILY_HOUR} * * *"
-prompt: "Run daily git snapshot. cortextos bus auto-commit - review the staged diff for PII - commit with descriptive message. Never push."
-```
-Add to config.json:
-```json
-{"name": "auto-commit", "type": "recurring", "cron": "0 <DAILY_HOUR> * * *", "prompt": "Run daily git snapshot. cortextos bus auto-commit - review the staged diff for PII - commit with descriptive message. Never push."}
+**local_version_control** — register via `cortextos bus add-cron` (time-anchored, daemon-managed):
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME auto-commit "0 ${DAILY_HOUR} * * *" "Run daily git snapshot. cortextos bus auto-commit - review the staged diff for PII - commit with descriptive message. Never push."
 ```
 
-**upstream_sync** - use CronCreate directly (time-anchored, same hour, 2 minutes offset):
-```
-cron: "2 ${DAILY_HOUR} * * *"
-prompt: "Check for framework updates: cortextos bus check-upstream. If updates available, explain every change in plain English via Telegram and wait for explicit approval before applying. Never apply during night mode."
-```
-Add to config.json:
-```json
-{"name": "check-upstream", "type": "recurring", "cron": "2 <DAILY_HOUR> * * *", "prompt": "Check for framework updates: cortextos bus check-upstream. If updates available, explain every change in plain English via Telegram and wait for explicit approval before applying. Never apply during night mode."}
+**upstream_sync** — register via `cortextos bus add-cron` (time-anchored, same hour, 2 minutes offset):
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME check-upstream "2 ${DAILY_HOUR} * * *" "Check for framework updates: cortextos bus check-upstream. If updates available, explain every change in plain English via Telegram and wait for explicit approval before applying. Never apply during night mode."
 ```
 
-**catalog_browse** - use CronCreate directly (weekly, Sunday same hour):
-```
-cron: "4 ${DAILY_HOUR} * * 0"
-prompt: "Browse community catalog: cortextos bus browse-catalog. Surface ONE relevant new item to user via Telegram. If they say install it: cortextos bus install-community-item <name>. If they decline, skip that item for 30 days."
-```
-Add to config.json:
-```json
-{"name": "catalog-browse", "type": "recurring", "cron": "4 <DAILY_HOUR> * * 0", "prompt": "Browse community catalog: cortextos bus browse-catalog. Surface ONE relevant new item to user via Telegram. If they say install it: cortextos bus install-community-item <name>. If they decline, skip that item for 30 days."}
+**catalog_browse** — register via `cortextos bus add-cron` (weekly, Sunday same hour):
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME catalog-browse "4 ${DAILY_HOUR} * * 0" "Browse community catalog: cortextos bus browse-catalog. Surface ONE relevant new item to user via Telegram. If they say install it: cortextos bus install-community-item <name>. If they decline, skip that item for 30 days."
 ```
 
 **community_publish** - no cron needed, triggered manually.
@@ -493,7 +484,7 @@ if [ -n "$ORCH_NAME" ]; then
 fi
 ```
 
-### Step 26: If theta wave enabled, add cron to config.json
+### Step 26: If theta wave enabled, register the cron
 
 Compute the theta wave hour (2 hours into night mode, so it runs after auto-commit and check-upstream):
 
@@ -505,15 +496,9 @@ NIGHT_HOUR=${NIGHT_HOUR:-18}
 TW_HOUR=$(( (NIGHT_HOUR + 2) % 24 ))
 ```
 
-Use CronCreate directly (time-anchored):
-```
-cron: "0 ${TW_HOUR} * * *"
-prompt: "Read .claude/skills/theta-wave/SKILL.md. Initiate the theta wave cycle. First action: message the orchestrator that theta wave is starting and share your initial system scan."
-```
-
-Add to config.json:
-```json
-{"name": "theta-wave", "type": "recurring", "cron": "0 <TW_HOUR> * * *", "prompt": "Read .claude/skills/theta-wave/SKILL.md. Initiate the theta wave cycle. First action: message the orchestrator that theta wave is starting and share your initial system scan."}
+Register via `cortextos bus add-cron` (time-anchored, daemon-managed):
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME theta-wave "0 ${TW_HOUR} * * *" "Read .claude/skills/theta-wave/SKILL.md. Initiate the theta wave cycle. First action: message the orchestrator that theta wave is starting and share your initial system scan."
 ```
 
 ## Part 8: Dashboard Walkthrough

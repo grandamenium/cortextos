@@ -263,9 +263,9 @@ c.crons.push({ name: 'new-cron', interval: '2h', prompt: 'Do the thing' });
 fs.writeFileSync(path, JSON.stringify(c, null, 2));
 "
 
-# Notify agent to reload crons
+# Notify agent that crons have been updated
 cortextos bus send-message "$AGENT" normal \
-  'Crons updated in config.json. Re-read your config.json and set up the new cron with /loop.'
+  'Crons updated in crons.json. The daemon scheduler will pick up the change automatically. To verify: cortextos bus list-crons '"$AGENT"
 ```
 
 ### Removing a Cron

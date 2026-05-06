@@ -11,7 +11,7 @@ Daily snapshot of all agent workspace changes. Runs via auto-commit.sh with a tw
 
 ## When to Run
 
-- Daily cron (configured in config.json)
+- Daily cron (configured via `cortextos bus add-cron`)
 - After major agent work sessions
 - Before any destructive operations
 

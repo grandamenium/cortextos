@@ -139,18 +139,18 @@ The orchestrator has 5 built-in crons. Set them all up now.
 
 ### Step 11: Set up core crons
 
-Check for existing crons first (run CronList - avoid duplicates).
+Check for existing crons first (`cortextos bus list-crons $CTX_AGENT_NAME` - avoid duplicates).
 
-**Interval-based crons** - create via `/loop`:
+**Interval-based crons** - add via `cortextos bus add-cron` (persistent, survives restarts):
 
-```
-/loop 4h Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, review agent health via cortextos bus read-all-heartbeats, and work on coordination tasks.
-```
-```
-/loop 2h Check for pending approvals: cortextos bus list-approvals --format json. Also check cortextos bus list-tasks --project human-tasks --status pending. For any pending approval or human task older than 1h, send user a Telegram reminder.
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME heartbeat 4h "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, review agent health via cortextos bus read-all-heartbeats, and work on coordination tasks."
+cortextos bus add-cron $CTX_AGENT_NAME approval-check 2h "Check for pending approvals: cortextos bus list-approvals --format json. Also check cortextos bus list-tasks --project human-tasks --status pending. For any pending approval or human task older than 1h, send user a Telegram reminder."
 ```
 
-**Time-anchored crons** - compute from context.json and create via CronCreate:
+Do NOT use `/loop` for these — those crons are session-only and will not survive a restart.
+
+**Time-anchored crons** - compute from context.json and add via `cortextos bus add-cron`:
 
 ```bash
 # DAY_START and DAY_END were read from context.json in Step 2
@@ -161,23 +161,11 @@ EVENING_HOUR=${EVENING_HOUR:-18}
 echo "Morning review: ${MORNING_HOUR}:00 | Evening review: ${EVENING_HOUR}:00"
 ```
 
-Use CronCreate (not /loop) for the three time-anchored crons:
-- Morning review: `{cron: "0 {MORNING_HOUR} * * *", prompt: "Read .claude/skills/morning-review/SKILL.md and execute the full morning review workflow. Include goal cascade from .claude/skills/goal-management/SKILL.md.", recurring: true}`
-- Evening review: `{cron: "0 {EVENING_HOUR} * * *", prompt: "Read .claude/skills/evening-review/SKILL.md and execute the full evening review workflow. Summarize the day, propose overnight tasks, queue nighttime work.", recurring: true}`
-- Weekly review: `{cron: "0 {MORNING_HOUR} * * 0", prompt: "Read .claude/skills/weekly-review/SKILL.md and run the full weekly review. Review all agent outputs, evaluate performance, plan next week.", recurring: true}`
-
-After creating all 5 crons, update config.json with the computed cron expressions:
-
+Add the three time-anchored crons via `cortextos bus add-cron` using cron expressions (not intervals):
 ```bash
-jq --arg mc "0 ${MORNING_HOUR} * * *" \
-  --arg ec "0 ${EVENING_HOUR} * * *" \
-  --arg wc "0 ${MORNING_HOUR} * * 0" \
-   '.crons = (.crons | map(
-     if .name == "morning-review" then . + {"cron": $mc} | del(.interval)
-     elif .name == "evening-review" then . + {"cron": $ec} | del(.interval)
-     elif .name == "weekly-review" then . + {"cron": $wc} | del(.interval)
-     else . end
-   ))' config.json > /tmp/config.tmp && mv /tmp/config.tmp config.json
+cortextos bus add-cron $CTX_AGENT_NAME morning-review "0 ${MORNING_HOUR} * * *" "Read .claude/skills/morning-review/SKILL.md and execute the full morning review workflow. Include goal cascade from .claude/skills/goal-management/SKILL.md."
+cortextos bus add-cron $CTX_AGENT_NAME evening-review "0 ${EVENING_HOUR} * * *" "Read .claude/skills/evening-review/SKILL.md and execute the full evening review workflow. Summarize the day, propose overnight tasks, queue nighttime work."
+cortextos bus add-cron $CTX_AGENT_NAME weekly-review "0 ${MORNING_HOUR} * * 0" "Read .claude/skills/weekly-review/SKILL.md and run the full weekly review. Review all agent outputs, evaluate performance, plan next week."
 ```
 
 ### Step 12: Write working hours, communication style, and autonomy to bootstrap files
@@ -289,11 +277,10 @@ If yes, collect all 8 things (just like agent onboarding):
 - (g) Loop interval - how often to run the experiment loop (often same as window)
 - (h) Approval required before running each experiment?
 
-Then set up following `.claude/skills/autoresearch/SKILL.md` setup steps exactly. The cycle must be created with `cortextos bus manage-cycle create` including `--loop-interval`. The cron must be set up immediately after:
+Then set up following `.claude/skills/autoresearch/SKILL.md` setup steps exactly. The cycle must be created with `cortextos bus manage-cycle create` including `--loop-interval`. Add the experiment cron immediately after:
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME experiment-<metric> <loop_interval> "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."
 ```
-/loop <loop_interval> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.
-```
-Add to `config.json` crons array.
 
 If no:
 > "No problem. You can tell me to configure autoresearch anytime, or the analyst will set it up when they come online."

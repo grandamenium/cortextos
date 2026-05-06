@@ -20,7 +20,7 @@ Boss:    Sent. Email delivered to 47 recipients. Task closed.
 
 You:     Add a cron to check my inbox every morning at 8am.
 Boss:    Done. "morning-inbox" cron set — runs daily at 08:00.
-         Added to config.json so it survives restarts.
+         Saved to crons.json — survives restarts automatically.
 ```
 
 ---

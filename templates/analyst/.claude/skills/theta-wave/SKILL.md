@@ -106,7 +106,7 @@ cortextos bus manage-cycle create <agent> \
 ```
 Then send the agent a message to set up the corresponding cron:
 ```bash
-cortextos bus send-message <agent> normal "New autoresearch cycle created: <cycle_name> optimizing <metric_name>. Set up the cron: /loop <loop_interval> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop. Add to config.json crons."
+cortextos bus send-message <agent> normal "New autoresearch cycle created: <cycle_name> optimizing <metric_name>. Register the cron: cortextos bus add-cron \$CTX_AGENT_NAME experiment-<metric> <loop_interval> \"Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.\""
 ```
 
 **Modify existing cycles:**

@@ -30,7 +30,7 @@ Complete the following in order. Do not skip steps.
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-6. Restore crons from `config.json` — run CronList first (no duplicates). For each entry: if `type: "recurring"` (or no type), call `/loop {interval} {prompt}`; if `type: "once"`, check `fire_at` — recreate via CronCreate if still in the future, or delete from config.json if expired. Do NOT assume crons survived a restart.
+6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
 7. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
 8. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 9. Check inbox: `cortextos bus check-inbox`
@@ -402,21 +402,20 @@ Always include `msg_id` as reply_to — this auto-ACKs the original. Un-ACK'd me
 
 ## Crons
 
-All crons — recurring schedules AND one-shot reminders — live in `config.json` under the `crons` array. Write to config.json FIRST, then create the live cron.
+Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
 
-**Recurring:** `{"name": "heartbeat", "type": "recurring", "interval": "4h", "prompt": "..."}`
-**One-shot:** `{"name": "remind-user", "type": "once", "fire_at": "2026-04-02T15:00:00Z", "prompt": "..."}`
+**View scheduled crons:**
+```bash
+cortextos bus list-crons $CTX_AGENT_NAME
+```
 
-**On every session start:** Run CronList first (no duplicates). Recreate recurring crons with `/loop`; recreate once crons with CronCreate only if `fire_at` is still in the future — delete expired entries from config.json. Never tell the user a cron is active without confirming it in CronList.
+**Add a recurring cron at runtime:** Use the `cron-management` skill. Do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only and will not survive a restart.
 
-**Add recurring:** Write to config.json, then `/loop {interval} {prompt}`
-**Add one-shot:** Write to config.json with `fire_at`, then CronCreate
-**Remove:** CronDelete, then remove from config.json
-**After one-shot fires:** Delete its entry from config.json
+**Add a one-shot reminder:** `cortextos bus add-cron $CTX_AGENT_NAME --name <name> --schedule <ISO> --prompt "<text>"` (one-time fire).
 
-Crons expire after 7 days. They are recreated from config.json on each session start — but only if you actively recreate them. This does not happen automatically.
+**Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 
-For full restore protocol, see `.claude/skills/cron-management/SKILL.md`.
+For full CRUD protocol, see `.claude/skills/cron-management/SKILL.md`.
 
 ---
 

@@ -250,113 +250,6 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
   });
 });
 
-describe('AgentProcess - cron auto-verification', () => {
-  it('scheduleCronVerification() is a no-op when config has no crons', async () => {
-    const ap = new AgentProcess('alice', mockEnv, {});
-    await ap.start();
-    // Should not throw, should not schedule anything
-    ap.scheduleCronVerification();
-    // No inject calls expected (beyond any from start)
-    expect(mockInjectMessage).not.toHaveBeenCalled();
-  });
-
-  it('scheduleCronVerification() is a no-op when config has only once crons', async () => {
-    const ap = new AgentProcess('alice', mockEnv, {
-      crons: [{ name: 'reminder', type: 'once' as const, fire_at: '2099-01-01T00:00:00Z', prompt: 'test' }],
-    });
-    await ap.start();
-    ap.scheduleCronVerification();
-    // Wait briefly to confirm nothing fires
-    await new Promise(r => setTimeout(r, 100));
-    expect(mockInjectMessage).not.toHaveBeenCalled();
-  });
-
-  it('scheduleCronVerification() is a no-op when config has only disabled crons', async () => {
-    const ap = new AgentProcess('alice', mockEnv, {
-      crons: [{ name: 'paused-job', type: 'disabled' as const, interval: '1h', prompt: 'test' }],
-    });
-    await ap.start();
-    ap.scheduleCronVerification();
-    await new Promise(r => setTimeout(r, 100));
-    expect(mockInjectMessage).not.toHaveBeenCalled();
-  });
-
-  it('scheduleGapDetection() is a no-op when config has only disabled crons', async () => {
-    const ap = new AgentProcess('alice', mockEnv, {
-      crons: [{ name: 'paused-job', type: 'disabled' as const, interval: '1h', prompt: 'test' }],
-    });
-    await ap.start();
-    ap.scheduleGapDetection();
-    await new Promise(r => setTimeout(r, 100));
-    expect(mockInjectMessage).not.toHaveBeenCalled();
-  });
-
-  it('scheduleCronVerification() schedules verification when config has recurring crons', async () => {
-    const ap = new AgentProcess('alice', mockEnv, {
-      crons: [
-        { name: 'heartbeat', interval: '4h', prompt: 'check in' },
-        { name: 'research', type: 'recurring' as const, interval: '24h', prompt: 'research' },
-      ],
-    });
-    await ap.start();
-    // This should not throw — verification runs in background
-    ap.scheduleCronVerification();
-    // Verification is waiting for idle flag — no immediate injection
-    expect(mockInjectMessage).not.toHaveBeenCalled();
-  });
-
-  it('verifyCronsAfterIdle: injects prompt containing cron names once idle flag appears newer than boot', async () => {
-    const fs = await import('fs');
-    const mockExistsSync = vi.mocked(fs.existsSync);
-    const mockReadFileSync = vi.mocked(fs.readFileSync);
-
-    const bootTs = 1000;
-    const idleTs = 2000;
-
-    // Track calls so the first read (boot snapshot) returns bootTs,
-    // subsequent reads (poll) return idleTs (agent went idle)
-    let readCount = 0;
-    mockExistsSync.mockImplementation((p) => {
-      if (typeof p === 'string' && p.endsWith('last_idle.flag')) return true;
-      return false;
-    });
-    mockReadFileSync.mockImplementation((p) => {
-      if (typeof p === 'string' && p.endsWith('last_idle.flag')) {
-        readCount++;
-        return readCount === 1 ? String(bootTs) : String(idleTs);
-      }
-      return '';
-    });
-
-    vi.useFakeTimers();
-    try {
-      const ap = new AgentProcess('alice', mockEnv, {
-        crons: [
-          { name: 'heartbeat', interval: '4h', prompt: 'check in' },
-          { name: 'daily-report', interval: '24h', prompt: 'report' },
-        ],
-      });
-      await ap.start();
-
-      ap.scheduleCronVerification();
-
-      // Advance past the 15s poll interval so the background loop wakes,
-      // reads the newer flag timestamp, and injects the verification prompt
-      await vi.advanceTimersByTimeAsync(16_000);
-    } finally {
-      vi.useRealTimers();
-      // Restore default fs mock behaviour for other tests
-      mockExistsSync.mockReturnValue(false);
-      mockReadFileSync.mockReset();
-    }
-
-    expect(mockInjectMessage).toHaveBeenCalledOnce();
-    const promptArg: string = mockInjectMessage.mock.calls[0][1] as string;
-    expect(promptArg).toContain('heartbeat');
-    expect(promptArg).toContain('daily-report');
-  });
-});
-
 describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
   it('fires sessionRefresh when config on disk still matches original short duration', async () => {
     const refreshSpy = vi.fn().mockResolvedValue(undefined);
@@ -406,6 +299,50 @@ describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
     }
 
     // sessionRefresh must NOT have been called — config said 1h, not 1s
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not loop when max_session_seconds overflows int32 setTimeout (regression)', async () => {
+    // Without the clamp, max_session_seconds: 3600000 (1000h = 3.6T ms) would
+    // exceed Node's int32 setTimeout max (~2.147B ms), get coerced to 1ms,
+    // fire immediately, re-read the same overflow value, reschedule, and loop
+    // tightly — locking the daemon. Clamp at the call site prevents this.
+    const fs = await import('fs');
+    const mockExistsSync = vi.mocked(fs.existsSync);
+    const mockReadFileSync = vi.mocked(fs.readFileSync);
+
+    const refreshSpy = vi.fn().mockResolvedValue(undefined);
+    const logSpy = vi.fn();
+
+    mockExistsSync.mockImplementation((p: unknown) =>
+      typeof p === 'string' && p.endsWith('config.json'),
+    );
+    mockReadFileSync.mockImplementation((p: unknown) => {
+      if (typeof p === 'string' && p.endsWith('config.json')) {
+        return JSON.stringify({ max_session_seconds: 3_600_000 });
+      }
+      return '';
+    });
+
+    vi.useFakeTimers();
+    try {
+      const ap = new AgentProcess('alice', mockEnv, { max_session_seconds: 3_600_000 });
+      vi.spyOn(ap, 'sessionRefresh').mockImplementation(refreshSpy);
+      vi.spyOn(ap as unknown as { log: (m: string) => void }, 'log').mockImplementation(logSpy);
+      await ap.start();
+      // Advance past the int32 setTimeout cap. Without clamp this would log
+      // thousands of "rescheduling" lines as the 1ms-coerced timer keeps firing.
+      await vi.advanceTimersByTimeAsync(5000);
+    } finally {
+      vi.useRealTimers();
+      mockExistsSync.mockReturnValue(false);
+      mockReadFileSync.mockReset();
+    }
+
+    const rescheduleCount = logSpy.mock.calls.filter(
+      ([msg]) => typeof msg === 'string' && msg.includes('rescheduling'),
+    ).length;
+    expect(rescheduleCount).toBeLessThan(5);
     expect(refreshSpy).not.toHaveBeenCalled();
   });
 });
