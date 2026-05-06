@@ -127,6 +127,40 @@ export function notifyAgents(opts: {
 }
 
 /**
+ * Structured exit-reason record. Mirrors the fields written to crashes.log
+ * but as JSON instead of a single tab-formatted log line so the dashboard
+ * can parse it directly without tailing the audit log.
+ */
+export interface ExitReason {
+  type: string;            // crash | rate-limited | user-stop | daemon-stop | etc.
+  timestamp: string;       // ISO 8601 UTC
+  reason: string;          // human-readable; '' when no reason marker was present
+  last_task: string;       // last heartbeat status; '' when none recorded
+}
+
+/**
+ * Write a point-in-time `exit-reason.json` to the agent's state dir.
+ *
+ * Always overwrites — the file is the most-recent-exit snapshot, not an
+ * append log (`crashes.log` is the append log). The dashboard reads this
+ * file to distinguish a planned restart from an unplanned crash without
+ * having to tail-and-parse crashes.log on every refresh.
+ *
+ * Best-effort: a write failure never throws. Worst case the dashboard
+ * shows a stale exit-reason or an empty one — both visible regressions
+ * that do not break the alert pipeline.
+ */
+export function writeExitReason(stateDir: string, reason: ExitReason): void {
+  try {
+    writeFileSync(
+      join(stateDir, 'exit-reason.json'),
+      JSON.stringify(reason, null, 2) + '\n',
+      'utf-8',
+    );
+  } catch { /* ignore */ }
+}
+
+/**
  * Return true if an identical (agent, type) alert was already sent within
  * the dedup window. Side effect: records this attempt when it is the first.
  */
@@ -240,6 +274,13 @@ async function main(): Promise<void> {
   try {
     appendFileSync(join(logDir, 'crashes.log'), logLine);
   } catch { /* ignore */ }
+
+  // Also write a point-in-time exit-reason.json the dashboard can read to
+  // distinguish a planned restart from an unplanned crash without having to
+  // tail-and-parse crashes.log. crashes.log stays the audit log; this file
+  // is just "what was the most recent exit, structured." Best-effort: a
+  // failure here never blocks the alert path.
+  writeExitReason(stateDir, { type: endType, timestamp, reason: reason || '', last_task: lastTask });
 
   // Decide whether to actually send to Telegram.
   const now = new Date();
