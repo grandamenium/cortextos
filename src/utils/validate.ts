@@ -19,10 +19,12 @@ export function validateAgentName(name: string): void {
   }
 }
 
+const ORG_NAME_REGEX = /^[a-zA-Z0-9_-]+$/;
+
 export function validateOrgName(org: string): void {
-  if (!org || !AGENT_NAME_REGEX.test(org)) {
+  if (!org || !ORG_NAME_REGEX.test(org)) {
     throw new Error(
-      `Invalid org name '${org}'. Must contain only lowercase letters, numbers, underscores, and hyphens.`
+      `Invalid org name '${org}'. Must contain only letters, numbers, underscores, and hyphens.`
     );
   }
 }
