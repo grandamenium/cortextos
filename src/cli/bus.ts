@@ -18,6 +18,8 @@ import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-stat
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
+import { writeSharedKnowledge } from '../bus/shared-knowledge.js';
+import { resolveMcpEnv } from '../utils/mcp-env-resolve.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -2714,6 +2716,134 @@ busCommand
       console.log('  cortextos restart <agent-name>');
     }
   });
+
+// ---------------------------------------------------------------------------
+// shared-knowledge — auto-format slug + frontmatter for vault/00-inbox writes
+// ---------------------------------------------------------------------------
+
+const sharedKnowledgeCmd = busCommand
+  .command('shared-knowledge')
+  .description('Write structured notes into the org Obsidian vault inbox');
+
+sharedKnowledgeCmd
+  .command('write')
+  .description('Compose a vault/00-inbox/<slug>.md note with auto-generated slug + frontmatter')
+  .requiredOption(
+    '--type <type>',
+    'Knowledge type (note|runbook|finding|handoff|proposal|postmortem|decision|spec|reference|moc|daily|template)',
+  )
+  .requiredOption('--tags <csv>', 'Comma-separated tags (≥1 required)')
+  .requiredOption('--title <title>', 'Note title (used to derive slug + first heading)')
+  .option('--topic <slug>', 'Override slug topic (defaults to slugified title)')
+  .option('--body <text>', 'Initial body markdown (defaults to skeleton template)')
+  .option('--status <s>', 'Initial status: draft|active|archived', 'draft')
+  .option('--relates-to <csv>', 'Comma-separated related slugs (without .md)')
+  .option('--session <iso>', 'Session-start ISO (defaults to now)')
+  .option('--agent <name>', 'Override agent name (defaults to CTX_AGENT_NAME)')
+  .option('--org <org>', 'Override org (defaults to CTX_ORG)')
+  .action(
+    (opts: {
+      type: string;
+      tags: string;
+      title: string;
+      topic?: string;
+      body?: string;
+      status?: string;
+      relatesTo?: string;
+      session?: string;
+      agent?: string;
+      org?: string;
+    }) => {
+      const env = resolveEnv();
+      const org = opts.org ?? env.org;
+      const agent = opts.agent ?? env.agentName;
+      if (!org) {
+        console.error('ERROR: --org or CTX_ORG required');
+        process.exit(1);
+      }
+      if (!agent) {
+        console.error('ERROR: --agent or CTX_AGENT_NAME required');
+        process.exit(1);
+      }
+      const tags = opts.tags
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const relatesTo = opts.relatesTo
+        ? opts.relatesTo
+            .split(',')
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : undefined;
+
+      try {
+        const result = writeSharedKnowledge({
+          type: opts.type as Parameters<typeof writeSharedKnowledge>[0]['type'],
+          tags,
+          title: opts.title,
+          topic: opts.topic,
+          body: opts.body,
+          status: (opts.status as 'draft' | 'active' | 'archived' | undefined) ?? 'draft',
+          relatesTo,
+          sessionIso: opts.session,
+          agent,
+          org,
+          frameworkRoot: env.frameworkRoot || process.cwd(),
+        });
+        console.log(`Wrote ${result.slug}`);
+        console.log(`  path: ${result.filePath}`);
+        console.log(`  vault: ${result.vaultRoot}`);
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    },
+  );
+
+// ---------------------------------------------------------------------------
+// mcp-resolve — substitute ${VAR} placeholders in agent .mcp.json
+// ---------------------------------------------------------------------------
+
+busCommand
+  .command('mcp-resolve')
+  .description(
+    'Resolve ${VAR} placeholders in an agent\'s .mcp.json against orgs/<org>/secrets.env + agent .env.',
+  )
+  .option('--agent <name>', 'Agent name (defaults to CTX_AGENT_NAME)')
+  .option('--org <org>', 'Org name (defaults to CTX_ORG)')
+  .option('--write', 'Write resolved JSON to <agentDir>/.mcp.resolved.json (default: dry-run, stdout-only)')
+  .option('--out <path>', 'Override output path when --write is set')
+  .action(
+    (opts: { agent?: string; org?: string; write?: boolean; out?: string }) => {
+      const env = resolveEnv();
+      const agent = opts.agent ?? env.agentName;
+      const org = opts.org ?? env.org;
+      if (!agent || !org) {
+        console.error('ERROR: --agent/--org or CTX_AGENT_NAME/CTX_ORG required');
+        process.exit(1);
+      }
+      try {
+        const r = resolveMcpEnv({
+          agent,
+          org,
+          frameworkRoot: env.frameworkRoot || process.cwd(),
+          outputPath: opts.out,
+          write: opts.write,
+        });
+        console.log('input:    ' + r.inputPath);
+        console.log('output:   ' + (r.outputPath ?? '(dry-run, not written)'));
+        console.log('resolved: ' + (r.substituted.join(', ') || '(none)'));
+        if (r.unresolved.length > 0) {
+          console.warn('UNRESOLVED ${VAR}: ' + r.unresolved.join(', '));
+          console.warn('  Add these to orgs/' + org + '/secrets.env, the agent .env, or supply a default like ${VAR:-fallback}.');
+          process.exit(2);
+        }
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    },
+  );
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
