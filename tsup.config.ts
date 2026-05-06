@@ -11,6 +11,7 @@ export default defineConfig({
     'hooks/hook-compact-telegram': 'src/hooks/hook-compact-telegram.ts',
     'hooks/hook-extract-facts': 'src/hooks/hook-extract-facts.ts',
     'hooks/hook-idle-flag': 'src/hooks/hook-idle-flag.ts',
+    'hooks/hook-session-restore': 'src/hooks/hook-session-restore.ts',
     'hooks/hook-context-status': 'src/hooks/hook-context-status.ts',
   },
   format: ['cjs'],

@@ -201,6 +201,7 @@ export default function ApprovalsPage() {
                   key={approval.id}
                   approval={approval}
                   onClick={handleApprovalClick}
+                  onQuickResolve={handleResolve}
                 />
               ))}
             </div>

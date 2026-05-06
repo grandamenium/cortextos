@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -8,7 +8,7 @@ vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { readMaxCrashesPerDay, notifyAgents } from '../../../src/hooks/hook-crash-alert';
+import { readMaxCrashesPerDay, notifyAgents, writeExitReason } from '../../../src/hooks/hook-crash-alert';
 
 describe('readMaxCrashesPerDay', () => {
   let tmp: string;
@@ -143,5 +143,63 @@ describe('notifyAgents', () => {
     })).not.toThrow();
     // Second recipient still attempted
     expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('writeExitReason', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'exitreason-'));
+  });
+
+  afterEach(() => {
+    // Restore writability so rmSync can clean up after the IO-failure test
+    // (which chmods the dir to read-only).
+    try { chmodSync(tmp, 0o755); } catch { /* already writable */ }
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('writes a JSON file with all four fields populated', () => {
+    writeExitReason(tmp, {
+      type: 'rate-limited',
+      timestamp: '2026-05-06T21:35:00.000Z',
+      reason: 'anthropic rate limit detected in stdout.log',
+      last_task: 'heartbeat: PR monitor',
+    });
+    const path = join(tmp, 'exit-reason.json');
+    expect(existsSync(path)).toBe(true);
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'));
+    expect(parsed).toEqual({
+      type: 'rate-limited',
+      timestamp: '2026-05-06T21:35:00.000Z',
+      reason: 'anthropic rate limit detected in stdout.log',
+      last_task: 'heartbeat: PR monitor',
+    });
+  });
+
+  it('overwrites the previous exit-reason atomically (latest wins)', () => {
+    writeExitReason(tmp, { type: 'crash', timestamp: 't1', reason: 'r1', last_task: 'lt1' });
+    writeExitReason(tmp, { type: 'planned-restart', timestamp: 't2', reason: 'r2', last_task: 'lt2' });
+    const parsed = JSON.parse(readFileSync(join(tmp, 'exit-reason.json'), 'utf-8'));
+    expect(parsed.type).toBe('planned-restart');
+    expect(parsed.timestamp).toBe('t2');
+  });
+
+  it('preserves empty-string fields rather than dropping them (dashboard parsing relies on shape)', () => {
+    writeExitReason(tmp, { type: 'daemon-stop', timestamp: 't', reason: '', last_task: '' });
+    const parsed = JSON.parse(readFileSync(join(tmp, 'exit-reason.json'), 'utf-8'));
+    expect(parsed).toHaveProperty('reason', '');
+    expect(parsed).toHaveProperty('last_task', '');
+  });
+
+  it('does not throw when the state dir is not writable (best-effort write)', () => {
+    chmodSync(tmp, 0o444);
+    expect(() => writeExitReason(tmp, {
+      type: 'crash',
+      timestamp: 't',
+      reason: 'r',
+      last_task: 'lt',
+    })).not.toThrow();
   });
 });
