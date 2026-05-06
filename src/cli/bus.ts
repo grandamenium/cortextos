@@ -1306,6 +1306,17 @@ busCommand
       }
 
       console.log('Message sent');
+      // Exit immediately after all local writes complete. The bus-mirror
+      // retry-drain (drainRetryQueue) is launched via setImmediate and uses
+      // long-timeout fetch calls that keep the Node event loop alive
+      // indefinitely when Supabase is slow or unreachable. The drain is
+      // fire-and-forget: the retry queue is persisted to disk and will be
+      // drained on the next bus write or daemon cycle. Calling process.exit(0)
+      // here fires before any setImmediate callbacks, so the drain never runs
+      // in this short-lived process — which is the correct behaviour for a CLI
+      // command. Without this, send-telegram can hang for hours (one 10s
+      // timeout × N queued entries) and leave zombie processes.
+      process.exit(0);
     } catch (err: any) {
       console.error(`Failed to send: ${err.message || err}`);
       process.exit(1);

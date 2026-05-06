@@ -89,7 +89,12 @@ export class TelegramAPI {
   private warnedSelfChat: Set<string> = new Set();
 
   constructor(token: string) {
-    this.baseUrl = `https://api.telegram.org/bot${token}`;
+    // TELEGRAM_API_BASE_URL allows tests to point at a local mock server
+    // without modifying production code paths. Only respected in test environments.
+    const baseOverride = process.env.TELEGRAM_API_BASE_URL;
+    this.baseUrl = baseOverride
+      ? `${baseOverride}/bot${token}`
+      : `https://api.telegram.org/bot${token}`;
   }
 
   /**
