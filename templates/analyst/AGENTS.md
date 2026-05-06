@@ -30,14 +30,14 @@ Complete the following in order. Do not skip steps.
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-6. Restore crons from `config.json` — run CronList first (no duplicates). For each entry: if `type: "recurring"` (or no type), call `/loop {interval} {prompt}`; if `type: "once"`, check `fire_at` — recreate via CronCreate if still in the future, or delete from config.json if expired. Do NOT assume crons survived a restart.
+6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
 7. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
 8. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 9. Check inbox: `cortextos bus check-inbox`
 10. Update heartbeat: `cortextos bus update-heartbeat "online"`
 11. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
 12. Write session start entry to daily memory (see Memory Protocol below)
-13. Send your online status message — **only AFTER crons are confirmed set**. On a cold boot: tell them crons running, pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
+13. Send your online status message. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
 
 ---
 
@@ -243,7 +243,7 @@ cat >> "memory/$TODAY.md" << MEMEOF
 
 ## Session Start - $(date -u +%H:%M:%S UTC)
 - Status: online
-- Crons active: <list from CronList>
+- Crons active: <list from `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
 - Current state: <where things stand — what is in progress, pending, or needs attention>
 - Resuming: <what to do next and why, with enough context to act without re-reading everything>
@@ -402,21 +402,93 @@ Always include `msg_id` as reply_to — this auto-ACKs the original. Un-ACK'd me
 
 ## Crons
 
-All crons — recurring schedules AND one-shot reminders — live in `config.json` under the `crons` array. Write to config.json FIRST, then create the live cron.
+Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
 
-**Recurring:** `{"name": "heartbeat", "type": "recurring", "interval": "4h", "prompt": "..."}`
-**One-shot:** `{"name": "remind-user", "type": "once", "fire_at": "2026-04-02T15:00:00Z", "prompt": "..."}`
+**View scheduled crons:**
+```bash
+cortextos bus list-crons $CTX_AGENT_NAME
+```
 
-**On every session start:** Run CronList first (no duplicates). Recreate recurring crons with `/loop`; recreate once crons with CronCreate only if `fire_at` is still in the future — delete expired entries from config.json. Never tell the user a cron is active without confirming it in CronList.
+**Add a recurring cron at runtime:** Use the `cron-management` skill. Do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only and will not survive a restart.
 
-**Add recurring:** Write to config.json, then `/loop {interval} {prompt}`
-**Add one-shot:** Write to config.json with `fire_at`, then CronCreate
-**Remove:** CronDelete, then remove from config.json
-**After one-shot fires:** Delete its entry from config.json
+**Add a one-shot reminder:** Use `cortextos bus add-cron $CTX_AGENT_NAME --name <name> --schedule <ISO> --prompt "<text>"` (one-time fire).
 
-Crons expire after 7 days. They are recreated from config.json on each session start — but only if you actively recreate them. This does not happen automatically.
+**Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 
-For full restore protocol, see `.claude/skills/cron-management/SKILL.md`.
+For full CRUD protocol, see `.claude/skills/cron-management/SKILL.md`.
+
+---
+
+## External Persistent Crons
+
+### The Model
+
+Persistent crons live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon owns this file — it reads it on every agent start, schedules each entry, and fires them by injecting prompts directly into your PTY session. Retry logic: 1s, 4s, 16s on injection failure. Execution is logged to `${CTX_ROOT}/state/${CTX_AGENT_NAME}/cron-execution.log`.
+
+Key properties:
+
+- **Survives daemon restarts.** State is on disk, not in memory.
+- **Survives agent restarts.** The daemon re-reads `crons.json` and re-schedules on every agent boot.
+- **Not session-local.** A cron defined here fires whether or not the session that created it is still running.
+
+### /loop vs Persistent Crons
+
+`/loop` is Claude Code's built-in for ephemeral polling inside a single session. Use it when you need something to repeat for the duration of one conversation (e.g., "poll this metric every 5 minutes"). It dies when the session ends.
+
+For ANY work that should survive restarts — heartbeats, nightly metrics, ecosystem checks, experiment loops — use `cortextos bus add-cron`.
+
+| Need | Use |
+|------|-----|
+| Repeat for this session only | `/loop <interval> <prompt>` |
+| Persist across restarts | `cortextos bus add-cron` |
+| One-time future fire | `cortextos bus add-cron --schedule <ISO>` |
+
+### Migration from config.json
+
+Automatic. On agent boot, the daemon migrates `config.json` crons to `crons.json` once. A marker file `${CTX_ROOT}/state/${CTX_AGENT_NAME}/.crons-migrated` prevents re-runs. The source `config.json` is left untouched — non-destructive.
+
+You do not need to do anything. If you want to verify: check that `.crons-migrated` exists and `crons.json` is populated.
+
+### Examples
+
+**1. Heartbeat every 6 hours:**
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h Read HEARTBEAT.md and follow its instructions.
+```
+
+**2. Nightly metrics at 1am daily (cron expression):**
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME nightly-metrics "0 1 * * *" Read .claude/skills/system-diagnostics/SKILL.md and run the nightly metrics sweep.
+```
+
+**3. Ecosystem check every 4 hours, offset to avoid stampede:**
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME ecosystem-check "30 */4 * * *" Check all enabled features and report anomalies to the orchestrator.
+```
+
+**4. Test that a cron fires correctly:**
+```bash
+cortextos bus test-cron-fire $CTX_AGENT_NAME heartbeat
+```
+This injects the cron prompt immediately — use it to confirm the wiring is correct before waiting for the first scheduled fire.
+
+### How to Verify
+
+```bash
+# List all scheduled crons for this agent (shows next_fire_at for each)
+cortextos bus list-crons $CTX_AGENT_NAME
+
+# View execution history
+cortextos bus get-cron-log $CTX_AGENT_NAME
+
+# Confirm migration ran
+ls "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.crons-migrated"
+
+# Inspect crons.json directly
+cat "${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json"
+```
+
+For full CRUD (update, pause, resume, delete), see `.claude/skills/cron-management/SKILL.md`.
 
 ---
 

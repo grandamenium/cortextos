@@ -131,7 +131,7 @@ export function writeCortextosEnv(agentDir: string, env: CtxEnv): void {
  *   - Inline ` #` comments on unquoted values
  * Lines with no `=` are skipped.
  */
-function parseEnvFile(filePath: string): Record<string, string> {
+export function parseEnvFile(filePath: string): Record<string, string> {
   const result: Record<string, string> = {};
   try {
     const content = readFileSync(filePath, 'utf-8');

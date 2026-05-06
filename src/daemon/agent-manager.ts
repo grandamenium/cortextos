@@ -5,10 +5,10 @@ import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
+import { migrateCronsForAgent } from './cron-migration.js';
+import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
-import { SlackPoller } from '../slack/poller.js';
-import { attachSlackToAgent } from '../slack/attach.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
@@ -22,36 +22,23 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller; slackPoller?: SlackPoller }> = new Map();
+  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
+  /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
+  private cronSchedulers: Map<string, CronScheduler> = new Map();
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
   private pendingRestarts: Set<string> = new Set();
-  // Per-agent in-flight stopAgent() promise. When a startAgent() arrives
-  // for the same name while a stop is still running, the new start awaits
-  // this promise before proceeding — which eliminates the IPC-level race
-  // where `cortextos stop foo && cortextos start foo` arrived at the daemon
-  // faster than the PTY could actually shut down (~6-15s) and landed both
-  // handlers in parallel. See startAgent() for how this is consumed.
-  private inFlightStops: Map<string, Promise<void>> = new Map();
   private instanceId: string;
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
-  // Daemon-wide cron scheduler. Each AgentProcess gets the same instance and
-  // calls attachAgent()/detachAgent() on start/stop. The scheduler owns all
-  // recurring cron timing so agents never rebuild CronCreate state on restart.
-  private cronScheduler: CronScheduler;
 
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
-    this.cronScheduler = new CronScheduler({
-      log: (msg) => console.log(`[cron-sched] ${msg}`),
-    });
-    this.cronScheduler.start();
   }
 
   /**
@@ -158,38 +145,21 @@ export class AgentManager {
    * `CTX_ORG` the daemon was started with.
    */
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
-    // IPC stop+start race: the cortextos IPC server dispatches stop-agent
-    // and start-agent handlers fire-and-forget (ipc-server.ts), so
-    //     cortextos stop foo && cortextos start foo
-    // can arrive at the daemon with both handlers running in parallel:
-    // stopAgent() is still awaiting PTY exit (6-15s) when startAgent()
-    // fires. Without this await, startAgent would land on
-    // `if (this.agents.has(name))` (true, because stopAgent hasn't reached
-    // agents.delete yet) and bail into the pendingRestarts fallback below,
-    // noisily logging a "BUG-011 regression" warning for what is in fact
-    // the expected concurrent-IPC pattern. Awaiting the in-flight stop
-    // here lets the usual path run cleanly. The pendingRestarts fallback
-    // is kept below as a safety net for any code path that bypasses
-    // stopAgent's inFlightStops registration.
-    const inFlightStop = this.inFlightStops.get(name);
-    if (inFlightStop) {
-      console.log(`[agent-manager] startAgent(${name}) waiting for in-flight stopAgent to complete`);
-      try {
-        await inFlightStop;
-      } catch {
-        // stopAgent failures are logged at their source; ignore here and
-        // proceed to the fresh-start path.
-      }
-    }
-
     if (this.agents.has(name)) {
-      // Safety net: a startAgent arrived while the name is still in the
-      // registry AND we have no in-flight stopAgent promise for it. This
-      // should only happen for code paths that mutate this.agents without
-      // going through stopAgent (none known today). Queue the restart so
-      // the next stopAgent — whenever it runs — honors it, rather than
-      // silently dropping the request.
-      console.log(`[agent-manager] startAgent(${name}) arrived with name still in registry and no in-flight stop; queueing restart`);
+      // BUG-031: this branch was the workaround for the BUG-011 PTY race
+      // (restart-all could send stop+start simultaneously, and the new
+      // start would arrive while the old stop's PTY exit was still in
+      // flight). PR #11 closed BUG-011 by making `AgentProcess.stop()`
+      // await the actual PTY exit before resolving — which means this
+      // branch should NEVER fire under normal restart paths.
+      //
+      // We log a regression warning here instead of deleting the branch
+      // entirely, so we'll know IMMEDIATELY if BUG-011 ever regresses
+      // (a future change accidentally breaks the exit-await). Phase 4 of
+      // the core stability test plan + cycle 2 of PR #13 both confirmed
+      // this branch is dormant. Once we have weeks of zero-warning
+      // production data, we can delete the queue mechanism entirely.
+      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
       this.pendingRestarts.add(name);
       return;
     }
@@ -272,19 +242,12 @@ export class AgentManager {
       }
     }
 
-    const agentProcess = new AgentProcess(name, env, config, log, this.cronScheduler);
-
-    // Build gmail_watch option if configured
-    const gmailWatchOption = config.gmail_watch?.query
-      ? { query: config.gmail_watch.query, intervalMs: config.gmail_watch.interval_ms ?? 15 * 60 * 1000 }
-      : undefined;
-
+    const agentProcess = new AgentProcess(name, env, config, log);
     const checker = new FastChecker(agentProcess, paths, this.frameworkRoot, {
       log,
       telegramApi,
       chatId,
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
-      gmailWatch: gmailWatchOption,
     });
 
     // Send Telegram notification on crashes and session refreshes
@@ -307,10 +270,22 @@ export class AgentManager {
 
     this.agents.set(name, { process: agentProcess, checker });
 
-    // Start agent. AgentProcess.start() attaches itself to the daemon-side
-    // CronScheduler after a successful spawn, so no further cron wiring is
-    // needed here — the scheduler ticks and injects cron prompts on its own.
+    // Start agent
     await agentProcess.start();
+
+    // Subtask 2.2: Auto-migrate crons from config.json → crons.json before
+    // starting the scheduler, so the scheduler always has a populated crons.json
+    // to read from.  The migration is idempotent (marker file prevents re-runs).
+    const configJsonPath = join(agentDir, 'config.json');
+    migrateCronsForAgent(name, configJsonPath, this.ctxRoot, {
+      log: (msg) => log(`[migration] ${msg}`),
+    });
+
+    // Wire daemon-level CronScheduler for this agent.
+    // The scheduler reads crons.json, fires crons, and injects prompts into
+    // the agent PTY via injectAgent().  This is the Phase 2 daemon-managed
+    // external cron system — agents no longer need to call CronCreate on boot.
+    this.startAgentCronScheduler(name);
 
     // Start fast checker in background
     checker.start().catch(err => {
@@ -331,7 +306,7 @@ export class AgentManager {
     // Start Telegram poller if credentials are available
     if (telegramApi && chatId) {
       const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir, 1000, undefined, name);
+      const poller = new TelegramPoller(telegramApi, stateDir);
 
       poller.onMessage((msg) => {
         // ALLOWED_USER gate: if configured, ignore messages from other users.
@@ -383,6 +358,7 @@ export class AgentManager {
             const relImagePath = toRel(media.image_path);
             const relFilePath = toRel(media.file_path);
 
+            log(`[DEBUG] media.type=${media.type} image_path=${JSON.stringify(relImagePath)} file_path=${JSON.stringify(relFilePath)}`);
             let formatted: string;
             if (media.type === 'photo') {
               formatted = FastChecker.formatTelegramPhotoMessage(from, effectiveChatId, media.text, relImagePath);
@@ -477,34 +453,7 @@ export class AgentManager {
       const entry = this.agents.get(name);
       if (entry) entry.poller = poller;
 
-      // Stagger poller start to avoid simultaneous getUpdates race conditions.
-      // Each agent waits (N * 2s) where N is its position in the registry.
-      // The delay is handled inside poller.start() rather than via setTimeout
-      // so a stop() issued during the stagger window is honored instead of
-      // leaking an orphaned poll loop. See BUG-POLLER-RACE note in poller.ts.
-      const pollerDelay = this.agents.size * 2000;
-      poller.start(pollerDelay).catch(err => {
-        log(`Telegram poller error: ${err}`);
-      });
-
       log('Telegram poller started');
-
-      // Slack poller — inject Slack DMs/@mentions for this agent into the
-      // same FastChecker queue. Uses agent_slack_inbox via Supabase REST.
-      attachSlackToAgent({
-        agentName: name,
-        agentDir,
-        checker,
-        log,
-        staggerMs: this.agents.size * 2000,
-      }).then((slackPoller) => {
-        if (!slackPoller) return;
-        const e2 = this.agents.get(name);
-        if (e2) e2.slackPoller = slackPoller;
-      }).catch((err) => {
-        log(`[slack] attach failed: ${err}`);
-      });
-
 
       // Orchestrator-only: start a second poller for the org's activity
       // channel bot so Telegram inline-button callbacks (currently just
@@ -608,27 +557,8 @@ export class AgentManager {
 
   /**
    * Stop a specific agent.
-   *
-   * Thin wrapper over _doStopAgent() that registers the in-flight stop
-   * promise in inFlightStops so a concurrent startAgent() for the same
-   * name can await it instead of racing into the pendingRestarts fallback.
-   * Parallel stopAgent() calls for the same name coalesce onto the same
-   * promise (idempotent).
    */
   async stopAgent(name: string): Promise<void> {
-    const existing = this.inFlightStops.get(name);
-    if (existing) return existing;
-
-    const stopPromise = this._doStopAgent(name);
-    this.inFlightStops.set(name, stopPromise);
-    try {
-      await stopPromise;
-    } finally {
-      this.inFlightStops.delete(name);
-    }
-  }
-
-  private async _doStopAgent(name: string): Promise<void> {
     const entry = this.agents.get(name);
     if (!entry) {
       console.log(`[agent-manager] Agent ${name} not found`);
@@ -637,19 +567,26 @@ export class AgentManager {
 
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
-    if (entry.slackPoller) entry.slackPoller.stop();
     entry.checker.stop();
     await entry.process.stop();
     this.agents.delete(name);
 
-    // Honor any restart that was queued while we were stopping. With the
-    // inFlightStops mechanism in startAgent(), the common stop+start IPC
-    // race no longer routes through pendingRestarts — this branch now only
-    // fires for code paths that mutate this.agents without going through
-    // stopAgent, which shouldn't happen today. Kept as a safety net.
+    // Stop and remove the agent's cron scheduler (if one was wired)
+    const scheduler = this.cronSchedulers.get(name);
+    if (scheduler) {
+      scheduler.stop();
+      this.cronSchedulers.delete(name);
+    }
+
+    // BUG-031: honor any restart that was queued while we were stopping.
+    // After PR #11 (BUG-011 fix) this branch should never fire — see the
+    // matching warning comment in startAgent(). The honor logic is preserved
+    // as a safety net in case BUG-011 regresses; the warn line tells us
+    // immediately if it ever does.
     if (this.pendingRestarts.has(name)) {
-      console.log(`[agent-manager] pendingRestarts fallback firing for ${name} — honoring queued restart`);
+      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: pendingRestarts fired for ${name} — race condition leaked through. Honoring queued restart as safety net.`);
       this.pendingRestarts.delete(name);
+      console.log(`[agent-manager] Honoring queued restart for ${name}`);
       this.startAgent(name, '').catch(err =>
         console.error(`[agent-manager] Queued restart failed for ${name}:`, err),
       );
@@ -715,9 +652,6 @@ export class AgentManager {
         console.error(`[agent-manager] Error stopping ${name}:`, err);
       }
     }
-
-    // Tear down the daemon-wide cron scheduler after every agent is stopped.
-    this.cronScheduler.stop();
   }
 
   /**
@@ -751,6 +685,14 @@ export class AgentManager {
    */
   getAgentNames(): string[] {
     return [...this.agents.keys()];
+  }
+
+  /**
+   * Return the CronScheduler for a given agent (for testing / introspection).
+   * Returns undefined if no scheduler is running for that agent.
+   */
+  getCronScheduler(agentName: string): CronScheduler | undefined {
+    return this.cronSchedulers.get(agentName);
   }
 
   // --- Worker management ---
@@ -815,6 +757,115 @@ export class AgentManager {
     const worker = this.workers.get(name);
     if (!worker) return false;
     return worker.inject(text);
+  }
+
+  /**
+   * Inject text directly into a running agent's PTY.
+   * Used by `cortextos bus test-cron-fire` to fire a cron immediately for testing.
+   * Returns true if the agent is running and the inject succeeded; false otherwise.
+   */
+  injectAgent(agentName: string, text: string): boolean {
+    const entry = this.agents.get(agentName);
+    if (!entry) return false;
+    return entry.process.injectMessage(text);
+  }
+
+  /**
+   * Signal the CronScheduler for an agent to re-read crons.json.
+   *
+   * Called by the IPC server after a `bus add-cron` / `bus remove-cron` write so
+   * the daemon-level scheduler picks up the new definition without waiting for
+   * the next 30 s tick.  Returns true on a successful reload (or no-op for
+   * Hermes agents, which manage their own crons natively); false if the agent
+   * is not running at all.
+   *
+   * Iter 7 fix: previously this returned `true` for any registered agent even
+   * when no scheduler existed in `cronSchedulers`, silently dropping reload
+   * requests during the start-window gap between `this.agents.set(name, ...)`
+   * and `startAgentCronScheduler(name)` (across the `await agentProcess.start()`
+   * yield in `startAgent`). Now: for non-Hermes agents that lack a scheduler we
+   * lazy-wire one so the just-written crons.json is read immediately.
+   */
+  reloadCrons(agentName: string): boolean {
+    const scheduler = this.cronSchedulers.get(agentName);
+    if (scheduler) {
+      scheduler.reload();
+      console.log(`[agent-manager] Cron scheduler reloaded for ${agentName}`);
+      return true;
+    }
+
+    const entry = this.agents.get(agentName);
+    if (!entry) return false;
+
+    // Hermes manages its own crons natively — no daemon scheduler exists by
+    // design. The reload IS a no-op; report success so the caller does not
+    // retry forever.
+    if (entry.process['config']?.runtime === 'hermes') {
+      return true;
+    }
+
+    // Non-Hermes agent registered but no scheduler: this is the start-window
+    // gap. Lazy-wire the scheduler now; its start() reads crons.json which
+    // already contains the new entry the caller just wrote.
+    this.startAgentCronScheduler(agentName);
+    console.log(`[agent-manager] Cron scheduler lazy-created for ${agentName} (start-window reload)`);
+    return this.cronSchedulers.has(agentName);
+  }
+
+  /**
+   * Wire a daemon-level CronScheduler for the named agent.
+   *
+   * The scheduler reads `crons.json` (via `readCrons()`), computes fire times,
+   * and on each tick injects the cron's prompt text directly into the agent PTY
+   * via `injectAgent()`.  The fire callback builds the same injected text that
+   * a Claude-Code `CronCreate` callback would emit so the agent's session sees
+   * a normal-looking cron-fire message and handles it with existing skill code.
+   *
+   * Hermes agents manage their own cron system natively — skip them here.
+   * If crons.json is absent or empty the scheduler starts but has nothing to do;
+   * it will pick up new entries on the next `reloadCrons()` call.
+   */
+  private startAgentCronScheduler(agentName: string): void {
+    // Skip if already running (idempotent — e.g. called twice on fast restart)
+    if (this.cronSchedulers.has(agentName)) {
+      console.log(`[agent-manager] Cron scheduler already running for ${agentName} — skipped`);
+      return;
+    }
+
+    const entry = this.agents.get(agentName);
+    if (!entry) return;
+
+    // Hermes manages its own cron scheduling — don't double-schedule
+    if (entry.process['config']?.runtime === 'hermes') {
+      console.log(`[daemon] Skipping external cron scheduler for Hermes agent "${agentName}"`);
+      return;
+    }
+
+    const onFire = async (cron: CronDefinition): Promise<void> => {
+      const prompt = cron.prompt ?? `[cron] ${cron.name} fired`;
+      // Salt with the fire timestamp so MessageDedup (which hashes the last 100
+      // injects) does not reject identical cron prompts on subsequent fires.
+      // Without the salt, every recurring cron after its first fire would be
+      // dedup-rejected and treated as a dispatch failure.
+      const firedAt = new Date().toISOString();
+      const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
+      const injected = this.injectAgent(agentName, injection);
+      if (!injected) {
+        throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
+      }
+    };
+
+    const scheduler = new CronScheduler({
+      agentName,
+      onFire,
+      logger: (msg) => console.log(`[daemon] ${msg}`),
+    });
+
+    scheduler.start();
+    this.cronSchedulers.set(agentName, scheduler);
+
+    const count = scheduler.getNextFireTimes().length;
+    console.log(`[daemon] Loaded ${count} external cron(s) for agent "${agentName}" from crons.json`);
   }
 
   /**

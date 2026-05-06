@@ -1,5 +1,50 @@
 # CHANGELOG
 
+## [0.2.0] — 2026-05-04 — External Persistent Crons
+
+Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.
+
+### Phase 5.4 — Race Hardening & Workspace Teaching
+
+- **iter 9 fix**: `lastGoodSchedule` fallback now distinguishes a legitimately-empty `crons.json` from a corrupt parse failure, so emptying a file no longer keeps stale crons firing.
+- **iter 10 fix**: persist `last_fire_attempted_at` to prevent crash-mid-fire double-fire on next daemon restart.
+- **iter 11 fix**: defer scheduler reload while a fire is in flight, and lazy-create the scheduler when a reload hits a start-window gap (no missed first fire after re-enable).
+- **iter 12 fix**: serialize bus `add-cron` / `update-cron` / `remove-cron` operations to fix lost-update race when concurrent edits land on the same agent.
+- **Race test pins**: dedicated regression tests for iter 9 / 10 / 12 race conditions plus remove-cron mid-fire (no double-fire).
+- **`bus upgrade-cron-teaching` CLI scanner**: scans CLAUDE/AGENTS/ONBOARDING/SKILL files for stale `CronCreate` / `/loop` references and reports advisories. Pure advisory by default; `--apply` for safe substitutions.
+- **`migrate-crons` cron-teaching upgrade banner**: daemon emits one advisory line per agent on first migration, drops `.cron-teaching-checked` marker (idempotent).
+
+### Phase 5.3 — Failure Mode & Recovery
+
+- **`lastGoodSchedule` snapshot in `CronScheduler`**: if a `reload()` produces an empty schedule (transient corruption), the scheduler retains the last successfully loaded schedule in memory and keeps firing until the file is repaired. In-memory only — does not survive daemon restarts.
+- **`.bak` rotation in `writeCrons`**: `atomicWriteSync` now accepts a `keepBak` flag; `writeCrons` passes `keepBak: true` so every atomic write preserves the previous `crons.json` as `crons.json.bak`.
+- **`.bak` fallback in `readCrons`**: on primary-file parse failure, `readCrons` automatically retries with `crons.json.bak`. Single-step automatic recovery without operator intervention.
+- **ENOSPC/EACCES catch in `tick()`**: disk-full and read-only-filesystem errors when persisting `last_fired_at` are caught and logged; the in-memory schedule is preserved and crons continue firing.
+
+### Phase 4 — Cron Dashboard
+
+- **`/workflows` fleet overview page**: health summary panel + paginated read-only cron table across all agents, with agent and name search filters.
+- **`/workflows/health` dedicated health page**: gap detection, health-status breakdown, and per-cron health rows for the entire fleet.
+- **`/workflows/[agent]/[name]` cron detail page**: edit form (schedule, prompt, enabled, description), execution history viewer, and test-fire button.
+- **`/workflows/new` page**: create a new cron for any enabled agent.
+- **POST/PATCH/DELETE API routes** at `/api/workflows/crons/...`: routed through IPC (`handleAddCron`, `handleUpdateCron`, `handleRemoveCron`) with full input validation and scheduler reload after each mutation.
+- **Test-fire button** (`/api/workflows/crons/[agent]/[name]/fire`): confirmation dialog, inline pending state, 30-second cooldown enforced client-side and server-side (IPC `handleFireCron`). Auto-refreshes execution history 6s after success.
+- **`manualFireDisabled` flag**: setting this field on a cron definition disables the test-fire button (HTTP 403) for that cron. Useful for crons that must only fire on schedule.
+- **Execution log pagination + filter + export**: history viewer supports status filter (All/Success/Failure), "Older"/"Newer" pagination with total count, and CSV/JSON export via dedicated executions API route.
+- **Fleet health caching**: `computeFleetHealth` caches results for 30 seconds; cache is invalidated after any mutation or manual fire.
+- **IPC commands**: `add-cron`, `update-cron`, `remove-cron`, `fire-cron`, `fleet-health`, `list-cron-executions` added to `IPCServer.handleRequest`.
+
+### Phase 1–3 — External Persistent Cron Engine
+
+- Crons migrated from session-local (`/loop` / `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`.
+- `CronScheduler` with 30-second tick, 5-field cron expression parser, interval shorthand support, catch-up-once policy, and 3-attempt exponential backoff (1s/4s/16s).
+- `readCrons` / `writeCrons` / `addCron` / `updateCron` / `removeCron` / `getCronByName` in `src/bus/crons.ts`.
+- Auto-migration from `config.json` on first daemon boot per agent (`.crons-migrated` marker).
+- Execution log (JSONL) with `fired` / `retried` / `failed` status entries.
+- IPC `reload-crons`, `list-all-crons` commands.
+
+---
+
 ## [0.1.1] — 2026-03-30
 
 ### Improvements

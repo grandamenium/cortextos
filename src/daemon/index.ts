@@ -7,6 +7,11 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir, atomicWriteSync } from '../utils/atomic.js';
 
+// Each fast-checker registers a process-level SIGUSR1 handler (see
+// fast-checker.ts:102). With >10 active agents the default Node listener cap
+// trips MaxListenersExceededWarning. Bump for the full fleet.
+process.setMaxListeners(20);
+
 // ---------------------------------------------------------------------------
 // Crash handling: turn silent daemon deaths into attributable, observable
 // events. Three responsibilities:

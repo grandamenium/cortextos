@@ -137,13 +137,9 @@ cortextos bus manage-cycle create $CTX_AGENT_NAME \
   --loop-interval "<e.g. 72h>"
 ```
 
-Then set up the cron immediately (this is a Claude command, not a bash command — run it directly):
-
-`/loop <loop_interval> Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop.`
-
-Then add to `config.json` crons array:
-```json
-{"name": "experiment-<metric>", "interval": "<loop_interval>", "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."}
+Then register the persistent cron via the bus (daemon-managed, survives restarts):
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME experiment-<metric> <loop_interval> "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."
 ```
 
 To modify a cycle when the user asks:

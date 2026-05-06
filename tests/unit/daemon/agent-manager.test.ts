@@ -3,7 +3,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
-import { makeTempDir, removeTempDir } from '../../setup';
 
 // Mock the PTY layer so we don't load native bindings or spawn real processes.
 // AgentManager → AgentProcess → AgentPTY → node-pty. We mock at AgentProcess.
@@ -53,7 +52,7 @@ describe('AgentManager.discoverAndStart - BUG-028 fix', () => {
   let frameworkRoot: string;
 
   beforeEach(() => {
-    testDir = makeTempDir('cortextos-am-test-');
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-test-'));
     ctxRoot = join(testDir, 'instance');
     frameworkRoot = join(testDir, 'framework');
     mkdirSync(join(ctxRoot, 'config'), { recursive: true });
@@ -62,7 +61,7 @@ describe('AgentManager.discoverAndStart - BUG-028 fix', () => {
   });
 
   afterEach(() => {
-    removeTempDir(testDir);
+    rmSync(testDir, { recursive: true, force: true });
   });
 
   it('skips agents marked enabled: false in enabled-agents.json', async () => {
@@ -350,102 +349,100 @@ describe('buildReplyContext - Telegram reply context (BUG fix: media replies los
   });
 });
 
-describe('AgentManager - stopAgent/startAgent IPC race', () => {
+describe('AgentManager.reloadCrons - silent-success bug fix (iter 7)', () => {
+  // Regression: reloadCrons() previously returned `true` when the agent was
+  // registered in `this.agents` but no scheduler existed in `this.cronSchedulers`.
+  // This silently dropped reload requests during the start-window gap between
+  // `this.agents.set(name, ...)` (agent-manager.ts line 271) and
+  // `startAgentCronScheduler(name)` (line 288), across the
+  // `await agentProcess.start()` yield. A `bus add-cron` IPC landing in that
+  // window would write crons.json, ask the daemon to reload, get a TRUE back,
+  // and the cron would never fire — until the next daemon boot.
+  //
+  // Fix: lazy-create the scheduler when missing for non-Hermes agents so the
+  // newly-written crons.json is read immediately. Hermes agents intentionally
+  // have no daemon scheduler (they manage crons natively), so for them the
+  // reload remains a no-op that returns true.
+
   let testDir: string;
   let ctxRoot: string;
   let frameworkRoot: string;
+  let prevCtxRoot: string | undefined;
 
   beforeEach(() => {
-    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-inflightstops-'));
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-reloadcrons-'));
     ctxRoot = join(testDir, 'instance');
     frameworkRoot = join(testDir, 'framework');
     mkdirSync(join(ctxRoot, 'config'), { recursive: true });
     mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
-    writeFileSync(
-      join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice', 'config.json'),
-      JSON.stringify({ agent_name: 'alice', enabled: true }),
-    );
+    // CronScheduler.start() reads crons.json via cronsFilePath which honors
+    // CTX_ROOT — point it at the sandbox so the scheduler doesn't touch
+    // production state.
+    prevCtxRoot = process.env.CTX_ROOT;
+    process.env.CTX_ROOT = ctxRoot;
   });
 
   afterEach(() => {
+    if (prevCtxRoot === undefined) {
+      delete process.env.CTX_ROOT;
+    } else {
+      process.env.CTX_ROOT = prevCtxRoot;
+    }
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('startAgent awaits in-flight stopAgent for the same name', async () => {
-    // Regression test for the fire-and-forget IPC race that produced the
-    // misleading "BUG-011 REGRESSION CHECK" warning on every rapid
-    // `cortextos stop X && cortextos start X`. The IPC server dispatches
-    // start-agent and stop-agent handlers without awaiting, so both run in
-    // parallel on the daemon side. Before the inFlightStops fix,
-    // startAgent hit `this.agents.has(name) === true` while stopAgent was
-    // still awaiting PTY exit, logged "BUG-011 REGRESSION CHECK", and
-    // queued into pendingRestarts. After the fix, startAgent awaits the
-    // in-flight stop and takes the normal path once it completes.
+  it('lazy-creates scheduler when non-Hermes agent has no scheduler wired', () => {
+    // Simulate the start-window gap: agent registered, no scheduler yet.
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const fakeProcess = { config: { runtime: undefined } } as any;
+    (am as any).agents.set('alice', { process: fakeProcess, checker: {} });
 
-    // Inject a fake entry with a controllable slow stop() so we can pause
-    // stopAgent mid-flight and fire startAgent in parallel.
-    let releaseStop: () => void = () => {};
-    const slowStop = new Promise<void>((resolve) => { releaseStop = resolve; });
-    const fakeEntry = {
-      process: {
-        stop: vi.fn(async () => { await slowStop; }),
-      },
-      checker: { stop: vi.fn() },
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (am as any).agents.set('alice', fakeEntry);
+    expect((am as any).cronSchedulers.has('alice')).toBe(false);
 
-    // Capture console output so we can assert on the log paths taken.
-    const logs: string[] = [];
-    const origLog = console.log;
-    const origWarn = console.warn;
-    console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
-    console.warn = (...args: unknown[]) => logs.push('WARN ' + args.map(String).join(' '));
+    const result = am.reloadCrons('alice');
 
-    try {
-      // Kick off stopAgent — it will block inside slowStop.
-      const stopPromise = am.stopAgent('alice');
-      // Concurrent startAgent — before the fix, this hit the BUG-011
-      // warning branch. After the fix, it must log "waiting for in-flight
-      // stopAgent" and suspend on the in-flight promise.
-      const startPromise = am.startAgent('alice', '').catch(() => { /* post-race failures are fine */ });
+    // After fix: scheduler is wired up so the just-added cron is picked up.
+    expect(result).toBe(true);
+    expect((am as any).cronSchedulers.has('alice')).toBe(true);
 
-      // Give the microtask queue a tick so both methods reach their awaits.
-      await new Promise((resolve) => setImmediate(resolve));
-
-      expect(logs.some((l) => l.includes('waiting for in-flight stopAgent'))).toBe(true);
-      expect(logs.some((l) => l.includes('BUG-011 REGRESSION'))).toBe(false);
-      expect(logs.some((l) => l.includes('still in registry'))).toBe(false);
-
-      // Release the stop and let everything settle.
-      releaseStop();
-      await stopPromise;
-      await startPromise;
-    } finally {
-      console.log = origLog;
-      console.warn = origWarn;
-    }
+    // Cleanup: stop the scheduler so its setInterval doesn't keep the test
+    // process alive
+    (am as any).cronSchedulers.get('alice').stop();
   });
 
-  it('stopAgent is idempotent under concurrent calls', async () => {
-    // Two concurrent stopAgent() calls for the same name should coalesce
-    // onto the same in-flight promise rather than racing each other.
+  it('returns true without creating a scheduler for Hermes agents (no-op preserved)', () => {
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const fakeProcess = { config: { runtime: 'hermes' } } as any;
+    (am as any).agents.set('alice', { process: fakeProcess, checker: {} });
 
-    const stopFn = vi.fn(async () => { /* instant */ });
-    const fakeEntry = {
-      process: { stop: stopFn },
-      checker: { stop: vi.fn() },
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (am as any).agents.set('alice', fakeEntry);
+    const result = am.reloadCrons('alice');
 
-    await Promise.all([am.stopAgent('alice'), am.stopAgent('alice'), am.stopAgent('alice')]);
+    expect(result).toBe(true);
+    expect((am as any).cronSchedulers.has('alice')).toBe(false);
+  });
 
-    // The underlying process.stop() must only run ONCE even though three
-    // concurrent stopAgent() calls fired — the later two should return the
-    // in-flight promise from inFlightStops.
-    expect(stopFn).toHaveBeenCalledTimes(1);
+  it('reuses existing scheduler when one is already wired', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const fakeProcess = { config: { runtime: undefined } } as any;
+    (am as any).agents.set('alice', { process: fakeProcess, checker: {} });
+
+    // Pre-wire a scheduler with a spy on reload()
+    const reloadSpy = vi.fn();
+    const stopSpy = vi.fn();
+    (am as any).cronSchedulers.set('alice', { reload: reloadSpy, stop: stopSpy });
+
+    const result = am.reloadCrons('alice');
+
+    expect(result).toBe(true);
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    // Did not replace the existing scheduler
+    expect((am as any).cronSchedulers.get('alice').reload).toBe(reloadSpy);
+  });
+
+  it('returns false when the agent is not running at all', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const result = am.reloadCrons('ghost');
+    expect(result).toBe(false);
+    expect((am as any).cronSchedulers.has('ghost')).toBe(false);
   });
 });
