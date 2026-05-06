@@ -113,4 +113,47 @@ describe('OutputBuffer redaction', () => {
     expect(written).toContain(shortTokenLike);
     expect(written).not.toContain('[REDACTED_JWT]');
   });
+
+  // HuggingFace access-token redaction — pattern hf_[A-Za-z0-9]{32,}
+  // matches the canonical EDITH gitleaks rule. Synthetic tokens used so
+  // the test corpus contains no real-looking secret material.
+
+  it('single HF token in a chunk: redacted in disk log and ring buffer', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    // 35 chars total: `hf_` + 32 alphanumerics. Right at the {32,} floor.
+    const fakeHf = 'hf_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFA12';
+    buf.push(`HF_TOKEN=${fakeHf}\n`);
+
+    const written = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(written).toContain('[REDACTED_HF_TOKEN]');
+    expect(written).not.toContain(fakeHf);
+
+    const recent = buf.getRecent();
+    expect(recent).toContain('[REDACTED_HF_TOKEN]');
+    expect(recent).not.toContain(fakeHf);
+  });
+
+  it('HF token shorter than 32 body-chars is NOT redacted (length guard)', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    // 31 alphanumerics after hf_ — one short of the {32,} floor.
+    const tooShort = 'hf_' + 'A'.repeat(31);
+    expect(tooShort.length).toBe(34);
+    buf.push(`debug=${tooShort}\n`);
+
+    const written = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(written).toContain(tooShort);
+    expect(written).not.toContain('[REDACTED_HF_TOKEN]');
+  });
+
+  it('HF token + JWT in same chunk: both redacted independently', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    const fakeHf = 'hf_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    buf.push(`hf=${fakeHf} jwt=${FAKE_JWT}\n`);
+
+    const written = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(written).toContain('[REDACTED_HF_TOKEN]');
+    expect(written).toContain('[REDACTED_JWT]');
+    expect(written).not.toContain(fakeHf);
+    expect(written).not.toContain(FAKE_JWT);
+  });
 });
