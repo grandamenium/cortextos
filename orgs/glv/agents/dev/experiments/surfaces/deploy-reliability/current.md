@@ -1,4 +1,4 @@
-# Deploy Reliability Surface — PHP Lint + Expanded Structural Marker Smoke Gate + WP Runtime Error Body Scan + PHP 8.x Compatibility Gate + PHPCompatibility PHPCS (pending)
+# Deploy Reliability Surface — PHP Lint + Expanded Structural Marker Smoke Gate + WP Runtime Error Body Scan + PHP 8.x Compatibility Gate + PHPCompatibility PHPCS + Smoke URL Migration (pending)
 
 ## Current Approach
 
@@ -72,6 +72,20 @@ Before pushing any code:
    ```
    Catches: PHP 7.4-removed/deprecated patterns that `php -l` does not flag. Critical context: SiteGround drops PHP 7.4 support on May 20, 2026 — patterns introduced during the migration window will hard-fail post-upgrade.
 
+4.75. **Run PHPCompatibility PHPCS scan on all changed .php files** ⚠️ _PENDING LOCAL AGENT INSTALL — before May 10_:
+   ```bash
+   CHANGED_PHP=$(git diff --name-only HEAD | grep '\.php$')
+   if [ -n "$CHANGED_PHP" ]; then
+     phpcs --standard=PHPCompatibility --runtime-set testVersion 8.1 $CHANGED_PHP
+     if [ $? -ne 0 ]; then
+       echo "FAIL: PHPCompatibility PHPCS found PHP 8.x incompatibilities — fix before push"
+       exit 1
+     fi
+     echo "PHPCompatibility gate: PASS"
+   fi
+   ```
+   Requires: `composer global require squizlabs/php_codesniffer phpcompatibility/php-compatibility` + `phpcs --config-set installed_paths ~/.composer/vendor/phpcompatibility/php-compatibility/PHPCompatibility`. Decision: IMPLEMENT (exp_1777925922_phpc, closed 2026-05-06). Catches: behavioral PHP 8.x changes not catchable by grep — strict null coercion (TypeError in PHP 8.0+), dynamic property deprecation (PHP 8.2+), `match` keyword conflicts, `str_contains` availability. Block push on ERROR; warn on WARNING.
+
 5. Run HTTP smoke test: curl 14 key URLs, check HTTP 200 + no PHP error strings in body
 6. Check CI output after GitHub Actions push
 
@@ -85,7 +99,7 @@ Four consecutive gate-layer keeps: php -l (syntax), structural markers (layout),
 
 **Result:** KEEP — zero PHP deploys in 48h window; gate correctly defined; master branch clean; fifth consecutive keep.
 
-## Hypothesis Being Tested (exp_1777925922_phpc)
+## Hypothesis Tested (exp_1777925922_phpc) — IMPLEMENT
 
 Five consecutive gate-layer keeps covering syntax, layout, template breadth, WP runtime errors, and PHP 7.4-removed patterns. The remaining unaddressed failure class is behavioral PHP 8.x changes that are legal in PHP 7.4 but break at runtime under PHP 8.x and are NOT catchable by grep: strict null coercion (null passed to non-nullable params now throws TypeError in PHP 8.0+), dynamic property deprecation (PHP 8.2+), `match` keyword conflicts in variable/function names, and `str_contains`/`str_starts_with` availability (requires PHP 8.0+, not available in 7.4). PHPCompatibility PHPCS standard (`phpcs --standard=PHPCompatibility --runtime-set testVersion 8.1`) performs static analysis for all these patterns and produces per-line ERROR/WARNING output. Gate: block push on ERROR, allow WARNING. Critical context: SiteGround drops PHP 7.4 on May 20, 2026 (16 days). This is the final gate layer before the upgrade window closes.
 
@@ -111,9 +125,35 @@ if [ -n "$CHANGED_PHP" ]; then
 fi
 ```
 
+**Result:** IMPLEMENT — exp closed 2026-05-06T20:18Z. Gate decision: block push on ERROR, warn on WARNING. Requires local phpcs + PHPCompatibility install before May 10 (SiteGround PHP 7.4→8.x deadline May 20). Step 4.75 added to Current Approach above.
+
+## Hypothesis Being Tested (exp_PENDING — Hypothesis 7: smoke URL migration)
+
+Six consecutive gate-layer keeps covering syntax, layout, template breadth, WP runtime errors, PHP 7.4-removed patterns, and PHPCompatibility PHPCS behavioral checks (step 4.75, pending install). Unaddressed gap: as of 2026-05-06, `reycomarine.com` is the production domain and `reyco.glvmarketing.ca` is staging. Both serve HTTP 200 with separate canonical URLs. Current smoke URLs in step 3 target `reyco.glvmarketing.ca` — a deploy could break production while staging passes the gate. Hypothesis: replacing all 6 smoke URLs with `reycomarine.com` equivalents validates the actual deploy target.
+
+**Proposed URLs for step 3 (once experiment confirms):**
+```bash
+SMOKE_URLS=(
+  "https://reycomarine.com/"
+  "https://reycomarine.com/products/"
+  "https://reycomarine.com/services/"
+  "https://reycomarine.com/?p=368"
+  "https://reycomarine.com/service/marine/"
+  "https://reycomarine.com/product-category/outboard-motors/"
+)
+```
+
+**Local agent — register + run this experiment:**
+```bash
+cortextos bus create-experiment "deploy_reliability" "Post-migration smoke URL update: replace reyco.glvmarketing.ca with reycomarine.com across all 6 smoke URLs. Production domain is reycomarine.com (migrated 2026-05-06). Staging domain reyco.glvmarketing.ca still serves 200 with separate canonical URLs — testing staging no longer validates production deploys." --surface experiments/surfaces/deploy-reliability/current.md --direction higher --window 48h
+cortextos bus run-experiment <id> "Updated smoke URLs from reyco.glvmarketing.ca to reycomarine.com (6 URLs)"
+```
+_(cloud session, 2026-05-07 ~20:07 UTC — hypothesis formed by autoresearch loop 13:11 UTC)_
+
 ## Known gaps
 - php -l catches syntax errors only, not logic errors or missing function calls
 - Structural marker + error scan requires live staging URL (SG Dynamic Cache may serve stale HTML on first hit post-commit)
 - Error string patterns are English-only; WP fatal templates in other locales would not match (not applicable for Reyco Marine — en-CA)
 - PHP 8.x grep gate covers removed/deprecated function calls but not behavioural changes (e.g. strict type coercion, `match` vs `switch` differences, `str_contains` availability)
-- PHPCompatibility PHPCS gate (exp_1777925922_phpc) addresses the behavioural-change gap but is PENDING LOCAL IMPLEMENTATION (requires phpcs + PHPCompatibility composer install before May 10)
+- PHPCompatibility PHPCS gate (step 4.75) is in Current Approach but PENDING LOCAL INSTALL (before May 10) — exp_1777925922_phpc decided IMPLEMENT 2026-05-06
+- Smoke gate targets `reyco.glvmarketing.ca` (staging) instead of `reycomarine.com` (production, migrated 2026-05-06) — Hypothesis 7 pending local agent bus registration
