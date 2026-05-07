@@ -48,5 +48,21 @@ module.exports = {
       restart_delay: 5000,
       autorestart: true,
     },
+    {
+      name: 'cortextos-dashboard',
+      script: path.join(FRAMEWORK_ROOT, 'bin', 'dashboard-launcher.sh'),
+      cwd: path.join(FRAMEWORK_ROOT, 'dashboard'),
+      interpreter: 'bash',
+      env: {
+        NODE_ENV: 'production',
+        PORT: '3000',
+      },
+      // On crash: restart fast (launcher skips build if .next/BUILD_ID exists).
+      // To pick up source changes: run bin/dashboard-rebuild.sh explicitly.
+      // On first cold boot: launcher runs next build automatically if .next/ is absent.
+      autorestart: true,
+      max_restarts: 5,
+      restart_delay: 3000,
+    },
   ],
 };

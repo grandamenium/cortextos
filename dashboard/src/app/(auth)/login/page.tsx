@@ -100,6 +100,16 @@ export default function LoginPage() {
     body.set('csrfToken', submitToken || '');
     body.set('username', usernameInput?.value || '');
     body.set('password', passwordInput?.value || '');
+    // Auth.js v5 redirects to the signIn page (/login) on success when no
+    // callbackUrl is provided, then handleSubmit below misreads that as a
+    // failed-with-no-error-param and shows "Sign-in failed: Unknown" even
+    // though the session cookie was set. Send the user-intended callback so
+    // success redirects to "/" instead of "/login".
+    const callbackParam = new URL(window.location.href).searchParams.get('callbackUrl');
+    const safeCallback = callbackParam && callbackParam.startsWith('/') && !callbackParam.startsWith('//')
+      ? callbackParam
+      : '/';
+    body.set('callbackUrl', safeCallback);
 
     try {
       const res = await fetch(form.action, {
