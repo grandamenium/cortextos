@@ -1,0 +1,48 @@
+# linkedin-poster@.service — systemd template unit for the self-hosted LinkedIn poster.
+#
+# One instance per LinkedIn user. Instantiate with:
+#   systemctl enable --now linkedin-poster@greg
+#   systemctl enable --now linkedin-poster@rachit
+#
+# The instance name (%i) becomes USER_ID. Override any env var by creating
+# /etc/linkedin-poster/%i.env (loaded via EnvironmentFile).
+#
+# Install:  deploy/install-service.sh --user greg
+# Remove:   systemctl disable --now linkedin-poster@greg && rm /etc/linkedin-poster/greg.env
+
+[Unit]
+Description=LinkedIn Poster (self-hosted) — user %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cortextos
+WorkingDirectory=/home/cortextos/cortextos/services/linkedin-poster-selfhost
+
+# Per-user config (USER_ID, SENDER_NAME, SENDER_LINKEDIN_ID, PORT, PROFILE_DIR)
+EnvironmentFile=-/etc/linkedin-poster/%i.env
+
+# Supabase credentials (shared across all instances)
+EnvironmentFile=-/etc/linkedin-poster/shared.env
+
+Environment=USER_ID=%i
+Environment=PROFILE_DIR=/var/lib/linkedin-poster/profiles/%i
+
+ExecStart=/usr/bin/node dist/index.js
+
+# Crash recovery: restart after 10s, no limit on restarts
+Restart=always
+RestartSec=10
+
+# Log via journald (journalctl -u linkedin-poster@%i -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=linkedin-poster-%i
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
