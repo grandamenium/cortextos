@@ -7,6 +7,15 @@
         "serve"
       ],
       "type": "stdio"
+    },
+    "obsidian": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "obsidian-mcp",
+        "/Users/arndt/cortextos/obsidian-vault"
+      ],
+      "type": "stdio"
     }
   }
 }
