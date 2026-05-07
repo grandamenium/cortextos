@@ -1,6 +1,6 @@
 # Dev Agent Goals
 
-_Last updated: 2026-05-07 (cloud session ~08:07 UTC — PR #87 opened: test/knowledge-base-coverage 24 new cases; merge queue steady at #84→#86→rebase #85→#85; exp_phpc CLOSED→IMPLEMENT 2026-05-06T20:18Z; PHP 7.4 deadline May 20 = 13 days; Node 22 deadline June 2 = 26 days)_
+_Last updated: 2026-05-07 (cloud session ~12:XX UTC — PR #79 added to merge queue (was opened 2026-05-03 but missing from GOALS.md); queue now at 88 PRs (#6–#87 + #79); PHP 7.4 deadline May 20 = 13 days; Node 22 deadline June 2 = 26 days)_
 
 ## Priority 1 — Merge Queue (blocked on Aiden review)
 
@@ -57,6 +57,7 @@ These PRs are complete and tested. Waiting for merge approval.
 | #82 | test(bus): postActivity success + failure + replyMarkup + second-candidate coverage — 4 cases | Fills postActivity live-send path gap in system.test.ts. returns true on success, false on throw, replyMarkup forwarded, second candidate env path. 20 pre-existing + 4 new = 24/24. ⚠️ local agent must run npm test before Aiden reviews. |
 | #81 | test(bus): hardRestart + autoCommit + checkGoalStaleness gap coverage — 7 cases | hardRestart (3: both markers created, HARD-RESTART log, distinct file paths), autoCommit (3: .cortextos-env blocked, node_modules/ excluded, non-git returns clean), checkGoalStaleness (1: INVALID_AGENT filtered). 15 pre-existing + 7 new = 22/22. ⚠️ local agent must run npm test before Aiden reviews. |
 | #80 | test(cli): startCommand coverage — 20 cases | Last untested CLI source file. daemon-script-missing exit(1), --foreground spawn, PM2+ecosystem, PM2 throw, no-PM2 detached (fake timers), agent auto-register, org propagation, IPC success/failure, --instance. 20/20 pass. Build clean. ⚠️ local agent must run npm test before Aiden reviews. |
+| #79 | test(cli): stopCommand coverage — 19 cases | Covers IPC-driven command paths missing from lifecycle-markers.test.ts. Guards: no-arg exit(2), agent+--all conflict exit(2). Daemon-down early-return. Single-agent: stop-agent IPC (success+error), .user-stop marker, --instance flag. --all: list-agents→stop-agent, list-error exit(1), empty-list, multi-agent, pm2-hint. 19/19 pass. Full suite 688/689 (pre-existing comms flake). Build clean. |
 | #78 | test(dashboard): maskToken + normalizeFsPath + parseSkillMd coverage — 14 cases | Exports 3 pure helpers from dashboard actions. 14/14 pass. Build clean. |
 | #77 | test(cli,dashboard): commandExists + categorizeFilePath coverage — 13 cases | SAFE_CMD regex (2) + commandExists (6, injectable spawnSync+isWindows) + categorizeFilePath (5-branch watcher classifier). 13/13 pass. Build clean. |
 | #76 | test(hooks): sendCompactNotification + buildPermissionMessage coverage — 14 cases | Exports sendCompactNotification(env, fetch?) + buildPermissionMessage(agentName, toolName, summary). 14/14 pass. Build clean. |
