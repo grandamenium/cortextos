@@ -25,6 +25,13 @@ export interface Experiment {
   started_at: string | null;
   completed_at: string | null;
   changes_description: string | null;
+  // Set when the experiment transitions to running. measurement_end =
+  // measurement_start + parsed window. evaluateExperiment soft-warns
+  // (does not fail) when called before measurement_end. Both are null
+  // until runExperiment runs; legacy experiment files written before
+  // this field existed load with these as undefined and are tolerated.
+  measurement_start: string | null;
+  measurement_end: string | null;
 }
 
 export interface ExperimentCreateOptions {
@@ -99,6 +106,29 @@ function nowISO(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+/**
+ * Parse a duration string (e.g. "72h", "30m", "7d") into milliseconds.
+ * Returns null when the input doesn't match a known shape — callers
+ * should leave the derived end-time field null in that case rather
+ * than guess a wrong window.
+ */
+function parseWindowMs(window: string): number | null {
+  const m = window.trim().match(/^(\d+(?:\.\d+)?)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks)$/i);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  const unit = m[2].toLowerCase();
+  const ms: Record<string, number> = {
+    s: 1_000, sec: 1_000, secs: 1_000, second: 1_000, seconds: 1_000,
+    m: 60_000, min: 60_000, mins: 60_000, minute: 60_000, minutes: 60_000,
+    h: 3_600_000, hr: 3_600_000, hrs: 3_600_000, hour: 3_600_000, hours: 3_600_000,
+    d: 86_400_000, day: 86_400_000, days: 86_400_000,
+    w: 604_800_000, wk: 604_800_000, wks: 604_800_000, week: 604_800_000, weeks: 604_800_000,
+  };
+  const mult = ms[unit];
+  if (mult === undefined) return null;
+  return n * mult;
+}
+
 function historyDir(agentDir: string): string {
   return join(agentDir, 'experiments', 'history');
 }
@@ -171,6 +201,8 @@ export function createExperiment(
     started_at: null,
     completed_at: null,
     changes_description: null,
+    measurement_start: null,
+    measurement_end: null,
   };
 
   saveExperiment(agentDir, experiment);
@@ -194,6 +226,22 @@ export function runExperiment(
 
   experiment.status = 'running';
   experiment.started_at = nowISO();
+  experiment.measurement_start = experiment.started_at;
+
+  // measurement_end = start + parsed window. When the window string
+  // can't be parsed we leave measurement_end null and warn — better
+  // than committing a wrong end-time that downstream queries trust.
+  const windowMs = parseWindowMs(experiment.window);
+  if (windowMs != null) {
+    const endIso = new Date(Date.now() + windowMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    experiment.measurement_end = endIso;
+  } else {
+    experiment.measurement_end = null;
+    console.warn(
+      `[experiment] Could not parse window "${experiment.window}" for ${experiment.id}; measurement_end left null`,
+    );
+  }
+
   if (changesDescription) {
     experiment.changes_description = changesDescription;
   }
@@ -221,6 +269,21 @@ export function evaluateExperiment(
 
   if (experiment.status !== 'running') {
     throw new Error(`Experiment ${experimentId} is '${experiment.status}', expected 'running'`);
+  }
+
+  // Soft-warn (don't fail) when evaluating before the measurement
+  // window has closed — the agent may want to short-circuit on
+  // dramatic results, or the window estimate may be wrong. Skip the
+  // check when measurement_end is missing (legacy rows or unparseable
+  // window) so old experiments stay evaluatable.
+  if (experiment.measurement_end) {
+    const endMs = new Date(experiment.measurement_end).getTime();
+    if (!Number.isNaN(endMs) && Date.now() < endMs) {
+      const remainingMin = Math.ceil((endMs - Date.now()) / 60_000);
+      console.warn(
+        `[experiment] Evaluating ${experimentId} ${remainingMin}m before measurement_end (${experiment.measurement_end}); proceeding anyway.`,
+      );
+    }
   }
 
   // Compare measured vs baseline using direction

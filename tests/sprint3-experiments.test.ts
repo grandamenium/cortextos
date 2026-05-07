@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -148,6 +148,128 @@ describe('Sprint 3: Experiment Framework', () => {
     it('throws if experiment is not running', () => {
       const id = createExperiment(testDir, 'testbot', 'ctr', 'test');
       expect(() => evaluateExperiment(testDir, id, 10)).toThrow("expected 'running'");
+    });
+  });
+
+  describe('measurement window', () => {
+    it('runExperiment populates measurement_start (= started_at) and measurement_end (= start + window)', () => {
+      const id = createExperiment(testDir, 'testbot', 'ctr', 'test', { window: '72h' });
+      const before = Date.now();
+      const exp = runExperiment(testDir, id);
+      const after = Date.now();
+
+      expect(exp.measurement_start).toBe(exp.started_at);
+      expect(exp.measurement_end).toBeTruthy();
+
+      const startMs = new Date(exp.measurement_start as string).getTime();
+      const endMs = new Date(exp.measurement_end as string).getTime();
+      const windowMs = 72 * 60 * 60 * 1000;
+
+      // nowISO() truncates milliseconds, so the recorded start can fall up
+      // to ~1s before the wall clock we sampled at the call site.
+      expect(startMs).toBeGreaterThanOrEqual(before - 1000);
+      expect(startMs).toBeLessThanOrEqual(after);
+      // end - start should equal the window within a small tolerance for
+      // the millisecond truncation in nowISO()
+      expect(endMs - startMs).toBeGreaterThanOrEqual(windowMs - 1000);
+      expect(endMs - startMs).toBeLessThanOrEqual(windowMs + 1000);
+    });
+
+    it.each([
+      ['30s', 30 * 1000],
+      ['15m', 15 * 60 * 1000],
+      ['24h', 24 * 60 * 60 * 1000],
+      ['7d', 7 * 24 * 60 * 60 * 1000],
+      ['2w', 14 * 24 * 60 * 60 * 1000],
+      ['2 hours', 2 * 60 * 60 * 1000],
+    ])('parses window "%s" into the right offset', (window, expectedMs) => {
+      const id = createExperiment(testDir, 'testbot', 'ctr', 'test', { window });
+      const exp = runExperiment(testDir, id);
+      const startMs = new Date(exp.measurement_start as string).getTime();
+      const endMs = new Date(exp.measurement_end as string).getTime();
+      expect(endMs - startMs).toBeGreaterThanOrEqual(expectedMs - 1000);
+      expect(endMs - startMs).toBeLessThanOrEqual(expectedMs + 1000);
+    });
+
+    it('leaves measurement_end null and warns when window is unparseable', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const id = createExperiment(testDir, 'testbot', 'ctr', 'test', { window: 'forever' });
+      const exp = runExperiment(testDir, id);
+      expect(exp.measurement_start).toBeTruthy();
+      expect(exp.measurement_end).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Could not parse window "forever"'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('evaluateExperiment soft-warns (does not throw) when called before measurement_end', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const id = createExperiment(testDir, 'testbot', 'ctr', 'test', { window: '24h' });
+      runExperiment(testDir, id);
+      const result = evaluateExperiment(testDir, id, 10);
+      expect(result.status).toBe('completed');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('before measurement_end'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('evaluateExperiment does not warn when measurement_end is in the past', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const id = createExperiment(testDir, 'testbot', 'ctr', 'test', { window: '1s' });
+      runExperiment(testDir, id);
+      // Sleep just past the 1s window so measurement_end is in the past.
+      const filePath = join(testDir, 'experiments', 'history', `${id}.json`);
+      const exp = JSON.parse(readFileSync(filePath, 'utf-8'));
+      const past = new Date(Date.now() - 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      exp.measurement_end = past;
+      writeFileSync(filePath, JSON.stringify(exp, null, 2));
+      warnSpy.mockClear();
+
+      evaluateExperiment(testDir, id, 10);
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('before measurement_end'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('evaluateExperiment does not warn when measurement_end is missing (legacy experiment)', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      // Hand-craft a legacy experiment file without the new fields.
+      const id = 'exp_legacy_99999';
+      const filePath = join(testDir, 'experiments', 'history', `${id}.json`);
+      mkdirSync(join(testDir, 'experiments', 'history'), { recursive: true });
+      writeFileSync(filePath, JSON.stringify({
+        id,
+        agent: 'testbot',
+        metric: 'ctr',
+        hypothesis: 'legacy',
+        surface: '',
+        direction: 'higher',
+        window: '24h',
+        measurement: '',
+        status: 'running',
+        baseline_value: 0,
+        result_value: null,
+        decision: null,
+        learning: '',
+        experiment_commit: null,
+        tracking_commit: null,
+        created_at: new Date().toISOString(),
+        started_at: new Date().toISOString(),
+        completed_at: null,
+        changes_description: null,
+        // measurement_start / measurement_end intentionally omitted
+      }, null, 2));
+      warnSpy.mockClear();
+
+      const result = evaluateExperiment(testDir, id, 10);
+      expect(result.status).toBe('completed');
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('before measurement_end'),
+      );
+      warnSpy.mockRestore();
     });
   });
 
