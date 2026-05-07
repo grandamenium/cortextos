@@ -1,6 +1,6 @@
 # Dev Agent Goals
 
-_Last updated: 2026-05-07 (cloud session ~04:00 UTC — no new PRs; merge queue steady at #84→#86→rebase #85→#85; exp_phpc CLOSED→IMPLEMENT 2026-05-06T20:18Z; PHP 7.4 deadline May 20 = 13 days; Node 22 deadline June 2 = 26 days)_
+_Last updated: 2026-05-07 (cloud session ~08:07 UTC — PR #87 opened: test/knowledge-base-coverage 24 new cases; merge queue steady at #84→#86→rebase #85→#85; exp_phpc CLOSED→IMPLEMENT 2026-05-06T20:18Z; PHP 7.4 deadline May 20 = 13 days; Node 22 deadline June 2 = 26 days)_
 
 ## Priority 1 — Merge Queue (blocked on Aiden review)
 
@@ -49,6 +49,7 @@ These PRs are complete and tested. Waiting for merge approval.
 
 | PR | Title | Notes |
 |----|-------|-------|
+| #87 | test(bus): knowledge-base coverage — scope routing, parseOutput, ensureKBDirs, loadSecretsEnv (24 cases) | Extends existing 5-case knowledge-base.test.ts to 29 cases. Covers all untested paths: scope routing (shared/private/all), result merging, parseOutput edge cases (null/no-JSON/malformed/r.result fallback), ensureKBDirs (create/skip), loadSecretsEnv (quote strip/comments). Test-only change. ⚠️ local agent must run npm test before Aiden reviews. |
 | #86 | fix(dashboard): Lead interface missing closing brace in types.ts | Second TypeScript error — `interface Lead` was missing `}` causing ContentStatus/ContentItem/etc. to parse as Lead members → `npx tsc --noEmit` fails. CI failing on PR #86 is EXPECTED (viewport error from PR #85 not included). Merge sequence: #84 → #86 → rebase #85 → #85. |
 | #85 | fix(dashboard): move viewport out of Metadata into separate Viewport export | Viewport fix is correct. CI: Build ✅ Unit Tests ❌ (needs #84) Dashboard Build ❌ (needs #86 merged first, then rebase). Rebase #85 from main after #86 merges → all three CI green. |
 | #84 | fix(test): comms channels timestamp flake — replace hardcoded 2026-04-15 timestamps with relative offsets | Unit Tests ✅ Build & Type Check ✅ Dashboard Build ❌ (pre-existing, blocked on #85). ⚠️ local agent must run npm test before Aiden reviews. |
