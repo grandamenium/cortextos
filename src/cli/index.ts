@@ -22,6 +22,7 @@ import { getConfigCommand } from './get-config.js';
 import { goalsCommand } from './goals.js';
 import { setupCommand } from './setup.js';
 import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
+import { importAgentCommand } from './import-agent.js';
 
 const program = new Command();
 
@@ -54,6 +55,7 @@ program.addCommand(spawnWorkerCommand);
 program.addCommand(terminateWorkerCommand);
 program.addCommand(listWorkersCommand);
 program.addCommand(injectWorkerCommand);
+program.addCommand(importAgentCommand);
 
 // crash-alert: SessionEnd hook — cross-platform replacement for crash-alert.sh
 const crashAlertCommand = new Command('crash-alert')
