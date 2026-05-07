@@ -26,34 +26,58 @@ cmd="${1:-status}"
 case "$cmd" in
     init)
         max="${2:-50}"
-        goal="${3:-(unspecified)}"
+        # Capture full goal text (argv[3..]) rather than only the third word
+        shift 2
+        goal="${*:-(unspecified)}"
         python3 - "$max" "$goal" <<'PY'
-import json, sys, datetime
+import json, sys, fcntl, datetime
+
+lock_path = ".claude/.goal-state.lock"
+state_path = ".claude/.goal-state.json"
+
 max_iters = int(sys.argv[1])
 goal = sys.argv[2]
 state = {
     "active": True,
-    "started": datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z"),
+    "started": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
     "iteration": 0,
     "max_iterations": max_iters,
     "goal": goal,
+    "stop_fires": 0,
     "completed": False,
 }
-open(".claude/.goal-state.json", "w").write(json.dumps(state, indent=2))
-print(f"[goal-budget] initialised — budget {max_iters} iterations")
+lf = open(lock_path, "w")
+fcntl.flock(lf, fcntl.LOCK_EX)
+try:
+    open(state_path, "w").write(json.dumps(state, indent=2))
+    print(f"[goal-budget] initialised — budget {max_iters} iterations")
+finally:
+    fcntl.flock(lf, fcntl.LOCK_UN)
+    lf.close()
 PY
         ;;
     tick)
         python3 - <<'PY'
-import json
-s = json.load(open(".claude/.goal-state.json"))
-s["iteration"] += 1
-open(".claude/.goal-state.json", "w").write(json.dumps(s, indent=2))
-print(f"{s['iteration']}/{s['max_iterations']}")
+import json, fcntl
+
+lock_path = ".claude/.goal-state.lock"
+state_path = ".claude/.goal-state.json"
+
+lf = open(lock_path, "w")
+fcntl.flock(lf, fcntl.LOCK_EX)
+try:
+    s = json.load(open(state_path))
+    s["iteration"] += 1
+    open(state_path, "w").write(json.dumps(s, indent=2))
+    print(f"[goal-budget] tick {s['iteration']}/{s['max_iterations']}")
+finally:
+    fcntl.flock(lf, fcntl.LOCK_UN)
+    lf.close()
 PY
         ;;
     status)
-        cat "$STATE" 2>/dev/null || echo '{"active": false, "error": "no goal active"}'
+        python3 -c "import json,sys; print(json.dumps(json.load(open('.claude/.goal-state.json')), indent=2))" \
+            2>/dev/null || echo '{"active": false, "error": "no goal active"}'
         ;;
     exhausted)
         python3 - <<'PY'
@@ -67,12 +91,22 @@ PY
         ;;
     complete)
         python3 - <<'PY'
-import json
-s = json.load(open(".claude/.goal-state.json"))
-s["active"] = False
-s["completed"] = True
-open(".claude/.goal-state.json", "w").write(json.dumps(s, indent=2))
-print("[goal-budget] marked complete")
+import json, fcntl
+
+lock_path = ".claude/.goal-state.lock"
+state_path = ".claude/.goal-state.json"
+
+lf = open(lock_path, "w")
+fcntl.flock(lf, fcntl.LOCK_EX)
+try:
+    s = json.load(open(state_path))
+    s["active"] = False
+    s["completed"] = True
+    open(state_path, "w").write(json.dumps(s, indent=2))
+    print("[goal-budget] marked complete")
+finally:
+    fcntl.flock(lf, fcntl.LOCK_UN)
+    lf.close()
 PY
         ;;
     reset)

@@ -24,7 +24,15 @@
 #
 # stdin JSON: { session_id, stop_hook_active, ... }
 
-set -eu
+set -euo pipefail
+
+# Read stdin JSON to honour stop_hook_active — Claude Code sets this True if
+# another Stop hook already exited 2 this cycle. Re-firing exit 2 in that case
+# can create a double-block condition, so we defer.
+INPUT=$(cat 2>/dev/null || echo '{}')
+STOP_ACTIVE=$(printf '%s' "$INPUT" | python3 -c \
+    'import sys,json; print(json.load(sys.stdin).get("stop_hook_active",False))' \
+    2>/dev/null || echo "False")
 
 AGENT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 cd "$AGENT_DIR" || exit 0
@@ -34,13 +42,30 @@ STATE=".claude/.goal-state.json"
 
 read -r ACTIVE COMPLETED ITER MAX STOP_FIRES <<EOF
 $(python3 - <<'PY'
-import json
-s = json.load(open(".claude/.goal-state.json"))
-s["stop_fires"] = s.get("stop_fires", 0) + 1
-open(".claude/.goal-state.json", "w").write(json.dumps(s, indent=2))
-print(s.get("active", False), s.get("completed", False),
-      s.get("iteration", 0), s.get("max_iterations", 50),
-      s["stop_fires"])
+import json, sys, fcntl, os
+
+lock_path = ".claude/.goal-state.lock"
+state_path = ".claude/.goal-state.json"
+
+try:
+    lf = open(lock_path, "w")
+    fcntl.flock(lf, fcntl.LOCK_EX)
+    try:
+        raw = open(state_path).read()
+        if not raw.strip():
+            raise ValueError("empty state file")
+        s = json.loads(raw)
+        s["stop_fires"] = s.get("stop_fires", 0) + 1
+        open(state_path, "w").write(json.dumps(s, indent=2))
+        print(s.get("active", False), s.get("completed", False),
+              s.get("iteration", 0), s.get("max_iterations", 50),
+              s["stop_fires"])
+    finally:
+        fcntl.flock(lf, fcntl.LOCK_UN)
+        lf.close()
+except Exception as e:
+    print("False False 0 50 0")
+    print(f"[goal-loop] state read error: {e}", file=sys.stderr)
 PY
 )
 EOF
@@ -61,7 +86,7 @@ The /goal loop appears stuck (not ticking the budget counter). Force-stopping.
 
 To recover:
   - Inspect .claude/.goal-state.json
-  - Check GOAL.md "Blocked on" section
+  - Check .goal-context.md "Blocked on" section
   - Resume with: /goal --resume   (after fixing root cause)
   - Or reset:    .claude/scripts/goal-budget.sh reset
 EOF
@@ -69,21 +94,24 @@ EOF
     exit 0
 fi
 
+# Don't re-fire if another Stop hook already exited 2 this cycle
+[ "$STOP_ACTIVE" = "True" ] && exit 0
+
 cat >&2 <<EOF
 [goal-loop] /goal active — iteration $ITER/$MAX. Continue the loop.
 
 Phase 2 next steps (do these without user prompting):
   1. Read PLAN.md → take the top "Pending" task into "In progress".
   2. Implement it (read before edit, atomic scope).
-  3. Run the validation command from GOAL.md (≤3 retries on failure).
+  3. Run the validation command from .goal-context.md (≤3 retries on failure).
   4. On green: stage & commit (one task = one commit).
-  5. Update PLAN.md (move task → Done) + tick GOAL.md success criteria.
+  5. Update PLAN.md (move task → Done) + tick .goal-context.md success criteria.
   6. Run: .claude/scripts/goal-budget.sh tick
   7. If all success criteria ticked → run: .claude/scripts/goal-budget.sh complete
      (then Phase 3 wrap runs; this hook will pass on the next Stop)
 
 If you hit a true blocker (3 validation failures + no clear fix), append the
-trace to GOAL.md "Blocked on" and run goal-budget.sh complete.
+trace to .goal-context.md "Blocked on" and run goal-budget.sh complete.
 
 Do NOT wait for the user to confirm. The whole point of /goal is autonomous
 iteration. The budget counter ($ITER/$MAX) is your only stop condition besides

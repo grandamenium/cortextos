@@ -8,9 +8,9 @@ argument-hint: <goal text> [--budget=N]
 
 Modeled on OpenAI Codex CLI's `/goal`. You operate continuously: plan, act, test, review, iterate — without waiting for user prompts between each task. You stop only when:
 
-1. The success criteria in `GOAL.md` are demonstrably met (tests green, evidence in commits), OR
+1. The success criteria in `.goal-context.md` are demonstrably met (tests green, evidence in commits), OR
 2. The iteration budget is exhausted (`./.claude/scripts/goal-budget.sh exhausted` exits 0), OR
-3. You hit a blocker that genuinely requires human input (then write it into `GOAL.md` under "Blocked on" and stop).
+3. You hit a blocker that genuinely requires human input (then write it into `.goal-context.md` under "Blocked on" and stop).
 
 ## Args
 
@@ -24,12 +24,12 @@ Modeled on OpenAI Codex CLI's `/goal`. You operate continuously: plan, act, test
 Run **once** at the start of a `/goal` invocation:
 
 1. Parse args. Extract `--budget=N` (default 50) and `--resume` flag. Remainder is the goal text.
-2. If `--resume` AND `.claude/.goal-state.json` exists AND `GOAL.md` exists → skip to Phase 2.
+2. If `--resume` AND `.claude/.goal-state.json` exists AND `.goal-context.md` exists → skip to Phase 2.
 3. Otherwise initialise:
    ```bash
    .claude/scripts/goal-budget.sh init <budget> "<goal text>"
    ```
-4. Write `GOAL.md` with this structure:
+4. Write `.goal-context.md` with this structure:
    ```markdown
    # Goal: <one-line objective>
 
@@ -47,7 +47,7 @@ Run **once** at the start of a `/goal` invocation:
    ## Started
    <ISO timestamp>
    ```
-   Success criteria must be **verifiable** — each one is a check-box you can prove green via a command or file inspection. If the goal text is vague, infer specific criteria; if you can't, surface the ambiguity in `GOAL.md` and stop.
+   Success criteria must be **verifiable** — each one is a check-box you can prove green via a command or file inspection. If the goal text is vague, infer specific criteria; if you can't, surface the ambiguity in `.goal-context.md` and stop.
 5. Write `PLAN.md` with the initial task breakdown:
    ```markdown
    # Plan
@@ -87,7 +87,7 @@ If exit 0 (exhausted) → jump to **Phase 3 — Wrap**.
 
 Read `PLAN.md`. Take the **top "Pending"** item. Move it to "In progress". Update `PLAN.md` and TodoWrite together.
 
-If `PLAN.md` has no pending tasks but success criteria aren't met → either decompose deeper (write new tasks) or surface the gap in `GOAL.md` "Blocked on".
+If `PLAN.md` has no pending tasks but success criteria aren't met → either decompose deeper (write new tasks) or surface the gap in `.goal-context.md` "Blocked on".
 
 ### 2c. Execute the task
 
@@ -95,11 +95,11 @@ Implement it. **Read before edit, edit don't rewrite.** Follow project conventio
 
 ### 2d. Validate
 
-Run the validation command from `GOAL.md`. **Iterate up to 3 times** on failures:
+Run the validation command from `.goal-context.md`. **Iterate up to 3 times** on failures:
 
 - Failure 1 → re-read the error, fix the implementation, re-run.
 - Failure 2 → fix again, run.
-- Failure 3 → if still failing: append the failure trace to `GOAL.md` "Blocked on", revert the in-progress edits (`git restore .` for unstaged, leave staged) if they leave the tree broken, move task back to Pending with a "blocked:" prefix, and continue to next task.
+- Failure 3 → if still failing: append the failure trace to `.goal-context.md` "Blocked on", revert the in-progress edits (`git restore .` for unstaged, leave staged) if they leave the tree broken, move task back to Pending with a "blocked:" prefix, and continue to next task.
 
 **Anti-cheat enforcement** (per CLAUDE.md): never modify tests to pass, never `# type: ignore`, never delete failing tests. If validation requires that, the task is genuinely blocked — surface it.
 
@@ -115,7 +115,7 @@ Don't `git add .` blindly — stage only the files this task owns.
 ### 2f. Update state
 
 - Move the task to "Done" in `PLAN.md`. Mark TodoWrite completed.
-- Re-check `GOAL.md` success criteria. Tick any boxes the just-completed task satisfies.
+- Re-check `.goal-context.md` success criteria. Tick any boxes the just-completed task satisfies.
 - Increment iteration counter:
   ```bash
   .claude/scripts/goal-budget.sh tick
@@ -154,7 +154,7 @@ When the loop exits (success, exhausted, or blocked):
 
 | File | Purpose | Lifecycle |
 |---|---|---|
-| `GOAL.md` | objective + success criteria + validation cmd | written Phase 0, updated Phase 2f, archived Phase 3 |
+| `.goal-context.md` | objective + success criteria + validation cmd | written Phase 0, updated Phase 2f, archived Phase 3 |
 | `PLAN.md` | task list (Pending/In progress/Done) | written Phase 0, updated every iteration |
 | `.claude/.goal-state.json` | iteration counter (out-of-band, can't be fudged by the model) | managed by `goal-budget.sh` |
 | `GOAL_REPORT.md` | final outcome | written Phase 3 |
