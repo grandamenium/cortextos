@@ -56,6 +56,11 @@
             "type": "command",
             "command": ".claude/hooks/goal-loop.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "cortextos bus hook-idle-flag",
+            "timeout": 5
           }
         ]
       }
