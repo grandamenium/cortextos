@@ -35,7 +35,12 @@ export async function POST(
   }
 
   const message = typeof body.message === 'string' ? body.message.trim() : '';
-  if (!message) return Response.json({ error: 'message is required' }, { status: 400 });
+  const messages = Array.isArray(body.messages)
+    ? body.messages
+    : message
+      ? [{ role: 'user', content: message }]
+      : [];
+  if (messages.length === 0) return Response.json({ error: 'message is required' }, { status: 400 });
 
   const upstream = await fetch(`${agent.hermesGateway}/v1/chat/completions`, {
     method: 'POST',
@@ -46,9 +51,8 @@ export async function POST(
     body: JSON.stringify({
       model: body.model || 'hermes',
       stream: true,
-      messages: Array.isArray(body.messages)
-        ? body.messages
-        : [{ role: 'user', content: message }],
+      ...(typeof body.sessionKey === 'string' ? { sessionKey: body.sessionKey, session_key: body.sessionKey } : {}),
+      messages,
     }),
   });
 

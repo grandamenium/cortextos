@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { Sidebar } from './sidebar';
 import { Topbar } from './topbar';
 import { BottomNav } from './bottom-nav';
+import { ConnectionStatusBanner } from './connection-status-banner';
+import { GlobalDashboardControls } from './global-dashboard-controls';
 import { OrgContext } from '@/hooks/use-org';
 import {
   Sheet,
@@ -56,12 +58,14 @@ export function DashboardShell({ orgs, children }: DashboardShellProps) {
             onOrgChange={setCurrentOrg}
             onMenuClick={() => setSidebarOpen(true)}
           />
+          <ConnectionStatusBanner />
           <main className="flex-1 overflow-auto p-4 pb-20 md:pb-5 md:p-5 lg:p-6 bg-background">
             {children}
           </main>
 
           {/* Mobile bottom navigation */}
           <BottomNav />
+          <GlobalDashboardControls />
         </div>
       </div>
     </OrgContext.Provider>

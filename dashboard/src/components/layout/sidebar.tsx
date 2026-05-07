@@ -42,6 +42,7 @@ const navItems: NavItem[] = [
   { label: 'Comms', href: '/comms', icon: IconMessages, section: 'ops' },
   { label: 'Approvals', href: '/approvals', icon: IconShieldCheck, section: 'ops' },
   { label: 'Workflows', href: '/workflows', icon: IconClock, section: 'ops' },
+  { label: 'Jobs', href: '/jobs', icon: IconClock, section: 'ops' },
   { label: 'Strategy', href: '/strategy', icon: IconTarget, section: 'ops' },
   { label: 'Analytics', href: '/analytics', icon: IconChartDots3, section: 'ops' },
 
