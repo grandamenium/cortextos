@@ -40,9 +40,14 @@ cd "$AGENT_DIR" || exit 0
 STATE=".claude/.goal-state.json"
 [ -f "$STATE" ] || exit 0  # no goal active → defer to next hook
 
-read -r ACTIVE COMPLETED ITER MAX STOP_FIRES <<EOF
+read -r ACTIVE COMPLETED FAILED PARKED ITER MAX STOP_FIRES PARK_TIMED_OUT <<EOF
 $(python3 - <<'PY'
-import json, sys, fcntl, os
+import json, sys, fcntl, os, datetime
+
+def parse_ts(value):
+    if not value:
+        return None
+    return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 lock_path = ".claude/.goal-state.lock"
 state_path = ".claude/.goal-state.json"
@@ -55,22 +60,52 @@ try:
         if not raw.strip():
             raise ValueError("empty state file")
         s = json.loads(raw)
+        park_timed_out = False
+        if s.get("parked"):
+            parked_at = parse_ts(s.get("parked_at"))
+            now = datetime.datetime.now(datetime.timezone.utc)
+            if parked_at and (now - parked_at).total_seconds() >= s.get("park_timeout_seconds", 14400):
+                s["active"] = False
+                s["failed"] = True
+                s["outcome"] = "park-timeout"
+                s["failure_reason"] = "Park timeout exceeded while waiting for human clarification."
+                s["parked"] = False
+                s["parked_seconds"] = s.get("parked_seconds", 0) + int((now - parked_at).total_seconds())
+                park_timed_out = True
         s["stop_fires"] = s.get("stop_fires", 0) + 1
         open(state_path, "w").write(json.dumps(s, indent=2))
         print(s.get("active", False), s.get("completed", False),
+              s.get("failed", False), s.get("parked", False),
               s.get("iteration", 0), s.get("max_iterations", 50),
-              s["stop_fires"])
+              s["stop_fires"], park_timed_out)
     finally:
         fcntl.flock(lf, fcntl.LOCK_UN)
         lf.close()
 except Exception as e:
-    print("False False 0 50 0")
+    print("False False False False 0 50 0 False")
     print(f"[goal-loop] state read error: {e}", file=sys.stderr)
 PY
 )
 EOF
 
-if [ "$ACTIVE" != "True" ] || [ "$COMPLETED" = "True" ]; then
+if [ "$PARK_TIMED_OUT" = "True" ]; then
+    cat >&2 <<EOF
+[goal-loop] HARD STOP — /goal was parked for more than 4 hours.
+The goal has been marked failed. Write GOAL_REPORT.md before closing the loop.
+EOF
+    exit 0
+fi
+
+if [ "$ACTIVE" != "True" ] || [ "$COMPLETED" = "True" ] || [ "$FAILED" = "True" ]; then
+    exit 0
+fi
+
+if [ "$PARKED" = "True" ]; then
+    cat >&2 <<EOF
+[goal-loop] /goal parked — waiting for human clarification.
+Question file: .claude/.goal-question.json
+Parked time does not burn the 6h wallclock budget. The goal auto-fails after 4h parked.
+EOF
     exit 0
 fi
 

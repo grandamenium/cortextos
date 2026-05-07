@@ -65,6 +65,72 @@ function checkDeliverableRequirement(taskId: string, frameworkRoot: string, org:
 export const busCommand = new Command('bus')
   .description('Bus commands for agent messaging, tasks, and events');
 
+async function sendTelegramToChat(chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }): Promise<void> {
+  // Resolve bot token: agent .env first, then process.env
+  const env = resolveEnv();
+  let botToken = '';
+
+  // 1. Check agent .env (most specific)
+  if (env.agentDir) {
+    const { readFileSync, existsSync } = require('fs');
+    const { join } = require('path');
+    const agentEnv = join(env.agentDir, '.env');
+    if (existsSync(agentEnv)) {
+      const content = readFileSync(agentEnv, 'utf-8');
+      const match = content.match(/^BOT_TOKEN=(.+)$/m);
+      if (match && match[1].trim()) botToken = match[1].trim();
+    }
+  }
+
+  // 2. Fall back to process env
+  if (!botToken) {
+    botToken = process.env.BOT_TOKEN || '';
+  }
+
+  if (!botToken) {
+    console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
+    process.exit(1);
+  }
+
+  const api = new TelegramAPI(botToken);
+  try {
+    let sentMessageId = 0;
+    if (opts.image) {
+      const result = await api.sendPhoto(chatId, opts.image, message);
+      sentMessageId = result?.result?.message_id ?? 0;
+    } else if (opts.file) {
+      const result = await api.sendDocument(chatId, opts.file, message);
+      sentMessageId = result?.result?.message_id ?? 0;
+    } else {
+      const result = await api.sendMessage(chatId, message, undefined, {
+        parseMode: opts.plainText ? null : 'HTML',
+      });
+      sentMessageId = result?.result?.message_id ?? 0;
+    }
+
+    // Log outbound and cache last-sent for context injection
+    const env = resolveEnv();
+    if (env.agentName && env.ctxRoot) {
+      logOutboundMessage(env.ctxRoot, env.agentName, chatId, message, sentMessageId, {
+        parseMode: opts.plainText ? 'none' : 'html',
+      });
+      cacheLastSent(env.ctxRoot, env.agentName, chatId, message);
+      // Auto-emit activity event so dashboard sees every Telegram send,
+      // even from agents that never call log-event directly.
+      try {
+        const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+        const preview = message.length > 120 ? message.slice(0, 120) + '…' : message;
+        logEvent(paths, env.agentName, env.org, 'message', 'telegram_sent', 'info', JSON.stringify({ chat_id: chatId, message_id: sentMessageId, preview }));
+      } catch { /* non-fatal */ }
+    }
+
+    console.log('Message sent');
+  } catch (err: any) {
+    console.error(`Failed to send: ${err.message || err}`);
+    process.exit(1);
+  }
+}
+
 busCommand
   .command('send-message')
   .argument('<to>', 'Target agent')
@@ -953,69 +1019,27 @@ busCommand
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
   .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
-    // Resolve bot token: agent .env first, then process.env
-    const env = resolveEnv();
-    let botToken = '';
+    await sendTelegramToChat(chatId, message, opts);
+  });
 
-    // 1. Check agent .env (most specific)
-    if (env.agentDir) {
-      const { readFileSync, existsSync } = require('fs');
-      const { join } = require('path');
-      const agentEnv = join(env.agentDir, '.env');
-      if (existsSync(agentEnv)) {
-        const content = readFileSync(agentEnv, 'utf-8');
-        const match = content.match(/^BOT_TOKEN=(.+)$/m);
-        if (match && match[1].trim()) botToken = match[1].trim();
-      }
+busCommand
+  .command('telegram-send')
+  .description('Compatibility alias for send-telegram; uses CTX_TELEGRAM_CHAT_ID/CHAT_ID when chat-id is omitted')
+  .argument('[chat-id-or-message]', 'Telegram chat ID, or message text when CTX_TELEGRAM_CHAT_ID/CHAT_ID is set')
+  .argument('[message]', 'Message text')
+  .option('--image <path>', 'Send a photo with caption')
+  .option('--file <path>', 'Send a document/file with caption (any file type)')
+  .option('--plain-text', 'Skip Telegram Markdown parsing entirely', false)
+  .action(async (chatIdOrMessage: string | undefined, message: string | undefined, opts: { image?: string; file?: string; plainText?: boolean }) => {
+    const envChatId = process.env.CTX_TELEGRAM_CHAT_ID || process.env.CHAT_ID || '';
+    const chatId = message ? (chatIdOrMessage || '') : envChatId;
+    const text = message || chatIdOrMessage || '';
+    if (!chatId || !text) {
+      console.error('Usage: cortextos bus telegram-send [chat-id] <message>');
+      console.error('When chat-id is omitted, CTX_TELEGRAM_CHAT_ID or CHAT_ID must be set.');
+      process.exit(2);
     }
-
-    // 2. Fall back to process env
-    if (!botToken) {
-      botToken = process.env.BOT_TOKEN || '';
-    }
-
-    if (!botToken) {
-      console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
-      process.exit(1);
-    }
-
-    const api = new TelegramAPI(botToken);
-    try {
-      let sentMessageId = 0;
-      if (opts.image) {
-        const result = await api.sendPhoto(chatId, opts.image, message);
-        sentMessageId = result?.result?.message_id ?? 0;
-      } else if (opts.file) {
-        const result = await api.sendDocument(chatId, opts.file, message);
-        sentMessageId = result?.result?.message_id ?? 0;
-      } else {
-        const result = await api.sendMessage(chatId, message, undefined, {
-          parseMode: opts.plainText ? null : 'HTML',
-        });
-        sentMessageId = result?.result?.message_id ?? 0;
-      }
-
-      // Log outbound and cache last-sent for context injection
-      const env = resolveEnv();
-      if (env.agentName && env.ctxRoot) {
-        logOutboundMessage(env.ctxRoot, env.agentName, chatId, message, sentMessageId, {
-          parseMode: opts.plainText ? 'none' : 'html',
-        });
-        cacheLastSent(env.ctxRoot, env.agentName, chatId, message);
-        // Auto-emit activity event so dashboard sees every Telegram send,
-        // even from agents that never call log-event directly.
-        try {
-          const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-          const preview = message.length > 120 ? message.slice(0, 120) + '…' : message;
-          logEvent(paths, env.agentName, env.org, 'message', 'telegram_sent', 'info', JSON.stringify({ chat_id: chatId, message_id: sentMessageId, preview }));
-        } catch { /* non-fatal */ }
-      }
-
-      console.log('Message sent');
-    } catch (err: any) {
-      console.error(`Failed to send: ${err.message || err}`);
-      process.exit(1);
-    }
+    await sendTelegramToChat(chatId, text, opts);
   });
 
 busCommand
