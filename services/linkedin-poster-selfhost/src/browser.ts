@@ -22,6 +22,10 @@ export class BrowserManager {
       console.log('[browser] WARNING: Profile not seeded yet. Run: cortextos bus poster-selfhost login --user <name>');
     }
 
+    const proxyServer = process.env['SOCKS_PROXY'] ?? process.env['HTTPS_PROXY'] ?? null;
+    if (proxyServer) {
+      console.log(`[browser] Using upstream proxy: ${proxyServer}`);
+    }
     console.log(`[browser] Launching persistent context: ${this.config.profileDir}`);
     this.context = await chromium.launchPersistentContext(this.config.profileDir, {
       headless: true,
@@ -32,6 +36,7 @@ export class BrowserManager {
         '--disable-blink-features=AutomationControlled',
       ],
       viewport: { width: 1280, height: 900 },
+      ...(proxyServer ? { proxy: { server: proxyServer } } : {}),
     });
 
     const pages = this.context.pages();
@@ -48,8 +53,8 @@ export class BrowserManager {
     if (!this.page) return false;
     try {
       await this.page.goto('https://www.linkedin.com/feed/', {
-        waitUntil: 'networkidle',
-        timeout: 30_000,
+        waitUntil: 'domcontentloaded',
+        timeout: 15_000,
       });
       const title = await this.page.title();
       const healthy = !LOGIN_PATTERN.test(title);

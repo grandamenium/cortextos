@@ -1,6 +1,15 @@
 export interface PosterConfig {
   profileDir: string;
+  /** Human-readable user identifier (e.g. "greg") — used in heartbeat agent_name and logs. */
   userId: string;
+  /**
+   * Supabase auth UUID for this sender (LI_SENDER_UUID env var).
+   * Used for sender_id / requested_by filters in linkedin_engagement_queue and
+   * linkedin_poster_jobs — both are UUID columns in Postgres and reject short
+   * string handles. Must match the UUID in auth.users / team_members for the
+   * account running this poster instance.
+   */
+  senderUuid: string;
   senderName: string;
   senderLinkedInId: string;
   supabaseUrl: string;

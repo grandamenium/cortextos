@@ -80,12 +80,13 @@ export class QueueConsumer {
     this.engagementProcessing = true;
 
     try {
-      // Claim one approved item scoped to this user (or unscoped items)
+      // Claim one approved item scoped to this sender UUID (or unscoped items).
+      // sender_id is a UUID column — pass senderUuid, not the human userId string.
       const { data: items, error } = await this.supabase
         .from('linkedin_engagement_queue')
         .select('id,status,sender_id,author_name,author_profile_url,post_url,actions,draft_comment,connection_note')
         .eq('status', 'approved')
-        .or(`sender_id.eq.${this.config.userId},sender_id.is.null`)
+        .or(`sender_id.eq.${this.config.senderUuid},sender_id.is.null`)
         .order('created_at', { ascending: true })
         .limit(1);
 
@@ -175,16 +176,19 @@ export class QueueConsumer {
       // requested_by to match this user; fetch_profile_posts is sender-agnostic.
       const SENDER_SCOPED_KINDS = ['publish_post', 'publish_post_with_image', 'publish_post_with_images'];
 
-      // Atomically claim by updating status pending -> claimed
+      // Atomically claim by updating status pending -> claimed.
+      // requested_by is a UUID column — use senderUuid, not the human userId string.
+      // NOTE: Supabase JS .update().order() translates to a PATCH with ?order= which
+      // PostgREST does not support for UPDATE operations — omit ordering here to avoid
+      // "column does not exist" errors. First-pending semantics are fine for correctness.
       const { data: claimed, error: claimErr } = await this.supabase
         .from('linkedin_poster_jobs')
         .update({ status: 'claimed', claimed_at: new Date().toISOString() })
         .eq('status', 'pending')
         .or(
           `and(kind.not.in.(${SENDER_SCOPED_KINDS.join(',')})),` +
-          `and(requested_by.eq.${this.config.userId})`
+          `and(requested_by.eq.${this.config.senderUuid})`
         )
-        .order('created_at', { ascending: true })
         .limit(1)
         .select('id,kind,status,payload,requested_by');
 
@@ -205,8 +209,9 @@ export class QueueConsumer {
           case 'publish_post':
           case 'publish_post_with_image':
           case 'publish_post_with_images': {
-            // Identity check — only process our own posts
-            if (job.requested_by !== this.config.userId) {
+            // Identity check — only process our own posts.
+            // Compare against senderUuid (UUID), not userId (short string handle).
+            if (job.requested_by !== this.config.senderUuid) {
               throw new Error(`unauthorized_requester:${job.requested_by ?? 'null'}`);
             }
             const payload = job.payload ?? {};

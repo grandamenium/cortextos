@@ -111,17 +111,7 @@
         ]
       }
     ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cortextos bus hook-compact-telegram",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
+    "PreCompact": [],
     "PostToolUse": [
       {
         "matcher": "Skill",

@@ -30,6 +30,7 @@ function requireEnv(name: string): string {
 const config: PosterConfig = {
   profileDir: process.env['PROFILE_DIR'] ?? '/var/lib/linkedin-poster/profiles/default',
   userId: process.env['USER_ID'] ?? 'default',
+  senderUuid: requireEnv('SENDER_UUID'), // Supabase auth UUID — must be UUID, not string handle
   senderName: process.env['SENDER_NAME'] ?? 'LinkedIn Poster',
   senderLinkedInId: process.env['SENDER_LINKEDIN_ID'] ?? '',
   supabaseUrl: requireEnv('SUPABASE_URL'),
