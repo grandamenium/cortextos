@@ -12,11 +12,53 @@ import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
+import { logEvent } from '../bus/event.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 
 type LogFn = (msg: string) => void;
+
+/**
+ * Reasons the daemon can refuse to enable Telegram for an agent at startup.
+ * Surfaced as the `reason` field on the `error/telegram_disabled` event so
+ * the dashboard can group and display refusal causes without log spelunking.
+ */
+export type TelegramDisabledReason =
+  | 'bad_token_format'
+  | 'bad_allowed_user_format'
+  | 'missing_allowed_user'
+  | 'missing_chat_id';
+
+/**
+ * Emit a `error/telegram_disabled` warning event and write a diagnostic
+ * line via the supplied log callback. Wrapped — a logEvent failure must
+ * not abort the agent startup path that called us.
+ *
+ * Why this exists: the daemon has several fail-closed branches around
+ * Telegram credentials (missing ALLOWED_USER, bad BOT_TOKEN format, etc.).
+ * Before this helper, those refusals only logged to the daemon stdout —
+ * which is invisible to the operator unless they `pm2 logs` directly.
+ * Lucy/health was silently inbound-disabled for days because of one
+ * missing ALLOWED_USER line. Now every refusal lands as a structured
+ * event the dashboard can surface.
+ *
+ * Exported so tests can lock the event shape without driving the full
+ * startAgent path.
+ */
+export function emitTelegramDisabled(
+  paths: BusPaths,
+  agent: string,
+  org: string,
+  reason: TelegramDisabledReason,
+  log: LogFn,
+): void {
+  try {
+    logEvent(paths, agent, org, 'error', 'telegram_disabled', 'warning', { reason });
+  } catch (err) {
+    log(`logEvent(telegram_disabled, ${reason}) failed: ${err}`);
+  }
+}
 
 /**
  * Manages all agents in a cortextOS instance.
@@ -217,12 +259,14 @@ export class AgentManager {
       // Validate BOT_TOKEN format: must be numeric_id:alphanumeric_secret
       if (botToken && !/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
         log(`WARNING: BOT_TOKEN format invalid (expected: 123456:ABC...). Telegram will not start.`);
+        emitTelegramDisabled(paths, name, resolvedOrg, 'bad_token_format', log);
         botToken = undefined;
       }
 
       // ALLOWED_USER must be a numeric Telegram user ID, not a username
       if (allowedUserId && !/^\d+$/.test(allowedUserId)) {
         log(`SECURITY: ALLOWED_USER is not a numeric ID. Telegram user IDs are numbers (e.g. 123456789). Refusing to enable Telegram. Fix the .env file.`);
+        emitTelegramDisabled(paths, name, resolvedOrg, 'bad_allowed_user_format', log);
         allowedUserId = undefined;
       }
 
@@ -232,6 +276,7 @@ export class AgentManager {
       // whitelists their numeric user ID.
       if (botToken && !allowedUserId) {
         log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
+        emitTelegramDisabled(paths, name, resolvedOrg, 'missing_allowed_user', log);
         botToken = undefined;
       }
 
@@ -239,6 +284,11 @@ export class AgentManager {
         telegramApi = new TelegramAPI(botToken);
         // Don't log sensitive user IDs — just indicate the gate is enabled
         log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
+      } else if (botToken && !chatId) {
+        // BOT_TOKEN passed every other check, but CHAT_ID is missing —
+        // before this branch the agent silently came up without Telegram.
+        log(`CONFIG: BOT_TOKEN is set but CHAT_ID is missing. Telegram will not start. Set CHAT_ID in .env.`);
+        emitTelegramDisabled(paths, name, resolvedOrg, 'missing_chat_id', log);
       }
     }
 
