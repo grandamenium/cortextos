@@ -20,6 +20,7 @@ import { dashboardCommand } from './dashboard.js';
 import { tunnelCommand } from './tunnel.js';
 import { getConfigCommand } from './get-config.js';
 import { goalsCommand } from './goals.js';
+import { councilCommand } from './council.js';
 import { setupCommand } from './setup.js';
 import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
 
@@ -49,6 +50,7 @@ program.addCommand(dashboardCommand);
 program.addCommand(tunnelCommand);
 program.addCommand(getConfigCommand);
 program.addCommand(goalsCommand);
+program.addCommand(councilCommand);
 program.addCommand(setupCommand);
 program.addCommand(spawnWorkerCommand);
 program.addCommand(terminateWorkerCommand);
