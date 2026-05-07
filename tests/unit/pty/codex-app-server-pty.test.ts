@@ -36,6 +36,7 @@ const requestMock = vi.fn();
 const notifyMock = vi.fn();
 const closeMock = vi.fn();
 const respondErrorMock = vi.fn();
+const logEventMock = vi.fn();
 let messageHandler: ((message: unknown) => void) | null = null;
 
 vi.mock('../../../src/utils/ws-unix-client.js', () => ({
@@ -52,6 +53,10 @@ vi.mock('../../../src/utils/ws-unix-client.js', () => ({
       request: requestMock,
     };
   }),
+}));
+
+vi.mock('../../../src/bus/event.js', () => ({
+  logEvent: logEventMock,
 }));
 
 const { CodexAppServerPTY } = await import('../../../src/pty/codex-app-server-pty.js');
@@ -75,6 +80,7 @@ beforeEach(() => {
   notifyMock.mockReset();
   closeMock.mockReset();
   respondErrorMock.mockReset();
+  logEventMock.mockReset();
   messageHandler = null;
 });
 
@@ -93,7 +99,8 @@ describe('CodexAppServerPTY socket path policy', () => {
     const pty = new CodexAppServerPTY(longEnv, {});
     const socketPath = (pty as unknown as { _socketPath: string })._socketPath;
     expect(socketPath).toMatch(/\/cas-[a-f0-9]{8}\.sock$/);
-    expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toBe(`unix://${socketPath}`);
+    expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toMatch(/^unix:\/\/\.\/cas-[a-f0-9]{8}\.sock$/);
+    expect((pty as unknown as { _socketCwd: string })._socketCwd).toBe('/tmp');
     expect(fsMocks.writeFileSync).toHaveBeenCalledWith(
       expect.stringContaining('codex-app-server-socket.json'),
       expect.stringContaining('"fallback": true'),
@@ -141,6 +148,39 @@ describe('CodexAppServerPTY command mapping', () => {
     await Promise.resolve();
     expect(pty.getOutputBuffer().getRecent()).toContain('Did you mean: imagegen');
     expect(requestMock).not.toHaveBeenCalledWith('turn/start', expect.anything());
+  });
+
+  it('maps exact $skill input to native UserInput.skill', async () => {
+    requestMock
+      .mockResolvedValueOnce({
+        result: {
+          data: [{ cwd: '/tmp', skills: [{ name: 'imagegen', path: '/skill.md', enabled: true }] }],
+        },
+      })
+      .mockResolvedValueOnce({ result: {} });
+    const pty = makeReadyPty();
+
+    pty.write('$imagegen make a logo');
+    pty.write('\r');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(requestMock).toHaveBeenNthCalledWith(1, 'skills/list', {
+      cwds: ['/tmp/fw/orgs/acme/agents/codex-app-agent'],
+      forceReload: false,
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
+      threadId: 'thread-1',
+      input: [
+        { type: 'skill', name: 'imagegen', path: '/skill.md' },
+        { type: 'text', text: 'make a logo', text_elements: [] },
+      ],
+    });
+
+    (pty as unknown as { handleRpcMessage(message: unknown): void }).handleRpcMessage({
+      method: 'turn/completed',
+      params: {},
+    });
   });
 
   it('queues turns until native turn/completed arrives', async () => {
@@ -193,6 +233,19 @@ describe('CodexAppServerPTY event handling', () => {
       params: {},
     });
     expect(respondErrorMock).toHaveBeenCalledWith(7, -32601, 'Unsupported app-server request: item/commandExecution/requestApproval');
+    expect(logEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'codex-app-agent',
+      'acme',
+      'error',
+      'codex_app_server_unsupported_request',
+      'error',
+      {
+        runtime: 'codex-app-server',
+        method: 'item/commandExecution/requestApproval',
+        thread_id: null,
+      },
+    );
     expect(pty.getOutputBuffer().getRecent()).toContain('unsupported request');
   });
 

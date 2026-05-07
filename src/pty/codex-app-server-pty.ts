@@ -1,11 +1,13 @@
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { homedir, tmpdir } from 'os';
+import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir } from '../utils/atomic.js';
+import { resolvePaths } from '../utils/paths.js';
+import { logEvent } from '../bus/event.js';
 import { WsUnixJsonRpcClient, type JsonRpcResponse } from '../utils/ws-unix-client.js';
 
 interface IPty {
@@ -99,6 +101,7 @@ export class CodexAppServerPTY {
   private _cwd: string;
   private _socketPath: string;
   private _socketListenArg: string;
+  private _socketCwd: string;
   private _threadStatePath: string;
   private _socketPointerPath: string;
   private _threadId: string | null = null;
@@ -116,6 +119,7 @@ export class CodexAppServerPTY {
     const socket = this.resolveSocketPath();
     this._socketPath = socket.path;
     this._socketListenArg = socket.listenArg;
+    this._socketCwd = socket.cwd;
     this._outputBuffer = new OutputBuffer(1000, logPath, BOOTSTRAP_PATTERN);
   }
 
@@ -263,7 +267,7 @@ export class CodexAppServerPTY {
         name: 'xterm-256color',
         cols: 200,
         rows: 50,
-        cwd: this._socketListenArg.includes('./') ? this._stateDir : this._cwd,
+        cwd: this._socketCwd,
         env: this.buildEnv(),
       });
 
@@ -458,6 +462,7 @@ export class CodexAppServerPTY {
       const method = String(message.method);
       const id = message.id as number | string;
       this._outputBuffer.push(`[codex-app-server] unsupported request: ${method}\n`);
+      this.emitUnsupportedRequestEvent(method);
       this._rpc?.respondError(id, -32601, `Unsupported app-server request: ${method}`);
       return;
     }
@@ -562,6 +567,27 @@ export class CodexAppServerPTY {
     pending.reject(err);
   }
 
+  private emitUnsupportedRequestEvent(method: string): void {
+    try {
+      const paths = resolvePaths(this._env.agentName, this._env.instanceId, this._env.org);
+      logEvent(
+        paths,
+        this._env.agentName,
+        this._env.org,
+        'error',
+        'codex_app_server_unsupported_request',
+        'error',
+        {
+          runtime: 'codex-app-server',
+          method,
+          thread_id: this._threadId,
+        },
+      );
+    } catch {
+      // OutputBuffer warning above is the user-visible fallback.
+    }
+  }
+
   private setThreadId(threadId: string): void {
     this._threadId = threadId;
     const state: ThreadState = {
@@ -582,13 +608,14 @@ export class CodexAppServerPTY {
     }
   }
 
-  private resolveSocketPath(): { path: string; listenArg: string } {
+  private resolveSocketPath(): { path: string; listenArg: string; cwd: string } {
     const defaultPath = join(this._stateDir, SOCKET_BASENAME);
-    if (Buffer.byteLength(defaultPath) <= SOCKET_PATH_WARN_BYTES) {
-      return { path: defaultPath, listenArg: `unix://./${SOCKET_BASENAME}` };
+    if (Buffer.byteLength(defaultPath) < SOCKET_PATH_WARN_BYTES) {
+      return { path: defaultPath, listenArg: `unix://./${SOCKET_BASENAME}`, cwd: this._stateDir };
     }
 
-    const fallback = join(tmpdir(), `cas-${randomBytes(4).toString('hex')}.sock`);
+    const fallbackBasename = `cas-${randomBytes(4).toString('hex')}.sock`;
+    const fallback = join('/tmp', fallbackBasename);
     const pointer: SocketPointer = {
       socketPath: fallback,
       fallback: true,
@@ -601,7 +628,7 @@ export class CodexAppServerPTY {
     } catch {
       // Non-fatal; spawn will still use fallback path.
     }
-    return { path: fallback, listenArg: `unix://${fallback}` };
+    return { path: fallback, listenArg: `unix://./${fallbackBasename}`, cwd: '/tmp' };
   }
 
   private removeSocket(): void {
