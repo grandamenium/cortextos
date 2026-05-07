@@ -135,10 +135,17 @@ if [[ -n "$RATIO" ]]; then
 fi
 
 # ── Mandatory persona check: Security + DataIntegrity ────────────────────────
-# Both personas must be present in the file AND their row must not contain
-# FAIL / REJECT / BLOCK. Match either a markdown table row ("| Security |
-# PASS | ...") or a heading ("## Security PASS ...") so authors aren't locked
-# into one format.
+# Both personas must be present in the file AND their row must not contain a
+# verdict word like FAIL / REJECT / BLOCK (and common inflections). Match
+# either a markdown table row ("| Security | PASS | ...") or a heading
+# ("## Security PASS ...") so authors aren't locked into one format.
+#
+# Word-boundary matching (grep -w) is critical: prose words like "failure",
+# "blocking", "non-blocking", "unblocking", "rejection" are perfectly normal
+# in plan-review notes and should NOT trip the gate. The previous substring
+# match (`grep -iE "FAIL|REJECT|BLOCK"`) false-positived on those, forcing
+# authors to rewrite legitimate prose. See task_1777093291910_415 + PR #248.
+PERSONA_VERDICT_PATTERN='FAIL|FAILED|FAILS|REJECT|REJECTED|REJECTS|BLOCK|BLOCKED|BLOCKS'
 for persona in Security DataIntegrity; do
   PERSONA_LINE="$(grep -iE "(^|\\|)[[:space:]]*${persona}\\b" "$PLAN_FILE" | head -n 1 || true)"
   if [[ -z "$PERSONA_LINE" ]]; then
@@ -146,7 +153,7 @@ for persona in Security DataIntegrity; do
     echo "[plan-review-gate] Both Security and DataIntegrity reviewers are required, regardless of quorum." >&2
     exit 1
   fi
-  if echo "$PERSONA_LINE" | grep -qiE "FAIL|REJECT|BLOCK"; then
+  if echo "$PERSONA_LINE" | grep -wqiE "$PERSONA_VERDICT_PATTERN"; then
     echo "[plan-review-gate] BLOCKED: mandatory persona '$persona' verdict is not PASS in '${PLAN_FILE#$REPO_ROOT/}'." >&2
     echo "[plan-review-gate] Address $persona's concerns before the push." >&2
     exit 1
