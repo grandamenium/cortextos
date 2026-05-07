@@ -20,6 +20,26 @@ import { homedir } from 'os';
 import { execFile } from 'child_process';
 
 const DEDUP_WINDOW_MS = 10 * 60 * 1000;         // 10 minutes
+
+function resolveOrchestratorName(): string {
+  if (process.env.CTX_ORCHESTRATOR) return process.env.CTX_ORCHESTRATOR;
+
+  const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+  const org = process.env.CTX_ORG;
+  if (frameworkRoot && org) {
+    const contextPath = join(frameworkRoot, 'orgs', org, 'context.json');
+    if (existsSync(contextPath)) {
+      try {
+        const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
+        if (typeof ctx.orchestrator === 'string' && ctx.orchestrator.trim() !== '') {
+          return ctx.orchestrator;
+        }
+      } catch { /* fall through to default */ }
+    }
+  }
+
+  return 'chief';
+}
 const QUIET_HOUR_START_LA = 22;                 // 22:00 America/Los_Angeles
 const QUIET_HOUR_END_LA = 7;                    // 07:00 America/Los_Angeles
 
@@ -326,7 +346,7 @@ async function main(): Promise<void> {
       lastTask,
       crashCount,
       restartAttempted,
-      recipients: ['chief', 'analyst'],
+      recipients: [resolveOrchestratorName(), 'analyst'],
     });
   }
 }
