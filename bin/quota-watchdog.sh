@@ -64,50 +64,87 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Determine remaining_pct (always — needed for both pause and auto-resume)
+# 1. Determine remaining_pct — API is the ONLY authoritative source for
+#    pause/resume decisions. ccusage was used as a fallback in v1+v2 but
+#    that produced a real false-positive on 2026-05-07 09:35 UTC: API
+#    transient failure → ccusage tripped 0% via "exceeds historical max"
+#    heuristic → all 6 agents paused even though Sondre had 96% remaining.
+#    Postmortem: vault/00-inbox/20260507-dev-quota-watchdog-ccusage-false-positive-postmortem.md
+#
+#    New policy (v3 — same script, tighter logic):
+#    - API success → use it for pause/resume decisions (UNCHANGED).
+#    - API failure → log + Telegram alert + DO NOT pause.
+#      ccusage stays available as a sanity-check signal in the monitoring
+#      log but is NEVER authoritative for pause/resume.
 # ---------------------------------------------------------------------------
 REMAINING_PCT=""
 METHOD=""
+API_AVAILABLE=no
 
-# Path 1: official Anthropic usage API (preferred — real plan utilization)
+# Path 1: official Anthropic usage API (the only authoritative source)
 if API_OUT=$("$CORTEXTOS" bus check-usage-api --json 2>/dev/null); then
   FIVE_H=$(echo "$API_OUT" | "$JQ" -r '.five_hour_utilization // empty')
   if [ -n "$FIVE_H" ] && [ "$FIVE_H" != "null" ]; then
     REMAINING_PCT=$(awk -v u="$FIVE_H" 'BEGIN { p = (1-u)*100; if (p<0) p=0; printf "%.0f", p }')
     METHOD="api"
+    API_AVAILABLE=yes
   fi
 fi
 
-# Path 2: ccusage fallback (heuristic against historical max)
-if [ -z "$REMAINING_PCT" ] && [ -x "$CCUSAGE" ]; then
+# Sanity-check signal only — log ccusage's reading next to API for monitoring
+# debugging, but never use it to drive pause/resume decisions.
+CCUSAGE_PCT=""
+if [ -x "$CCUSAGE" ]; then
   if CC_OUT=$("$CCUSAGE" blocks --active --json -t max 2>/dev/null); then
-    PCT_USED=$(echo "$CC_OUT" | "$JQ" -r '.blocks[0].tokenLimitStatus.percentUsed // empty')
-    if [ -n "$PCT_USED" ]; then
-      REMAINING_PCT=$(awk -v u="$PCT_USED" 'BEGIN { p = 100-u; if (p<0) p=0; printf "%.0f", p }')
-      METHOD="ccusage"
+    CC_USED=$(echo "$CC_OUT" | "$JQ" -r '.blocks[0].tokenLimitStatus.percentUsed // empty')
+    if [ -n "$CC_USED" ]; then
+      CCUSAGE_PCT=$(awk -v u="$CC_USED" 'BEGIN { p = 100-u; if (p<0) p=0; printf "%.0f", p }')
     fi
   fi
 fi
 
-# Path 3: fail-safe — can't determine usage → assume zero, pause
-if [ -z "$REMAINING_PCT" ]; then
-  REMAINING_PCT=0
-  METHOD="fail-safe"
-  log "WARNING: usage unreadable from API and ccusage; failing safe"
+# If API path failed, alert + stay running (DO NOT auto-pause). The
+# Sondre-impact of a false-positive pause is much worse than a brief
+# blind window; quota tax during the blind window is bounded by burn rate.
+if [ "$API_AVAILABLE" = "no" ]; then
+  REMAINING_PCT=unknown
+  METHOD="api-degraded"
+  log "WARNING: API path unavailable. ccusage_signal=${CCUSAGE_PCT:-unavailable}%. Staying running per v3 policy — alert sent to operator."
+  ALERT_MSG="⚠️ Quota watchdog API path degraded — ccusage signal=${CCUSAGE_PCT:-unavailable}%. Agents NOT paused (per v3 policy: pause only on API-confirmed below-threshold). Investigate manually if API path doesn't recover within the next cycle. Watchdog log: $LOG"
+  # Only alert ONCE per degradation episode — don't spam Sondre on repeated cron ticks
+  DEGRADED_FLAG="$STATE_DIR/.api-degraded-since"
+  if [ ! -f "$DEGRADED_FLAG" ]; then
+    "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$ALERT_MSG" --plain-text >> "$LOG" 2>&1 || log "  telegram alert failed"
+    echo "$(ts)" > "$DEGRADED_FLAG"
+  fi
+  cat > "$CHECK_FILE" <<EOF
+{
+  "ts": "$(ts)",
+  "method": "$METHOD",
+  "remaining_pct": "unknown",
+  "ccusage_signal_pct": ${CCUSAGE_PCT:-null},
+  "paused": $([ -f "$PAUSED_FILE" ] && echo true || echo false)
+}
+EOF
+  exit 0
 fi
+
+# API recovered — clear any stale degradation flag
+[ -f "$STATE_DIR/.api-degraded-since" ] && rm -f "$STATE_DIR/.api-degraded-since"
 
 cat > "$CHECK_FILE" <<EOF
 {
   "ts": "$(ts)",
   "method": "$METHOD",
   "remaining_pct": $REMAINING_PCT,
+  "ccusage_signal_pct": ${CCUSAGE_PCT:-null},
   "threshold_pct": $THRESHOLD_PCT,
   "resume_pct": $RESUME_PCT,
   "paused": $([ -f "$PAUSED_FILE" ] && echo true || echo false)
 }
 EOF
 
-log "check method=$METHOD remaining=${REMAINING_PCT}% threshold=${THRESHOLD_PCT}% resume=${RESUME_PCT}% paused=$([ -f "$PAUSED_FILE" ] && echo yes || echo no)"
+log "check method=$METHOD remaining=${REMAINING_PCT}% ccusage_signal=${CCUSAGE_PCT:-na}% threshold=${THRESHOLD_PCT}% resume=${RESUME_PCT}% paused=$([ -f "$PAUSED_FILE" ] && echo yes || echo no)"
 
 # ---------------------------------------------------------------------------
 # 2. Branch: if paused.json exists → maybe auto-resume; else → maybe pause
@@ -115,9 +152,11 @@ log "check method=$METHOD remaining=${REMAINING_PCT}% threshold=${THRESHOLD_PCT}
 
 if [ -f "$PAUSED_FILE" ]; then
   # ---- Already paused: should we auto-resume? ----
-  # Fail-safe path stays paused. Don't auto-resume on a guess.
-  if [ "$METHOD" = "fail-safe" ]; then
-    log "still paused; usage unreadable, holding pause"
+  # API-degraded path stays paused — never resume on a guess (we already
+  # exited in the API-degraded branch above before reaching here, but
+  # belt-and-suspenders).
+  if [ "$METHOD" != "api" ]; then
+    log "still paused; method=$METHOD non-authoritative, holding pause"
     exit 0
   fi
 
