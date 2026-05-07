@@ -4,7 +4,6 @@ import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 
 import { spawnSync } from 'child_process';
 import { StaleAgentWatchdog } from './stale-watchdog.js';
 import { SleepScheduler } from './sleep-scheduler.js';
-import { writeFileSync, existsSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';

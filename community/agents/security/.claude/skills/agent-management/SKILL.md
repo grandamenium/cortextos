@@ -256,19 +256,6 @@ Crons are daemon-managed and persisted to `${CTX_ROOT}/state/<agent>/crons.json`
 ```bash
 cortextos bus add-cron <agent> <name> <interval-or-cron-expr> "<prompt>"
 # Example: cortextos bus add-cron sentinel new-cron 2h "Do the thing"
-AGENT="sentinel"
-ORG="myorg"
-node -e "
-const fs = require('fs');
-const path = '$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT/config.json';
-const c = JSON.parse(fs.readFileSync(path));
-if (!c.crons) c.crons = [];
-c.crons.push({ name: 'new-cron', interval: '2h', prompt: 'Do the thing' });
-fs.writeFileSync(path, JSON.stringify(c, null, 2));
-"
-# Notify agent to reload crons
-cortextos bus send-message "$AGENT" normal \
-  'Crons updated in config.json. Re-read your config.json and set up the new cron with /loop.'
 ```
 
 ### Removing a Cron
@@ -284,14 +271,6 @@ cortextos bus update-cron <agent> <name> --interval <new>
 ### Listing Crons
 ```bash
 cortextos bus list-crons <agent>
-node -e "
-const fs = require('fs');
-const path = '$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT/config.json';
-const c = JSON.parse(fs.readFileSync(path));
-c.crons = (c.crons || []).filter(cr => cr.name !== 'cron-to-remove');
-fs.writeFileSync(path, JSON.stringify(c, null, 2));
-"
-cortextos bus send-message "$AGENT" normal 'Cron removed from config.json. Recreate your crons on next restart.'
 ```
 
 ---
@@ -397,7 +376,6 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 | Change model | Edit config.json model field + soft restart |
 | Update bot token | Edit .env BOT_TOKEN + soft restart |
 | Add cron | `cortextos bus add-cron <agent> <name> <interval> "<prompt>"` |
-| Add cron | Edit config.json crons + notify agent |
 | Check health | `cortextos status` or `cortextos bus read-all-heartbeats` |
 | List agents | `cortextos bus list-agents --format json` |
 | Check PM2 | `pm2 list` |

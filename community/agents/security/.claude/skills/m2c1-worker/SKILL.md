@@ -399,7 +399,6 @@ Once the worker is past discovery and tool setup, it should run autonomously:
 ### Set Up Auto-Iteration
 
 Tell the worker to create a /loop for task polling within its session:
-Tell the worker to create a /loop:
 ```bash
 cortextos bus send-message <worker-name> normal \
   'Set up a /loop every 10 minutes to check START.md for pending tasks. If not working on a task, pick the next one.'
