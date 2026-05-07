@@ -34,7 +34,7 @@ export function AgentCard({ agent }: AgentCardProps) {
     agent.health === 'stale' ? 'Stale' : 'Offline';
 
   return (
-    <Link href={`/agents/${encodeURIComponent(agent.systemName)}`}>
+    <Link href={`/agents/${encodeURIComponent(agent.systemName)}/chat`}>
       <Card className="group relative h-full cursor-pointer transition-all hover:shadow-md hover:border-primary/20">
         <CardContent className="space-y-3">
           {/* Header: avatar + name + health */}
