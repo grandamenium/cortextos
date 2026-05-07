@@ -243,6 +243,12 @@ export class AgentManager {
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
+    // Issue #330: pass the Telegram handle into AgentProcess so CodexPTY can
+    // emit sendChatAction directly from the JSONL stream. Has no effect for
+    // claude-code / hermes runtimes — those still use fast-checker.
+    if (telegramApi && chatId) {
+      agentProcess.setTelegramHandle(telegramApi, chatId);
+    }
     const checker = new FastChecker(agentProcess, paths, this.frameworkRoot, {
       log,
       telegramApi,

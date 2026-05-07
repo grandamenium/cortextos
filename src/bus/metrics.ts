@@ -543,6 +543,21 @@ function collectSkillFiles(dir: string): string[] {
     } catch { /* ignore */ }
   }
 
+  // .codex/prompts/*.md and .codex/commands/*.md (issue #329)
+  // Codex CLI exposes user prompts via `.codex/prompts/`; some templates also
+  // ship a `.codex/commands/` dir mirroring the .claude convention. Both feed
+  // the Telegram setMyCommands call so codex-runtime agents get a slash menu.
+  for (const sub of ['prompts', 'commands']) {
+    const codexDir = join(dir, '.codex', sub);
+    if (existsSync(codexDir)) {
+      try {
+        for (const f of readdirSync(codexDir)) {
+          if (f.endsWith('.md')) files.push(join(codexDir, f));
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
   // .claude/skills/*/SKILL.md
   const claudeSkillsDir = join(dir, '.claude', 'skills');
   if (existsSync(claudeSkillsDir)) {

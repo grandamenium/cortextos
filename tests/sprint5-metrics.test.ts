@@ -354,5 +354,62 @@ describe('Sprint 5: Observability & Metrics', () => {
       const commands = collectTelegramCommands([scanDir]);
       expect(commands[0].description.length).toBe(256);
     });
+
+    // Issue #329: codex-runtime agents store slash commands under .codex/, not
+    // .claude/. Without these scan paths, registerTelegramCommands sees zero
+    // commands for codex agents and the Telegram setMyCommands call no-ops,
+    // leaving codex bots with an empty slash menu.
+    it('collects from .codex/prompts/ (issue #329)', () => {
+      const scanDir = join(testDir, 'codex-agent-prompts');
+      const promptsDir = join(scanDir, '.codex', 'prompts');
+      mkdirSync(promptsDir, { recursive: true });
+      writeFileSync(
+        join(promptsDir, 'review.md'),
+        '---\nname: review\ndescription: Review the staged diff\n---\n',
+        'utf-8',
+      );
+
+      const commands = collectTelegramCommands([scanDir]);
+      expect(commands.length).toBe(1);
+      expect(commands[0].command).toBe('review');
+      expect(commands[0].description).toBe('Review the staged diff');
+    });
+
+    it('collects from .codex/commands/ (issue #329)', () => {
+      const scanDir = join(testDir, 'codex-agent-commands');
+      const cmdDir = join(scanDir, '.codex', 'commands');
+      mkdirSync(cmdDir, { recursive: true });
+      writeFileSync(
+        join(cmdDir, 'plan.md'),
+        '---\nname: plan\ndescription: Draft a plan\n---\n',
+        'utf-8',
+      );
+
+      const commands = collectTelegramCommands([scanDir]);
+      expect(commands.length).toBe(1);
+      expect(commands[0].command).toBe('plan');
+    });
+
+    it('merges codex + claude commands across both layouts (issue #329)', () => {
+      const scanDir = join(testDir, 'mixed-agent');
+      const codexDir = join(scanDir, '.codex', 'prompts');
+      const claudeDir = join(scanDir, '.claude', 'commands');
+      mkdirSync(codexDir, { recursive: true });
+      mkdirSync(claudeDir, { recursive: true });
+      writeFileSync(
+        join(codexDir, 'codex-only.md'),
+        '---\nname: codex_only\ndescription: Codex prompt\n---\n',
+        'utf-8',
+      );
+      writeFileSync(
+        join(claudeDir, 'claude-only.md'),
+        '---\nname: claude_only\ndescription: Claude command\n---\n',
+        'utf-8',
+      );
+
+      const cmds = collectTelegramCommands([scanDir]);
+      const names = cmds.map((c) => c.command).sort();
+      expect(names).toEqual(['claude_only', 'codex_only']);
+    });
   });
 });
