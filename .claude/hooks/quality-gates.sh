@@ -21,6 +21,9 @@ cd "$PROJECT_ROOT" || exit 0
 STATE_DIR=".claude/.gates-state"
 mkdir -p "$STATE_DIR"
 
+# Prune session markers older than 7 days so the state dir doesn't grow forever.
+find "$STATE_DIR" -name "skill-optimizer-*" -mtime +7 -delete 2>/dev/null || true
+
 # ---- Gate 2: skill-optimizer ----------------------------------------------
 PROJECT_SLUG=$(printf '%s' "$PROJECT_ROOT" | sed 's|/|-|g; s| |-|g')
 TRANSCRIPT_DIR="$HOME/.claude/projects/$PROJECT_SLUG"
