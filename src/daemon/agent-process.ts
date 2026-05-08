@@ -11,6 +11,7 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { readCrashCount, incrementCrashCount } from './crash-counter.js';
 
 type LogFn = (msg: string) => void;
 
@@ -45,6 +46,9 @@ export class AgentProcess {
   // from an old PTY can race past stopRequested and trigger crash recovery on
   // the new agent.
   private lifecycleGeneration: number = 0;
+  // Guard: only one cron verification waiter in-flight per agent at a time.
+  // Rapid --continue restarts must not stack duplicate waiters. (Issue #182)
+  private cronVerificationPending: boolean = false;
   // BUG-011 fix: stop() awaits this promise (resolved by the onExit handler in start())
   // to guarantee the PTY exit has fired before stopping=false is reset. Without
   // this, the exit handler can fire after stopping=false and trigger spurious
@@ -68,6 +72,14 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
+
+    // Restore crash count from disk so it survives daemon restarts.
+    // Without this, a PM2 restart resets the in-memory counter to 0
+    // and the max_crashes_per_day limit is never enforced.
+    this.crashCount = readCrashCount(env.ctxRoot, name);
+    if (this.crashCount > 0) {
+      this.log(`Restored crash count from disk: ${this.crashCount}/${this.maxCrashesPerDay}`);
+    }
   }
 
   /**
@@ -420,15 +432,25 @@ export class AgentProcess {
       return;
     }
 
-    // Check crash limit
-    this.crashCount++;
-    const today = new Date().toISOString().split('T')[0];
-    this.resetCrashCountIfNewDay(today);
+    // Increment persisted crash counter (shared with watchdog)
+    const { count } = incrementCrashCount(this.env.ctxRoot, this.name);
+    this.crashCount = count;
 
     if (this.crashCount >= this.maxCrashesPerDay) {
       this.log(`HALTED: exceeded ${this.maxCrashesPerDay} crashes today`);
       this.appendCrashToRestartsLog(exitCode, 0, 'HALTED');
       this.status = 'halted';
+      this.notifyStatusChange();
+      return;
+    }
+
+    // Check if the agent was rate-limited before crashing.
+    // If so, don't auto-restart — the watchdog will handle restart after the
+    // limit resets. This prevents crash loops where a rate-limited agent boots,
+    // burns tokens on startup, hits the limit again, and crashes in an endless cycle.
+    if (this.isRateLimitedFromLog()) {
+      this.log(`Crash recovery DEFERRED: agent is rate-limited (crash #${this.crashCount}). Watchdog will restart after limit resets.`);
+      this.status = 'crashed';
       this.notifyStatusChange();
       return;
     }
@@ -449,6 +471,31 @@ export class AgentProcess {
         this.start().catch(err => this.log(`Restart failed: ${err}`));
       }
     }, backoff);
+  }
+
+  /**
+   * Check if the agent's stdout.log tail shows rate-limit patterns.
+   * Used by crash recovery to defer restart when the agent hit token limits.
+   */
+  private isRateLimitedFromLog(): boolean {
+    const SCAN_BYTES = 16384;
+    const PATTERNS = ["You've hit your limit", 'hit your limit', '/rate-limit-options'];
+    const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
+    try {
+      if (!existsSync(logPath)) return false;
+      const { statSync, openSync, readSync, closeSync } = require('fs');
+      const stats = statSync(logPath);
+      if (stats.size === 0) return false;
+      const readSize = Math.min(stats.size, SCAN_BYTES);
+      const fd = openSync(logPath, 'r');
+      const buffer = Buffer.alloc(readSize);
+      readSync(fd, buffer, 0, readSize, stats.size - readSize);
+      closeSync(fd);
+      const tail = buffer.toString('utf-8').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      return PATTERNS.some(p => tail.includes(p));
+    } catch {
+      return false;
+    }
   }
 
   private shouldContinue(): boolean {
@@ -695,21 +742,16 @@ export class AgentProcess {
     }
   }
 
-  private resetCrashCountIfNewDay(today: string): void {
-    const crashFile = join(this.env.ctxRoot, 'logs', this.name, '.crash_count_today');
-    try {
-      if (existsSync(crashFile)) {
-        const content = readFileSync(crashFile, 'utf-8').trim();
-        const [storedDate, count] = content.split(':');
-        if (storedDate === today) {
-          this.crashCount = parseInt(count, 10) + 1;
-        } else {
-          this.crashCount = 1;
-        }
-      }
-      ensureDir(join(this.env.ctxRoot, 'logs', this.name));
-      writeFileSync(crashFile, `${today}:${this.crashCount}`, 'utf-8');
-    } catch { /* ignore */ }
+  /**
+   * Get the current crash count. Used by the watchdog to check if an agent
+   * has exceeded its daily crash limit before restarting.
+   */
+  getCrashCount(): number {
+    return this.crashCount;
+  }
+
+  getMaxCrashesPerDay(): number {
+    return this.maxCrashesPerDay;
   }
 
   private notifyStatusChange(): void {

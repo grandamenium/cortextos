@@ -18,10 +18,13 @@ import {
   IconClock,
   IconTarget,
   IconMessages,
+  IconGitBranch,
+  IconTopologyComplex,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { UpstreamStatusWidget } from '@/components/upstream-status-widget';
 
 interface NavItem {
   label: string;
@@ -47,6 +50,7 @@ const navItems: NavItem[] = [
 
   // Intelligence
   { label: 'Knowledge Base', href: '/knowledge-base', icon: IconBook2, section: 'intel' },
+  { label: 'Code Graph', href: '/graph', icon: IconTopologyComplex, section: 'intel' },
   { label: 'Experiments', href: '/experiments', icon: IconFlask, section: 'intel' },
   { label: 'Skills', href: '/skills', icon: IconPuzzle, section: 'intel' },
 ];
@@ -176,8 +180,21 @@ export function Sidebar({
 
       <Separator />
 
-      {/* Settings at bottom */}
-      <div className="px-2 py-2">
+      {/* System links at bottom */}
+      <div className="px-2 py-2 space-y-0.5">
+        <Link
+          href={orgHref('/changelog')}
+          onClick={onNavigate}
+          className={cn(
+            'flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-all',
+            isActive('/changelog')
+              ? 'bg-primary/10 text-primary font-medium'
+              : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+          )}
+        >
+          <IconGitBranch size={16} className="shrink-0" />
+          <span>Changelog</span>
+        </Link>
         <Link
           href={orgHref('/settings')}
           onClick={onNavigate}
@@ -191,6 +208,13 @@ export function Sidebar({
           <IconSettings size={16} className="shrink-0" />
           <span>Settings</span>
         </Link>
+
+        {/* Framework upstream status — User-Direktive 2026-04-25:
+            "ich sehe auch nicht ob das github dazu ein neues update mit verbesserungen hat".
+            Self-checks every page load, shows pending commits + GitHub link. */}
+        <div className="mt-3 px-1.5">
+          <UpstreamStatusWidget />
+        </div>
       </div>
     </aside>
   );

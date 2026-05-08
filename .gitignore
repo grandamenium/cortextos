@@ -54,3 +54,10 @@ BRAINDUMP*.md
 AGENTS.md
 dashboard/screenshots/
 dashboard/test-*.py
+# Added by code-review-graph
+.code-review-graph/
+
+# Obsidian vault (personal memory layer — not part of framework)
+obsidian-vault/
+.obsidian/
+

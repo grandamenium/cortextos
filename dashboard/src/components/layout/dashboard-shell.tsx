@@ -16,22 +16,29 @@ interface DashboardShellProps {
 }
 
 export function DashboardShell({ orgs, children }: DashboardShellProps) {
-  const [currentOrg, setCurrentOrg] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      // URL is authoritative: if ?org= is present, use it so server and client agree.
-      // Fall back to localStorage for the common case of navigating without a param.
-      const urlOrg = new URLSearchParams(window.location.search).get('org');
-      if (urlOrg && (urlOrg === 'all' || orgs.includes(urlOrg))) return urlOrg;
-      const saved = localStorage.getItem('cortextos-org');
-      if (saved && (saved === 'all' || orgs.includes(saved))) return saved;
-    }
-    return 'all';
-  });
+  // Always start with 'all' to match SSR output and avoid hydration mismatch.
+  // Restore saved org in useEffect after hydration completes.
+  const [currentOrg, setCurrentOrg] = useState<string>('all');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Restore org from URL or localStorage AFTER hydration
+  useEffect(() => {
+    const urlOrg = new URLSearchParams(window.location.search).get('org');
+    if (urlOrg && (urlOrg === 'all' || orgs.includes(urlOrg))) {
+      setCurrentOrg(urlOrg);
+      return;
+    }
+    const saved = localStorage.getItem('cortextos-org');
+    if (saved && (saved === 'all' || orgs.includes(saved))) {
+      setCurrentOrg(saved);
+    }
+  }, [orgs]);
 
   // Persist org selection to localStorage
   useEffect(() => {
-    localStorage.setItem('cortextos-org', currentOrg);
+    if (currentOrg !== 'all' || localStorage.getItem('cortextos-org')) {
+      localStorage.setItem('cortextos-org', currentOrg);
+    }
   }, [currentOrg]);
 
   return (

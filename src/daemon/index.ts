@@ -2,6 +2,8 @@ import { AgentManager } from './agent-manager.js';
 import { IPCServer } from './ipc-server.js';
 import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'fs';
 import { spawnSync } from 'child_process';
+import { StaleAgentWatchdog } from './stale-watchdog.js';
+import { SleepScheduler } from './sleep-scheduler.js';
 import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';

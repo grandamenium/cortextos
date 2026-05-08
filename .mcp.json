@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "code-review-graph": {
+      "command": "uvx",
+      "args": [
+        "code-review-graph",
+        "serve"
+      ],
+      "type": "stdio"
+    },
+    "obsidian": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "obsidian-mcp",
+        "/Users/arndt/cortextos/obsidian-vault"
+      ],
+      "type": "stdio"
+    }
+  }
+}

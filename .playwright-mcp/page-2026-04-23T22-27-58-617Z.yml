@@ -1,0 +1,49 @@
+- generic [active] [ref=e1]:
+  - link "Skip to content":
+    - /url: "#geist-skip-nav"
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - link "Vercel logo":
+        - /url: /home
+        - button "Vercel Logo":
+          - img "Vercel Logo"
+      - navigation [ref=e5]:
+        - navigation [ref=e6]:
+          - link "Sign Up" [ref=e7] [cursor=pointer]:
+            - /url: /signup?next=%2Fsso-api%3Furl%3Dhttps%253A%252F%252Fphytomedic-saas-67cessnhg-cteam-syntastic.vercel.app%252Fagb%26nonce%3D1fdf1b77e267c724994c488b1b9626375361ffa9e37c1cf34b962bead6eeb952
+            - paragraph [ref=e9]: Sign Up
+    - main [ref=e10]:
+      - generic [ref=e12]:
+        - heading "Log in to Vercel" [level=1] [ref=e15]
+        - generic [ref=e16]:
+          - generic [ref=e17]:
+            - textbox "Email Address" [ref=e19]
+            - button "Continue with Email" [ref=e21] [cursor=pointer]:
+              - generic [ref=e22]: Continue with Email
+          - generic [ref=e24]:
+            - button "Continue with Google" [ref=e25] [cursor=pointer]:
+              - img [ref=e28]
+              - generic [ref=e34]: Continue with Google
+            - button "Continue with GitHub" [ref=e35] [cursor=pointer]:
+              - img [ref=e37]
+              - generic [ref=e41]: Continue with GitHub
+            - button "Continue with Apple" [ref=e42] [cursor=pointer]:
+              - img [ref=e44]
+              - generic [ref=e47]: Continue with Apple
+            - button "Continue with SAML SSO" [ref=e49] [cursor=pointer]:
+              - img [ref=e51]
+              - generic [ref=e53]: Continue with SAML SSO
+            - button "Continue with Passkey" [ref=e54] [cursor=pointer]:
+              - img [ref=e56]
+              - generic [ref=e58]: Continue with Passkey
+            - button "Show other options" [ref=e59] [cursor=pointer]:
+              - generic [ref=e60]: Show other options
+        - paragraph [ref=e62]:
+          - text: Don't have an account?
+          - link "Sign Up" [ref=e63] [cursor=pointer]:
+            - /url: /signup?next=%2Fsso-api%3Furl%3Dhttps%253A%252F%252Fphytomedic-saas-67cessnhg-cteam-syntastic.vercel.app%252Fagb%26nonce%3D1fdf1b77e267c724994c488b1b9626375361ffa9e37c1cf34b962bead6eeb952
+      - generic [ref=e66]:
+        - link "Terms" [ref=e67] [cursor=pointer]:
+          - /url: /legal/terms
+        - link "Privacy Policy" [ref=e68] [cursor=pointer]:
+          - /url: /legal/privacy-policy

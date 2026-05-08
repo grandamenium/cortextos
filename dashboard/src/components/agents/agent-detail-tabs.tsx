@@ -8,6 +8,8 @@ import { LogsTab } from './logs-tab';
 import { CronsTab } from './crons-tab';
 import { SettingsTab } from './settings-tab';
 import { GoalsTab } from './goals-tab';
+import { SkillsTab } from './skills-tab';
+import { OpsTab } from './ops-tab';
 import type {
   AgentDetail,
   IdentityFields,
@@ -38,11 +40,13 @@ export function AgentDetailTabs({
     <Tabs defaultValue="profile">
       <TabsList variant="line">
         <TabsTrigger value="profile">Profile</TabsTrigger>
+        <TabsTrigger value="ops">Ops</TabsTrigger>
         <TabsTrigger value="tasks">Tasks</TabsTrigger>
         <TabsTrigger value="crons">Crons</TabsTrigger>
         <TabsTrigger value="memory">Memory</TabsTrigger>
         <TabsTrigger value="logs">Logs</TabsTrigger>
         <TabsTrigger value="goals">Goals</TabsTrigger>
+        <TabsTrigger value="skills">Skills</TabsTrigger>
         <TabsTrigger value="settings">Settings</TabsTrigger>
       </TabsList>
 
@@ -53,6 +57,10 @@ export function AgentDetailTabs({
           identity={identityFields}
           soul={soulFields}
         />
+      </TabsContent>
+
+      <TabsContent value="ops">
+        <OpsTab agentName={detail.systemName ?? detail.name} />
       </TabsContent>
 
       <TabsContent value="tasks">
@@ -82,6 +90,10 @@ export function AgentDetailTabs({
 
       <TabsContent value="goals">
         <GoalsTab agentName={detail.systemName ?? detail.name} org={detail.org} />
+      </TabsContent>
+
+      <TabsContent value="skills">
+        <SkillsTab agentName={detail.systemName ?? detail.name} />
       </TabsContent>
 
       <TabsContent value="settings">
