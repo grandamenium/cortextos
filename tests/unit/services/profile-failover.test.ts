@@ -300,6 +300,26 @@ describe('runFailover guard rejections', () => {
     );
   });
 
+  it('throws already_on_fallback when claude_profile already equals fallback_profile', () => {
+    // Idempotency: if a prior invocation already swapped the agent
+    // (and boss has since restarted, losing its session-scoped
+    // trigger-id set), re-running the failover should NOT flip the
+    // agent back to its original profile. Exit 5 signals "already
+    // actioned" so boss runbook can ignore quietly.
+    writeProfilesJson({
+      default_profile: 'personal',
+      profiles: { personal: { config_dir: '/p' }, work: { config_dir: '/w' } },
+    });
+    writeAgentConfig({
+      agent_name: AGENT,
+      claude_profile: 'work',         // already on the fallback
+      fallback_profile: 'work',
+    });
+    expect(() => runFailover(makeOpts())).toThrowError(
+      expect.objectContaining({ reason: 'already_on_fallback' }),
+    );
+  });
+
   it('throws cascade_window_active when target profile recently exhausted', () => {
     // Boss-LLM should NOT auto-failover into a profile that just
     // emitted profile_quota_exhausted itself — that's the cascade
@@ -453,6 +473,35 @@ describe('runFailover cascade-prevention via bus log', () => {
       sendRestart: restartRecorder().fn,
     });
     expect(result.to_profile).toBe('work');
+  });
+
+  it('detects an exhaustion event in yesterday\'s file when now just past midnight UTC', () => {
+    // Just-past-midnight edge case: a quota event at 23:50Z lands
+    // in yesterday's JSONL; cascade-prevention must read both
+    // today + yesterday or it silently misses recent exhaustions
+    // when boss runs the failover at 00:15Z.
+    writeProfilesJson({
+      default_profile: 'personal',
+      profiles: { personal: { config_dir: '/p' }, work: { config_dir: '/w' } },
+    });
+    writeAgentConfig({ agent_name: AGENT, fallback_profile: 'work' });
+
+    const now = new Date('2026-05-09T00:15:00Z');
+    const past = new Date('2026-05-08T23:50:00Z'); // yesterday's file, 25 min ago
+    writeBusEvent(past, 'profile_quota_exhausted', { profile: 'work' });
+
+    expect(() =>
+      runFailover({
+        projectRoot: tmpRoot,
+        org: ORG,
+        agentName: AGENT,
+        triggerEventId: 'e1',
+        now,
+        analyticsEventsRoot: analyticsEventsRoot(),
+        emit: emitRecorder().fn,
+        sendRestart: restartRecorder().fn,
+      }),
+    ).toThrowError(expect.objectContaining({ reason: 'cascade_window_active' }));
   });
 
   it('returns false (not a cascade) when no events tree exists', () => {

@@ -43,7 +43,8 @@ export type FailoverErrorReason =
   | 'registry_missing'
   | 'fallback_profile_unknown'
   | 'cascade_window_active'
-  | 'config_write_failed';
+  | 'config_write_failed'
+  | 'already_on_fallback';
 
 export class FailoverError extends Error {
   constructor(public reason: FailoverErrorReason, message: string) {
@@ -138,6 +139,21 @@ export function runFailover(opts: FailoverOptions): FailoverResult {
     throw new FailoverError(
       'fallback_profile_unknown',
       `fallback_profile "${fallback}" not in orgs/${opts.org}/profiles.json`,
+    );
+  }
+
+  // Idempotency at the call site: if the agent is ALREADY on the
+  // fallback profile, treat this as already-actioned and reject.
+  // Without this, a second invocation with the same trigger event
+  // (boss session restart loses session-scoped trigger-id state)
+  // would flip the agent BACK to its original profile — exactly
+  // the wrong recovery shape. Boss runbook still tracks
+  // session-scoped trigger IDs as a first-line gate; this is the
+  // belt-and-suspenders second-line gate at the primitive itself.
+  if (config.claude_profile === fallback) {
+    throw new FailoverError(
+      'already_on_fallback',
+      `Agent ${opts.agentName} is already on profile "${fallback}"; failover is a no-op`,
     );
   }
 

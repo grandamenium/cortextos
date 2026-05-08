@@ -411,6 +411,50 @@ export const doctorCommand = new Command('doctor')
       } catch { /* ignore scan errors */ }
     }
 
+    // BL-003 phase 3: analyst boss-failover doc drift check.
+    //
+    // The active org's analyst HEARTBEAT.md + GUARDRAILS.md are
+    // gitignored — the canonical version lives in templates/analyst/.
+    // When a phase-3+ change updates the templates, the active doc
+    // can silently drift (the auditor-misses-themselves trap class).
+    // This check warns when the active doc is older than the
+    // template by file mtime — operator action: re-sync the active
+    // copy from the template (a one-line `cp` per file).
+    //
+    // Per-org mtime check; warn-level only (the active doc may be
+    // intentionally diverged for that org's workflow).
+    const templatesAnalystDir = join(frameworkRoot, 'templates', 'analyst');
+    if (existsSync(templatesAnalystDir) && existsSync(orgsRoot)) {
+      try {
+        for (const org of readdirSync(orgsRoot, { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => d.name)) {
+          const activeAnalystDir = join(orgsRoot, org, 'agents', 'analyst');
+          if (!existsSync(activeAnalystDir)) continue;
+          const drifted: string[] = [];
+          for (const f of ['HEARTBEAT.md', 'GUARDRAILS.md']) {
+            const tpl = join(templatesAnalystDir, f);
+            const active = join(activeAnalystDir, f);
+            if (!existsSync(tpl) || !existsSync(active)) continue;
+            const tplMtime = statSync(tpl).mtimeMs;
+            const activeMtime = statSync(active).mtimeMs;
+            if (tplMtime > activeMtime) {
+              const ageDays = Math.floor((tplMtime - activeMtime) / (24 * 60 * 60 * 1000));
+              drifted.push(`${f} (template ${ageDays}d newer)`);
+            }
+          }
+          if (drifted.length) {
+            checks.push({
+              name: `Analyst doc drift (${org})`,
+              status: 'warn',
+              message: `Template newer than active: ${drifted.join(', ')}`,
+              fix: `Diff and re-sync: diff -u templates/analyst/<file> orgs/${org}/agents/analyst/<file>`,
+            });
+          }
+        }
+      } catch { /* ignore scan errors */ }
+    }
+
     // Check GEMINI_API_KEY for Knowledge Base (semantic search / RAG)
     const orgsDir = join(frameworkRoot, 'orgs');
     let geminiConfigured = false;

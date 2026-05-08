@@ -114,6 +114,7 @@ without parsing stderr:
 | 2 | `agent_dir_missing` or `no_fallback_configured` | See step 2 / config error. Tell Saurav. |
 | 3 | `registry_missing` / `fallback_profile_unknown` / `config_unreadable` | Config error in `orgs/<org>/profiles.json` or agent config. Run `cortextos doctor` for diagnostics; tell Saurav with the doctor output. |
 | 4 | `cascade_window_active` | Target profile recently exhausted too — likely platform-wide incident. Do NOT retry. Tell Saurav: "<agent> quota-exhausted; can't auto-failover because target profile <fallback> also exhausted within 30min. Manual triage required." |
+| 5 | `already_on_fallback` | Agent's `claude_profile` is already the fallback — a prior invocation already actioned this. Treat as success, no Saurav notification needed (avoid alert noise). Useful when boss restarts and re-processes a trigger; this exit code prevents flipping the agent back to its original profile. |
 | 1 | Unexpected internal error | Tell Saurav, attach the stderr line. |
 
 ### 5. Notify Saurav (success path)
@@ -129,13 +130,17 @@ incident is friendly).
 ### 6. Watch the restart
 
 The target agent's existing restart skill picks up the
-`soft-restart` message. Confirm it boots:
+`soft-restart` message. Confirm it boots — `read-all-heartbeats`
+is the only heartbeat-read CLI; filter to the target agent in jq:
 
 ```bash
-sleep 30 && cortextos bus read-heartbeat <agent>
+sleep 30
+cortextos bus read-all-heartbeats --format json \
+  | jq --arg agent "<agent>" '.[] | select(.agent == $agent) | {agent, status, last_heartbeat}'
 ```
 
-If still stale after 60s, escalate to Saurav.
+If `last_heartbeat` is older than 60s after the restart message,
+escalate to Saurav.
 
 ---
 

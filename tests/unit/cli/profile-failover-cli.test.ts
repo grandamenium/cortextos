@@ -120,6 +120,27 @@ describe('profile-failover CLI exit-code map', () => {
     expect(exitSpy).toHaveBeenCalledWith(3);
   });
 
+  it('exits 5 when the agent is already on the fallback profile (idempotency)', async () => {
+    writeProfilesJson({
+      default_profile: 'personal',
+      profiles: { personal: { config_dir: '/p' }, work: { config_dir: '/w' } },
+    });
+    writeAgentConfig({
+      agent_name: AGENT,
+      claude_profile: 'work',
+      fallback_profile: 'work',
+    });
+    const exitSpy = spyExit();
+    silenceConsole();
+
+    await expect(
+      profileFailoverCommand.parseAsync(
+        ['node', 'cli', '--agent', AGENT, '--trigger', 'e1'],
+      ),
+    ).rejects.toThrow(/__TEST_PROCESS_EXIT_5__/);
+    expect(exitSpy).toHaveBeenCalledWith(5);
+  });
+
   it('exits 1 with a clear error when CTX_ORG is unset and --org omitted', async () => {
     delete process.env.CTX_ORG;
     const exitSpy = spyExit();

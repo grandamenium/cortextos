@@ -65,6 +65,14 @@ export const profileFailoverCommand = new Command('profile-failover')
             process.exit(3);
           case 'cascade_window_active':
             process.exit(4);
+          case 'already_on_fallback':
+            // Exit 5 = already-actioned (idempotency belt-and-
+            // suspenders). Distinct from 0 (success) so boss can
+            // tell "I just swapped" from "I would have swapped
+            // but a prior invocation already did". Distinct from
+            // 1/2/3/4 (other failure shapes) so the runbook can
+            // log without alarm.
+            process.exit(5);
           case 'config_write_failed':
           default:
             process.exit(1);
