@@ -355,12 +355,20 @@ export const doctorCommand = new Command('doctor')
               const cfgPath = join(agentsDir, agentName, 'config.json');
               if (!existsSync(cfgPath)) continue;
               try {
-                const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as { claude_profile?: unknown };
-                const ref = cfg.claude_profile;
-                if (typeof ref === 'string' && ref) {
-                  const list = referencedBy.get(ref) ?? [];
-                  list.push(agentName);
-                  referencedBy.set(ref, list);
+                const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8')) as {
+                  claude_profile?: unknown;
+                  fallback_profile?: unknown;
+                };
+                // Active profile + phase-3 fallback profile both
+                // count as references — a dangling fallback fails
+                // boss's runbook just as silently as a dangling
+                // active profile fails the spawn path.
+                for (const ref of [cfg.claude_profile, cfg.fallback_profile]) {
+                  if (typeof ref === 'string' && ref) {
+                    const list = referencedBy.get(ref) ?? [];
+                    if (!list.includes(agentName)) list.push(agentName);
+                    referencedBy.set(ref, list);
+                  }
                 }
               } catch { /* skip malformed config */ }
             }

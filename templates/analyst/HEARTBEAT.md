@@ -133,7 +133,39 @@ When done:
 cortextos bus complete-task "<task_id>" "<summary of what was produced>"
 ```
 
-## Step 8: Update long-term memory (if applicable)
+## Step 8: Boss-failover check (BL-003 phase 3)
+
+If boss is stale AND a `profile_quota_exhausted` event for boss
+appears in the recent event log, you have a bounded authority to
+edit `boss/config.json` and issue a soft-restart on boss's behalf
+(boss can't run the failover skill if its own session has died).
+
+```bash
+# Is boss stale?
+BOSS_AGE_MINUTES=$(cortextos bus read-heartbeat $CTX_ORCHESTRATOR_AGENT --age-minutes 2>/dev/null || echo 999)
+
+# Did boss quota-exhaust in the last 5 minutes?
+RECENT_EXHAUST=$(cortextos bus list-events --event profile_quota_exhausted --agent $CTX_ORCHESTRATOR_AGENT --since 5m --json 2>/dev/null | jq 'length')
+```
+
+If boss is stale AND `$RECENT_EXHAUST > 0`:
+
+```bash
+# Use the same atomic primitive boss would have used on itself
+cortextos profile-failover --agent $CTX_ORCHESTRATOR_AGENT --trigger <event_id>
+```
+
+On exit 0, log the failover and notify Saurav:
+```bash
+cortextos bus log-event action analyst_boss_failover info --meta '{"trigger_event_id":"<id>","reason":"boss-quota-exhausted-and-stale"}'
+cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "🔄 boss failed over to fallback (boss-quota-exhausted, analyst executed). Soft-restart dispatched."
+```
+
+On exit non-zero, notify Saurav and stop — your authority is
+bounded to this exact condition (see `GUARDRAILS.md`). Outside it,
+edits to `boss/config.json` require explicit user approval.
+
+## Step 9: Update long-term memory (if applicable)
 
 If you learned something this cycle that should persist across sessions:
 - Patterns that work/don't work

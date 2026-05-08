@@ -205,6 +205,18 @@ export interface AgentConfig {
    * profile resolution so callers can intentionally override.
    */
   env?: Record<string, string>;
+  /**
+   * Profile to swap to when boss observes a `profile_quota_exhausted`
+   * event for this agent. When unset, boss does NOT auto-failover —
+   * sends a Telegram alert to the user and stops. BL-003 phase 3
+   * default policy: ON for boss/engineer/devops/fullstack, OFF for
+   * analyst (audit lane; no urgency on auto-failover).
+   *
+   * Failover is by definition cold-boot — Claude Code session state
+   * is per-config-dir, `--continue` won't work across accounts.
+   * Saurav explicitly accepted this trade-off (2026-05-08T17:55Z).
+   */
+  fallback_profile?: string;
 }
 
 export interface CronEntry {

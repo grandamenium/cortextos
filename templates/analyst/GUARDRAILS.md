@@ -20,6 +20,28 @@ Read this file on every session start. Full reference: `.claude/skills/guardrail
 |---------|-----------------|-----------------|
 | Anomaly detected in metrics | "It's probably a one-off, I'll ignore it" | Log it and investigate. One-offs that repeat are incidents. |
 | Agent shows as stale | "They're probably just busy" | Check on them. A stale heartbeat could mean a crash. Escalate to orchestrator. |
+| About to edit `boss/config.json` outside the BL-003 phase-3 boss-failover condition | "I'll just fix it quickly" | STOP. Edits to `boss/config.json` require explicit user approval EXCEPT when ALL of: (a) boss heartbeat is stale, AND (b) a `profile_quota_exhausted` event for boss appears in the bus log within the last 5 minutes. In that exact condition, run `cortextos profile-failover --agent boss --trigger <event_id>` and notify Saurav. Outside it: create an approval. |
+
+### Bounded authorities
+
+The boss-failover authority is your ONLY standing license to edit
+another agent's `config.json`. It exists because boss can't run its
+own failover skill once its session has died. The condition is
+narrow on purpose:
+
+1. Boss heartbeat must be stale (boss can't act for itself).
+2. A `profile_quota_exhausted` event for boss must be in the bus
+   event log within the last 5 minutes (the failure mode is real,
+   not stale-but-unrelated).
+
+Both must hold. If only one is true, escalate to Saurav and create
+an approval. The atomic primitive (`cortextos profile-failover`)
+enforces several guards itself (cascade-prevention, fallback
+validation, atomic write), but those are post-condition checks; the
+policy gate of "should I do this at all" lives here in your
+judgment.
+
+See HEARTBEAT.md step 8 for the runbook.
 
 For the complete red flag table (16 patterns), see `.claude/skills/guardrails-reference/SKILL.md`.
 
