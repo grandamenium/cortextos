@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
+import { loadProfileRegistry, resolveProfile } from '../utils/profiles.js';
 
 // node-pty types
 interface IPty {
@@ -134,6 +135,36 @@ export class AgentPTY {
           }
         }
       } catch { /* leave unset if context.json is missing or malformed */ }
+    }
+
+    // BL-003 phase 1: resolve claude_profile → CLAUDE_CONFIG_DIR.
+    // The registry at orgs/<org>/profiles.json maps profile names to
+    // config dirs; each spawned Claude reads/writes its own ~/.claude*
+    // dir so agents can run on different Claude accounts.
+    //
+    // Resolution: agent's claude_profile (if set) → registry default
+    // (if registry exists) → no override. Missing/malformed registry
+    // silently degrades to no-override; doctor surfaces the parse
+    // failure in a separate check so the spawn path doesn't kill the
+    // agent over a config edit gone wrong.
+    if (this.env.projectRoot && this.env.org) {
+      const registry = loadProfileRegistry(this.env.projectRoot, this.env.org);
+      if (registry) {
+        const profile = resolveProfile(registry, this.config.claude_profile);
+        if (profile?.config_dir) {
+          ptyEnv['CLAUDE_CONFIG_DIR'] = profile.config_dir;
+        }
+      }
+    }
+
+    // BL-003 phase 1: generic per-agent env passthrough.
+    // Applied AFTER profile resolution so an explicit
+    // config.env.CLAUDE_CONFIG_DIR can override the registry — useful
+    // for one-off testing without editing the registry.
+    if (this.config.env) {
+      for (const [k, v] of Object.entries(this.config.env)) {
+        ptyEnv[k] = v;
+      }
     }
 
     // Spawn the agent binary directly (no shell wrapper) — cross-platform, no shell escaping needed.

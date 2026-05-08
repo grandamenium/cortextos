@@ -4,14 +4,16 @@ import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName } from '../utils/validate';
+import { loadProfileRegistry } from '../utils/profiles.js';
 
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
   .option('--template <type>', 'Agent template (orchestrator, analyst, agent)', 'agent')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
+  .option('--profile <name>', 'Claude profile to assign (must exist in orgs/<org>/profiles.json)')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; profile?: string }) => {
     // BUG-041 fix: validate the agent name BEFORE creating anything on disk.
     // Without this, mixed-case names like 'CortextDesigner' pass through
     // add-agent, get written to disk, and THEN fail every `cortextos bus *`
@@ -60,6 +62,33 @@ export const addAgentCommand = new Command('add-agent')
       process.exit(1);
     }
 
+    // BL-003 phase 1: validate --profile against the org's profiles.json
+    // BEFORE creating any files. Cheap fail-fast — boss decision #4
+    // (2026-05-08T18:00Z). Same shape as the agent-name validation
+    // above: catch the misconfiguration at create-time, not at the
+    // first spawn (where the misconfig would silently fall back to
+    // default behaviour and surface as "why is this agent on the
+    // wrong account?" hours later).
+    if (options.profile) {
+      const registry = loadProfileRegistry(projectRoot, org);
+      if (!registry) {
+        console.error(
+          `Error: --profile ${options.profile} given but orgs/${org}/profiles.json is missing or malformed.`,
+        );
+        console.error(`Create the registry first or omit --profile to use the org default.`);
+        process.exit(1);
+      }
+      if (!(options.profile in registry.profiles)) {
+        const known = Object.keys(registry.profiles).join(', ') || '(none defined)';
+        console.error(
+          `Error: profile "${options.profile}" not in orgs/${org}/profiles.json ` +
+            `(or has an invalid/missing config_dir — the loader silently drops malformed entries). ` +
+            `Known: ${known}`,
+        );
+        process.exit(1);
+      }
+    }
+
     console.log(`\nAdding agent: ${name}`);
     console.log(`  Template: ${options.template}`);
     console.log(`  Organization: ${org}`);
@@ -93,17 +122,35 @@ export const addAgentCommand = new Command('add-agent')
       }, null, 2) + '\n', 'utf-8');
     }
 
-    // Create config.json
+    // Create config.json. Template copy may already have written one
+    // (templates/<role>/config.json carries crons + ecosystem defaults
+    // that the minimal-fallback path doesn't); merge claude_profile
+    // into either source rather than write-or-skip so --profile is
+    // honored regardless of which path created the file.
     const configPath = join(agentDir, 'config.json');
-    if (!existsSync(configPath)) {
-      writeFileSync(configPath, JSON.stringify({
+    let configObj: Record<string, unknown>;
+    if (existsSync(configPath)) {
+      try {
+        configObj = JSON.parse(readFileSync(configPath, 'utf-8'));
+      } catch {
+        // Template wrote unparseable JSON — replace it with a sane
+        // default rather than fail add-agent. This is a template-bug
+        // recovery path; doctor would catch the original issue.
+        configObj = { agent_name: name, enabled: true };
+      }
+    } else {
+      configObj = {
         agent_name: name,
         startup_delay: 0,
         max_session_seconds: 255600,
         enabled: true,
         crons: [],
-      }, null, 2) + '\n', 'utf-8');
+      };
     }
+    if (options.profile) {
+      configObj.claude_profile = options.profile;
+    }
+    writeFileSync(configPath, JSON.stringify(configObj, null, 2) + '\n', 'utf-8');
 
     // Create .env placeholder with helpful comments
     const envPath = join(agentDir, '.env');

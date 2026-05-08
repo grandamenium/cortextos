@@ -190,6 +190,21 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * Claude account profile name. Resolves to a CLAUDE_CONFIG_DIR via
+   * `orgs/<org>/profiles.json`. When unset, the spawn path falls back
+   * to `default_profile` from the registry (no env override if the
+   * registry is also absent — preserves pre-BL-003 behaviour).
+   * See BL-2026-05-08-003 for the multi-account design.
+   */
+  claude_profile?: string;
+  /**
+   * Generic per-agent env-var passthrough applied at PTY spawn. Useful
+   * for any Claude env knob that doesn't deserve its own AgentConfig
+   * field (e.g. `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`). Applied AFTER
+   * profile resolution so callers can intentionally override.
+   */
+  env?: Record<string, string>;
 }
 
 export interface CronEntry {
