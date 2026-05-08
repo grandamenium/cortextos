@@ -4,7 +4,7 @@ Adopted + adapted from `sb-claude-jarvis/.claude/rules/code-quality.md` 2026-05-
 
 ## Universal rules
 
-- **File size — soft 300, hard 500.** Validator should enforce 500 hard. At 300, ask *should this split?* Cohesive single-purpose files (parsers, dispatch tables, state machines, schema dataclasses) can sit 300–500. Mixed-responsibility 300+ files must split.
+- **File size — soft 300, hard 500.** Validator should enforce 500 hard. At 300, ask *should this split?* Cohesive single-purpose files (parsers, dispatch tables, state machines, zod/schema modules, type-definition files) can sit 300–500. Mixed-responsibility 300+ files must split.
 - **Functions under 40 lines.** Hard rule. Extract helpers if longer.
 - **Module package over single file when complexity grows.** `src/foo.ts` → `src/foo/` directory once it grows beyond basic CRUD. Index via `src/foo/index.ts`.
 - **Single responsibility.** Storage doesn't render. Views don't mutate. Commands are thin wrappers around library functions. If a 300+ file mixes responsibilities, split — size is the symptom.
@@ -41,7 +41,7 @@ Adopted + adapted from `sb-claude-jarvis/.claude/rules/code-quality.md` 2026-05-
 ## Before writing code
 
 1. Read `OVERVIEW.md` and `CLAUDE.md` at framework root for architecture context.
-2. Search `git log --oneline` and `experiments/learnings.md` per agent for past mistakes around the area you are touching.
+2. Search `git log --oneline` for past commits touching the area, and (when touching org-/agent-scoped code) `orgs/<org>/agents/<agent>/experiments/learnings.md` for past lessons captured by that agent's theta wave or autoresearch cycles. If neither path exists yet for the area you are touching, there is no historical context to load — proceed.
 3. Check target file line count — if 300+, ask whether your addition belongs here or needs a new module.
 4. If unsure where code goes → it's a separate file under `src/<area>/`.
 
@@ -49,7 +49,7 @@ Adopted + adapted from `sb-claude-jarvis/.claude/rules/code-quality.md` 2026-05-
 
 - Re-read the diff before committing. The unread diff is where regressions hide.
 - Run `npm run build` (TypeScript compile) and `npm test` (vitest). Both must pass green.
-- Run `code-evaluator` subagent on every phase commit (see CLAUDE.md working loop). LGTM is the gate to next phase.
+- Run the `code-evaluator` subagent (defined in `~/.claude/CLAUDE.md` — the user-level Claude Code config — and in this project's CLAUDE.md working loop) on every phase commit. LGTM is the gate to the next phase. Fix-commits land in a separate commit, never amend.
 
 ## Reliability lessons (compressed)
 
