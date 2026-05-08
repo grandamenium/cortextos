@@ -885,6 +885,36 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
+   * Write a green-severity sentinel into context-pct.json after a Tier-2
+   * handoff or Tier-3 force-restart. Preserves context_limit + model from
+   * the previous-session file so a 1M-opus agent doesn't briefly see a
+   * 200k limit before the next statusLine fire overwrites the entry.
+   * Falls back to 200_000 / "" when the prior file is absent or unreadable.
+   */
+  private writeContextResetFile(): void {
+    const statusPath = join(this.paths.stateDir, 'context-pct.json');
+    let priorLimit = 200_000;
+    let priorModel = '';
+    try {
+      if (existsSync(statusPath)) {
+        const prior = JSON.parse(readFileSync(statusPath, 'utf-8'));
+        if (typeof prior.context_limit === 'number' && prior.context_limit > 0) {
+          priorLimit = prior.context_limit;
+        }
+        if (typeof prior.model === 'string') priorModel = prior.model;
+      }
+    } catch { /* fall through to defaults */ }
+    try {
+      writeFileSync(statusPath, JSON.stringify({
+        agent: this.agent.name, session_id: '', transcript_path: 'reset://post-handoff',
+        model: priorModel, context_limit: priorLimit, current_loaded_tokens: 0,
+        pct: 0, severity: 'green', next_action_threshold_pct: 50,
+        updated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      }));
+    } catch { /* non-fatal */ }
+  }
+
+  /**
    * Context monitor — called on every poll cycle.
    *
    * Reads context-pct.json written by the statusLine hook (BL-2026-05-08-004
@@ -997,17 +1027,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       this.ctxHandoffFiredAt = now;
       this.ctxHandoffDeadlineAt = now + 5 * 60_000; // 5min grace for agent to cooperate
       // Reset context-pct.json so the new session doesn't re-trigger immediately.
-      // Write a green-severity entry (the next statusLine hook fire will overwrite
-      // with the real pct from the new session).
-      const statusPath = join(this.paths.stateDir, 'context-pct.json');
-      try {
-        writeFileSync(statusPath, JSON.stringify({
-          agent: this.agent.name, session_id: '', transcript_path: 'reset://post-handoff',
-          model: '', context_limit: 200_000, current_loaded_tokens: 0,
-          pct: 0, severity: 'green', next_action_threshold_pct: 50,
-          updated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-        }));
-      } catch { /* non-fatal */ }
+      // Preserves prior context_limit + model so a 1M-opus agent isn't briefly
+      // mis-reported as 200k between this write and the next statusLine fire.
+      this.writeContextResetFile();
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + 'Z';
       const handoffPrompt = `[CONTEXT HANDOFF REQUIRED] Context is at ${Math.round(effectivePct)}%. Write a handoff document to memory/handoffs/handoff-${ts}.md with these sections: ## Current Tasks, ## Next Actions, ## Active Crons, ## Key Context, ## Files Modified This Session. Then run: cortextos bus hard-restart --reason "context handoff at ${Math.round(effectivePct)}%" --handoff-doc <absolute path to the handoff doc you just wrote>. Do this NOW before the context window is exhausted.`;
       this.agent.injectMessage(handoffPrompt);
@@ -1076,15 +1098,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
     // Reset context-pct.json so the new session's FastChecker doesn't re-trigger
     // Tier 2 immediately by reading the stale high-pct value from the previous session.
-    const statusPath = join(this.paths.stateDir, 'context-pct.json');
-    try {
-      writeFileSync(statusPath, JSON.stringify({
-        agent: this.agent.name, session_id: '', transcript_path: 'reset://post-handoff',
-        model: '', context_limit: 200_000, current_loaded_tokens: 0,
-        pct: 0, severity: 'green', next_action_threshold_pct: 50,
-        updated_at: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-      }));
-    } catch { /* non-fatal */ }
+    // Preserves prior context_limit + model (see writeContextResetFile).
+    this.writeContextResetFile();
 
     // sessionRefresh() does stop() + start(); shouldContinue() will return false
     // because .force-fresh was just written, giving us a clean fresh session.
