@@ -111,6 +111,8 @@ pm2 start ecosystem.config.js && pm2 save && pm2 startup
 | `analyst` | System health, metrics, theta-wave autoresearch, analytics |
 | `agent` | General-purpose worker — use this as the base for specialist agents |
 
+All templates instruct the agent to read `.claude/rules/code-quality.md` early in session start. That file is the canonical engineering bar for cortextOS work — universal P9-eng rules plus cortextOS-specific class-of-trap micro-retros surfaced from real incidents. Agents re-read it when starting non-trivial coding tasks; the analyst calibrates audits + theta-wave proposals against it.
+
 ---
 
 ## CLI Reference

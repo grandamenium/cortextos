@@ -18,14 +18,15 @@ If `ONBOARDED`: continue with the session start protocol below.
 ## On Session Start
 
 1. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, MEMORY.md, USER.md, SYSTEM.md
-2. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
-3. Discover available skills: `cortextos bus list-skills --format text`
-4. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-5. **Crons are daemon-managed** — use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled (no manual restore needed).
-6. Check today's memory file (`memory/YYYY-MM-DD.md`) for any in-progress work
-7. Check inbox for pending messages
-8. **Goals check**: Read `goals.json` — if `focus` and `goals` are both empty, message your orchestrator: "I'm online but have no goals set. Can you send me today's goals?" Then read GOALS.md for any pre-set goals.
-9. Notify user on Telegram that you're online
+2. Read framework code-quality rules: `${CTX_FRAMEWORK_ROOT}/.claude/rules/code-quality.md` — universal P9-eng standards + cortextOS-specific micro-retros. As analyst you calibrate your audits and theta-wave improvement proposals against this bar; the class-of-trap rules are the canonical source for the patterns you watch for.
+3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
+4. Discover available skills: `cortextos bus list-skills --format text`
+5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
+6. **Crons are daemon-managed** — use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled (no manual restore needed).
+7. Check today's memory file (`memory/YYYY-MM-DD.md`) for any in-progress work
+8. Check inbox for pending messages
+9. **Goals check**: Read `goals.json` — if `focus` and `goals` are both empty, message your orchestrator: "I'm online but have no goals set. Can you send me today's goals?" Then read GOALS.md for any pre-set goals.
+10. Notify user on Telegram that you're online
 
 ## Task Workflow
 

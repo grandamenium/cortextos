@@ -268,6 +268,15 @@ export const doctorCommand = new Command('doctor')
       }
     }
 
+    // Check framework code-quality rules (referenced by every agent's session-start protocol)
+    const codeQualityRulesPath = join(frameworkRoot, '.claude', 'rules', 'code-quality.md');
+    checks.push({
+      name: '.claude/rules/code-quality.md',
+      status: existsSync(codeQualityRulesPath) ? 'pass' : 'warn',
+      message: existsSync(codeQualityRulesPath) ? 'Found' : 'Not found — agents will fail to load engineering bar at session start',
+      fix: !existsSync(codeQualityRulesPath) ? 'Run: cortextos bus check-upstream --apply to fetch the latest framework rules' : undefined,
+    });
+
     // Check community/catalog.json (needed for browse-catalog and install-community-item)
     const catalogPath = join(frameworkRoot, 'community', 'catalog.json');
     checks.push({

@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Added
+
+- **Framework code-quality rules** at `.claude/rules/code-quality.md` — universal P9-eng standards (file/function size budgets, single responsibility, edge cases, primitive-with-callers shipping, session-restart immunity, one code path for critical ops, batch creator boundary, external mutation idempotency, parallel state machine bans, helper second-caller predicate, integration tests reading consumer artifacts, supervisor KeepAlive, probe+recovery shared detector, two-roots/outbound gate, and more) plus cortextOS-specific micro-retros surfaced from prior incidents (opus[1m] config rejection, bus CLI flag drift, NextAuth Secure flag, daemon SGT-as-local TZ canon, fire-on-add vs update-cron, missed disk-full outage, cross-fleet branch contamination, gitignore exception for whitelisted tracked subtrees).
+- **Bootstrap-step references** added to all agent + orchestrator + analyst templates (`templates/{agent,orchestrator,analyst}/CLAUDE.md` and `AGENTS.md`) and to all community catalog mirrors (`community/agents/{agent,orchestrator,analyst,security}/CLAUDE.md` and `AGENTS.md`). Each template instructs the agent to read `${CTX_FRAMEWORK_ROOT}/.claude/rules/code-quality.md` early in session start, with role-tailored framing (engineering bar / orchestrator decomposition / analyst audit calibration).
+- **Gitignore exception** for `.claude/rules/` so the rules tree is tracked while the rest of `.claude/` remains gitignored.
+
+### Migration
+
+- Existing in-tree agents (e.g. `orgs/<org>/agents/<name>/CLAUDE.md`) were created from a prior template snapshot and will NOT pick up this change automatically. To upgrade an agent post-template-change, diff its `CLAUDE.md` against `templates/<role>/CLAUDE.md` and apply the forward changes manually. See `community/skills/agent-management/SKILL.md` for the upgrade workflow.
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.

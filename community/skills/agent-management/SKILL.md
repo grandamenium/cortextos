@@ -342,7 +342,42 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 
 ---
 
-## 10. Troubleshooting
+## 10. Upgrading an Existing Agent After a Template Change
+
+When the framework templates (`templates/<role>/CLAUDE.md`, `AGENTS.md`, etc.) are updated, **existing in-tree agents do NOT automatically pick up the change.** Each agent's `CLAUDE.md` is a one-time templated copy living under `orgs/<org>/agents/<name>/`. To bring an agent in line with current framework standards:
+
+```bash
+AGENT="boss"
+ORG="myorg"
+ROLE="orchestrator"  # or "agent" or "analyst"
+
+# Step 1: Diff the agent's CLAUDE.md against the current template
+diff -u \
+  "$CTX_FRAMEWORK_ROOT/templates/$ROLE/CLAUDE.md" \
+  "$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT/CLAUDE.md"
+
+# Step 2: Same for AGENTS.md
+diff -u \
+  "$CTX_FRAMEWORK_ROOT/templates/$ROLE/AGENTS.md" \
+  "$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT/AGENTS.md"
+```
+
+**Apply forward-changes manually.** Do NOT blindly overwrite — the agent's CLAUDE.md may have role-specific customizations (custom skills, additional crons, modified guardrails) that the template does not have. Cherry-pick only the framework-side additions (new bootstrap steps, new skill references, new protocols).
+
+**Soft-restart the agent** after edits so it re-reads the updated CLAUDE.md on next session start.
+
+```bash
+cortextos bus send-message "$AGENT" high "soft-restart" "applied template upgrade — re-read CLAUDE.md"
+```
+
+**When to run this upgrade:**
+- After pulling a framework update via `cortextos bus check-upstream --apply`.
+- After the analyst flags a "stale-template" advisory in a system-health report.
+- When CHANGELOG entries note new bootstrap steps or new framework rules being wired into templates.
+
+---
+
+## 11. Troubleshooting
 
 ### Agent Not Responding to Telegram
 1. Check .env exists and has BOT_TOKEN + CHAT_ID + ALLOWED_USER

@@ -17,21 +17,22 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 ## On Session Start
 
-See AGENTS.md for the full 13-step session start checklist. Key steps:
+See AGENTS.md for the full 14-step session start checklist (orchestrator template). Key steps:
 
 1. **Send boot message first**: `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"`
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
-3. Read org knowledge base: `../../knowledge.md`
-4. Discover available skills: `cortextos bus list-skills --format text`
-5. Discover active agents: `cortextos bus list-agents`
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
-7. Check today's memory file for in-progress work
-8. If resuming a task, query KB: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
-9. Check inbox: `cortextos bus check-inbox`
-10. Update heartbeat: `cortextos bus update-heartbeat "online"`
-11. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
-12. Write session start entry to daily memory
-13. Send full online status — **only AFTER crons are confirmed set**
+3. Read framework code-quality rules: `${CTX_FRAMEWORK_ROOT}/.claude/rules/code-quality.md` — universal P9-eng standards + cortextOS-specific micro-retros. As orchestrator you should know the bar engineering work is held to, and the class-of-trap rules apply to your own decomposition + delegation patterns.
+4. Read org knowledge base: `../../knowledge.md`
+5. Discover available skills: `cortextos bus list-skills --format text`
+6. Discover active agents: `cortextos bus list-agents`
+7. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
+8. Check today's memory file for in-progress work
+9. If resuming a task, query KB: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
+10. Check inbox: `cortextos bus check-inbox`
+11. Update heartbeat: `cortextos bus update-heartbeat "online"`
+12. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
+13. Write session start entry to daily memory
+14. Send full online status — **only AFTER crons are confirmed set**
 
 ## Task Workflow
 
