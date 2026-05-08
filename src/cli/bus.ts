@@ -21,6 +21,7 @@ import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/kn
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
+import { computeContextUsage, writeContextUsage } from '../monitor/context-usage.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -502,6 +503,59 @@ busCommand
       console.log(`${label} (${hb.org}) — ${hb.status}${staleFlag} — last seen ${hb.last_heartbeat}`);
       if (hb.current_task) console.log(`  task: ${hb.current_task}`);
     }
+  });
+
+busCommand
+  .command('context-update')
+  .description('Read agent transcript JSONL, compute context %, write state/<agent>/context-pct.json. Logs context_threshold_crossed event when severity > green.')
+  .option('--agent <name>', 'Agent name (defaults to CTX_AGENT_NAME)')
+  .option('--cwd <path>', 'Working directory used by the agent\'s Claude Code session (defaults to the agent dir under CTX_FRAMEWORK_ROOT, then process.cwd())')
+  .option('--projects-root <path>', 'Override Claude Code projects root (defaults to ~/.claude/projects)')
+  .option('--format <fmt>', 'Output format: text (default) or json', 'text')
+  .action((opts: { agent?: string; cwd?: string; projectsRoot?: string; format?: string }) => {
+    const env = resolveEnv();
+    const agentName = opts.agent || env.agentName;
+    try { validateAgentName(agentName); } catch (err) { console.error(String(err)); process.exit(1); }
+    const paths = resolvePaths(agentName, env.instanceId, env.org);
+
+    let cwd = opts.cwd;
+    if (!cwd) {
+      const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || process.env.CTX_PROJECT_ROOT || '';
+      const candidate = frameworkRoot ? join(frameworkRoot, 'orgs', env.org, 'agents', agentName) : '';
+      cwd = candidate && existsSync(candidate) ? candidate : process.cwd();
+    }
+
+    const usage = computeContextUsage({ agent: agentName, cwd, projectsRoot: opts.projectsRoot, env: process.env });
+    if (!usage) {
+      // Fail-open: log a warning and exit non-zero so callers (heartbeat scripts) can detect the no-data case
+      // without false-triggering /compact based on absent data.
+      try { logEvent(paths, agentName, env.org, 'error', 'context_monitor_no_data', 'warning', JSON.stringify({ cwd })); } catch { /* non-fatal */ }
+      console.error(`No transcript found for ${agentName} at cwd=${cwd}`);
+      process.exit(2);
+    }
+
+    const filePath = writeContextUsage(paths.stateDir, usage);
+
+    // Emit a context_threshold_crossed event when severity is non-green so the activity feed surfaces the elevated state.
+    if (usage.severity !== 'green') {
+      const sev = usage.severity === 'red' ? 'critical' : usage.severity === 'orange' ? 'warning' : 'info';
+      try {
+        logEvent(paths, agentName, env.org, 'context', 'context_threshold_crossed', sev, JSON.stringify({
+          severity: usage.severity,
+          pct: usage.pct,
+          loaded_tokens: usage.current_loaded_tokens,
+          context_limit: usage.context_limit,
+          model: usage.model,
+          next_action_threshold_pct: usage.next_action_threshold_pct,
+        }));
+      } catch { /* non-fatal */ }
+    }
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify({ ...usage, file: filePath }));
+      return;
+    }
+    console.log(`${agentName}: ${usage.pct}% (${usage.current_loaded_tokens}/${usage.context_limit} tokens) [${usage.severity}] → ${filePath}`);
   });
 
 busCommand
