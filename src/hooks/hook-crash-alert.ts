@@ -16,45 +16,25 @@
  */
 import {
   existsSync, readFileSync, writeFileSync, appendFileSync,
-  unlinkSync, mkdirSync, statSync, openSync, readSync, closeSync,
+  unlinkSync, mkdirSync,
 } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFile } from 'child_process';
 
-/**
- * Read at most `maxBytes` from the END of `logPath`. Bounded disk
- * read — does NOT load the whole file into memory before slicing
- * (the prior pattern of `readFileSync(path).slice(-N)` would pull
- * a 500MB log into RAM just to discard 99.96% of it).
- *
- * Returns `''` on missing file, read error, or zero-byte file.
- * Never throws — callers are SessionEnd-hook detectors and a hook
- * crash silently loses the alert window.
- *
- * Single source of truth for log-tail reads in this module: both
- * `detectRateLimitInLog` (UX classifier) and
- * `detectProfileQuotaExhaustion` (failover signal) call this.
- */
-function readLogTail(logPath: string, maxBytes: number): string {
-  let fd: number | null = null;
-  try {
-    const size = statSync(logPath).size;
-    if (size === 0) return '';
-    const readBytes = Math.min(size, maxBytes);
-    const start = Math.max(0, size - readBytes);
-    fd = openSync(logPath, 'r');
-    const buf = Buffer.allocUnsafe(readBytes);
-    const got = readSync(fd, buf, 0, readBytes, start);
-    return buf.subarray(0, got).toString('utf-8');
-  } catch {
-    return '';
-  } finally {
-    if (fd !== null) {
-      try { closeSync(fd); } catch { /* ignore */ }
-    }
-  }
-}
+import { readLogTail } from '../utils/log-tail.js';
+import { maybeEmitQuotaEvent } from './quota-detection.js';
+// Re-export quota-detection helpers from this module so existing
+// importers (tests, future callers) can keep using
+// `hook-crash-alert` as the surface — the extraction is structural
+// for the 500-line cap, not a public API change.
+export {
+  detectProfileQuotaExhaustion,
+  readClaudeProfile,
+  emitProfileQuotaExhausted,
+  QUOTA_PATTERNS,
+  maybeEmitQuotaEvent,
+} from './quota-detection.js';
 
 const DEDUP_WINDOW_MS = 10 * 60 * 1000;         // 10 minutes
 const QUIET_HOUR_START_LA = 22;                 // 22:00 America/Los_Angeles
@@ -86,117 +66,15 @@ function isQuietHoursLA(now: Date): boolean {
 }
 
 /**
- * Profile-quota patterns for BL-003 phase 2.
- *
- * Distinct from `detectRateLimitInLog` below: these are the structured
- * Anthropic API / HTTP error signatures that map to "this profile's
- * billing/quota is exhausted, switch to its fallback". The
- * rate-limit detector is a UX-level classifier (broader: includes
- * "weekly limit", "5h limit", "used 80% of your" — used to suppress
- * Telegram crash alerts during pause windows). Quota detection is
- * narrower (regex-only, structured) and emits a bus event boss
- * subscribes to in phase 3.
- *
- * The two intentionally remain separate functions: merging them
- * would require a single return shape that serves both audiences,
- * which loses the clean "did we hit a known quota error" check
- * (boss needs the pattern name; the rate-limit classifier just
- * needs a boolean).
- *
- * Pattern source: spec
- *   docs/roadmap/v0.4-cortexos-retrofit/... → BL-2026-05-08-003 §"Quota detection".
- * Validate against any new Anthropic error semantics before adding
- * patterns — false positives here cascade into spurious failovers.
- */
-const QUOTA_PATTERNS: ReadonlyArray<{ name: string; regex: RegExp }> = [
-  { name: 'rate_limit_exceeded', regex: /rate_limit_exceeded/i },
-  { name: 'credit_balance_too_low', regex: /credit_balance_too_low/i },
-  { name: 'quota_exceeded', regex: /quota.{0,10}exceeded/i },
-  { name: 'http_429', regex: /HTTP\s+429/ },
-  { name: 'usage_limit_reached', regex: /usage_limit_reached/i },
-];
-
-/**
- * Scan the tail of `logPath` for any QUOTA_PATTERNS match. Returns the
- * first match's name (deterministic — array order = priority) so the
- * emitted `profile_quota_exhausted` event includes a stable
- * `error_pattern` field rather than the full matched substring (which
- * could carry secrets / stack frames / megabytes of context).
- *
- * Returns `{ matched: false, pattern: null }` on missing log, read
- * error, or no match. Never throws — this runs on the SessionEnd hook
- * path and a hook crash would silently lose the alert window.
- */
-export function detectProfileQuotaExhaustion(logPath: string): {
-  matched: boolean;
-  pattern: string | null;
-} {
-  const slice = readLogTail(logPath, 200 * 1024);
-  if (!slice) return { matched: false, pattern: null };
-  // Strip ANSI color codes — Anthropic error messages render with them.
-  const text = slice.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-  for (const { name, regex } of QUOTA_PATTERNS) {
-    if (regex.test(text)) {
-      return { matched: true, pattern: name };
-    }
-  }
-  return { matched: false, pattern: null };
-}
-
-/**
- * Read `claude_profile` from the agent's config.json. Returns null
- * when absent, malformed, or non-string. Caller treats null as
- * "agent uses default profile" for event metadata — boss's failover
- * skill (phase 3) checks the registry to find the agent's actual
- * resolved profile.
- */
-export function readClaudeProfile(agentDir: string | undefined): string | null {
-  if (!agentDir) return null;
-  try {
-    const cfg = JSON.parse(readFileSync(join(agentDir, 'config.json'), 'utf-8')) as Record<string, unknown>;
-    return typeof cfg.claude_profile === 'string' && cfg.claude_profile ? cfg.claude_profile : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Emit a `profile_quota_exhausted` bus event. Best-effort, fire-and-
- * forget — a failure here must not block the SessionEnd hook (which
- * still needs to fire crash alerts, dedup, etc.). Boss subscribes
- * to this event name in phase 3 and uses the metadata to decide
- * whether to fail over the agent to its `fallback_profile`.
- */
-export function emitProfileQuotaExhausted(meta: {
-  agent: string;
-  profile: string | null;
-  error_pattern: string;
-  observed_at: string;
-  /** Reserved field — spec requires it but the hook does not yet
-   *  parse stdin for session context. Always `null` in phase 2;
-   *  phase-3 boss skill should treat undefined and null
-   *  identically as "exit code unknown". */
-  exit_code: number | null;
-}): void {
-  try {
-    execFile(
-      'cortextos',
-      ['bus', 'log-event', 'action', 'profile_quota_exhausted', 'warning', '--meta', JSON.stringify(meta)],
-      { timeout: 5_000 },
-      () => { /* async errors land here — never propagate */ },
-    );
-    // The outer try/catch covers SYNCHRONOUS throws only (e.g.
-    // JSON.stringify failure, which the typed input prevents).
-    // Async failures from the spawned process surface in the
-    // callback and are deliberately swallowed — the SessionEnd
-    // hook must never crash on a downstream tool failure.
-  } catch { /* never throw out of the SessionEnd hook */ }
-}
-
-/**
  * Scan the tail of stdout.log for Anthropic rate-limit or weekly-limit
  * signatures. Mirrors OutputBuffer.hasRateLimitSignature so the hook and the
- * daemon use the same detection logic.
+ * daemon use the same detection logic. UX classifier (returns boolean) —
+ * the structured-quota detector lives in `quota-detection.ts`.
+ *
+ * Case handling: lower-cases the input and uses substring/regex tests
+ * without `/i`. If a future maintainer adds a CASE-SENSITIVE pattern,
+ * recase before merging or it will silently miss after the
+ * `.toLowerCase()` below.
  */
 function detectRateLimitInLog(logPath: string): boolean {
   const slice = readLogTail(logPath, 200 * 1024);
@@ -346,44 +224,16 @@ async function main(): Promise<void> {
   // trip a quota pattern in stderr.log (structured Anthropic API
   // error). Both detectors run; either firing emits the bus event.
   // Boss's phase-3 failover skill subscribes to this event and uses
-  // the metadata to swap agents to their fallback_profile.
-  //
-  // The event fires even during quiet hours and even if Telegram is
-  // muted — crash alerts are operator-comfort gated, but failover
+  // the metadata to swap agents to their fallback_profile. The
+  // event fires through quiet hours and Telegram-muting — failover
   // signal is reliability-gated and must always reach the bus.
-  {
-    const stdoutPath = join(logDir, 'stdout.log');
-    const stderrPath = join(logDir, 'stderr.log');
-    let quotaMatch: { matched: boolean; pattern: string | null } = { matched: false, pattern: null };
-    for (const path of [stderrPath, stdoutPath]) {
-      if (existsSync(path)) {
-        const result = detectProfileQuotaExhaustion(path);
-        if (result.matched) {
-          quotaMatch = result;
-          break;
-        }
-      }
-    }
-    if (quotaMatch.matched && quotaMatch.pattern) {
-      // Surface the env-fallback path explicitly: an unset
-      // CTX_AGENT_DIR means we'd be reading config.json from
-      // process.cwd(), which on a hook spawn might be anywhere.
-      // The resulting `profile` would be wrong rather than null,
-      // and phase-3 failover would route to the wrong fallback.
-      // Log to stderr so the operator sees the misconfiguration.
-      const agentDir = process.env.CTX_AGENT_DIR;
-      if (!agentDir) {
-        try { process.stderr.write(`[hook-crash-alert] WARN: CTX_AGENT_DIR unset; profile resolution may be incorrect for agent=${agentName}\n`); } catch { /* ignore */ }
-      }
-      emitProfileQuotaExhausted({
-        agent: agentName,
-        profile: readClaudeProfile(agentDir ?? process.cwd()),
-        error_pattern: quotaMatch.pattern,
-        observed_at: new Date().toISOString(),
-        exit_code: null,
-      });
-    }
-  }
+  maybeEmitQuotaEvent({
+    agentName,
+    agentDir: process.env.CTX_AGENT_DIR,
+    stdoutPath: join(logDir, 'stdout.log'),
+    stderrPath: join(logDir, 'stderr.log'),
+    now: new Date(),
+  });
 
   // Track crash count (real crashes only).
   const today = new Date().toISOString().split('T')[0];

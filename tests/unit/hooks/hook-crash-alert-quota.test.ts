@@ -23,7 +23,8 @@ import {
   detectProfileQuotaExhaustion,
   readClaudeProfile,
   emitProfileQuotaExhausted,
-} from '../../../src/hooks/hook-crash-alert';
+  maybeEmitQuotaEvent,
+} from '../../../src/hooks/quota-detection';
 
 let tmp: string;
 let logPath: string;
@@ -270,5 +271,133 @@ describe('emitProfileQuotaExhausted', () => {
         exit_code: null,
       }),
     ).not.toThrow();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────
+// maybeEmitQuotaEvent — integration test that drives the wiring
+// previously inline in hook-crash-alert.ts:main(). Extracted so the
+// scan→read-profile→emit chain has a single test entry point. Both
+// the per-phase code-evaluator and pr-deep-evaluator flagged this
+// as a coverage gap; closing it here.
+// ──────────────────────────────────────────────────────────────────
+
+describe('maybeEmitQuotaEvent', () => {
+  let agentDir: string;
+  let stderrPath: string;
+  let stdoutPath: string;
+
+  beforeEach(() => {
+    execFileMock.mockReset();
+    agentDir = join(tmp, 'agent');
+    require('fs').mkdirSync(agentDir, { recursive: true });
+    stderrPath = join(tmp, 'stderr.log');
+    stdoutPath = join(tmp, 'stdout.log');
+  });
+
+  it('emits the bus event with resolved profile when stderr matches', () => {
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ claude_profile: 'work' }), 'utf-8');
+    writeFileSync(stderrPath, 'rate_limit_exceeded\n', 'utf-8');
+    writeFileSync(stdoutPath, '', 'utf-8');
+
+    const result = maybeEmitQuotaEvent({
+      agentName: 'engineer',
+      agentDir,
+      stdoutPath,
+      stderrPath,
+      now: new Date('2026-05-08T20:30:00Z'),
+    });
+
+    expect(result.matched).toBe(true);
+    expect(result.pattern).toBe('rate_limit_exceeded');
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const meta = JSON.parse(execFileMock.mock.calls[0][1][6]);
+    expect(meta).toEqual({
+      agent: 'engineer',
+      profile: 'work',
+      error_pattern: 'rate_limit_exceeded',
+      observed_at: '2026-05-08T20:30:00.000Z',
+      exit_code: null,
+    });
+  });
+
+  it('falls back to scanning stdout when stderr has no match', () => {
+    writeFileSync(stderrPath, 'just normal output\n', 'utf-8');
+    writeFileSync(stdoutPath, 'HTTP 429 Too Many Requests\n', 'utf-8');
+
+    const result = maybeEmitQuotaEvent({
+      agentName: 'engineer',
+      agentDir,
+      stdoutPath,
+      stderrPath,
+      now: new Date(),
+    });
+
+    expect(result.matched).toBe(true);
+    expect(result.pattern).toBe('http_429');
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not emit when neither log matches', () => {
+    writeFileSync(stderrPath, 'normal\n', 'utf-8');
+    writeFileSync(stdoutPath, 'also normal\n', 'utf-8');
+
+    const result = maybeEmitQuotaEvent({
+      agentName: 'engineer',
+      agentDir,
+      stdoutPath,
+      stderrPath,
+      now: new Date(),
+    });
+
+    expect(result.matched).toBe(false);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it('warns to the warnSink when CTX_AGENT_DIR is unset', () => {
+    // The warn fires only when a quota pattern is detected (otherwise
+    // there's no failover-routing concern). Profile resolves to null
+    // because no agentDir → no config.json read.
+    writeFileSync(stderrPath, 'rate_limit_exceeded\n', 'utf-8');
+    writeFileSync(stdoutPath, '', 'utf-8');
+    const warnings: string[] = [];
+
+    const result = maybeEmitQuotaEvent({
+      agentName: 'engineer',
+      agentDir: undefined,
+      stdoutPath,
+      stderrPath,
+      now: new Date(),
+      warnSink: (m) => warnings.push(m),
+    });
+
+    expect(result.matched).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/CTX_AGENT_DIR unset/);
+    // Event still fires — operator can correlate the warn line with
+    // the bus event's null profile field for triage.
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    const meta = JSON.parse(execFileMock.mock.calls[0][1][6]);
+    expect(meta.profile).toBeNull();
+  });
+
+  it('does NOT warn on the no-match path (warn is failover-scoped)', () => {
+    writeFileSync(stderrPath, 'normal\n', 'utf-8');
+    writeFileSync(stdoutPath, 'normal\n', 'utf-8');
+    const warnings: string[] = [];
+
+    maybeEmitQuotaEvent({
+      agentName: 'engineer',
+      agentDir: undefined,
+      stdoutPath,
+      stderrPath,
+      now: new Date(),
+      warnSink: (m) => warnings.push(m),
+    });
+
+    // No warn — an unset CTX_AGENT_DIR is only a problem if we're
+    // about to emit the failover signal. On the happy path (no
+    // quota match) it's a non-event.
+    expect(warnings).toHaveLength(0);
   });
 });
