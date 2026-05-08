@@ -147,13 +147,17 @@ describe('cortextos bus context-update (integration)', () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('No transcript found');
 
+    // The no-data event is load-bearing for observability (operators grep for
+    // `context_monitor_no_data` to find agents whose transcripts vanished).
+    // Assert unconditionally — the file MUST exist and contain the event.
     const today = new Date().toISOString().split('T')[0];
     const eventFile = join(ctxRoot, 'orgs', 'sb-personal', 'analytics', 'events', 'fullstack', `${today}.jsonl`);
-    if (existsSync(eventFile)) {
-      const lines = readFileSync(eventFile, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
-      const noData = lines.find(l => l.event === 'context_monitor_no_data');
-      expect(noData).toBeTruthy();
-    }
+    expect(existsSync(eventFile)).toBe(true);
+    const lines = readFileSync(eventFile, 'utf-8').trim().split('\n').map(l => JSON.parse(l));
+    const noData = lines.find(l => l.event === 'context_monitor_no_data');
+    expect(noData).toBeTruthy();
+    expect(noData.severity).toBe('warning');
+    expect(noData.metadata.cwd).toBe(agentCwd);
   });
 
   it('respects CLAUDE_CODE_DISABLE_1M_CONTEXT=true and applies 200k thresholds', () => {

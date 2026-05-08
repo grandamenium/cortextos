@@ -83,6 +83,27 @@ export function encodeCwdToProjectDir(cwd: string): string {
   return cwd.replace(/\//g, '-');
 }
 
+// Detect 1M-context vs 200k tier from environment + observed model id.
+//
+// IMPORTANT: this intentionally diverges from the literal code snippet in the
+// BL-004 spec (which keys on a `[1m]` suffix on the model id). Per the
+// `harness-internal model-variant IDs` micro-retro in
+// `.claude/rules/code-quality.md`, the `[1m]` suffix is an INTERNAL marker
+// resolved by the Claude Code CLI; it is NOT carried in the transcript's
+// `message.model` field nor passable through user config. The canonical 1M
+// flip is `CLAUDE_CODE_DISABLE_1M_CONTEXT` (true/false) on the spawned PTY's
+// env, set per agent via the daemon. The spec snippet was written assuming
+// the suffix appears in transcripts; it does not.
+//
+// Resolution policy (matches today's fleet defaults):
+//   - Opus + flag absent/false  → 1M (boss / engineer / analyst / fullstack)
+//   - Opus + flag true          → 200k (explicit opt-out)
+//   - Sonnet / Haiku / unknown  → 200k
+//
+// If you deploy an Opus agent that should be on 200k, you MUST set
+// CLAUDE_CODE_DISABLE_1M_CONTEXT=true on its spawn env — otherwise this
+// monitor will under-trigger /compact actions. There is no transcript-side
+// signal to disambiguate, so the env flag IS the authoritative input.
 export function resolveContextLimit(env: NodeJS.ProcessEnv, modelHint: string): number {
   const flag = (env.CLAUDE_CODE_DISABLE_1M_CONTEXT ?? '').toLowerCase();
   const disabled = flag === 'true' || flag === '1' || flag === 'yes';
@@ -116,6 +137,12 @@ export function findCurrentTranscriptPath(projectsRoot: string, cwd: string): st
   return bestPath;
 }
 
+// Find the most recent assistant turn's usage by walking the transcript
+// in reverse. This loads the whole file into memory; for the Phase 1
+// heartbeat-poll cadence (~4h) and current ~500KB transcripts the cost is
+// trivial (~1ms). If/when the Phase 2 PostToolUse hook fires per-tool-call
+// and transcripts grow into the multi-MB range, swap to a streaming
+// reverse reader (read tail blocks, split on newlines, parse last assistant turn).
 export function readLatestUsage(transcriptPath: string): RawTurnUsage | null {
   let content: string;
   try {
@@ -185,6 +212,9 @@ export function computeContextUsage(opts: ComputeOptions): ContextUsage | null {
 }
 
 export function writeContextUsage(stateDir: string, usage: ContextUsage): string {
+  // ensureDir is idempotent (mkdir recursive) and atomicWriteSync also creates
+  // the parent dir. The explicit ensureDir here is defensive — keeps the failure
+  // mode obvious if stateDir resolution is broken upstream.
   ensureDir(stateDir);
   const path = join(stateDir, 'context-pct.json');
   atomicWriteSync(path, JSON.stringify(usage));
