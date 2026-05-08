@@ -80,8 +80,24 @@ export default function LoginPage() {
     const usernameInput = form.querySelector('input[name="username"]') as HTMLInputElement | null;
     const passwordInput = form.querySelector('input[name="password"]') as HTMLInputElement | null;
 
+    // Re-fetch CSRF token at submit time so body token matches the current
+    // cookie. React StrictMode double-invokes the mount-time CSRF useEffect
+    // in dev; if the two in-flight /api/auth/csrf responses resolve out of
+    // order, the browser's authjs.csrf-token cookie can end up pinned to a
+    // different token than csrfTokenRef.current — which the server rejects
+    // as MissingCSRF. An atomic fetch-then-submit here forces cookie and
+    // body into sync regardless of earlier mount-time races.
+    let submitToken = csrfTokenRef.current;
+    try {
+      const freshCsrf = await fetch('/api/auth/csrf', { credentials: 'same-origin', cache: 'no-store' });
+      const freshData = await freshCsrf.json();
+      if (freshData?.csrfToken) submitToken = freshData.csrfToken;
+    } catch {
+      // Fall back to the mount-time token if the refetch fails.
+    }
+
     const body = new URLSearchParams();
-    body.set('csrfToken', csrfTokenRef.current || '');
+    body.set('csrfToken', submitToken || '');
     body.set('username', usernameInput?.value || '');
     body.set('password', passwordInput?.value || '');
 

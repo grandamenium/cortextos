@@ -112,7 +112,7 @@ describe('Sprint 5: Observability & Metrics', () => {
       expect(existsSync(join(ctxRoot, 'analytics', 'reports', 'latest.json'))).toBe(true);
     });
 
-    it('counts errors from event logs', () => {
+    it('counts errors from event logs (severity-filtered)', () => {
       writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
       mkdirSync(join(ctxRoot, 'state', 'bot1'), { recursive: true });
 
@@ -120,13 +120,100 @@ describe('Sprint 5: Observability & Metrics', () => {
       const eventDir = join(ctxRoot, 'analytics', 'events', 'bot1');
       mkdirSync(eventDir, { recursive: true });
       writeFileSync(join(eventDir, `${today}.jsonl`), [
-        '{"category":"error","event":"crash"}',
-        '{"category":"info","event":"heartbeat"}',
-        '{"category":"error","event":"timeout"}',
+        '{"category":"error","event":"crash","severity":"error"}',
+        '{"category":"info","event":"heartbeat","severity":"info"}',
+        '{"category":"error","event":"timeout","severity":"error"}',
       ].join('\n'), 'utf-8');
 
       const report = collectMetrics(ctxRoot);
       expect(report.agents.bot1.errors_today).toBe(2);
+    });
+
+    it('does NOT count info-severity events even when category=error (Frank false-positive case)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      mkdirSync(join(ctxRoot, 'state', 'bot1'), { recursive: true });
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventDir = join(ctxRoot, 'analytics', 'events', 'bot1');
+      mkdirSync(eventDir, { recursive: true });
+      // The exact pattern that polluted Frank's metrics: 7 info-severity
+      // gap_detector_false_positive events emitted under category=error.
+      const lines: string[] = [];
+      for (let i = 0; i < 7; i++) {
+        lines.push(`{"category":"error","event":"gap_detector_false_positive","severity":"info","metadata":{"i":${i}}}`);
+      }
+      // Plus one real error
+      lines.push('{"category":"error","event":"actual_failure","severity":"error"}');
+      writeFileSync(join(eventDir, `${today}.jsonl`), lines.join('\n'), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents.bot1.errors_today).toBe(1);
+    });
+
+    it('counts critical-severity events as errors', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      mkdirSync(join(ctxRoot, 'state', 'bot1'), { recursive: true });
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventDir = join(ctxRoot, 'analytics', 'events', 'bot1');
+      mkdirSync(eventDir, { recursive: true });
+      writeFileSync(join(eventDir, `${today}.jsonl`), [
+        '{"category":"error","event":"oom","severity":"critical"}',
+        '{"category":"error","event":"crash","severity":"error"}',
+      ].join('\n'), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents.bot1.errors_today).toBe(2);
+    });
+
+    it('does NOT count warning-severity category=error events', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      mkdirSync(join(ctxRoot, 'state', 'bot1'), { recursive: true });
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventDir = join(ctxRoot, 'analytics', 'events', 'bot1');
+      mkdirSync(eventDir, { recursive: true });
+      writeFileSync(join(eventDir, `${today}.jsonl`), [
+        '{"category":"error","event":"degraded","severity":"warning"}',
+      ].join('\n'), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents.bot1.errors_today).toBe(0);
+    });
+
+    it('ignores false positives where "category":"error" appears inside a metadata payload', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      mkdirSync(join(ctxRoot, 'state', 'bot1'), { recursive: true });
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventDir = join(ctxRoot, 'analytics', 'events', 'bot1');
+      mkdirSync(eventDir, { recursive: true });
+      // The substring `"category":"error"` is embedded in metadata, but the
+      // actual top-level category is 'task'. The previous substring check
+      // would have miscounted this; the parsed-JSON path correctly skips it.
+      writeFileSync(join(eventDir, `${today}.jsonl`), [
+        '{"category":"task","event":"taxonomy","severity":"info","metadata":{"taxonomy":"\\"category\\":\\"error\\""}}',
+      ].join('\n'), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents.bot1.errors_today).toBe(0);
+    });
+
+    it('skips malformed JSON lines without crashing', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      mkdirSync(join(ctxRoot, 'state', 'bot1'), { recursive: true });
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventDir = join(ctxRoot, 'analytics', 'events', 'bot1');
+      mkdirSync(eventDir, { recursive: true });
+      writeFileSync(join(eventDir, `${today}.jsonl`), [
+        '{"category":"error","event":"real","severity":"error"}',
+        'not-valid-json-at-all',
+        '{broken json',
+      ].join('\n'), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents.bot1.errors_today).toBe(1);
     });
   });
 
@@ -266,6 +353,63 @@ describe('Sprint 5: Observability & Metrics', () => {
 
       const commands = collectTelegramCommands([scanDir]);
       expect(commands[0].description.length).toBe(256);
+    });
+
+    // Issue #329: codex-runtime agents store slash commands under .codex/, not
+    // .claude/. Without these scan paths, registerTelegramCommands sees zero
+    // commands for codex agents and the Telegram setMyCommands call no-ops,
+    // leaving codex bots with an empty slash menu.
+    it('collects from .codex/prompts/ (issue #329)', () => {
+      const scanDir = join(testDir, 'codex-agent-prompts');
+      const promptsDir = join(scanDir, '.codex', 'prompts');
+      mkdirSync(promptsDir, { recursive: true });
+      writeFileSync(
+        join(promptsDir, 'review.md'),
+        '---\nname: review\ndescription: Review the staged diff\n---\n',
+        'utf-8',
+      );
+
+      const commands = collectTelegramCommands([scanDir]);
+      expect(commands.length).toBe(1);
+      expect(commands[0].command).toBe('review');
+      expect(commands[0].description).toBe('Review the staged diff');
+    });
+
+    it('collects from .codex/commands/ (issue #329)', () => {
+      const scanDir = join(testDir, 'codex-agent-commands');
+      const cmdDir = join(scanDir, '.codex', 'commands');
+      mkdirSync(cmdDir, { recursive: true });
+      writeFileSync(
+        join(cmdDir, 'plan.md'),
+        '---\nname: plan\ndescription: Draft a plan\n---\n',
+        'utf-8',
+      );
+
+      const commands = collectTelegramCommands([scanDir]);
+      expect(commands.length).toBe(1);
+      expect(commands[0].command).toBe('plan');
+    });
+
+    it('merges codex + claude commands across both layouts (issue #329)', () => {
+      const scanDir = join(testDir, 'mixed-agent');
+      const codexDir = join(scanDir, '.codex', 'prompts');
+      const claudeDir = join(scanDir, '.claude', 'commands');
+      mkdirSync(codexDir, { recursive: true });
+      mkdirSync(claudeDir, { recursive: true });
+      writeFileSync(
+        join(codexDir, 'codex-only.md'),
+        '---\nname: codex_only\ndescription: Codex prompt\n---\n',
+        'utf-8',
+      );
+      writeFileSync(
+        join(claudeDir, 'claude-only.md'),
+        '---\nname: claude_only\ndescription: Claude command\n---\n',
+        'utf-8',
+      );
+
+      const cmds = collectTelegramCommands([scanDir]);
+      const names = cmds.map((c) => c.command).sort();
+      expect(names).toEqual(['claude_only', 'codex_only']);
     });
   });
 });

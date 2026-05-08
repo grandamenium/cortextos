@@ -4,6 +4,7 @@ import type { Task, Priority, TaskStatus, BusPaths, StaleTaskReport, ArchiveRepo
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { randomDigits } from '../utils/random.js';
 import { validatePriority } from '../utils/validate.js';
+import { logEvent } from './event.js';
 
 /**
  * Create a new task. Identical JSON format to bash create-task.sh.
@@ -440,6 +441,12 @@ export function claimTask(
  * Matches bash complete-task.sh behavior, with the cross-org fallback from
  * findTaskFile so an assignee in one org can complete a task filed by an
  * orchestrator in a sibling org.
+ *
+ * Side-effect: emits a `task/task_completed` event on the activity feed so
+ * completions are visible on the dashboard without agents having to follow
+ * every complete-task call with a separate log-event. The event is written
+ * best-effort — a failing event write never unblocks task completion from
+ * persisting to disk.
  */
 export function completeTask(
   paths: BusPaths,
@@ -454,11 +461,13 @@ export function completeTask(
   }
   let prevStatus: TaskStatus | undefined;
   let assignee: string | undefined;
+  let taskOrg: string = '';
   try {
     const content = readFileSync(filePath, 'utf-8');
     const task: Task = JSON.parse(content);
     prevStatus = task.status;
     assignee = task.assigned_to;
+    taskOrg = task.org || '';
     task.status = 'completed';
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     task.completed_at = task.updated_at;
@@ -470,6 +479,18 @@ export function completeTask(
     throw new Error(`Task ${taskId} complete failed: ${err}`);
   }
   appendTaskAudit(paths, taskId, { event: 'complete', agent: assignee || 'unknown', from: prevStatus, to: 'completed', note: result });
+
+  // Activity-feed event. Best-effort — the task is already persisted.
+  if (assignee) {
+    try {
+      logEvent(paths, assignee, taskOrg, 'task', 'task_completed', 'info', {
+        task_id: taskId,
+        ...(result ? { result } : {}),
+      });
+    } catch {
+      // Never let observability break task completion.
+    }
+  }
 }
 
 /**
