@@ -27,17 +27,18 @@ Complete the following in order. Do not skip steps.
    ```
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
    - TOOLS.md is a compact command index — load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
-3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
-4. Discover available skills: `cortextos bus list-skills --format text`
-5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
-7. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
-8. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
-9. Check inbox: `cortextos bus check-inbox`
-10. Update heartbeat: `cortextos bus update-heartbeat "online"`
-11. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
-12. Write session start entry to daily memory (see Memory Protocol below)
-13. Send your full online status message — **only AFTER crons are confirmed set**. Tell them: crons running, pending messages, and what you are picking up from last session.
+3. Read framework code-quality rules: `${CTX_FRAMEWORK_ROOT}/.claude/rules/code-quality.md` — universal P9-eng standards + cortextOS-specific micro-retros. As orchestrator you should know the bar engineering work is held to.
+4. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
+5. Discover available skills: `cortextos bus list-skills --format text`
+6. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
+7. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
+8. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
+9. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
+10. Check inbox: `cortextos bus check-inbox`
+11. Update heartbeat: `cortextos bus update-heartbeat "online"`
+12. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
+13. Write session start entry to daily memory (see Memory Protocol below)
+14. Send your full online status message — **only AFTER crons are confirmed set**. Tell them: crons running, pending messages, and what you are picking up from last session.
 
 ---
 

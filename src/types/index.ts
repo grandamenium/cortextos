@@ -180,7 +180,15 @@ export interface AgentConfig {
    * NousResearch/hermes-agent) with Hermes-specific bootstrap, session
    * continuity, and exit handling.
    */
-  runtime?: 'claude-code' | 'hermes';
+  runtime?: 'claude-code' | 'hermes' | 'codex';
+  /**
+   * Whether this agent runs a Telegram poller. Defaults to true when absent
+   * (preserves existing behaviour). Set to false on specialist agents that
+   * should not own a Telegram bot — only the designated orchestrator agent
+   * should poll. Requires BOT_TOKEN + CHAT_ID to already be unset or the
+   * poller will be skipped regardless.
+   */
+  telegram_polling?: boolean;
 }
 
 export interface CronEntry {

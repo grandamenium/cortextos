@@ -135,7 +135,25 @@ cortextos bus send-message <agent_name> high "soft-restart" "<reason>"
 cortextos bus hard-restart --reason "context exhaustion"
 ```
 
-**When to use:** Context window full, conversation corrupted, need clean slate.
+**When to use:** Context window full, conversation corrupted, need clean slate, or wiring a new hook (see Hook Reload Lifecycle below). Hard-restart sends an IPC `restart-agent` signal to the daemon, which kills the running PID and respawns it fresh. The respawn consumes the `.force-fresh` marker and skips `--continue`, so `settings.json` (including newly-wired hooks) is re-read from scratch.
+
+### Hook Reload Lifecycle
+
+`.claude/settings.json` hooks (PreToolUse, PostToolUse, Stop, SessionStart, etc) are loaded once when the Claude CLI process starts. They are NOT reloaded by `cortextos bus self-restart` — soft restart relaunches Claude with `--continue`, which reuses the existing process settings cache. Project-level hooks added or changed in `settings.json` since the original boot DO NOT take effect under soft restart.
+
+**When wiring a new hook to a running agent, use a hard restart, not a soft restart:**
+
+```bash
+# From inside the agent itself, or from another agent/terminal:
+cortextos bus hard-restart --reason "loading new hook"
+
+# Equivalent ops-side path:
+cortextos stop <agent> && cortextos start <agent>
+```
+
+Both kill the existing PID and respawn a fresh process that re-reads `settings.json` from scratch. Verify by adding a one-line debug write to your hook script before testing — if the file shows up after a benign tool call, the hook is loaded.
+
+This bit us hard on the coder-telegram-guardrail wire-up before upstream PR #217 fixed `bus hard-restart` to actually signal the daemon. On any fork that has not pulled in #217 (commit `a38ef7a`), `bus hard-restart` writes markers without killing the PID — fall back to external `stop && start` until the fork is rebased.
 
 ### Restart from Another Agent
 
@@ -360,6 +378,13 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 2. Check PM2 logs: `pm2 logs <agent-process-name>`
 3. Regenerate ecosystem config: `cortextos ecosystem` then `pm2 restart ecosystem.config.js`
 4. If exit code shows throttling, wait 10s then `cortextos enable <agent> --restart`
+
+### New Hook Not Firing After Wiring It Up
+1. Confirm `settings.json` is valid JSON and the hook block is in the right shape (matcher, type=command, etc).
+2. Try a benign tool call that should trigger the hook. If nothing happens, the hook is not loaded.
+3. **Do NOT soft-restart** — `--continue` does not reload project hooks (see Hook Reload Lifecycle in Section 2).
+4. Hard-restart the agent: `cortextos bus hard-restart --reason "load new hook"`. The daemon kills the PID and respawns a fresh process that re-reads `settings.json`.
+5. If the hook still does not fire after a fresh PID, instrument the script with an unconditional write to `/tmp/<agent>-hook-test.log` at the very top of `main()`, run a benign tool, and check whether the file appears. If yes, the hook is firing but the script is returning early. If no, the hook is wired wrong in `settings.json`.
 
 ---
 

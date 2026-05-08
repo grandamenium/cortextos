@@ -184,6 +184,20 @@ Once approved, `review_status` will be set to `"approved"` and the item will app
 
 ---
 
+## Agent Awareness Standard
+
+cortextOS agents discover features through their CLAUDE.md template. A feature that exists in code but isn't mentioned in the agent template is invisible — no agent will ever use it.
+
+**Before merging any feature PR**, verify:
+
+- [ ] **Does this feature add a new bus command, CLI command, or API endpoint?** If yes, add it to `templates/agent/CLAUDE.md` (and `templates/orchestrator/CLAUDE.md`, `templates/analyst/CLAUDE.md`, `templates/security/CLAUDE.md` if applicable) with a usage example.
+- [ ] **Does this feature change agent behavior or add a new hook?** If yes, update the relevant template's session-start or workflow section.
+- [ ] **Does this feature add or modify a skill?** If yes, ensure the skill's `SKILL.md` has a current `description` and `triggers` list so agents know when to load it.
+
+A feature without a template update ships dark. If you're unsure whether a template update is needed, it is.
+
+---
+
 ## Questions
 
 Open a GitHub issue or message the cortextOS community channel.
