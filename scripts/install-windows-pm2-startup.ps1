@@ -79,7 +79,11 @@ $settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Hours 72) `
-    -MultipleInstances IgnoreNew
+    -MultipleInstances IgnoreNew `
+    -Hidden  # Hide the task and prevent its action from inheriting a console.
+             # Without this, PM2 children (e.g. the dashboard "next dev") spawn
+             # with a visible "next-server (vX)" terminal at logon. PM2's own
+             # `windowsHide: true` is unreliable, so we hide the launcher.
 
 # Re-register cleanly so the script is idempotent.
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
