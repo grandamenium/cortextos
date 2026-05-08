@@ -8,6 +8,13 @@ import { validateAgentName } from '../utils/validate';
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
 
+// Templates that don't have a codex variant yet. Pairing any of these with
+// --runtime codex-app-server used to silently scaffold claude-only bootstrap
+// (`.claude/skills/`, `CLAUDE_CODE_OAUTH_TOKEN`, `/loop` references) into a
+// codex agent — degrading on first boot. Reject the combo until codex
+// variants exist (PR 11+).
+const NON_CODEX_TEMPLATES = ['orchestrator', 'analyst', 'm2c1-worker', 'hermes'] as const;
+
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
   .option('--template <type>', 'Agent template (orchestrator, analyst, agent, agent-codex)', 'agent')
@@ -18,6 +25,11 @@ export const addAgentCommand = new Command('add-agent')
   .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
     if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
       console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
+      process.exit(1);
+    }
+
+    if (options.runtime === 'codex-app-server' && (NON_CODEX_TEMPLATES as readonly string[]).includes(options.template)) {
+      console.error(`Error: no codex variant of "${options.template}" yet. Use --template agent for a codex agent (or file an issue to track adding a codex-${options.template} variant).`);
       process.exit(1);
     }
     // BUG-041 fix: validate the agent name BEFORE creating anything on disk.

@@ -120,9 +120,24 @@ Add a codex agent the same way you add a claude agent:
 
 ```bash
 cortextos add-agent reindexer --template agent-codex --org myorg
+# or, equivalently, with the runtime flag on the default template:
+cortextos add-agent reindexer --runtime codex-app-server --org myorg
 ```
 
 Codex agents share the same bus, crons, and dashboard surfaces as claude agents — they only differ in which model handles each turn.
+
+### The `runtime` field
+
+Every agent's `config.json` carries an explicit `runtime` field that the daemon dispatches on. Valid values:
+
+| Runtime | Adapter | Default model | Skills location |
+|---|---|---|---|
+| `claude-code` | `ClaudePTY` (default) | claude-sonnet-4-6 | `.claude/skills/<skill>/SKILL.md` |
+| `codex-app-server` | `CodexAppServerPTY` | `gpt-5-codex` | `plugins/cortextos-agent-skills/skills/<skill>/SKILL.md` (linked into `~/.codex/skills/<agent>__<skill>`) |
+| `hermes` | `HermesPTY` (experimental) | model per `config.json` | hermes-specific |
+| `codex` | legacy CodexPTY | gpt-5 series | claude-style skills tree |
+
+Pass `--runtime <kind>` on `add-agent` to set it at scaffold time, or edit the field in `config.json` and restart the agent. The default is `claude-code`. Today only `--template agent` (and the alias `--template agent-codex`) supports `--runtime codex-app-server` — pairing the codex runtime with `--template orchestrator`/`analyst`/`m2c1-worker`/`hermes` errors with a clean message until codex variants of those templates ship.
 
 ---
 
@@ -131,7 +146,7 @@ Codex agents share the same bus, crons, and dashboard surfaces as claude agents 
 ```bash
 cortextos install            # Set up state directories
 cortextos init <org>         # Create an organization
-cortextos add-agent <name>   # Add an agent (--template, --org)
+cortextos add-agent <name>   # Add an agent (--template, --org, --runtime)
 cortextos enable <name>      # Enable agent in daemon
 cortextos ecosystem          # Generate PM2 config
 cortextos status             # Agent health table
