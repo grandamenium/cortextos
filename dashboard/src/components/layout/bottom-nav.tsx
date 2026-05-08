@@ -20,6 +20,10 @@ import {
   IconClock,
   IconTarget,
   IconX,
+  IconBrain,
+  IconFiles,
+  IconTerminal2,
+  IconServer,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +40,7 @@ const morePages = [
   { label: 'Activity', href: '/activity', icon: IconActivity },
   { label: 'Knowledge Base', href: '/knowledge-base', icon: IconBook2 },
   { label: 'Workflows', href: '/workflows', icon: IconClock },
+  { label: 'Jobs', href: '/jobs', icon: IconClock },
   { label: 'Strategy', href: '/strategy', icon: IconTarget },
   { label: 'Experiments', href: '/experiments', icon: IconFlask },
   { label: 'Skills', href: '/skills', icon: IconPuzzle },
@@ -60,6 +65,16 @@ export function BottomNav() {
   }
 
   const isMoreActive = morePages.some(p => isActive(p.href));
+  const agentMatch = pathname.match(/^\/agents\/([^/]+)/);
+  const agentName = agentMatch?.[1];
+  const inspectorTabs = agentName ? [
+    { label: 'Chat', href: `/agents/${agentName}/chat`, icon: IconMessages },
+    { label: 'Memory', href: `/agents/${agentName}/memory`, icon: IconBrain },
+    { label: 'Skills', href: `/agents/${agentName}/skills`, icon: IconPuzzle },
+    { label: 'MCP', href: `/agents/${agentName}/mcp`, icon: IconServer },
+    { label: 'Files', href: `/agents/${agentName}/files`, icon: IconFiles },
+    { label: 'Terminal', href: `/agents/${agentName}/terminal`, icon: IconTerminal2 },
+  ] : null;
 
   return (
     <>
@@ -103,8 +118,8 @@ export function BottomNav() {
 
       {/* Bottom tab bar */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 border-t bg-card/95 backdrop-blur-sm md:hidden safe-area-bottom">
-        <div className="flex items-center justify-around h-14">
-          {mainTabs.map((tab) => {
+        <div className="flex h-14 items-center justify-around overflow-x-auto">
+          {(inspectorTabs ?? mainTabs).map((tab) => {
             const Icon = tab.icon;
             const active = isActive(tab.href);
             return (
@@ -122,7 +137,7 @@ export function BottomNav() {
             );
           })}
           {/* More button */}
-          <button
+          {!inspectorTabs && <button
             onClick={() => setMoreOpen(!moreOpen)}
             className={cn(
               'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors',
@@ -131,7 +146,7 @@ export function BottomNav() {
           >
             <IconDotsVertical size={20} strokeWidth={isMoreActive || moreOpen ? 2.5 : 1.5} />
             <span className="text-[10px] font-medium">More</span>
-          </button>
+          </button>}
         </div>
       </nav>
     </>
