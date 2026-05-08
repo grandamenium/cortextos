@@ -29,6 +29,7 @@ Boss:    Done. "morning-inbox" cron set — runs daily at 08:00.
 
 - **Persistent agents** — Claude Code runs 24/7 in PTY sessions, auto-restarting on crash or after 71-hour context rotation.
 - **Multi-agent orchestration** — Orchestrator, Analyst, and specialist agents coordinate via a shared file bus. Tasks, blockers, and approvals flow automatically.
+- **Multi-runtime** — Run agents on `claude-code` (default) or OpenAI's `codex-app-server`. Both runtimes share the same bus, crons, dashboard, and Telegram integration; pick per-agent.
 - **Telegram + iOS control** — Send commands, approve actions, and get reports from anywhere. Native iOS app coming soon.
 - **Web dashboard** — Full-featured Next.js UI for tasks, approvals, experiments, analytics, and agent fleet health.
 - **Autoresearch (theta wave)** — Agents run autonomous experiments overnight, evaluate results, and surface findings for your review.
@@ -113,6 +114,15 @@ pm2 start ecosystem.config.js && pm2 save && pm2 startup
 | `orchestrator` | Coordinates agents, manages goals, handles morning/evening reviews, approves actions |
 | `analyst` | System health, metrics, theta-wave autoresearch, analytics |
 | `agent` | General-purpose worker — use this as the base for specialist agents |
+| `agent-codex` | Codex-runtime worker, scaffolds with `runtime: codex-app-server` and `model: gpt-5-codex` (see `templates/agent-codex/`) |
+
+Add a codex agent the same way you add a claude agent:
+
+```bash
+cortextos add-agent reindexer --template agent-codex --org myorg
+```
+
+Codex agents share the same bus, crons, and dashboard surfaces as claude agents — they only differ in which model handles each turn.
 
 ---
 
