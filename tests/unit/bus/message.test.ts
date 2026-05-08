@@ -93,6 +93,38 @@ describe('Message Bus', () => {
         sendMessage(senderPaths, '../bad', 'good', 'normal', 'test')
       ).toThrow();
     });
+
+    // BL-2026-05-08-004 Phase 3 — fresh_start dispatch hint
+    it('omits fresh_start when not provided (backwards compat)', () => {
+      sendMessage(senderPaths, 'a', 'b', 'normal', 'no hint');
+      const inbox = join(testDir, 'inbox', 'b');
+      const file = readdirSync(inbox).filter(f => f.endsWith('.json'))[0];
+      const content = JSON.parse(readFileSync(join(inbox, file), 'utf-8'));
+      expect(content).not.toHaveProperty('fresh_start');
+    });
+
+    it('persists fresh_start=true when provided', () => {
+      sendMessage(senderPaths, 'a', 'b', 'normal', 'unrelated dispatch', undefined, true);
+      const inbox = join(testDir, 'inbox', 'b');
+      const file = readdirSync(inbox).filter(f => f.endsWith('.json'))[0];
+      const content = JSON.parse(readFileSync(join(inbox, file), 'utf-8'));
+      expect(content.fresh_start).toBe(true);
+    });
+
+    it('persists fresh_start=false (explicit override) when provided', () => {
+      sendMessage(senderPaths, 'a', 'b', 'normal', 'related dispatch', undefined, false);
+      const inbox = join(testDir, 'inbox', 'b');
+      const file = readdirSync(inbox).filter(f => f.endsWith('.json'))[0];
+      const content = JSON.parse(readFileSync(join(inbox, file), 'utf-8'));
+      expect(content.fresh_start).toBe(false);
+    });
+
+    it('round-trips fresh_start through checkInbox', () => {
+      sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'dispatch', undefined, true);
+      const messages = checkInbox(receiverPaths);
+      expect(messages.length).toBe(1);
+      expect(messages[0].fresh_start).toBe(true);
+    });
   });
 
   describe('checkInbox', () => {

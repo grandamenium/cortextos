@@ -55,6 +55,7 @@ export function sendMessage(
   priority: Priority,
   text: string,
   replyTo?: string,
+  freshStart?: boolean,
 ): string {
   validateAgentName(from);
   validateAgentName(to);
@@ -67,6 +68,9 @@ export function sendMessage(
   const filename = `${pnum}-${epochMs}-from-${from}-${rand}.json`;
 
   // Security (H10): Sign message with HMAC-SHA256.
+  // fresh_start is intentionally NOT part of the signature payload (same as
+  // priority/timestamp): it's a dispatch hint, not authenticated content.
+  // Additive field for receivers that don't yet handle it (BL-2026-05-08-004 Phase 3).
   const signingKey = loadSigningKey(paths.ctxRoot);
   const message: InboxMessage = {
     id: msgId,
@@ -77,6 +81,7 @@ export function sendMessage(
     text,
     reply_to: replyTo || null,
     ...(signingKey ? { sig: hmacSign(signingKey, signPayload(msgId, from, to, text)) } : {}),
+    ...(freshStart !== undefined ? { fresh_start: freshStart } : {}),
   };
 
   // Write to target agent's inbox

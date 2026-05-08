@@ -73,7 +73,9 @@ busCommand
   .argument('<text>', 'Message text')
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
-  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string }) => {
+  .option('--fresh-start', 'Dispatch hint: ask receiver to hard-restart before processing (BL-004 Phase 3 — unrelated-task transition)')
+  .option('--no-fresh-start', 'Dispatch hint: explicitly tell receiver NOT to hard-restart even if heuristic would (BL-004 Phase 3 — explicit override)')
+  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string; freshStart?: boolean }) => {
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
@@ -113,9 +115,9 @@ busCommand
       console.error(`Warning: agent '${to}' not found in project. Message will be queued but may never be read.`);
     }
 
-    const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo);
+    const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo, opts.freshStart);
     try {
-      logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null }));
+      logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null, fresh_start: opts.freshStart ?? null }));
     } catch { /* non-fatal */ }
     console.log(msgId);
   });

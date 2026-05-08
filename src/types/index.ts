@@ -23,6 +23,22 @@ export interface InboxMessage {
   text: string;
   reply_to: string | null;
   sig?: string; // Security (H10): HMAC-SHA256 signature — optional for backwards compat
+  /**
+   * Dispatch hint for the receiving agent (BL-2026-05-08-004 Phase 3).
+   *
+   * - `true` — sender is asking the receiver to hard-restart with a fresh session
+   *   before working on this dispatch (typically because the new task is unrelated
+   *   to whatever the receiver was last working on, and a clean conversation is
+   *   safer than carrying stale context).
+   * - `false` — sender is explicitly overriding the heuristic; receiver should
+   *   continue in its current session even if the task looks unrelated.
+   * - `undefined` — no hint; receiver runs the self-detection heuristic per
+   *   "On dispatch receipt" in CLAUDE.md.
+   *
+   * Not part of the HMAC signature payload (same exclusion as priority/timestamp);
+   * additive field, backwards compatible with senders that don't set it.
+   */
+  fresh_start?: boolean;
 }
 
 // Task Types

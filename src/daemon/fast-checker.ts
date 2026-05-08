@@ -180,7 +180,7 @@ export class FastChecker {
     // Check agent inbox
     const inboxMessages = checkInbox(this.paths);
     for (const msg of inboxMessages) {
-      messageBlock += this.formatInboxMessage(msg);
+      messageBlock += FastChecker.formatInboxMessage(msg);
       ackIds.push(msg.id);
     }
 
@@ -215,11 +215,22 @@ export class FastChecker {
 
   /**
    * Format an inbox message for injection.
-   * Matches bash fast-checker.sh format exactly.
+   * Matches bash fast-checker.sh format with the BL-2026-05-08-004 Phase 3
+   * `fresh_start` annotation appended when the sender set the dispatch hint.
+   * Receiving agents read the annotation in CLAUDE.md "On dispatch receipt"
+   * to decide whether to hard-restart before processing.
+   *
+   * Static so the formatter can be unit-tested without spinning up a
+   * FastChecker instance — pure function of `msg`.
    */
-  private formatInboxMessage(msg: InboxMessage): string {
+  static formatInboxMessage(msg: InboxMessage): string {
     const replyNote = msg.reply_to ? ` [reply_to: ${msg.reply_to}]` : '';
-    return `=== AGENT MESSAGE from ${msg.from}${replyNote} [msg_id: ${msg.id}] ===
+    const freshStartNote = msg.fresh_start === true
+      ? '\n[FRESH-START: sender requests hard-restart before processing — see CLAUDE.md "On dispatch receipt"]'
+      : msg.fresh_start === false
+      ? '\n[FRESH-START: explicit override — sender says do NOT hard-restart even if task looks unrelated]'
+      : '';
+    return `=== AGENT MESSAGE from ${msg.from}${replyNote} [msg_id: ${msg.id}] ===${freshStartNote}
 \`\`\`
 ${msg.text}
 \`\`\`

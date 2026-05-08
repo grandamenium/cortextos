@@ -833,4 +833,46 @@ describe('FastChecker', () => {
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
+
+  // BL-2026-05-08-004 Phase 3 — fresh_start dispatch hint surfacing
+  describe('formatInboxMessage', () => {
+    const baseMsg = {
+      id: 'mid-1',
+      from: 'boss',
+      to: 'fullstack',
+      priority: 'normal' as const,
+      timestamp: '2026-05-08T20:00:00.000Z',
+      text: 'Pick up BL-005 next.',
+      reply_to: null,
+    };
+
+    it('omits fresh-start annotation when fresh_start is undefined (backwards compat)', () => {
+      const result = FastChecker.formatInboxMessage(baseMsg);
+      expect(result).toContain('=== AGENT MESSAGE from boss [msg_id: mid-1] ===');
+      expect(result).not.toContain('[FRESH-START');
+    });
+
+    it('annotates fresh_start=true with hard-restart hint', () => {
+      const result = FastChecker.formatInboxMessage({ ...baseMsg, fresh_start: true });
+      expect(result).toContain('[FRESH-START: sender requests hard-restart before processing');
+      expect(result).toContain('CLAUDE.md "On dispatch receipt"');
+    });
+
+    it('annotates fresh_start=false with explicit-override hint', () => {
+      const result = FastChecker.formatInboxMessage({ ...baseMsg, fresh_start: false });
+      expect(result).toContain('[FRESH-START: explicit override');
+      expect(result).toContain('do NOT hard-restart');
+    });
+
+    it('preserves reply_to + msg_id alongside fresh-start annotation', () => {
+      const result = FastChecker.formatInboxMessage({
+        ...baseMsg,
+        reply_to: 'parent-mid',
+        fresh_start: true,
+      });
+      expect(result).toContain('[reply_to: parent-mid]');
+      expect(result).toContain('[msg_id: mid-1]');
+      expect(result).toContain('[FRESH-START: sender requests hard-restart');
+    });
+  });
 });
