@@ -35,6 +35,19 @@ export interface ThresholdTable {
 export const THRESHOLDS_1M: ThresholdTable = { soft: 25, yellow: 35, orange: 42, red: 50 };
 export const THRESHOLDS_200K: ThresholdTable = { soft: 50, yellow: 65, orange: 75, red: 85 };
 
+// Schema notes for downstream consumers:
+//
+// - `pct` and `severity` are AUTHORITATIVE for action decisions. Read these.
+// - `current_loaded_tokens` is INFORMATIONAL (forensic — "how many tokens got
+//   there"). It excludes `output_tokens` because those don't accumulate in the
+//   input-context window — the API bills based on input + cache fields, and
+//   output tokens go out the door. Consumers MUST NOT recompute pct from
+//   `current_loaded_tokens / context_limit`; the two can disagree by rounding
+//   or, in the statusLine path, because Claude-Code-reported `used_percentage`
+//   is preferred over our naive sum (when both are present and finite, they
+//   should agree to within rounding).
+// - `transcript_path` is `'statusline://current-session'` for statusLine-derived
+//   records; it's a real filesystem path for transcript-derived records.
 export interface ContextUsage {
   agent: string;
   session_id: string;

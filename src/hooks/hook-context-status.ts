@@ -81,7 +81,7 @@ async function main(): Promise<void> {
         : usage.severity === 'orange'
           ? 'warning'
           : 'info';
-      logEvent(paths, agentName, org, 'context', 'context_threshold_crossed', sev, JSON.stringify({
+      logEvent(paths, agentName, org, 'context', 'context_threshold_crossed', sev, {
         severity: usage.severity,
         pct: usage.pct,
         loaded_tokens: usage.current_loaded_tokens,
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
         model: usage.model,
         next_action_threshold_pct: usage.next_action_threshold_pct,
         source: 'statusline',
-      }));
+      });
     } catch { /* non-fatal */ }
   }
 }

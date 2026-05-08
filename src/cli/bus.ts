@@ -2422,7 +2422,7 @@ busCommand
 
 busCommand
   .command('hook-context-status')
-  .description('StatusLine hook: writes context window % to state/context_status.json')
+  .description('StatusLine hook: writes context window severity to state/context-pct.json (BL-004 schema); emits context_threshold_crossed events on severity > green')
   .action(() => runHook('hook-context-status'));
 
 busCommand
