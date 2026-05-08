@@ -317,32 +317,90 @@ export async function publishLinkedInPost(
     throw new Error(`Too many images: ${imagePaths.length} (LinkedIn caps at 20)`);
   }
 
-  console.log('[actions] Opening LinkedIn feed to publish post…');
-  await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'networkidle', timeout: 30_000 });
-  await page.waitForTimeout(2000);
-  await checkSession(page);
+  // Navigate to feed and wait for actual readiness (not just DOMContentLoaded).
+  // LinkedIn's React app does client-side navigations after DOMContentLoaded which
+  // can destroy the JS execution context mid-evaluate. Use waitForSelector as the
+  // readiness gate — it retries internally and survives client-side redirects.
+  const navigateAndReady = async (): Promise<void> => {
+    console.log('[actions] Opening LinkedIn feed to publish post…');
+    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    // Wait for at least one interactive element — proves React has hydrated
+    await page.waitForSelector('div[role="button"]', { state: 'visible', timeout: 15_000 });
+    await checkSession(page);
+  };
+  await navigateAndReady();
 
-  // Click "Start a post" button — may be inside shadow DOM
-  const startPostClicked = await page.evaluate(() => {
-    // Try light DOM first
-    const btns = Array.from(document.querySelectorAll('button'));
-    const startBtn = btns.find(b => /Start a post/i.test(b.textContent ?? ''));
-    if (startBtn) { startBtn.click(); return 'light-dom'; }
-    // Try interop-outlet shadow
-    const outlet = document.querySelector('#interop-outlet');
-    const shadow = outlet?.shadowRoot;
-    if (shadow) {
-      const shadowBtns = Array.from(shadow.querySelectorAll('button'));
-      const shadowStart = shadowBtns.find(b => /Start a post/i.test(b.textContent ?? ''));
-      if (shadowStart) { shadowStart.click(); return 'shadow-dom'; }
+  // Click "Start a post". LinkedIn 2026 renders this as div[role="button"], not <button>.
+  // Use Playwright's locator.click() (real mouse events) rather than element.click() inside
+  // evaluate — programmatic clicks can be treated differently by LinkedIn's React event handlers.
+  // Wrap in try/catch: retry with re-navigation if execution context is destroyed.
+  const clickStartPost = async (): Promise<string> => {
+    // Try Playwright locator first (sends real pointer events, most reliable)
+    const locator = page.locator('div[role="button"]').filter({ hasText: /^Start a post$/i }).first();
+    const locatorCount = await locator.count().catch(() => 0);
+    if (locatorCount > 0) {
+      await locator.click({ timeout: 5_000 });
+      return 'locator-click';
     }
-    return 'not-found';
-  });
+    // Fallback: <button> locator
+    const btnLocator = page.getByRole('button', { name: /Start a post/i }).first();
+    const btnCount = await btnLocator.count().catch(() => 0);
+    if (btnCount > 0) {
+      await btnLocator.click({ timeout: 5_000 });
+      return 'button-locator';
+    }
+    // Last resort: evaluate-based click (handles shadow DOM)
+    return page.evaluate(() => {
+      const outlet = document.querySelector('#interop-outlet');
+      const shadow = outlet?.shadowRoot;
+      if (shadow) {
+        const shadowBtns = Array.from(shadow.querySelectorAll('button, div[role="button"]'));
+        const shadowStart = shadowBtns.find(b =>
+          /Start a post/i.test((b as HTMLElement).textContent?.trim() ?? '') ||
+          /Start a post/i.test(b.getAttribute('aria-label') ?? '')
+        );
+        if (shadowStart) { (shadowStart as HTMLElement).click(); return 'shadow-dom'; }
+      }
+      return 'not-found';
+    });
+  };
+
+  let startPostClicked: string;
+  try {
+    startPostClicked = await clickStartPost();
+  } catch (err) {
+    const msg = (err as Error).message ?? '';
+    if (msg.includes('Execution context was destroyed') || msg.includes('Target closed')) {
+      console.warn('[actions] Execution context lost on first attempt — re-navigating and retrying');
+      await navigateAndReady();
+      startPostClicked = await clickStartPost();
+    } else {
+      throw err;
+    }
+  }
+
   if (startPostClicked === 'not-found') {
-    throw new Error("Could not find 'Start a post' button. LinkedIn layout may have changed.");
+    const pageTitle = await page.title();
+    throw new Error(`Could not find 'Start a post' button. Page title: "${pageTitle}"`);
   }
   console.log(`[actions] Start a post clicked via ${startPostClicked}`);
-  await page.waitForTimeout(1500);
+
+  // Wait for the post composer editor to actually appear — shadow DOM or regular DOM.
+  // Linux/Xvfb renders slower than Mac — fixed 1500ms is insufficient.
+  try {
+    await page.waitForFunction(() => {
+      // Primary: shadow DOM under #interop-outlet (LinkedIn SDUI)
+      const outlet = document.querySelector('#interop-outlet');
+      const shadow = (outlet as Element & { shadowRoot: ShadowRoot | null })?.shadowRoot;
+      if (shadow?.querySelector('[contenteditable="true"]')) return true;
+      // Fallback: regular DOM contenteditable (older LinkedIn layout or different session state)
+      return document.querySelectorAll('[contenteditable="true"]').length > 0;
+    }, { timeout: 12_000 });
+    console.log('[actions] Composer editor ready');
+  } catch {
+    const pageTitle = await page.title();
+    throw new Error(`Composer editor did not appear within 12s. Page title: "${pageTitle}"`);
+  }
 
   // Inject text via shadow DOM (same approach as Mac poster — proven pattern)
   const safeText = JSON.stringify(postText);
@@ -439,6 +497,28 @@ export async function publishLinkedInPost(
     await page.waitForTimeout(3000);
   }
 
+  // Intercept LinkedIn's share-creation API response to capture the post URN.
+  // LinkedIn POSTs to /voyager/api/contentcreation/normShares (or similar) when
+  // the Post button is clicked; the response JSON contains the share URN.
+  let capturedUrn: string | undefined;
+  const urnListener = async (response: import('playwright').Response) => {
+    if (capturedUrn) return;
+    try {
+      const url = response.url();
+      if (!url.includes('linkedin.com')) return;
+      if (response.status() < 200 || response.status() >= 300) return;
+      // Scan ALL LinkedIn API responses (not just known endpoints) for the share URN.
+      // We log the URL when we find a URN so we can narrow the filter later.
+      const body = await response.text().catch(() => '');
+      const match = body.match(/urn:li:share:\d+/);
+      if (match) {
+        capturedUrn = match[0];
+        console.log(`[actions] Captured share URN from network: ${capturedUrn} (endpoint: ${url.split('?')[0]})`);
+      }
+    } catch { /* non-fatal */ }
+  };
+  page.on('response', urnListener);
+
   // Click Post button in shadow DOM
   const postClicked = await page.evaluate(() => {
     const outlet = document.querySelector('#interop-outlet');
@@ -457,8 +537,23 @@ export async function publishLinkedInPost(
     throw new Error("Could not find 'Post' button in composer.");
   }
   console.log(`[actions] Post submitted via ${postClicked}`);
-  await page.waitForTimeout(3000);
-  return { success: true };
+
+  // Give LinkedIn time to complete the API call and return the URN
+  await page.waitForTimeout(6000);
+  page.off('response', urnListener);
+
+  // Build permalink from URN if captured
+  const linkedin_post_id = capturedUrn
+    ? `https://www.linkedin.com/feed/update/${capturedUrn}`
+    : undefined;
+
+  if (linkedin_post_id) {
+    console.log(`[actions] Permalink: ${linkedin_post_id}`);
+  } else {
+    console.warn('[actions] Share URN not captured from network — post published but permalink unknown');
+  }
+
+  return { success: true, ...(linkedin_post_id ? { linkedin_post_id } : {}) };
 }
 
 // ---------------------------------------------------------------------------

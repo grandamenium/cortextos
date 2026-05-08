@@ -23,6 +23,8 @@ export interface ActionResult {
   reason?: string;
   error?: string;
   note?: string;
+  /** LinkedIn post URN or permalink URL returned after a successful publish_post action. */
+  linkedin_post_id?: string;
 }
 
 export interface PostCommentRequest {
