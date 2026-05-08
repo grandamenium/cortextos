@@ -5,13 +5,21 @@ import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName } from '../utils/validate';
 
+const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex', 'codex-app-server'] as const;
+type RuntimeKind = typeof VALID_RUNTIMES[number];
+
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
   .option('--template <type>', 'Agent template (orchestrator, analyst, agent)', 'agent')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
+  .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+    if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
+      console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
+      process.exit(1);
+    }
     // BUG-041 fix: validate the agent name BEFORE creating anything on disk.
     // Without this, mixed-case names like 'CortextDesigner' pass through
     // add-agent, get written to disk, and THEN fail every `cortextos bus *`
@@ -103,6 +111,20 @@ export const addAgentCommand = new Command('add-agent')
         enabled: true,
         crons: [],
       }, null, 2) + '\n', 'utf-8');
+    }
+
+    // Persist non-default runtime into config.json regardless of whether the
+    // file came from a template or was created above. The template-supplied
+    // config.json wins file existence, so we read-merge-write to inject the
+    // runtime field that agent-process.ts branches on.
+    if (options.runtime !== 'claude-code' && existsSync(configPath)) {
+      try {
+        const existingCfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+        existingCfg.runtime = options.runtime;
+        writeFileSync(configPath, JSON.stringify(existingCfg, null, 2) + '\n', 'utf-8');
+      } catch (err) {
+        console.error(`Warning: failed to set runtime field in config.json: ${(err as Error).message}`);
+      }
     }
 
     // Create .env placeholder with helpful comments

@@ -3,6 +3,7 @@ import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
+import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { CodexPTY } from '../pty/codex-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
@@ -22,7 +23,7 @@ export class AgentProcess {
   readonly name: string;
   private env: CtxEnv;
   private config: AgentConfig;
-  private pty: AgentPTY | CodexPTY | null = null;
+  private pty: AgentPTY | CodexPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
@@ -118,13 +119,15 @@ export class AgentProcess {
       ? new HermesPTY(this.env, this.config, logPath)
       : this.config.runtime === 'codex'
         ? new CodexPTY(this.env, this.config, logPath)
-        : new AgentPTY(this.env, this.config, logPath);
+        : this.config.runtime === 'codex-app-server'
+          ? new CodexAppServerPTY(this.env, this.config, logPath)
+          : new AgentPTY(this.env, this.config, logPath);
 
     // Issue #330: re-wire the Telegram handle on every start() (session refresh
     // creates a fresh CodexPTY). Only CodexPTY uses this — Claude / Hermes
     // typing indicators flow through fast-checker.
-    if (this.config.runtime === 'codex' && this.telegramApi && this.telegramChatId) {
-      (this.pty as CodexPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
+    if ((this.config.runtime === 'codex' || this.config.runtime === 'codex-app-server') && this.telegramApi && this.telegramChatId) {
+      (this.pty as CodexPTY | CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
     }
 
     // BUG-011 fix: create a fresh exit signal for this run. resolveExit is
@@ -207,7 +210,7 @@ export class AgentProcess {
           // so we use Ctrl+D which exits cleanly on the first press.
           pty.write('\x04'); // Ctrl+D
           await sleep(3000);
-        } else if (this.config.runtime === 'codex') {
+        } else if (this.config.runtime === 'codex' || this.config.runtime === 'codex-app-server') {
           // Codex uses an exec-per-turn model — there is no persistent REPL
           // between turns, so /exit + sleep below are no-ops on CodexPTY
           // (write() just buffers). The only meaningful stop step is
@@ -338,8 +341,8 @@ export class AgentProcess {
   setTelegramHandle(api: TelegramAPI, chatId: string): void {
     this.telegramApi = api;
     this.telegramChatId = chatId;
-    if (this.config.runtime === 'codex' && this.pty) {
-      (this.pty as CodexPTY).setTelegramHandle(api, chatId);
+    if ((this.config.runtime === 'codex' || this.config.runtime === 'codex-app-server') && this.pty) {
+      (this.pty as CodexPTY | CodexAppServerPTY).setTelegramHandle(api, chatId);
     }
   }
 
