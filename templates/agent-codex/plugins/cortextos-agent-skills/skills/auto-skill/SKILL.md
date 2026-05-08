@@ -15,7 +15,7 @@ After completing any task, run this self-check:
 
 1. **Tool call count**: Did this task require 8+ distinct tool calls for a coherent workflow?
 2. **Recurrence**: Does your daily memory show this same task type appearing 3+ times across different dates?
-3. **Existing skill**: Does a skill for this already exist in `.claude/skills/`? If yes, stop — consider proposing a patch instead.
+3. **Existing skill**: Does a skill for this already exist in `plugins/cortextos-agent-skills/skills/`? If yes, stop — consider proposing a patch instead.
 4. **Repeatability**: Is this task type likely to recur, or was it a one-off?
 
 If yes to 1 or 2, AND no to 3, AND yes to 4 → create a draft.
@@ -89,7 +89,7 @@ status: draft
 Before writing the file, check:
 
 - [ ] `description` is under 100 characters
-- [ ] No skill with this name exists in `.claude/skills/`
+- [ ] No skill with this name exists in `plugins/cortextos-agent-skills/skills/`
 - [ ] All steps are actionable — no vague instructions like "handle errors appropriately"
 - [ ] Any step requiring external actions (email, deploy, post, delete) has an explicit approval gate documented
 - [ ] `source_task_id` is filled in for traceability
@@ -122,10 +122,10 @@ When you receive an inbox message with a skill decision:
 
 ```bash
 # Move from draft to active
-mv skills/drafts/[skill-name]/ .claude/skills/[skill-name]/
+mv skills/drafts/[skill-name]/ plugins/cortextos-agent-skills/skills/[skill-name]/
 
 # Update status field
-sed -i '' 's/status: draft/status: active/' .claude/skills/[skill-name]/SKILL.md
+sed -i '' 's/status: draft/status: active/' plugins/cortextos-agent-skills/skills/[skill-name]/SKILL.md
 
 # Log activation
 cortextos bus log-event action skill_activated info --meta "{\"skill\":\"[skill-name]\",\"agent\":\"$CTX_AGENT_NAME\"}"
@@ -169,7 +169,7 @@ cortextos bus ack-inbox [msg_id]
 | State | Location | Loaded at boot? |
 |-------|----------|-----------------|
 | draft | `skills/drafts/[name]/SKILL.md` | No |
-| active | `.claude/skills/[name]/SKILL.md` | Yes |
+| active | `plugins/cortextos-agent-skills/skills/[name]/SKILL.md` | Yes |
 | archived | `skills/archive/[name]/SKILL.md` | No |
 
 Drafts older than 14 days with no action: move to `skills/archive/` and log `skill_expired`.

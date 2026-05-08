@@ -48,11 +48,11 @@ git add .gitignore && git commit -m "init: $PROJECT_DIR"
 ### 2. Copy M2C1 skill files
 
 ```bash
-mkdir -p .claude/skills/m2c1/artifact-templates
+mkdir -p plugins/cortextos-agent-skills/skills/m2c1/artifact-templates
 
 # Copy from the local cortextOS framework install
 for file in SKILL.md orchestration-workflow.md; do
-  cp "${CTX_FRAMEWORK_ROOT}/templates/agent/.claude/skills/m2c1/$file" "./.claude/skills/m2c1/$file"
+  cp "${CTX_FRAMEWORK_ROOT}/templates/agent-codex/plugins/cortextos-agent-skills/skills/m2c1/$file" "./plugins/cortextos-agent-skills/skills/m2c1/$file"
 done
 ```
 
@@ -77,8 +77,8 @@ Write a comprehensive brain dump in `$PROJECT_DIR/BRAINDUMP.md`. Include:
 The worker needs the bus messaging skill to communicate with you:
 
 ```bash
-mkdir -p "$PROJECT_DIR/.claude/skills/comms"
-cp "$CTX_FRAMEWORK_ROOT/templates/agent/.claude/skills/comms/SKILL.md" "$PROJECT_DIR/.claude/skills/comms/SKILL.md" 2>/dev/null
+mkdir -p "$PROJECT_DIR/plugins/cortextos-agent-skills/skills/comms"
+cp "$CTX_FRAMEWORK_ROOT/templates/agent-codex/plugins/cortextos-agent-skills/skills/comms/SKILL.md" "$PROJECT_DIR/plugins/cortextos-agent-skills/skills/comms/SKILL.md" 2>/dev/null
 ```
 
 ### 6. Set up .claude/ permission bypass
@@ -115,7 +115,7 @@ Write `$PROJECT_DIR/AGENTS.md` with instructions for the worker:
 You are building <description>.
 
 ## Your Role
-You are the M2C1 orchestrator. Follow the 12-phase workflow in .claude/skills/m2c1/orchestration-workflow.md.
+You are the M2C1 orchestrator. Follow the 12-phase workflow in plugins/cortextos-agent-skills/skills/m2c1/orchestration-workflow.md.
 
 ## Communication
 Send messages to <your-agent-name>:
@@ -145,10 +145,10 @@ If you detect the same tool call repeated 5 or more times consecutively (same to
 4. Do not resume until the supervisor responds with instructions.
 
 Common stuck patterns to watch for:
-- Repeated `Bash` calls with the same command that keeps failing
-- Repeated `Read` calls on the same file with no subsequent action
-- Repeated `Edit` calls that fail and are retried identically
-- Repeated `WebSearch` calls with the same query
+- Repeated shell calls with the same command that keeps failing
+- Repeated file reads on the same file with no subsequent action
+- Repeated file edits that fail and are retried identically
+- Repeated web search calls with the same query
 
 Set environment:
 ```
@@ -182,7 +182,7 @@ $PLAN_CONTENT"
    cortextos bus check-inbox
    ```
    Do NOT write any source files until you receive a message containing `PLAN_APPROVED`.
-5. Once approved, read .claude/skills/m2c1/orchestration-workflow.md and begin implementation.
+5. Once approved, read plugins/cortextos-agent-skills/skills/m2c1/orchestration-workflow.md and begin implementation.
 
 ## Start
 1. Read BRAINDUMP.md
@@ -343,15 +343,15 @@ mkdir -p "$PROJECT_DIR/.claude"
 which agent-browser || npm install -g agent-browser
 agent-browser install   # Downloads Chrome from Chrome for Testing
 
-# Copy the agent-browser SKILL.md into the worker's .claude/skills/ so
+# Copy the agent-browser SKILL.md into the worker's plugins/cortextos-agent-skills/skills/ so
 # it is teachable to the worker session:
-mkdir -p "$PROJECT_DIR/.claude/skills/agent-browser"
-cp "$CTX_FRAMEWORK_ROOT/templates/agent/.claude/skills/agent-browser/SKILL.md" \
-   "$PROJECT_DIR/.claude/skills/agent-browser/SKILL.md"
+mkdir -p "$PROJECT_DIR/plugins/cortextos-agent-skills/skills/agent-browser"
+cp "$CTX_FRAMEWORK_ROOT/templates/agent-codex/plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md" \
+   "$PROJECT_DIR/plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md"
 
 # 2. Worker can use agent-browser via Bash (no MCP restart required):
 cortextos bus send-message <worker-name> normal \
-  'agent-browser is available globally. Test by running: agent-browser open https://example.com && agent-browser get title && agent-browser close. Use snapshot-then-ref pattern for AI-driven flows. The .claude/skills/agent-browser/SKILL.md was added — invoke `agent-browser skills get <name>` for current per-version command syntax.'
+  'agent-browser is available globally. Test by running: agent-browser open https://example.com && agent-browser get title && agent-browser close. Use snapshot-then-ref pattern for AI-driven flows. The plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md was added — invoke `agent-browser skills get <name>` for current per-version command syntax.'
 ```
 
 ### Iterative Tool Verification
@@ -385,7 +385,7 @@ cortextos bus send-message <worker-name> normal 'Source .env in your project dir
 Copy relevant cortextOS skills to the worker's project:
 ```bash
 # If the worker needs browser automation knowledge, the agent-browser skill
-# is already in templates/agent/.claude/skills/agent-browser/SKILL.md and
+# is already in templates/agent-codex/plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md and
 # was copied into $PROJECT_DIR above during MCP/tool setup.
 ```
 

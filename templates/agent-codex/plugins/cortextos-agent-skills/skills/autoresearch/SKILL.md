@@ -138,7 +138,7 @@ cortextos bus manage-cycle create $CTX_AGENT_NAME \
 
 Then register the persistent cron via the bus (daemon-managed, survives restarts):
 ```bash
-cortextos bus add-cron $CTX_AGENT_NAME experiment-<metric> <loop_interval> "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."
+cortextos bus add-cron $CTX_AGENT_NAME experiment-<metric> <loop_interval> "Read plugins/cortextos-agent-skills/skills/autoresearch/SKILL.md and execute the experiment loop."
 ```
 
 To modify a cycle when the user asks:

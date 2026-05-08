@@ -318,6 +318,115 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
   });
 
+  it('rewrites /skill_name to native UserInput.skill via skills/list', async () => {
+    requestMock
+      .mockResolvedValueOnce({
+        result: {
+          data: [{ cwd: '/tmp', skills: [{ name: 'heartbeat', path: '/h.md', enabled: true }] }],
+        },
+      })
+      .mockResolvedValueOnce({ result: {} });
+    const pty = makeReadyPty();
+
+    pty.write('/heartbeat');
+    pty.write('\r');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(requestMock).toHaveBeenNthCalledWith(1, 'skills/list', {
+      cwds: ['/tmp/fw/orgs/acme/agents/codex-app-agent'],
+      forceReload: false,
+    });
+    expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
+      threadId: 'thread-1',
+      input: [{ type: 'skill', name: 'heartbeat', path: '/h.md' }],
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'dangerFullAccess' },
+    });
+  });
+
+  it('preserves /goal in the local goal handler (does not rewrite to skill)', async () => {
+    requestMock.mockResolvedValue({ result: { goal: null } });
+    const pty = makeReadyPty();
+    pty.write('/goal');
+    pty.write('\r');
+    await Promise.resolve();
+    expect(requestMock).toHaveBeenCalledWith('thread/goal/get', { threadId: 'thread-1' });
+    expect(requestMock).not.toHaveBeenCalledWith('skills/list', expect.anything());
+  });
+
+  it('replies with [skill] unknown for an unknown slash command', async () => {
+    requestMock.mockResolvedValue({
+      result: { data: [{ cwd: '/tmp', skills: [{ name: 'heartbeat', path: '/h.md', enabled: true }] }] },
+    });
+    const pty = makeReadyPty();
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    pty.setTelegramHandle({ sendMessage } as unknown as Parameters<typeof pty.setTelegramHandle>[0], '7940429114');
+    pty.write('/notaskill');
+    pty.write('\r');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sendMessage).toHaveBeenCalledWith(
+      '7940429114',
+      '[skill] unknown "notaskill". No enabled matches found.',
+      undefined,
+      { parseMode: null },
+    );
+    expect(requestMock).not.toHaveBeenCalledWith('turn/start', expect.anything());
+  });
+
+  it('preserves trailing text payload through the slash rewrite', async () => {
+    requestMock
+      .mockResolvedValueOnce({
+        result: {
+          data: [{ cwd: '/tmp', skills: [{ name: 'heartbeat', path: '/h.md', enabled: true }] }],
+        },
+      })
+      .mockResolvedValueOnce({ result: {} });
+    const pty = makeReadyPty();
+
+    pty.write('/heartbeat extra context here');
+    pty.write('\r');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
+      threadId: 'thread-1',
+      input: [
+        { type: 'skill', name: 'heartbeat', path: '/h.md' },
+        { type: 'text', text: 'extra context here', text_elements: [] },
+      ],
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'dangerFullAccess' },
+    });
+  });
+
+  it('routes Telegram-delivered /heartbeat through the slash rewrite', async () => {
+    requestMock
+      .mockResolvedValueOnce({
+        result: {
+          data: [{ cwd: '/tmp', skills: [{ name: 'heartbeat', path: '/h.md', enabled: true }] }],
+        },
+      })
+      .mockResolvedValueOnce({ result: {} });
+    const pty = makeReadyPty();
+
+    pty.write(`=== TELEGRAM from [USER: James] (chat_id:7940429114) ===
+/heartbeat
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`);
+    pty.write('\r');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(requestMock).toHaveBeenNthCalledWith(2, 'turn/start', {
+      threadId: 'thread-1',
+      input: [{ type: 'skill', name: 'heartbeat', path: '/h.md' }],
+      approvalPolicy: 'never',
+      sandboxPolicy: { type: 'dangerFullAccess' },
+    });
+  });
+
   it('queues turns until native turn/completed arrives', async () => {
     requestMock.mockResolvedValue({ result: {} });
     const pty = makeReadyPty();

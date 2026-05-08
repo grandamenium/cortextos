@@ -81,6 +81,9 @@ const SOCKET_BASENAME = 'codex.sock';
 const SOCKET_PATH_WARN_BYTES = 100;
 const BOOTSTRAP_PATTERN = '[codex-app-server] ready';
 
+const SLASH_REWRITE_RE = /^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i;
+const LOCAL_SLASH_COMMANDS = new Set(['goal']);
+
 /**
  * Codex app-server PTY adapter for cortextOS.
  *
@@ -236,6 +239,14 @@ export class CodexAppServerPTY {
     }
     if (input.startsWith('$')) {
       await this.handleSkillInput(input);
+      return;
+    }
+    const slashMatch = input.match(SLASH_REWRITE_RE);
+    if (slashMatch && !LOCAL_SLASH_COMMANDS.has(slashMatch[1].toLowerCase())) {
+      const [, name, trailing] = slashMatch;
+      const trimmed = trailing?.trim();
+      const rewritten = trimmed ? `$${name} ${trimmed}` : `$${name}`;
+      await this.handleSkillInput(rewritten);
       return;
     }
     this.queueTurn([{ type: 'text', text: input, text_elements: [] }]);
