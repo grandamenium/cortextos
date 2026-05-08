@@ -24,10 +24,6 @@ vi.mock('../../../src/pty/agent-pty.js', () => ({
   AgentPTY: function AgentPTY() { return mockAgentPty; },
 }));
 
-vi.mock('../../../src/pty/codex-pty.js', () => ({
-  CodexPTY: function CodexPTY() { return mockAgentPty; },
-}));
-
 vi.mock('../../../src/pty/codex-app-server-pty.js', () => ({
   CodexAppServerPTY: function CodexAppServerPTY() { return mockCodexAppServerPty; },
 }));

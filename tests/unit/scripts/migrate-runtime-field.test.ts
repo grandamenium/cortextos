@@ -65,8 +65,8 @@ describe('migrate-runtime-field', () => {
     expect(afterSecond).toBe(afterFirst);
   });
 
-  it('skips configs that already have a runtime set (codex, hermes, codex-app-server)', () => {
-    seed('lifeos', 'codex-test', { agent_name: 'codex-test', enabled: true, runtime: 'codex' });
+  it('skips configs that already have a runtime set (claude-code, hermes, codex-app-server)', () => {
+    seed('lifeos', 'claude-test', { agent_name: 'claude-test', enabled: true, runtime: 'claude-code' });
     seed('lifeos', 'codex-app', { agent_name: 'codex-app', enabled: true, runtime: 'codex-app-server' });
     seed('lifeos', 'hermes-bot', { agent_name: 'hermes-bot', enabled: true, runtime: 'hermes' });
 
@@ -75,8 +75,8 @@ describe('migrate-runtime-field', () => {
     expect(summary.alreadySet).toBe(3);
 
     // None of the existing runtime values are overwritten.
-    const codexResult = results.find(r => r.agent === 'codex-test');
-    expect(codexResult?.before).toBe('codex');
+    const codexResult = results.find(r => r.agent === 'codex-app');
+    expect(codexResult?.before).toBe('codex-app-server');
   });
 
   it('dry-run does not write anything to disk', () => {
