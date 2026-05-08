@@ -397,12 +397,13 @@ Once the worker is past discovery and tool setup, it should run autonomously:
 
 ### Set Up Auto-Iteration
 
-Tell the worker to create a /loop for task polling within its session:
+Register a daemon cron on the worker so it polls its task queue every 10 minutes:
 ```bash
-cortextos bus send-message <worker-name> normal \
-  'Set up a /loop every 10 minutes to check START.md for pending tasks. If not working on a task, pick the next one.'
+cortextos bus add-cron <worker-name> task-poll 10m \
+  'Check START.md for pending tasks. If not working on a task, pick the next one.'
 ```
-<!-- Note: /loop is intentionally used here — this is a short-lived session-scoped poll for the worker's task queue, not a persistent cron. For persistent recurring crons, use cortextos bus add-cron instead. -->
+
+This survives worker restart, works on both `claude-code` and `codex-app-server` runtimes, and the daemon owns dispatch — no session-local schedulers required.
 
 
 ### Periodic Check-ins

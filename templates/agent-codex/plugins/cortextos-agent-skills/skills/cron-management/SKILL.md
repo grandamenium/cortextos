@@ -9,8 +9,42 @@ Crons are **daemon-managed**. They are stored in `${CTX_ROOT}/state/$CTX_AGENT_N
 and dispatched by the cortextOS daemon. Crons survive agent restarts, context compactions,
 and daemon restarts automatically. You do NOT need to recreate them on session start.
 
-**Never use `/loop` or CronCreate for persistent recurring work** — those are session-local
-and die on agent restart.
+**Daemon crons are the only persistent scheduling path on this runtime.** Session-local
+schedulers — anything that lives only inside the agent's process — die on restart and
+silently drop their work. Always register recurring or future-dated jobs via the bus
+commands below so the daemon owns dispatch.
+
+Editing `config.json.crons[]` while the agent is running does NOT hot-reload — the daemon
+only re-reads `config.json` on agent boot. Mid-session changes go through `bus add-cron` /
+`bus update-cron` / `bus remove-cron`, which trigger an automatic scheduler reload.
+
+---
+
+## Handling a Cron Fire
+
+When a registered cron fires, the daemon injects a message into your session in this exact
+shape:
+
+```
+[CRON FIRED <iso-timestamp>] <cron-name>: <prompt>
+```
+
+Treat the inject as if the user just sent you `<prompt>`. Run it to completion. Then —
+**mandatory** — close the loop with `update-cron-fire` so the daemon's gap-detection knows
+you actually handled it (not just that the prompt was injected):
+
+```bash
+cortextos bus update-cron-fire <cron-name> --interval <interval>
+```
+
+`<interval>` matches the cron's schedule shorthand (`6h`, `30m`, `1d`) or the expected gap
+between fires for a 5-field expression. If you skip this step the daemon will eventually
+nudge you with a "cron seems stuck" reminder even though you handled it. The audit trail
+lives in `state/<agent>/cron-state.json` — the daemon trusts that file, so write to it on
+every fire.
+
+**One-shot crons** (cron-expression form, see below) are the only exception: a one-shot
+removes itself at the end of its handler, so its `last_fire` never matters again.
 
 ---
 
@@ -70,6 +104,32 @@ cortextos bus update-cron $CTX_AGENT_NAME heartbeat --enabled true
 
 ```bash
 cortextos bus remove-cron $CTX_AGENT_NAME <name>
+```
+
+---
+
+## One-Shot Reminder via Cron Expression
+
+There is no daemon-side `fire_at` (yet). The pattern for "fire once at a specific time" is
+a future-dated 5-field cron expression plus a self-removing handler:
+
+```bash
+# Remind me on May 8 at 15:30 local time to send the weekly report.
+# Format: minute hour day month dow
+cortextos bus add-cron $CTX_AGENT_NAME may8-report "30 15 8 5 *" \
+  'Send the weekly report. Then remove this cron: cortextos bus remove-cron '"$CTX_AGENT_NAME"' may8-report'
+```
+
+When the cron fires, your handler does the work AND removes the cron. If you forget the
+remove step the cron will fire again next year on May 8 — same reason `update-cron-fire`
+is mandatory for recurring crons: the loop only closes when you say it does.
+
+If you need a reminder less than 24 hours out and the date math is awkward, use a short
+interval shorthand that you remove on first fire instead:
+
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME quick-reminder 90m \
+  'Check the soak run. Then: cortextos bus remove-cron '"$CTX_AGENT_NAME"' quick-reminder'
 ```
 
 ---

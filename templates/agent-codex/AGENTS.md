@@ -413,14 +413,31 @@ For full flag/syntax details: read `plugins/cortextos-agent-skills/skills/bus-re
 
 Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
 
-**View scheduled crons:**
+### Handling a cron fire
+
+When a registered cron fires, you receive an injected message in this exact shape:
+
+```
+[CRON FIRED <iso-timestamp>] <cron-name>: <prompt>
+```
+
+Treat the inject as if the user just sent you `<prompt>`. Execute it to completion. Then — **mandatory** — record the fire so the daemon's gap-detection can tell you actually handled it:
+
+```bash
+cortextos bus update-cron-fire <cron-name> --interval <interval>
+```
+
+`<interval>` matches the cron's schedule shorthand (`6h`, `30m`, `1d`) or its expected gap if it's a 5-field expression. If you skip this step the daemon will eventually nudge you with a "cron seems stuck" reminder even though you handled it — `update-cron-fire` is the audit trail.
+
+### View scheduled crons
+
 ```bash
 cortextos bus list-crons $CTX_AGENT_NAME
 ```
 
-**Add a recurring cron at runtime:** Use `cortextos bus add-cron`. For full CRUD protocol read `plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`. There is no `/loop` for codex agents — it is a Claude-Code-only construct that does not exist in this runtime. The only persistent scheduling path is `cortextos bus add-cron`.
+**Add a recurring cron at runtime:** Use `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval-or-cron-expr> <prompt>`. The daemon hot-reloads automatically; `crons.json` survives every kind of restart. For full CRUD (update, pause, resume, troubleshoot) read `plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`. This is the **only** persistent scheduling path on this runtime — there is no in-session scheduling tool, and editing `config.json.crons[]` mid-session does NOT hot-reload (the daemon only re-reads `config.json` on agent boot).
 
-**Add a one-shot reminder:** `cortextos bus add-cron $CTX_AGENT_NAME --name <name> --schedule <ISO> --prompt "<text>"` (one-time fire).
+**Add a one-shot reminder:** there is no daemon-side `fire_at`. Use a future-dated 5-field cron expression (e.g. `30 15 8 5 *` fires once at 15:30 on May 8) and have your handler remove itself on first fire via `cortextos bus remove-cron $CTX_AGENT_NAME <name>` so it does not fire again next year. See the cron-management skill for the worked example.
 
 **Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 

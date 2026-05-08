@@ -443,6 +443,62 @@ cortextos bus check-upstream [--apply]
 
 ---
 
+## Crons
+
+Daemon-managed scheduled tasks. Persisted in `${CTX_ROOT}/state/<agent>/crons.json`,
+dispatched on the daemon's 30-second tick, and survive every kind of restart. Editing
+`config.json.crons[]` mid-session does NOT hot-reload — these commands do, and they
+update `crons.json` directly. For full protocol, examples, and the one-shot pattern see
+`plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`.
+
+### add-cron
+Register a new persistent cron on an agent. The daemon hot-reloads automatically.
+
+```bash
+cortextos bus add-cron <agent> <name> <interval-or-cron-expr> <prompt>
+```
+
+- **agent**: target agent name
+- **name**: unique slug per agent (`heartbeat`, `daily-report`)
+- **schedule**: interval shorthand (`6h`, `30m`, `1d`) OR a 5-field cron expression (`0 9 * * 1-5`)
+- **prompt**: text injected into the agent's session when the cron fires
+- `--desc <description>`: optional human-readable description
+
+### list-crons
+Show all registered crons for an agent + each one's `next_fire_at`.
+
+```bash
+cortextos bus list-crons <agent> [--json]
+```
+
+### remove-cron
+Delete a cron. Daemon reloads on next tick.
+
+```bash
+cortextos bus remove-cron <agent> <name>
+```
+
+### test-cron-fire
+Inject the cron's prompt into the agent NOW, regardless of schedule. 30-second cooldown
+prevents accidental rapid-fires. Use to verify wiring.
+
+```bash
+cortextos bus test-cron-fire <agent> <name>
+```
+
+### update-cron-fire
+**Mandatory at the end of every cron handler.** Records that the named cron actually fired
+to completion, so the daemon's gap-detection knows you handled it. Without this the daemon
+will eventually nudge you with a "cron seems stuck" reminder.
+
+```bash
+cortextos bus update-cron-fire <cron-name> --interval <interval>
+```
+
+The interval should match the cron's schedule shorthand or the expected gap between fires.
+
+---
+
 ## Community Ecosystem
 
 ### browse-catalog
@@ -511,6 +567,11 @@ cortextos bus submit-community-item <item-name> <item-type> "<description>" [--d
 | Restart (fresh)                   | `hard-restart`            |
 | Snapshot workspace                | `auto-commit`             |
 | Check for updates                 | `check-upstream`          |
+| Schedule a recurring task         | `add-cron`                |
+| List my scheduled tasks           | `list-crons`              |
+| Cancel a scheduled task           | `remove-cron`             |
+| Fire a cron now (test-fire)       | `test-cron-fire`          |
+| Mark a cron as handled            | `update-cron-fire`        |
 
 
 ### agent-browser (Browser Automation — replaces Playwright)

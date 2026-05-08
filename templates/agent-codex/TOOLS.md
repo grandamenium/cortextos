@@ -128,7 +128,7 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `test-cron-fire <agent> <name>` | Inject the cron prompt now to verify wiring |
 | `get-cron-log <agent>` | Execution history |
 
-> Codex has no `/loop` (Claude-Code-only). Use `add-cron` for ALL persistent scheduling.
+> `add-cron` is the ONLY persistent scheduling path on this runtime. There is no in-session scheduling tool — every recurring or future-dated job goes through the daemon.
 
 ### Experiments (Theta Wave) — full docs: `plugins/cortextos-agent-skills/skills/autoresearch/SKILL.md`
 | Command | What it does |
