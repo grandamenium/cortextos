@@ -539,8 +539,8 @@ export function manageCycle(
 // orch_approvals.org_id is a UUID FK to organizations.id (RevOps Global).
 const REVOPS_ORG_UUID =
   process.env.SUPABASE_RGOS_ORG_UUID || 'a1b2c3d4-0000-0000-0000-000000000001';
-// Approvals expire if not decided within 7 days.
-const APPROVAL_TTL_MS = 7 * 24 * 3600 * 1000;
+// Approvals expire if not decided within 14 days.
+const APPROVAL_TTL_MS = 14 * 24 * 3600 * 1000;
 
 /**
  * Create a paired orch_approvals row for a proposed experiment.
