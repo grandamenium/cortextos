@@ -14,10 +14,27 @@
  *     broken watchdog loop results in at most one notification, not a buzz
  *     storm.
  */
-import { existsSync, readFileSync, writeFileSync, appendFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
+import {
+  existsSync, readFileSync, writeFileSync, appendFileSync,
+  unlinkSync, mkdirSync,
+} from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFile } from 'child_process';
+
+import { readLogTail } from '../utils/log-tail.js';
+import { maybeEmitQuotaEvent } from './quota-detection.js';
+// Re-export quota-detection helpers from this module so existing
+// importers (tests, future callers) can keep using
+// `hook-crash-alert` as the surface — the extraction is structural
+// for the 500-line cap, not a public API change.
+export {
+  detectProfileQuotaExhaustion,
+  readClaudeProfile,
+  emitProfileQuotaExhausted,
+  QUOTA_PATTERNS,
+  maybeEmitQuotaEvent,
+} from './quota-detection.js';
 
 const DEDUP_WINDOW_MS = 10 * 60 * 1000;         // 10 minutes
 const QUIET_HOUR_START_LA = 22;                 // 22:00 America/Los_Angeles
@@ -51,31 +68,31 @@ function isQuietHoursLA(now: Date): boolean {
 /**
  * Scan the tail of stdout.log for Anthropic rate-limit or weekly-limit
  * signatures. Mirrors OutputBuffer.hasRateLimitSignature so the hook and the
- * daemon use the same detection logic.
+ * daemon use the same detection logic. UX classifier (returns boolean) —
+ * the structured-quota detector lives in `quota-detection.ts`.
+ *
+ * Case handling: lower-cases the input and uses substring/regex tests
+ * without `/i`. If a future maintainer adds a CASE-SENSITIVE pattern,
+ * recase before merging or it will silently miss after the
+ * `.toLowerCase()` below.
  */
 function detectRateLimitInLog(logPath: string): boolean {
-  try {
-    const size = statSync(logPath).size;
-    const readBytes = Math.min(size, 200 * 1024); // last 200 KB
-    const fd = readFileSync(logPath);
-    const slice = fd.slice(Math.max(0, fd.length - readBytes)).toString('utf-8');
-    const text = slice.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').toLowerCase();
-    return (
-      text.includes('overloaded_error') ||
-      text.includes('rate_limit_error') ||
-      text.includes('rate limit') ||
-      text.includes('rate-limit') ||
-      text.includes('too many requests') ||
-      text.includes('quota exceeded') ||
-      text.includes('usage limit') ||
-      text.includes('weekly limit') ||
-      text.includes('5-hour limit') ||
-      text.includes('5h limit') ||
-      /used \d+% of your/.test(text)
-    );
-  } catch {
-    return false;
-  }
+  const slice = readLogTail(logPath, 200 * 1024);
+  if (!slice) return false;
+  const text = slice.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').toLowerCase();
+  return (
+    text.includes('overloaded_error') ||
+    text.includes('rate_limit_error') ||
+    text.includes('rate limit') ||
+    text.includes('rate-limit') ||
+    text.includes('too many requests') ||
+    text.includes('quota exceeded') ||
+    text.includes('usage limit') ||
+    text.includes('weekly limit') ||
+    text.includes('5-hour limit') ||
+    text.includes('5h limit') ||
+    /used \d+% of your/.test(text)
+  );
 }
 
 /**
@@ -200,6 +217,23 @@ async function main(): Promise<void> {
       reason = 'anthropic rate limit detected in stdout.log';
     }
   }
+
+  // BL-003 phase 2: structured quota detection → profile_quota_exhausted bus event.
+  // Independent of the rate-limited reclassification above: an exit
+  // can be classified as 'crash' (no UX rate-limit string) but still
+  // trip a quota pattern in stderr.log (structured Anthropic API
+  // error). Both detectors run; either firing emits the bus event.
+  // Boss's phase-3 failover skill subscribes to this event and uses
+  // the metadata to swap agents to their fallback_profile. The
+  // event fires through quiet hours and Telegram-muting — failover
+  // signal is reliability-gated and must always reach the bus.
+  maybeEmitQuotaEvent({
+    agentName,
+    agentDir: process.env.CTX_AGENT_DIR,
+    stdoutPath: join(logDir, 'stdout.log'),
+    stderrPath: join(logDir, 'stderr.log'),
+    now: new Date(),
+  });
 
   // Track crash count (real crashes only).
   const today = new Date().toISOString().split('T')[0];
