@@ -77,6 +77,50 @@ Example:
 cortextos bus list-tasks --agent $CTX_AGENT_NAME --status pending
 ```
 
+### claim-task
+Atomically claim a pending task (sets `in_progress` + assignee in one shot, rejects if another agent already owns it). Prefer this over `update-task ... in_progress` when racing other agents on a shared queue.
+
+```bash
+cortextos bus claim-task <task_id> [--owner <agent>]
+```
+
+### task-history
+Show a task's append-only audit log (every status change, claim, completion).
+
+```bash
+cortextos bus task-history <task_id>
+```
+
+### check-deps
+Show open dependencies blocking a task — lists `blocked_by` entries that are not yet completed.
+
+```bash
+cortextos bus check-deps <task_id>
+```
+
+### save-output
+Copy a file into the per-task deliverables tree and link it to the task as a file output. Use when shipping artifacts (reports, generated assets, audit records) tied to a task.
+
+```bash
+cortextos bus save-output <task_id> <source_path> [--label "<short label>"]
+```
+
+- **task_id** (required): Target task ID
+- **source_path** (required): Path to the file to attach (copied, not moved)
+- **--label** (optional): Human-readable label shown in dashboard listings
+
+Example:
+```bash
+cortextos bus save-output task_abc123 /tmp/audit-report.md --label "Audit report v1"
+```
+
+### compact-tasks
+Archive completed tasks older than N days into a per-month archive (`archive-YYYY-MM.jsonl`) and remove them from the active list. Preserves audit logs; skips tasks that still appear as blockers.
+
+```bash
+cortextos bus compact-tasks [--older-than <days>] [--dry-run]
+```
+
 ---
 
 ## Messages
@@ -161,6 +205,22 @@ cortextos bus update-heartbeat "<current_task_summary>"
 Example:
 ```bash
 cortextos bus update-heartbeat "WORKING ON: Implementing user auth for the dashboard"
+```
+
+---
+
+## Memory
+
+### recall-facts
+Recall recent session facts extracted at compaction time (cross-session memory). Read these before today's daily memory file — they capture granular decisions and outcomes that did not survive into MEMORY.md.
+
+```bash
+cortextos bus recall-facts [--days N] [--limit M] [--format json|text]
+```
+
+Example:
+```bash
+cortextos bus recall-facts --days 3
 ```
 
 ---
@@ -339,6 +399,16 @@ Collect experiment context for hypothesis generation.
 cortextos bus gather-context [--agent <name>] [--metric <name>] [--format json|markdown]
 ```
 
+### manage-cycle
+Manage experiment cycles for an agent (start, advance, end). Used by orchestrators to gate cycle transitions.
+
+```bash
+cortextos bus manage-cycle <action> <agent>
+```
+
+- **action** (required): `start` | `advance` | `end` | `status`
+- **agent** (required): Target agent name
+
 ---
 
 ## Lifecycle
@@ -413,10 +483,16 @@ cortextos bus submit-community-item <item-name> <item-type> "<description>" [--d
 | Check for messages                | `check-inbox`             |
 | Confirm I read a message          | `ack-inbox`               |
 | Talk to another agent             | `send-message`            |
+| Recall recent session facts       | `recall-facts`            |
 | Create work                       | `create-task`             |
+| Claim a shared task atomically    | `claim-task`              |
 | Show progress                     | `update-task`             |
 | Finish work                       | `complete-task`           |
+| Attach a file to a task           | `save-output`             |
+| Inspect a task's audit log        | `task-history`            |
+| See blockers on a task            | `check-deps`              |
 | See my queue                      | `list-tasks`              |
+| Compact old completed tasks       | `compact-tasks`           |
 | Leave a trail                     | `log-event`               |
 | Ask permission                    | `create-approval`         |
 | Alert the user                    | `send-telegram`           |
@@ -430,6 +506,7 @@ cortextos bus submit-community-item <item-name> <item-type> "<description>" [--d
 | Find stale goals                  | `check-goal-staleness`    |
 | Archive old tasks                 | `archive-tasks`           |
 | Run an experiment                 | `create-experiment`       |
+| Manage experiment cycles          | `manage-cycle`            |
 | Restart (keep history)            | `self-restart`            |
 | Restart (fresh)                   | `hard-restart`            |
 | Snapshot workspace                | `auto-commit`             |

@@ -345,7 +345,36 @@ Callbacks include `callback_data:` and `message_id:`. Process all immediately an
 Reply using: cortextos bus send-message <agent> normal '<reply>' <msg_id>
 ```
 
-Always include `msg_id` as reply_to — this auto-ACKs the original. Un-ACK'd messages redeliver after 5 min. For no-reply messages: `cortextos bus ack-inbox <msg_id>`.
+**REPLY + ACK DISCIPLINE — non-negotiable:**
+
+1. **Reply** via the exact `Reply using:` command. Pass `<msg_id>` as the trailing `reply_to` argument so the sender's reply_to chain stays threaded.
+2. **Ack** via `cortextos bus ack-inbox <msg_id>` if (and only if) you do NOT reply. Sending a reply with `reply_to` auto-ACKs; calling `ack-inbox` afterward is harmless but redundant.
+3. Un-ACK'd messages redeliver every 5 minutes. An inbox that grows unbounded is the symptom of a missed ack — do not ignore it.
+
+**Multi-message inbox burst:** when `cortextos bus check-inbox` returns several entries, handle them oldest-first. Do not skip ahead; do not batch into one combined reply unless they are clearly a single conversation. Each `msg_id` needs either a `reply_to` reply or an explicit `ack-inbox`.
+
+**Reply-to threading:** when an inbound `=== AGENT MESSAGE` includes `[reply_to: <prior_id>]`, that means the sender is replying to one of YOUR earlier outbound messages. Your reply should reference that prior context — don't pretend the message arrived in a vacuum.
+
+**Bus quick-reference for codex agents:**
+
+| Need to...                       | Command                                                        |
+|----------------------------------|----------------------------------------------------------------|
+| Reply to an inbox message        | `bus send-message <from> normal '<text>' <msg_id>`             |
+| Ack a no-reply inbox item        | `bus ack-inbox <msg_id>`                                       |
+| Check inbox                      | `bus check-inbox`                                              |
+| Create a task                    | `bus create-task "<title>" --desc "<desc>" [--assignee <a>]`   |
+| Update task status               | `bus update-task <id> in_progress\|completed\|blocked`         |
+| Complete a task with result      | `bus complete-task <id> --result "<what shipped>"`             |
+| Attach a file to a task          | `bus save-output <task-id> <source-file>`                      |
+| Log an event                     | `bus log-event <category> <event> info\|warning\|error`        |
+| Update heartbeat                 | `bus update-heartbeat "<one-line state>"`                      |
+| Request human approval           | `bus create-approval "<title>" <category> "[context]"`         |
+| Propose / run / score experiment | `bus create-experiment <metric> "<hypothesis>"`, `run-experiment <id>`, `evaluate-experiment <id> <value>` |
+| Discover agents / skills         | `bus list-agents`, `bus list-skills --format text`             |
+| Cross-session memory             | `bus recall-facts --days 3`                                    |
+| Urgent signal to another agent   | `bus notify-agent <agent> "<message>"`                         |
+
+For full flag/syntax details: read `plugins/cortextos-agent-skills/skills/bus-reference/SKILL.md`. For copy-paste recipes per workflow (tasks, comms, approvals, experiments), the per-skill SKILL.md files under `plugins/cortextos-agent-skills/skills/` carry full examples.
 
 ---
 
