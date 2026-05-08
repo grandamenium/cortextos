@@ -183,6 +183,28 @@ describe('Bus System', () => {
       expect(status.last_at).not.toBeNull();
       expect(status.age_seconds).toBeLessThan(5);
     });
+
+    // Locks in spec § Component 6 "max 1 hard-restart per N min UNLESS EXPLICIT": when an
+    // explicit fresh_start=true dispatch arrives during an active cooldown, the agent's
+    // CLAUDE.md "On dispatch receipt" rule fires the restart anyway and the marker is
+    // overwritten. The implementation supports this by always writing the marker on
+    // hardRestart(freshStart=true) — there's no "skip if recent" guard inside the function.
+    it('overwrites marker on second hardRestart(freshStart=true) — explicit bypasses cooldown', async () => {
+      const paths = makePaths(testDir);
+      hardRestart(paths, 'test-agent', 'first fresh-start', true);
+      const firstStatus = getFreshRestartCooldown(paths);
+      expect(firstStatus.on_cooldown).toBe(true);
+      const firstTs = firstStatus.last_at!;
+      // Wait briefly so the second timestamp differs (1s ISO resolution)
+      await new Promise(r => setTimeout(r, 1100));
+      hardRestart(paths, 'test-agent', 'second fresh-start (cooldown bypass)', true);
+      const secondStatus = getFreshRestartCooldown(paths);
+      expect(secondStatus.last_at).not.toBeNull();
+      expect(secondStatus.last_at).not.toBe(firstTs); // overwritten
+      // Both restart-log entries are tagged distinctly so post-mortem can see both fired
+      const logContent = readFileSync(join(paths.logDir, 'restarts.log'), 'utf-8');
+      expect(logContent.match(/HARD-RESTART \(fresh-start\):/g)?.length).toBe(2);
+    });
   });
 
   describe('autoCommit', () => {

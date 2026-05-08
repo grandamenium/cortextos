@@ -723,9 +723,13 @@ busCommand
   .action((opts: { cooldownSeconds: string; format: string }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const cooldownSeconds = Number.parseInt(opts.cooldownSeconds, 10);
-    if (!Number.isFinite(cooldownSeconds) || cooldownSeconds < 0) {
-      console.error(`Invalid --cooldown-seconds: ${opts.cooldownSeconds}`);
+    // Strict integer parse: reject NaN, Infinity, negatives, AND floats. parseInt('1800.5')
+    // silently returns 1800; per .claude/rules/code-quality/numeric-validation-three-traps.md
+    // counts need an integer guard tighter than typeof/parseInt alone.
+    const raw = opts.cooldownSeconds;
+    const cooldownSeconds = Number(raw);
+    if (!Number.isFinite(cooldownSeconds) || !Number.isInteger(cooldownSeconds) || cooldownSeconds < 0) {
+      console.error(`Invalid --cooldown-seconds: ${raw} (expected non-negative integer)`);
       process.exit(1);
     }
     const status = getFreshRestartCooldown(paths, cooldownSeconds);

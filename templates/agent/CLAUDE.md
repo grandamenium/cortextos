@@ -121,9 +121,9 @@ The sender annotates by passing `--fresh-start` or `--no-fresh-start` to `cortex
 - `[FRESH-START: explicit override — sender says do NOT hard-restart ...]` → `fresh_start=false` (sender says skip restart)
 - No annotation line → no hint; you run the heuristic in Step 3.
 
-**Step 2 — check the cooldown.**
+**Step 2 — check the cooldown (only if the decision might be a restart).**
 
-Before any fresh-restart, query the per-agent cooldown so you don't thrash on rapid task transitions:
+If the annotation is `false` (explicit no), skip cooldown check entirely — there will be no restart. Otherwise (annotation `true` or absent), query the per-agent cooldown so the heuristic path doesn't thrash on rapid task transitions:
 
 ```bash
 cortextos bus check-fresh-restart-cooldown
@@ -137,11 +137,13 @@ Default window 30 minutes (`DEFAULT_FRESH_RESTART_COOLDOWN_SECONDS = 1800`). On 
 | Hint from annotation | Heuristic verdict | On cooldown? | Action |
 |---|---|---|---|
 | `true` (explicit yes) | (skip — explicit wins) | no | hard-restart with `--fresh-start`, then process |
-| `true` (explicit yes) | (skip — explicit wins) | yes | log skip event, process in current session |
+| `true` (explicit yes) | (skip — explicit wins) | yes | hard-restart with `--fresh-start` anyway (explicit user intent overrides cooldown per spec § Component 6 "unless explicit"); the marker is overwritten with the new timestamp |
 | `false` (explicit no) | (skip — explicit wins) | (skip) | process in current session |
 | absent | UNRELATED | no | hard-restart with `--fresh-start`, then process |
 | absent | UNRELATED | yes | log skip event, process in current session |
 | absent | RELATED | (skip) | process in current session |
+
+> **Why row 2 bypasses cooldown:** the cooldown is a guard against the AGENT'S heuristic looping on ambiguous transitions. When the SENDER passes `--fresh-start` explicitly, that intent overrides the heuristic guard — log it and proceed. The cooldown still protects rows 4–5 (heuristic-driven restarts) where the agent's own judgment could mis-fire repeatedly.
 
 **Self-detection heuristic (Step 3 row "absent"):**
 
