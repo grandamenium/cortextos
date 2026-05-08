@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
@@ -76,17 +76,43 @@ export const addAgentCommand = new Command('add-agent')
     // Create agent directory
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(join(agentDir, 'memory'), { recursive: true });
-    mkdirSync(join(agentDir, '.claude', 'skills'), { recursive: true });
+
+    // For codex-app-server, skills live under plugins/cortextos-agent-skills/skills
+    // and are copied in by the template; .claude/skills is Claude-Code-only.
+    const isCodexAppServer = options.runtime === 'codex-app-server';
+    if (!isCodexAppServer) {
+      mkdirSync(join(agentDir, '.claude', 'skills'), { recursive: true });
+    }
+
+    // Resolve template name. Codex agents created with the default --template agent
+    // get the codex-specific bootstrap in templates/agent-codex/. Any explicit
+    // --template choice is honored as-is so orchestrator/analyst/etc still work.
+    const effectiveTemplate = (isCodexAppServer && options.template === 'agent')
+      ? 'agent-codex'
+      : options.template;
 
     // Copy template files
-    const templateDir = findTemplateDir(projectRoot, options.template);
+    const templateDir = findTemplateDir(projectRoot, effectiveTemplate);
     if (templateDir) {
       copyTemplateFiles(templateDir, agentDir, name, org);
-      console.log(`  Copied template files from ${options.template}`);
+      console.log(`  Copied template files from ${effectiveTemplate}`);
     } else {
       // Create minimal files
       createMinimalAgent(agentDir, name, org, options.template);
       console.log('  Created minimal agent files');
+    }
+
+    // Codex agents: link each local skill into ~/.codex/skills/<agent>__<skill>
+    // so codex-app-server's host-wide skill discovery sees the per-agent set.
+    if (isCodexAppServer) {
+      try {
+        const linksCreated = installCodexSkillSymlinks(agentDir, name);
+        if (linksCreated > 0) {
+          console.log(`  Linked ${linksCreated} skill(s) into ~/.codex/skills/`);
+        }
+      } catch (err) {
+        console.error(`Warning: failed to install codex skill symlinks: ${(err as Error).message}`);
+      }
     }
 
     // Create goals.json (empty — orchestrator will populate on morning cascade)
@@ -276,6 +302,54 @@ export const addAgentCommand = new Command('add-agent')
     console.log(`    2. Customize identity files (IDENTITY.md, SOUL.md, GOALS.md)`);
     console.log(`    3. Start: cortextos start ${name}\n`);
   });
+
+/**
+ * Walk an agent's plugins/cortextos-agent-skills/skills tree and create one
+ * symlink per skill in ~/.codex/skills/<agent_name>__<skill_name>.
+ *
+ * The agent-name prefix prevents collisions when multiple codex agents share
+ * the host's ~/.codex/skills directory (codex's default skill discovery
+ * location). Existing symlinks pointing at the same target are replaced;
+ * non-symlink entries with the same name are left alone (we don't clobber
+ * unknown files the user may have placed there).
+ *
+ * Returns the number of symlinks successfully created or refreshed.
+ */
+function installCodexSkillSymlinks(agentDir: string, agentName: string): number {
+  const skillsRoot = join(agentDir, 'plugins', 'cortextos-agent-skills', 'skills');
+  if (!existsSync(skillsRoot)) return 0;
+
+  const codexSkillsDir = join(homedir(), '.codex', 'skills');
+  mkdirSync(codexSkillsDir, { recursive: true });
+
+  let linked = 0;
+  const entries = readdirSync(skillsRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillSrc = join(skillsRoot, entry.name);
+    const linkPath = join(codexSkillsDir, `${agentName}__${entry.name}`);
+    try {
+      // Replace an existing symlink — but never an actual file/dir owned by the user.
+      if (existsSync(linkPath) || lstatSync(linkPath, { throwIfNoEntry: false } as any)) {
+        try {
+          const st = lstatSync(linkPath);
+          if (st.isSymbolicLink()) {
+            unlinkSync(linkPath);
+          } else {
+            // Skip — something else is here, leave it.
+            continue;
+          }
+        } catch { /* path likely doesn't exist; continue to symlink */ }
+      }
+      symlinkSync(skillSrc, linkPath, 'dir');
+      linked++;
+    } catch (err) {
+      // Don't abort the whole scaffold for one bad symlink.
+      console.error(`    Warning: failed to symlink ${linkPath}: ${(err as Error).message}`);
+    }
+  }
+  return linked;
+}
 
 function findTemplateDir(projectRoot: string, template: string): string | null {
   const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || projectRoot;

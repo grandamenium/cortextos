@@ -1,0 +1,6 @@
+local/
+.env
+.cortextos-env
+memory/
+*.log
+.cache/
