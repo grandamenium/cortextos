@@ -14,6 +14,12 @@ The first call updates the agent-alive signal on the dashboard. The second call 
 
 If either fails, your agent shows as DEAD on the dashboard. Fix before anything else.
 
+**Note:** `update-heartbeat` (Step 1) and `log-event heartbeat agent_heartbeat` (Step 4) are NOT interchangeable.
+- `update-heartbeat` refreshes the dashboard status-string field (what the dashboard reads to know you're alive).
+- `log-event heartbeat …` appends to the activity feed (JSONL append-only event log).
+
+Both are required every cycle. Skipping Step 1 leaves your dashboard view stale even though you're firing events.
+
 ## Step 2: Check inbox
 
 ```bash
