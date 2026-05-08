@@ -94,6 +94,7 @@ Format: `- [domain] <slug>: one-line symptom (severity)`. Read the subfile when 
 - [llm, ai-orchestration] `llm-vague-triage-hallucinates`: vague triage/synthesis briefs produce convincing-looking false data (blocker)
 - [data-promotion, llm, ai-orchestration] `never-auto-create-canonical-objects`: extraction emits to triage queue; only explicit user/human action promotes to canonical store (blocker)
 - [llm, ai-orchestration, briefs] `brief-addendums-lost-in-planner`: planner reads brief body into task descriptions but doesn't propagate addendums after planning (should-know)
+- [llm, context-management, compaction] `compact-instructions`: surgical `/compact` prompt library for task-boundary compaction (phase / feature / pre-hard-restart / mid-task emergency) — read when context-pct.json reports severity > green (should-know)
 
 ### Daemon, supervisors, deployment
 
