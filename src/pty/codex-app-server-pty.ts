@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
@@ -673,6 +673,7 @@ export class CodexAppServerPTY {
         break;
       case 'thread/tokenUsage/updated':
         this.writeContextStatus(params);
+        this.appendCodexTokenLog(params);
         this._outputBuffer.push(`[codex-app-server:event] ${method}\n`);
         break;
       case 'warning':
@@ -800,6 +801,41 @@ export class CodexAppServerPTY {
       atomicWriteSync(join(this._stateDir, 'context_status.json'), payload);
     } catch {
       // Non-fatal: FastChecker will skip stale/missing files gracefully.
+    }
+  }
+
+  /**
+   * Append a per-turn token usage record to <ctxRoot>/logs/<agent>/codex-tokens.jsonl
+   * so the dashboard cost-parser can scan it alongside ~/.claude/projects/*.jsonl.
+   * One JSONL line per `thread/tokenUsage/updated` notification; dedup by
+   * (session_id, turn_id) is the parser's responsibility.
+   */
+  private appendCodexTokenLog(params: Record<string, unknown>): void {
+    const tokenUsage = isRecord(params.tokenUsage) ? params.tokenUsage : null;
+    if (!tokenUsage) return;
+    const total = isRecord(tokenUsage.total) ? tokenUsage.total : null;
+    if (!total) return;
+
+    const turnId = typeof params.turnId === 'string' ? params.turnId : null;
+    if (!turnId || !this._threadId) return;
+
+    const entry = {
+      timestamp: new Date().toISOString(),
+      model: this._config.model || 'gpt-5-codex',
+      input_tokens: typeof total.inputTokens === 'number' ? total.inputTokens : 0,
+      output_tokens: typeof total.outputTokens === 'number' ? total.outputTokens : 0,
+      cache_read_tokens: typeof total.cachedInputTokens === 'number' ? total.cachedInputTokens : 0,
+      cache_write_tokens: 0,
+      session_id: this._threadId,
+      turn_id: turnId,
+    };
+
+    try {
+      const logDir = join(this._env.ctxRoot, 'logs', this._env.agentName);
+      ensureDir(logDir);
+      appendFileSync(join(logDir, 'codex-tokens.jsonl'), `${JSON.stringify(entry)}\n`);
+    } catch {
+      // Non-fatal: cost reporting is observability only.
     }
   }
 

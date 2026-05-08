@@ -5,10 +5,11 @@ import { useRouter } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { HealthDot } from '@/components/shared/health-dot';
 import { OrgBadge } from '@/components/shared/org-badge';
+import { RuntimeBadge } from '@/components/shared/runtime-badge';
 import { AgentAvatar } from '@/components/shared/agent-avatar';
 import { AgentActions } from './agent-actions';
 import { IconChecklist } from '@tabler/icons-react';
-import type { HealthStatus } from '@/lib/types';
+import type { AgentRuntime, HealthStatus } from '@/lib/types';
 
 export interface AgentCardData {
   name: string;
@@ -20,6 +21,7 @@ export interface AgentCardData {
   health: HealthStatus;
   currentTask?: string;
   tasksToday: number;
+  runtime?: AgentRuntime;
 }
 
 interface AgentCardProps {
@@ -66,8 +68,11 @@ export function AgentCard({ agent }: AgentCardProps) {
             />
           </div>
 
-          {/* Org badge */}
-          {agent.org && <OrgBadge org={agent.org} />}
+          {/* Org + runtime badges */}
+          <div className="flex items-center gap-1.5">
+            {agent.org && <OrgBadge org={agent.org} />}
+            {agent.runtime && <RuntimeBadge runtime={agent.runtime} />}
+          </div>
 
           {/* Current task */}
           {agent.currentTask ? (

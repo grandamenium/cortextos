@@ -5,6 +5,7 @@ const fsMocks = {
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
   unlinkSync: vi.fn(),
+  appendFileSync: vi.fn(),
 };
 
 vi.mock('fs', async () => {
@@ -15,6 +16,7 @@ vi.mock('fs', async () => {
     get readFileSync() { return fsMocks.readFileSync; },
     get writeFileSync() { return fsMocks.writeFileSync; },
     get unlinkSync() { return fsMocks.unlinkSync; },
+    get appendFileSync() { return fsMocks.appendFileSync; },
   };
 });
 
@@ -79,6 +81,7 @@ beforeEach(() => {
   fsMocks.readFileSync.mockReset();
   fsMocks.writeFileSync.mockReset();
   fsMocks.unlinkSync.mockReset();
+  fsMocks.appendFileSync.mockReset();
   requestMock.mockReset();
   notifyMock.mockReset();
   closeMock.mockReset();
@@ -854,6 +857,143 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
     expect(() => feedTokenUsage(pty, {
       last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
       total: { cachedInputTokens: 0, inputTokens: 1000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1000 },
+      modelContextWindow: 200000,
+    })).not.toThrow();
+  });
+});
+
+describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', () => {
+  function feedTokenUsage(
+    pty: InstanceType<typeof CodexAppServerPTY>,
+    tokenUsage: unknown,
+    turnId: string | null = 'turn-1',
+  ) {
+    (pty as unknown as { handleRpcMessage(message: unknown): void }).handleRpcMessage({
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'thread-9', turnId, tokenUsage },
+    });
+  }
+
+  function lastAppendedEntry(): Record<string, unknown> | null {
+    if (fsMocks.appendFileSync.mock.calls.length === 0) return null;
+    const lastCall = fsMocks.appendFileSync.mock.calls.at(-1) as [string, string];
+    const trimmed = lastCall[1].replace(/\n$/, '');
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  }
+
+  it('appends a JSONL line to <ctxRoot>/logs/<agent>/codex-tokens.jsonl on tokenUsage', () => {
+    const pty = new CodexAppServerPTY(mockEnv, { model: 'gpt-5-codex' });
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 1234, inputTokens: 5000, outputTokens: 800, reasoningOutputTokens: 0, totalTokens: 7034 },
+      modelContextWindow: 200000,
+    });
+
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    const [path, line] = fsMocks.appendFileSync.mock.calls[0] as [string, string];
+    expect(path).toBe('/tmp/ctx/logs/codex-app-agent/codex-tokens.jsonl');
+    expect(line.endsWith('\n')).toBe(true);
+
+    const entry = lastAppendedEntry()!;
+    expect(entry.model).toBe('gpt-5-codex');
+    expect(entry.input_tokens).toBe(5000);
+    expect(entry.output_tokens).toBe(800);
+    expect(entry.cache_read_tokens).toBe(1234);
+    expect(entry.cache_write_tokens).toBe(0);
+    expect(entry.session_id).toBe('thread-9');
+    expect(entry.turn_id).toBe('turn-1');
+    expect(typeof entry.timestamp).toBe('string');
+  });
+
+  it('defaults model to gpt-5-codex when config.model is unset', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 150 },
+      modelContextWindow: 200000,
+    });
+
+    const entry = lastAppendedEntry()!;
+    expect(entry.model).toBe('gpt-5-codex');
+  });
+
+  it('preserves config.model override when set', () => {
+    const pty = new CodexAppServerPTY(mockEnv, { model: 'gpt-5-codex-preview' });
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 150 },
+      modelContextWindow: 200000,
+    });
+
+    const entry = lastAppendedEntry()!;
+    expect(entry.model).toBe('gpt-5-codex-preview');
+  });
+
+  it('skips append when turnId is missing', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 150 },
+      modelContextWindow: 200000,
+    }, null);
+
+    expect(fsMocks.appendFileSync).not.toHaveBeenCalled();
+  });
+
+  it('skips append when threadId has not been set', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 150 },
+      modelContextWindow: 200000,
+    });
+
+    expect(fsMocks.appendFileSync).not.toHaveBeenCalled();
+  });
+
+  it('skips append when params.tokenUsage is missing', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    (pty as unknown as { handleRpcMessage(message: unknown): void }).handleRpcMessage({
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'thread-9', turnId: 'turn-1' },
+    });
+    expect(fsMocks.appendFileSync).not.toHaveBeenCalled();
+  });
+
+  it('produces a separate JSONL line per turn (no implicit dedup at writer)', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 150 },
+      modelContextWindow: 200000,
+    }, 'turn-1');
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 200, outputTokens: 75, reasoningOutputTokens: 0, totalTokens: 275 },
+      modelContextWindow: 200000,
+    }, 'turn-2');
+
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(2);
+    const turnIds = fsMocks.appendFileSync.mock.calls.map((c) => {
+      const line = (c as [string, string])[1].replace(/\n$/, '');
+      return (JSON.parse(line) as { turn_id: string }).turn_id;
+    });
+    expect(turnIds).toEqual(['turn-1', 'turn-2']);
+  });
+
+  it('does not throw when appendFileSync rejects (cost logging is non-fatal)', () => {
+    fsMocks.appendFileSync.mockImplementationOnce(() => { throw new Error('disk full'); });
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    expect(() => feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 150 },
       modelContextWindow: 200000,
     })).not.toThrow();
   });

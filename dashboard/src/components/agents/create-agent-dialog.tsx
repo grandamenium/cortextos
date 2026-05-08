@@ -30,7 +30,8 @@ interface CreateAgentDialogProps {
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
 const TEMPLATES = [
-  { value: 'agent', label: 'Agent' },
+  { value: 'agent', label: 'Agent (Claude)' },
+  { value: 'agent-codex', label: 'Agent (Codex)' },
   { value: 'orchestrator', label: 'Orchestrator' },
   { value: 'analyst', label: 'Analyst' },
 ] as const;
