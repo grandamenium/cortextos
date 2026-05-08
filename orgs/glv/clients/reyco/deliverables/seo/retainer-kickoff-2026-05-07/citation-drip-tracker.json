@@ -1,0 +1,51 @@
+{
+  "client": "reyco",
+  "domain": "reycomarine.com",
+  "drip_started": null,
+  "canonical_nap": {
+    "name": "Reyco Marine & Small Engine",
+    "address": null,
+    "phone": null,
+    "website": "https://reycomarine.com",
+    "note": "Confirm address + phone from GBP before submitting any directory"
+  },
+  "tier1": [
+    { "day": 1, "name": "Google Business Profile", "url": "google.com/business", "status": "pending_aiden", "submitted": null, "verified": null, "note": "Update website URL to reycomarine.com — Aiden AM action" },
+    { "day": 1, "name": "Bing Places", "url": "bingplaces.com", "status": "pending_aiden", "submitted": null, "verified": null, "note": "Free listing — imports from GBP optionally" },
+    { "day": 2, "name": "Apple Maps Business Connect", "url": "mapsconnect.apple.com", "status": "pending_aiden", "submitted": null, "verified": null, "note": "Requires Apple ID" },
+    { "day": 2, "name": "Facebook Business Page", "url": "facebook.com", "status": "pending_aiden", "submitted": null, "verified": null, "note": "Update existing FB page website URL + hours" },
+    { "day": 3, "name": "YellowPages.ca", "url": "yellowpages.ca", "status": "pending_nap", "submitted": null, "verified": null, "note": "Major CA directory — high Google trust. Hold until NAP confirmed." },
+    { "day": 3, "name": "Canada411", "url": "canada411.ca", "status": "pending_nap", "submitted": null, "verified": null, "note": "Telus-owned; auto-pulls from Telus data" },
+    { "day": 4, "name": "Yelp Canada", "url": "yelp.ca", "status": "pending_nap", "submitted": null, "verified": null, "note": "Important for review velocity" },
+    { "day": 4, "name": "Foursquare", "url": "foursquare.com", "status": "pending_nap", "submitted": null, "verified": null, "note": "Feeds Bing, Snapchat, Apple Maps" },
+    { "day": 5, "name": "BBB Canada", "url": "bbb.org/canada", "status": "pending_nap", "submitted": null, "verified": null, "note": "Free basic listing; accreditation optional" },
+    { "day": 5, "name": "Hotfrog Canada", "url": "hotfrog.ca", "status": "pending_nap", "submitted": null, "verified": null, "note": "Scraped by aggregators" },
+    { "day": 6, "name": "Cylex Canada", "url": "cylex.ca", "status": "pending_nap", "submitted": null, "verified": null, "note": "Feeds several secondary directories" },
+    { "day": 6, "name": "n49.ca", "url": "n49.ca", "status": "pending_nap", "submitted": null, "verified": null, "note": "Canada-specific" },
+    { "day": 7, "name": "Local.ca", "url": "local.ca", "status": "pending_nap", "submitted": null, "verified": null, "note": "Google indexes well" },
+    { "day": 7, "name": "Canpages", "url": "canpages.ca", "status": "pending_nap", "submitted": null, "verified": null, "note": "Legacy Canadian directory" }
+  ],
+  "tier2_manufacturer": [
+    { "name": "Princecraft dealer locator", "url": "princecraft.com", "priority": "URGENT", "status": "pending_verify", "note": "Confirm Reyco appears in dealer finder — contact rep if missing" },
+    { "name": "Mercury Marine dealer locator", "url": "mercurymarine.com", "priority": "URGENT", "status": "pending_verify", "note": "Verify in Mercury official dealer search" },
+    { "name": "Echo dealer locator", "url": "echo-usa.com", "priority": "high", "status": "pending_verify", "note": null },
+    { "name": "Toro dealer locator", "url": "toro.com", "priority": "high", "status": "pending_verify", "note": null },
+    { "name": "Cub Cadet dealer locator", "url": "cubcadet.ca", "priority": "high", "status": "pending_verify", "note": null },
+    { "name": "EZGO dealer locator", "url": "ezgo.com", "priority": "medium", "status": "pending_verify", "note": null },
+    { "name": "Hisun dealer locator", "url": "hisunmotors.ca", "priority": "medium", "status": "pending_verify", "note": null },
+    { "name": "Minn Kota dealer locator", "url": "minnkota.com", "priority": "low", "status": "pending_verify", "note": null }
+  ],
+  "tier3_marine_powersports": [
+    { "name": "Boating Industry Canada", "url": "boatingindustry.com/dealers", "status": "pending_nap" },
+    { "name": "Marine Trader", "url": "marinetrader.com", "status": "pending_nap" },
+    { "name": "OFAH", "url": "ofah.org", "status": "pending_nap" },
+    { "name": "Powersports Business", "url": "powersportsbusiness.com", "status": "pending_nap" },
+    { "name": "Boat Trader Canada", "url": "boattrader.ca", "status": "pending_nap" },
+    { "name": "Kijiji Marine", "url": "kijiji.ca", "status": "pending_nap" },
+    { "name": "Boats.com Canada", "url": "boats.com", "status": "pending_nap" },
+    { "name": "Canada Powersports Dealers Association", "url": "cpda.ca", "status": "pending_verify" },
+    { "name": "Algoma District / algomacountry.ca", "url": "algomacountry.ca", "status": "pending_nap" }
+  ],
+  "last_updated": "2026-05-07",
+  "updated_by": "seo-agent"
+}

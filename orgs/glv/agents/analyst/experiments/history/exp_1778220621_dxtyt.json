@@ -1,0 +1,21 @@
+{
+  "id": "exp_1778220621_dxtyt",
+  "agent": "analyst",
+  "metric": "system_effectiveness",
+  "hypothesis": "Cycle-16 score 7/10 KEEP — stable-at-7 5-cycle window (12-16); Phase 6 closed with 5 boss approvals; banked FAG 3-branch framework + H5 cross-fleet worked example + cron-fire-late observation class",
+  "surface": "",
+  "direction": "higher",
+  "window": "24h",
+  "measurement": "",
+  "status": "proposed",
+  "baseline_value": 0,
+  "result_value": null,
+  "decision": null,
+  "learning": "",
+  "experiment_commit": null,
+  "tracking_commit": null,
+  "created_at": "2026-05-08T06:10:21Z",
+  "started_at": null,
+  "completed_at": null,
+  "changes_description": null
+}
