@@ -231,6 +231,10 @@ export class AgentPTY {
       // Bypass Permissions warning — navigate down to "Yes, I accept" then Enter.
       if (!bypassAccepted && data.includes('Bypass')) {
         bypassAccepted = true;
+        // Auditable log per `pty-output-substring-heuristic-matches-multiple-dialogs`:
+        // every heuristic match + action is logged so a sibling-dialog
+        // false-positive is greppable in stderr.
+        process.stderr.write(`[agent-pty] bypass-warning auto-accept fired (down-arrow + Enter) for ${this.config.name}\n`);
         this.pty.write('\x1b[B');
         setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 300);
         return;
@@ -239,6 +243,7 @@ export class AgentPTY {
       // Trust folder prompt — only fires if bypass wasn't detected in this chunk.
       if (!trustAccepted && data.includes('trust')) {
         trustAccepted = true;
+        process.stderr.write(`[agent-pty] trust-dialog auto-accept fired (Enter) for ${this.config.name}\n`);
         this.pty.write('\r');
       }
     });
@@ -252,10 +257,12 @@ export class AgentPTY {
       const recent = this.outputBuffer.getRecent();
       if (!bypassAccepted && recent.includes('Bypass')) {
         bypassAccepted = true;
+        process.stderr.write(`[agent-pty] bypass-warning auto-accept fired via fallback probe for ${this.config.name}\n`);
         this.pty.write('\x1b[B');
         setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 300);
       } else if (!trustAccepted && recent.includes('trust')) {
         trustAccepted = true;
+        process.stderr.write(`[agent-pty] trust-dialog auto-accept fired via fallback probe for ${this.config.name}\n`);
         this.pty.write('\r');
       }
     };

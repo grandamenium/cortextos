@@ -19,6 +19,17 @@ import { atomicWriteSync } from './atomic.js';
  * runtime trust dialog — operator can hand-accept once and the value
  * sticks. Failing the spawn over a config seed would be worse than the
  * fallback.
+ *
+ * **Concurrency note:** the read-modify-write window is unguarded.
+ * `atomicWriteSync` makes the final rename atomic, but if the operator
+ * is running interactive `claude` against the same `~/.claude.json`
+ * (default-account case where CLAUDE_CONFIG_DIR is unset and the agent
+ * shares the operator's home), one side's write between the other side's
+ * read and rename can be silently dropped. The seed itself is
+ * idempotent — re-running on next spawn re-asserts — so the fallout is
+ * at most a single missed seed, which the runtime trust handler in
+ * `agent-pty.ts` recovers from. Per-agent isolated CLAUDE_CONFIG_DIR
+ * (a separate BL) closes this race entirely.
  */
 export function seedTrustDialog(claudeJsonPath: string, cwd: string): void {
   let obj: Record<string, unknown> = {};
