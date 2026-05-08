@@ -536,10 +536,73 @@ export function manageCycle(
 // Supabase sync — non-blocking, fail-open
 // ---------------------------------------------------------------------------
 
+// orch_approvals.org_id is a UUID FK to organizations.id (RevOps Global).
+const REVOPS_ORG_UUID =
+  process.env.SUPABASE_RGOS_ORG_UUID || 'a1b2c3d4-0000-0000-0000-000000000001';
+// Approvals expire if not decided within 7 days.
+const APPROVAL_TTL_MS = 7 * 24 * 3600 * 1000;
+
+/**
+ * Create a paired orch_approvals row for a proposed experiment.
+ * Returns the approval UUID, or null on failure (non-fatal).
+ *
+ * Must mirror the shape used by orch-experiment-proposer so the Approvals UI
+ * renders identically regardless of which path created the experiment.
+ */
+async function createApprovalRow(
+  supabaseUrl: string,
+  serviceKey: string,
+  experiment: Experiment,
+): Promise<string | null> {
+  const headers: Record<string, string> = {
+    'apikey': serviceKey,
+    'Authorization': `Bearer ${serviceKey}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=representation',
+  };
+  const expiresAt = new Date(Date.now() + APPROVAL_TTL_MS).toISOString();
+  const body = JSON.stringify({
+    org_id: REVOPS_ORG_UUID,
+    type: 'orch_experiment',
+    status: 'pending',
+    context: {
+      task_title: experiment.hypothesis.split('\n')[0].slice(0, 120),
+      source: 'cortextos-bus',
+      proposed_by: experiment.agent,
+      hypothesis: experiment.hypothesis,
+      method: experiment.measurement || `${experiment.metric} via ${experiment.surface}`,
+      success_criteria: `${experiment.metric} (${experiment.direction}) — ${experiment.surface || 'general'}`,
+      token_budget: 0,
+    },
+    expires_at: expiresAt,
+  });
+  try {
+    const res = await fetch(`${supabaseUrl}/rest/v1/orch_approvals`, {
+      method: 'POST',
+      headers,
+      body,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) {
+      const rows = await res.json() as Array<{ id: string }>;
+      return rows?.[0]?.id ?? null;
+    }
+  } catch {
+    // Non-fatal — experiment will sync without an approval_id and stay stuck
+    // in proposed forever. Caller logs nothing; the experiment row will be
+    // visible in the dashboard as a signal that the approval path is broken.
+  }
+  return null;
+}
+
 /**
  * Sync a local Experiment to the orch_experiments table.
  * - If experiment.orch_id is set: PATCH that row (UPDATE).
  * - Otherwise: INSERT and store the returned UUID as orch_id in the local file.
+ *   For proposed experiments, a paired orch_approvals row is created first so
+ *   the trg_approve_experiment trigger can promote status → approved when Greg
+ *   approves via the dashboard. Without this, approval_id is null and the
+ *   experiment is permanently stuck in proposed.
  * Always non-blocking: errors are logged but never thrown.
  *
  * Mapping:
@@ -566,7 +629,8 @@ export async function syncExperimentToSupabase(
     'Prefer': 'return=representation',
   };
 
-  const payload = {
+  const payload: Record<string, unknown> = {
+    org_id: 'revops-global',
     hypothesis: experiment.hypothesis,
     method: experiment.measurement || `${experiment.metric} via ${experiment.surface}`,
     proposed_by: experiment.agent,
@@ -601,6 +665,18 @@ export async function syncExperimentToSupabase(
         { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 10_000, isRetryable: isTransientError },
       );
     } else {
+      // New experiment INSERT.
+      // For proposed experiments: create the orch_approvals row first so the
+      // DB trigger (trg_approve_experiment) has an approval_id to fire on.
+      // Skip for running/completed experiments — they were already approved
+      // (or ran locally without the approval gate).
+      if (experiment.status === 'proposed') {
+        const approvalId = await createApprovalRow(url, key, experiment);
+        if (approvalId) {
+          payload.approval_id = approvalId;
+        }
+      }
+
       // INSERT and capture the UUID — 1 retry only (non-idempotent; duplicate risk on retry)
       const res = await withRetry(
         () => fetch(base, {
