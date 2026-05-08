@@ -15,6 +15,7 @@ import {
   readLatestUsage,
   computeContextUsage,
   writeContextUsage,
+  usageFromStatusLine,
 } from '../../../src/monitor/context-usage';
 
 describe('thresholdsFor', () => {
@@ -306,5 +307,132 @@ describe('writeContextUsage', () => {
     expect(existsSync(p)).toBe(true);
     const round = JSON.parse(readFileSync(p, 'utf-8'));
     expect(round).toEqual(usage);
+  });
+});
+
+describe('usageFromStatusLine', () => {
+  it('returns null when context_window block is absent', () => {
+    expect(usageFromStatusLine({ agent: 'a', input: {} })).toBeNull();
+    expect(usageFromStatusLine({ agent: 'a', input: { session_id: 's' } })).toBeNull();
+  });
+
+  it('uses Claude-Code-reported context_window_size as the limit (no env-flag heuristic)', () => {
+    // 1M opus reported directly
+    const u = usageFromStatusLine({
+      agent: 'a',
+      input: {
+        context_window: {
+          context_window_size: 1_000_000,
+          used_percentage: 13.13,
+          current_usage: { input_tokens: 1, cache_creation_input_tokens: 2867, cache_read_input_tokens: 128414 },
+        },
+        session_id: 'sid-1',
+        model: 'claude-opus-4-7',
+      },
+    });
+    expect(u!.context_limit).toBe(1_000_000);
+    expect(u!.current_loaded_tokens).toBe(131_282);
+    expect(u!.pct).toBeCloseTo(13.13, 2);
+    expect(u!.severity).toBe('green');
+    expect(u!.next_action_threshold_pct).toBe(25);
+    expect(u!.session_id).toBe('sid-1');
+    expect(u!.model).toBe('claude-opus-4-7');
+    expect(u!.transcript_path).toBe('statusline://current-session');
+  });
+
+  it('falls back to fallbackLimit (default 200k) when context_window_size missing', () => {
+    const u = usageFromStatusLine({
+      agent: 'a',
+      input: {
+        context_window: {
+          // no context_window_size
+          current_usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 130_000 },
+        },
+      },
+    });
+    expect(u!.context_limit).toBe(200_000);
+    expect(u!.severity).toBe('yellow'); // 130k/200k = 65% on 200k table
+  });
+
+  it('honors explicit fallbackLimit', () => {
+    const u = usageFromStatusLine({
+      agent: 'a',
+      input: {
+        context_window: {
+          current_usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 100_000 },
+        },
+      },
+      fallbackLimit: 1_000_000,
+    });
+    expect(u!.context_limit).toBe(1_000_000);
+    expect(u!.severity).toBe('green'); // 10% on 1M
+  });
+
+  it('prefers Claude-Code-reported used_percentage when present', () => {
+    // Claude reports 30% even though our naive sum would compute differently
+    const u = usageFromStatusLine({
+      agent: 'a',
+      input: {
+        context_window: {
+          context_window_size: 1_000_000,
+          used_percentage: 30,
+          current_usage: { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 1 },
+        },
+      },
+    });
+    expect(u!.pct).toBe(30);
+    expect(u!.severity).toBe('soft'); // 30% on 1M = soft (25-35 band)
+  });
+
+  it('computes pct from current_usage when used_percentage missing', () => {
+    const u = usageFromStatusLine({
+      agent: 'a',
+      input: {
+        context_window: {
+          context_window_size: 1_000_000,
+          // used_percentage absent
+          current_usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 450_000 },
+        },
+      },
+    });
+    expect(u!.pct).toBeCloseTo(45, 2);
+    expect(u!.severity).toBe('orange');
+  });
+
+  it('coerces NaN/null fields without crashing', () => {
+    const u = usageFromStatusLine({
+      agent: 'a',
+      input: {
+        context_window: {
+          context_window_size: 1_000_000,
+          used_percentage: null as any,
+          current_usage: { input_tokens: NaN as any, cache_creation_input_tokens: undefined as any, cache_read_input_tokens: 5 },
+        },
+      },
+    });
+    expect(u!.current_loaded_tokens).toBe(5);
+    expect(u!.severity).toBe('green');
+  });
+
+  it('escalates to red when reported pct ≥ 50% on 1M opus', () => {
+    const u = usageFromStatusLine({
+      agent: 'a',
+      input: {
+        context_window: { context_window_size: 1_000_000, used_percentage: 51 },
+      },
+    });
+    expect(u!.severity).toBe('red');
+    expect(u!.next_action_threshold_pct).toBeNull();
+  });
+
+  it('respects 200k thresholds when limit is 200k', () => {
+    const u = usageFromStatusLine({
+      agent: 'a',
+      input: {
+        context_window: { context_window_size: 200_000, used_percentage: 86 },
+      },
+    });
+    expect(u!.context_limit).toBe(200_000);
+    expect(u!.severity).toBe('red');
   });
 });

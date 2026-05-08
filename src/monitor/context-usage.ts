@@ -216,6 +216,96 @@ export function computeContextUsage(opts: ComputeOptions): ContextUsage | null {
   };
 }
 
+// ---------------------------------------------------------------------------
+// statusLine entry point — Phase 2 of BL-2026-05-08-004.
+//
+// Claude Code's `statusLine` hook receives a JSON blob on stdin after every
+// assistant turn (debounced ~300ms) plus on each refreshInterval tick. The
+// blob includes a `context_window` block with Claude-Code-authoritative
+// `context_window_size` and `current_usage` fields. Computing severity from
+// these is more reliable than re-deriving from the transcript JSONL because:
+// - context_window_size is reported directly by Claude Code (no env-flag
+//   heuristic needed; works even if CLAUDE_CODE_DISABLE_1M_CONTEXT is unset
+//   on a 200k-deployment Opus agent).
+// - current_usage is computed by the API, not by us re-walking the transcript.
+//
+// This function is the PRIMARY data source post-Phase 2; the transcript-tail
+// path in computeContextUsage() above remains as a fallback for the
+// `cortextos bus context-update` CLI when no statusLine input is available
+// (e.g. heartbeat-driven poll without a recent assistant turn).
+// ---------------------------------------------------------------------------
+
+export interface StatusLineInput {
+  context_window?: {
+    used_percentage?: number | null;
+    context_window_size?: number | null;
+    exceeds_200k_tokens?: boolean;
+    current_usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
+  };
+  session_id?: string;
+  model?: string;
+}
+
+export interface StatusLineUsageOptions {
+  agent: string;
+  input: StatusLineInput;
+  now?: Date;
+  /**
+   * Fallback context limit used only when `context_window.context_window_size`
+   * is missing from the statusLine blob. Defaults to 200_000 (the safer of
+   * the two — over-reports severity rather than under-reports).
+   */
+  fallbackLimit?: number;
+}
+
+export function usageFromStatusLine(opts: StatusLineUsageOptions): ContextUsage | null {
+  const cw = opts.input.context_window;
+  if (!cw) return null;
+
+  const cu = cw.current_usage ?? {};
+  const inputTok = toNonNegInt(cu.input_tokens);
+  const cacheCreation = toNonNegInt(cu.cache_creation_input_tokens);
+  const cacheRead = toNonNegInt(cu.cache_read_input_tokens);
+  const loaded = inputTok + cacheCreation + cacheRead;
+
+  const reportedLimit = Number(cw.context_window_size);
+  const limit = Number.isFinite(reportedLimit) && reportedLimit > 0
+    ? Math.floor(reportedLimit)
+    : (opts.fallbackLimit ?? 200_000);
+
+  // Prefer Claude-Code-reported used_percentage when present and finite;
+  // fall back to our own (loaded / limit) computation. They should agree to
+  // within rounding when both are derivable.
+  const reportedPct = Number(cw.used_percentage);
+  const pct = Number.isFinite(reportedPct)
+    ? Math.round(reportedPct * 100) / 100
+    : (limit > 0 ? Math.round((loaded / limit) * 10000) / 100 : 0);
+
+  const table = thresholdsFor(limit);
+  const severity = severityForPct(pct, table);
+  const ts = (opts.now ?? new Date()).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+  return {
+    agent: opts.agent,
+    session_id: typeof opts.input.session_id === 'string' ? opts.input.session_id : '',
+    // statusLine doesn't carry a transcript path; use a sentinel that callers
+    // can grep for if forensic context is needed.
+    transcript_path: 'statusline://current-session',
+    model: typeof opts.input.model === 'string' ? opts.input.model : '',
+    context_limit: limit,
+    current_loaded_tokens: loaded,
+    pct,
+    severity,
+    next_action_threshold_pct: nextActionThresholdPct(severity, table),
+    updated_at: ts,
+  };
+}
+
 export function writeContextUsage(stateDir: string, usage: ContextUsage): string {
   // ensureDir is idempotent (mkdir recursive) and atomicWriteSync also creates
   // the parent dir. The explicit ensureDir here is defensive — keeps the failure
