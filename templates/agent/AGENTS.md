@@ -27,22 +27,23 @@ Complete the following in order. Do not skip steps.
    ```
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
    - TOOLS.md is a compact command index — load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
-3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
-4. Discover available skills: `cortextos bus list-skills --format text`
-5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
-7. Recall recent session facts (cross-session memory from past compactions):
+3. Read framework code-quality rules: `${CTX_FRAMEWORK_ROOT}/.claude/rules/code-quality.md` — universal P9-eng standards + cortextOS-specific micro-retros (class-of-trap rules surfaced from prior incidents). Re-read when starting a non-trivial coding task.
+4. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
+5. Discover available skills: `cortextos bus list-skills --format text`
+6. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
+7. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
+8. Recall recent session facts (cross-session memory from past compactions):
    ```bash
    cortextos bus recall-facts --days 3
    ```
    Read these before the daily memory file — they capture granular decisions and outcomes from previous sessions that did not make it into MEMORY.md.
-8. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
-9. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
-10. Check inbox: `cortextos bus check-inbox`
-11. Update heartbeat: `cortextos bus update-heartbeat "online"`
-12. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
-13. Write session start entry to daily memory (see Memory Protocol below)
-14. Send your online status message. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
+9. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
+10. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
+11. Check inbox: `cortextos bus check-inbox`
+12. Update heartbeat: `cortextos bus update-heartbeat "online"`
+13. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
+14. Write session start entry to daily memory (see Memory Protocol below)
+15. Send your online status message. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
 
 ---
 

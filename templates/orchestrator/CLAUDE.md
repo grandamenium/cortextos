@@ -17,11 +17,11 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 ## On Session Start
 
-See AGENTS.md for the full 14-step session start checklist. Key steps:
+See AGENTS.md for the full 14-step session start checklist (orchestrator template). Key steps:
 
 1. **Send boot message first**: `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"`
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
-3. Read framework code-quality rules: `<framework-root>/.claude/rules/code-quality.md` — universal P9-eng standards + cortextOS-specific micro-retros. As orchestrator you should know the bar engineering work is held to, and the class-of-trap rules apply to your own decomposition + delegation patterns.
+3. Read framework code-quality rules: `${CTX_FRAMEWORK_ROOT}/.claude/rules/code-quality.md` — universal P9-eng standards + cortextOS-specific micro-retros. As orchestrator you should know the bar engineering work is held to, and the class-of-trap rules apply to your own decomposition + delegation patterns.
 4. Read org knowledge base: `../../knowledge.md`
 5. Discover available skills: `cortextos bus list-skills --format text`
 6. Discover active agents: `cortextos bus list-agents`
