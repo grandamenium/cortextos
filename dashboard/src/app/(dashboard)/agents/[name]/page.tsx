@@ -7,6 +7,7 @@ import { AgentDetailTabs } from '@/components/agents/agent-detail-tabs';
 import { AgentAvatar } from '@/components/shared/agent-avatar';
 import { HealthDot } from '@/components/shared/health-dot';
 import { OrgBadge } from '@/components/shared/org-badge';
+import { RuntimeBadge } from '@/components/shared/runtime-badge';
 import { Button } from '@/components/ui/button';
 import type { SoulFields } from '@/lib/types';
 
@@ -70,9 +71,10 @@ export default async function AgentDetailPage({
             <p className="text-sm text-muted-foreground">
               {detail.identity.role || 'No role set'}
             </p>
-            {detail.org && (
-              <OrgBadge org={detail.org} className="mt-1" />
-            )}
+            <div className="mt-1 flex items-center gap-1.5">
+              {detail.org && <OrgBadge org={detail.org} />}
+              {detail.runtime && <RuntimeBadge runtime={detail.runtime} />}
+            </div>
           </div>
         </div>
 
