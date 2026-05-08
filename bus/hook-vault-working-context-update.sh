@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VAULT="${CTX_FRAMEWORK_ROOT:-/Users/arndt/cortextos}/obsidian-vault"
+VAULT="/Users/arndt/cortextos/obsidian-vault"
 AGENT="${CTX_AGENT_NAME:-cortextos-improver}"
 WC_FILE="$VAULT/$AGENT/working-context.md"
 TODAY=$(date -u +%Y-%m-%d)

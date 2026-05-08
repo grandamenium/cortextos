@@ -19,17 +19,21 @@ fi
 
 mkdir -p "$VAULT/feedback/greptile" "$VAULT/feedback/ci"
 
-for pr in $(seq $((LAST+1)) $LATEST); do
-  PR_DATA=$(gh pr view "$pr" --repo "$REPO" \
-    --json number,title,mergedAt,statusCheckRollup,comments \
-    2>/dev/null) || continue
+TMPFILE=$(mktemp /tmp/memory-08-pr-XXXXXX.json)
+trap 'rm -f "$TMPFILE"' EXIT
 
-  python3 - <<PYEOF
-import json, re
+for pr in $(seq $((LAST+1)) $LATEST); do
+  gh pr view "$pr" --repo "$REPO" \
+    --json number,title,mergedAt,statusCheckRollup,comments \
+    2>/dev/null > "$TMPFILE" || continue
+
+  python3 - "$TMPFILE" <<PYEOF
+import json, re, sys
 from pathlib import Path
 from datetime import datetime, timezone
 
-pr_data = json.loads('''$PR_DATA'''.replace("'", "'\\''"))
+with open(sys.argv[1]) as f:
+    pr_data = json.load(f)
 pr_num = pr_data.get('number', 0)
 today = '$TODAY'
 vault = Path('$VAULT')
