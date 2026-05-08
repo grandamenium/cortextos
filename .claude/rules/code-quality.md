@@ -156,6 +156,9 @@ Format: `- [domain] <slug>: one-line symptom (severity)`. Read the subfile when 
 ### Auth, dashboard, deployment
 
 - [auth, deployment, dashboard] `nextauth-secure-cookies-vs-tls`: `secure: NODE_ENV === 'production'` breaks local-HTTP sign-in; track TLS availability, not deployment mode (blocker)
+- [auth, claude-config, multi-account, headless-agents] `claude-config-dir-is-keychain-partition-key`: `CLAUDE_CONFIG_DIR` partitions macOS keychain entries — two values that resolve to the same `.claude.json` file map to two different keychain entries; setting it to a never-logged-in value silently fails with "Not logged in" (blocker)
+- [auth, claude-config, headless-agents, pty] `bypass-dialog-no-config-suppression`: Claude Code 2.1+ Bypass Permissions warning has no `settings.json` or CLI flag suppression — must be auto-accepted via PTY input (down-arrow + Enter) (blocker)
+- [pty, automation, terminal, vendor-tuis] `pty-output-substring-heuristic-matches-multiple-dialogs`: auto-Enter on PTY-output substring backfires when a future vendor release adds a sibling dialog containing the same substring whose default is destructive (blocker)
 
 ### TUI / automation
 
