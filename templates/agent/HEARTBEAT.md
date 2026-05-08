@@ -50,6 +50,25 @@ cortextos bus list-tasks --agent $CTX_AGENT_NAME --status in_progress
 
 Stale tasks are visible on the dashboard. They make you look broken.
 
+## Step 3a: Context-discipline check
+
+Refresh your context-pct snapshot and decide whether to act. The monitor reads your Claude Code transcript, computes loaded-context %, and writes `~/.cortextos/$CTX_INSTANCE_ID/state/$CTX_AGENT_NAME/context-pct.json`. A `context_threshold_crossed` event is emitted automatically when severity is non-green.
+
+```bash
+cortextos bus context-update
+cat "$CTX_ROOT/state/$CTX_AGENT_NAME/context-pct.json" | jq '{pct, severity, current_loaded_tokens, context_limit, model}'
+```
+
+Severity → action (full reference: `.claude/rules/code-quality/compact-instructions.md`):
+
+- `green` — no action
+- `soft` — log a heartbeat note that context is elevated; no `/compact` yet
+- `yellow` — schedule `/compact` at the **next** phase boundary (commit first, then compact)
+- `orange` — `/compact` **now** at a safe boundary; if no boundary reachable, run the *Mid-task emergency* template
+- `red` — `cortextos bus hard-restart --reason "context-red"`; `/compact` at this point is too late
+
+If `context-update` exits non-zero (no transcript found): treat as unknown, skip threshold action this cycle, log warning.
+
 ## Step 4: Log heartbeat event
 
 Full reference: `.claude/skills/event-logging/SKILL.md`
