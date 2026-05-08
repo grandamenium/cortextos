@@ -465,6 +465,158 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
   });
 });
 
+describe('CodexAppServerPTY extractTelegramPayload media types', () => {
+  function extract(content: string, options?: { existsSync?: boolean; readFileSync?: string }): string | null {
+    if (options?.existsSync !== undefined) fsMocks.existsSync.mockReturnValue(options.existsSync);
+    if (options?.readFileSync !== undefined) fsMocks.readFileSync.mockReturnValue(options.readFileSync);
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    return (pty as unknown as { extractTelegramPayload(c: string): string | null }).extractTelegramPayload(content);
+  }
+
+  it('photo: surfaces both caption and local_file path', () => {
+    const inject = `=== TELEGRAM PHOTO from James (chat_id:7940429114) ===
+caption:
+\`\`\`
+what's in this image
+\`\`\`
+local_file: telegram-images/2026-05-08_xyz.jpg
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('[PHOTO]');
+    expect(out).toContain("caption: what's in this image");
+    expect(out).toContain('local_file: telegram-images/2026-05-08_xyz.jpg');
+  });
+
+  it('document: surfaces caption + file_name + local_file', () => {
+    const inject = `=== TELEGRAM DOCUMENT from James (chat_id:7940429114) ===
+caption:
+\`\`\`
+have a look at this PDF
+\`\`\`
+local_file: telegram-images/myfile.pdf
+file_name: myfile.pdf
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('[DOCUMENT]');
+    expect(out).toContain('caption: have a look at this PDF');
+    expect(out).toContain('file_name: myfile.pdf');
+    expect(out).toContain('local_file: telegram-images/myfile.pdf');
+  });
+
+  it('voice without transcript: surfaces local_file + duration but no transcript line', () => {
+    const inject = `=== TELEGRAM VOICE from James (chat_id:7940429114) ===
+duration: 5s
+local_file: telegram-images/voice_1234.ogg
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('[VOICE]');
+    expect(out).toContain('local_file: telegram-images/voice_1234.ogg');
+    expect(out).toContain('duration: 5s');
+    expect(out).not.toContain('transcript:');
+  });
+
+  it('voice with transcript: surfaces transcript text', () => {
+    const inject = `=== TELEGRAM VOICE from James (chat_id:7940429114) ===
+duration: 5s
+local_file: telegram-images/voice_1234.ogg
+transcript:
+\`\`\`
+say hi back
+\`\`\`
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('[VOICE]');
+    expect(out).toContain('transcript: say hi back');
+    expect(out).toContain('local_file: telegram-images/voice_1234.ogg');
+  });
+
+  it('video: surfaces caption + file_name + local_file + duration', () => {
+    const inject = `=== TELEGRAM VIDEO from James (chat_id:7940429114) ===
+caption:
+\`\`\`
+demo clip
+\`\`\`
+duration: 12s
+local_file: telegram-images/video_1234.mp4
+file_name: video_1234.mp4
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('[VIDEO]');
+    expect(out).toContain('caption: demo clip');
+    expect(out).toContain('file_name: video_1234.mp4');
+    expect(out).toContain('local_file: telegram-images/video_1234.mp4');
+    expect(out).toContain('duration: 12s');
+  });
+
+  it('plain-text TELEGRAM (no media token) preserves existing fenced-block behavior', () => {
+    const inject = `=== TELEGRAM from James (chat_id:7940429114) ===
+\`\`\`
+just a chat message
+\`\`\`
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toBe('just a chat message');
+  });
+
+  it('reply_to with no outbound log: appends bare in-reply-to marker', () => {
+    fsMocks.existsSync.mockImplementation((p: string) => !String(p).endsWith('outbound-messages.jsonl'));
+    const inject = `=== TELEGRAM from James (chat_id:7940429114) ===
+[reply_to: 4242]
+\`\`\`
+what did you mean by that?
+\`\`\`
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('what did you mean by that?');
+    expect(out).toContain('[in reply to message 4242]');
+  });
+
+  it('reply_to with matching outbound log entry: appends prior message body (truncated)', () => {
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockReturnValue([
+      JSON.stringify({ message_id: 4241, text: 'something else' }),
+      JSON.stringify({ message_id: 4242, text: 'My earlier message about the deploy' }),
+      JSON.stringify({ message_id: 4243, text: 'a later one' }),
+    ].join('\n'));
+
+    const inject = `=== TELEGRAM from James (chat_id:7940429114) ===
+[reply_to: 4242]
+\`\`\`
+what did you mean by that?
+\`\`\`
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('what did you mean by that?');
+    expect(out).toContain('[in reply to: My earlier message about the deploy]');
+  });
+
+  it('photo with reply_to: surfaces media payload AND reply_to marker', () => {
+    fsMocks.existsSync.mockReturnValue(false);
+    const inject = `=== TELEGRAM PHOTO from James (chat_id:7940429114) ===
+[reply_to: 99]
+caption:
+\`\`\`
+follow-up image
+\`\`\`
+local_file: telegram-images/p.jpg
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('[PHOTO]');
+    expect(out).toContain('caption: follow-up image');
+    expect(out).toContain('local_file: telegram-images/p.jpg');
+    expect(out).toContain('[in reply to message 99]');
+  });
+});
+
 describe('CodexAppServerPTY thread lifecycle', () => {
   it('starts a new thread in fresh mode', async () => {
     requestMock.mockResolvedValue({ result: { thread: { id: 'fresh-thread' } } });

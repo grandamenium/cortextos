@@ -348,18 +348,28 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   /**
    * Format a Telegram voice/audio message for injection.
    * Matches bash fast-checker.sh format.
+   *
+   * `transcript` is optional and only emitted when populated by an upstream
+   * transcription service. Whisper integration is not currently wired in
+   * cortextos src/ (only in tools/graphify); call sites pass undefined until
+   * that pipeline is in place. The codex extractor surfaces the transcript
+   * block when present.
    */
   static formatTelegramVoiceMessage(
     from: string,
     chatId: string | number,
     filePath: string,
     duration: number | undefined,
+    transcript?: string,
   ): string {
     const dur = duration !== undefined ? duration : 'unknown';
+    const transcriptBlock = transcript && transcript.trim()
+      ? `transcript:\n\`\`\`\n${transcript.trim()}\n\`\`\`\n`
+      : '';
     return `=== TELEGRAM VOICE from ${from} (chat_id:${chatId}) ===
 duration: ${dur}s
 local_file: ${filePath}
-Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
+${transcriptBlock}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
 `;
   }

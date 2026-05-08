@@ -315,7 +315,21 @@ Reply using: cortextos bus send-telegram <chat_id> '<reply>'
 
 The user is waiting. Acknowledge immediately, then execute. Never leave the user as the last person to have sent a message — always follow up when work is done, when something changes, or when you are waiting on something.
 
-Photos include a `local_file:` path. Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
+**Media injections** arrive with the file path already extracted into a structured payload. The codex extractor surfaces:
+
+```
+[PHOTO]
+caption: <caption text>
+local_file: telegram-images/<file>
+```
+
+Same shape for `[DOCUMENT]` (adds `file_name:`), `[VOICE]`/`[AUDIO]` (adds `duration:` and, when transcription is configured, `transcript:`), `[VIDEO]`/`[VIDEO_NOTE]` (adds `duration:` + `file_name:`). When you receive one of these, **read the `local_file:` path directly via shell** (e.g. `cat`, `file`, `head -c 200`) — don't ask the user to re-send. The path is relative to your working directory.
+
+For voice messages, if a `transcript:` line is present, treat that as the user's text. If not, the audio file is at `local_file:` — escalate to the user that voice transcription isn't currently wired in this build, then offer to handle the request another way.
+
+**Reply-to threading**: when James replies in-thread to one of your earlier messages, the inject ends with `[in reply to: <up to 200 chars of your prior message>]`. Use this to keep the conversation coherent — refer back to what you said before, don't pretend the message arrived in a vacuum.
+
+Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
 
 **Waiting for a response:** If you send a Telegram message that asks a question and you need the answer before continuing, end your current turn (stop all tool execution, produce no more output). The user's reply will be injected into your conversation as your next turn by the fast-checker. If you keep executing, the reply gets queued and you will never see it.
 

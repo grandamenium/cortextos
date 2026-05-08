@@ -255,9 +255,23 @@ export class CodexAppServerPTY {
   private extractTelegramPayload(content: string): string | null {
     if (!content.startsWith('=== TELEGRAM')) return null;
 
+    const headerMatch = content.match(/^=== TELEGRAM(?:\s+(PHOTO|DOCUMENT|VOICE|AUDIO|VIDEO|VIDEO_NOTE))?\s+from/);
+    const mediaType = headerMatch?.[1] ?? null;
+
     const beforeReply = content
       .split('\n[Your last message:', 1)[0]
       .split('\nReply using:', 1)[0];
+
+    const replyToContext = this.extractReplyToContext(beforeReply);
+    const withReplyTo = (payload: string | null): string | null => {
+      if (!payload) return null;
+      return replyToContext ? `${payload}\n\n${replyToContext}` : payload;
+    };
+
+    if (mediaType) {
+      const mediaPayload = this.buildMediaPayload(mediaType, beforeReply);
+      if (mediaPayload) return withReplyTo(mediaPayload);
+    }
 
     const lines = beforeReply
       .split('\n')
@@ -269,13 +283,13 @@ export class CodexAppServerPTY {
       if (line.startsWith('=== TELEGRAM')) continue;
       if (line.startsWith('[Recent conversation:]')) continue;
       if (line.startsWith('[reply_to:')) continue;
-      if (line.startsWith('/') || line.startsWith('$')) return line;
+      if (line.startsWith('/') || line.startsWith('$')) return withReplyTo(line);
       break;
     }
 
     const fencedBlocks = [...beforeReply.matchAll(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n```/g)];
     if (fencedBlocks.length > 0) {
-      return fencedBlocks[fencedBlocks.length - 1]?.[1]?.trim() || null;
+      return withReplyTo(fencedBlocks[fencedBlocks.length - 1]?.[1]?.trim() || null);
     }
 
     for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -283,10 +297,62 @@ export class CodexAppServerPTY {
       if (line.startsWith('=== TELEGRAM')) continue;
       if (line.startsWith('[Recent conversation:]')) continue;
       if (line.startsWith('[reply_to:')) continue;
-      return line;
+      return withReplyTo(line);
     }
 
     return null;
+  }
+
+  private buildMediaPayload(mediaType: string, beforeReply: string): string | null {
+    const captionMatch = beforeReply.match(/caption:\s*\n```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n```/);
+    const caption = captionMatch?.[1]?.trim() ?? '';
+
+    const transcriptMatch = beforeReply.match(/transcript:\s*\n```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n```/);
+    const transcript = transcriptMatch?.[1]?.trim() ?? '';
+
+    const localFileMatch = beforeReply.match(/^local_file:\s*(.+)$/m);
+    const localFile = localFileMatch?.[1]?.trim() ?? '';
+
+    const fileNameMatch = beforeReply.match(/^file_name:\s*(.+)$/m);
+    const fileName = fileNameMatch?.[1]?.trim() ?? '';
+
+    const durationMatch = beforeReply.match(/^duration:\s*(.+)$/m);
+    const duration = durationMatch?.[1]?.trim() ?? '';
+
+    const lines: string[] = [`[${mediaType}]`];
+    if (caption) lines.push(`caption: ${caption}`);
+    if (transcript) lines.push(`transcript: ${transcript}`);
+    if (fileName) lines.push(`file_name: ${fileName}`);
+    if (localFile) lines.push(`local_file: ${localFile}`);
+    if (duration) lines.push(`duration: ${duration}`);
+
+    return lines.length > 1 ? lines.join('\n') : null;
+  }
+
+  private extractReplyToContext(beforeReply: string): string | null {
+    const replyToMatch = beforeReply.match(/\[reply_to:\s*(\d+)\]/);
+    if (!replyToMatch) return null;
+    const messageId = replyToMatch[1];
+
+    try {
+      const outboundLog = join(this._stateDir, 'outbound-messages.jsonl');
+      if (!existsSync(outboundLog)) return `[in reply to message ${messageId}]`;
+      const fileLines = readFileSync(outboundLog, 'utf-8').split('\n').filter((l) => l.trim());
+      for (let i = fileLines.length - 1; i >= 0; i -= 1) {
+        try {
+          const entry = JSON.parse(fileLines[i]) as { message_id?: number | string; text?: string };
+          if (entry.message_id !== undefined && String(entry.message_id) === messageId) {
+            const text = (entry.text || '').slice(0, 200);
+            return text ? `[in reply to: ${text}]` : `[in reply to message ${messageId}]`;
+          }
+        } catch {
+          // skip malformed lines
+        }
+      }
+      return `[in reply to message ${messageId}]`;
+    } catch {
+      return `[in reply to message ${messageId}]`;
+    }
   }
 
   private parseGoalCommand(content: string): { type: 'get' | 'clear' } | { type: 'set'; objective: string } | null {
