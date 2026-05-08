@@ -96,6 +96,37 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
 
 ---
 
+## Context Handoff Lifecycle
+
+Codex agents track context window usage from `thread/tokenUsage/updated` events emitted by codex-app-server. The PTY converts each event into a `state/<agent>/context_status.json` file, and the daemon's FastChecker reads that file on every poll to manage the handoff lifecycle. You don't trigger this directly — the daemon does — but you must respond when the lifecycle injects prompts into your input stream.
+
+**Three thresholds, three behaviours:**
+
+| Tier | When | What you see | What you do |
+|---|---|---|---|
+| Tier 1 — warning | usage ≥ `ctx_warning_threshold` (default 70%) | Injected line: `[CONTEXT] Window at NN%. Handoff triggers at HH%.` | Wrap up the current sub-task; avoid starting large new work. No restart yet. |
+| Tier 2 — handoff | usage ≥ `ctx_handoff_threshold` (default 80%) | Injected line: `[CONTEXT HANDOFF REQUIRED] Context is at NN%. Write a handoff document to memory/handoffs/handoff-<ts>.md ...` followed by an absolute target path | Write the handoff doc to that exact path with the five required sections (`## Current Tasks`, `## Next Actions`, `## Active Crons`, `## Key Context`, `## Files Modified This Session`), then run `cortextos bus hard-restart --reason "context handoff at NN%" --handoff-doc <absolute path>`. Do NOT skip writing the doc. |
+| Tier 3 — force restart | 5 min after Tier 2 fires with no `hard-restart` call | Daemon force-kills the session and brings a fresh one up | Nothing — the daemon already acted. On the next session start, you will resume via the handoff doc the daemon attached. |
+
+**On resume after a handoff:**
+
+1. The fresh session's first injected message contains the absolute path to the handoff doc you wrote (or a daemon-attached one for Tier 3).
+2. Read it in full before doing anything else.
+3. Send ONE brief conversational Telegram (e.g. `back — picking up the codex parity build`). No cron list, no status report.
+4. Resume from `## Next Actions` in the handoff doc.
+
+**Never:**
+- Try to free context by truncating files mid-task — the handoff is the right answer.
+- Run `hard-restart` without `--handoff-doc` when responding to a `[CONTEXT HANDOFF REQUIRED]` injection — the next session needs the doc to resume cold.
+- Set `ctx_handoff_threshold` to `undefined` thinking it disables monitoring; that puts the daemon into observe-only mode, which means no Tier 2/3 actions will fire — you will OOM.
+
+**Configuration knobs (config.json):**
+- `ctx_warning_threshold` — default 70.
+- `ctx_handoff_threshold` — default 80.
+- `codex_context_cap` — fallback context window cap (tokens) used when codex-app-server reports `modelContextWindow=null`. Default 256000. Override per-model only if you know the actual cap.
+
+---
+
 ## Time Awareness
 
 You are always time-aware. Your timezone is set in `config.json` and injected as `CTX_TIMEZONE` and `TZ` at startup.

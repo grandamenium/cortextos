@@ -18,8 +18,11 @@ vi.mock('fs', async () => {
   };
 });
 
+const atomicWriteSyncMock = vi.fn();
+
 vi.mock('../../../src/utils/atomic.js', () => ({
   ensureDir: vi.fn(),
+  atomicWriteSync: atomicWriteSyncMock,
 }));
 
 vi.mock('node-pty', () => ({
@@ -81,6 +84,7 @@ beforeEach(() => {
   closeMock.mockReset();
   respondErrorMock.mockReset();
   logEventMock.mockReset();
+  atomicWriteSyncMock.mockReset();
   messageHandler = null;
 });
 
@@ -714,5 +718,143 @@ describe('CodexAppServerPTY event handling', () => {
     const pty = new CodexAppServerPTY(mockEnv, {});
     await (pty as unknown as { connectRpc(): Promise<void> }).connectRpc();
     expect(messageHandler).not.toBeNull();
+  });
+});
+
+describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', () => {
+  function feedTokenUsage(pty: InstanceType<typeof CodexAppServerPTY>, tokenUsage: unknown) {
+    (pty as unknown as { handleRpcMessage(message: unknown): void }).handleRpcMessage({
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'thread-9', turnId: 'turn-1', tokenUsage },
+    });
+  }
+
+  function lastWrittenPayload(): Record<string, unknown> | null {
+    if (atomicWriteSyncMock.mock.calls.length === 0) return null;
+    const lastCall = atomicWriteSyncMock.mock.calls.at(-1) as [string, string];
+    return JSON.parse(lastCall[1]) as Record<string, unknown>;
+  }
+
+  it('writes context_status.json atomically with computed used_percentage', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 1000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1000 },
+      total: { cachedInputTokens: 5000, inputTokens: 60000, outputTokens: 4000, reasoningOutputTokens: 1000, totalTokens: 70000 },
+      modelContextWindow: 200000,
+    });
+
+    expect(atomicWriteSyncMock).toHaveBeenCalledTimes(1);
+    const [path] = atomicWriteSyncMock.mock.calls[0];
+    expect(path).toBe('/tmp/ctx/state/codex-app-agent/context_status.json');
+    const payload = lastWrittenPayload()!;
+    expect(payload.used_percentage).toBeCloseTo(35, 5);
+    expect(payload.context_window_size).toBe(200000);
+    expect(payload.exceeds_200k_tokens).toBe(false);
+    expect(payload.session_id).toBe('thread-9');
+    expect(typeof payload.written_at).toBe('string');
+    expect(payload.current_usage).toEqual({
+      input_tokens: 60000,
+      output_tokens: 4000,
+      cache_read_input_tokens: 5000,
+      cache_creation_input_tokens: 0,
+    });
+  });
+
+  it('falls back to default 256000 cap when modelContextWindow is null', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 64000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 64000 },
+      modelContextWindow: null,
+    });
+
+    const payload = lastWrittenPayload()!;
+    expect(payload.context_window_size).toBe(256000);
+    expect(payload.used_percentage).toBeCloseTo(25, 5);
+  });
+
+  it('honours codex_context_cap config override when modelContextWindow is null', () => {
+    const pty = new CodexAppServerPTY(mockEnv, { codex_context_cap: 100000 });
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 50000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 50000 },
+      modelContextWindow: null,
+    });
+
+    const payload = lastWrittenPayload()!;
+    expect(payload.context_window_size).toBe(100000);
+    expect(payload.used_percentage).toBeCloseTo(50, 5);
+  });
+
+  it('flags exceeds_200k_tokens once total > 200k', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 210000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 210000 },
+      modelContextWindow: 1000000,
+    });
+
+    const payload = lastWrittenPayload()!;
+    expect(payload.exceeds_200k_tokens).toBe(true);
+  });
+
+  it('clamps used_percentage to 100 when totals exceed cap', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 300000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 300000 },
+      modelContextWindow: 256000,
+    });
+
+    const payload = lastWrittenPayload()!;
+    expect(payload.used_percentage).toBe(100);
+  });
+
+  it('skips the write when params.tokenUsage is missing', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    (pty as unknown as { handleRpcMessage(message: unknown): void }).handleRpcMessage({
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'thread-9', turnId: 'turn-1' },
+    });
+    expect(atomicWriteSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('skips the write when total.totalTokens is missing', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 0, reasoningOutputTokens: 0 },
+      modelContextWindow: 200000,
+    });
+    expect(atomicWriteSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('still emits the event log line even on a successful context write', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 1000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1000 },
+      modelContextWindow: 200000,
+    });
+    expect(pty.getOutputBuffer().getRecent()).toContain('[codex-app-server:event] thread/tokenUsage/updated');
+  });
+
+  it('does not throw when atomicWriteSync rejects (write failure is non-fatal)', () => {
+    atomicWriteSyncMock.mockImplementationOnce(() => { throw new Error('disk full'); });
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    expect(() => feedTokenUsage(pty, {
+      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
+      total: { cachedInputTokens: 0, inputTokens: 1000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1000 },
+      modelContextWindow: 200000,
+    })).not.toThrow();
   });
 });

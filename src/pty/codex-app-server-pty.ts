@@ -5,7 +5,7 @@ import { randomBytes } from 'crypto';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import type { TelegramAPI } from '../telegram/api.js';
-import { ensureDir } from '../utils/atomic.js';
+import { ensureDir, atomicWriteSync } from '../utils/atomic.js';
 import { resolvePaths } from '../utils/paths.js';
 import { logEvent } from '../bus/event.js';
 import { WsUnixJsonRpcClient, type JsonRpcResponse } from '../utils/ws-unix-client.js';
@@ -671,10 +671,13 @@ export class CodexAppServerPTY {
         this._outputBuffer.push(`[codex-app-server] error: ${JSON.stringify(params)}\n`);
         this.rejectTurnCompletion(new Error(JSON.stringify(params)));
         break;
+      case 'thread/tokenUsage/updated':
+        this.writeContextStatus(params);
+        this._outputBuffer.push(`[codex-app-server:event] ${method}\n`);
+        break;
       case 'warning':
       case 'mcpServer/startupStatus/updated':
       case 'account/rateLimits/updated':
-      case 'thread/tokenUsage/updated':
       case 'skills/changed':
       case 'item/started':
         this._outputBuffer.push(`[codex-app-server:event] ${method}\n`);
@@ -747,6 +750,57 @@ export class CodexAppServerPTY {
       updatedAt: new Date().toISOString(),
     };
     writeFileSync(this._threadStatePath, `${JSON.stringify(state, null, 2)}\n`, 'utf-8');
+  }
+
+  /**
+   * Translate a `thread/tokenUsage/updated` notification from codex-app-server
+   * into the context_status.json shape consumed by the FastChecker context
+   * monitor. Writes atomically; failures are non-fatal (observability only).
+   *
+   * Mapping (per codex schema ThreadTokenUsageUpdatedNotification):
+   *   - used_percentage = total.totalTokens / cap * 100  (clamped to [0, 100])
+   *   - context_window_size = modelContextWindow ?? config.codex_context_cap ?? 256000
+   *   - exceeds_200k_tokens = total.totalTokens > 200000
+   *   - current_usage.{input,output,cache_read} from total.{input,output,cachedInput}Tokens
+   *   - session_id = current threadId
+   */
+  private writeContextStatus(params: Record<string, unknown>): void {
+    const tokenUsage = isRecord(params.tokenUsage) ? params.tokenUsage : null;
+    if (!tokenUsage) return;
+    const total = isRecord(tokenUsage.total) ? tokenUsage.total : null;
+    if (!total) return;
+    const totalTokens = typeof total.totalTokens === 'number' ? total.totalTokens : null;
+    if (totalTokens === null) return;
+
+    const modelContextWindow = typeof tokenUsage.modelContextWindow === 'number'
+      ? tokenUsage.modelContextWindow
+      : null;
+    const cap = modelContextWindow ?? this._config.codex_context_cap ?? 256000;
+    const usedPct = cap > 0 ? Math.min(100, (totalTokens / cap) * 100) : null;
+
+    const inputTokens = typeof total.inputTokens === 'number' ? total.inputTokens : 0;
+    const outputTokens = typeof total.outputTokens === 'number' ? total.outputTokens : 0;
+    const cachedInputTokens = typeof total.cachedInputTokens === 'number' ? total.cachedInputTokens : 0;
+
+    const payload = JSON.stringify({
+      used_percentage: usedPct,
+      context_window_size: cap,
+      exceeds_200k_tokens: totalTokens > 200000,
+      current_usage: {
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cache_read_input_tokens: cachedInputTokens,
+        cache_creation_input_tokens: 0,
+      },
+      session_id: this._threadId,
+      written_at: new Date().toISOString(),
+    });
+
+    try {
+      atomicWriteSync(join(this._stateDir, 'context_status.json'), payload);
+    } catch {
+      // Non-fatal: FastChecker will skip stale/missing files gracefully.
+    }
   }
 
   private readThreadState(): ThreadState | null {
