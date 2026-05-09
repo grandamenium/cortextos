@@ -35,6 +35,43 @@
 
 import { execFileSync } from 'child_process';
 
+/**
+ * Shell-safe single-quote escape for a string value used inside a remote
+ * shell command. Wraps in single quotes and escapes any embedded single
+ * quotes as '\''.
+ */
+function shellEscapeSingleQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Build the remote shell command string sent to the Mac via SSH.
+ *
+ * The prompt is base64-encoded before embedding so that any content
+ * (curly braces, single quotes, double quotes, $-variables, backticks,
+ * newlines) survives the remote shell without interpretation.
+ * base64 only contains [A-Za-z0-9+/=] — safe inside any shell context.
+ *
+ * Without this encoding, a prompt like 'do X with { type: object }' causes
+ * zsh to throw "parse error near }" because SSH joins trailing arguments
+ * into a single command string that the remote shell interprets literally.
+ */
+function buildRemoteCommand(
+  dispatchScript: string,
+  opts: Pick<ComputerUseOptions, 'noPlugin' | 'workdir' | 'timeout'>,
+  prompt: string,
+): string {
+  const parts: string[] = [dispatchScript];
+  if (opts.noPlugin) parts.push('--no-plugin');
+  if (opts.workdir) parts.push('--workdir', shellEscapeSingleQuote(opts.workdir));
+  parts.push('--timeout', String(opts.timeout ?? 300));
+  // base64-encode the prompt; decode on the remote side with printf + base64 -d.
+  // printf '%s' avoids the trailing-newline that `echo` would add.
+  const promptB64 = Buffer.from(prompt, 'utf-8').toString('base64');
+  parts.push(`"$(printf '%s' ${promptB64} | base64 -d)"`);
+  return parts.join(' ');
+}
+
 export interface ComputerUseOptions {
   /** Skip the @Computer Use plugin prefix — send a plain Codex prompt */
   noPlugin?: boolean;
@@ -92,25 +129,28 @@ export async function computerUse(
   const timeoutSec = opts.timeout ?? 300;
   const start = Date.now();
 
-  // Build codex-dispatch.sh args
-  const dispatchArgs: string[] = [dispatchScript];
-  if (opts.noPlugin) dispatchArgs.push('--no-plugin');
-  if (opts.workdir) dispatchArgs.push('--workdir', opts.workdir);
-  dispatchArgs.push('--timeout', String(timeoutSec));
-  dispatchArgs.push(prompt);
+  // Build the remote command with base64-encoded prompt (see buildRemoteCommand).
+  const remoteCmd = buildRemoteCommand(dispatchScript, opts, prompt);
 
-  // SSH command — single quoted args to avoid shell interpretation
+  // SSH options:
+  //   StrictHostKeyChecking=accept-new — TOFU semantics (accepts new host keys,
+  //     rejects changed ones); safer than =no which silently accepts MITM keys.
+  //   ServerAliveInterval/CountMax — detect dead connections after ~60s instead
+  //     of hanging silently for the full (timeoutSec+30) wall-clock window.
   const sshArgs = [
-    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'StrictHostKeyChecking=accept-new',
     '-o', 'ConnectTimeout=10',
+    '-o', 'ServerAliveInterval=30',
+    '-o', 'ServerAliveCountMax=2',
     sshHost,
-    ...dispatchArgs,
+    remoteCmd,
   ];
 
   try {
     const output = execFileSync('ssh', sshArgs, {
       timeout: (timeoutSec + 30) * 1000, // extra 30s for SSH overhead
       encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
     });
 
     return {
@@ -164,6 +204,7 @@ export async function computerUse(
         timeout: timeoutSec * 1000,
         encoding: 'utf-8',
         cwd: opts.workdir,
+        maxBuffer: 10 * 1024 * 1024,
       });
 
       let output: string;

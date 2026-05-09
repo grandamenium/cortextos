@@ -80,7 +80,7 @@ describe('computerUse — SSH success path', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('passes ssh host and ConnectTimeout args', async () => {
+  it('passes ssh host, ConnectTimeout, and keepalive args', async () => {
     mockExecFileSync.mockReturnValueOnce('done\n');
 
     await computerUse('do something', { noPlugin: true, sshHost: 'custom-mac' });
@@ -89,25 +89,33 @@ describe('computerUse — SSH success path', () => {
     expect(cmd).toBe('ssh');
     expect(args).toContain('custom-mac');
     expect(args).toContain('ConnectTimeout=10');
+    expect(args).toContain('ServerAliveInterval=30');
+    expect(args).toContain('ServerAliveCountMax=2');
+    // TOFU host key checking (not =no)
+    expect(args).toContain('StrictHostKeyChecking=accept-new');
+    expect(args).not.toContain('StrictHostKeyChecking=no');
   });
 
-  it('passes --workdir flag to dispatch script', async () => {
+  it('passes --workdir flag to dispatch script (embedded in command string)', async () => {
     mockExecFileSync.mockReturnValueOnce('done\n');
 
     await computerUse('build', { noPlugin: true, workdir: '/tmp/project' });
 
+    // The remote command is a single string — the last element of the args array.
     const [, args] = mockExecFileSync.mock.calls[0];
-    expect(args).toContain('--workdir');
-    expect(args).toContain('/tmp/project');
+    const remoteCmd = args[args.length - 1] as string;
+    expect(remoteCmd).toContain('--workdir');
+    expect(remoteCmd).toContain('/tmp/project');
   });
 
-  it('passes --no-plugin when noPlugin=true', async () => {
+  it('passes --no-plugin when noPlugin=true (embedded in command string)', async () => {
     mockExecFileSync.mockReturnValueOnce('done\n');
 
     await computerUse('code task', { noPlugin: true });
 
     const [, args] = mockExecFileSync.mock.calls[0];
-    expect(args).toContain('--no-plugin');
+    const remoteCmd = args[args.length - 1] as string;
+    expect(remoteCmd).toContain('--no-plugin');
   });
 
   it('omits --no-plugin when noPlugin is false/default', async () => {
@@ -116,7 +124,8 @@ describe('computerUse — SSH success path', () => {
     await computerUse('screenshot task');
 
     const [, args] = mockExecFileSync.mock.calls[0];
-    expect(args).not.toContain('--no-plugin');
+    const remoteCmd = args[args.length - 1] as string;
+    expect(remoteCmd).not.toContain('--no-plugin');
   });
 
   it('does not fire log-event when SSH succeeds', async () => {
@@ -344,5 +353,120 @@ describe('computerUse — logging behavior', () => {
 
     const cortextosCalls = mockExecFileSync.mock.calls.filter(([cmd]) => cmd === 'cortextos');
     expect(cortextosCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Prompt shell-escaping — regression tests for the curly-brace bug
+// (zsh: parse error near }) and related shell metacharacters.
+// ---------------------------------------------------------------------------
+
+describe('computerUse — prompt shell escaping (base64 encoding)', () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  /**
+   * The remote command must encode the prompt as base64 so the remote shell
+   * never interprets the prompt content. We verify by:
+   *   1. Capturing the remote command string (last SSH arg)
+   *   2. Extracting the base64 token from printf '%s' <TOKEN>
+   *   3. Decoding it and asserting it equals the original prompt
+   */
+  function extractDecodedPrompt(remoteCmd: string): string {
+    // The pattern is: "$(printf '%s' <BASE64> | base64 -d)"
+    const match = remoteCmd.match(/printf '%s' ([A-Za-z0-9+/=]+)/);
+    if (!match) throw new Error(`No base64 token found in: ${remoteCmd}`);
+    return Buffer.from(match[1], 'base64').toString('utf-8');
+  }
+
+  const METACHAR_PROMPTS = [
+    ['curly braces',    'do something with { type: object, properties: {} }'],
+    ['single quotes',   "it's a prompt with 'quoted text'"],
+    ['double quotes',   'say "hello world" and exit'],
+    ['dollar variable', 'echo $HOME and $PATH and ${USER}'],
+    ['backticks',       'run `ls -la` and show me the output'],
+    ['semicolons',      'do A; then do B; finally C'],
+    ['pipe + redirect', 'cat /etc/passwd | grep root > /tmp/out.txt'],
+    ['newlines',        'line one\nline two\nline three'],
+    ['mixed',           'deploy { env: "prod" } with $TOKEN and `git rev-parse HEAD`'],
+  ] as const;
+
+  it.each(METACHAR_PROMPTS)(
+    'safely encodes prompt containing %s',
+    async (_label, prompt) => {
+      mockExecFileSync.mockReturnValueOnce('done\n');
+
+      await computerUse(prompt, { noPlugin: true });
+
+      const [cmd, args] = mockExecFileSync.mock.calls[0];
+      expect(cmd).toBe('ssh');
+
+      const remoteCmd = args[args.length - 1] as string;
+      // The raw prompt must NOT appear literally in the remote command
+      // (if it did, the remote shell would interpret the metacharacters)
+      expect(remoteCmd).not.toContain('{');
+      expect(remoteCmd).not.toContain('}');
+
+      // The decoded prompt must round-trip exactly
+      const decoded = extractDecodedPrompt(remoteCmd);
+      expect(decoded).toBe(prompt);
+    },
+  );
+
+  it('embeds the base64-decoded prompt via printf + base64 -d in the command string', async () => {
+    mockExecFileSync.mockReturnValueOnce('done\n');
+
+    const prompt = 'analyze { type: "object", properties: { id: { type: "string" } } }';
+    await computerUse(prompt, { noPlugin: true });
+
+    const [, args] = mockExecFileSync.mock.calls[0];
+    const remoteCmd = args[args.length - 1] as string;
+
+    // Must use printf + base64 -d (not echo, which adds a newline)
+    expect(remoteCmd).toMatch(/printf '%s'.*\| base64 -d/);
+
+    // base64 string must only contain safe characters
+    const b64Match = remoteCmd.match(/printf '%s' ([A-Za-z0-9+/=]+)/);
+    expect(b64Match).not.toBeNull();
+    expect(b64Match![1]).toMatch(/^[A-Za-z0-9+/=]+$/);
+
+    // Decoded value must match original prompt exactly
+    const decoded = Buffer.from(b64Match![1], 'base64').toString('utf-8');
+    expect(decoded).toBe(prompt);
+  });
+
+  it('does not regress: plain ASCII prompts also round-trip correctly', async () => {
+    mockExecFileSync.mockReturnValueOnce('done\n');
+
+    const prompt = 'summarize the changes in the last 5 commits';
+    await computerUse(prompt, { noPlugin: true });
+
+    const [, args] = mockExecFileSync.mock.calls[0];
+    const remoteCmd = args[args.length - 1] as string;
+    const decoded = extractDecodedPrompt(remoteCmd);
+    expect(decoded).toBe(prompt);
+  });
+
+  it('sets maxBuffer=10MB on the SSH execFileSync call', async () => {
+    mockExecFileSync.mockReturnValueOnce('done\n');
+
+    await computerUse('task', { noPlugin: true });
+
+    const [, , opts] = mockExecFileSync.mock.calls[0];
+    expect(opts?.maxBuffer).toBe(10 * 1024 * 1024);
+  });
+
+  it('sets maxBuffer=10MB on the local codex exec fallback call', async () => {
+    mockExecFileSync
+      .mockImplementationOnce(() => { throw new Error('ConnectTimeout: timed out'); })
+      .mockReturnValueOnce('')  // log-event
+      .mockReturnValueOnce(JSON.stringify({ message: 'done', exit_code: 0 })) // codex
+      .mockReturnValueOnce(''); // fallback log-event
+
+    await computerUse('task', { noPlugin: true });
+
+    const codexCall = mockExecFileSync.mock.calls.find(([cmd]) => cmd === 'codex');
+    expect(codexCall).toBeDefined();
+    const [, , codexOpts] = codexCall!;
+    expect(codexOpts?.maxBuffer).toBe(10 * 1024 * 1024);
   });
 });
