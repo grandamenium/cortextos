@@ -935,17 +935,44 @@ export class AgentManager {
 
   /**
    * Load agent config from config.json.
+   *
+   * On parse error: log a clear, operator-actionable error to stderr (file path,
+   * SyntaxError message, and a 1-line offending-snippet hint when locatable) and
+   * fall back to default config so the daemon does not hard-crash. Without this
+   * surfacing, a trailing comma in config.json silently degrades the agent into
+   * a "model not available" state because the model field is missing — see #345.
    */
   private loadAgentConfig(agentDir: string): AgentConfig {
     const configPath = join(agentDir, 'config.json');
+    if (!existsSync(configPath)) return {};
+    let raw: string;
     try {
-      if (existsSync(configPath)) {
-        return JSON.parse(readFileSync(configPath, 'utf-8'));
-      }
-    } catch {
-      // Ignore parse errors
+      raw = readFileSync(configPath, 'utf-8');
+    } catch (err) {
+      console.error(`[agent-manager] config read failed: ${configPath}: ${(err as Error).message}`);
+      return {};
     }
-    return {}; // Default config
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      const msg = (err as SyntaxError).message;
+      // Best-effort line/column extraction from V8 SyntaxError messages.
+      // V8 emits "Unexpected token ... in JSON at position N" — we resolve
+      // N back to a 1-indexed line/column so operators can jump to the offender.
+      const posMatch = /position (\d+)/.exec(msg);
+      let locHint = '';
+      if (posMatch) {
+        const pos = Math.min(Number(posMatch[1]), raw.length);
+        const before = raw.slice(0, pos);
+        const line = before.split('\n').length;
+        const col = pos - (before.lastIndexOf('\n') + 1) + 1;
+        const offendingLine = raw.split('\n')[line - 1] || '';
+        locHint = ` (line ${line}, col ${col}: \`${offendingLine.trim().slice(0, 80)}\`)`;
+      }
+      console.error(`[agent-manager] config.json invalid JSON: ${configPath}${locHint}: ${msg}`);
+      console.error(`[agent-manager] hint: trailing commas, unquoted keys, and single quotes are common causes`);
+      return {};
+    }
   }
 }
 
