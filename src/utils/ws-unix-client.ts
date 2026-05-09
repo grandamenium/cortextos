@@ -251,7 +251,19 @@ export class WsUnixJsonRpcClient {
   private parseTextPayload(text: string): void {
     for (const line of text.split('\n')) {
       if (!line.trim()) continue;
-      const message = JSON.parse(line) as JsonRpcMessage;
+      let message: JsonRpcMessage;
+      try {
+        message = JSON.parse(line) as JsonRpcMessage;
+      } catch (err) {
+        for (const handler of this.handlers) {
+          handler({
+            jsonrpc: '2.0',
+            method: '_parse_error',
+            params: { line, error: (err as Error).message },
+          } as unknown as JsonRpcMessage);
+        }
+        continue;
+      }
       if ('id' in message && this.pending.has(message.id)) {
         const pending = this.pending.get(message.id)!;
         clearTimeout(pending.timer);

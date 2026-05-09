@@ -264,7 +264,7 @@ export class CodexAppServerPTY {
     const headerMatch = content.match(/^=== TELEGRAM(?:\s+(PHOTO|DOCUMENT|VOICE|AUDIO|VIDEO|VIDEO_NOTE))?\s+from/);
     const mediaType = headerMatch?.[1] ?? null;
 
-    const chatIdMatch = content.match(/\(chat_id:(-?\d+)\)/);
+    const chatIdMatch = content.match(/^=== TELEGRAM[^\n]*\(chat_id:(-?\d+)\)/);
     const chatId = chatIdMatch?.[1] ?? null;
 
     const beforeReply = content
