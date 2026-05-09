@@ -13,6 +13,7 @@ function createMockAgent(name = 'test-agent') {
     name,
     isBootstrapped: vi.fn().mockReturnValue(true),
     injectMessage: vi.fn().mockReturnValue(true),
+    consumeHandoffAutoResume: vi.fn().mockReturnValue(false),
     write: vi.fn(),
   } as any;
 }

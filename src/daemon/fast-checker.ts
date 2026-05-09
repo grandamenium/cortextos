@@ -107,6 +107,17 @@ export class FastChecker {
     await this.waitForBootstrap();
     this.log('Bootstrap complete. Beginning poll loop.');
 
+    // Handoff auto-resume: if this session was started from a context handoff,
+    // inject a nudge immediately so the agent starts processing without waiting
+    // for an external message (user, cron, or inbox). LangGraph-style: the new
+    // session already has the full handoff context in its boot prompt — we just
+    // need to kick the REPL into running it.
+    if (this.agent.consumeHandoffAutoResume()) {
+      this.log('Handoff restart detected — injecting auto-resume nudge');
+      this.agent.injectMessage('[SYSTEM] Context handoff restart. Resume from handoff document now.');
+      await sleep(2000);
+    }
+
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;

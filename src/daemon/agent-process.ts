@@ -52,6 +52,10 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // Set when a handoff doc was detected at startup so fast-checker can
+  // inject a resume nudge immediately after bootstrap instead of waiting
+  // for an external message.
+  private pendingHandoffAutoResume: boolean = false;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -542,10 +546,22 @@ export class AgentProcess {
       const docPath = readFileSync(markerPath, 'utf-8').trim();
       unlinkSync(markerPath);
       if (!docPath || !existsSync(docPath)) return '';
+      this.pendingHandoffAutoResume = true;
       return ` CONTEXT HANDOFF: Before restoring crons or checking inbox, read the handoff document at ${docPath} to resume your prior session state.`;
     } catch {
       return '';
     }
+  }
+
+  /**
+   * Returns true (and clears the flag) if this session started from a context
+   * handoff and needs an auto-resume nudge injected after bootstrap.
+   * Called once by FastChecker immediately after bootstrap completes.
+   */
+  consumeHandoffAutoResume(): boolean {
+    if (!this.pendingHandoffAutoResume) return false;
+    this.pendingHandoffAutoResume = false;
+    return true;
   }
 
   private startSessionTimer(): void {
