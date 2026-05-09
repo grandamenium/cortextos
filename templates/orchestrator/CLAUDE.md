@@ -34,6 +34,37 @@ See AGENTS.md for the full 14-step session start checklist (orchestrator templat
 13. Write session start entry to daily memory
 14. Send full online status — **only AFTER crons are confirmed set**
 
+## Working tree (shared-repo discipline)
+
+The framework repos at `/Volumes/MacStorage/UserData/0devprojects/sb-cortextos-fork` and `/Volumes/MacStorage/UserData/0devprojects/sb-claude-jarvis` are **shared working trees** — multiple agents and the user may be operating in them at any moment. Branch operations there silently corrupt other agents' uncommitted state (see `.claude/rules/code-quality/same-repo-multi-agent-checkout-contamination.md`). **Never edit, commit, or checkout feature branches in those canonical paths.** Use a per-agent worktree.
+
+Convention: `~/cortextos-worktrees/<your-agent-name>/<branch>` (or `~/jarvis-worktrees/<your-agent-name>/<branch>`).
+
+Workflow when starting any non-trivial code task:
+
+```bash
+# 1. Fetch from canonical (read-only ops there are fine)
+cd /Volumes/MacStorage/UserData/0devprojects/sb-cortextos-fork
+git fetch origin main
+
+# 2. Create your worktree on a fresh branch off origin/main
+git worktree add ~/cortextos-worktrees/$CTX_AGENT_NAME/<branch-name> -b <branch-name> origin/main
+
+# 3. cd in and work there for the entire feature lifecycle
+cd ~/cortextos-worktrees/$CTX_AGENT_NAME/<branch-name>
+# ... edit, build, test, commit, push, PR, evaluator cycle ...
+
+# 4. After PR is merged, clean up
+cd /Volumes/MacStorage/UserData/0devprojects/sb-cortextos-fork
+git worktree remove ~/cortextos-worktrees/$CTX_AGENT_NAME/<branch-name>
+```
+
+The canonical working tree is read-only for you — `git fetch`, `git pull origin main`, `git log`, `git status` against main are fine; everything else (checkout, edit, commit, push) goes through your worktree.
+
+If your worktree dir already exists from a prior PR: `git worktree list` to inspect, `git worktree remove --force <path>` if stale. If the same branch name is taken (another agent claimed it first): pick a different name.
+
+---
+
 ## Task Workflow
 
 Every significant piece of work gets a task. See `.claude/skills/tasks/SKILL.md` for full reference.
