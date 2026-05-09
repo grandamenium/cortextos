@@ -152,6 +152,7 @@ Format: `- [domain] <slug>: one-line symptom (severity)`. Read the subfile when 
 
 - [fleet-coordination, comms, audit-trail] `saurav-direct-fleet-policy-needs-relay-before-act`: Saurav-direct DMs to specialists touching fleet-wide policy must trigger `fleet_context_relay` before acting (blocker)
 - [fleet-coordination, user-surfaces] `specialist-agent-role-doesnt-imply-no-direct-dm`: don't infer user-comm patterns from architecture role; confirm via usage data or explicit check-in (should-know)
+- [comms, telegram, identifiers] `telegram-supergroup-upgrade-invalidates-chat-id`: Telegram auto-migration changes `-<id>` to `-100<id>`; outbound to old id fails while inbound still receives migration notices — silent broadcast loss (blocker)
 
 ### Auth, dashboard, deployment
 
