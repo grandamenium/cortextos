@@ -70,17 +70,28 @@ describe('loadProfileRegistry', () => {
     expect(r!.profiles.work.config_dir).toBe('/Users/x/.claude-work');
   });
 
-  it('drops profile entries with missing or non-string config_dir', () => {
+  it('drops profile entries with malformed (present-but-non-string) config_dir, keeps key-absent sentinels', () => {
+    // Key-absent (`{}` or `{ not_config_dir: ... }`) is the canonical
+    // sentinel for "default account — do not set CLAUDE_CONFIG_DIR";
+    // the spawn path skips writing the env when `config_dir` is
+    // undefined. Key-present-but-malformed (null, non-string, empty)
+    // is dropped — the operator probably intended a value, and
+    // silently coercing to "default account" would mask a config typo.
     writeRegistry('acme', JSON.stringify({
       default_profile: 'personal',
       profiles: {
-        personal: { config_dir: '/Users/x/.claude' },
-        broken: { not_config_dir: 'oops' },
-        nullish: { config_dir: null },
+        personal: {},                                  // sentinel: keep
+        work: { config_dir: '/Users/x/.claude-work' }, // valid: keep
+        keyless: { not_config_dir: 'oops' },           // sentinel: keep
+        nullish: { config_dir: null },                 // malformed: drop
+        empty: { config_dir: '' },                     // malformed: drop
       },
     }));
     const r = loadProfileRegistry(tmpRoot, 'acme')!;
-    expect(Object.keys(r.profiles).sort()).toEqual(['personal']);
+    expect(Object.keys(r.profiles).sort()).toEqual(['keyless', 'personal', 'work']);
+    expect(r.profiles.personal.config_dir).toBeUndefined();
+    expect(r.profiles.work.config_dir).toBe('/Users/x/.claude-work');
+    expect(r.profiles.keyless.config_dir).toBeUndefined();
   });
 
   it('passes through a known failback_policy value', () => {

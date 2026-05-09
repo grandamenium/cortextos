@@ -39,8 +39,27 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 export interface Profile {
-  /** Absolute path to the Claude config directory. */
-  config_dir: string;
+  /**
+   * Absolute path to set as `CLAUDE_CONFIG_DIR` for this profile's spawns.
+   *
+   * **Optional by design.** `CLAUDE_CONFIG_DIR` is both a path resolver
+   * AND a macOS Keychain partition key (see
+   * `code-quality/claude-config-dir-is-keychain-partition-key.md`). Any
+   * value that hasn't been logged-in via `claude /login` under that
+   * exact env will fail headless agents with "Not logged in".
+   *
+   * The default account (the one the operator uses when running plain
+   * `claude` from a terminal — no env override) MUST omit this field.
+   * Setting it to `$HOME` "for clarity" is a different keychain
+   * partition than no-env-set; tokens won't be found.
+   *
+   * Non-default accounts (e.g. a `work` profile) set this to a
+   * pre-logged-in alternate dir, matching whatever shell alias the
+   * operator uses for that account
+   * (e.g. `alias claude-work='CLAUDE_CONFIG_DIR=~/.claude-work claude'`
+   * → `config_dir: "/Users/sauravb/.claude-work"`).
+   */
+  config_dir?: string;
 }
 
 export type FailbackPolicy = 'manual' | 'auto' | 'disabled';
@@ -85,10 +104,20 @@ export function loadProfileRegistry(
   const out: Record<string, Profile> = {};
   for (const [name, p] of Object.entries(profiles as Record<string, unknown>)) {
     if (!p || typeof p !== 'object') continue;
-    const dir = (p as Record<string, unknown>)['config_dir'];
-    if (typeof dir === 'string' && dir) {
+    const obj = p as Record<string, unknown>;
+    const hasKey = 'config_dir' in obj;
+    const dir = obj['config_dir'];
+    if (!hasKey) {
+      // Key absent — canonical sentinel for "default account, do not set
+      // CLAUDE_CONFIG_DIR". Keep the profile so it resolves and
+      // `findDanglingReferences` doesn't false-alarm.
+      out[name] = {};
+    } else if (typeof dir === 'string' && dir) {
       out[name] = { config_dir: dir };
     }
+    // Key present but malformed (null, non-string, empty string) — drop
+    // the entry. The operator probably intended a value; failing closed
+    // is safer than silently treating it as "default account".
   }
 
   const failback = obj['failback_policy'];

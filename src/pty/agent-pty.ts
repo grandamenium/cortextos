@@ -4,6 +4,7 @@ import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import { loadProfileRegistry, resolveProfile } from '../utils/profiles.js';
+import { seedTrustDialog } from '../utils/claude-config.js';
 
 // node-pty types
 interface IPty {
@@ -167,6 +168,17 @@ export class AgentPTY {
       }
     }
 
+    // Pre-seed the workspace-trust acceptance for this cwd so claude
+    // doesn't render an interactive trust dialog on a headless PTY.
+    // Replaces the prior output-substring heuristic that pressed Enter
+    // on any prompt containing 'trust' or 'Yes' — that heuristic
+    // silently backfired when Claude Code 2.1.126 added a "Bypass
+    // Permissions" warning whose default option exits the session.
+    const claudeConfigDir = ptyEnv['CLAUDE_CONFIG_DIR'] || ptyEnv['HOME'] || process.env.HOME;
+    if (claudeConfigDir && cwd) {
+      seedTrustDialog(join(claudeConfigDir, '.claude.json'), cwd);
+    }
+
     // Spawn the agent binary directly (no shell wrapper) — cross-platform, no shell escaping needed.
     // env is passed natively via node-pty options; no bash export commands required.
     // On Windows, npm global installs create .cmd wrappers, not .exe binaries.
@@ -184,10 +196,78 @@ export class AgentPTY {
 
     this._alive = true;
 
-    // Set up output capture
+    // Track which interactive prompts we've already responded to so the
+    // handlers fire at most once per session and never overlap.
+    let bypassAccepted = false;
+    let trustAccepted = false;
+
+    // Output capture + inline prompt detection.
+    //
+    // Claude Code 2.1+ shows a "Bypass Permissions" warning dialog whose
+    // default option is "No, exit" — pressing Enter on the default exits
+    // the session, which is what was crash-looping the fleet. Neither
+    // settings.json `permissions.defaultMode: bypassPermissions` nor the
+    // `--permission-mode bypassPermissions` CLI flag suppress this dialog
+    // on 2.1.126; only programmatic acceptance works (down-arrow → Enter).
+    //
+    // Single-word substring matches: raw PTY data interleaves ANSI
+    // cursor-forward codes between characters, so multi-word matches
+    // ("Bypass Permissions", "Yes, I accept") fail silently. "Bypass" and
+    // "trust" are single tokens that survive the interleaving.
+    //
+    // Synchronous flag set: bypassAccepted is set BEFORE any setTimeout
+    // so the trust handler below cannot fire on the same data chunk and
+    // mistakenly Enter-press while "No, exit" is still selected. Trust
+    // handler also matches on "trust" only (not "Yes") to avoid the
+    // sibling-dialog false-positive class-of-trap.
+    //
+    // Pre-spawn `seedTrustDialog` above writes hasTrustDialogAccepted=true
+    // to ~/.claude.json, so the trust dialog usually doesn't render at
+    // all — these handlers are the runtime safety net.
     this.pty.onData((data: string) => {
       this.outputBuffer.push(data);
+      if (!this.pty) return;
+
+      // Bypass Permissions warning — navigate down to "Yes, I accept" then Enter.
+      if (!bypassAccepted && data.includes('Bypass')) {
+        bypassAccepted = true;
+        // Auditable log per `pty-output-substring-heuristic-matches-multiple-dialogs`:
+        // every heuristic match + action is logged so a sibling-dialog
+        // false-positive is greppable in stderr.
+        process.stderr.write(`[agent-pty] bypass-warning auto-accept fired (down-arrow + Enter) for ${this.config.name}\n`);
+        this.pty.write('\x1b[B');
+        setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 300);
+        return;
+      }
+
+      // Trust folder prompt — only fires if bypass wasn't detected in this chunk.
+      if (!trustAccepted && data.includes('trust')) {
+        trustAccepted = true;
+        process.stderr.write(`[agent-pty] trust-dialog auto-accept fired (Enter) for ${this.config.name}\n`);
+        this.pty.write('\r');
+      }
     });
+
+    // Fallback probes: re-scan the recent buffer in case the onData
+    // handler missed a prompt that arrived before registration (race
+    // between PTY spawn and onData wiring), or the prompt's data chunk
+    // didn't contain the trigger keyword.
+    const acceptPromptFallback = () => {
+      if (!this.pty) return;
+      const recent = this.outputBuffer.getRecent();
+      if (!bypassAccepted && recent.includes('Bypass')) {
+        bypassAccepted = true;
+        process.stderr.write(`[agent-pty] bypass-warning auto-accept fired via fallback probe for ${this.config.name}\n`);
+        this.pty.write('\x1b[B');
+        setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 300);
+      } else if (!trustAccepted && recent.includes('trust')) {
+        trustAccepted = true;
+        process.stderr.write(`[agent-pty] trust-dialog auto-accept fired via fallback probe for ${this.config.name}\n`);
+        this.pty.write('\r');
+      }
+    };
+    setTimeout(acceptPromptFallback, 2000);
+    setTimeout(acceptPromptFallback, 5000);
 
     // Set up exit handler
     this.pty.onExit(({ exitCode, signal }) => {
@@ -197,26 +277,6 @@ export class AgentPTY {
         this.onExitHandler(exitCode, signal);
       }
     });
-
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 8000);
   }
 
   /**
@@ -259,7 +319,15 @@ export class AgentPTY {
       args.push('--continue');
     }
 
+    // Pass BOTH legacy and modern bypass flags. `--dangerously-skip-permissions`
+    // is required to enable the bypass option in CC 2.1.126 (without it,
+    // `--permission-mode bypassPermissions` alone fails with exit 1).
+    // `--permission-mode bypassPermissions` then sets the explicit mode and
+    // matches the `permissions.defaultMode` settings.json key. Neither
+    // suppresses the interactive WARNING dialog CC 2.1+ added — that's
+    // handled by the auto-accept in the PTY data handler above.
     args.push('--dangerously-skip-permissions');
+    args.push('--permission-mode', 'bypassPermissions');
 
     if (this.config.model) {
       args.push('--model', this.config.model);
