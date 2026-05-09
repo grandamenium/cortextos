@@ -1,6 +1,6 @@
 # Dev Agent Goals
 
-_Last updated: 2026-05-08 (cloud session ~20:23 UTC — reyco PRs #235/#236/#237 MERGED today; #238 open (canonical email info@); #189 ~51h open (~27h past SLA); #234 ~25h open; 88 cortextos PRs (#6–#87 + #79) waiting Aiden; PHP 7.4 deadline May 20 = 12 days; Node 22 deadline June 2 = 24 days; ⚠️ WP 7.0 also drops May 20 — double-change day risk)_
+_Last updated: 2026-05-09 (cloud session ~04:07 UTC — overnight idle; #238 ~9h open; #189 ~59h open (~35h past SLA); #234 ~33h open (boss can merge); 88 cortextos PRs (#6–#87 + #79) waiting Aiden; PHP 7.4 deadline May 20 = 11 days; Node 22 deadline June 2 = 24 days; ⚠️ WP 7.0 also drops May 20 — double-change day risk; ⚠️ PHPCompatibility PHPCS install deadline May 10 = 1 day)_
 
 ## Priority 1 — Merge Queue (blocked on Aiden review)
 
@@ -53,7 +53,7 @@ These PRs are complete and tested. Waiting for merge approval.
 | #86 | fix(dashboard): Lead interface missing closing brace in types.ts | Second TypeScript error — `interface Lead` was missing `}` causing ContentStatus/ContentItem/etc. to parse as Lead members → `npx tsc --noEmit` fails. CI failing on PR #86 is EXPECTED (viewport error from PR #85 not included). Merge sequence: #84 → #86 → rebase #85 → #85. |
 | #85 | fix(dashboard): move viewport out of Metadata into separate Viewport export | Viewport fix is correct. CI: Build ✅ Unit Tests ❌ (needs #84) Dashboard Build ❌ (needs #86 merged first, then rebase). Rebase #85 from main after #86 merges → all three CI green. |
 | #84 | fix(test): comms channels timestamp flake — replace hardcoded 2026-04-15 timestamps with relative offsets | Unit Tests ✅ Build & Type Check ✅ Dashboard Build ❌ (pre-existing, blocked on #85). ⚠️ local agent must run npm test before Aiden reviews. |
-| #83 | chore(ci): bump Node.js 20 → 22 LTS across all CI jobs | Single-file change (.github/workflows/ci.yml). Node 20 EOL Apr 2026; GitHub Actions forces Node 24 default June 2 (28 days). No src changes — CI verifies on merge. |
+| #83 | chore(ci): bump Node.js 20 → 22 LTS across all CI jobs | Single-file change (.github/workflows/ci.yml). Node 20 EOL Apr 2026; GitHub Actions forces Node 24 default June 2 (24 days). No src changes — CI verifies on merge. |
 | #82 | test(bus): postActivity success + failure + replyMarkup + second-candidate coverage — 4 cases | Fills postActivity live-send path gap in system.test.ts. returns true on success, false on throw, replyMarkup forwarded, second candidate env path. 20 pre-existing + 4 new = 24/24. ⚠️ local agent must run npm test before Aiden reviews. |
 | #81 | test(bus): hardRestart + autoCommit + checkGoalStaleness gap coverage — 7 cases | hardRestart (3: both markers created, HARD-RESTART log, distinct file paths), autoCommit (3: .cortextos-env blocked, node_modules/ excluded, non-git returns clean), checkGoalStaleness (1: INVALID_AGENT filtered). 15 pre-existing + 7 new = 22/22. ⚠️ local agent must run npm test before Aiden reviews. |
 | #80 | test(cli): startCommand coverage — 20 cases | Last untested CLI source file. daemon-script-missing exit(1), --foreground spawn, PM2+ecosystem, PM2 throw, no-PM2 detached (fake timers), agent auto-register, org propagation, IPC success/failure, --instance. 20/20 pass. Build clean. ⚠️ local agent must run npm test before Aiden reviews. |
@@ -126,7 +126,7 @@ These PRs are complete and tested. Waiting for merge approval.
 
 ### Reyco Marine
 
-- **⚠️ PHP 7.4 → 8.x migration — DEADLINE May 20, 2026 (12 days)** — SiteGround drops PHP 7.4 support site-wide. Reyco Marine custom theme must be PHP 8.x-compatible before then.
+- **⚠️ PHP 7.4 → 8.x migration — DEADLINE May 20, 2026 (11 days)** — SiteGround drops PHP 7.4 support site-wide. Reyco Marine custom theme must be PHP 8.x-compatible before then.
   - Files to audit: `functions.php`, `header.php`, `footer.php`, `single-product.php`, `service-detail.php`, `inc/class-resend-mailer.php`, `front-page.php`, `subcategory-section.php`
   - Key patterns to check: `each(`, `create_function(`, `(real)` cast, old-style constructors, `${` string interpolation, `ereg`/`split`
   - **✅ Cloud grep scan (2026-05-03 ~08:00 UTC)**: GitHub code search across master branch — zero hits on all critical PHP 7.4→8.x removed/deprecated patterns: `each(`, `create_function(`, `(real)`, `ereg`/`split(`, `${` interpolation, `mysql_*`, old-style constructors, `function match` keyword conflict. Master branch is clean on grep-level checks. `Reyco_Resend_Mailer` (PR #130) not yet on master — verify when merged.
@@ -137,14 +137,14 @@ These PRs are complete and tested. Waiting for merge approval.
   - Source: Context7 weekly stack scan 2026-05-08 ~14:56 UTC.
 - **WC 10.7 HPOS audit** — cloud GitHub code search (2026-05-05): zero hits on `wp_postmeta`, `get_post_meta`, `update_post_meta`, `get_posts`, and WC REST v1/v2/v3 across master branch. Theme is a display layer only — no custom order-management code. Low HPOS risk. Recommend local agent run `WP_DEBUG=true` smoke test after WC 10.7 upgrade to catch any runtime surprises.
   - Experiment `exp_1777768046_php8g` — **DECIDED: KEEP** (2026-05-04T20:18Z). Zero PHP deploys in 48h window; gate correct; master branch clean. Closed.
-  - Experiment `exp_1777925922_phpc` — **✅ CLOSED → decision: IMPLEMENT** (closed 2026-05-06T20:18Z). PHPCompatibility PHPCS gate for PHP 7.4→8.x behavioral changes. **⚠️ LOCAL AGENT ACTION REQUIRED before May 10:** `composer global require squizlabs/php_codesniffer phpcompatibility/php-compatibility` + `phpcs --config-set installed_paths ~/.composer/vendor/phpcompatibility/php-compatibility/PHPCompatibility` + add step 4.75 to pre-push checklist (block on ERROR, warn on WARNING). PHP deadline May 20 (12 days) makes this mandatory.
+  - Experiment `exp_1777925922_phpc` — **✅ CLOSED → decision: IMPLEMENT** (closed 2026-05-06T20:18Z). PHPCompatibility PHPCS gate for PHP 7.4→8.x behavioral changes. **⚠️ LOCAL AGENT ACTION REQUIRED before May 10:** `composer global require squizlabs/php_codesniffer phpcompatibility/php-compatibility` + `phpcs --config-set installed_paths ~/.composer/vendor/phpcompatibility/php-compatibility/PHPCompatibility` + add step 4.75 to pre-push checklist (block on ERROR, warn on WARNING). PHP deadline May 20 (11 days) makes this mandatory.
 - **Path C booking form** — interim wp_mail form + calendar embed slot. Standing by for Aiden spot-check on v2 service pages.
 - **Visual regression CI** — PR #75 closed 2026-05-04 (no Playwright CI planned at this time).
 - **Lightspeed product sync** — 58 products still missing images (Mercury 38, Toro 7, Cub Cadet 10, Princecraft 3). Root cause: not yet synced from Lightspeed to WC. Unblocked when Casey runs sync.
 - **Open PRs (needs Aiden review):**
   - PR #238 (opened 2026-05-08T~19:19Z) — feat(canonical): contact email info@reycomarine.com — customizer default + LocalBusiness schema + wp_mail_from filter + about.php RECIPIENTS fix (missed in #235). Awaiting Aiden review.
   - PR #234 (opened 2026-05-07T19:02Z) — fix(mobile): hero phone-CTA spacing — `pb-16` → `pb-28` on hero inner div (front-page.php line 36). **Boss can merge (no CI gate).**
-  - PR #189 (opened 2026-05-06T~17:08Z) — fix: Casey-twice on Meet the Team Sales counter card — **⚠️ NOW ~51h open (~27h past 24h SLA)** — needs Aiden review urgently
+  - PR #189 (opened 2026-05-06T~17:08Z) — fix: Casey-twice on Meet the Team Sales counter card — **⚠️ NOW ~59h open (~35h past 24h SLA)** — needs Aiden review urgently
 
 ### WC Pricing Sweep
 
