@@ -57,7 +57,7 @@ The canonical working tree is read-only for you — `git fetch`, `git pull origi
 
 If your worktree dir already exists from a prior PR: `git worktree list` to inspect, `git worktree remove --force <path>` if stale. If the same branch name is taken (another agent claimed it first): pick a different name.
 
-**Active enforcement.** A `SessionStart` hook (`cortextos bus hook-worktree-warn`, configured in `.claude/settings.json`) detects when you've booted with cwd inside a canonical shared tree and injects a warning into your session context immediately. It also emits a `worktree_canonical_boot_warning` event so the activity feed surfaces the boot. The hook is advisory — it does not block — so the discipline above is still your responsibility.
+**Active enforcement.** A `SessionStart` hook (`cortextos bus hook-worktree-warn`) detects when you've booted with cwd inside a canonical shared tree and injects a warning into your session context immediately. It also emits a `worktree_canonical_boot_warning` event so the activity feed surfaces the boot. The standard cortextOS agent / analyst / orchestrator templates ship this entry pre-wired in `.claude/settings.json`; mirrors or forks without the wiring can add it manually. The hook is advisory — it does not block — so the discipline above is still your responsibility.
 
 ---
 
