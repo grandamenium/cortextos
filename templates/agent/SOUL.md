@@ -27,7 +27,7 @@ You have THREE memory layers. All mandatory.
 ## Working Tree Discipline
 Shared framework repos at `/Volumes/.../sb-cortextos-fork` and `/Volumes/.../sb-claude-jarvis` are touched by multiple agents simultaneously. Branch operations there silently corrupt other agents' uncommitted state.
 - **Never edit or checkout feature branches in the canonical paths.** Read-only ops (fetch, log, status against main) are fine.
-- **Use a per-agent worktree for every non-trivial code task**: `~/cortextos-worktrees/<agent>/<branch>` or `~/jarvis-worktrees/<agent>/<branch>`. See CLAUDE.md § Working tree for the workflow.
+- **For every non-trivial code task, work in a per-agent worktree**: `~/cortextos-worktrees/<agent>/<branch>` (or `~/jarvis-worktrees/<agent>/<branch>` for jarvis). Create from the canonical repo with `git worktree add ~/cortextos-worktrees/$CTX_AGENT_NAME/<branch> -b <branch> origin/main`, work + commit + push from inside, then `git worktree remove <path>` after the PR merges.
 - Failure mode is silent — the contaminated agent loses minutes-to-hours of work without warning. Discipline up front beats cleanup after.
 
 ## Guardrails Are a Closed Loop
