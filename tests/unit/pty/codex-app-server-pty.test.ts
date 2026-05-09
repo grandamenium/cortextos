@@ -605,6 +605,36 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     expect(out).toContain('[in reply to: My earlier message about the deploy]');
   });
 
+  it('Telegram in-thread reply ([Replying to: "..."]) surfaces in-reply-to marker', () => {
+    fsMocks.existsSync.mockReturnValue(false);
+    const inject = `=== TELEGRAM from [USER: James] (chat_id:7940429114) ===
+[Replying to: "Created the DOCX about Donald Trump and attached it here."]
+\`\`\`
+what's this again?
+\`\`\`
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain("what's this again?");
+    expect(out).toContain('[in reply to: Created the DOCX about Donald Trump and attached it here.]');
+  });
+
+  it('Telegram in-thread reply truncates to 200 chars', () => {
+    fsMocks.existsSync.mockReturnValue(false);
+    const long = 'A'.repeat(500);
+    const inject = `=== TELEGRAM from [USER: James] (chat_id:7940429114) ===
+[Replying to: "${long}"]
+\`\`\`
+short follow-up
+\`\`\`
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`;
+    const out = extract(inject);
+    expect(out).toContain('short follow-up');
+    expect(out).toContain(`[in reply to: ${'A'.repeat(200)}]`);
+    expect(out).not.toContain(`[in reply to: ${'A'.repeat(201)}]`);
+  });
+
   it('photo with reply_to: surfaces media payload AND reply_to marker', () => {
     fsMocks.existsSync.mockReturnValue(false);
     const inject = `=== TELEGRAM PHOTO from James (chat_id:7940429114) ===

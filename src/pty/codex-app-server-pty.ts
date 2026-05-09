@@ -283,6 +283,7 @@ export class CodexAppServerPTY {
       if (line.startsWith('=== TELEGRAM')) continue;
       if (line.startsWith('[Recent conversation:]')) continue;
       if (line.startsWith('[reply_to:')) continue;
+      if (line.startsWith('[Replying to:')) continue;
       if (line.startsWith('/') || line.startsWith('$')) return withReplyTo(line);
       break;
     }
@@ -297,6 +298,7 @@ export class CodexAppServerPTY {
       if (line.startsWith('=== TELEGRAM')) continue;
       if (line.startsWith('[Recent conversation:]')) continue;
       if (line.startsWith('[reply_to:')) continue;
+      if (line.startsWith('[Replying to:')) continue;
       return withReplyTo(line);
     }
 
@@ -330,6 +332,12 @@ export class CodexAppServerPTY {
   }
 
   private extractReplyToContext(beforeReply: string): string | null {
+    const telegramReplyMatch = beforeReply.match(/\[Replying to:\s*"([\s\S]*?)"\]/);
+    if (telegramReplyMatch) {
+      const text = telegramReplyMatch[1].slice(0, 200);
+      if (text) return `[in reply to: ${text}]`;
+    }
+
     const replyToMatch = beforeReply.match(/\[reply_to:\s*(\d+)\]/);
     if (!replyToMatch) return null;
     const messageId = replyToMatch[1];
