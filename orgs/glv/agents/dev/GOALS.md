@@ -1,6 +1,6 @@
 # Dev Agent Goals
 
-_Last updated: 2026-05-09 (cloud session ~12:05 UTC — idle; #189 ~67h open (~43h past SLA); #234 ~41h open (boss can merge); 88 cortextos PRs (#6–#87 + #79) waiting Aiden; PHP 7.4 deadline May 20 = 11 days; Node 22 deadline June 2 = 24 days; ⚠️ WP 7.0 also drops May 20 — double-change day risk; ⚠️ PHPCompatibility PHPCS install deadline May 10 = TODAY ~12h remaining — CRITICAL)_
+_Last updated: 2026-05-09 (cloud session ~16:10 UTC — idle; #189 ~71h open (~47h past SLA); #234 ~45h open (boss can merge); 88 cortextos PRs (#6–#87 + #79) waiting Aiden; PHP 7.4 deadline May 20 = 11 days; Node 22 deadline June 2 = 24 days; ⚠️ WP 7.0 also drops May 20 — double-change day risk; 🚨 PHPCompatibility PHPCS install deadline May 10 = ~8h remaining — FINAL ESCALATION)_
 
 ## Priority 1 — Merge Queue (blocked on Aiden review)
 
@@ -143,7 +143,7 @@ These PRs are complete and tested. Waiting for merge approval.
 - **Lightspeed product sync** — 58 products still missing images (Mercury 38, Toro 7, Cub Cadet 10, Princecraft 3). Root cause: not yet synced from Lightspeed to WC. Unblocked when Casey runs sync.
 - **Open PRs (needs Aiden review):**
   - PR #234 (opened 2026-05-07T19:02Z) — fix(mobile): hero phone-CTA spacing — `pb-16` → `pb-28` on hero inner div (front-page.php line 36). **Boss can merge (no CI gate).**
-  - PR #189 (opened 2026-05-06T~17:08Z) — fix: Casey-twice on Meet the Team Sales counter card — **⚠️ NOW ~67h open (~43h past 24h SLA)** — needs Aiden review urgently
+  - PR #189 (opened 2026-05-06T~17:08Z) — fix: Casey-twice on Meet the Team Sales counter card — **⚠️ NOW ~71h open (~47h past 24h SLA)** — needs Aiden review urgently
 
 ### WC Pricing Sweep
 
