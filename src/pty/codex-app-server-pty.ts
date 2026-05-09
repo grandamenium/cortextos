@@ -223,7 +223,8 @@ export class CodexAppServerPTY {
   }
 
   private async handleInput(content: string): Promise<void> {
-    const input = this.extractTelegramPayload(content) ?? content;
+    const extracted = this.extractTelegramPayload(content);
+    const input = extracted?.payload ?? content;
     const goalCommand = this.parseGoalCommand(input);
     if (goalCommand?.type === 'get') {
       await this.getGoal();
@@ -249,28 +250,40 @@ export class CodexAppServerPTY {
       await this.handleSkillInput(rewritten);
       return;
     }
-    this.queueTurn([{ type: 'text', text: input, text_elements: [] }]);
+    const turnText = extracted?.replyDirective
+      ? `${input}\n\n${extracted.replyDirective}`
+      : input;
+    this.queueTurn([{ type: 'text', text: turnText, text_elements: [] }]);
   }
 
-  private extractTelegramPayload(content: string): string | null {
+  private extractTelegramPayload(
+    content: string,
+  ): { payload: string; replyDirective: string | null } | null {
     if (!content.startsWith('=== TELEGRAM')) return null;
 
     const headerMatch = content.match(/^=== TELEGRAM(?:\s+(PHOTO|DOCUMENT|VOICE|AUDIO|VIDEO|VIDEO_NOTE))?\s+from/);
     const mediaType = headerMatch?.[1] ?? null;
+
+    const chatIdMatch = content.match(/\(chat_id:(-?\d+)\)/);
+    const chatId = chatIdMatch?.[1] ?? null;
 
     const beforeReply = content
       .split('\n[Your last message:', 1)[0]
       .split('\nReply using:', 1)[0];
 
     const replyToContext = this.extractReplyToContext(beforeReply);
-    const withReplyTo = (payload: string | null): string | null => {
+    const replyDirective = chatId
+      ? `Reply via: cortextos bus send-telegram ${chatId} '<your reply>' — this is the only path that surfaces in Telegram and on the dashboard. Do not reply through the codex channel.`
+      : null;
+    const wrap = (payload: string | null): { payload: string; replyDirective: string | null } | null => {
       if (!payload) return null;
-      return replyToContext ? `${payload}\n\n${replyToContext}` : payload;
+      const withReplyTo = replyToContext ? `${payload}\n\n${replyToContext}` : payload;
+      return { payload: withReplyTo, replyDirective };
     };
 
     if (mediaType) {
       const mediaPayload = this.buildMediaPayload(mediaType, beforeReply);
-      if (mediaPayload) return withReplyTo(mediaPayload);
+      if (mediaPayload) return wrap(mediaPayload);
     }
 
     const lines = beforeReply
@@ -284,13 +297,13 @@ export class CodexAppServerPTY {
       if (line.startsWith('[Recent conversation:]')) continue;
       if (line.startsWith('[reply_to:')) continue;
       if (line.startsWith('[Replying to:')) continue;
-      if (line.startsWith('/') || line.startsWith('$')) return withReplyTo(line);
+      if (line.startsWith('/') || line.startsWith('$')) return wrap(line);
       break;
     }
 
     const fencedBlocks = [...beforeReply.matchAll(/```(?:[a-zA-Z0-9_-]+)?\n([\s\S]*?)\n```/g)];
     if (fencedBlocks.length > 0) {
-      return withReplyTo(fencedBlocks[fencedBlocks.length - 1]?.[1]?.trim() || null);
+      return wrap(fencedBlocks[fencedBlocks.length - 1]?.[1]?.trim() || null);
     }
 
     for (let i = lines.length - 1; i >= 0; i -= 1) {
@@ -299,7 +312,7 @@ export class CodexAppServerPTY {
       if (line.startsWith('[Recent conversation:]')) continue;
       if (line.startsWith('[reply_to:')) continue;
       if (line.startsWith('[Replying to:')) continue;
-      return withReplyTo(line);
+      return wrap(line);
     }
 
     return null;

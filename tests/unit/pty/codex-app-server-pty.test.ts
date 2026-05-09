@@ -408,6 +408,29 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
   });
 
+  it('appends bus reply directive to plain-text Telegram turn so codex routes responses through cortextos bus', async () => {
+    requestMock.mockResolvedValue({ result: {} });
+    const pty = makeReadyPty();
+
+    pty.write(`=== TELEGRAM from [USER: James] (chat_id:7940429114) ===
+\`\`\`
+Hello? Are you working right?
+\`\`\`
+Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
+`);
+    pty.write('\r');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    const call = requestMock.mock.calls[0];
+    expect(call[0]).toBe('turn/start');
+    const text = (call[1] as { input: Array<{ text: string }> }).input[0].text;
+    expect(text).toContain('Hello? Are you working right?');
+    expect(text).toContain("cortextos bus send-telegram 7940429114 '<your reply>'");
+    expect(text).toContain('Do not reply through the codex channel.');
+  });
+
   it('routes Telegram-delivered /heartbeat through the slash rewrite', async () => {
     requestMock
       .mockResolvedValueOnce({
@@ -477,7 +500,16 @@ describe('CodexAppServerPTY extractTelegramPayload media types', () => {
     if (options?.existsSync !== undefined) fsMocks.existsSync.mockReturnValue(options.existsSync);
     if (options?.readFileSync !== undefined) fsMocks.readFileSync.mockReturnValue(options.readFileSync);
     const pty = new CodexAppServerPTY(mockEnv, {});
-    return (pty as unknown as { extractTelegramPayload(c: string): string | null }).extractTelegramPayload(content);
+    const result = (pty as unknown as {
+      extractTelegramPayload(c: string): { payload: string; replyDirective: string | null } | null;
+    }).extractTelegramPayload(content);
+    return result?.payload ?? null;
+  }
+  function extractWithDirective(content: string): { payload: string; replyDirective: string | null } | null {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    return (pty as unknown as {
+      extractTelegramPayload(c: string): { payload: string; replyDirective: string | null } | null;
+    }).extractTelegramPayload(content);
   }
 
   it('photo: surfaces both caption and local_file path', () => {
