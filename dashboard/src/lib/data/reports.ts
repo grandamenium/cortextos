@@ -273,7 +273,12 @@ export function getPlanUsage(): PlanUsage | null {
   const file = path.join(CTX_ROOT, 'state', 'usage', 'latest.json');
   if (!fs.existsSync(file)) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    // Validate expected shape — file may contain UsageSnapshot (quota API format)
+    // or other formats. Only return data that actually has plan quota fields.
+    if (!data || typeof data !== 'object') return null;
+    if (!data.week_all_models || !data.session) return null;
+    return data as PlanUsage;
   } catch {
     return null;
   }
