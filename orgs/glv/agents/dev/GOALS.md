@@ -1,6 +1,6 @@
 # Dev Agent Goals
 
-_Last updated: 2026-05-09 (cloud session ~04:07 UTC — overnight idle; #238 ~9h open; #189 ~59h open (~35h past SLA); #234 ~33h open (boss can merge); 88 cortextos PRs (#6–#87 + #79) waiting Aiden; PHP 7.4 deadline May 20 = 11 days; Node 22 deadline June 2 = 24 days; ⚠️ WP 7.0 also drops May 20 — double-change day risk; ⚠️ PHPCompatibility PHPCS install deadline May 10 = 1 day)_
+_Last updated: 2026-05-09 (cloud session ~04:04 UTC — idle; #238 MERGED 23:51 UTC May 8 ✅; #189 ~60h open (~36h past SLA); #234 ~33.5h open (boss can merge); 88 cortextos PRs (#6–#87 + #79) waiting Aiden; PHP 7.4 deadline May 20 = 11 days; Node 22 deadline June 2 = 24 days; ⚠️ WP 7.0 also drops May 20 — double-change day risk; ⚠️ PHPCompatibility PHPCS install deadline May 10 = TODAY ~20h remaining)_
 
 ## Priority 1 — Merge Queue (blocked on Aiden review)
 
@@ -142,9 +142,8 @@ These PRs are complete and tested. Waiting for merge approval.
 - **Visual regression CI** — PR #75 closed 2026-05-04 (no Playwright CI planned at this time).
 - **Lightspeed product sync** — 58 products still missing images (Mercury 38, Toro 7, Cub Cadet 10, Princecraft 3). Root cause: not yet synced from Lightspeed to WC. Unblocked when Casey runs sync.
 - **Open PRs (needs Aiden review):**
-  - PR #238 (opened 2026-05-08T~19:19Z) — feat(canonical): contact email info@reycomarine.com — customizer default + LocalBusiness schema + wp_mail_from filter + about.php RECIPIENTS fix (missed in #235). Awaiting Aiden review.
   - PR #234 (opened 2026-05-07T19:02Z) — fix(mobile): hero phone-CTA spacing — `pb-16` → `pb-28` on hero inner div (front-page.php line 36). **Boss can merge (no CI gate).**
-  - PR #189 (opened 2026-05-06T~17:08Z) — fix: Casey-twice on Meet the Team Sales counter card — **⚠️ NOW ~59h open (~35h past 24h SLA)** — needs Aiden review urgently
+  - PR #189 (opened 2026-05-06T~17:08Z) — fix: Casey-twice on Meet the Team Sales counter card — **⚠️ NOW ~60h open (~36h past 24h SLA)** — needs Aiden review urgently
 
 ### WC Pricing Sweep
 
@@ -153,7 +152,7 @@ These PRs are complete and tested. Waiting for merge approval.
 ## Priority 3 — Pending Sequencing Decisions
 
 | PR | Title | Blocked On |
-|----|-------|-----------|
+|----|-------|----------|
 | #7 | sync: upstream 17-commit merge | Aiden merge decision |
 | #8 | feat(dashboard): Clients/Reyco tabs | Depends on #7 merge order? |
 | #11 | fix(auto-commit): gate .db + .gitignore (draft) | Sync #7 sequencing |
@@ -163,6 +162,7 @@ These PRs are complete and tested. Waiting for merge approval.
 
 ## Completed (Recent)
 
+- reyco-marine PR #238 (merged 2026-05-08 23:51 UTC) — feat(canonical): contact email info@reycomarine.com — customizer default + LocalBusiness schema + wp_mail_from filter + about.php RECIPIENTS fix
 - reyco-marine PR #237 (merged 2026-05-08) — fix: mixed-content HTTPS — `is_ssl()` false behind SiteGround reverse proxy → assets on `http://`; 3 hooks: init HTTPS flag + script/style URL rewrite filters
 - reyco-marine PR #236 (merged 2026-05-08) — fix(homepage): adventure-tab label "Water" → "Marine"
 - reyco-marine PR #235 (merged 2026-05-08) — feat(forms): multi-recipient contact forms (info@+parts@+sales@ RECIPIENTS) across all 4 forms: class-resend-mailer.php, contact.php, service-detail.php, notify-me.php
