@@ -7,11 +7,19 @@ import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
-import { TelegramAPI } from '../telegram/api.js';
+import { TelegramAPI, loadOrFetchBotIdentity } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
-import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
+import {
+  recordInboundTelegram,
+  recordFilteredInbound,
+  recordRawTelegramUpdate,
+  cacheLastSent,
+  logOutboundMessage,
+  buildRecentHistory,
+} from '../telegram/logging.js';
+import { shouldForwardMessage, type BotIdentity } from '../telegram/filter.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
@@ -314,7 +322,51 @@ export class AgentManager {
     // running its own poller (only the designated orchestrator agent should poll).
     if (telegramApi && chatId && config.telegram_polling !== false) {
       const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir);
+      const ctxRoot = this.ctxRoot;
+      const tgApi = telegramApi;
+
+      // BL-2026-05-10-001 — mention-only filter. Resolve the bot's
+      // identity once on boot (cached on disk via state/<agent>/bot-identity.json).
+      // If getMe fails (network, 401, missing fields), botIdentityRef.current
+      // stays null and the poller fails OPEN — every message forwards
+      // unchanged, matching the legacy behaviour. We retry on every poll
+      // cycle (in the raw-update observer below) so a transient network
+      // partition resolves itself without a daemon restart.
+      const botIdentityRef: { current: BotIdentity | null } = { current: null };
+      const refreshBotIdentity = async () => {
+        if (botIdentityRef.current) return;
+        try {
+          const identity = await loadOrFetchBotIdentity(tgApi, stateDir);
+          if (identity) {
+            botIdentityRef.current = identity;
+            log(`Bot identity resolved: @${identity.username} (id ${identity.id}) — mention-only filter active`);
+          }
+        } catch {
+          // Refresh failures are silent — next cycle tries again.
+        }
+      };
+      await refreshBotIdentity();
+      if (!botIdentityRef.current) {
+        log(`WARNING: getMe failed at boot — mention-only filter disabled until next successful refresh; forwarding all inbound messages in the meantime`);
+      }
+
+      const poller = new TelegramPoller(
+        telegramApi,
+        stateDir,
+        1000,
+        undefined,
+        // Raw-update observer fires once per inbound update, BEFORE any
+        // message handler runs. Records a verbatim copy to a day-rotated
+        // archive (telegram-updates-YYYY-MM-DD.jsonl) for "what did
+        // Telegram actually send us" diagnostics, and opportunistically
+        // re-attempts the bot-identity fetch when it has not yet succeeded.
+        (update) => {
+          recordRawTelegramUpdate(ctxRoot, name, update);
+          if (!botIdentityRef.current) {
+            refreshBotIdentity().catch(() => { /* swallow — try next cycle */ });
+          }
+        },
+      );
 
       poller.onMessage((msg) => {
         // ALLOWED_USER gate: if configured, ignore messages from other users.
@@ -323,6 +375,18 @@ export class AgentManager {
           const allowedId = parseInt(allowedUserId, 10);
           if (msg.from?.id !== allowedId) {
             log(`Ignoring message from unauthorized user (allowed_user gate)`);
+            return;
+          }
+        }
+
+        // BL-2026-05-10-001 — mention-only filter. Drop service messages,
+        // group/supergroup/channel chatter not addressed to us. Fail-open
+        // when botIdentity is unresolved.
+        if (botIdentityRef.current) {
+          const decision = shouldForwardMessage(msg, botIdentityRef.current);
+          if (!decision.forward) {
+            log(`Filtered inbound (${decision.reason}): chat=${msg.chat?.id} msg=${msg.message_id}`);
+            recordFilteredInbound(ctxRoot, name, msg, decision.reason);
             return;
           }
         }
