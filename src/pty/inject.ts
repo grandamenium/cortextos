@@ -59,43 +59,61 @@ export class MessageDedup {
  * @param write Function to write to the PTY (pty.write)
  * @param content The message content to inject
  * @param enterDelay Milliseconds to wait before sending Enter (default 300ms)
+ * @param opts.wakeFirst Send a single ESC byte 80ms before the paste to wake
+ *   the Claude Code readline render loop when the session is post-Stop idle.
+ *   ESC on an empty prompt is a no-op for input but re-engages the TUI event
+ *   loop — replicating the cron double-write that accidentally made cron
+ *   injections reliable. Default false preserves existing behavior.
  */
 export function injectMessage(
   write: (data: string) => void,
   content: string,
   enterDelay: number = 300,
+  opts: { wakeFirst?: boolean } = {},
 ): void {
   // For very large messages, chunk the write to avoid overwhelming the PTY buffer
   const MAX_CHUNK = 4096;
 
-  if (content.length <= MAX_CHUNK) {
-    write(PASTE_START + content + PASTE_END);
-  } else {
-    // Chunked write for large messages
-    write(PASTE_START);
-    for (let i = 0; i < content.length; i += MAX_CHUNK) {
-      write(content.slice(i, i + MAX_CHUNK));
+  const doPaste = (): void => {
+    if (content.length <= MAX_CHUNK) {
+      write(PASTE_START + content + PASTE_END);
+    } else {
+      // Chunked write for large messages
+      write(PASTE_START);
+      for (let i = 0; i < content.length; i += MAX_CHUNK) {
+        write(content.slice(i, i + MAX_CHUNK));
+      }
+      write(PASTE_END);
     }
-    write(PASTE_END);
-  }
 
-  // Send Enter after a short delay to submit the pasted content.
-  // Why the try/catch: the write callback captures `this.pty` (or similar
-  // nullable PTY handle) via closure in callers. If the PTY is torn down
-  // during the enterDelay window — e.g. hard-restart IPC kills the child —
-  // the callback will read `null.write` and throw. Swallowing here keeps
-  // the daemon process alive; the dropped Enter is the acceptable cost.
-  // Root cause: PR #196 fixed three this.pty! callers in agent-process.ts
-  // but missed worker-process.ts:93. This try/catch is the structural fix
-  // that covers every present and future caller.
-  setTimeout(() => {
-    try {
-      write(KEYS.ENTER);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[inject] deferred Enter failed (pty likely torn down): ${msg}`);
-    }
-  }, enterDelay);
+    // Send Enter after a short delay to submit the pasted content.
+    // Why the try/catch: the write callback captures `this.pty` (or similar
+    // nullable PTY handle) via closure in callers. If the PTY is torn down
+    // during the enterDelay window — e.g. hard-restart IPC kills the child —
+    // the callback will read `null.write` and throw. Swallowing here keeps
+    // the daemon process alive; the dropped Enter is the acceptable cost.
+    // Root cause: PR #196 fixed three this.pty! callers in agent-process.ts
+    // but missed worker-process.ts:93. This try/catch is the structural fix
+    // that covers every present and future caller.
+    setTimeout(() => {
+      try {
+        write(KEYS.ENTER);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[inject] deferred Enter failed (pty likely torn down): ${msg}`);
+      }
+    }, enterDelay);
+  };
+
+  if (opts.wakeFirst) {
+    // Wake the readline render loop before injecting. ESC on an empty prompt
+    // is a no-op for the buffer but fires the TUI's input event, ensuring the
+    // subsequent paste lands in an engaged readline rather than a parked one.
+    write(KEYS.ESCAPE);
+    setTimeout(doPaste, 80);
+  } else {
+    doPaste();
+  }
 }
 
 /**

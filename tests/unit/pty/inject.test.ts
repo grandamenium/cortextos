@@ -35,6 +35,80 @@ describe('KEYS', () => {
   });
 });
 
+describe('injectMessage — wakeFirst ESC preamble', () => {
+  // Verifies the idle-aware ESC preamble: when wakeFirst=true, a single ESC
+  // byte is written first to re-engage the Claude Code readline render loop,
+  // followed by the bracketed paste 80ms later, then Enter at enterDelay.
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sends ESC as the first write when wakeFirst is true', () => {
+    const writes: string[] = [];
+    const write = (data: string) => { writes.push(data); };
+
+    injectMessage(write, 'hello', 300, { wakeFirst: true });
+
+    // ESC must be the very first write — before paste markers
+    expect(writes.length).toBe(1);
+    expect(writes[0]).toBe(KEYS.ESCAPE);
+  });
+
+  it('sends PASTE_START + content + PASTE_END after 80ms when wakeFirst is true', () => {
+    const writes: string[] = [];
+    const write = (data: string) => { writes.push(data); };
+
+    injectMessage(write, 'hello', 300, { wakeFirst: true });
+    expect(writes.length).toBe(1); // only ESC so far
+
+    vi.advanceTimersByTime(80);
+
+    // After 80ms: paste block should have been written (single write for small content)
+    expect(writes.length).toBe(2);
+    expect(writes[1]).toBe('\x1b[200~hello\x1b[201~');
+  });
+
+  it('sends Enter at enterDelay after the paste when wakeFirst is true', () => {
+    const writes: string[] = [];
+    const write = (data: string) => { writes.push(data); };
+
+    injectMessage(write, 'hello', 300, { wakeFirst: true });
+    vi.advanceTimersByTime(80);   // triggers paste
+    vi.advanceTimersByTime(300);  // triggers Enter (300ms after paste)
+
+    expect(writes[writes.length - 1]).toBe(KEYS.ENTER);
+    // Total: ESC + paste-block + Enter
+    expect(writes.length).toBe(3);
+  });
+
+  it('does NOT send ESC when wakeFirst is false (default)', () => {
+    const writes: string[] = [];
+    const write = (data: string) => { writes.push(data); };
+
+    injectMessage(write, 'hello', 300);
+
+    // Synchronous path: paste written immediately, no ESC
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes[0]).not.toBe(KEYS.ESCAPE);
+    expect(writes[0]).toContain('\x1b[200~'); // starts with PASTE_START
+  });
+
+  it('does NOT send ESC when wakeFirst is explicitly false', () => {
+    const writes: string[] = [];
+    const write = (data: string) => { writes.push(data); };
+
+    injectMessage(write, 'hello', 300, { wakeFirst: false });
+
+    expect(writes[0]).not.toBe(KEYS.ESCAPE);
+    expect(writes[0]).toContain('\x1b[200~');
+  });
+});
+
 describe('injectMessage — deferred Enter crash safety', () => {
   // Regression guard for the 2026-04-22 storm. worker-process.ts:93 passed
   // an unsafe `this.pty!.write` callback; when PTY was torn down during the

@@ -286,8 +286,12 @@ export class AgentProcess {
 
   /**
    * Inject a message into the agent's PTY.
+   *
+   * @param wakeFirst When true, prepends an ESC byte 80ms before the paste to
+   *   re-engage the Claude Code readline render loop in post-Stop idle sessions.
+   *   Default false — existing callers are unaffected.
    */
-  injectMessage(content: string): boolean {
+  injectMessage(content: string, wakeFirst = false): boolean {
     if (!this.pty || this.status !== 'running') {
       this.droppedMessageCount++;
       this.log(`[drop] agent_message_dropped: status=${this.status} (drop #${this.droppedMessageCount})`);
@@ -302,7 +306,7 @@ export class AgentProcess {
       return false;
     }
 
-    injectMessage((data) => this.pty?.write(data), content);
+    injectMessage((data) => this.pty?.write(data), content, 300, { wakeFirst });
     return true;
   }
 

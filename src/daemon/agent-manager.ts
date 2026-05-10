@@ -771,11 +771,15 @@ export class AgentManager {
    * Inject text directly into a running agent's PTY.
    * Used by `cortextos bus test-cron-fire` to fire a cron immediately for testing.
    * Returns true if the agent is running and the inject succeeded; false otherwise.
+   *
+   * @param wakeFirst When true, prepends an ESC wake stimulus before the paste.
+   *   Pass true for cron fires (session is almost always post-Stop idle at fire time).
+   *   Default false for all other callers.
    */
-  injectAgent(agentName: string, text: string): boolean {
+  injectAgent(agentName: string, text: string, wakeFirst = false): boolean {
     const entry = this.agents.get(agentName);
     if (!entry) return false;
-    return entry.process.injectMessage(text);
+    return entry.process.injectMessage(text, wakeFirst);
   }
 
   /**
@@ -857,7 +861,9 @@ export class AgentManager {
       // dedup-rejected and treated as a dispatch failure.
       const firedAt = new Date().toISOString();
       const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
-      const injected = this.injectAgent(agentName, injection);
+      // Cron fires almost always hit a post-Stop idle session — pass wakeFirst
+      // so the ESC preamble re-engages the readline before the paste lands.
+      const injected = this.injectAgent(agentName, injection, true);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
       }

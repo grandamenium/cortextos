@@ -209,7 +209,16 @@ export class FastChecker {
 
     // Inject if there's anything
     if (messageBlock) {
-      const injected = this.agent.injectMessage(messageBlock);
+      // Determine whether the session is post-Stop idle so we can prepend an
+      // ESC wake stimulus. isAgentActive() returning false means the Stop hook
+      // has already fired and the readline is parked. We also require the
+      // last_idle.flag mtime to be ≥500ms old to avoid the stop-edge race
+      // where the flag was JUST written and the agent hasn't fully settled.
+      const isIdle = !this.isAgentActive() && this.isLastIdleOlderThan(500);
+      const injected = this.agent.injectMessage(messageBlock, isIdle);
+      if (isIdle) {
+        this.log(`[wake] idle session detected — prepending ESC preamble before paste`);
+      }
       if (injected) {
         // ACK inbox messages
         for (const id of ackIds) {
@@ -1295,6 +1304,22 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return this.lastMessageInjectedAt > idleTs;
     } catch {
       return true; // Can't read flag — assume still active
+    }
+  }
+
+  /**
+   * Returns true if last_idle.flag exists and its mtime is older than `minAgeMs`.
+   * Used to avoid the stop-edge race: if the flag was written less than 500ms ago
+   * the agent may still be mid-flush and the readline isn't fully parked yet.
+   * ENOENT (no flag) → false (treat as not-idle-settled).
+   */
+  private isLastIdleOlderThan(minAgeMs: number): boolean {
+    const flagPath = join(this.paths.stateDir, 'last_idle.flag');
+    try {
+      const { mtimeMs } = statSync(flagPath);
+      return Date.now() - mtimeMs >= minAgeMs;
+    } catch {
+      return false; // ENOENT or other error — not idle-settled
     }
   }
 }
