@@ -762,6 +762,165 @@ describe('FastChecker', () => {
     });
   });
 
+  describe('stuck-turn watchdog', () => {
+    // Clear the execFile mock between tests to prevent cross-test contamination.
+    // The module-level vi.mock is shared; each test must start with a clean slate.
+    beforeEach(async () => {
+      const { execFile } = await import('child_process');
+      (execFile as ReturnType<typeof vi.fn>).mockClear();
+    });
+
+    it('sends ESCAPE and emits KPI event when stdout flat with queued messages past active threshold', async () => {
+      const { execFile } = await import('child_process');
+      const execMock = execFile as ReturnType<typeof vi.fn>;
+
+      const agent = createMockAgent('chief');
+      // Make getStatus return running so watchdog fires
+      agent.getStatus = vi.fn().mockReturnValue({ status: 'running' });
+
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      // Seed the stuck clock to 6 minutes ago (past active threshold of 5 min)
+      const sixMinutesAgo = Date.now() - 6 * 60 * 1000;
+      (checker as any).lastStdoutGrowthAt = sixMinutesAgo;
+      (checker as any).lastWatchdogFiredAt = 0; // no cooldown
+
+      // Write a stub stdout.log so trackStdoutGrowth doesn't reset the clock
+      const logPath = join(paths.logDir, 'stdout.log');
+      writeFileSync(logPath, 'x'.repeat(100));
+      // Seed the size baseline to same value so it doesn't appear to grow
+      (checker as any).stdoutLogSize = 100;
+
+      // Queue a telegram message (hasQueuedWork = true)
+      (checker as any).telegramMessages.push({ formatted: 'hello', ackIds: [] });
+
+      // Run one poll cycle directly
+      await (checker as any).pollCycle();
+
+      // ESCAPE should have been written to PTY
+      expect(agent.write).toHaveBeenCalledWith(expect.stringContaining('\x1b'));
+
+      // KPI event emitted with correct metadata shape
+      expect(execMock).toHaveBeenCalledWith(
+        'cortextos',
+        expect.arrayContaining([
+          'bus', 'log-event', 'kpi', 'stuck_turn_interrupted', 'warning',
+        ]),
+        expect.any(Function),
+      );
+      // Check --meta contains the required fields
+      const metaArg = execMock.mock.calls
+        .find((c: any[]) => c[1]?.includes('stuck_turn_interrupted'))
+        ?.[1]?.find((a: string) => {
+          try { const j = JSON.parse(a); return 'stuck_minutes' in j && 'queued_count' in j && 'interrupted_at' in j; } catch { return false; }
+        });
+      expect(metaArg).toBeTruthy();
+    });
+
+    it('does NOT fire before active threshold is reached', async () => {
+      const { execFile } = await import('child_process');
+      const execMock = execFile as ReturnType<typeof vi.fn>;
+
+      const agent = createMockAgent('chief');
+      agent.getStatus = vi.fn().mockReturnValue({ status: 'running' });
+
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      // Only 2 minutes stale (below 5-min active threshold)
+      (checker as any).lastStdoutGrowthAt = Date.now() - 2 * 60 * 1000;
+      (checker as any).lastWatchdogFiredAt = 0;
+      (checker as any).stdoutLogSize = 100;
+      const logPath = join(paths.logDir, 'stdout.log');
+      writeFileSync(logPath, 'x'.repeat(100));
+
+      (checker as any).telegramMessages.push({ formatted: 'hello', ackIds: [] });
+      await (checker as any).pollCycle();
+
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(execMock).not.toHaveBeenCalledWith(
+        'cortextos',
+        expect.arrayContaining(['stuck_turn_interrupted']),
+        expect.any(Function),
+      );
+    });
+
+    it('fires at absolute threshold even with empty queue', async () => {
+      const { execFile } = await import('child_process');
+      const execMock = execFile as ReturnType<typeof vi.fn>;
+
+      const agent = createMockAgent('chief');
+      agent.getStatus = vi.fn().mockReturnValue({ status: 'running' });
+
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      // 16 minutes stale (past 15-min absolute threshold), empty queue
+      (checker as any).lastStdoutGrowthAt = Date.now() - 16 * 60 * 1000;
+      (checker as any).lastWatchdogFiredAt = 0;
+      (checker as any).stdoutLogSize = 100;
+      const logPath = join(paths.logDir, 'stdout.log');
+      writeFileSync(logPath, 'x'.repeat(100));
+      // No queued telegram messages
+
+      await (checker as any).pollCycle();
+
+      expect(agent.write).toHaveBeenCalledWith(expect.stringContaining('\x1b'));
+      expect(execMock).toHaveBeenCalledWith(
+        'cortextos',
+        expect.arrayContaining(['stuck_turn_interrupted']),
+        expect.any(Function),
+      );
+    });
+
+    it('respects cooldown — does not fire twice within cooldown window', async () => {
+      const agent = createMockAgent('chief');
+      agent.getStatus = vi.fn().mockReturnValue({ status: 'running' });
+
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      // Past threshold
+      (checker as any).lastStdoutGrowthAt = Date.now() - 10 * 60 * 1000;
+      // Just fired 1 minute ago (within 5-min cooldown)
+      (checker as any).lastWatchdogFiredAt = Date.now() - 60 * 1000;
+      (checker as any).stdoutLogSize = 100;
+      const logPath = join(paths.logDir, 'stdout.log');
+      writeFileSync(logPath, 'x'.repeat(100));
+
+      (checker as any).telegramMessages.push({ formatted: 'hello', ackIds: [] });
+      await (checker as any).pollCycle();
+
+      expect(agent.write).not.toHaveBeenCalled();
+    });
+
+    it('does not fire when agent is not running', async () => {
+      const agent = createMockAgent('chief');
+      agent.getStatus = vi.fn().mockReturnValue({ status: 'stopped' });
+
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      (checker as any).lastStdoutGrowthAt = Date.now() - 10 * 60 * 1000;
+      (checker as any).lastWatchdogFiredAt = 0;
+      (checker as any).stdoutLogSize = 100;
+      const logPath = join(paths.logDir, 'stdout.log');
+      writeFileSync(logPath, 'x'.repeat(100));
+
+      (checker as any).telegramMessages.push({ formatted: 'hello', ackIds: [] });
+      await (checker as any).pollCycle();
+
+      expect(agent.write).not.toHaveBeenCalled();
+    });
+
+    it('queueTelegramMessage calls wake immediately', () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      // Spy on the wake method
+      const wakeSpy = vi.spyOn(checker as any, 'wake');
+      checker.queueTelegramMessage('test message');
+
+      expect(wakeSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('heartbeat watchdog', () => {
     beforeEach(() => { vi.useFakeTimers(); });
     afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
@@ -833,4 +992,5 @@ describe('FastChecker', () => {
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
+
 });

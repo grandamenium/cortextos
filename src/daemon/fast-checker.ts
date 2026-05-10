@@ -48,6 +48,15 @@ export class FastChecker {
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
+  // Stuck-turn watchdog: track last time stdoutLogSize grew
+  private lastStdoutGrowthAt: number = 0; // initialized after bootstrap
+  private lastWatchdogFiredAt: number = 0;
+  // Active-queue threshold: fire when stdout flat + queue non-empty (default 5 min)
+  private readonly stuckActiveThresholdMs: number;
+  // Absolute threshold: fire regardless of queue state (default 15 min)
+  private readonly stuckAbsoluteThresholdMs: number;
+  private readonly stuckCooldownMs: number;
+
   // Context monitor state
   private ctxConfigMtime: number = 0;
   private ctxWarningFiredAt: number = 0;    // dedup: 15min cooldown between warnings
@@ -73,6 +82,11 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+
+    // Stuck-turn watchdog thresholds — configurable via env
+    this.stuckActiveThresholdMs = parseInt(process.env['CTX_STUCK_TURN_THRESHOLD_MS'] || '300000', 10); // 5 min default
+    this.stuckAbsoluteThresholdMs = parseInt(process.env['CTX_STUCK_TURN_ABSOLUTE_MS'] || '900000', 10); // 15 min default
+    this.stuckCooldownMs = parseInt(process.env['CTX_STUCK_TURN_COOLDOWN_MS'] || '300000', 10); // 5 min default
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
@@ -105,6 +119,10 @@ export class FastChecker {
     // Wait for bootstrap
     await this.waitForBootstrap();
     this.log('Bootstrap complete. Beginning poll loop.');
+
+    // Initialize stuck-turn growth clock AFTER bootstrap so brand-new boots
+    // don't trigger the watchdog during the initial startup turn.
+    this.lastStdoutGrowthAt = Date.now();
 
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
@@ -160,6 +178,7 @@ export class FastChecker {
    */
   queueTelegramMessage(formatted: string): void {
     this.telegramMessages.push({ formatted, ackIds: [] });
+    this.wake();
   }
 
   /**
@@ -169,6 +188,11 @@ export class FastChecker {
     let messageBlock = '';
     const ackIds: string[] = [];
 
+    // Snapshot queue lengths before draining (used by watchdog below)
+    const queuedTelegram = this.telegramMessages.length;
+    const inboxMessages = checkInbox(this.paths);
+    const hasQueuedWork = queuedTelegram > 0 || inboxMessages.length > 0;
+
     // Process queued Telegram messages
     let hasTelegramMessage = false;
     while (this.telegramMessages.length > 0) {
@@ -177,8 +201,7 @@ export class FastChecker {
       hasTelegramMessage = true;
     }
 
-    // Check agent inbox
-    const inboxMessages = checkInbox(this.paths);
+    // Add inbox messages
     for (const msg of inboxMessages) {
       messageBlock += this.formatInboxMessage(msg);
       ackIds.push(msg.id);
@@ -209,8 +232,91 @@ export class FastChecker {
       await this.sendTyping(this.telegramApi, this.chatId);
     }
 
+    // Update stdout growth tracker
+    this.trackStdoutGrowth();
+
+    // Stuck-turn watchdog: interrupt if stdout has been flat with queued work
+    // Always call when bootstrapped — checkStuckTurn selects the right threshold
+    if (this.lastStdoutGrowthAt > 0) {
+      await this.checkStuckTurn(queuedTelegram + inboxMessages.length, hasQueuedWork);
+    }
+
     // Context monitor: check usage thresholds and fire warnings/handoffs
     await this.checkContextStatus();
+  }
+
+  /**
+   * Read current stdout log size and update lastStdoutGrowthAt if it grew.
+   */
+  private trackStdoutGrowth(): void {
+    const logPath = join(this.paths.logDir, 'stdout.log');
+    try {
+      if (!existsSync(logPath)) return;
+      const { size } = statSync(logPath);
+      if (this.stdoutLogSize === -1) {
+        // First valid read — seed baseline without triggering growth clock
+        this.stdoutLogSize = size;
+        return;
+      }
+      if (size > this.stdoutLogSize) {
+        this.stdoutLogSize = size;
+        this.lastStdoutGrowthAt = Date.now();
+      }
+    } catch { /* non-critical */ }
+  }
+
+  /**
+   * Stuck-turn watchdog: if stdout has not grown for the threshold duration,
+   * send ESCAPE to interrupt the current turn and allow queued messages in.
+   *
+   * Two thresholds:
+   *   - Active-queue (stuckActiveThresholdMs, default 5 min): fires when queue is non-empty.
+   *   - Absolute (stuckAbsoluteThresholdMs, default 15 min): fires regardless of queue.
+   *
+   * A 5-minute cooldown prevents back-to-back interrupts for the same stuck turn.
+   */
+  private async checkStuckTurn(queuedCount: number, hasQueuedWork: boolean): Promise<void> {
+    const now = Date.now();
+
+    // Cooldown: don't fire again within stuckCooldownMs of last fire
+    if (this.lastWatchdogFiredAt > 0 && now - this.lastWatchdogFiredAt < this.stuckCooldownMs) {
+      return;
+    }
+
+    const stuckMs = now - this.lastStdoutGrowthAt;
+
+    // Select applicable threshold: lower active-queue threshold when messages are waiting
+    const threshold = hasQueuedWork ? this.stuckActiveThresholdMs : this.stuckAbsoluteThresholdMs;
+    if (stuckMs < threshold) return;
+
+    // Only fire when agent is running and bootstrapped
+    const agentStatus = this.agent.getStatus?.();
+    if (!agentStatus || agentStatus.status !== 'running') return;
+    if (!this.agent.isBootstrapped()) return;
+
+    this.lastWatchdogFiredAt = now;
+    const stuckMinutes = Math.round(stuckMs / 60000 * 10) / 10;
+    this.log(`[watchdog] stuck-turn detected (${stuckMinutes}min idle, ${queuedCount} queued) — sending ESCAPE`);
+
+    try {
+      this.agent.write(KEYS.ESCAPE);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      this.log(`[watchdog] ESCAPE write failed (pty likely torn down): ${msg}`);
+      return;
+    }
+
+    // Emit KPI event with spec-required metadata fields
+    execFile('cortextos', [
+      'bus', 'log-event', 'kpi', 'stuck_turn_interrupted', 'warning',
+      '--meta', JSON.stringify({
+        stuck_minutes: stuckMinutes,
+        queued_count: queuedCount,
+        interrupted_at: new Date(now).toISOString(),
+      }),
+    ], (err) => {
+      if (err) this.log(`[watchdog] log-event failed: ${err.message}`);
+    });
   }
 
   /**
