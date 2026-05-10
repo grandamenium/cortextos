@@ -54,6 +54,8 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // Count of silently-dropped injectMessage calls for observability (fix #4)
+  private droppedMessageCount: number = 0;
   // Issue #330: held here so CodexPTY can be re-wired across session refresh
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
@@ -287,16 +289,36 @@ export class AgentProcess {
    */
   injectMessage(content: string): boolean {
     if (!this.pty || this.status !== 'running') {
+      this.droppedMessageCount++;
+      this.log(`[drop] agent_message_dropped: status=${this.status} (drop #${this.droppedMessageCount})`);
+      this.emitDropEvent('status_not_running', this.status);
       return false;
     }
 
     if (this.dedup.isDuplicate(content)) {
-      this.log('Dedup: skipping duplicate message');
+      this.droppedMessageCount++;
+      this.log(`[drop] agent_message_dropped: duplicate content (drop #${this.droppedMessageCount})`);
+      this.emitDropEvent('duplicate', this.status);
       return false;
     }
 
     injectMessage((data) => this.pty?.write(data), content);
     return true;
+  }
+
+  /**
+   * Emit a kpi:agent_message_dropped event via execFile (non-blocking, fire-and-forget).
+   * Failures are swallowed — visibility must not break message delivery paths.
+   */
+  private emitDropEvent(reason: string, agentStatus: string): void {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { execFile } = require('child_process') as typeof import('child_process');
+    execFile('cortextos', [
+      'bus', 'log-event', 'kpi', 'agent_message_dropped', 'warning',
+      '--meta', JSON.stringify({ reason, agent: this.name, agent_status: agentStatus, drop_count: this.droppedMessageCount }),
+    ], (err) => {
+      if (err) this.log(`[drop] log-event failed: ${err.message}`);
+    });
   }
 
   /**
