@@ -18,15 +18,18 @@ vi.mock('../../../src/daemon/agent-process.js', () => ({
     async stop() { /* no-op */ }
     getStatus() { return { name: this.name, status: 'stopped' }; }
     onExit() { /* no-op */ }
+    setTelegramHandle() { /* no-op */ }
+    onStatusChanged() { /* no-op */ }
   },
 }));
 
 // Mock FastChecker so it doesn't try to spawn anything either.
 vi.mock('../../../src/daemon/fast-checker.js', () => ({
   FastChecker: class {
-    start() { /* no-op */ }
+    start() { return Promise.resolve(); }
     stop() { /* no-op */ }
     wake() { /* no-op */ }
+    handleActivityCallback() { return Promise.resolve(); }
   },
 }));
 
@@ -37,12 +40,38 @@ vi.mock('../../../src/telegram/api.js', () => ({
   },
 }));
 
+// Records every TelegramPoller construction so tests can assert on the
+// `offsetFileSuffix` arg — the activity-channel poller passes `'activity'`
+// here, while the primary poller leaves it undefined. This is how we tell
+// "the activity poller was wired up" apart from "only the primary poller
+// was wired up" without spawning real network IO.
+const telegramPollerConstructions: Array<unknown[]> = [];
+
 vi.mock('../../../src/telegram/poller.js', () => ({
   TelegramPoller: class {
-    start() { /* no-op */ }
+    constructor(...args: unknown[]) {
+      telegramPollerConstructions.push(args);
+    }
+    start() { return Promise.resolve(); }
     stop() { /* no-op */ }
+    onMessage() { /* no-op */ }
+    onCallback() { /* no-op */ }
+    onReaction() { /* no-op */ }
   },
 }));
+
+// Mock bus/metrics to keep `registerTelegramCommands` from hitting api.telegram.org
+// in the activity-channel test (the test sets a fake BOT_TOKEN).
+vi.mock('../../../src/bus/metrics.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/bus/metrics.js')>(
+    '../../../src/bus/metrics.js',
+  );
+  return {
+    ...actual,
+    collectTelegramCommands: () => [],
+    registerTelegramCommands: async () => ({ status: 'ok' as const, count: 0 }),
+  };
+});
 
 const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
 
@@ -444,5 +473,109 @@ describe('AgentManager.reloadCrons - silent-success bug fix (iter 7)', () => {
     const result = am.reloadCrons('ghost');
     expect(result).toBe(false);
     expect((am as any).cronSchedulers.has('ghost')).toBe(false);
+  });
+});
+
+describe('AgentManager.startAgent — activity-channel poller wires up on CLI/IPC restart path', () => {
+  // Regression: agent-manager.ts:473 used to pass the raw `org` parameter to
+  // `maybeStartActivityChannelPoller`, but `org` is undefined on the
+  // `cortextos start <agent>` IPC path (and on watchdog auto-restarts) — only
+  // the resolved value is reliable. The pre-fix code returned at the
+  // `if (!org) return;` guard inside maybeStartActivityChannelPoller, so the
+  // activity-channel poller silently did not start when the orchestrator was
+  // restarted via the CLI. Approve/Deny inline buttons in the activity
+  // channel went dead on every restart until full daemon boot.
+  //
+  // The fix passes `resolvedOrg` instead of `org`, mirroring every other
+  // org-aware site in startAgent. This test pins the wiring so a future
+  // regression to `org` would fail here.
+
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+  let prevCtxRoot: string | undefined;
+
+  beforeEach(() => {
+    telegramPollerConstructions.length = 0;
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-activity-poller-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    mkdirSync(join(ctxRoot, 'state', 'alice'), { recursive: true });
+
+    const aliceDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(aliceDir, { recursive: true });
+
+    // Agent .env with valid-format Telegram credentials. ALLOWED_USER is
+    // required (security gate), BOT_TOKEN must match `^\d+:[A-Za-z0-9_-]+$`.
+    writeFileSync(
+      join(aliceDir, '.env'),
+      'BOT_TOKEN=12345:fake_primary_token_xxxx\nCHAT_ID=999\nALLOWED_USER=12345\n',
+    );
+
+    // Orchestrator-only gate: org context.json names alice as the orchestrator.
+    writeFileSync(
+      join(frameworkRoot, 'orgs', 'acme', 'context.json'),
+      JSON.stringify({ orchestrator: 'alice' }),
+    );
+
+    // Activity-channel env present + complete — both keys required, otherwise
+    // maybeStartActivityChannelPoller bails before constructing the poller.
+    writeFileSync(
+      join(frameworkRoot, 'orgs', 'acme', 'activity-channel.env'),
+      'ACTIVITY_BOT_TOKEN=67890:fake_activity_token_xxxx\nACTIVITY_CHAT_ID=-1003790591089\n',
+    );
+
+    // Tell resolveAgentOrg that alice lives in 'acme' so the test exercises
+    // the IPC path (no org argument) without relying on the legacy
+    // filesystem scan — keeps the test independent of `this.org` defaulting.
+    writeFileSync(
+      join(ctxRoot, 'config', 'enabled-agents.json'),
+      JSON.stringify({ alice: { enabled: true, org: 'acme' } }),
+    );
+
+    // CronScheduler reads CTX_ROOT — point it at the sandbox so
+    // startAgentCronScheduler doesn't write into production state.
+    prevCtxRoot = process.env.CTX_ROOT;
+    process.env.CTX_ROOT = ctxRoot;
+  });
+
+  afterEach(() => {
+    if (prevCtxRoot === undefined) {
+      delete process.env.CTX_ROOT;
+    } else {
+      process.env.CTX_ROOT = prevCtxRoot;
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('constructs the activity-channel poller when org is resolved internally (IPC restart path)', async () => {
+    // BUG: `cortextos stop alice && cortextos start alice` calls
+    // AgentManager.startAgent('alice', '') with NO org argument. Before the
+    // fix, line 473 forwarded `undefined` to maybeStartActivityChannelPoller,
+    // which immediately returned at its `if (!org) return;` guard. The
+    // resolved org was sitting one stack frame up but never used.
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    // Construct the call shape that matters: positional arg #4 (org) is omitted.
+    await am.startAgent('alice', '');
+
+    // Two poller constructions are expected:
+    //   #1 — primary bot poller (BOT_TOKEN), no offsetFileSuffix (undefined)
+    //   #2 — activity-channel bot poller, offsetFileSuffix='activity'
+    expect(telegramPollerConstructions).toHaveLength(2);
+
+    // Argument layout for TelegramPoller(api, stateDir, intervalMs?, offsetFileSuffix?)
+    const activityArgs = telegramPollerConstructions[1];
+    expect(activityArgs[3]).toBe('activity');
+
+    // Defensive: also confirm the primary poller didn't sneak the suffix in.
+    const primaryArgs = telegramPollerConstructions[0];
+    expect(primaryArgs[3]).toBeUndefined();
+
+    // Tear down the cron scheduler that startAgentCronScheduler created so
+    // its setInterval doesn't keep the test process alive.
+    const scheduler = (am as any).cronSchedulers.get('alice');
+    if (scheduler && typeof scheduler.stop === 'function') scheduler.stop();
   });
 });
