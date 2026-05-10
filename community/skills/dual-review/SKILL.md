@@ -41,8 +41,12 @@ if [ -z "$FALLBACK" ] && ! codex login status >/dev/null 2>&1; then
   FALLBACK=1
 fi
 
-# Add reviews/ to .gitignore if not already there — keeps session artifacts out of fix-commits
-if ! grep -qE '^reviews/?$' .gitignore 2>/dev/null; then
+# Add reviews/ to .gitignore if not already there — keeps session artifacts out of fix-commits.
+# `[ -f .gitignore ]` short-circuits when .gitignore doesn't exist (otherwise grep's
+# non-zero exit would abort under `set -e`).
+if [ -f .gitignore ] && grep -qE '^reviews/?$' .gitignore; then
+  :  # already ignored
+else
   echo "reviews/" >> .gitignore
 fi
 ```
@@ -63,10 +67,27 @@ TS=$(date -u +%Y-%m-%dT%H%M%SZ)               # full UTC timestamp — multiple 
 SESSION_DIR="reviews/dual-${PR_NUM}-${TS}"
 mkdir -p "$SESSION_DIR"
 
-# Detect default branch — don't assume `main`
+# Resolve the GitHub repo if not exported. PR mode needs it for `gh pr view/diff`.
+GH_REPO="${GH_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)}"
+
+# Detect default branch — don't assume `main`.
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null \
   | sed 's@^refs/remotes/origin/@@')
-DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"      # fallback only if detection fails
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"      # fallback only if detection fails.
+
+# Both evaluators read live git state (codex review takes no diff-file flag).
+# Abort on dirty working tree to prevent two trap classes:
+#   (a) checkout silently carrying uncommitted work onto the PR-head SHA, OR
+#   (b) the two evaluators disagreeing because unrelated working-tree changes
+#       altered what `git diff` returns between Stage 1a and Stage 1b.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "abort: working tree has uncommitted changes — commit or stash first." >&2
+  echo "       both evaluators read live git state; dirty trees give incoherent reviews." >&2
+  exit 1
+fi
+
+# Capture the current branch so we can return after PR-mode checkout (which goes detached).
+START_REF=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse HEAD)
 
 if [ "$PR_NUM" = "branch" ]; then
   BASE="$DEFAULT_BRANCH"
@@ -75,27 +96,32 @@ else
   BASE=$(gh pr view "$PR_NUM" --repo "$GH_REPO" --json baseRefName -q .baseRefName)
   HEAD_SHA=$(gh pr view "$PR_NUM" --repo "$GH_REPO" --json headRefOid -q .headRefOid)
 
-  # Both evaluators must see the SAME diff. Check out the PR head first
-  # so working-tree state is deterministic across both evaluators.
+  # Check out the PR head so both evaluators see the same change set.
+  # Lands in detached-HEAD state; return path is `git switch -` or `git checkout "$START_REF"`.
   git fetch origin "+refs/pull/${PR_NUM}/head:refs/remotes/origin/pr/${PR_NUM}"
   git checkout "$HEAD_SHA"
 
   gh pr diff "$PR_NUM" --repo "$GH_REPO" > "$SESSION_DIR/diff.txt"
 fi
+
+# After Stage 4 (or on early exit), restore the original branch:
+#   git checkout "$START_REF"
 ```
 
-**Working-tree contract:** both evaluators derive their diff from current git state, not from `$SESSION_DIR/diff.txt`. The captured diff file is for audit only. To prove both evaluators see the same change set, the skill checks out the PR head before invoking either. For branch mode, the working tree must be at the branch tip with no unrelated unstaged changes — the skill aborts if `git diff "$BASE"` differs from `git diff "$BASE" HEAD`.
+**Working-tree contract:** both evaluators read live git state. The captured `diff.txt` is for audit only. The Setup stage above enforces this contract by aborting on a dirty tree and (for PR mode) checking out the PR head SHA before either evaluator runs. Skip Setup at your own risk — a dirty tree produces incoherent reviews.
 
-If the diff is empty, tell the user there's nothing to review and stop.
+If the captured diff is empty, tell the user there's nothing to review and stop.
 
 ---
 
 ## Stage 1a: Claude `code-evaluator` subagent (project-aware)
 
-Spawn the `code-evaluator` subagent. Its prompt:
+Spawn the `code-evaluator` subagent. **Before passing the prompt to the Task tool, the invoking agent must substitute `$SESSION_DIR` with the resolved absolute path** — subagents run in their own context and don't inherit shell variables from the invoker. The same goes for any other shell var below.
+
+Prompt template (substitute `$SESSION_DIR` and `$DIFF_PATH` before dispatch):
 
 ```
-Review the diff at $SESSION_DIR/diff.txt for correctness, error paths,
+Review the diff at <SESSION_DIR>/diff.txt for correctness, error paths,
 tests, naming, and architectural fit against project CLAUDE.md and
 .claude/rules/.
 
@@ -110,7 +136,7 @@ Severities: BLOCKER / SHOULD-FIX / NIT.
 
 End with `LGTM` if no findings.
 
-Write your output to $SESSION_DIR/claude-review.md.
+Write your output to <SESSION_DIR>/claude-review.md.
 ```
 
 This runs in parallel with Stage 1b (don't wait).
