@@ -231,8 +231,7 @@ After workflows and tools are configured:
       "$CTX_AGENT_DIR/GOALS.md" \
       "$CTX_AGENT_DIR/IDENTITY.md" \
       --org $CTX_ORG --scope private \
-      --agent $CTX_AGENT_NAME \
-      --collection "memory-$CTX_AGENT_NAME" --force
+      --agent $CTX_AGENT_NAME --force
     ```
 
     Ingest any additional files the user specified in their answers.
