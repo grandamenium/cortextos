@@ -323,20 +323,27 @@ export class AgentManager {
     if (telegramApi && chatId && config.telegram_polling !== false) {
       const stateDir = join(this.ctxRoot, 'state', name);
       const ctxRoot = this.ctxRoot;
-      const tgApi = telegramApi;
 
       // BL-2026-05-10-001 — mention-only filter. Resolve the bot's
-      // identity once on boot (cached on disk via state/<agent>/bot-identity.json).
+      // identity (cached on disk via state/<agent>/bot-identity.json).
       // If getMe fails (network, 401, missing fields), botIdentityRef.current
       // stays null and the poller fails OPEN — every message forwards
       // unchanged, matching the legacy behaviour. We retry on every poll
       // cycle (in the raw-update observer below) so a transient network
       // partition resolves itself without a daemon restart.
+      //
+      // The initial fetch is fire-and-forget: a wedged Telegram API
+      // would otherwise block startAgent for up to 15s per agent
+      // (TelegramAPI.post timeout) and ripple into discoverAndStart's
+      // sequential boot loop. With fail-open the brief window
+      // before the first refresh resolves still forwards messages —
+      // identical to what the daemon did pre-BL-001 — so there's no
+      // safety regression from going async here.
       const botIdentityRef: { current: BotIdentity | null } = { current: null };
       const refreshBotIdentity = async () => {
         if (botIdentityRef.current) return;
         try {
-          const identity = await loadOrFetchBotIdentity(tgApi, stateDir);
+          const identity = await loadOrFetchBotIdentity(telegramApi, stateDir);
           if (identity) {
             botIdentityRef.current = identity;
             log(`Bot identity resolved: @${identity.username} (id ${identity.id}) — mention-only filter active`);
@@ -345,10 +352,7 @@ export class AgentManager {
           // Refresh failures are silent — next cycle tries again.
         }
       };
-      await refreshBotIdentity();
-      if (!botIdentityRef.current) {
-        log(`WARNING: getMe failed at boot — mention-only filter disabled until next successful refresh; forwarding all inbound messages in the meantime`);
-      }
+      refreshBotIdentity().catch(() => { /* swallow — observer retries */ });
 
       const poller = new TelegramPoller(
         telegramApi,
@@ -394,7 +398,6 @@ export class AgentManager {
         const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
         const msgChatId = msg.chat?.id;
         const effectiveChatId = msgChatId ?? chatId ?? '';
-        const stateDir = join(this.ctxRoot, 'state', name);
 
         // Persist the inbound message to JSONL AND emit a
         // `message/telegram_received` bus event in one helper so

@@ -40,8 +40,8 @@ function stubApi(updates: TelegramUpdate[]): TelegramAPI {
  * Shape mirrors src/daemon/agent-manager.ts (BL-001 wiring):
  *   - poller constructed with onRawUpdate observer that calls
  *     recordRawTelegramUpdate
- *   - onMessage runs the ALLOWED_USER gate (skipped here for brevity),
- *     then shouldForwardMessage; on drop calls recordFilteredInbound and
+ *   - onMessage runs the ALLOWED_USER gate first (when set), then
+ *     shouldForwardMessage; on drop calls recordFilteredInbound and
  *     returns; on pass falls through to the agent-side handling
  */
 function wireUpPoller(opts: {
@@ -51,6 +51,10 @@ function wireUpPoller(opts: {
   agentName: string;
   botIdentity: BotIdentity | null;
   forwarded: TelegramMessage[];
+  /** When set, drops messages whose msg.from.id !== allowedUserId before the filter runs. */
+  allowedUserId?: number;
+  /** Records messages dropped by the ALLOWED_USER gate so tests can distinguish from filter drops. */
+  allowedUserDrops?: TelegramMessage[];
 }): TelegramPoller {
   const poller = new TelegramPoller(
     opts.api,
@@ -61,6 +65,12 @@ function wireUpPoller(opts: {
   );
 
   poller.onMessage((msg) => {
+    if (opts.allowedUserId !== undefined) {
+      if (msg.from?.id !== opts.allowedUserId) {
+        opts.allowedUserDrops?.push(msg);
+        return;
+      }
+    }
     if (opts.botIdentity) {
       const decision = shouldForwardMessage(msg, opts.botIdentity);
       if (!decision.forward) {
@@ -320,6 +330,110 @@ describe('mention-only filter wire-up (agent-manager Phase 2 shape)', () => {
     expect(rawLines).toHaveLength(3);
     const ids = rawLines.map((l) => JSON.parse(l).update_id);
     expect(ids).toEqual([50, 51, 52]);
+  });
+
+  describe('ALLOWED_USER gate composes with mention-only filter', () => {
+    const allowedUserId = 999;
+
+    it('ALLOWED_USER gate fires BEFORE the filter — message from a stranger is dropped without touching filtered-inbound.jsonl', async () => {
+      const update: TelegramUpdate = {
+        update_id: 70,
+        message: {
+          message_id: 700,
+          chat: { id: -1001234, type: 'supergroup' },
+          from: { id: 12345, first_name: 'Stranger' },
+          text: '@sb_fullstack_bot ping', // would pass filter, but blocked by gate
+          entities: [{ type: 'mention', offset: 0, length: 17 }],
+        },
+      };
+
+      const forwarded: TelegramMessage[] = [];
+      const allowedUserDrops: TelegramMessage[] = [];
+      const poller = wireUpPoller({
+        api: stubApi([update]),
+        stateDir,
+        ctxRoot,
+        agentName,
+        botIdentity: BOT,
+        forwarded,
+        allowedUserId,
+        allowedUserDrops,
+      });
+
+      await poller.pollOnce();
+
+      expect(forwarded).toEqual([]);
+      expect(allowedUserDrops).toHaveLength(1);
+      expect(existsSync(filteredInboundPath())).toBe(false);
+    });
+
+    it('allowed user in a supergroup without @-mention — gate passes, filter drops', async () => {
+      // Verifies the two gates compose correctly: passing the allow-list
+      // does NOT exempt a message from the mention-only filter.
+      const update: TelegramUpdate = {
+        update_id: 71,
+        message: {
+          message_id: 701,
+          chat: { id: -1001234, type: 'supergroup' },
+          from: { id: allowedUserId, first_name: 'Saurav' },
+          text: 'allowed user but plain group chatter',
+        },
+      };
+
+      const forwarded: TelegramMessage[] = [];
+      const allowedUserDrops: TelegramMessage[] = [];
+      const poller = wireUpPoller({
+        api: stubApi([update]),
+        stateDir,
+        ctxRoot,
+        agentName,
+        botIdentity: BOT,
+        forwarded,
+        allowedUserId,
+        allowedUserDrops,
+      });
+
+      await poller.pollOnce();
+
+      expect(forwarded).toEqual([]);
+      expect(allowedUserDrops).toEqual([]);
+      const entry = JSON.parse(readFileSync(filteredInboundPath(), 'utf-8').trim());
+      expect(entry.filter_reason).toBe('no_mention');
+      expect(entry.from).toBe(allowedUserId);
+    });
+
+    it('allowed user @-mentions the bot — both gates pass, message forwards', async () => {
+      const update: TelegramUpdate = {
+        update_id: 72,
+        message: {
+          message_id: 702,
+          chat: { id: -1001234, type: 'supergroup' },
+          from: { id: allowedUserId, first_name: 'Saurav' },
+          text: '@sb_fullstack_bot triage',
+          entities: [{ type: 'mention', offset: 0, length: 17 }],
+        },
+      };
+
+      const forwarded: TelegramMessage[] = [];
+      const allowedUserDrops: TelegramMessage[] = [];
+      const poller = wireUpPoller({
+        api: stubApi([update]),
+        stateDir,
+        ctxRoot,
+        agentName,
+        botIdentity: BOT,
+        forwarded,
+        allowedUserId,
+        allowedUserDrops,
+      });
+
+      await poller.pollOnce();
+
+      expect(forwarded).toHaveLength(1);
+      expect(forwarded[0].message_id).toBe(702);
+      expect(allowedUserDrops).toEqual([]);
+      expect(existsSync(filteredInboundPath())).toBe(false);
+    });
   });
 
   it('still archives raw updates when an onMessage handler throws', async () => {
