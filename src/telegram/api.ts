@@ -355,6 +355,21 @@ export class TelegramAPI {
 
   /**
    * Get updates via long polling.
+   *
+   * `allowed_updates` is a closed set: Telegram will not deliver any
+   * update type omitted here. Notable absences (forward-compat bookmarks
+   * for BL-2026-05-10-001):
+   *   - `channel_post` / `edited_channel_post` — channel posts the bot
+   *     can see. Today's mention-only filter has unit-test coverage for
+   *     `chat.type === 'channel'` against `message` updates, but those
+   *     don't fire in production via this poller because the channel
+   *     update type is gated out here. Add `channel_post` only when a
+   *     real use case appears.
+   *   - `edited_message` — fires when a user edits a previously-sent
+   *     message. Spec § Edge cases anticipates this for the filter, but
+   *     until added here Telegram won't deliver it.
+   * Adding either is a single-line change; the filter already handles
+   * both shapes correctly.
    */
   async getUpdates(offset: number, timeout: number = 1): Promise<any> {
     return this.post('getUpdates', {
@@ -676,6 +691,12 @@ export async function loadOrFetchBotIdentity(
 
   try {
     mkdirSync(stateDir, { recursive: true });
+    // STALE-CACHE NOTE: this entry is invalidated only by filesystem
+    // deletion. If a bot is renamed via @BotFather the username on this
+    // cache becomes stale and the BL-001 mention-only filter will start
+    // dropping legitimate `@new_username` mentions silently. Recovery is
+    // `rm state/<agent>/bot-identity.json` followed by a daemon
+    // restart. Future hardening: a TTL or a periodic getMe re-fetch.
     writeFileSync(cachePath, JSON.stringify(identity), 'utf-8');
   } catch {
     // Cache write failure is non-fatal — identity is still returned for this run.

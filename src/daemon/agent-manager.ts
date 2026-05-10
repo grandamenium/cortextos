@@ -324,8 +324,17 @@ export class AgentManager {
       const stateDir = join(this.ctxRoot, 'state', name);
       const ctxRoot = this.ctxRoot;
 
-      // BL-2026-05-10-001 — mention-only filter. Resolve the bot's
-      // identity (cached on disk via state/<agent>/bot-identity.json).
+      // BL-2026-05-10-001 — mention-only filter.
+      //
+      // ACTIVATION NOTE: this wiring lives in the daemon process. A
+      // per-agent restart (`cortextos start <agent>` or `cortextos bus
+      // self-restart`) re-spawns the agent under the same compiled
+      // parent, so it WILL NOT pick up changes to this block. Activating
+      // BL-001 after a deploy requires a daemon restart (e.g. `pm2
+      // restart cortextos`). See
+      // .claude/rules/code-quality/daemon-side-config-requires-daemon-restart.md.
+      //
+      // Resolve the bot's identity (cached on disk via state/<agent>/bot-identity.json).
       // If getMe fails (network, 401, missing fields), botIdentityRef.current
       // stays null and the poller fails OPEN — every message forwards
       // unchanged, matching the legacy behaviour. We retry on every poll
