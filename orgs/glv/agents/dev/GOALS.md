@@ -1,6 +1,6 @@
 # Dev Agent Goals
 
-_Last updated: 2026-05-10 (cloud session ~08:07 UTC — idle; #189 ~87h open (~63h past SLA); #234 ~61h open (boss can merge); 88 cortextos PRs (#6–#87 + #79) waiting Aiden; PHP 7.4 deadline May 20 = 10 days; Node 22 deadline June 2 = 23 days; ⚠️ WP 7.0 also drops May 20 — double-change day risk; 🚨 PHPCompatibility PHPCS install deadline PASSED — local agent must install NOW before May 20 PHP deadline; CI audit: #87 Build ✅ Unit Tests ❌ Dashboard Build ❌ (pre-existing flakes); #84 Build ✅ Unit Tests ✅ Dashboard Build ❌ (needs #86); #83 Build ✅ Unit Tests ❌ Dashboard Build ❌ (fixed by #84))_
+_Last updated: 2026-05-10 (cloud session ~12:07 UTC — idle; #189 ~91h open (~67h past SLA); #234 ~65h open (boss can merge); 88 cortextos PRs (#6–#87 + #79) waiting Aiden; PHP 7.4 deadline May 20 = 10 days; Node 22 deadline June 2 = 23 days; ⚠️ WP 7.0 also drops May 20 — double-change day risk; 🚨 PHPCompatibility PHPCS install deadline PASSED — local agent must install NOW before May 20 PHP deadline; CI audit: #87 Build ✅ Unit Tests ❌ Dashboard Build ❌ (pre-existing flakes); #84 Build ✅ Unit Tests ✅ Dashboard Build ❌ (needs #86); #83 Build ✅ Unit Tests ❌ Dashboard Build ❌ (fixed by #84))_
 
 ## Priority 1 — Merge Queue (blocked on Aiden review)
 
