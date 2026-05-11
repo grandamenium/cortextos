@@ -1,91 +1,45 @@
-# Heartbeat Checklist - EXECUTE EVERY STEP. SKIP NOTHING.
+# Heartbeat Checklist — Analyst. EXECUTE EVERY STEP. SKIP NOTHING.
 
-This runs on your heartbeat cron (every 4 hours). Execute EVERY step in order.
-Skipping steps = broken system. The dashboard monitors your compliance.
+Runs every 4h. Full step references: `.claude/skills/heartbeat/SKILL.md`.
 
 ## Step 1: Update heartbeat (DO THIS FIRST)
 
 ```bash
-cortextos bus update-heartbeat "<1-sentence summary of current work>"
+cortextos bus update-heartbeat "<1-sentence summary>"
 ```
 
-If this fails, your agent shows as DEAD on the dashboard. Fix it before anything else.
+`update-heartbeat` refreshes the dashboard status field; `log-event heartbeat agent_heartbeat` (Step 4) appends to activity. Both required, not interchangeable.
 
-**Note:** `update-heartbeat` (Step 1) and `log-event heartbeat agent_heartbeat` (Step 4) are NOT interchangeable.
-- `update-heartbeat` refreshes the dashboard status-string field (what the dashboard reads to know you're alive).
-- `log-event heartbeat …` appends to the activity feed (JSONL append-only event log).
-
-Both are required every cycle. Skipping Step 1 leaves your dashboard view stale even though you're firing events.
-
-## Step 2: Check inbox
+## Step 2: Sweep inbox
 
 ```bash
 cortextos bus check-inbox
+# for each: process, then cortextos bus ack-inbox "<id>"
 ```
 
-Process ALL messages. ACK every single one:
+Un-ACK'd messages re-deliver after 5 min. Target: 0 after the sweep.
+
+## Step 3: System health check (analyst — before your own tasks)
 
 ```bash
-cortextos bus ack-inbox "<message_id>"
-```
-
-Un-ACK'd messages are re-delivered in 5 minutes. Do not ignore them.
-Target: 0 un-ACK'd messages after this step.
-
-## Step 3: System health check (ANALYST — do this before your own tasks)
-
-Full reference: `.claude/skills/agent-management/SKILL.md`
-
-```bash
-# Check all agent heartbeats — flag any silent for >5 hours
 cortextos bus read-all-heartbeats
-
-# Check for agents with no recent activity
-cortextos bus list-tasks --status in_progress 2>/dev/null | head -20
+cortextos bus list-tasks --status in_progress | head -20
 ```
 
-For each agent: if heartbeat is older than 5 hours, send a message to that agent:
-```bash
-cortextos bus send-message <agent_name> normal "Heartbeat check: are you running? Last heartbeat was more than 5 hours ago."
-```
-
-If an agent is unresponsive for >8 hours, notify the orchestrator and log the issue:
-```bash
-cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal "Agent <name> appears unresponsive — last heartbeat >8h ago. May need restart."
-cortextos bus log-event action agent_unresponsive warning --meta '{"agent":"<name>","hours_silent":8}'
-```
-
-## Step 3b: Check own task queue + stale task detection
-
-```bash
-cortextos bus list-tasks --agent $CTX_AGENT_NAME --status pending
-cortextos bus list-tasks --agent $CTX_AGENT_NAME --status in_progress
-```
-
-- If you have pending tasks: pick the highest priority one
-- If you have in_progress tasks older than 2 hours: either complete them NOW or update their status with a note
-- If you have NO tasks: check GOALS.md for objectives, then message the orchestrator
-
-Stale tasks are visible on the dashboard. They make you look broken.
+For each agent: heartbeat >5h → message that agent + flag in memory. >5 errors in last hour → escalate to orchestrator. >3 restarts in last hour → flag a stability incident.
 
 ## Step 3a: Context-discipline check
 
-Refresh your context-pct snapshot and decide whether to act. The monitor reads your Claude Code transcript, computes loaded-context %, and writes `~/.cortextos/$CTX_INSTANCE_ID/state/$CTX_AGENT_NAME/context-pct.json`. A `context_threshold_crossed` event is emitted automatically when severity is non-green.
-
 ```bash
 cortextos bus context-update
-cat "$CTX_ROOT/state/$CTX_AGENT_NAME/context-pct.json" | jq '{pct, severity, current_loaded_tokens, context_limit, model}'
+cat "$CTX_ROOT/state/$CTX_AGENT_NAME/context-pct.json" | jq '{pct, severity}'
 ```
 
-Severity → action (full reference: `.claude/rules/code-quality/compact-instructions.md`):
+Severity → action (`.claude/rules/code-quality/compact-instructions.md`):
 
-- `green` — no action
-- `soft` — log a heartbeat note that context is elevated; no autonomous action
-- `yellow` — log a heartbeat note recommending **operator** `/compact` at the next phase boundary; agent has no autonomous action (`/compact` is a Claude Code slash command typed by the operator — agents cannot invoke it from a tool call; see `code-quality/agent-side-compact-not-invokable.md`)
-- `orange` — log a heartbeat note recommending **operator** `/compact` NOW; agent has no autonomous action. If the operator is unavailable and the situation is unsafe, the only agent-self fallback is `cortextos bus hard-restart` (preserves durable memory; loses live conversation)
-- `red` — `cortextos bus hard-restart --reason "context-red"` (Layer 1a agent-self primitive — `/compact` is too late at this severity)
-
-If `context-update` exits non-zero (no transcript found): treat as unknown, skip threshold action this cycle, log warning.
+- `green` / `soft` — log a note, no autonomous action
+- `yellow` / `orange` — log a note recommending **operator** `/compact` (agents cannot invoke `/compact`)
+- `red` — `cortextos bus hard-restart --reason "context-red"`
 
 ## Step 4: Log heartbeat event
 
@@ -93,105 +47,51 @@ If `context-update` exits non-zero (no transcript found): treat as unknown, skip
 cortextos bus log-event heartbeat agent_heartbeat info --meta '{"agent":"'$CTX_AGENT_NAME'"}'
 ```
 
-## Step 5: Write daily memory
+## Step 5: Daily memory
+
+Append heartbeat checkpoint to `memory/$(date -u +%Y-%m-%d).md` — WORKING ON, status, inbox count, next action. Template: `.claude/skills/memory-discipline/SKILL.md`.
+
+## Step 6: Metrics + anomaly scan (analyst-specific)
 
 ```bash
-TODAY=$(date -u +%Y-%m-%d)
-LOCAL_TIME=$(date +'%-I:%M %p %Z' 2>/dev/null || date)
-MEMORY_DIR="$(pwd)/memory"
-mkdir -p "$MEMORY_DIR"
-cat >> "$MEMORY_DIR/$TODAY.md" << MEMORY
-
-## Heartbeat Update - $(date -u +%H:%M UTC) / $LOCAL_TIME
-- WORKING ON: <task_id or "none">
-- Status: <healthy/working/blocked>
-- Inbox: <N messages processed>
-- Next action: <what you will do next>
-MEMORY
+cortextos bus collect-metrics
+cat ~/.cortextos/$CTX_INSTANCE_ID/analytics/reports/latest.json | jq '.summary'
+cat ~/.cortextos/$CTX_INSTANCE_ID/analytics/events/$CTX_AGENT_NAME/$(date -u +%Y-%m-%d).jsonl \
+  | jq 'select(.category == "error")'
 ```
 
-## Step 6: Check GOALS.md
-
-Read GOALS.md for any new objectives from the user.
-If goals changed since last check, create tasks to address them:
-
-```bash
-cortextos bus create-task "<title>" --desc "<description>" --assignee $CTX_AGENT_NAME --priority normal
-```
+Anomalies → report to orchestrator (`task_dispatched` to investigate, or direct message).
 
 ## Step 7: Resume work
 
-Pick your highest priority task and work on it.
+Pick highest-priority task. `update-task in_progress` when starting, `complete-task --result` when done.
 
-When starting:
+## Step 8: Boss-failover gate (Bounded authority)
+
+Check whether the BL-003 phase-3 condition holds — see GUARDRAILS.md "Analyst-Specific". Both conditions must be true:
+
+1. Boss heartbeat is stale (boss can't act for itself).
+2. A `profile_quota_exhausted` event for boss appeared in the bus event log within the last 5 min.
+
+If both hold:
 ```bash
-cortextos bus update-task "<task_id>" in_progress
+cortextos profile-failover --agent boss --trigger <event_id>
+cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Boss failover executed — trigger event_id=<id>"
 ```
 
-When done:
-```bash
-cortextos bus complete-task "<task_id>" "<summary of what was produced>"
-```
+If only one is true → create an approval, escalate to Saurav, do NOT edit `boss/config.json` directly.
 
-## Step 8: Boss-failover check (BL-003 phase 3)
+## Step 9: Memory + KB refresh
 
-If boss is stale AND a `profile_quota_exhausted` event for boss
-appears in the recent event log, you have a bounded authority to
-edit `boss/config.json` and issue a soft-restart on boss's behalf
-(boss can't run the failover skill if its own session has died).
+If you learned something durable, append to MEMORY.md. Then:
 
 ```bash
-# Is boss stale? read-all-heartbeats is the only available CLI;
-# filter to boss in jq and compare last_heartbeat to now.
-NOW_EPOCH=$(date -u +%s)
-BOSS_HB=$(cortextos bus read-all-heartbeats --format json \
-  | jq -r --arg agent "$CTX_ORCHESTRATOR_AGENT" \
-      '.[] | select(.agent == $agent) | .last_heartbeat // empty')
-if [ -z "$BOSS_HB" ]; then
-  BOSS_AGE_MINUTES=999  # no heartbeat record at all → treat as stale
-else
-  BOSS_AGE_MINUTES=$(( (NOW_EPOCH - $(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$BOSS_HB" +%s 2>/dev/null || date -u -d "$BOSS_HB" +%s)) / 60 ))
-fi
-
-# Did boss quota-exhaust in the last 5 minutes? cortextOS doesn't
-# expose a list-events CLI; read the analytics JSONL directly.
-EVENTS_FILE=~/.cortextos/$CTX_INSTANCE_ID/orgs/$CTX_ORG/analytics/events/$CTX_ORCHESTRATOR_AGENT/$(date -u +%F).jsonl
-CUTOFF=$(date -u -v-5M +%FT%TZ 2>/dev/null || date -u -d '5 min ago' +%FT%TZ)
-RECENT_EXHAUST=0
-if [ -f "$EVENTS_FILE" ]; then
-  RECENT_EXHAUST=$(jq -c --arg cutoff "$CUTOFF" \
-    'select(.event == "profile_quota_exhausted" and .timestamp > $cutoff)' \
-    "$EVENTS_FILE" 2>/dev/null | wc -l | tr -d ' ')
-fi
+cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force
 ```
 
-If `BOSS_AGE_MINUTES > 5` AND `$RECENT_EXHAUST > 0`:
-
-```bash
-# Use the same atomic primitive boss would have used on itself
-cortextos profile-failover --agent $CTX_ORCHESTRATOR_AGENT --trigger <event_id>
-```
-
-On exit 0, log the failover and notify Saurav:
-```bash
-cortextos bus log-event action analyst_boss_failover info --meta '{"trigger_event_id":"<id>","reason":"boss-quota-exhausted-and-stale"}'
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "🔄 boss failed over to fallback (boss-quota-exhausted, analyst executed). Soft-restart dispatched."
-```
-
-On exit non-zero, notify Saurav and stop — your authority is
-bounded to this exact condition (see `GUARDRAILS.md`). Outside it,
-edits to `boss/config.json` require explicit user approval.
-
-## Step 9: Update long-term memory (if applicable)
-
-If you learned something this cycle that should persist across sessions:
-- Patterns that work/don't work
-- User preferences discovered
-- System behaviors noted
-- Append to MEMORY.md
+Skip if `GEMINI_API_KEY` not configured.
 
 ---
 
-REMINDER: A heartbeat with 0 events logged and 0 memory updates means you did nothing visible.
-Target: >= 2 events and >= 1 memory update per heartbeat cycle.
-Invisible work is wasted work.
+A heartbeat with 0 events and 0 memory updates = invisible work. Target: ≥2 events and ≥1 memory update per cycle.

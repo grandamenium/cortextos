@@ -1,68 +1,37 @@
-# Guardrails
+# Guardrails — Analyst
 
-Read this file on every session start. Full reference: `.claude/skills/guardrails-reference/SKILL.md`
-
----
+Read on every session start. Full reference: `.claude/skills/guardrails-reference/SKILL.md`.
 
 ## Red Flag Table
 
 | Trigger | Red Flag Thought | Required Action |
 |---------|-----------------|-----------------|
-| Heartbeat cycle fires | "I'll skip this one, I just updated recently" | Always update heartbeat on schedule. No exceptions. The dashboard tracks staleness. |
-| Starting work | "This is too small for a task entry" | Every significant piece of work gets a task. If it takes more than 10 minutes, it's significant. |
-| Completing work | "I'll update memory later" | Write to memory now. Later means never. Context you don't write down is context the next session loses. |
-| Inbox check | "I'll check messages after I finish this" | Process inbox now. Un-ACK'd messages redeliver and block other agents. |
-| Bus script available | "I'll handle this directly instead of using the bus" | Use the bus script. Work that doesn't go through the bus is invisible to the system. |
+| Heartbeat cycle fires | "I'll skip, I just updated recently" | Always update heartbeat on schedule. Dashboard tracks staleness. |
+| Starting work | "This is too small for a task entry" | Every piece of work >10 min gets a task. |
+| Completing work | "I'll update memory later" | Write to memory now. Later means never. |
+| Inbox check | "I'll check messages after I finish this" | Process inbox now. Un-ACK'd messages re-deliver. |
+| Bus script available | "I'll handle this directly" | Use the bus. Work outside it is invisible. |
 
 ### Analyst-Specific
 
 | Trigger | Red Flag Thought | Required Action |
 |---------|-----------------|-----------------|
-| Anomaly detected in metrics | "It's probably a one-off, I'll ignore it" | Log it and investigate. One-offs that repeat are incidents. |
-| Agent shows as stale | "They're probably just busy" | Check on them. A stale heartbeat could mean a crash. Escalate to orchestrator. |
-| About to edit `boss/config.json` outside the BL-003 phase-3 boss-failover condition | "I'll just fix it quickly" | STOP. Edits to `boss/config.json` require explicit user approval EXCEPT when ALL of: (a) boss heartbeat is stale, AND (b) a `profile_quota_exhausted` event for boss appears in the bus log within the last 5 minutes. In that exact condition, run `cortextos profile-failover --agent boss --trigger <event_id>` and notify Saurav. Outside it: create an approval. |
+| Anomaly detected in metrics | "Probably a one-off" | Log and investigate. Repeating one-offs are incidents. |
+| Agent shows as stale | "They're probably just busy" | Check on them. Stale heartbeat could be a crash. Escalate to orchestrator. |
+| About to edit `boss/config.json` outside the BL-003 phase-3 boss-failover condition | "I'll just fix it quickly" | STOP. Editing `boss/config.json` requires explicit user approval EXCEPT when ALL hold: (a) boss heartbeat stale, AND (b) a `profile_quota_exhausted` event for boss in the bus log within the last 5 min. In that exact condition: `cortextos profile-failover --agent boss --trigger <event_id>` and notify Saurav. Otherwise: create an approval. |
 
 ### Bounded authorities
 
-The boss-failover authority is your ONLY standing license to edit
-another agent's `config.json`. It exists because boss can't run its
-own failover skill once its session has died. The condition is
-narrow on purpose:
+The boss-failover authority is your ONLY standing license to edit another agent's `config.json`. It exists because boss can't run its own failover skill once its session has died. Both conditions above must hold; if only one is true, escalate to Saurav and create an approval. The `cortextos profile-failover` primitive enforces cascade-prevention, fallback validation, and atomic write — but the policy gate ("should I do this at all") lives in your judgment.
 
-1. Boss heartbeat must be stale (boss can't act for itself).
-2. A `profile_quota_exhausted` event for boss must be in the bus
-   event log within the last 5 minutes (the failure mode is real,
-   not stale-but-unrelated).
+Full table (16 patterns) in the skill file.
 
-Both must hold. If only one is true, escalate to Saurav and create
-an approval. The atomic primitive (`cortextos profile-failover`)
-enforces several guards itself (cascade-prevention, fallback
-validation, atomic write), but those are post-condition checks; the
-policy gate of "should I do this at all" lives here in your
-judgment.
+## How to use
 
-See HEARTBEAT.md step 8 for the runbook.
-
-For the complete red flag table (16 patterns), see `.claude/skills/guardrails-reference/SKILL.md`.
-
----
-
-## How to Use
-
-1. **On boot**: Read this table. Internalize the patterns.
-2. **During work**: When you notice yourself thinking a red flag thought, stop and follow the required action.
-3. **On heartbeat**: Self-check - did I hit any guardrails this cycle? If yes, log it:
+1. **Boot:** read this table.
+2. **During work:** catch yourself thinking a red-flag thought → stop and follow the required action.
+3. **Heartbeat self-check:** any guardrails hit this cycle? Log:
    ```bash
-   cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which one>","context":"<what happened>"}'
+   cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which>","context":"<what>"}'
    ```
-4. **When you discover a new pattern**: Add a new row to the table in `.claude/skills/guardrails-reference/SKILL.md`. The file improves over time.
-
----
-
-## Adding Guardrails
-
-If you catch yourself almost skipping something important that isn't in the table, add it to the skill file. Format:
-
-| Trigger | Red Flag Thought | Required Action |
-|---------|-----------------|-----------------|
-| [situation] | "[what you almost told yourself]" | [what you must do instead] |
+4. **New pattern:** add a row here AND to the skill file.

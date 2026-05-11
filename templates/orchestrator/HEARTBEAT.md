@@ -1,197 +1,107 @@
-# Heartbeat Checklist - EXECUTE EVERY STEP. SKIP NOTHING.
+# Heartbeat Checklist — Orchestrator. EXECUTE EVERY STEP. SKIP NOTHING.
 
-This runs on your heartbeat cron (every 4 hours). Execute EVERY step in order.
-Skipping steps = broken system. The dashboard monitors your compliance.
+Runs every 4h. Full step references: `.claude/skills/heartbeat/SKILL.md`.
 
 ## Step 1: Update heartbeat (DO THIS FIRST)
 
 ```bash
-cortextos bus update-heartbeat "<1-sentence summary of current work>"
+cortextos bus update-heartbeat "<1-sentence summary>"
 ```
 
-If this fails, your agent shows as DEAD on the dashboard. Fix it before anything else.
+`update-heartbeat` refreshes the dashboard status field; `log-event heartbeat agent_heartbeat` (Step 4) appends to activity. Both required, not interchangeable.
 
-**Note:** `update-heartbeat` (Step 1) and `log-event heartbeat agent_heartbeat` (Step 4) are NOT interchangeable.
-- `update-heartbeat` refreshes the dashboard status-string field (what the dashboard reads to know you're alive).
-- `log-event heartbeat …` appends to the activity feed (JSONL append-only event log).
-
-Both are required every cycle. Skipping Step 1 leaves your dashboard view stale even though you're firing events.
-
-## Step 2: Sweep inbox for un-ACK'd messages
-
-Messages arrive in real time via the fast-checker daemon — you don't need to poll for them. This step is a safety sweep for anything that wasn't ACK'd (e.g. a crash mid-processing).
-
-Full reference: `.claude/skills/comms/SKILL.md`
+## Step 2: Sweep inbox
 
 ```bash
 cortextos bus check-inbox
+# for each: process, then cortextos bus ack-inbox "<id>"
 ```
 
-For any messages returned: process and ACK each one:
+Un-ACK'd messages re-deliver after 5 min. Target: 0 after the sweep.
+
+## Step 3: Fleet health (orchestrator — before your own tasks)
 
 ```bash
-cortextos bus ack-inbox "<message_id>"
-```
-
-Un-ACK'd messages are re-delivered after 5 minutes. Target: 0 un-ACK'd after this sweep.
-
-## Step 3: Fleet health check (ORCHESTRATOR — do this before your own tasks)
-
-Full reference: `.claude/skills/agent-management/SKILL.md`
-Approvals reference: `.claude/skills/approvals/SKILL.md`
-Human tasks reference: `.claude/skills/human-tasks/SKILL.md`
-
-```bash
-# Check all agent heartbeats
 cortextos bus read-all-heartbeats
-
-# Check all pending approvals
-cortextos bus list-approvals --format json 2>/dev/null
-
-# Check stale human tasks
-cortextos bus list-tasks --project human-tasks --status pending 2>/dev/null
+cortextos bus list-approvals --format json
+cortextos bus list-tasks --project human-tasks --status pending
 ```
 
-For each agent: if heartbeat is older than 5 hours, send an alert to that agent and flag in memory.
+- Heartbeat >5h old → alert that agent, flag in memory
+- Approval pending >4h → ping user via Telegram
+- [HUMAN] task pending >4h → ping user
 
-For any pending approval older than 4 hours: ping the user via Telegram.
-For any [HUMAN] task pending longer than 4 hours: ping the user via Telegram.
+Full references: `.claude/skills/agent-management/SKILL.md`, `approvals/SKILL.md`, `human-tasks/SKILL.md`.
+
+## Step 3a: Context-discipline check
 
 ```bash
-# Example: ping user about stale approval or human task
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Pending approval needs your decision: <title> — check dashboard"
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "[HUMAN] task waiting on you: <title> — blocking <agent> on <parent task>"
+cortextos bus context-update
+cat "$CTX_ROOT/state/$CTX_AGENT_NAME/context-pct.json" | jq '{pct, severity}'
 ```
 
-## Step 3b: Check own task queue + stale task detection
+Severity → action (`.claude/rules/code-quality/compact-instructions.md`):
 
-Full reference: `.claude/skills/tasks/SKILL.md`
+- `green` / `soft` — log a note, no autonomous action
+- `yellow` / `orange` — log a note recommending **operator** `/compact` (agents cannot invoke `/compact`)
+- `red` — `cortextos bus hard-restart --reason "context-red"`
+
+## Step 3b: Own task queue
 
 ```bash
 cortextos bus list-tasks --agent $CTX_AGENT_NAME --status pending
 cortextos bus list-tasks --agent $CTX_AGENT_NAME --status in_progress
 ```
 
-- If you have pending tasks: pick the highest priority one
-- If you have in_progress tasks older than 2 hours: either complete them NOW or update their status with a note
-- If you have NO tasks: check GOALS.md for objectives, generate tasks for specialist agents
-
-Stale tasks are visible on the dashboard. They make you look broken.
-
-## Step 3a: Context-discipline check
-
-Refresh your context-pct snapshot and decide whether to act. The monitor reads your Claude Code transcript, computes loaded-context %, and writes `~/.cortextos/$CTX_INSTANCE_ID/state/$CTX_AGENT_NAME/context-pct.json`. A `context_threshold_crossed` event is emitted automatically when severity is non-green.
-
-```bash
-cortextos bus context-update
-cat "$CTX_ROOT/state/$CTX_AGENT_NAME/context-pct.json" | jq '{pct, severity, current_loaded_tokens, context_limit, model}'
-```
-
-Severity → action (full reference: `.claude/rules/code-quality/compact-instructions.md`):
-
-- `green` — no action
-- `soft` — log a heartbeat note that context is elevated; no autonomous action
-- `yellow` — log a heartbeat note recommending **operator** `/compact` at the next phase boundary; agent has no autonomous action (`/compact` is a Claude Code slash command typed by the operator — agents cannot invoke it from a tool call; see `code-quality/agent-side-compact-not-invokable.md`)
-- `orange` — log a heartbeat note recommending **operator** `/compact` NOW; agent has no autonomous action. If the operator is unavailable and the situation is unsafe, the only agent-self fallback is `cortextos bus hard-restart` (preserves durable memory; loses live conversation)
-- `red` — `cortextos bus hard-restart --reason "context-red"` (Layer 1a agent-self primitive — `/compact` is too late at this severity)
-
-If `context-update` exits non-zero (no transcript found): treat as unknown, skip threshold action this cycle, log warning.
+Pick highest pending. in_progress >2h → complete or update. No tasks → re-read GOALS.md and generate tasks for specialist agents.
 
 ## Step 4: Log heartbeat event
-
-Full reference: `.claude/skills/event-logging/SKILL.md`
 
 ```bash
 cortextos bus log-event heartbeat agent_heartbeat info --meta '{"agent":"'$CTX_AGENT_NAME'"}'
 ```
 
-## Step 5: Write daily memory
+## Step 5: Daily memory
 
-Full reference: `.claude/skills/memory/SKILL.md`
+Append heartbeat checkpoint to `memory/$(date -u +%Y-%m-%d).md` — WORKING ON, status, inbox count, next action. Template: `.claude/skills/memory-discipline/SKILL.md`.
 
-```bash
-TODAY=$(date -u +%Y-%m-%d)
-LOCAL_TIME=$(date +'%-I:%M %p %Z' 2>/dev/null || date)
-MEMORY_DIR="$(pwd)/memory"
-mkdir -p "$MEMORY_DIR"
-cat >> "$MEMORY_DIR/$TODAY.md" << MEMORY
-
-## Heartbeat Update - $(date -u +%H:%M UTC) / $LOCAL_TIME
-- WORKING ON: <task_id or "none">
-- Status: <healthy/working/blocked>
-- Inbox: <N messages processed>
-- Next action: <what you will do next>
-MEMORY
-```
-
-## Step 6: Check org goals state
-
-Full reference: `.claude/skills/goal-management/SKILL.md`
+## Step 6: Org goals state
 
 ```bash
 cat $CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/goals.json
 ```
 
-- If `daily_focus_set_at` is not today AND it is before 10 AM: trigger morning review now — read `.claude/skills/morning-review/SKILL.md`
-- If `north_star` is empty: message user via Telegram to set it
-- If any agent has an empty `goals.json` (focus and goals both empty): write their goals and regenerate GOALS.md
+- `daily_focus_set_at` ≠ today AND before 10 AM → trigger morning review now (`.claude/skills/morning-review/SKILL.md`)
+- `north_star` empty → message user to set it
+- Any agent with empty `goals.json` → write theirs, regenerate GOALS.md
 
-Also read your own GOALS.md for any manual overrides or notes you left yourself.
+Read your own GOALS.md for manual overrides.
 
 ## Step 7: Resume work
 
-Full reference: `.claude/skills/tasks/SKILL.md`
-
-Pick your highest priority task and work on it. Tasks should trace back to your current goals.
-
-When starting:
-```bash
-cortextos bus update-task "<task_id>" in_progress
-```
-
-When done:
-```bash
-cortextos bus complete-task "<task_id>" --result "<summary of what was produced>"
-```
+Pick highest-priority task. `update-task in_progress` → do the work → `complete-task --result`.
 
 ## Step 8: Guardrail self-check
 
-Full reference: `.claude/skills/guardrails-reference/SKILL.md`
+Did I skip any procedures? Log:
 
-Ask yourself: did I skip any procedures this cycle? Did I rationalize not doing something I should have?
-
-If yes, log it:
 ```bash
-cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which one>","context":"<what happened>"}'
+cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which>","context":"<what>"}'
 ```
 
-If you discovered a new pattern that should be a guardrail, add it to GUARDRAILS.md now.
+New pattern? Add a row to GUARDRAILS.md now.
 
-## Step 9: Update long-term memory (if applicable)
+## Step 9: Memory + KB refresh
 
-Full reference: `.claude/skills/memory/SKILL.md`
-
-If you learned something this cycle that should persist across sessions:
-- Patterns that work/don't work
-- User preferences discovered
-- System behaviors noted
-- Append to MEMORY.md
-
-## Step 10: Re-ingest memory to knowledge base
-
-Full reference: `.claude/skills/knowledge-base/SKILL.md`
-
-Keep your memory collection searchable and current:
+If you learned something durable, append to MEMORY.md. Then:
 
 ```bash
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
   --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force
 ```
 
-This runs automatically on every heartbeat cycle. It ensures past experiences, user preferences, and learned patterns are semantically searchable for future tasks. Skip if GEMINI_API_KEY is not configured.
+Skip if `GEMINI_API_KEY` not configured.
 
 ---
 
-REMINDER: A heartbeat with 0 events logged and 0 memory updates means you did nothing visible.
-Target: >= 2 events and >= 1 memory update per heartbeat cycle.
-Invisible work is wasted work.
+A heartbeat with 0 events and 0 memory updates = invisible work. Target: ≥2 events and ≥1 memory update per cycle.
