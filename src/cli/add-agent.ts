@@ -1,9 +1,10 @@
 import { Command } from 'commander';
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, symlinkSync, lstatSync, unlinkSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName } from '../utils/validate';
+import { TelegramAPI } from '../telegram/api.js';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -21,8 +22,9 @@ export const addAgentCommand = new Command('add-agent')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
   .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
+  .option('--bot-token <token>', 'Telegram bot token (writes BOT_TOKEN in .env)')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string; botToken?: string }) => {
     if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
       console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
       process.exit(1);
@@ -108,6 +110,11 @@ export const addAgentCommand = new Command('add-agent')
     if (templateDir) {
       copyTemplateFiles(templateDir, agentDir, name, org);
       console.log(`  Copied template files from ${effectiveTemplate}`);
+      try {
+        linkTemplateSkills(templateDir, agentDir, name, org);
+      } catch (err) {
+        console.warn(`  Warning: Failed to link skills: ${(err as Error).message}`);
+      }
     } else {
       // Create minimal files
       createMinimalAgent(agentDir, name, org, options.template);
@@ -142,13 +149,35 @@ export const addAgentCommand = new Command('add-agent')
     // Create config.json
     const configPath = join(agentDir, 'config.json');
     if (!existsSync(configPath)) {
-      writeFileSync(configPath, JSON.stringify({
+      const config = {
         agent_name: name,
         startup_delay: 0,
         max_session_seconds: 255600,
         enabled: true,
         crons: [],
-      }, null, 2) + '\n', 'utf-8');
+      } as Record<string, any>;
+      if (options.runtime) {
+        const runtime = options.runtime;
+        if (!['claude-code', 'hermes'].includes(runtime)) {
+          console.error(`Invalid runtime "${runtime}". Use claude-code or hermes.`);
+          process.exit(1);
+        }
+        config.runtime = runtime;
+      }
+      writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    } else if (options.runtime) {
+      const runtime = options.runtime;
+      if (!['claude-code', 'hermes'].includes(runtime)) {
+        console.error(`Invalid runtime "${runtime}". Use claude-code or hermes.`);
+        process.exit(1);
+      }
+      try {
+        const config = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, any>;
+        config.runtime = runtime;
+        writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+      } catch {
+        console.warn('  Warning: Failed to update config.json with runtime');
+      }
     }
 
     // Persist non-default runtime into config.json regardless of whether the
@@ -188,6 +217,10 @@ export const addAgentCommand = new Command('add-agent')
         '',
       ].join('\n'), 'utf-8');
       chmodSync(envPath, 0o600); // credentials — owner read/write only
+    }
+
+    if (options.botToken) {
+      await applyTelegramToken(envPath, options.botToken);
     }
 
     // Generate SYSTEM.md from context.json (static org context only).
@@ -401,6 +434,40 @@ function copyTemplateFiles(templateDir: string, agentDir: string, name: string, 
   }
 }
 
+function linkTemplateSkills(templateDir: string, agentDir: string, name: string, org: string): void {
+  const skillsRoot = join(templateDir, '.claude', 'skills');
+  if (!existsSync(skillsRoot)) return;
+
+  const agentSkillsDir = join(agentDir, '.claude', 'skills');
+  mkdirSync(agentSkillsDir, { recursive: true });
+
+  const entries = readdirSync(skillsRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const source = join(skillsRoot, entry.name);
+    const target = join(agentSkillsDir, entry.name);
+
+    if (existsSync(target)) {
+      try {
+        const stat = lstatSync(target);
+        if (stat.isSymbolicLink()) {
+          rmSync(target, { recursive: true, force: true });
+        } else {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
+    try {
+      symlinkSync(source, target, 'dir');
+    } catch {
+      // If symlink fails (e.g. on Windows), fall back to copying
+      copyTemplateFiles(source, target, name, org);
+    }
+  }
+}
+
 function createMinimalAgent(agentDir: string, name: string, org: string, template: string): void {
   const role = template === 'orchestrator' ? 'Orchestrator'
     : template === 'analyst' ? 'Analyst'
@@ -447,5 +514,33 @@ Complete tasks: \`cortextos bus complete-task <id> --result "<text>"\`
 Log events: \`cortextos bus log-event <category> <event> <severity>\`
 Update heartbeat: \`cortextos bus update-heartbeat "<status>"\`
 Send Telegram: \`cortextos bus send-telegram <chat_id> "<text>"\`
-`;
+  `;
+}
+
+async function applyTelegramToken(envPath: string, botToken: string): Promise<void> {
+  const trimmed = botToken.trim();
+  if (!trimmed) return;
+
+  const envContent = existsSync(envPath) ? readFileSync(envPath, 'utf-8') : '';
+  const next = envContent
+    .replace(/^BOT_TOKEN=.*$/m, `BOT_TOKEN=${trimmed}`)
+    .replace(/^CHAT_ID=.*$/m, 'CHAT_ID=')
+    .replace(/^ALLOWED_USER=.*$/m, 'ALLOWED_USER=');
+
+  writeFileSync(envPath, next, 'utf-8');
+
+  try {
+    const api = new TelegramAPI(trimmed);
+    const me = await api.getMe();
+    console.log(`  Telegram bot: @${me.username}`);
+    console.log('  Now send a message to the bot (e.g. "hi"), then run:');
+    console.log(`  cortextos enable ${resolveAgentNameFromEnv(envPath)}`);
+  } catch {
+    console.warn('  Warning: Telegram token set, but validation failed. Check BOT_TOKEN in .env.');
+  }
+}
+
+function resolveAgentNameFromEnv(envPath: string): string {
+  const parts = envPath.split('/');
+  return parts[parts.length - 2] || 'agent';
 }
