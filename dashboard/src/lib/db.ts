@@ -168,6 +168,10 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_cost_entries_timestamp ON cost_entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_cost_entries_agent ON cost_entries(agent);
     CREATE INDEX IF NOT EXISTS idx_cost_entries_org ON cost_entries(org);
+    -- Dedup: INSERT OR IGNORE only works when there is a UNIQUE constraint.
+    -- Without this, syncCosts() re-inserts every row on every sync, inflating costs.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_entries_dedup
+      ON cost_entries(timestamp, agent, model, source_file, total_tokens, cost_usd);
 
     CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_agent);
     CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent);
