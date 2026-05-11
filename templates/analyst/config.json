@@ -1,7 +1,8 @@
 {
   "agent_name": "{{agent_name}}",
   "enabled": true,
-  "model": "sonnet",
+  "runtime": "claude-code",
+  "model": "opus",
   "startup_delay": 0,
   "max_session_seconds": 28800,
   "max_crashes_per_day": 10,

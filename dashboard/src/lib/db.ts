@@ -181,15 +181,35 @@ const globalForDb = globalThis as unknown as {
   __cortextos_db: Database.Database | undefined;
 };
 
-export const db = globalForDb.__cortextos_db ?? createDatabase();
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForDb.__cortextos_db = db;
+// Lazy singleton: avoid opening the DB at module-load time. Next.js' build-time
+// "Collecting page data" phase evaluates every route module in parallel workers
+// — eager creation races N workers on the SQLite file and trips SQLITE_BUSY.
+// We defer the open until the first real db access.
+function getOrCreateDb(): Database.Database {
+  if (!globalForDb.__cortextos_db) {
+    globalForDb.__cortextos_db = createDatabase();
+  }
+  return globalForDb.__cortextos_db;
 }
 
-/** Re-export for explicit initialization (idempotent - db is created on import) */
+export const db: Database.Database = new Proxy({} as Database.Database, {
+  get(_target, prop, receiver) {
+    const real = getOrCreateDb();
+    const value = Reflect.get(real, prop, real);
+    return typeof value === 'function' ? value.bind(real) : value;
+  },
+  set(_target, prop, value) {
+    const real = getOrCreateDb();
+    return Reflect.set(real, prop, value);
+  },
+  has(_target, prop) {
+    return Reflect.has(getOrCreateDb(), prop);
+  },
+});
+
+/** Re-export for explicit initialization (idempotent - opens the DB on first call) */
 export function initializeDb(): Database.Database {
-  return db;
+  return getOrCreateDb();
 }
 
 /** Check if the database connection is healthy */

@@ -11,6 +11,27 @@ This skill runs on first boot or when explicitly triggered. It is the only thing
 
 ---
 
+## Step 0: Detect your runtime
+
+Read `config.json` to find your runtime — it determines where your skills live, which slash-commands exist, and which env vars matter.
+
+```bash
+RUNTIME=$(grep -o '"runtime"[[:space:]]*:[[:space:]]*"[^"]*"' config.json | sed -E 's/.*"runtime"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
+echo "Runtime: ${RUNTIME:-claude-code}"
+```
+
+Branch the rest of onboarding on this value:
+
+| Runtime | Skills location | Slash-commands available | Auth env var |
+|---|---|---|---|
+| `claude-code` (default) | `.claude/skills/<skill>/SKILL.md` | `/loop`, `/usage`, `/compact`, etc. | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `codex-app-server` | `plugins/cortextos-agent-skills/skills/<skill>/SKILL.md` (linked into `~/.codex/skills/<agent>__<skill>`) | none — codex has no slash-command surface | `CODEX_API_KEY` (or codex login) |
+| `hermes` | hermes-specific (see hermes adapter docs) | none | hermes-specific |
+
+If `runtime` is missing or empty, treat it as `claude-code` (legacy default).
+
+---
+
 ## Step 1: Check onboarding status
 
 ```bash
@@ -61,7 +82,7 @@ cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h Read HEARTBEAT.md and follow
 
 The daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on every start and re-schedules all entries. Your crons will fire even after crashes or hard restarts.
 
-Do NOT use `/loop` for persistent scheduling — it is session-only and dies on restart. Use `cortextos bus add-cron` for any workflow that must keep running.
+Use `cortextos bus add-cron` for any workflow that must keep running across restarts. (Claude-Code-runtime agents: do NOT use `/loop` for persistent scheduling — it is session-only and dies on restart. Codex-runtime agents have no `/loop` to begin with; `add-cron` is the only path.)
 
 For full details, see the `## External Persistent Crons` section in `AGENTS.md`.
 

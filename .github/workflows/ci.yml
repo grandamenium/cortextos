@@ -53,8 +53,17 @@ jobs:
       - name: Install dashboard dependencies
         run: npm ci --prefix dashboard
 
+      - name: Build CLI
+        # Integration / subprocess tests spawn `dist/cli.js` and bail out in
+        # beforeAll() when it's missing. Build artifacts aren't shared from
+        # the `build` job (each job runs on a fresh runner), so build here too.
+        run: npm run build
+
       - name: Run unit tests
         run: npm test
+
+      - name: Run codex parity tests
+        run: npm run test:codex
 
   dashboard-build:
     name: Dashboard Build

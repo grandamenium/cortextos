@@ -3,7 +3,7 @@ import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
-import { CodexPTY } from '../pty/codex-pty.js';
+import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -22,7 +22,7 @@ export class AgentProcess {
   readonly name: string;
   private env: CtxEnv;
   private config: AgentConfig;
-  private pty: AgentPTY | CodexPTY | null = null;
+  private pty: AgentPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
@@ -54,7 +54,7 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
-  // Issue #330: held here so CodexPTY can be re-wired across session refresh
+  // Issue #330: held here so CodexAppServerPTY can be re-wired across session refresh
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
   private telegramChatId: string | null = null;
@@ -116,15 +116,15 @@ export class AgentProcess {
     this.log(`Log path: ${logPath}`);
     this.pty = this.config.runtime === 'hermes'
       ? new HermesPTY(this.env, this.config, logPath)
-      : this.config.runtime === 'codex'
-        ? new CodexPTY(this.env, this.config, logPath)
+      : this.config.runtime === 'codex-app-server'
+        ? new CodexAppServerPTY(this.env, this.config, logPath)
         : new AgentPTY(this.env, this.config, logPath);
 
     // Issue #330: re-wire the Telegram handle on every start() (session refresh
-    // creates a fresh CodexPTY). Only CodexPTY uses this — Claude / Hermes
+    // creates a fresh CodexAppServerPTY). Only CodexAppServerPTY uses this — Claude / Hermes
     // typing indicators flow through fast-checker.
-    if (this.config.runtime === 'codex' && this.telegramApi && this.telegramChatId) {
-      (this.pty as CodexPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
+    if (this.config.runtime === 'codex-app-server' && this.telegramApi && this.telegramChatId) {
+      (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
     }
 
     // BUG-011 fix: create a fresh exit signal for this run. resolveExit is
@@ -154,7 +154,7 @@ export class AgentProcess {
     try {
       await this.pty.spawn(mode, prompt);
       // Codex exec-per-turn race: the new PTY's onExit can fire BEFORE this
-      // line if `codex exec` completes its prompt quickly (CodexPTY's spawn
+      // line if `codex exec` completes its prompt quickly (CodexAppServerPTY's spawn
       // resolves once exec is launched, but the process may exit moments
       // later as it finishes the bootstrap turn). handleExit() nulls
       // this.pty and schedules crash recovery — we must not claim 'running'
@@ -207,9 +207,9 @@ export class AgentProcess {
           // so we use Ctrl+D which exits cleanly on the first press.
           pty.write('\x04'); // Ctrl+D
           await sleep(3000);
-        } else if (this.config.runtime === 'codex') {
+        } else if (this.config.runtime === 'codex-app-server') {
           // Codex uses an exec-per-turn model — there is no persistent REPL
-          // between turns, so /exit + sleep below are no-ops on CodexPTY
+          // between turns, so /exit + sleep below are no-ops on CodexAppServerPTY
           // (write() just buffers). The only meaningful stop step is
           // pty.kill(), which terminates the in-flight `codex exec` (if any)
           // and flips _alive=false. Skipping the 6s Claude-REPL dance makes
@@ -331,15 +331,15 @@ export class AgentProcess {
   }
 
   /**
-   * Wire the agent's Telegram bot handle. Used by CodexPTY (issue #330) to
+   * Wire the agent's Telegram bot handle. Used by CodexAppServerPTY (issue #330) to
    * fire sendChatAction directly from the JSONL stream. Safe to call before
    * or after start() — the handle is re-applied on every PTY (re)spawn.
    */
   setTelegramHandle(api: TelegramAPI, chatId: string): void {
     this.telegramApi = api;
     this.telegramChatId = chatId;
-    if (this.config.runtime === 'codex' && this.pty) {
-      (this.pty as CodexPTY).setTelegramHandle(api, chatId);
+    if (this.config.runtime === 'codex-app-server' && this.pty) {
+      (this.pty as CodexAppServerPTY).setTelegramHandle(api, chatId);
     }
   }
 

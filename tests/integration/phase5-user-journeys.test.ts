@@ -108,8 +108,10 @@ const ONE_HOUR  = 3_600_000;
 const TEN_MINS  = 10 * ONE_MIN;
 const TWO_MINS  = 2 * ONE_MIN;
 
-// Doc paths under test
-const ONBOARDING_MD         = join(ROOT, 'templates', 'agent', 'ONBOARDING.md');
+// Doc paths under test.
+// Post-PR-A2 (2026-05-11): the per-template ONBOARDING.md was removed; the
+// "use bus add-cron, not /loop" guidance moved into the cron-management SKILL.
+const ONBOARDING_MD         = join(ROOT, 'templates', 'agent', '.claude', 'skills', 'cron-management', 'SKILL.md');
 const CRONS_MIGRATION_GUIDE = join(ROOT, 'CRONS_MIGRATION_GUIDE.md');
 
 // ---------------------------------------------------------------------------

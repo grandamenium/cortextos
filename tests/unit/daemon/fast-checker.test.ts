@@ -760,6 +760,29 @@ describe('FastChecker', () => {
 
       expect(result).toContain('duration: unknowns');
     });
+
+    it('emits a transcript: fenced block when transcript is provided', () => {
+      const result = FastChecker.formatTelegramVoiceMessage(
+        'Alice',
+        '123',
+        '/tmp/voice.ogg',
+        5,
+        'say hi back',
+      );
+
+      expect(result).toContain('=== TELEGRAM VOICE from Alice (chat_id:123) ===');
+      expect(result).toContain('duration: 5s');
+      expect(result).toContain('local_file: /tmp/voice.ogg');
+      expect(result).toContain('transcript:\n```\nsay hi back\n```');
+    });
+
+    it('omits the transcript block when transcript is undefined or empty', () => {
+      const noArg = FastChecker.formatTelegramVoiceMessage('Alice', '123', '/tmp/voice.ogg', 5);
+      const empty = FastChecker.formatTelegramVoiceMessage('Alice', '123', '/tmp/voice.ogg', 5, '   ');
+
+      expect(noArg).not.toContain('transcript:');
+      expect(empty).not.toContain('transcript:');
+    });
   });
 
   describe('heartbeat watchdog', () => {
