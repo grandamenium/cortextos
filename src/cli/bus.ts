@@ -1355,18 +1355,26 @@ busCommand
 
 busCommand
   .command('voice-reply')
-  .description("Generate an MP3 from text using the agent's configured voice (edge-tts), send to Telegram, and post text+audio to the dashboard chat")
+  .description(
+    "Generate an MP3 from text and send to Telegram. Engine: google-tts-neural2 (default when GOOGLE_TTS_API_KEY set) " +
+    "or edge-tts (free fallback). Usage logged to voice_usage. Hard cap $5/day → auto-fallback to edge-tts."
+  )
   .argument('<chat-id>', 'Telegram chat ID')
   .argument('<text>', 'Text to speak')
-  .option('--voice <name>', 'Override voice (e.g. en-US-AndrewNeural). Defaults to the voice field in config.json.')
+  .option('--voice <name>', 'Override edge-tts voice name (e.g. en-US-AndrewNeural). Defaults to config.json voice field.')
+  .option('--engine <name>', 'TTS engine: google-tts-neural2 | edge-tts. Default: google-tts-neural2 if key set, else edge-tts.')
   .option('--local', 'Also play through Mac speakers via afplay after sending')
-  .action(async (chatId: string, text: string, opts: { voice?: string; local?: boolean }) => {
+  .action(async (chatId: string, text: string, opts: { voice?: string; engine?: string; local?: boolean }) => {
     const { execFileSync: execFile, spawnSync: spawnCmd } = require('child_process') as typeof import('child_process');
-    const { unlinkSync, existsSync: fsExists, readFileSync: fsRead, mkdirSync: fsMkdir, copyFileSync: fsCopy } = require('fs') as typeof import('fs');
+    const { unlinkSync, existsSync: fsExists, readFileSync: fsRead, mkdirSync: fsMkdir,
+            copyFileSync: fsCopy, writeFileSync: fsWrite, appendFileSync: fsAppend } =
+      require('fs') as typeof import('fs');
     const { join: pathJoin } = require('path') as typeof import('path');
     const os = require('os') as typeof import('os');
+    const https = require('https') as typeof import('https');
 
     const env = resolveEnv();
+    const DAILY_CAP_USD = 5.0;
 
     // Resolve bot token
     let botToken = '';
@@ -1384,47 +1392,127 @@ busCommand
       process.exit(1);
     }
 
-    // Resolve voice: CLI flag > config.json > fallback
-    let voice = opts.voice || '';
-    if (!voice && env.agentDir) {
+    // Resolve edge-tts voice name: CLI flag > config.json > fallback
+    let edgeTtsVoice = opts.voice || '';
+    if (!edgeTtsVoice && env.agentDir) {
       const configPath = pathJoin(env.agentDir, 'config.json');
       if (fsExists(configPath)) {
-        try {
-          const cfg = JSON.parse(fsRead(configPath, 'utf-8'));
-          if (cfg.voice) voice = cfg.voice;
-        } catch { /* use fallback */ }
+        try { const cfg = JSON.parse(fsRead(configPath, 'utf-8')); if (cfg.voice) edgeTtsVoice = cfg.voice; } catch { /* */ }
       }
     }
-    if (!voice) voice = 'en-US-AndrewNeural';
+    if (!edgeTtsVoice) edgeTtsVoice = 'en-US-AndrewNeural';
 
-    // Generate MP3 to a temp file
-    const tmpFile = pathJoin(os.tmpdir(), `voice-reply-${Date.now()}.mp3`);
-    try {
-      execFile('python3', ['-m', 'edge_tts', '--voice', voice, '--text', text, '--write-media', tmpFile], {
-        stdio: 'pipe',
-      });
-    } catch (err: any) {
-      console.error(`edge-tts failed: ${err.message || err}`);
-      process.exit(1);
+    // Determine engine: CLI flag > config.json voice_engine > auto (google if key present, else edge-tts)
+    const gcpKey = process.env.GOOGLE_TTS_API_KEY || '';
+    let desiredEngine: 'google-tts-neural2' | 'edge-tts' = 'edge-tts';
+    if (opts.engine === 'google-tts-neural2') {
+      desiredEngine = 'google-tts-neural2';
+    } else if (opts.engine === 'edge-tts') {
+      desiredEngine = 'edge-tts';
+    } else {
+      // Read from config or auto-detect
+      if (env.agentDir) {
+        const cfgPath = pathJoin(env.agentDir, 'config.json');
+        if (fsExists(cfgPath)) {
+          try {
+            const cfg = JSON.parse(fsRead(cfgPath, 'utf-8'));
+            if (cfg.voice_engine === 'google-tts-neural2') desiredEngine = 'google-tts-neural2';
+          } catch { /* */ }
+        }
+      }
+      // Auto: use google if key is available
+      if (desiredEngine === 'edge-tts' && gcpKey) desiredEngine = 'google-tts-neural2';
     }
+
+    // Check daily cap → fall back to edge-tts if exceeded
+    const spentToday = await todayTtsCost();
+    let usedEngine = desiredEngine;
+    if (desiredEngine === 'google-tts-neural2' && spentToday >= DAILY_CAP_USD) {
+      usedEngine = 'edge-tts';
+      console.warn(`[voice-reply] daily cap $${DAILY_CAP_USD} hit ($${spentToday.toFixed(4)} today). Falling back to edge-tts.`);
+      try {
+        const { execFileSync: ef } = require('child_process') as typeof import('child_process');
+        ef('cortextos', ['bus', 'send-message', 'orchestrator', 'normal',
+          `Voice cap hit: $${spentToday.toFixed(4)} today. Falling back to edge-tts until tomorrow.`],
+          { stdio: 'pipe', timeout: 10000 });
+      } catch { /* non-fatal */ }
+    }
+
+    // Also fall back if google engine selected but no key
+    if (usedEngine === 'google-tts-neural2' && !gcpKey) {
+      console.warn('[voice-reply] GOOGLE_TTS_API_KEY not set — falling back to edge-tts.');
+      usedEngine = 'edge-tts';
+    }
+
+    const tmpFile = pathJoin(os.tmpdir(), `voice-reply-${Date.now()}.mp3`);
+    const t0 = Date.now();
+
+    if (usedEngine === 'google-tts-neural2') {
+      // Google Cloud TTS Neural2
+      const body = JSON.stringify({
+        input: { text },
+        voice: { languageCode: 'en-US', name: 'en-US-Neural2-D' },
+        audioConfig: { audioEncoding: 'MP3' },
+      });
+      await new Promise<void>((resolve, reject) => {
+        const req = https.request(
+          {
+            hostname: 'texttospeech.googleapis.com',
+            path: `/v1/text:synthesize?key=${gcpKey}`,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+          },
+          (res: any) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => {
+              if (res.statusCode !== 200) {
+                reject(new Error(`Google TTS ${res.statusCode}: ${Buffer.concat(chunks).toString().slice(0, 200)}`));
+                return;
+              }
+              try {
+                const json = JSON.parse(Buffer.concat(chunks).toString());
+                fsWrite(tmpFile, Buffer.from(json.audioContent, 'base64'));
+                resolve();
+              } catch (e: any) { reject(e); }
+            });
+          }
+        );
+        req.on('error', reject);
+        req.write(body);
+        req.end();
+      }).catch(async (err: Error) => {
+        console.warn(`[voice-reply] Google TTS failed (${err.message}), falling back to edge-tts.`);
+        usedEngine = 'edge-tts';
+        try {
+          execFile('python3', ['-m', 'edge_tts', '--voice', edgeTtsVoice, '--text', text, '--write-media', tmpFile], { stdio: 'pipe' });
+        } catch (e: any) {
+          console.error(`edge-tts fallback failed: ${e.message}`);
+          process.exit(1);
+        }
+      });
+    } else {
+      // edge-tts (free)
+      try {
+        execFile('python3', ['-m', 'edge_tts', '--voice', edgeTtsVoice, '--text', text, '--write-media', tmpFile], { stdio: 'pipe' });
+      } catch (err: any) {
+        console.error(`edge-tts failed: ${err.message || err}`);
+        process.exit(1);
+      }
+    }
+
+    const durationSeconds = (Date.now() - t0) / 1000;
 
     if (!fsExists(tmpFile)) {
-      console.error('edge-tts did not produce output file');
+      console.error('TTS did not produce output file');
       process.exit(1);
     }
 
     try {
-      // Play locally if requested
-      if (opts.local) {
-        spawnCmd('afplay', [tmpFile], { stdio: 'inherit' });
-      }
+      if (opts.local) spawnCmd('afplay', [tmpFile], { stdio: 'inherit' });
 
       // Publish the MP3 under {ctxRoot}/dashboard-uploads so /api/media/...
-      // can serve it back to the dashboard chat UI. We write the file directly
-      // instead of POSTing to /api/comms/upload because that endpoint sits
-      // behind the dashboard's session-cookie middleware — a CLI curl with
-      // no cookie gets 401 and the audio URL silently goes missing from the
-      // outbound log (the whole reason voice replies only showed text).
+      // can serve it back to the dashboard chat UI.
       let audioUrl = '';
       if (env.ctxRoot) {
         try {
@@ -1436,7 +1524,6 @@ busCommand
           audioUrl = `/api/media/dashboard-uploads/${audioFilename}`;
         } catch (err: any) {
           console.error(`[voice-reply] publish to dashboard-uploads failed: ${err.message || err}`);
-          // Non-fatal — Telegram send still proceeds below.
         }
       }
 
@@ -1445,9 +1532,6 @@ busCommand
       await api.sendDocument(chatId, tmpFile, '');
 
       // Log to outbound-messages.jsonl so the dashboard chat shows text + audio player.
-      // The text field contains the spoken text; the audio URL is appended on a new line
-      // so the MessageContent component detects it as a /api/media/ URL and renders
-      // an <audio controls> element inline beneath the text.
       if (env.agentName && env.ctxRoot) {
         const dashboardText = audioUrl ? `${text}\n${audioUrl}` : text;
         logOutboundMessage(env.ctxRoot, env.agentName, chatId, dashboardText, 0, {});
@@ -1455,17 +1539,158 @@ busCommand
         try {
           const paths = resolvePaths(env.agentName, env.instanceId, env.org);
           logEvent(paths, env.agentName, env.org, 'message', 'voice_sent', 'info',
-            JSON.stringify({ chat_id: chatId, voice, chars: text.length, audio_url: audioUrl || null }));
+            JSON.stringify({ chat_id: chatId, engine: usedEngine, chars: text.length, audio_url: audioUrl || null }));
         } catch { /* non-fatal */ }
       }
 
-      console.log('Voice message sent');
+      // Log usage to voice_usage (all engines — edge-tts logs $0 for cost visibility)
+      const costEstimate = estimateTtsCost(usedEngine, text.length);
+      const modelName = usedEngine === 'google-tts-neural2' ? 'en-US-Neural2-D' : edgeTtsVoice;
+      await logTtsUsage({
+        agent: env.agentName || 'unknown',
+        engine: usedEngine,
+        model: modelName,
+        input_chars: text.length,
+        duration_seconds: durationSeconds,
+        cost_estimate_usd: costEstimate,
+      });
+
+      console.log(`Voice message sent (engine=${usedEngine}, ${durationSeconds.toFixed(1)}s, cost=$${costEstimate.toFixed(5)})`);
     } finally {
       try { unlinkSync(tmpFile); } catch { /* ignore */ }
     }
-    // Exit after temp file cleanup and all local writes complete.
-    // logEvent() schedules mirrorEventToRgos() via setImmediate → drainRetryQueue;
-    // the drain is disk-persisted and runs on the next daemon cycle.
+    process.exit(0);
+  });
+
+// ---------------------------------------------------------------------------
+// Voice POC L1 helpers — used by voice-reply and voice-usage-report
+// ---------------------------------------------------------------------------
+
+type TtsEngine = 'edge-tts' | 'google-tts-neural2';
+
+/** USD per character. edge-tts is free. */
+const TTS_COST_PER_CHAR: Record<TtsEngine, number> = {
+  'edge-tts':           0,
+  'google-tts-neural2': 0.004 / 1000, // $0.004 per 1K chars (Neural2)
+};
+
+function estimateTtsCost(engine: TtsEngine, chars: number): number {
+  return (TTS_COST_PER_CHAR[engine] ?? 0) * chars;
+}
+
+/**
+ * Query today's total TTS spend from SUPABASE_RGOS voice_usage table.
+ * Returns 0 if Supabase is not configured or query fails.
+ */
+async function todayTtsCost(): Promise<number> {
+  const sbUrl = process.env.SUPABASE_RGOS_URL;
+  const sbKey = process.env.SUPABASE_RGOS_SERVICE_KEY || process.env.RGOS_SUPABASE_SERVICE_KEY;
+  if (!sbUrl || !sbKey) return 0;
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const res = await fetch(
+      `${sbUrl}/rest/v1/voice_usage?select=cost_estimate_usd&ts=gte.${today}T00:00:00Z`,
+      { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } }
+    );
+    if (!res.ok) return 0;
+    const rows = await res.json() as Array<{ cost_estimate_usd: number }>;
+    return rows.reduce((s, r) => s + (r.cost_estimate_usd ?? 0), 0);
+  } catch { return 0; }
+}
+
+/**
+ * Log a TTS usage record to SUPABASE_RGOS voice_usage table.
+ * Fire-and-forget — failures are logged but do not abort the command.
+ */
+async function logTtsUsage(record: {
+  agent: string; engine: TtsEngine; model: string;
+  input_chars: number; duration_seconds: number; cost_estimate_usd: number;
+}): Promise<void> {
+  const sbUrl = process.env.SUPABASE_RGOS_URL;
+  const sbKey = process.env.SUPABASE_RGOS_SERVICE_KEY || process.env.RGOS_SUPABASE_SERVICE_KEY;
+  if (!sbUrl || !sbKey) return;
+  try {
+    await fetch(`${sbUrl}/rest/v1/voice_usage`, {
+      method: 'POST',
+      headers: {
+        apikey: sbKey,
+        Authorization: `Bearer ${sbKey}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        agent:             record.agent,
+        engine:            record.engine,
+        model:             record.model,
+        input_chars:       record.input_chars,
+        duration_seconds:  record.duration_seconds,
+        cost_estimate_usd: record.cost_estimate_usd,
+        ts:                new Date().toISOString(),
+      }),
+    });
+  } catch (err: any) {
+    console.error(`[voice-reply] usage log failed: ${err.message}`);
+  }
+}
+
+busCommand
+  .command('voice-usage-report')
+  .description('Query voice_usage for yesterday and send a cost summary to orchestrator. Runs daily at 09:00 PT via cron.')
+  .action(async () => {
+    const sbUrl = process.env.SUPABASE_RGOS_URL;
+    const sbKey = process.env.SUPABASE_RGOS_SERVICE_KEY || process.env.RGOS_SUPABASE_SERVICE_KEY;
+    if (!sbUrl || !sbKey) {
+      console.error('SUPABASE_RGOS_URL / SUPABASE_RGOS_SERVICE_KEY not set — cannot generate report.');
+      process.exit(1);
+    }
+
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yDate = yesterday.toISOString().slice(0, 10);
+    const startTs = `${yDate}T00:00:00Z`;
+    const endTs   = `${yDate}T23:59:59Z`;
+
+    try {
+      const res = await fetch(
+        `${sbUrl}/rest/v1/voice_usage?select=agent,engine,model,input_chars,cost_estimate_usd,ts&ts=gte.${startTs}&ts=lte.${endTs}&order=ts.desc`,
+        { headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` } }
+      );
+      if (!res.ok) {
+        console.error(`Supabase query failed: ${res.status}`);
+        process.exit(1);
+      }
+      const rows = await res.json() as Array<{ agent: string; engine: string; model: string; input_chars: number; cost_estimate_usd: number }>;
+
+      const totalCost  = rows.reduce((s, r) => s + (r.cost_estimate_usd ?? 0), 0);
+      const totalCalls = rows.length;
+      const byEngine: Record<string, { calls: number; cost: number }> = {};
+      for (const r of rows) {
+        const e = r.engine || 'unknown';
+        if (!byEngine[e]) byEngine[e] = { calls: 0, cost: 0 };
+        byEngine[e].calls++;
+        byEngine[e].cost += r.cost_estimate_usd ?? 0;
+      }
+
+      const lines = [`Voice usage ${yDate}: ${totalCalls} calls, $${totalCost.toFixed(4)} total`];
+      for (const [eng, { calls, cost }] of Object.entries(byEngine)) {
+        lines.push(`  ${eng}: ${calls} calls, $${cost.toFixed(4)}`);
+      }
+      if (totalCalls === 0) lines.push('  No calls logged yesterday.');
+
+      const summary = lines.join('\n');
+      console.log(summary);
+
+      try {
+        const { execFileSync: ef } = require('child_process') as typeof import('child_process');
+        ef('cortextos', ['bus', 'send-message', 'orchestrator', 'normal', summary], { stdio: 'pipe', timeout: 10000 });
+        console.log('[voice-usage-report] sent to orchestrator');
+      } catch (err: any) {
+        console.error(`[voice-usage-report] send-message failed: ${err.message}`);
+      }
+    } catch (err: any) {
+      console.error(`[voice-usage-report] error: ${err.message}`);
+      process.exit(1);
+    }
     process.exit(0);
   });
 
