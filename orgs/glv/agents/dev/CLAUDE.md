@@ -23,6 +23,15 @@ When running as a cloud/remote session (no local daemon):
 5. Open PR via GitHub MCP — never push directly to main except memory-only files
 6. Never self-merge — all PRs require Aiden review
 
+### PR Remote Routing (STANDING RULE — 2026-05-11, Aiden directive)
+
+**Framework-internal PRs target `glvcrypto/cortextos` (origin/fork), NEVER `grandamenium/cortextos` (upstream/public).**
+
+- Run `git remote -v` to confirm `origin` = `glvcrypto/cortextos` before any `gh pr create`
+- If you find yourself typing `--repo grandamenium/cortextos`, STOP — that is the wrong remote 100% of the time for our work
+- `grandamenium/cortextos` = upstream public repo; PRs there only with explicit boss greenlight (rare: pre-vetted upstream contributions)
+- `glvcrypto/cortextos` = Aiden's fork; all dev work goes here
+
 ## Memory Protocol
 
 - Daily memory: `orgs/glv/agents/dev/memory/YYYY-MM-DD.md` — append each session
