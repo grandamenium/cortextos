@@ -73,11 +73,63 @@ c.enabled = true;
 fs.writeFileSync(path, JSON.stringify(c, null, 2));
 "
 
+# Step 6.5: PRE-ENABLE CHECKLIST — DO NOT SKIP
+# Lesson from 2026-05-11: an agent enabled with template placeholders + generic
+# Autonomy Rules came online and asked Hari what it should be doing. Hari
+# expects agents to describe what they are starting on, not ask. Running these
+# spot-checks before `cortextos enable` prevents this class of failure.
+
+AGENT_DIR="$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT_NAME"
+
+# Check 1: No unfilled template placeholders.
+if grep -rn "{{" "$AGENT_DIR"/IDENTITY.md "$AGENT_DIR"/SOUL.md "$AGENT_DIR"/GUARDRAILS.md "$AGENT_DIR"/USER.md "$AGENT_DIR"/GOALS.md 2>/dev/null; then
+  echo "❌ FAIL: unfilled {{placeholders}} found — fill them before enable"
+  exit 1
+fi
+
+# Check 2: SOUL.md Day/Night Mode is concrete.
+grep -q "Day Mode ([0-9]" "$AGENT_DIR/SOUL.md" || { echo "❌ FAIL: SOUL.md Day Mode hours not set"; exit 1; }
+
+# Check 3: SOUL.md Autonomy Rules is agent-specific (not generic stock).
+SOUL_AUTONOMY_LINES=$(awk '/## Autonomy Rules/,/^## /' "$AGENT_DIR/SOUL.md" | wc -l)
+[ "$SOUL_AUTONOMY_LINES" -ge 10 ] || { echo "❌ FAIL: SOUL.md Autonomy Rules looks generic ($SOUL_AUTONOMY_LINES lines). Author specifics."; exit 1; }
+
+# Check 4: GUARDRAILS.md has agent-specific red flags.
+GUARDRAIL_ROWS=$(grep -c "^| " "$AGENT_DIR/GUARDRAILS.md" 2>/dev/null || echo 0)
+[ "$GUARDRAIL_ROWS" -ge 10 ] || echo "⚠ WARN: GUARDRAILS.md has only $GUARDRAIL_ROWS rows — consider adding agent-specific patterns"
+
+# Check 5: goals.json has concrete boot actions.
+GOALS_COUNT=$(jq '.goals | length' "$AGENT_DIR/goals.json" 2>/dev/null || echo 0)
+[ "$GOALS_COUNT" -ge 3 ] || { echo "❌ FAIL: goals.json has only $GOALS_COUNT goals"; exit 1; }
+grep -qiE "on boot|priority [0-9]|start with|begin with|first action" "$AGENT_DIR/goals.json" || echo "⚠ WARN: no explicit ON BOOT action in goals.json"
+
+# Check 6: USER.md describes Telegram register if Telegram-enabled.
+if grep -q "^BOT_TOKEN=." "$AGENT_DIR/.env" 2>/dev/null; then
+  grep -q -i "Telegram" "$AGENT_DIR/USER.md" || { echo "❌ FAIL: Telegram-enabled but USER.md doesn't describe Telegram register"; exit 1; }
+fi
+
+# Check 7: .env populated correctly.
+grep -q "^BOT_TOKEN=$" "$AGENT_DIR/.env" 2>/dev/null && { echo "❌ FAIL: BOT_TOKEN empty"; exit 1; }
+if grep -q "^BOT_TOKEN=." "$AGENT_DIR/.env" 2>/dev/null && grep -q "^CHAT_ID=$" "$AGENT_DIR/.env" 2>/dev/null; then
+  echo "❌ FAIL: BOT_TOKEN set but CHAT_ID empty"; exit 1
+fi
+
+# Check 8: config.json agent_name correct.
+[ "$(jq -r '.agent_name' "$AGENT_DIR/config.json")" = "$AGENT_NAME" ] || { echo "❌ FAIL: config.json agent_name mismatch"; exit 1; }
+
+# Check 9: IDENTITY.md is substantively authored.
+[ "$(grep -cv '^$' "$AGENT_DIR/IDENTITY.md")" -ge 20 ] || { echo "❌ FAIL: IDENTITY.md too thin"; exit 1; }
+
+echo "✅ Pre-enable checklist passed for $AGENT_NAME"
+
 # Step 7: Enable agent (registers with daemon)
 cortextos enable "$AGENT_NAME" --org "$ORG"
 
 # Step 8: Verify
 cortextos status
+
+# Step 9: Watch first heartbeat. If the agent comes online and asks "what should
+# I do?", that's a config bug — stop the agent, audit identity files, fix, re-enable.
 ```
 
 ### For Another Person (Cross-User Agent)
@@ -250,7 +302,7 @@ fi
 
 ## 6. Managing Crons
 
-Crons are daemon-managed and persisted to `${CTX_ROOT}/state/<agent>/crons.json`. The daemon dispatches them automatically — no agent-side restoration needed. Use the bus commands; do NOT edit `config.json` or use `/loop` / `CronCreate`.
+Crons are daemon-managed and persisted to `${CTX_ROOT}/.cortextOS/state/agents/<agent>/crons.json`. The daemon dispatches them automatically — no agent-side restoration needed. Use the bus commands; do NOT edit `config.json` or use `/loop` / `CronCreate`.
 
 ### Adding a Cron
 ```bash
