@@ -349,11 +349,10 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * Format a Telegram voice/audio message for injection.
    * Matches bash fast-checker.sh format.
    *
-   * `transcript` is optional and only emitted when populated by an upstream
-   * transcription service. Whisper integration is not currently wired in
-   * cortextos src/ (only in tools/graphify); call sites pass undefined until
-   * that pipeline is in place. The codex extractor surfaces the transcript
-   * block when present.
+   * `transcript` is populated by `src/telegram/transcribe.ts` when whisper-cli
+   * and the GGML model are available; otherwise it stays undefined and the
+   * agent receives only the .ogg path. The codex extractor surfaces the
+   * transcript block when present.
    */
   static formatTelegramVoiceMessage(
     from: string,
