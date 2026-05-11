@@ -1,5 +1,7 @@
 # Plan — Agent cost & context optimization (cortextOS + Jarvis)
 
+> **SUPERSEDED 2026-05-11.** PR-A and PR-A2 shipped from this plan (per-role payload trim, configs, 1M-off, skills extraction). The forward-looking decisions in this doc — particularly the model assignments (engineer=sonnet, analyst=opus, devops=sonnet) and the Phase 2/3 daemon-side roadmap — have been re-decided from data, not from this plan, in `orgs/sb-personal/backlog/REASSESSMENT-2026-05-11.md`. Read the reassessment first for the current direction. The sections below remain useful as historical context for PR-A/A2 design rationale.
+
 ## Context
 
 Token-spend analysis (`scripts/session-analysis/analyze.py`, 2026-05-11) surfaced **~$9.9k list across the four cortextOS org-agent dirs** (boss $2.7k · analyst $2.2k · engineer $2.6k · devops $0.4k · fullstack $2.0k) and ~$9.2k on `sb-claude-jarvis`. One cortextOS engineer session reached **658M tokens / 1,664 turns / 79 hours**. Goal: cut spend significantly without degrading agent usefulness.
