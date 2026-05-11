@@ -11,6 +11,7 @@ If you're running an unattended single-operator deployment — or just want Tele
 | `watchdog.sh` | Daemon-level. Detects accumulated Telegram poller errors in PM2's daemon error log; restarts the daemon if a threshold of errors accumulates inside a 5-min window. | every 5 min |
 | `agent-recover.sh` | Per-agent. Detects agents whose process is alive but stdout has been idle ≥6 min while the daemon is still injecting messages — i.e., a hung PTY. Restarts JUST that agent (no daemon-wide restart) with a 20-min cooldown. | every 5 min |
 | `usage-monitor.sh` | Cost. Calls `ccusage blocks --json`, computes USD/hr for the active 5-hour Claude Code session window, sends Telegram alerts on tier transitions (default GREEN <$15, YELLOW $15–$30, RED >$30). | every 30 min |
+| `compact-boundary-watcher.sh` | Context. Scans every active Claude Code session JSONL under `~/.claude/projects/`; when a turn crosses a configured cache_read tier at a text-only or 5-min-idle boundary, sends a Telegram hint with the canned `/compact` prompt pre-quoted. Operator-typed `/compact` is the only way to keep a session below the 200K-context cliff; this surfaces the moment the agent cannot. Defaults: tiers 120K / 150K / 170K (≈ 60/75/85% of 200K). Idempotent — 1 hint per (session, tier). | every 10 min |
 
 Each script is matched by a launchd plist template you customize once.
 
@@ -28,7 +29,7 @@ Steps:
 ```bash
 # 1. Copy scripts into your local cortextOS state dir (so they live with your instance, not the repo)
 mkdir -p ~/.cortextos/default/scripts ~/.cortextos/default/logs
-cp scripts/self-healing/{watchdog,agent-recover,usage-monitor}.sh ~/.cortextos/default/scripts/
+cp scripts/self-healing/{watchdog,agent-recover,usage-monitor,compact-boundary-watcher}.sh ~/.cortextos/default/scripts/
 chmod +x ~/.cortextos/default/scripts/*.sh
 
 # 2. Render plist templates (substitute {USER}, {HOME}, {INSTANCE} for your values, then drop into ~/Library/LaunchAgents)
@@ -39,7 +40,7 @@ for f in scripts/self-healing/*.plist.template; do
 done
 
 # 3. Load the launchd jobs
-for f in ~/Library/LaunchAgents/com.cortextos.{watchdog,agent-recover,usage-monitor}.plist; do
+for f in ~/Library/LaunchAgents/com.cortextos.{watchdog,agent-recover,usage-monitor,compact-boundary-watcher}.plist; do
   launchctl load "$f"
 done
 
@@ -52,7 +53,7 @@ Each script writes to `~/.cortextos/<instance>/logs/<scriptname>.log`. Tail thos
 ## Uninstall
 
 ```bash
-for f in ~/Library/LaunchAgents/com.cortextos.{watchdog,agent-recover,usage-monitor}.plist; do
+for f in ~/Library/LaunchAgents/com.cortextos.{watchdog,agent-recover,usage-monitor,compact-boundary-watcher}.plist; do
   launchctl unload "$f"
   rm "$f"
 done
@@ -71,6 +72,12 @@ All thresholds live at the top of each script as shell variables — open the sc
 
 ### `usage-monitor.sh`
 - `YELLOW_THRESHOLD` (default `15`) and `RED_THRESHOLD` (default `30`) — USD/hr tier boundaries
+
+### `compact-boundary-watcher.sh`
+- `COMPACT_TIERS` (default `120,150,170`) — comma-separated cache_read tier thresholds in K tokens. One Telegram hint is emitted per `(session, tier)`. For 1M-Opus deployments override to e.g. `350,500,700`.
+- `COMPACT_SINCE_MINUTES` (default `5`) — only consider sessions whose JSONL has activity within this window. Tighter than the 10-min cron cadence so the hint stays "fresh."
+- `COMPACT_ANALYZE_PY` — override path to `analyze.py` if `$CTX_FRAMEWORK_ROOT/scripts/session-analysis/analyze.py` doesn't resolve.
+- Idempotency state: `~/.cortextos/<instance>/compact-watcher-state.tsv`. Delete to re-arm all sessions.
 
 ## Caveats
 
