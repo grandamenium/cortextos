@@ -5,7 +5,7 @@ description: Shared-repo multi-agent contamination rules. Trigger before any git
 
 # Worktree discipline (shared-repo coordination)
 
-The framework repos at `/Volumes/MacStorage/UserData/0devprojects/sb-cortextos-fork` and `/Volumes/MacStorage/UserData/0devprojects/sb-claude-jarvis` are **shared working trees** — multiple agents and the user may be operating in them at any moment. Branch operations there silently corrupt other agents' uncommitted state. See `.claude/rules/code-quality/same-repo-multi-agent-checkout-contamination.md`.
+The framework repo at `$CTX_FRAMEWORK_ROOT` (and any sibling shared repos the agent operates on — e.g. `$CTX_JARVIS_ROOT`, resolved per-machine) are **shared working trees** — multiple agents and the user may be operating in them at any moment. Branch operations there silently corrupt other agents' uncommitted state. See `.claude/rules/code-quality/same-repo-multi-agent-checkout-contamination.md`.
 
 **Never edit, commit, or checkout feature branches in the canonical tree.** Use a per-agent worktree.
 
@@ -17,7 +17,7 @@ The framework repos at `/Volumes/MacStorage/UserData/0devprojects/sb-cortextos-f
 
 ```bash
 # 1. Fetch from canonical (read-only ops there are fine)
-cd /Volumes/MacStorage/UserData/0devprojects/sb-cortextos-fork
+cd $CTX_FRAMEWORK_ROOT
 git fetch origin main
 
 # 2. Create your worktree on a fresh branch off origin/main
@@ -28,7 +28,7 @@ cd ~/cortextos-worktrees/$CTX_AGENT_NAME/<branch-name>
 # ... edit, build, test, commit, push, PR, evaluator cycle ...
 
 # 4. After PR is merged, clean up
-cd /Volumes/MacStorage/UserData/0devprojects/sb-cortextos-fork
+cd $CTX_FRAMEWORK_ROOT
 git worktree remove ~/cortextos-worktrees/$CTX_AGENT_NAME/<branch-name>
 ```
 

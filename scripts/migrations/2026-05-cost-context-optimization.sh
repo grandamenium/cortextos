@@ -38,6 +38,10 @@ done
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 
 # ---- map role -> model (engineer is sole Opus) -------------------------
+# Assumption: agent role is inferred from the directory name under
+# orgs/<org>/agents/. Orgs that use non-canonical names (e.g. "code-bot"
+# instead of "engineer") silently default to sonnet — adjust per-agent
+# config.json post-migration if those agents need the Opus override.
 model_for_role() {
   case "$1" in
     engineer) echo "opus";;
@@ -75,10 +79,16 @@ elif "max_session_seconds" not in cfg:
     changes.append(("max_session_seconds", None, target))
     cfg["max_session_seconds"] = target
 
-# thresholds — bump 1M-tier defaults (42/50) to 200K-tier (70/80); add if missing
-for key, want in (("ctx_warning_threshold", 70), ("ctx_handoff_threshold", 80)):
+# thresholds — bump 1M-tier defaults to 200K-tier; add if missing.
+# Per-key legacy-set so operators who intentionally cross-set (e.g.
+# ctx_warning=50 as a tighter custom value) aren't silently bumped.
+# Legacy 1M-opus defaults were warning=42, handoff=50 — strict, per-key.
+for key, want, legacy in (
+    ("ctx_warning_threshold", 70, {42}),
+    ("ctx_handoff_threshold", 80, {50}),
+):
     cur = cfg.get(key)
-    if cur is None or cur in (42, 50):
+    if cur is None or cur in legacy:
         if cur != want:
             changes.append((key, cur, want))
             cfg[key] = want

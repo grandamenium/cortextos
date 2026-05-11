@@ -50,4 +50,4 @@ Daily memory is the agent's own log; `MEMORY.md` is durable agent state; the **k
 
 - **Daily memory absent or sparse** — on session crash, the next session starts from zero. Symptom: agent re-asks questions it already had answers to.
 - **MEMORY.md polluted with ephemeral state** — startup context grows; the same context the cost-optimization plan tries to shrink.
-- **Stale MEMORY.md entries acted on without verification** — see `.claude/rules/code-quality/before-recommending-from-memory` guidance: a memory naming a function/file is a claim that it existed at write time, not now.
+- **Stale MEMORY.md entries acted on without verification** — a memory naming a function/file is a claim that it existed at write time, not now. Before recommending or acting on it, verify the named symbol/file still exists via grep / a quick read.
