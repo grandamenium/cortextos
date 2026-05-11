@@ -856,14 +856,13 @@ export class AgentManager {
 
       if (cronMode === 'print') {
         const runtime = entry.process.getConfig().runtime ?? 'claude-code';
-        if (runtime !== 'claude-code') {
-          console.warn(
-            `[daemon] cron_mode=print is only supported for claude-code runtime ` +
-            `(agent "${agentName}" has runtime="${runtime}") — falling back to inject`,
-          );
-        } else {
+        if (runtime === 'claude-code' || runtime === 'codex-app-server') {
           return this.fireCronPrint(agentName, cron, entry.process, firedAt);
         }
+        console.warn(
+          `[daemon] cron_mode=print is not supported for runtime="${runtime}" ` +
+          `(agent "${agentName}") — falling back to inject`,
+        );
       }
 
       const prompt = cron.prompt ?? `[cron] ${cron.name} fired`;
@@ -892,10 +891,10 @@ export class AgentManager {
   }
 
   /**
-   * Deliver a cron prompt via `claude --print` (one-shot subprocess).
-   * Used when the agent's config.cron_mode is 'print'.  The subprocess runs
-   * with a clean slate — no session history — so it never inflates the PTY
-   * session context.  Output is written to the cron execution log.
+   * Deliver a cron prompt via a one-shot subprocess.
+   * claude-code → `claude --print --dangerously-skip-permissions ...`
+   * codex-app-server → `codex exec --ephemeral --ask-for-approval never ...`
+   * Both run with no session continuity so the agent's PTY context is unaffected.
    */
   private fireCronPrint(
     agentName: string,
@@ -907,16 +906,35 @@ export class AgentManager {
       const config = agentProcess.getConfig();
       const env = agentProcess.getPrintSubprocessEnv();
       const cwd = config.working_directory || agentProcess.getAgentDir();
+      const runtime = config.runtime ?? 'claude-code';
 
       const prompt = `[CRON FIRED ${firedAt}] ${cron.name}: ${cron.prompt ?? cron.name}`;
-      const args = ['--print', '--dangerously-skip-permissions'];
-      if (config.model) args.push('--model', config.model);
-      args.push(prompt);
+
+      let bin: string;
+      let args: string[];
+      if (runtime === 'codex-app-server') {
+        bin = 'codex';
+        args = [
+          'exec',
+          '--ephemeral',
+          '--ask-for-approval', 'never',
+          '--sandbox', 'danger-full-access',
+          '--skip-git-repo-check',
+          '-C', cwd,
+        ];
+        if (config.model) args.push('--model', config.model);
+        args.push(prompt);
+      } else {
+        bin = 'claude';
+        args = ['--print', '--dangerously-skip-permissions'];
+        if (config.model) args.push('--model', config.model);
+        args.push(prompt);
+      }
 
       const start = Date.now();
-      console.log(`[daemon] cron-print: spawning claude --print for "${cron.name}" on agent "${agentName}"`);
+      console.log(`[daemon] cron-print: spawning ${bin} for "${cron.name}" on agent "${agentName}" (runtime=${runtime})`);
 
-      const child = spawnChild('claude', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawnChild(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
 
       child.stderr.on('data', (d: Buffer) => {
         process.stderr.write(`[cron-print:${agentName}:${cron.name}] ${d}`);
@@ -930,15 +948,15 @@ export class AgentManager {
           status: code === 0 ? 'fired' : 'failed',
           attempt: 1,
           duration_ms,
-          error: code !== 0 ? `claude --print exited ${code}` : null,
+          error: code !== 0 ? `${bin} exited ${code}` : null,
         });
         console.log(`[daemon] cron-print: "${cron.name}" on "${agentName}" finished (exit=${code}, ${duration_ms}ms)`);
         if (code === 0) resolve();
-        else reject(new Error(`claude --print exited ${code} for cron "${cron.name}" on agent "${agentName}"`));
+        else reject(new Error(`${bin} exited ${code} for cron "${cron.name}" on agent "${agentName}"`));
       });
 
       child.on('error', (err: Error) => {
-        reject(new Error(`Failed to spawn claude --print for cron "${cron.name}": ${err.message}`));
+        reject(new Error(`Failed to spawn ${bin} for cron "${cron.name}": ${err.message}`));
       });
     });
   }

@@ -32,7 +32,7 @@ interface SettingsTabProps {
 }
 
 const APPROVAL_CATEGORIES = ['external-comms', 'financial', 'deployment', 'data-deletion'] as const;
-const RUNTIME_OPTIONS = ['claude-code', 'hermes'] as const;
+const RUNTIME_OPTIONS = ['claude-code', 'codex-app-server', 'hermes'] as const;
 
 type MessageState = { type: 'success' | 'error'; text: string } | null;
 
@@ -336,10 +336,14 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
           <div>
             <label className="text-xs text-muted-foreground">Cron Delivery Mode</label>
             {(() => {
-              const printSupported = !config.runtime || config.runtime === 'claude-code';
+              const runtime = config.runtime ?? 'claude-code';
+              const printSupported = runtime === 'claude-code' || runtime === 'codex-app-server';
               const printDisabledTitle = printSupported
                 ? undefined
-                : `Print mode requires claude-code runtime. Current runtime (${config.runtime}) does not support --print.`;
+                : `Print mode is not supported for runtime "${runtime}".`;
+              const printDescription = runtime === 'codex-app-server'
+                ? 'Spawn fresh `codex exec --ephemeral` per fire. No persisted thread, stateless.'
+                : 'Spawn fresh `claude --print` subprocess. Stateless, ~10x cheaper for old sessions.';
               return (
                 <div className="mt-1.5 flex rounded-md border bg-background overflow-hidden">
                   {(['inject', 'print'] as const).map((mode) => {
@@ -366,8 +370,8 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
                         <span className="font-semibold capitalize">{mode}</span>
                         <span className="block mt-0.5 text-[10px] font-normal leading-snug opacity-80">
                           {mode === 'inject'
-                            ? 'Inject into live --continue session. Stateful, context grows over time.'
-                            : 'Spawn fresh --print subprocess. Stateless, ~10x cheaper for old sessions.'}
+                            ? 'Inject into live session. Stateful, context grows over time.'
+                            : printDescription}
                         </span>
                       </button>
                     );
@@ -375,9 +379,9 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
                 </div>
               );
             })()}
-            {config.runtime && config.runtime !== 'claude-code' && (
+            {config.runtime && config.runtime !== 'claude-code' && config.runtime !== 'codex-app-server' && (
               <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-                Print mode is only available for claude-code runtime.
+                Print mode is not supported for runtime "{config.runtime}".
               </p>
             )}
           </div>

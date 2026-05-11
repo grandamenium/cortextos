@@ -199,16 +199,16 @@ export interface AgentConfig {
    * Cron delivery mode. Defaults to 'inject' (existing behaviour — prompt is
    * injected into the running PTY session, accumulating in context).
    *
-   * 'print' spawns `claude --print` as a one-shot subprocess for each cron
-   * fire.  The subprocess runs with a clean slate (no session history) and its
-   * output is logged to the cron execution log rather than fed back into the
-   * PTY.  This eliminates per-cron context growth for agents whose recurring
-   * tasks don't need access to conversation history (heartbeat, check-approvals,
-   * morning-review, etc.).
+   * 'print' spawns a one-shot subprocess for each cron fire with no session
+   * continuity. Output is logged to the cron execution log rather than fed
+   * back into the PTY, so per-cron context growth is eliminated.
+   *   - claude-code → `claude --print --dangerously-skip-permissions ...`
+   *   - codex-app-server → `codex exec --ephemeral --ask-for-approval never
+   *     --sandbox danger-full-access --skip-git-repo-check ...`
    *
    * Agents that require session continuity for cron tasks (e.g. commander,
-   * analyst) should keep 'inject'.  Agents with the hermes runtime should also
-   * keep 'inject' — 'print' only applies to claude-code agents.
+   * analyst) should keep 'inject'. The hermes runtime does not support 'print'
+   * and silently falls back to 'inject' with a warning.
    */
   cron_mode?: 'inject' | 'print';
 }
