@@ -64,14 +64,16 @@ At $500/month ($16.67/day), splitting across more than 2 ad sets fragments the s
 | Setting | Value |
 |---------|-------|
 | Geography | Ontario (all) |
-| Age | 50–70 |
+| Age | All *(see compliance note below)* |
 | Gender | All |
 | Interests | `Minimalism` (one interest only — do not stack) |
 | Placements | Auto |
 | Expected CPL | $30–45 CAD |
 | Creative load | 2 ads (Angle 2 — lifestyle/downsizer hooks only) |
 
-**Purpose:** Test whether a narrow downsizer set outperforms broad on the same creative. Kill if CPL runs 25%+ higher than Ad Set A after 2 weeks + $100 spend. If it matches or beats broad, it may warrant its own budget at $800+/month.
+**Purpose:** Test whether a downsizer-creative set outperforms broad on the same audience. Kill if CPL runs 25%+ higher than Ad Set A after 2 weeks + $100 spend.
+
+**COMPLIANCE NOTE (updated 2026-05-11):** Housing Special Ad Category (which applies to residential construction/tiny homes) prohibits age, gender, and postal code targeting. The original age 50-70 targeting is not permitted. Ad Set B must rely on creative differentiation only (Angle 2 lifestyle/downsizer hook) to self-select the downsizer audience — Meta's algorithm will find them via creative signal. This is actually consistent with the Andromeda broad-targeting strategy. Remove the age range at setup.
 
 ---
 
@@ -185,10 +187,13 @@ When Meta BM and pixel are confirmed:
 1. Create Pixel in Meta Events Manager → install on titantinyhomes.ca (1 line in `<head>`)
 2. Verify pixel is firing via Meta Pixel Helper Chrome extension
 3. Create Lead Gen campaign (CBO, $16.67/day)
-4. Create Ad Set A (Broad Ontario)
-5. Create Ad Set B (Downsizer — 50–70, Minimalism interest)
+   - **File campaign under "Housing" Special Ad Category** — required for residential construction; failure to do so causes ad rejection
+4. Create Ad Set A (Broad Ontario — no age/gender targeting per Housing SAC)
+5. Create Ad Set B (Downsizer — Minimalism interest only; no age targeting per Housing SAC)
 6. Build lead form "Talk to Joey"
 7. Load Angle 1 + Angle 2 ads into each ad set
+   - **Audit Advantage+ Creative enhancements before launch** — all are ON by default since Feb 2026. Disable: background generation, music overlays. Evaluate: text variations, contrast. Keep: aspect ratio adjustments.
+   - **Check creative assets for AI-generated/AI-modified content** — disclosure label required by Meta since March 2026 if any AI-assisted visuals are used
 8. Launch — note launch date and time
 9. Do not touch for 14 days
 10. Day 14 review: kill underperformers, add Angles 3 + 4

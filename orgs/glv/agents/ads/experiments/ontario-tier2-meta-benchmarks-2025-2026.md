@@ -1,6 +1,6 @@
 # Ontario Tier-2 Meta Ads Benchmarks: Refreshed Research
 **Prepared by:** GLV Marketing (ads agent)
-**Date:** 2026-05-04
+**Date:** 2026-05-04 | **Refreshed:** 2026-05-11
 **Purpose:** Refresh and expand the proxy baseline in `cpl-null-recovery-proposal.md` with 2025-2026 sourced data. Read in conjunction with that file.
 
 ---
@@ -342,3 +342,67 @@ All sources accessed May 2026:
 - [LocaliQ — Facebook Advertising Benchmarks for 2025](https://localiq.com/blog/facebook-advertising-benchmarks/)
 
 *Note: cyberlinkdigital.com real estate Andromeda article cited Indian market (rupee pricing) — excluded from CAD calculations.*
+
+---
+
+## May 11 Refresh — New Findings (pass date: 2026-05-11)
+
+### HIGH PRIORITY — Actionable at Stage 4 Campaign Setup
+
+**1. Advantage+ Creative defaults ON for all new Lead campaigns (since Feb 2026)**
+Source: SocialBee (May 8, 2026) + Prism ME | Confidence: HIGH
+
+Since February 2026, all new campaigns under the Leads objective launch with ALL Advantage+ Creative enhancements pre-selected. Meta will automatically apply visual modifications (cropping, aspect ratio changes, background generation, text variations, music overlays) to ad assets unless explicitly disabled per enhancement.
+
+Titan implication: UGC creative authenticity is the primary creative strategy — unmodified phone-shot Joey/Kathryn clips. Automatic Advantage+ Creative modifications risk undermining that authenticity. At Stage 4 setup, explicitly review and selectively disable per enhancement. Recommended approach:
+- DISABLE: Background generation, music overlays, image expansion (for video)
+- EVALUATE: Text variations, image brightness/contrast (low risk)
+- KEEP: Aspect ratio adjustments for placement fit
+
+**2. Housing Special Ad Category — 15-mile minimum radius; age/gender targeting prohibited**
+Source: Mediastrobe/Medium (March 2026) | Confidence: HIGH
+
+Under Meta's Housing Special Ad Category (which applies to real estate and residential construction), geo-targeting requires a minimum 15-mile radius. Age and gender targeting are prohibited. Postal code targeting is not available.
+
+Titan implications:
+- Ontario-wide targeting is compliant AND is the only compliant strategy (no SSM-only, no GTA-exclusion, no age 28-65 targeting). This aligns with the existing Andromeda broad-targeting strategy.
+- Ad Set B (Downsizer — age 50-70) is NOT compliant under Housing Special Ad Category. Age targeting is prohibited. Must redesign Ad Set B to use creative differentiation only, not age targeting.
+- Campaign must be filed under "Housing" Special Ad Category at setup. Failure to do so risks ad rejection.
+
+### MEDIUM PRIORITY — Informational / Deferred
+
+**3. AI-generated content disclosure label now required (since March 2026)**
+Source: Dataslayer | Confidence: HIGH
+
+Meta requires a disclosure label on any ad containing AI-generated or AI-modified visuals. Applies even to AI-enhanced photos (background removal, upscaling). UGC shot on-site is not affected. Flag at creative review if any AI-assisted assets are in the bundle.
+
+**4. "Describe Your Audience" natural language targeting input in Advantage+**
+Source: Prism ME | Confidence: MEDIUM (rollout not confirmed fleet-wide)
+
+Advertisers can now write a plain-English description of their ideal customer inside Advantage+ Targeting. Richer signal than interest category dropdowns. Test at Month 2 if available in the account: "Ontario homeowners interested in downsizing, sustainable living, alternative housing, or off-grid lifestyle."
+
+**5. Three new Andromeda creative KPI metrics now in Ads Manager**
+Source: Uproas, AdScale | Confidence: MEDIUM (metric names not publicly documented)
+
+Platform-native metrics now signal when a creative library is stale and needs new content. Monitor in Ads Manager at Month 1 review rather than relying solely on CPL trend.
+
+**6. Advantage+ Shopping conversion threshold reduced: 50 → 25 events/week**
+Source: Prism ME | Confidence: HIGH (but applies to Shopping objective only)
+
+Applies specifically to Advantage+ Shopping campaigns; Leads objective threshold not confirmed changed. Not actionable at $500/mo (still structurally unable to reach 25 conv/week). Worth monitoring if Titan ever tests a sales-conversion objective.
+
+### WHAT DID NOT CHANGE
+
+- SuperAds.ai Canada real estate CPL: no new data since Dec 2025 endpoint. $87 CAD benchmark holds.
+- Canada CPM: no new 2026 data. Jan 2026 trough ($9.15 USD CPM) remains most current.
+- Andromeda 10-32% CPL reduction: confirmed holding. One case study outlier ($86→$13.87 CPL within 24h after adding 8 creatives) confirms creative freshness can have nonlinear impact — not a planning figure but illustrates ceiling dynamics.
+- Real estate CPL declining 21% YoY globally (bucking cross-industry +20% trend) — consistent with lead form efficiency gains noted in May 4 pass.
+- Three persistent data gaps remain unfilled: Tier-2 Ontario city-level CPM, tiny home Canada-specific CPL, Ontario agency case study with city-level geo.
+
+### May 11 Sources
+- SocialBee — Meta & Facebook Updates May 8, 2026
+- Dataslayer — Every Meta Ads Change in 2025-2026
+- Prism ME — Meta Advantage+ Features Explained 2026
+- Uproas — Meta Andromeda Update Explained 2026
+- AdScale — Meta Andromeda Update
+- Mediastrobe/Medium — Meta Housing Ads 2026: Geo-Targeting Under Special Ad Category Restrictions
