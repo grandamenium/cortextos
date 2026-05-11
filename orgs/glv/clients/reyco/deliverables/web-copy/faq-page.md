@@ -1,9 +1,9 @@
 # Reyco Marine — FAQ Page
 **Deliverable type:** Web copy — FAQ page  
 **Platform:** reycomarine.com  
-**Experiment:** exp_1778438276_x0dxp (content-quality cycle, exp_7)  
+**Experiment:** exp_1778474757_actes (content-quality cycle, exp_8 — proof-in-every-answer revision)  
 **Surface rules applied:** NO-specific fact lede, CMI-adapted FAQ structure, named staff, Canadian English  
-**Status:** Draft — awaiting Aiden review before publishing
+**Status:** Draft v2 (exp_8 revision) — awaiting Aiden review before publishing
 
 ---
 
@@ -89,7 +89,7 @@ Walleye season on most Algoma district inland lakes opens the third Saturday in 
 
 **Do you offer financing?**
 
-Yes. We offer financing on new product purchases. Terms and approval depend on the lender. Contact us for current rates and to start the application — we do not publish rate details online because they change.
+Yes. We offer financing on new product purchases. Terms and approval depend on the lender, and rates change — which is why we don't publish them online. Talk to Casey or Aaron directly to get current options and start an application.
 
 **Do you publish service pricing?**
 
@@ -101,15 +101,15 @@ Labour rates and job estimates are provided when you book or drop off your equip
 
 **Where are you located?**
 
-Reyco Marine is located in Sault Ste. Marie, Ontario. Visit reycomarine.com for our current address and a map.
+Reyco Marine is located in Sault Ste. Marie, Ontario. We serve customers across the Algoma district — from Wawa south to Espanola and east toward Sudbury. Most customers drive in, drop off their equipment, and pick up when the work is done. Visit reycomarine.com for our current address and a map before you make the trip.
 
 **What are your hours?**
 
-Hours vary seasonally. Check reycomarine.com or call us directly for current hours before you make the trip — spring and summer hours differ from fall and winter.
+Hours vary seasonally. Spring and summer we extend our hours to handle the service rush ahead of the walleye opener and the start of lake season — that's when the schedule fills fastest. Call us or check reycomarine.com for current hours before driving in, especially in spring.
 
 **Do you ship parts?**
 
-We focus on in-person sales and service. For shipping inquiries on specific parts, call the parts counter directly.
+We focus on in-person sales and service — Sault Ste. Marie is a drive-in market and the large majority of our customers are within a day's drive of the shop. For customers further out or with time-sensitive parts needs, call Lynn or Ron at the parts counter and we'll work out the best option.
 
 ---
 
