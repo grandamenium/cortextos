@@ -272,7 +272,9 @@ export class AgentPTY {
       args.push('--continue');
     }
 
-    args.push('--dangerously-skip-permissions');
+    if (typeof process.getuid !== 'function' || process.getuid() !== 0) {
+      args.push('--dangerously-skip-permissions');
+    }
 
     if (this.config.model) {
       args.push('--model', this.config.model);

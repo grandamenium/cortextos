@@ -246,6 +246,10 @@ describe('FM-1: Disk full — ENOSPC write failure, no data loss on recovery', (
     chmodSync(readOnlyDir, 0o555);
 
     const testPath = join(readOnlyDir, 'test.json');
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
+      // Root can bypass read-only permissions on many systems; skip expectation.
+      return;
+    }
     expect(() => atomicWriteSync(testPath, '{"data":1}')).toThrow();
 
     // Restore and confirm write works
