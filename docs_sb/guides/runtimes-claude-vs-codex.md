@@ -136,12 +136,21 @@ ls ~/.codex/skills/ | grep "^<name>__" | wc -l   # should be ≥1 per skill
 
 If steps 1-5 all pass, codex is end-to-end functional for this agent.
 
+## Codex CLI version requirement
+
+The adapter (`src/pty/codex-app-server-pty.ts`) spawns codex with `--listen unix://./codex.sock`. **This requires `@openai/codex >= 0.128.0`** (the version that re-introduced `unix://` and `unix://PATH` to the `--listen` schema). Earlier versions — including `0.114.0` — only accept `stdio://` or `ws://IP:PORT` and will reject the unix-socket URL with `unsupported --listen URL`, causing `Timed out waiting for app-server socket` on every spawn attempt.
+
+Pinned today: `0.130.0`. Upgrade with `npm install -g @openai/codex@0.130.0`. Verify with `codex app-server --help | grep -A2 listen` — `unix://` must appear in the Supported values list.
+
+After upgrading codex, restart the cortextos daemon (`pm2 restart cortextos-daemon`) so already-running agents pick up the new binary's PATH lookup.
+
 ## Failure modes — what to look for
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| `unsupported --listen URL 'unix://./codex.sock'` in stdout | codex CLI < 0.128.0 (no `unix://` listener support) | `npm install -g @openai/codex@0.130.0` + `pm2 restart cortextos-daemon` |
 | `spawn ENOENT codex` in daemon log | `codex` not in PATH for the daemon's env | Restart daemon with `codex` in PATH |
-| `Timed out waiting for app-server socket` | codex crashed on startup; OpenAI auth missing or expired | `codex login status` — re-login if needed |
+| `Timed out waiting for app-server socket` (no `unsupported URL` line) | codex crashed on startup; OpenAI auth missing or expired | `codex login status` — re-login if needed |
 | Socket path > 100 bytes | Adapter falls back to `/tmp/cas-<uuid>.sock`. Expected on long org paths | Not an error; informational |
 | Boot prompt complaining about missing `AGENTS.md` | PR-A2 trim didn't preserve through merge | Re-grep `src/daemon/agent-process.ts:buildStartupPrompt` for AGENTS.md references |
 | Dashboard runtime badge shows "unknown" | `runtime` field absent in `config.json` | Run `scripts/migrate-runtime-field.ts` (backfills `runtime: claude-code` on legacy configs) |
