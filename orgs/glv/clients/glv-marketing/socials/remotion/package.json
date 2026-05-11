@@ -1,0 +1,25 @@
+{
+  "name": "glv-marketing-remotion",
+  "version": "1.0.0",
+  "description": "GLV Marketing social carousel / video pipeline",
+  "scripts": {
+    "studio": "npx remotion studio",
+    "render:carousel": "npx remotion render GLVCarousel --codec=png --output=../../../deliverables/socials/renders/",
+    "render:still": "npx remotion still GLVCarousel --frame=0 --output=../../../deliverables/socials/renders/test-001/slide-hook.png",
+    "render:all-stills": "node scripts/render-all-stills.js",
+    "render:mp4": "npx remotion render GLVCarouselVideo --gl=swiftshader --output=../../../deliverables/socials/renders/test-001/carousel.mp4"
+  },
+  "dependencies": {
+    "remotion": "^4.0.0",
+    "@remotion/cli": "^4.0.0",
+    "@remotion/renderer": "^4.0.0",
+    "@remotion/google-fonts": "^4.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}

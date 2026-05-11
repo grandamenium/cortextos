@@ -1,0 +1,4 @@
+# PNG renders are large — store locally, share via Telegram/Slack
+*.png
+*.mp4
+*.webm

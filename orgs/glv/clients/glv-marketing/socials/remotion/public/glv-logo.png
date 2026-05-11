@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en-CA">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Google tag (gtag.js) - deferred until after page load for LCP -->
+    <script>
+      window.addEventListener('load', function() {
+        var s = document.createElement('script');
+        s.src = 'https://www.googletagmanager.com/gtag/js?id=G-9GGVWB40Z4';
+        s.async = true;
+        s.onload = function() {
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          window.gtag = gtag;
+          gtag('js', new Date());
+          gtag('config', 'G-9GGVWB40Z4');
+        };
+        document.head.appendChild(s);
+      });
+    </script>
+    <!-- Preload LCP hero image -->
+    <link rel="preload" as="image" href="/hero-bg.jpg" fetchpriority="high" />
+    <!-- Preconnect to critical origins -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    
+
+    <!-- Load Google Fonts asynchronously (non-render-blocking) via JS injection -->
+    <script>
+      (function(){var l=document.createElement('link');l.rel='stylesheet';l.href='https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&display=swap';document.head.appendChild(l);})();
+    </script>
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&display=swap" /></noscript>
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="512x512" />
+    <link rel="apple-touch-icon" href="/favicon.png" />
+    <title>Digital Marketing & AI Automation in Sault Ste. Marie | GLV Marketing</title>
+    <!-- Block indexing on non-production domains -->
+    <script>
+      (function(){
+        if(window.location.hostname !== 'glvmarketing.ca'){
+          var m=document.createElement('meta');
+          m.name='robots';m.content='noindex,nofollow';
+          document.head.appendChild(m);
+        }
+      })();
+    </script>
+    <meta name="author" content="GLV Marketing" />
+    <meta name="geo.region" content="CA-ON" />
+    <meta name="geo.placename" content="Sault Ste. Marie" />
+    <script type="module" crossorigin src="/assets/index-CRMsSRSD.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BAmm-ih2.css">
+      <meta property="og:title" content="Digital Marketing & AI Automation in Sault Ste. Marie | GLV Marketing" />
+    <meta name="twitter:title" content="Digital Marketing & AI Automation in Sault Ste. Marie | GLV Marketing" />
+    <meta name="description" content="GLV Marketing is Sault Ste. Marie's leading digital marketing agency. We deliver AI automation, paid advertising, lead generation, web development, and Generative Engine Optimization (GEO) for local businesses in Northern Ontario." />
+    <meta property="og:description" content="GLV Marketing is Sault Ste. Marie's leading digital marketing agency. We deliver AI automation, paid advertising, lead generation, web development, and Generative Engine Optimization (GEO) for local businesses in Northern Ontario." />
+    <meta name="twitter:description" content="GLV Marketing is Sault Ste. Marie's leading digital marketing agency. We deliver AI automation, paid advertising, lead generation, web development, and Generative Engine Optimization (GEO) for local businesses in Northern Ontario." />
+    <link rel="canonical" href="https://glvmarketing.ca/" />
+    <meta property="og:url" content="https://glvmarketing.ca/" />
+    <link rel="alternate" hreflang="en-CA" href="https://glvmarketing.ca/" />
+    <link rel="alternate" hreflang="x-default" href="https://glvmarketing.ca/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="en_CA" />
+    <meta property="og:site_name" content="GLV Marketing" />
+    <meta property="og:image" content="https://glvmarketing.ca/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@GLVMarketing" />
+    <meta name="twitter:image" content="https://glvmarketing.ca/og-image.png" />
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"LocalBusiness","name":"GLV Marketing","description":"GLV Marketing delivers revenue-focused digital marketing, AI automation, and lead generation for local businesses in Sault Ste. Marie and Northern Ontario.","url":"https://glvmarketing.ca","telephone":"+17059750579","email":"info@glvmarketing.ca","openingHours":["Mo-Fr 09:00-18:00","Sa-Su 10:00-18:00"],"address":{"@type":"PostalAddress","addressLocality":"Sault Ste. Marie","addressRegion":"Ontario","addressCountry":"CA"},"areaServed":"Sault Ste. Marie, Northern Ontario, Canada"}</script>
+    <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"GLV Marketing","url":"https://glvmarketing.ca","publisher":{"@type":"Organization","name":"GLV Marketing","url":"https://glvmarketing.ca"}}</script>
+  </head>
+
+  <body style="background:#0d0d0d;">
+    <div id="root">
+      <!-- Static fallback for crawlers/bots/AI. Visible by default, hidden when React mounts. -->
+      <div id="static-fallback" style="background:#0d0d0d;color:#f2f2f2;font-family:system-ui,sans-serif;min-height:100vh;">
+        <header style="padding:1rem 2rem;">
+          <h1 style="font-size:1.5rem;margin:0;">GLV Marketing — Digital Marketing Agency in Sault Ste. Marie</h1>
+          <p>AI Automation, Lead Generation &amp; Web Development for Northern Ontario Businesses</p>
+          <nav>
+            <a href="/" style="color:#f2f2f2;margin-right:1rem;">Home</a>
+            <a href="/services" style="color:#f2f2f2;margin-right:1rem;">Services</a>
+            <a href="/about" style="color:#f2f2f2;margin-right:1rem;">About</a>
+            <a href="/blog" style="color:#f2f2f2;margin-right:1rem;">Blog</a>
+            <a href="/contact" style="color:#f2f2f2;">Contact</a>
+          </nav>
+        </header>
+        <main style="padding:2rem;">
+
+          <!-- HOME -->
+          <section>
+            <img src="/hero-bg.jpg" alt="GLV Marketing hero background" width="1704" height="1080" fetchpriority="high" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;" />
+            <h2>More Customers. More Sales. More Growth.</h2>
+            <p>We help local businesses get more customers using smart technology and modern marketing. Our tools do the hard work so you can focus on what you do best.</p>
+          </section>
+
+          <!-- SERVICES OVERVIEW -->
+          <section>
+            <h2>Our Digital Marketing Services</h2>
+            <ul>
+              <li><strong>AI Automation:</strong> Let smart tools handle boring, repetitive tasks so you can save time and get more done.</li>
+              <li><strong>Generative Engine Optimization (GEO):</strong> Show up when people ask AI assistants like ChatGPT or Gemini about businesses like yours.</li>
+              <li><strong>Paid Advertising:</strong> Run ads on social media that reach the right people and bring real customers to your door.</li>
+              <li><strong>Lead Generation:</strong> Turn website visitors into paying customers with smart follow-up emails and easy-to-use forms.</li>
+              <li><strong>Web Development:</strong> Get a fast, good-looking website that works great on phones and helps people find you online.</li>
+              <li><strong>Local SEO:</strong> Dominate local search results so customers in your area find you first on Google.</li>
+            </ul>
+          </section>
+
+          <!-- WHY GLV -->
+          <section>
+            <h2>Why Local Businesses Choose GLV Marketing</h2>
+            <ul>
+              <li><strong>Locally Owned:</strong> We live and work right here in Sault Ste. Marie.</li>
+              <li><strong>Focused on Results:</strong> Everything we do is meant to bring you more customers and more money.</li>
+              <li><strong>Smart Technology:</strong> We use AI tools to give your small business the same power that big companies have.</li>
+            </ul>
+          </section>
+
+          <!-- SERVICES DETAIL -->
+          <section>
+            <h2>Digital Marketing Services in Sault Ste. Marie</h2>
+            <p>Everything we offer is built to help your business grow. No fluff. No confusing numbers. Just real results.</p>
+
+            <h3>AI Automation &amp; Systems</h3>
+            <p>Doing the same tasks over and over wastes your team's time. We set up smart tools that handle the boring stuff for you — like following up with leads, sorting tasks, and keeping your business running around the clock.</p>
+
+            <h3>Generative Engine Optimization (AI Search)</h3>
+            <p>When people ask ChatGPT, Gemini, or Copilot for help finding a business like yours, your competitors show up and you don't. We make sure AI assistants know about your business so they recommend you.</p>
+
+            <h3>Paid Ads on Meta, TikTok &amp; Reddit</h3>
+            <p>We build ads that reach the right people, test what works best, and track every dollar so you know exactly what you're getting.</p>
+
+            <h3>Lead Generation &amp; Email Follow-Up</h3>
+            <p>We build pages that collect contact info and set up automatic emails that follow up, build trust, and turn visitors into buyers.</p>
+
+            <h3>Website Design &amp; Management</h3>
+            <p>We build fast, modern websites that look great on phones, help people find you on Google, and turn visitors into paying customers.</p>
+
+            <h3>Local SEO</h3>
+            <p>We help your business dominate local search results so customers in your area find you first on Google.</p>
+          </section>
+
+          <!-- FAQ -->
+          <section>
+            <h2>Frequently Asked Questions</h2>
+            <h3>What services does GLV Marketing offer in Sault Ste. Marie?</h3>
+            <p>We offer AI automation, Generative Engine Optimization (GEO), paid ads on Meta/TikTok/Reddit, lead generation, and website design for businesses in Sault Ste. Marie and Northern Ontario.</p>
+            <h3>How much does marketing cost for a small business?</h3>
+            <p>Every plan is built around your goals and budget. Book a free call and we'll put together a plan that fits what your business actually needs.</p>
+            <h3>What is Generative Engine Optimization (GEO) and why do I need it?</h3>
+            <p>GEO helps your business show up when people use AI tools like ChatGPT or Gemini to look for services in your area. It's the next step beyond regular SEO.</p>
+            <h3>Do you work with businesses outside Sault Ste. Marie?</h3>
+            <p>Yes! We're based in Sault Ste. Marie and focus on Northern Ontario, but we work with businesses all across Canada.</p>
+            <h3>How long does it take to see results?</h3>
+            <p>Paid ads can bring in leads within days. SEO and GEO build up over weeks and months. We'll set clear expectations during your free consultation.</p>
+          </section>
+
+          <!-- ABOUT -->
+          <section>
+            <h2>About GLV Marketing</h2>
+            <p>GLV Marketing is a locally owned marketing agency in Northern Ontario. We help small and medium businesses grow online using smart tools and modern marketing.</p>
+
+            <h3>Our Mission</h3>
+            <p>To give local businesses the same online tools that big companies use. We make marketing, AI, and lead generation easy and affordable for every business in Northern Ontario.</p>
+
+            <h3>Our Vision</h3>
+            <p>A Northern Ontario where every local business can be found online, bring in new customers, and grow — no matter how small they are.</p>
+
+            <h3>Aiden Glave — CEO, Chief Executive Officer</h3>
+            <p>Aiden Glave is the founder and lead strategist behind GLV Marketing. With a background blending hands-on technical execution and performance-driven marketing, he approaches every project as a systems problem first. He specializes in AI automation, Generative Engine Optimization (GEO), lead generation funnels, website design, paid advertising, and digital workflow optimization.</p>
+
+            <h3>Ethan Roode — CCO, Chief Creative Officer</h3>
+            <p>Ethan Roode is a multidisciplinary creative and digital strategist. His work sits at the intersection of creativity, digital marketing, and emerging technology — building solutions that reduce friction, save time, and help businesses show up more clearly online. He specializes in brand development, content strategy, AI integration, and creative design.</p>
+
+            <h3>Why We Started</h3>
+            <p>We saw too many great local businesses struggling to get noticed online. GLV Marketing was started to fix that. We use smart technology and local know-how to build websites and systems that actually bring in money.</p>
+          </section>
+
+          <!-- CONTACT -->
+          <section>
+            <h2>Contact GLV Marketing</h2>
+            <p>Ready to grow your business? Reach out and we'll get back to you within 24 hours.</p>
+            <p>Email: <a href="/cdn-cgi/l/email-protection#71181f171e31161d071c10031a1405181f165f1210"><span class="__cf_email__" data-cfemail="bcd5d2dad3fcdbd0cad1ddced7d9c8d5d2db92dfdd">[email&#160;protected]</span></a> | Phone: <a href="tel:+17059750579">(705) 975-0579</a></p>
+            <p>Location: Sault Ste. Marie, Ontario, Canada</p>
+            <p>Hours: Weekdays 9:00 AM - 6:00 PM, Weekends 10:00 AM - 6:00 PM</p>
+          </section>
+
+          <!-- BLOG -->
+          <section>
+            <h2>Digital Marketing Blog — Tips &amp; Insights</h2>
+            <p>Read actionable insights on digital marketing, AI automation, lead generation, and local business growth from GLV Marketing in Sault Ste. Marie.</p>
+            <p><a href="/blog" style="color:#f2f2f2;">View all blog posts</a></p>
+          </section>
+
+          <!-- PRIVACY SUMMARY -->
+          <section>
+            <h2>Privacy Policy</h2>
+            <p>GLV Marketing is committed to protecting your privacy. We collect contact information, business information, and usage data to provide our digital marketing, AI automation, and advertising services. We comply with PIPEDA and CASL. We do not sell your personal information. For full details, visit our <a href="/privacy" style="color:#f2f2f2;">Privacy Policy</a> page.</p>
+          </section>
+
+          <!-- TERMS SUMMARY -->
+          <section>
+            <h2>Terms &amp; Conditions</h2>
+            <p>By using our website or engaging our services, you agree to our terms. GLV Marketing provides AI automation, Generative Engine Optimization (GEO), paid advertising, lead generation, and web development. All pricing is in Canadian Dollars. For full details, visit our <a href="/terms" style="color:#f2f2f2;">Terms &amp; Conditions</a> page.</p>
+          </section>
+
+        </main>
+        <footer style="padding:1rem 2rem;border-top:1px solid #333;">
+          <p>&copy; 2026 GLV Marketing. All rights reserved. | <a href="/privacy" style="color:#f2f2f2;">Privacy Policy</a> | <a href="/terms" style="color:#f2f2f2;">Terms &amp; Conditions</a></p>
+          <p>GLV Marketing — Digital Marketing &amp; AI Automation in Sault Ste. Marie, Ontario, Canada</p>
+        </footer>
+      </div>
+      <!-- /static-fallback -->
+    </div>
+    <!-- Third-party scripts loaded dynamically after cookie consent -->
+  <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script></body>
+</html>
