@@ -18,6 +18,7 @@ interface AgentConfig {
   max_crashes_per_day?: number;
   startup_delay?: number;
   runtime?: 'claude-code' | 'codex-app-server' | 'hermes';
+  cron_mode?: 'inject' | 'print';
 }
 
 const MODEL_PLACEHOLDER: Record<NonNullable<AgentConfig['runtime']>, string> = {
@@ -31,6 +32,7 @@ interface SettingsTabProps {
 }
 
 const APPROVAL_CATEGORIES = ['external-comms', 'financial', 'deployment', 'data-deletion'] as const;
+const RUNTIME_OPTIONS = ['claude-code', 'hermes'] as const;
 
 type MessageState = { type: 'success' | 'error'; text: string } | null;
 
@@ -57,7 +59,16 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
     fetch(`/api/agents/${encodeURIComponent(agentName)}/config`, { signal: controller.signal })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       .then(d => {
-        if (!controller.signal.aborted && d.config) setConfig(d.config);
+        if (!controller.signal.aborted && d.config) {
+          const nextConfig = { ...d.config } as AgentConfig;
+          if (!nextConfig.runtime) {
+            nextConfig.runtime = 'claude-code';
+          }
+          if (!nextConfig.cron_mode) {
+            nextConfig.cron_mode = 'inject';
+          }
+          setConfig(nextConfig);
+        }
         if (!controller.signal.aborted) setLoading(false);
       })
       .catch(err => { if (err.name !== 'AbortError') setLoading(false); });
@@ -148,14 +159,21 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
   const saveAgConfig = () =>
     saveSection(
       {
+        runtime: config.runtime,
         model: config.model,
         max_session_seconds: config.max_session_seconds,
         max_crashes_per_day: config.max_crashes_per_day,
         startup_delay: config.startup_delay,
+        cron_mode: config.cron_mode,
       },
       setAgSaving,
       setAgMessage,
     );
+
+  const handleRuntimeChange = (value: string) => {
+    const runtime = value as AgentConfig['runtime'];
+    setConfig((prev) => ({ ...prev, runtime }));
+  };
 
   if (loading) {
     return <div className="p-6 text-muted-foreground">Loading settings...</div>;
@@ -295,6 +313,75 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
           <CardTitle className="text-sm font-medium">Agent Config</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div>
+            <label className="text-xs text-muted-foreground">Runtime</label>
+            <select
+              value={config.runtime || ''}
+              onChange={e => handleRuntimeChange(e.target.value)}
+              className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
+            >
+              <option value="">Select runtime</option>
+              {RUNTIME_OPTIONS.map(rt => (
+                <option key={rt} value={rt}>
+                  {rt}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Runtime determines which CLI is used to launch the agent.
+            </p>
+          </div>
+
+          {/* Cron Delivery Mode */}
+          <div>
+            <label className="text-xs text-muted-foreground">Cron Delivery Mode</label>
+            {(() => {
+              const printSupported = !config.runtime || config.runtime === 'claude-code';
+              const printDisabledTitle = printSupported
+                ? undefined
+                : `Print mode requires claude-code runtime. Current runtime (${config.runtime}) does not support --print.`;
+              return (
+                <div className="mt-1.5 flex rounded-md border bg-background overflow-hidden">
+                  {(['inject', 'print'] as const).map((mode) => {
+                    const isActive = (config.cron_mode ?? 'inject') === mode;
+                    const isDisabled = mode === 'print' && !printSupported;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        disabled={isDisabled}
+                        title={isDisabled ? printDisabledTitle : undefined}
+                        onClick={() => !isDisabled && setConfig(p => ({ ...p, cron_mode: mode }))}
+                        className={[
+                          'flex-1 px-3 py-2 text-xs font-medium transition-colors text-left',
+                          isActive && !isDisabled
+                            ? mode === 'print'
+                              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-r last:border-r-0 border-border'
+                              : 'bg-primary text-primary-foreground border-r last:border-r-0 border-border'
+                            : isDisabled
+                              ? 'opacity-40 cursor-not-allowed text-muted-foreground border-r last:border-r-0 border-border'
+                              : 'text-muted-foreground hover:bg-muted border-r last:border-r-0 border-border',
+                        ].join(' ')}
+                      >
+                        <span className="font-semibold capitalize">{mode}</span>
+                        <span className="block mt-0.5 text-[10px] font-normal leading-snug opacity-80">
+                          {mode === 'inject'
+                            ? 'Inject into live --continue session. Stateful, context grows over time.'
+                            : 'Spawn fresh --print subprocess. Stateless, ~10x cheaper for old sessions.'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+            {config.runtime && config.runtime !== 'claude-code' && (
+              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                Print mode is only available for claude-code runtime.
+              </p>
+            )}
+          </div>
+
           <div>
             <label className="text-xs text-muted-foreground">Model</label>
             <input

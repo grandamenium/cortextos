@@ -57,6 +57,7 @@ interface CronSummaryRow {
   lastFire: string | null;
   lastStatus: 'fired' | 'retried' | 'failed' | null;
   nextFire: string;
+  agentCronMode?: 'inject' | 'print';
 }
 
 interface CronExecutionEntry {
@@ -640,9 +641,24 @@ export default function WorkflowsPage() {
                             </span>
                           </td>
                           <td className="py-2.5 pr-4">
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <IconClock size={13} className="text-muted-foreground shrink-0" />
                               <span>{row.cron.name}</span>
+                              {row.agentCronMode === 'print' ? (
+                                <span
+                                  className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold tracking-wide bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                                  title="Cron prompts run via claude --print (fresh subprocess, no session history)"
+                                >
+                                  PRINT
+                                </span>
+                              ) : (
+                                <span
+                                  className="inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold tracking-wide bg-muted text-muted-foreground border border-border"
+                                  title="Cron prompts inject into the long-lived --continue session"
+                                >
+                                  INJECT
+                                </span>
+                              )}
                               <button
                                 className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 text-muted-foreground hover:text-foreground"
                                 title="Open detail page"

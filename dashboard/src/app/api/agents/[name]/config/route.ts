@@ -68,13 +68,27 @@ export async function PATCH(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'communication_style', 'approval_rules', 'max_session_seconds', 'max_crashes_per_day', 'startup_delay', 'model', 'ctx_warning_threshold', 'ctx_handoff_threshold'];
+  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'communication_style', 'approval_rules', 'runtime', 'max_session_seconds', 'max_crashes_per_day', 'startup_delay', 'model', 'ctx_warning_threshold', 'ctx_handoff_threshold', 'cron_mode'];
+  const runtimeValues = ['claude-code', 'hermes'] as const;
+  const cronModeValues = ['inject', 'print'] as const;
   const timeRegex = /^\d{2}:\d{2}$/;
   if (body.day_mode_start && !timeRegex.test(body.day_mode_start as string)) {
     return Response.json({ error: 'day_mode_start must be HH:MM' }, { status: 400 });
   }
   if (body.day_mode_end && !timeRegex.test(body.day_mode_end as string)) {
     return Response.json({ error: 'day_mode_end must be HH:MM' }, { status: 400 });
+  }
+
+  if (body.runtime !== undefined) {
+    if (typeof body.runtime !== 'string' || !runtimeValues.includes(body.runtime as typeof runtimeValues[number])) {
+      return Response.json({ error: 'runtime must be one of claude-code, hermes' }, { status: 400 });
+    }
+  }
+
+  if (body.cron_mode !== undefined) {
+    if (typeof body.cron_mode !== 'string' || !cronModeValues.includes(body.cron_mode as typeof cronModeValues[number])) {
+      return Response.json({ error: 'cron_mode must be one of inject, print' }, { status: 400 });
+    }
   }
 
   // Validate approval_rules shape

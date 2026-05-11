@@ -16,7 +16,7 @@
 import fs from 'fs';
 import path from 'path';
 import { NextRequest } from 'next/server';
-import { CTX_ROOT, getAllAgents } from '@/lib/config';
+import { CTX_ROOT, getAllAgents, getAgentDir } from '@/lib/config';
 import { parseDurationMs } from '@/lib/cron-utils';
 import { IPCClient } from '@/lib/ipc-client';
 
@@ -54,6 +54,7 @@ export interface CronSummaryRow {
   lastFire: string | null;
   lastStatus: 'fired' | 'retried' | 'failed' | null;
   nextFire: string;
+  agentCronMode: 'inject' | 'print';
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,16 @@ export interface CronSummaryRow {
 // ---------------------------------------------------------------------------
 
 const CRONS_DIR = '.cortextOS/state/agents';
+
+function readAgentCronMode(agentName: string, org: string): 'inject' | 'print' {
+  try {
+    const configPath = path.join(getAgentDir(agentName, org), 'config.json');
+    if (!fs.existsSync(configPath)) return 'inject';
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (config.cron_mode === 'print') return 'print';
+  } catch { /* fall through */ }
+  return 'inject';
+}
 
 function readAgentCrons(agentName: string): CronDefinition[] {
   const filePath = path.join(CTX_ROOT, CRONS_DIR, agentName, 'crons.json');
@@ -119,6 +130,7 @@ export async function GET(request: NextRequest) {
 
     for (const agent of agents) {
       const crons = readAgentCrons(agent.name);
+      const agentCronMode = readAgentCronMode(agent.name, agent.org);
       for (const cron of crons) {
         if (searchFilter && !cron.name.toLowerCase().includes(searchFilter)) continue;
 
@@ -131,6 +143,7 @@ export async function GET(request: NextRequest) {
           lastFire: lastEntry?.ts ?? null,
           lastStatus: lastEntry?.status ?? null,
           nextFire: computeNextFire(cron.schedule, cron.last_fired_at, now),
+          agentCronMode,
         });
       }
     }

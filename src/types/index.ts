@@ -195,6 +195,22 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * Cron delivery mode. Defaults to 'inject' (existing behaviour — prompt is
+   * injected into the running PTY session, accumulating in context).
+   *
+   * 'print' spawns `claude --print` as a one-shot subprocess for each cron
+   * fire.  The subprocess runs with a clean slate (no session history) and its
+   * output is logged to the cron execution log rather than fed back into the
+   * PTY.  This eliminates per-cron context growth for agents whose recurring
+   * tasks don't need access to conversation history (heartbeat, check-approvals,
+   * morning-review, etc.).
+   *
+   * Agents that require session continuity for cron tasks (e.g. commander,
+   * analyst) should keep 'inject'.  Agents with the hermes runtime should also
+   * keep 'inject' — 'print' only applies to claude-code agents.
+   */
+  cron_mode?: 'inject' | 'print';
 }
 
 export interface CronEntry {

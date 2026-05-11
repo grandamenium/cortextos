@@ -374,6 +374,61 @@ export class AgentProcess {
     return this.config;
   }
 
+  /**
+   * Build the environment for a `claude --print` cron subprocess.
+   * Mirrors AgentPTY.spawn()'s ptyEnv construction: system vars, CTX_* from
+   * CtxEnv, org secrets.env, agent .env, and convenience aliases.
+   */
+  getPrintSubprocessEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+
+    const keepVars = [
+      'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
+      'TMPDIR', 'TEMP', 'TMP', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY',
+      'NODE_PATH',
+    ];
+    for (const key of keepVars) {
+      if (process.env[key]) env[key] = process.env[key]!;
+    }
+
+    env['CTX_INSTANCE_ID']    = this.env.instanceId;
+    env['CTX_ROOT']           = this.env.ctxRoot;
+    env['CTX_FRAMEWORK_ROOT'] = this.env.frameworkRoot;
+    env['CTX_AGENT_NAME']     = this.env.agentName;
+    env['CTX_ORG']            = this.env.org;
+    env['CTX_AGENT_DIR']      = this.env.agentDir;
+    env['CTX_PROJECT_ROOT']   = this.env.projectRoot;
+    env['CRM_AGENT_NAME']     = this.env.agentName;
+
+    const loadEnvFile = (filePath: string) => {
+      if (!existsSync(filePath)) return;
+      try {
+        const content = readFileSync(filePath, 'utf-8');
+        for (const line of content.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const eqIdx = trimmed.indexOf('=');
+          if (eqIdx > 0) env[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
+        }
+      } catch { /* skip unreadable env files */ }
+    };
+
+    if (this.env.org && this.env.projectRoot) {
+      loadEnvFile(join(this.env.projectRoot, 'orgs', this.env.org, 'secrets.env'));
+    }
+    loadEnvFile(join(this.env.agentDir, '.env'));
+
+    if (env['CHAT_ID']) env['CTX_TELEGRAM_CHAT_ID'] = env['CHAT_ID'];
+    if (this.config.timezone) {
+      env['CTX_TIMEZONE'] = this.config.timezone;
+      env['TZ'] = this.config.timezone;
+    } else if (process.env.TZ) {
+      env['CTX_TIMEZONE'] = process.env.TZ;
+    }
+
+    return env;
+  }
+
   // --- Private methods ---
 
   private handleExit(exitCode: number): void {
