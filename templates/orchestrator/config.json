@@ -1,8 +1,9 @@
 {
   "agent_name": "{{agent_name}}",
   "enabled": true,
+  "model": "sonnet",
   "startup_delay": 0,
-  "max_session_seconds": 255600,
+  "max_session_seconds": 28800,
   "max_crashes_per_day": 10,
   "working_directory": "",
   "timezone": "",
@@ -47,5 +48,7 @@
   ],
   "ecosystem": {
     "local_version_control": { "enabled": true }
-  }
+  },
+  "ctx_warning_threshold": 70,
+  "ctx_handoff_threshold": 80
 }
