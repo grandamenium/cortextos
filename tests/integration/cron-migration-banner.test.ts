@@ -235,8 +235,10 @@ describe('migrateCronsForAgent — cron-teaching upgrade banner', () => {
   it('survives a corrupt config.json without throwing through the advisory', () => {
     const configPath = join(tmpAgentDir, 'config.json');
     writeFileSync(configPath, '{ not valid json', 'utf-8');
+    // PR-A2: AGENT_TOP_FILES is now ['CLAUDE.md']. Plant the stale teaching on
+    // CLAUDE.md so the scanner picks it up.
     writeAgentFile(
-      'AGENTS.md',
+      'CLAUDE.md',
       'Use `CronCreate` for the heartbeat.\nEdit config.json to register a cron.',
     );
 

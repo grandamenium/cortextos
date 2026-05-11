@@ -129,14 +129,17 @@ describe('scanFile — apply mode (literal substitutions)', () => {
 });
 
 describe('listAgentFiles', () => {
-  it('returns CLAUDE.md / AGENTS.md / ONBOARDING.md when present', () => {
+  it('returns CLAUDE.md only (PR-A2: AGENTS/ONBOARDING removed)', () => {
     write('CLAUDE.md', 'a\n');
+    // AGENTS.md and ONBOARDING.md are no longer scanned by AGENT_TOP_FILES;
+    // they're written here to verify they're NOT picked up even when present.
     write('AGENTS.md', 'b\n');
     write('ONBOARDING.md', 'c\n');
     const files = listAgentFiles(workDir);
-    expect(files.map((f) => f.split('/').pop())).toEqual(
-      expect.arrayContaining(['CLAUDE.md', 'AGENTS.md', 'ONBOARDING.md']),
-    );
+    const basenames = files.map((f) => f.split('/').pop());
+    expect(basenames).toContain('CLAUDE.md');
+    expect(basenames).not.toContain('AGENTS.md');
+    expect(basenames).not.toContain('ONBOARDING.md');
   });
 
   it('walks .claude/skills/**/SKILL.md', () => {
@@ -158,8 +161,11 @@ describe('listAgentFiles', () => {
 
 describe('scanAgentDir', () => {
   it('scans top files + skills, separates sentinel-skipped files', () => {
-    write('CLAUDE.md', 'Use CronCreate to register heartbeat.\n');
-    write('AGENTS.md', 'Heartbeat (configured in config.json).\n');
+    // PR-A2: AGENT_TOP_FILES is now ['CLAUDE.md'] only. Put the stale patterns
+    // on CLAUDE.md + a skill file so we still get 2 matches, and put the
+    // sentinel on a separate skill so it skips one file.
+    write('CLAUDE.md',
+      'Use CronCreate to register heartbeat.\nHeartbeat (configured in config.json).\n');
     write('.claude/skills/cron-management/SKILL.md',
       'Never use /loop or CronCreate for persistent recurring work.\n');
     write('.claude/skills/m2c1-worker/SKILL.md',
@@ -167,26 +173,26 @@ describe('scanAgentDir', () => {
 
     const r = scanAgentDir(workDir);
 
-    expect(r.scannedFiles).toHaveLength(3);
+    expect(r.scannedFiles).toHaveLength(2); // CLAUDE.md + cron-management SKILL
     expect(r.skippedSentinelFiles).toHaveLength(1);
     expect(r.skippedSentinelFiles[0]).toContain('m2c1-worker');
 
-    // Two stale matches (CLAUDE.md + AGENTS.md). The cron-management
-    // skill's sentence has "never use" which is teaching, not stale.
+    // Two stale matches in CLAUDE.md (CronCreate + configured-in-config.json).
+    // The cron-management skill's sentence has "never use" which is teaching, not stale.
     expect(r.matches).toHaveLength(2);
-    expect(r.matches.find((m) => m.file.endsWith('CLAUDE.md'))?.pattern).toBe('CronCreate');
-    expect(r.matches.find((m) => m.file.endsWith('AGENTS.md'))?.pattern).toBe(
-      '(configured in config.json)',
+    const claudeMatches = r.matches.filter((m) => m.file.endsWith('CLAUDE.md'));
+    expect(claudeMatches.map((m) => m.pattern).sort()).toEqual(
+      ['(configured in config.json)', 'CronCreate'],
     );
   });
 
   it('apply=true rewrites only the safe substitutions', () => {
-    write('AGENTS.md',
+    write('CLAUDE.md',
       'Heartbeat (configured in config.json).\nUse CronCreate to register.\n');
     const r = scanAgentDir(workDir, { apply: true });
 
     expect(r.appliedSubstitutions).toBe(1);
-    const out = readFileSync(join(workDir, 'AGENTS.md'), 'utf-8');
+    const out = readFileSync(join(workDir, 'CLAUDE.md'), 'utf-8');
     expect(out).toContain('(configured via cortextos bus add-cron)');
     // CronCreate line is still there (not safe to mechanically rewrite).
     expect(out).toContain('Use CronCreate to register.');
@@ -198,8 +204,13 @@ describe('scanAgentDir', () => {
 
 describe('groupMatchesByFile', () => {
   it('groups matches by file', () => {
+    // PR-A2: AGENT_TOP_FILES is ['CLAUDE.md'] only — second file must be a
+    // SKILL.md to exercise the multi-file grouping path.
     const fpA = write('CLAUDE.md', 'Use CronCreate.\nAnd /loop 4h heartbeat.\n');
-    const fpB = write('AGENTS.md', '(configured in config.json)\n');
+    const fpB = write(
+      '.claude/skills/cron-management/SKILL.md',
+      '(configured in config.json)\n',
+    );
     const r = scanAgentDir(workDir);
     const grouped = groupMatchesByFile(r.matches);
     expect(grouped.get(fpA)?.length).toBe(2);

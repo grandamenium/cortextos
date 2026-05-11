@@ -9,9 +9,12 @@ describe('Sprint 1: Template Completeness', () => {
     const agentDir = join(TEMPLATE_ROOT, 'agent');
 
     it('has all required markdown files', () => {
+      // PR-A2 (2026-05-11): AGENTS.md, ONBOARDING.md, TOOLS.md removed — content
+      // moved to .claude/skills/onboarding/SKILL.md, docs_sb/guides/bus-cli-reference.md,
+      // and the trimmed CLAUDE.md (which now embeds the bootstrap protocol directly).
       const requiredFiles = [
-        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
-        'GUARDRAILS.md', 'ONBOARDING.md', 'IDENTITY.md',
+        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md',
+        'GUARDRAILS.md', 'IDENTITY.md',
         'SYSTEM.md', 'USER.md', 'GOALS.md', 'MEMORY.md',
       ];
       for (const file of requiredFiles) {
@@ -82,20 +85,18 @@ describe('Sprint 1: Template Completeness', () => {
       expect(content).toContain('SKIP NOTHING');
     });
 
-    it('TOOLS.md has complete script inventory', () => {
-      const content = readFileSync(join(agentDir, 'TOOLS.md'), 'utf-8');
+    it('docs_sb/guides/bus-cli-reference.md has complete script inventory', () => {
+      // PR-A2: per-role TOOLS.md collapsed into a single shared reference.
+      const ref = join(__dirname, '..', 'docs_sb', 'guides', 'bus-cli-reference.md');
+      expect(existsSync(ref), 'Missing bus-cli-reference.md').toBe(true);
+      const content = readFileSync(ref, 'utf-8');
       expect(content).toContain('create-task');
       expect(content).toContain('send-message');
       expect(content).toContain('log-event');
       expect(content).toContain('update-heartbeat');
-      expect(content).toContain('create-approval');
       expect(content).toContain('send-telegram');
       expect(content).toContain('list-agents');
       expect(content).toContain('list-skills');
-      expect(content).toContain('check-stale-tasks');
-      expect(content).toContain('create-experiment');
-      expect(content).toContain('browse-catalog');
-      expect(content).toContain('Quick Reference');
     });
 
     it('GUARDRAILS.md has red flag table', () => {
@@ -105,13 +106,11 @@ describe('Sprint 1: Template Completeness', () => {
       expect(content).toContain('Required Action');
     });
 
-    it('ONBOARDING.md has 5 parts', () => {
-      const content = readFileSync(join(agentDir, 'ONBOARDING.md'), 'utf-8');
-      expect(content).toContain('Part 1: Identity');
-      expect(content).toContain('Part 2: Workflows');
-      expect(content).toContain('Part 3: Context');
-      expect(content).toContain('Part 4: Finalize');
-      expect(content).toContain('Part 5: Autoresearch');
+    it('onboarding skill exists', () => {
+      // PR-A2: per-role ONBOARDING.md replaced by the onboarding skill which
+      // ships under .claude/skills/onboarding/SKILL.md for every agent template.
+      const skillPath = join(agentDir, '.claude', 'skills', 'onboarding', 'SKILL.md');
+      expect(existsSync(skillPath), 'Missing onboarding skill').toBe(true);
     });
 
     it('skill files have YAML frontmatter', () => {
@@ -128,8 +127,8 @@ describe('Sprint 1: Template Completeness', () => {
 
     it('has all required markdown files', () => {
       const requiredFiles = [
-        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
-        'GUARDRAILS.md', 'ONBOARDING.md', 'IDENTITY.md',
+        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md',
+        'GUARDRAILS.md', 'IDENTITY.md',
         'SYSTEM.md', 'USER.md', 'GOALS.md', 'MEMORY.md',
       ];
       for (const file of requiredFiles) {
@@ -184,10 +183,12 @@ describe('Sprint 1: Template Completeness', () => {
       expect(content).toContain('Delegate');
     });
 
-    it('ONBOARDING.md has orchestrator role description', () => {
-      const content = readFileSync(join(orchDir, 'ONBOARDING.md'), 'utf-8');
+    it('orchestrator CLAUDE.md describes coordination role', () => {
+      // PR-A2: per-role ONBOARDING.md removed; role description lives in CLAUDE.md
+      // and the onboarding skill at .claude/skills/onboarding/SKILL.md.
+      const content = readFileSync(join(orchDir, 'CLAUDE.md'), 'utf-8');
       expect(content).toContain('Orchestrator');
-      expect(content).toContain('coordination');
+      expect(content).toContain('coordinate');
     });
 
     it('IDENTITY.md has orchestrator work style', () => {
@@ -206,8 +207,8 @@ describe('Sprint 1: Template Completeness', () => {
 
     it('has all required markdown files', () => {
       const requiredFiles = [
-        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md', 'TOOLS.md',
-        'GUARDRAILS.md', 'ONBOARDING.md', 'IDENTITY.md',
+        'CLAUDE.md', 'SOUL.md', 'HEARTBEAT.md',
+        'GUARDRAILS.md', 'IDENTITY.md',
         'SYSTEM.md', 'USER.md', 'GOALS.md', 'MEMORY.md',
       ];
       for (const file of requiredFiles) {

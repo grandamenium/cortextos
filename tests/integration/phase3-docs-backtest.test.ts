@@ -51,7 +51,14 @@ const MARKER_FILE = '.crons-migrated';
 const EXEC_LOG    = 'cron-execution.log';
 
 // Doc paths under test
-const ONBOARDING_MD        = join(ROOT, 'templates', 'agent', 'ONBOARDING.md');
+// PR-A2 (2026-05-11): per-template ONBOARDING.md removed — onboarding content
+// now lives under the per-template onboarding skill. The cron-creation Step 9
+// teaching is asserted against templates/agent/.claude/skills/onboarding/SKILL.md
+// (the skill that ships with every agent dir) below.
+const ONBOARDING_SKILL_MD  = join(ROOT, 'templates', 'agent', '.claude', 'skills', 'onboarding', 'SKILL.md');
+// Cron-creation teaching that used to live in ONBOARDING.md Step 9 now lives in
+// the cron-management skill bundled with every agent template.
+const CRON_MGMT_TEMPLATE_SKILL = join(ROOT, 'templates', 'agent', '.claude', 'skills', 'cron-management', 'SKILL.md');
 const CRONS_MIGRATION_GUIDE = join(ROOT, 'CRONS_MIGRATION_GUIDE.md');
 const SKILL_MD             = join(ROOT, 'community', 'skills', 'cron-management', 'SKILL.md');
 
@@ -148,27 +155,30 @@ function readExecLog(agentName: string): CronExecutionLogEntry[] {
 // Scenario 1: New user onboarding via ONBOARDING.md
 // ---------------------------------------------------------------------------
 
-describe('Scenario 1: New user onboarding (ONBOARDING.md Step 9)', () => {
+describe('Scenario 1: New user onboarding (cron-management skill — was ONBOARDING.md Step 9)', () => {
+  // PR-A2: per-template ONBOARDING.md was removed. The cron-creation teaching
+  // it previously carried at "Step 9" now lives in the template's
+  // cron-management skill. We assert against that skill below.
   // ---- 1a: Doc content assertions ----------------------------------------
 
-  it('1a: ONBOARDING.md exists and instructs bus add-cron for persistent crons', () => {
-    const doc = readDoc(ONBOARDING_MD);
+  it('1a: cron-management skill instructs bus add-cron for persistent crons', () => {
+    const doc = readDoc(CRON_MGMT_TEMPLATE_SKILL);
 
     // The doc must prescribe bus add-cron as the persistent cron creation command
     expect(doc).toContain('cortextos bus add-cron');
 
-    // Must describe the command signature
-    expect(doc).toMatch(/bus add-cron\s+\$CTX_AGENT_NAME\s+<workflow-name>\s+<interval>\s+<prompt>/);
+    // Must describe the command signature (skill uses <name> <interval|cron-expr>)
+    expect(doc).toMatch(/bus add-cron\s+\$CTX_AGENT_NAME\s+<[^>]+>\s+<[^>]+>\s+"?<[^>]+>"?/);
 
     // Must warn against /loop for persistent work
-    expect(doc).toMatch(/do NOT use.*\/loop.*session.only|not.*\/loop.*dies on restart/i);
+    expect(doc).toMatch(/do NOT use.*\/loop|not.*\/loop|never use.*\/loop/i);
 
     // Must mention that crons survive restarts
     expect(doc).toMatch(/survives?.*restarts?|persists?.*restart/i);
   });
 
-  it('1b: onboarding example command is copy-paste ready (has concrete interval + prompt)', () => {
-    const doc = readDoc(ONBOARDING_MD);
+  it('1b: skill example command is copy-paste ready (has concrete interval + prompt)', () => {
+    const doc = readDoc(CRON_MGMT_TEMPLATE_SKILL);
 
     // Look for a concrete interval shorthand in an add-cron line (not just <interval>)
     const lines = doc.split('\n');
@@ -177,7 +187,7 @@ describe('Scenario 1: New user onboarding (ONBOARDING.md Step 9)', () => {
       /[0-9]+[mhd]|"[0-9*\/]+ /.test(l) &&
       !/<interval>|<name>|<workflow-name>/.test(l)
     );
-    expect(concreteCronLines.length, 'ONBOARDING.md must have at least one concrete bus add-cron example').toBeGreaterThan(0);
+    expect(concreteCronLines.length, 'cron-management skill must have at least one concrete bus add-cron example').toBeGreaterThan(0);
   });
 
   // ---- 1c: Programmatic execution ----------------------------------------

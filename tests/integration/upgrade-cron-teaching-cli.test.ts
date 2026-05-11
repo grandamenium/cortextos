@@ -86,7 +86,8 @@ describe.skipIf(!existsSync(DIST_CLI))('bus upgrade-cron-teaching CLI', () => {
   });
 
   it('--apply substitutes the safe pattern but leaves CronCreate references alone', async () => {
-    const file = writeAgentFile('mixed', 'AGENTS.md',
+    // PR-A2: AGENT_TOP_FILES is ['CLAUDE.md'] only — write the fixture there.
+    const file = writeAgentFile('mixed', 'CLAUDE.md',
       'Heartbeat (configured in config.json).\nUse CronCreate to register.\n');
     const { stdout } = await runCli(['mixed', '--apply']);
     const after = readFileSync(file, 'utf-8');
