@@ -21,6 +21,7 @@ import {
   IconNotes,
   IconPlugConnected,
   IconGitBranch,
+  IconChartHistogram,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -57,6 +58,7 @@ const navItems: NavItem[] = [
 
   // Other
   { label: 'Git Repo', href: '/git-repo', icon: IconGitBranch, section: 'other' },
+  { label: 'Usage', href: '/usage', icon: IconChartHistogram, section: 'other' },
 ];
 
 const sectionLabels: Record<string, string> = {

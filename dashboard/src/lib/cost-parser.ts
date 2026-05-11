@@ -18,7 +18,7 @@ interface ModelPricing {
   cacheReadPerMillion: number;
 }
 
-const MODEL_PRICING: Record<string, ModelPricing> = {
+export const MODEL_PRICING: Record<string, ModelPricing> = {
   opus: { inputPerMillion: 15, outputPerMillion: 75, cacheWritePerMillion: 3.75, cacheReadPerMillion: 1.50 },
   sonnet: { inputPerMillion: 3, outputPerMillion: 15, cacheWritePerMillion: 3.75, cacheReadPerMillion: 0.30 },
   haiku: { inputPerMillion: 0.8, outputPerMillion: 4, cacheWritePerMillion: 1.00, cacheReadPerMillion: 0.08 },
@@ -32,7 +32,7 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
  * opus/sonnet/haiku; gpt-5-codex (and bare "codex" / "gpt-5" variants) map to
  * gpt-5-codex pricing rather than silently defaulting to sonnet.
  */
-function resolvePricingKey(model: string): string {
+export function resolvePricingKey(model: string): string {
   const lower = model.toLowerCase();
   if (lower.includes('opus')) return 'opus';
   if (lower.includes('haiku')) return 'haiku';
@@ -160,9 +160,17 @@ export function scanClaudeProjectsCosts(): CostEntry[] {
 
       const parts = dir.name.split('-');
       const orgsIdx = parts.indexOf('orgs');
-      const orgName = orgsIdx >= 0 && orgsIdx < parts.length - 1
-        ? parts[orgsIdx + 1]
-        : 'default';
+      const agentsIdx = parts.lastIndexOf('agents');
+
+      // Org name lives between 'orgs' and 'agents' in the encoded path. It may
+      // contain hyphens (e.g. "sondre-hq"), so join the slice rather than taking
+      // a single token.
+      let orgName = 'default';
+      if (orgsIdx >= 0 && agentsIdx > orgsIdx + 1) {
+        orgName = parts.slice(orgsIdx + 1, agentsIdx).join('-');
+      } else if (orgsIdx >= 0 && orgsIdx < parts.length - 1) {
+        orgName = parts[orgsIdx + 1];
+      }
 
       // Scope to current instance's orgs — prevent cross-instance bleed
       if (!allowedOrgs.has(orgName)) continue;
@@ -173,7 +181,6 @@ export function scanClaudeProjectsCosts(): CostEntry[] {
       for (const file of files) {
         const filePath = path.join(projectPath, file);
         // Extract agent name from encoded dir path (e.g. "-Users-...-agents-devbot" -> "devbot")
-        const agentsIdx = parts.lastIndexOf('agents');
         const agentName = agentsIdx >= 0 && agentsIdx < parts.length - 1
           ? parts.slice(agentsIdx + 1).join('-')
           : dir.name;

@@ -334,12 +334,12 @@ export function syncAll(): SyncResult {
 // Lazy cost sync (only called from Analytics page)
 // ---------------------------------------------------------------------------
 
-const COST_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+const COST_SYNC_INTERVAL_MS = 15 * 1000;
 
-export function syncCostsLazy(): void {
+export function syncCostsLazy(force = false): void {
   const now = Date.now();
   const lastCostSync = (globalThis as unknown as Record<string, number>).__lastCostSync ?? 0;
-  if (now - lastCostSync > COST_SYNC_INTERVAL_MS) {
+  if (force || now - lastCostSync > COST_SYNC_INTERVAL_MS) {
     try {
       const { syncCosts } = require('./cost-parser');
       const costResult = syncCosts();
