@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 // ---------------------------------------------------------------------------
 
 const VALID_NAME = /^[a-z0-9_-]+$/;
-const VALID_TEMPLATES = ['agent', 'orchestrator', 'analyst'];
+const VALID_TEMPLATES = ['agent', 'agent-codex', 'orchestrator', 'analyst'];
 
 
 // ---------------------------------------------------------------------------

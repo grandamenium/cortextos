@@ -13,6 +13,9 @@ export type { CategoryBadgeProps } from './category-badge';
 export { OrgBadge } from './org-badge';
 export type { OrgBadgeProps } from './org-badge';
 
+export { RuntimeBadge } from './runtime-badge';
+export type { RuntimeBadgeProps } from './runtime-badge';
+
 export { AgentAvatar } from './agent-avatar';
 export type { AgentAvatarProps } from './agent-avatar';
 

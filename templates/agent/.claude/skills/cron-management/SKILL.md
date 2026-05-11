@@ -10,7 +10,7 @@ Crons are **daemon-managed**. They are stored in `${CTX_ROOT}/state/$CTX_AGENT_N
 and dispatched by the cortextOS daemon. Crons survive agent restarts, context compactions,
 and daemon restarts automatically. You do NOT need to recreate them on session start.
 
-**Never use `/loop` or CronCreate for persistent recurring work** — those are session-local
+**Do NOT use `/loop` or CronCreate for persistent recurring work** — those are session-only
 and die on agent restart.
 
 ---
@@ -26,7 +26,7 @@ cortextos bus list-crons $CTX_AGENT_NAME
 If a cron is missing from the list, add it:
 
 ```bash
-cortextos bus add-cron $CTX_AGENT_NAME <name> <interval|cron-expr> "<prompt>"
+cortextos bus add-cron $CTX_AGENT_NAME <workflow-name> <interval> <prompt>   # or <interval|cron-expr> "<prompt>"
 ```
 
 ---
