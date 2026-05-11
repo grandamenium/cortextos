@@ -87,6 +87,14 @@ echo "$CANDIDATES_JSON" | "$JQ_BIN" -c '.[]' | while read -r row; do
   timestamp=$(echo "$row" | "$JQ_BIN" -r '.timestamp')
   why=$(echo "$row" | "$JQ_BIN" -r '.why')
 
+  # Defensive: skip rows where context_total isn't a positive integer
+  # (e.g. an assistant row with no usage block — analyze.py would emit 0,
+  # but jq's // fallback or upstream schema drift could yield "null").
+  if ! [[ "$context_total" =~ ^[0-9]+$ ]] || [ "$context_total" -eq 0 ]; then
+    echo "[$log_ts]   skip $agent_name $session_id (no context_total: '$context_total')" >> "$LOG_FILE"
+    continue
+  fi
+
   # Highest crossed tier (the alert speaks to the most urgent level reached).
   crossed_tier=""
   for tier_k in $(echo "$TIERS_RAW" | tr ',' ' '); do
@@ -135,8 +143,8 @@ Operator: paste this at the agent prompt to compact at the next phase boundary �
       echo "[$log_ts]   ERR  Telegram send failed: $response" >> "$LOG_FILE"
     fi
   else
-    # No bot configured — log only, still record state to avoid spam once it's wired.
+    # No bot configured — log only. Do NOT record state: once the bot is
+    # wired later, prior candidates would otherwise be permanently suppressed.
     echo "[$log_ts]   DRY  (no bot) $agent_name $session_id tier=${crossed_tier}K cr=${cr_human}" >> "$LOG_FILE"
-    printf '%s\t%s\t%s\n' "$session_id" "$crossed_tier" "$ts_now" >> "$STATE_FILE"
   fi
 done

@@ -375,13 +375,20 @@ def cmd_recent_candidates(args):
                 continue
             age = (now - ts).total_seconds()
             if age > since_seconds:
-                break  # turns are time-ordered; earlier ones are too old
+                # Sidechain turns can produce non-monotonic timestamps, so
+                # keep walking rather than `break` — old turns get filtered
+                # by the age check itself.
+                continue
             ctx = t["cr"] + t["cc"]
             if ctx < threshold:
                 continue
             text_only = not t["tools"]
             gap = False
             if i + 1 < len(turns):
+                # turns[i+1] is the NEXT turn chronologically (higher index =
+                # later append). gap>300 ⇒ the agent paused 5+ min AFTER turn i,
+                # so turn i is the last safe boundary before the idle window.
+                # Matches cmd_compact's existing semantics.
                 nxt = _parse_iso(turns[i + 1]["ts"])
                 if nxt is not None:
                     gap = (nxt - ts).total_seconds() > 300
