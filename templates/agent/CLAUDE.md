@@ -91,6 +91,16 @@ On any inbox message, run the fresh-restart decision flow **before** acting: `.c
 
 When the user asks to restart, always ask: "Fresh restart or continue with conversation history?" Don't restart until they specify.
 
+## Per-task Opus escalation (engineer / fullstack)
+
+Default model is Sonnet 4.6 @ 200K — covers the median session. For complex multi-phase work (architectural decisions, multi-step refactors, ambiguous-spec resolution), the **operator** starts that task on Opus with a per-task override:
+
+```bash
+cortextos start $CTX_AGENT_NAME --model opus
+```
+
+The agent does NOT escalate itself. Heuristic auto-escalation (Agent calls >5 → auto-respawn on Opus) is Phase 2 work — requires FastChecker change. Today's path is operator-triggered.
+
 ## Token & context efficiency
 
 - **Batch Bash calls.** `git status && git log -5 && git diff --stat` in one call — three sequential turns each pay full cache_read.
