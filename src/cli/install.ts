@@ -54,6 +54,31 @@ function tryInstallJq(): boolean {
   return false;
 }
 
+function tryInstallWhisperCpp(): boolean {
+  if (IS_MAC && commandExists('brew')) {
+    try { execSync('brew install whisper-cpp', { stdio: 'inherit' }); return true; } catch { return false; }
+  }
+  return false;
+}
+
+function tryInstallFfmpeg(): boolean {
+  if (IS_MAC && commandExists('brew')) {
+    try { execSync('brew install ffmpeg', { stdio: 'inherit' }); return true; } catch { return false; }
+  }
+  if (!IS_WINDOWS && !IS_MAC) {
+    try { execSync('sudo apt-get install -y ffmpeg', { stdio: 'inherit' }); return true; } catch { return false; }
+  }
+  if (IS_WINDOWS) {
+    if (commandExists('winget')) {
+      try { execSync('winget install Gyan.FFmpeg --silent', { stdio: 'inherit' }); return true; } catch { /* try choco */ }
+    }
+    if (commandExists('choco')) {
+      try { execSync('choco install ffmpeg -y', { stdio: 'inherit' }); return true; } catch { return false; }
+    }
+  }
+  return false;
+}
+
 export const installCommand = new Command('install')
   .option('--instance <id>', 'Instance ID', 'default')
   .description('Install cortextOS — create state directories, check and install dependencies')
@@ -228,6 +253,51 @@ export const installCommand = new Command('install')
       } catch {
         console.log('  ✓ jq: installed');
       }
+    }
+
+    // Voice transcription deps — whisper-cli + ffmpeg + GGML model.
+    // Best-effort: failures degrade voice messages to path-only (no transcript)
+    // but never block install. Disable entirely with CTX_TELEGRAM_NO_TRANSCRIBE=1.
+    if (!commandExists('whisper-cli')) {
+      console.log('  - whisper-cli: not found. Installing...');
+      const installed = tryInstallWhisperCpp();
+      if (installed && commandExists('whisper-cli')) {
+        console.log('  ✓ whisper-cli: installed');
+      } else {
+        console.log('  ! whisper-cli: could not auto-install.');
+        if (IS_MAC) console.log('    Install with: brew install whisper-cpp');
+        else if (IS_WINDOWS) console.log('    See: https://github.com/ggerganov/whisper.cpp#quick-start');
+        else console.log('    Build from source: https://github.com/ggerganov/whisper.cpp');
+        console.log('    Voice messages will be delivered without transcripts until installed.');
+      }
+    } else {
+      console.log('  ✓ whisper-cli: installed');
+    }
+
+    if (!commandExists('ffmpeg')) {
+      console.log('  - ffmpeg: not found. Installing...');
+      const installed = tryInstallFfmpeg();
+      if (installed && commandExists('ffmpeg')) {
+        console.log('  ✓ ffmpeg: installed');
+      } else {
+        console.log('  ! ffmpeg: could not auto-install.');
+        if (IS_MAC) console.log('    Install with: brew install ffmpeg');
+        else if (IS_WINDOWS) console.log('    Install with: winget install Gyan.FFmpeg');
+        else console.log('    Install with: sudo apt-get install -y ffmpeg');
+      }
+    } else {
+      console.log('  ✓ ffmpeg: installed');
+    }
+
+    // GGML whisper model — idempotent download via shipped script.
+    const modelScript = join(process.cwd(), 'scripts', 'install-whisper-model.sh');
+    if (existsSync(modelScript)) {
+      const modelResult = spawnSync('bash', [modelScript], { stdio: 'inherit', timeout: 5 * 60 * 1000 });
+      if (modelResult.status !== 0) {
+        console.log('  ! whisper model: download failed. Re-run: bash scripts/install-whisper-model.sh');
+      }
+    } else {
+      console.log(`  ! whisper model installer not found at ${modelScript}; skipping`);
     }
 
     // Python venv for Knowledge Base
