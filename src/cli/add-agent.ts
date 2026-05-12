@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFi
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
-import { validateAgentName } from '../utils/validate';
+import { validateAgentName, validateOrgName } from '../utils/validate';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -71,6 +71,20 @@ export const addAgentCommand = new Command('add-agent')
 
     if (!org) {
       console.error('No organization found. Run "cortextos init <org>" first.');
+      process.exit(1);
+    }
+
+    // Mirror the BUG-041 fix above for the resolved org name.
+    // Mixed-case orgs pass through add-agent today (whether supplied via --org or
+    // auto-detected from the orgs/ directory), get committed to disk, and then
+    // break every `cortextos bus *` invocation at runtime because env.ts strictly
+    // validates CTX_ORG. The dashboard API also rejects them with HTTP 400.
+    // Canonical rule: src/utils/validate.ts:validateOrgName (/^[a-z0-9_-]+$/).
+    try {
+      validateOrgName(org);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      console.error(`Org names must match /^[a-z0-9_-]+$/ (lowercase letters, numbers, underscores, hyphens).`);
       process.exit(1);
     }
 

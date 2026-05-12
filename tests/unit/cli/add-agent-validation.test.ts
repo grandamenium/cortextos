@@ -93,3 +93,66 @@ describe('BUG-041: add-agent agent name validation', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });
+
+/**
+ * Issue #407 regression test: `cortextos add-agent` must reject invalid
+ * --org values for the same reasons it rejects invalid agent names —
+ * mixed-case orgs pass scaffolding but then break every `cortextos bus *`
+ * invocation at runtime (env.ts strictly validates CTX_ORG) and every
+ * dashboard add-agent attempt (POST /api/agents returns HTTP 400).
+ */
+describe('issue #407: add-agent --org name validation', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('rejects --org teamStupid (camelCase) before any filesystem write', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`__TEST_PROCESS_EXIT_${code}__`);
+    }) as never);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      addAgentCommand.parseAsync(
+        ['node', 'cli', 'validagent', '--template', 'agent', '--org', 'teamStupid']
+      )
+    ).rejects.toThrow(/__TEST_PROCESS_EXIT_1__/);
+
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    const errorOutput = consoleErrorSpy.mock.calls.flat().join(' ');
+    expect(errorOutput).toContain("Invalid org name 'teamStupid'");
+    expect(errorOutput).toContain('/^[a-z0-9_-]+$/');
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('rejects --org with spaces', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`__TEST_PROCESS_EXIT_${code}__`);
+    }) as never);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      addAgentCommand.parseAsync(
+        ['node', 'cli', 'validagent', '--template', 'agent', '--org', 'my org']
+      )
+    ).rejects.toThrow(/__TEST_PROCESS_EXIT_1__/);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('rejects --org path-traversal attempts', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`__TEST_PROCESS_EXIT_${code}__`);
+    }) as never);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      addAgentCommand.parseAsync(
+        ['node', 'cli', 'validagent', '--template', 'agent', '--org', '../escape']
+      )
+    ).rejects.toThrow(/__TEST_PROCESS_EXIT_1__/);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
