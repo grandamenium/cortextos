@@ -12,6 +12,12 @@
       "type": "recurring",
       "interval": "4h",
       "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+    },
+    {
+      "name": "autoresearch_post_publish_to_index_velocity",
+      "type": "recurring",
+      "interval": "168h",
+      "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop."
     }
   ],
   "ecosystem": {

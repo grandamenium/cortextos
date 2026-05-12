@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "cycle": "post_publish_to_index_velocity",
+    "metric": "publish_to_index_days",
+    "direction": "lower",
+    "window": "30d_rolling",
+    "measurement": "median days from publish-event to first GSC indexed-impression across all published posts in rolling 30d window",
+    "loop_interval": "168h",
+    "surface_created": "2026-05-12",
+    "notes": "5-week measurement latency upfront. First publish May 15. First KEEP/DISCARD signal no earlier than June 15. Week-1 no-signal is NOT discard — latency baked in."
+  },
+  "posts": []
+}

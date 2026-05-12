@@ -1,0 +1,31 @@
+{
+  "client": "reyco-marine",
+  "domain": "reycomarine.com",
+  "lastAudit": "2026-05-11",
+  "auditStreak": 1,
+  "openIssues": 8,
+  "nextAuditDue": "2026-05-18",
+  "runs": [
+    {
+      "skill": "audit",
+      "date": "2026-05-11",
+      "status": "complete",
+      "issues_found": 8,
+      "data_sources": [
+        "gsc"
+      ],
+      "note": "T+9 audit pulled forward at Aiden directive. GSC-only (GA4 not installed, Semrush not configured)."
+    }
+  ],
+  "baseline": {
+    "date": "2026-05-11",
+    "clicks_28d": 107,
+    "impressions_28d": 1296,
+    "avg_ctr": 0.083,
+    "avg_position": 10.36,
+    "sitemap_submitted": 413,
+    "sitemap_indexed": 0,
+    "unique_queries": 194,
+    "note": "Day-0 snapshot (9 days post-launch). 0 indexed in sitemap tool is normal lag \u2014 site actively crawled per 194-query signal."
+  }
+}

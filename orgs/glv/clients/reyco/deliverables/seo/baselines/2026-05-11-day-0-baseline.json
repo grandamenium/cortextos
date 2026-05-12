@@ -1,0 +1,159 @@
+{
+  "meta": {
+    "client": "reyco-marine",
+    "site": "reycomarine.com",
+    "gsc_property": "sc-domain:reycomarine.com",
+    "snapshot_date": "2026-05-11",
+    "data_window": "2026-05-02 to 2026-05-11",
+    "data_window_days": 9,
+    "domain_cutover_date": "2026-05-02",
+    "days_since_launch": 9,
+    "gsc_data_lag_days": 2,
+    "generated_by": "seo-agent",
+    "generated_at": "2026-05-11T15:40:00Z",
+    "note": "Day-0 baseline anchored to domain cutover. GSC data only exists from May 2 onward (new WP site). Data lag means May 10-11 may be incomplete. 9-day window is normal for first post-launch snapshot."
+  },
+  "sitemap": {
+    "url": "https://reycomarine.com/sitemap_index.xml",
+    "last_submitted": "2026-05-08T19:30:28Z",
+    "last_downloaded_by_google": "2026-05-09T21:27:14Z",
+    "is_index": true,
+    "errors": 0,
+    "warnings": 0,
+    "submitted_web_urls": 413,
+    "indexed_web_urls": 0,
+    "submitted_image_urls": 586,
+    "indexed_image_urls": 0,
+    "note": "Sitemap submitted May 8. 'indexed=0' in sitemap tool is normal lag for a 9-day-old domain — site IS receiving organic traffic and impressions, confirming active crawl. Expect indexation counts to populate over next 2-4 weeks."
+  },
+  "performance_sitewide": {
+    "window": "2026-05-02 to 2026-05-11",
+    "total_clicks": 107,
+    "total_impressions": 1296,
+    "avg_ctr": 0.0826,
+    "avg_position": 10.36,
+    "unique_queries_with_data": 194
+  },
+  "performance_by_device": {
+    "mobile": {"clicks": 72, "impressions": 711, "avg_position": 7.3, "ctr": 0.101},
+    "desktop": {"clicks": 27, "impressions": 542, "avg_position": 14.7, "ctr": 0.050},
+    "tablet": {"clicks": 8, "impressions": 43, "avg_position": 6.6, "ctr": 0.186}
+  },
+  "performance_by_country": {
+    "canada": {"clicks": 101, "impressions": 1047, "avg_position": 10.3},
+    "usa": {"clicks": 6, "impressions": 188, "avg_position": 8.4}
+  },
+  "top_queries": [
+    {"query": "reyco marine", "clicks": 30, "impressions": 79, "position": 1.0, "ctr": 0.380, "type": "brand"},
+    {"query": "boats for sale sault ste marie", "clicks": 3, "impressions": 17, "position": 9.1, "ctr": 0.176, "type": "local-dealer"},
+    {"query": "superior marine sault", "clicks": 2, "impressions": 9, "position": 1.0, "ctr": 0.222, "type": "competitor-brand"},
+    {"query": "boat dealers sault ste marie", "clicks": 1, "impressions": 2, "position": 1.5, "ctr": 0.500, "type": "local-dealer"},
+    {"query": "lawnmower repair near me", "clicks": 1, "impressions": 2, "position": 1.0, "ctr": 0.500, "type": "service-intent"},
+    {"query": "sault ste marie boat dealers", "clicks": 1, "impressions": 7, "position": 2.3, "ctr": 0.143, "type": "local-dealer"},
+    {"query": "marine store near me", "clicks": 1, "impressions": 3, "position": 2.0, "ctr": 0.333, "type": "local-dealer"},
+    {"query": "marine shops near me", "clicks": 1, "impressions": 2, "position": 42.5, "ctr": 0.500, "type": "local-dealer"},
+    {"query": "propeller repair shop near me", "clicks": 1, "impressions": 2, "position": 4.0, "ctr": 0.500, "type": "service-intent"},
+    {"query": "rayco marine", "clicks": 1, "impressions": 11, "position": 3.0, "ctr": 0.091, "type": "brand-misspell"}
+  ],
+  "top_pages": [
+    {"url": "https://www.reycomarine.com/", "clicks": 80, "impressions": 682, "position": 6.7, "note": "www redirect — homepage dominant"},
+    {"url": "https://reycomarine.com/", "clicks": 9, "impressions": 285, "position": 11.5, "note": "non-www homepage"},
+    {"url": "https://www.reycomarine.com/search/inventory/availability/In%20Stock", "clicks": 7, "impressions": 164, "position": 3.3},
+    {"url": "https://www.reycomarine.com/search/inventory", "clicks": 6, "impressions": 46, "position": 3.3},
+    {"url": "https://reycomarine.com/product/minn-kota-riptide-terrova-80-lb-refurb-60/", "clicks": 2, "impressions": 23, "position": 13.8},
+    {"url": "https://www.reycomarine.com/search/inventory/availability/In%20Stock/type/Pontoons/usage/New", "clicks": 2, "impressions": 15, "position": 25.5},
+    {"url": "https://www.reycomarine.com/aboutus", "clicks": 1, "impressions": 201, "position": 5.3, "note": "High impressions, low CTR — meta desc opportunity"},
+    {"url": "https://www.reycomarine.com/search/inventory/availability/In%20Stock/brand/Mercury/usage/New", "clicks": 1, "impressions": 16, "position": 6.8},
+    {"url": "https://www.reycomarine.com/search/inventory/availability/In%20Stock/brand/Toro/usage/New", "clicks": 1, "impressions": 120, "position": 3.0, "note": "Strong early Toro signal"},
+    {"url": "https://www.reycomarine.com/search/inventory/availability/In%20Stock/type/Boats", "clicks": 1, "impressions": 135, "position": 5.7}
+  ],
+  "tracked_keywords_57": {
+    "keywords_with_data": 2,
+    "keywords_no_data": 55,
+    "note": "55/57 keywords show no GSC data at Day 9 — expected for a new domain. Google has not yet crawled/indexed service pages deeply enough to rank for these terms. Baseline positions are 'not ranking' for measurement purposes.",
+    "data": [
+      {
+        "cluster": "A",
+        "keyword": "small engine repair sault ste marie",
+        "clicks": 0,
+        "impressions": 20,
+        "position": 2.1,
+        "ctr": 0.0,
+        "signal": "STRONG — top-3 position in 9 days, zero-competition term, 20 impressions. Will drive clicks when service page is fully indexed."
+      },
+      {
+        "cluster": "A",
+        "keyword": "boat repair near me",
+        "clicks": 0,
+        "impressions": 2,
+        "position": 1.5,
+        "ctr": 0.0,
+        "signal": "Early crawl signal — 1.5 average position is likely due to local pack disambiguation, not a stable page ranking."
+      }
+    ],
+    "no_data_keywords": [
+      "small engine repair near me", "small engine repair", "lawn mower repair near me",
+      "lawn mower repair", "snowblower repair near me", "snowblower repair",
+      "outboard motor repair", "outboard engine repair", "lawn mower service",
+      "boat winterization", "boat winterization near me", "how to winterize outboard motor",
+      "snowblower tune up", "lawn mower tune up", "how often to service outboard motor",
+      "snowblower repair sault ste marie", "lawn mower repair sault ste marie",
+      "boat repair sault ste marie", "marine service sault ste marie",
+      "outboard motor repair sault ste marie", "outboard engine repair sault ste marie",
+      "outboard tune up sault ste marie", "marine engine repair sault ste marie",
+      "small engine mechanic sault ste marie", "echo chainsaw repair sault ste marie",
+      "lawn mower service sault ste marie", "lawn mower tune up sault ste marie",
+      "riding mower repair sault ste marie", "snowblower service sault ste marie",
+      "snowblower tune up sault ste marie", "cub cadet service sault ste marie",
+      "cub cadet snowblower service sault ste marie", "toro lawn mower service sault ste marie",
+      "toro snowblower repair sault ste marie", "spring tune up service sault ste marie",
+      "atv repair sault ste marie", "utv repair sault ste marie",
+      "side by side repair sault ste marie", "hisun service sault ste marie",
+      "boat winterization sault ste marie", "how to winterize a boat ontario",
+      "mercury outboard dealer sault ste marie", "mercury outboard service sault ste marie",
+      "mercury outboard parts sault ste marie", "marine parts sault ste marie",
+      "cub cadet authorized service near me", "cub cadet parts sault ste marie",
+      "toro parts sault ste marie", "mercury outboard warranty ontario",
+      "is regular service required for warranty", "warranty repair sault ste marie"
+    ]
+  },
+  "notable_organic_signals": [
+    {
+      "query": "small engine repair sault ste marie",
+      "position": 2.1, "impressions": 20, "clicks": 0,
+      "note": "Highest-value early organic signal. KD=0, local near me intent, no competition. Position 2 at Day 9 is exceptional. Expect first clicks once service page is consistently indexed."
+    },
+    {
+      "query": "lawnmower repair near me",
+      "position": 1.0, "impressions": 2, "clicks": 1,
+      "note": "Misspelling variant of tracked 'lawn mower repair near me'. Already converting at Day 9. Service page ranking #1 locally."
+    },
+    {
+      "query": "princecraft dealers ontario",
+      "position": 6.8, "impressions": 5, "clicks": 0,
+      "note": "Dealer page ranking provincially. Uncapped upside — Princecraft page SEO work pending."
+    },
+    {
+      "query": "mercury outboard dealer near me",
+      "position": 1.0, "impressions": 2, "clicks": 0,
+      "note": "Position 1 for Mercury dealer intent. High commercial value."
+    },
+    {
+      "query": "cub cadet dealer near me",
+      "position": 1.5, "impressions": 2, "clicks": 0,
+      "note": "Position 1-2 for Cub Cadet dealer intent. Authorized dealer status is strong trust signal."
+    }
+  ],
+  "coverage_notes": {
+    "sitemap_submitted": "2026-05-08",
+    "sitemap_errors": 0,
+    "sitemap_warnings": 0,
+    "total_urls_in_sitemap": 413,
+    "indexed_per_sitemap_tool": 0,
+    "actual_indexation_evidence": "194 unique queries generating impressions confirms active crawl and partial indexation despite sitemap tool showing 0. GSC sitemap indexed count lags actual by 2-4 weeks.",
+    "recommended_action": "Check indexation via URL Inspection on key service pages at 30-day mark (chino:audit May 13 will capture this)."
+  },
+  "core_web_vitals": {
+    "note": "CWV data not available via Search Analytics API for a 9-day-old domain. Insufficient CrUX data. Will be available in GSC CWV report once field data accumulates (~28 days of real-user traffic). Check at 30-day mark."
+  }
+}

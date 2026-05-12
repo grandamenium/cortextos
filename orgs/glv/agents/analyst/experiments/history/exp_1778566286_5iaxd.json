@@ -1,0 +1,21 @@
+{
+  "id": "exp_1778566286_5iaxd",
+  "agent": "analyst",
+  "metric": "system_effectiveness",
+  "hypothesis": "Theta wave cycle-18 (2026-05-12 04:47Z fire) scores 8/10 KEEP. Substantive: (1) Phase 3 cycle-16 recursion catch — banked rule's first application target was the bank itself, 4d latency; exp_1778220621_dxtyt discarded. (2) Phase 4 self-application of own banked gate-dependent-metric rule firing 21d late on prospector pipeline. (3) Phase 5 external research no-defer. (4) Phase 6 multi-round real exchange with boss: R1 6 proposals, R2 4 rejects + score-offer, R3 2 pushbacks (pentester scope + revise-vs-violate framing), R4 both accepted with 4th-line refinement. (5) Phase 7 3-cycle creation (imagegen/seo/pentester) + AM brief 12:03Z 3-item deliverable. NOT-9: (a) rule-bank-self-application latency, (b) GOALS.md gap 3-cycle, (c) prospector 21d, (d) dev cloud-session no detector, (e) gate-dependent escalation 21d. Banking Phase 6 multi-round exchange pattern as cycle-19+ worked example: rubber-stamp = 7, real bidirectional pushback = 8.",
+  "surface": "notes/theta-wave-cycle-18-2026-05-12.md",
+  "direction": "higher",
+  "window": "24h",
+  "measurement": "",
+  "status": "completed",
+  "baseline_value": 8,
+  "result_value": 8,
+  "decision": "keep",
+  "learning": "KEEP 8/10. Substantive Phase 3-7 as detailed in hypothesis. Real Phase 6 multi-round exchange landed (boss score-offer 7-rubber-stamp vs 8-real-pushback resolved at 8). 3 cycles dispatched (imagegen/seo/pentester). AM brief 12:03Z 3-item deliverable structured per boss-locked framing including revise-override-hold rule-revision-candidate refinement on prospector send-gate. NOT-9 candidates: cycle-16 recursion latency + GOALS.md 3-cycle gap + prospector 21d gate + dev cloud-session detector + gate-dependent escalation 21d.",
+  "experiment_commit": null,
+  "tracking_commit": null,
+  "created_at": "2026-05-12T06:11:26Z",
+  "started_at": "2026-05-12T06:11:26Z",
+  "completed_at": "2026-05-12T06:11:26Z",
+  "changes_description": "cycle-18 Phase 7 dispatch executed; AM brief 12:03Z deliverable pending"
+}
