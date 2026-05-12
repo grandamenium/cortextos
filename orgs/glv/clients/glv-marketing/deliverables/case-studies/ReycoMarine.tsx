@@ -14,31 +14,29 @@ import {
   Layout as LayoutIcon,
   Target,
   Code,
-  FileText,
-  Quote,
-  Star,
   ExternalLink,
-  TrendingUp,
   CheckCircle,
+  Package,
+  MapPin,
 } from "lucide-react";
 
-// ─── DRAFT — Awaiting Aiden QC ───────────────────────────────────────────────
-// Flags:
-//   [FLAG-1] Casey quote: none on file — placeholder below, must be replaced before publish
-//   [FLAG-2] GSC traffic/rankings: baseline snapshot taken May 7; live impressions/clicks
-//             not yet available. Request May 6-12 GSC performance export from Aiden to update
-//             the target keywords table with real position + CTR data.
-//   [FLAG-3] GBP: not confirmed by SEO — verify GBP setup status before citing as deliverable
+// ─── DRAFT — Awaiting Aiden re-QC ────────────────────────────────────────────
+// Revision 2 (2026-05-12): per Aiden direction via boss
+//   - Stripped quote/testimonial section (no Casey quote on file)
+//   - Stripped keywords table (GSC data months out — re-add when live)
+//   - GBP confirmed set up by Aiden — included as deliverable
+//   - Re-framed: WordPress/WooCommerce build case study (not SEO retainer)
+//   - Removed all retainer/$/mo language
 // ─────────────────────────────────────────────────────────────────────────────
 
 const seo = {
   title: "Reyco Marine Case Study | GLV Marketing",
   description:
-    "How GLV Marketing built Reyco Marine's production website, completed a pre-launch security audit, and activated a 62-funnel SEO retainer to grow Northern Ontario's premier marine and outdoor power dealer online.",
+    "How GLV Marketing built Reyco Marine's production WordPress and WooCommerce site — structuring an 11-brand catalogue, running a pre-launch security audit, and executing a clean domain migration to reycomarine.com.",
   canonical: "https://glvmarketing.ca/case-studies/reyco-marine",
 };
 
-const tags = ["WordPress Development", "WooCommerce", "Local SEO", "Security Audit", "Content Strategy"];
+const tags = ["WordPress Development", "WooCommerce", "Security Audit", "Domain Migration", "Local SEO"];
 
 const challenges = [
   {
@@ -66,8 +64,13 @@ const challenges = [
 const solutions = [
   {
     icon: LayoutIcon,
-    title: "WordPress + WooCommerce Build",
-    desc: "Full production site built on WordPress with WooCommerce. Structured around 11 authorized brands — Echo, Princecraft, R&J, Toro, Mercury, EZGO, Cub Cadet, Minn Kota, Cannon, Humminbird, and Hisun — plus service categories covering marine, small engine, lawn, snow, and ATV/UTV. Canadian English throughout, mobile-responsive, fast load times on SiteGround hosting.",
+    title: "Custom WordPress + WooCommerce Build",
+    desc: "Full production site built on WordPress with WooCommerce on SiteGround hosting. Canadian English throughout, mobile-responsive, structured around the full scope of Reyco's business: marine, lawn, snow, and ATV/UTV equipment, plus in-house service and an authorized parts department.",
+  },
+  {
+    icon: Package,
+    title: "11-Brand Catalogue Architecture",
+    desc: "WooCommerce product catalogue structured around all 11 authorized brands — Echo, Princecraft, R&J, Toro, Mercury, EZGO, Cub Cadet, Minn Kota, Cannon, Humminbird, and Hisun — plus service categories covering marine, small engine, lawn, snow, and ATV/UTV. Each brand and category built for clean navigation and search indexing.",
   },
   {
     icon: ShieldCheck,
@@ -77,27 +80,20 @@ const solutions = [
   {
     icon: Code,
     title: "Domain Migration",
-    desc: "Clean cutover from the internal staging environment (reyco.glvmarketing.ca) to the production domain (reycomarine.com) on May 6, 2026. Redirect structure preserved any early crawl signal and prevented split-authority issues.",
+    desc: "Clean cutover from the internal staging environment (reyco.glvmarketing.ca) to the production domain (reycomarine.com) on May 6, 2026. Redirect structure preserved any early crawl signal and eliminated split-authority issues at launch.",
   },
   {
     icon: Target,
-    title: "SEO Foundation",
-    desc: "Keyword research targeting Northern Ontario marine, small engine, and outdoor power searches. On-page optimisation across all product and service pages — including brand, category, and location targeting. 62 content funnels designed and staged for monthly deployment.",
+    title: "On-Page SEO Configuration",
+    desc: "Keyword research targeting Northern Ontario marine, small engine, and outdoor power searches. On-page optimisation across all product and service pages — brand, category, and location targeting. 356 product SEO assets deployed (196 meta descriptions + 160 alt-text entries). LocalBusiness schema deployed site-wide. Google Business Profile set up for Sault Ste. Marie.",
   },
   {
-    icon: FileText,
-    title: "SEO Audit + Content Architecture",
-    desc: "586-page SEO audit completed across the full site. 196 product meta descriptions and 160 product alt-text entries written and deployed (A1 and A2 batches). LocalBusiness schema deployed site-wide. 12-month blog calendar produced (96 posts) across key service and brand topics. LSA eligibility brief prepared — Reyco qualifies for Local Services Ads in marine, small engine, and outdoor power categories.",
-  },
-  {
-    icon: TrendingUp,
-    title: "Monthly SEO Retainer",
-    desc: "Ongoing engagement activated May 2026. Monthly content deployments across 62 staged funnels, technical health monitoring, and quarterly strategy reviews — compounding organic reach month over month as the GSC baseline matures.",
+    icon: MapPin,
+    title: "Google Business Profile",
+    desc: "GBP set up and verified for Reyco Marine in Sault Ste. Marie — establishing local search presence at launch and supporting map pack eligibility for marine, small engine, and outdoor power searches in Northern Ontario.",
   },
 ];
 
-// Launch milestones — verified with SEO agent May 12, 2026
-// [FLAG-2] Supplement with GSC traffic data once Aiden exports May 6-12 performance report
 const milestones = [
   {
     label: "Production site launched",
@@ -106,21 +102,15 @@ const milestones = [
     icon: CheckCircle,
   },
   {
+    label: "Authorized brands structured",
+    value: "11 brands",
+    sub: "Full WooCommerce catalogue architecture",
+    icon: Package,
+  },
+  {
     label: "Product SEO deployed",
     value: "356 assets",
     sub: "196 meta descriptions + 160 alt-text entries",
-    icon: FileText,
-  },
-  {
-    label: "Content funnels staged",
-    value: "62",
-    sub: "Ready for monthly deployment",
-    icon: TrendingUp,
-  },
-  {
-    label: "Pages audited",
-    value: "586",
-    sub: "Full-site SEO audit completed",
     icon: Search,
   },
   {
@@ -130,20 +120,17 @@ const milestones = [
     icon: ShieldCheck,
   },
   {
-    label: "Blog calendar",
-    value: "96 posts",
-    sub: "12-month content plan — ready to deploy",
-    icon: Store,
+    label: "Domain migration",
+    value: "Clean cutover",
+    sub: "Staging → reycomarine.com, May 6",
+    icon: Code,
   },
-];
-
-// Target keywords — will be replaced with ranking data once GSC baseline lands [FLAG-2]
-const targetKeywords = [
-  { keyword: "reyco marine sault ste marie", status: "Targeting" },
-  { keyword: "mercury outboard dealer northern ontario", status: "Targeting" },
-  { keyword: "marine service sault ste marie", status: "Targeting" },
-  { keyword: "toro lawn mower dealer ssm", status: "Targeting" },
-  { keyword: "small engine repair sault ste marie", status: "Targeting" },
+  {
+    label: "Google Business Profile",
+    value: "Active",
+    sub: "Sault Ste. Marie — set up at launch",
+    icon: MapPin,
+  },
 ];
 
 const ReycoMarine = () => (
@@ -164,7 +151,7 @@ const ReycoMarine = () => (
             Reyco <span className="text-gradient">Marine</span>
           </h1>
           <p className="text-lg text-muted-foreground max-w-2xl mb-6">
-            How GLV Marketing built a production WooCommerce site, ran a pre-launch security audit, and activated a 62-funnel SEO retainer for Northern Ontario's premier marine and outdoor power dealer.
+            How GLV Marketing built Reyco Marine's production WordPress and WooCommerce site — structuring an 11-brand catalogue, running a pre-launch security audit, and executing a clean domain migration to launch Northern Ontario's premier marine and outdoor power dealer online.
           </p>
           <div className="flex flex-wrap gap-2">
             {tags.map((tag) => (
@@ -213,7 +200,7 @@ const ReycoMarine = () => (
         <AnimatedSection>
           <h2 className="text-2xl md:text-3xl font-heading font-bold mb-4">The Challenge</h2>
           <p className="text-muted-foreground leading-relaxed max-w-3xl mb-8">
-            Reyco Marine is a Sault Ste. Marie institution — a full-service dealer for marine, lawn, snow, and ATV/UTV equipment, with an in-house service team and an authorized parts department. Despite a strong local reputation, they faced a significant gap online:
+            Reyco Marine is a Sault Ste. Marie institution — a full-service dealer for marine, lawn, snow, and ATV/UTV equipment, with an in-house service team and an authorized parts department. Despite a strong local reputation, they had no customer-facing website and no presence in search:
           </p>
           <div className="grid sm:grid-cols-2 gap-4">
             {challenges.map((c) => (
@@ -239,7 +226,7 @@ const ReycoMarine = () => (
     <section className="section-padding bg-card border-y border-border">
       <div className="container max-w-4xl">
         <AnimatedSection>
-          <h2 className="text-2xl md:text-3xl font-heading font-bold mb-8">What We Did</h2>
+          <h2 className="text-2xl md:text-3xl font-heading font-bold mb-8">What We Built</h2>
           <div className="relative">
             <div className="absolute left-5 top-0 bottom-0 w-px bg-border hidden md:block" />
             <div className="space-y-8">
@@ -267,11 +254,9 @@ const ReycoMarine = () => (
         <AnimatedSection>
           <h2 className="text-2xl md:text-3xl font-heading font-bold mb-2 text-center">The Results</h2>
           <p className="text-muted-foreground text-center mb-10">
-            Launch milestones — May 2026. Organic traffic data updates as GSC baseline establishes.
+            Delivered at launch — May 6, 2026.
           </p>
-
-          {/* Milestone Cards */}
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-12">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {milestones.map((m) => (
               <div key={m.label} className="rounded-xl border border-border/50 bg-card p-5">
                 <div className="flex items-center gap-3 mb-3">
@@ -287,74 +272,29 @@ const ReycoMarine = () => (
               </div>
             ))}
           </div>
-
-          {/* Target Keywords */}
-          <h3 className="font-heading font-bold text-lg mb-2 text-center">Target Keywords</h3>
-          <p className="text-muted-foreground text-sm text-center mb-4">
-            Ranking data will appear here as GSC baseline establishes (~28 days post-launch).
-          </p>
-          <div className="rounded-xl border border-border/50 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-muted/50 border-b border-border/50">
-                  <th className="text-left p-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Keyword</th>
-                  <th className="text-center p-3 font-medium text-muted-foreground text-xs uppercase tracking-wider">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {targetKeywords.map((k) => (
-                  <tr key={k.keyword} className="border-b border-border/30 last:border-0">
-                    <td className="p-3 font-medium">{k.keyword}</td>
-                    <td className="p-3 text-center">
-                      <Badge variant="secondary" className="text-[10px]">{k.status}</Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </AnimatedSection>
-      </div>
-    </section>
-
-    {/* Testimonial — [FLAG-1] No Casey quote on file. Replace placeholder before publishing. */}
-    <section className="section-padding bg-primary/5 border-y border-primary/10">
-      <div className="container max-w-3xl text-center">
-        <AnimatedSection>
-          <div className="flex justify-center gap-1 mb-6">
-            {[...Array(5)].map((_, i) => (
-              <Star key={i} size={22} className="text-yellow-500 fill-yellow-500" />
-            ))}
-          </div>
-          <Quote className="mx-auto text-primary/30 mb-4" size={40} />
-          {/* [FLAG-1] PLACEHOLDER — replace with Casey's actual quote before publishing */}
-          <blockquote className="text-lg md:text-xl font-heading italic text-foreground/90 mb-6 leading-relaxed">
-            "[Quote from Casey — pending. Confirm with Aiden before publishing.]"
-          </blockquote>
-          <p className="text-muted-foreground font-medium">- Casey, Owner, Reyco Marine</p>
         </AnimatedSection>
       </div>
     </section>
 
     {/* Key Takeaway */}
-    <section className="section-padding">
+    <section className="section-padding bg-card border-y border-border">
       <div className="container max-w-3xl text-center">
         <AnimatedSection>
           <h2 className="text-2xl md:text-3xl font-heading font-bold mb-4">Key Takeaway</h2>
           <p className="text-muted-foreground leading-relaxed max-w-2xl mx-auto">
-            Reyco Marine had the reputation and the inventory. What they needed was a digital foundation worthy of both. By launching a production WooCommerce site with a clean security record, a structured content architecture, and 62 organic funnels already staged, GLV Marketing positioned Reyco to compound search visibility month over month — not start from scratch after launch.
+            Reyco Marine had the inventory, the reputation, and the service team. What they needed was a digital foundation that matched all three. GLV Marketing delivered a production WordPress and WooCommerce site with a structured 11-brand catalogue, a clean security record, and a verified local search presence — all in place before the domain went live.
           </p>
         </AnimatedSection>
       </div>
     </section>
 
     {/* CTA */}
-    <section className="section-padding bg-card border-y border-border">
+    <section className="section-padding">
       <div className="container max-w-2xl text-center">
         <AnimatedSection>
-          <h2 className="text-3xl font-heading font-bold mb-4">Ready to grow your business online?</h2>
+          <h2 className="text-3xl font-heading font-bold mb-4">Ready to build your business online?</h2>
           <p className="text-muted-foreground mb-8">
-            Let's build a strategy that works for you, just like we did for Reyco Marine.
+            Let's build a site that works as hard as you do, just like we did for Reyco Marine.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link to="/contact">
