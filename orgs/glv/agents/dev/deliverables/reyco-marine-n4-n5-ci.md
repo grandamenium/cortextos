@@ -2,6 +2,7 @@
 
 _Drafted: 2026-05-08 (cloud session dev agent heartbeat)_
 _Updated: 2026-05-11 — PHP 8.1 (EOL Dec 2025) → 8.3 runner; testVersion expanded to `7.4-8.3` range for full deprecation coverage._
+_Updated: 2026-05-12 — smoke-test job: SMOKE_URLS updated to verified reycomarine.com production paths (exp_1778496458_smku); REQUIRED_MARKERS updated to theme-accurate Tailwind markers (next hypothesis after exp close 2026-05-13T10:57Z, verified 2026-05-11 against live site)._
 _Scout signal HIGH priority item from 2026-05-07: review Claude Code CI auto-fix integration path before implementing N4/N5 manually._
 
 ## Decision Summary
@@ -112,13 +113,16 @@ jobs:
         run: |
           SMOKE_URLS=(
             "https://reycomarine.com/"
-            "https://reycomarine.com/products/"
-            "https://reycomarine.com/services/"
-            "https://reycomarine.com/?p=368"
-            "https://reycomarine.com/service/marine/"
-            "https://reycomarine.com/product-category/outboard-motors/"
+            "https://reycomarine.com/boats-and-marine/"
+            "https://reycomarine.com/service/"
+            "https://reycomarine.com/product/2022-mercury-me-60-elpt-4s-efi/"
+            "https://reycomarine.com/service/engine-repair/"
+            "https://reycomarine.com/boats-and-marine/outboard-motors/"
           )
-          REQUIRED_MARKERS=(".site-header" ".site-footer" "main.site-main" "nav.site-nav")
+          # Theme-accurate markers (Tailwind theme — not WP classic class names).
+          # reyco-nav-link: custom class, 9× per page; <main/<footer/<nav: HTML5 structural elements.
+          # Verified 2026-05-11 against live reycomarine.com.
+          REQUIRED_MARKERS=("reyco-nav-link" "<main" "<footer" "<nav")
           WP_ERROR_PATTERNS=("Fatal error" "Parse error" "There has been a critical error" "Call to undefined" "Call to a member function" "class not found" "wp-die")
 
           FAIL=0
@@ -214,8 +218,10 @@ phpcs --standard=PHPCompatibility --runtime-set testVersion 7.4-8.3 --extensions
 - `shivammathur/setup-php@v2` is the standard PHP setup action for GitHub Actions — handles PHP version + PECL extensions
 - PHPCompatibility scan uses `testVersion 7.4-8.3` — covers all removals/deprecations from PHP 7.4 through 8.3. SiteGround targeting 8.1 (EOL Dec 2025); recommend requesting 8.3 (active through Dec 2027). Either way the range catches all issues.
 - CI runner uses PHP 8.3 — runs on the latest stable PHP to catch runtime issues regardless of SiteGround's specific target version
-- Smoke test uses `reycomarine.com` (production domain, migrated 2026-05-06) — not `reyco.glvmarketing.ca` (staging)
+- Smoke URLs: all 6 verified 200 on reycomarine.com 2026-05-11 (exp_1778496458_smku). Old staging URLs (`reyco.glvmarketing.ca`, `/products/`, `/services/`) were stale — `/products/` and `/services/` returned 404 even on staging.
+- `REQUIRED_MARKERS`: reyco-marine uses Tailwind utility classes — WP classic class names (`.site-header`, `.site-footer`, `main.site-main`, `nav.site-nav`) do NOT exist in the theme. Replaced with `reyco-nav-link` (theme-specific custom class, 9× per page) + HTML5 structural tags (`<main`, `<footer`, `<nav`). Verified 2026-05-11 against live reycomarine.com. A broken WP deploy (white screen, PHP fatal) would be missing all 4 markers.
 - smoke-test job guarded by `if: github.event_name == 'push' && github.ref == 'refs/heads/master'` — runs only after master deploy, not on PRs
+- Single product URL (`/product/2022-mercury-me-60-elpt-4s-efi/`) could 404 if the product is deleted; update to a durable inventory page URL once one exists
 - Claude review action (`claude-review.yml`) is additive — costs ~$0.10–$0.30 per PR review depending on diff size
 - `claude-code-action@v1` breaking changes from beta: `direct_prompt` → `prompt`, `mode` removed (auto-detected), `custom_instructions` → `claude_args: --append-system-prompt`
 - If PHP lint or PHPCS CI fails on a PR, Claude Code auto-fix (via `subscribe_pr_activity` in a Claude Code session) can watch + fix automatically
