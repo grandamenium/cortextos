@@ -3,6 +3,18 @@
   "updated_at": "2026-04-06T00:00:00Z",
   "items": [
     {
+      "name": "agentic-crm-assistant",
+      "description": "Agentic CRM personal assistant — reusable executive/personal assistant template with structured relationship memory, inbox/calendar/meeting workflows, full interactive setup, tool-agnostic connectors, CRM skills, and recurring assistant crons",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["personal-assistant", "crm", "calendar", "email", "meetings", "relationships"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/agents/agentic-crm-assistant",
+      "submitted_at": "2026-05-12T00:00:00Z"
+    },
+    {
       "name": "orchestrator",
       "description": "Orchestrator agent — coordinates other agents, handles morning/evening reviews, manages goals and approvals, weekly reporting",
       "author": "cortextos",
