@@ -1,6 +1,66 @@
 # Dev Agent Goals
 
-_Last updated: 2026-05-12 ~19:30 UTC — cloud session. Client repos: reyco-marine PR #239 OPEN (llms.txt routing — awaiting Aiden); titantinyhomes PR #5 MERGED+DEPLOYED; glvmarketing PR #2 OPEN (WP Phase 2 source-control only — SLA expired 19:01 UTC, no merge action); **glvmarketing PR #3 OPEN** (Phase 2 regressions: logos + partner row — local agent must apply deploy.yml fix before merge); fusionfinancial 0 open PRs ✅. 95 cortextos PRs waiting Aiden (#6–#95). ✅ Coverage scan complete. ⚠️ PHPCompatibility PHPCS DEADLINE PASSED (midnight May 10) — local agent must install before May 20 PHP cutover (8 days). ⚠️ Node 22 deadline June 2 = 21 days. ⚠️ PHP 7.4 cutover May 20 = 8 days. ⏸ exp_1778496458_smku closes 2026-05-13T10:57Z — implement REQUIRED_MARKERS fix after close. ⚠️ glvmarketing WP-CLI items: permalink revert (pages 10/11/12 parent=9) + RankMath sitemap + CF7 form verify — need SSH to glvmarketing.ca SiteGround (separate from reyco SSH)._
+_Last updated: 2026-05-12 ~20:00 UTC — cloud session. **🚨 URGENT: glvmarketing.ca emergency handoff from boss at 19:55 UTC — template-service.php 500 is launch blocker (see Priority 0 below).** Client repos: reyco-marine PR #239 OPEN (llms.txt routing — awaiting Aiden); titantinyhomes PR #5 MERGED+DEPLOYED; glvmarketing PR #2 OPEN (SLA expired 19:01 UTC, safe to merge or close); **glvmarketing PR #3 OPEN** (Phase 2 regressions: logos + partner row — local agent must apply deploy.yml fix before merge); fusionfinancial 0 open PRs ✅. 95 cortextos PRs waiting Aiden (#6–#95). ✅ Coverage scan complete. ⚠️ PHPCompatibility PHPCS DEADLINE PASSED (midnight May 10) — local agent must install before May 20 PHP cutover (8 days). ⚠️ Node 22 deadline June 2 = 21 days. ⚠️ PHP 7.4 cutover May 20 = 8 days. ⏸ exp_1778496458_smku closes 2026-05-13T10:57Z — implement REQUIRED_MARKERS fix after close._
+
+## Priority 0 — URGENT: glvmarketing.ca Launch Blockers
+
+**Boss dispatch 19:55 UTC May 12 (msg_id 1778615871114-boss-7xwl1). Boss has been doing 2h of direct FTP+REST work; handing off to dev at Aiden's direction.**
+
+**State as of handoff:**
+- ✅ Visual fixes done
+- ✅ Contact form / Resend wired
+- ✅ URL hierarchy reparented (Services parent page)
+- ✅ 20 pages created via REST
+- ❌ **template-service.php 500 bug** — blocking all 10 service pages from showing Vite-styled layout
+- ⏳ Remaining 11 pages need proper content + template
+- ⏳ FAQ visual match to Vite design
+- ⏳ `/case-studies/titan` + `/case-studies/fusion` 404 (rewrite cache)
+
+**Aiden hint:** reference `glvcrypto/reyco-marine` template-service.php — same SG infra, same template name, works there.
+
+**Cloud session NOTE:** `glvcrypto/glvmarketing` and `glvcrypto/reyco-marine` are NOT accessible from cloud (git proxy restricted to cortextos only). **Local agent must handle all glvmarketing.ca work.** See deliverable:
+
+```
+orgs/glv/clients/glv-marketing/deliverables/template-service-fix/
+  template-service.php   — clean replacement template (safe, no fatal)
+  APPLY.md               — diagnostic steps + SCP/git apply instructions
+```
+
+### P0-1: template-service.php 500 fix (LAUNCH BLOCKER)
+
+**Local agent steps:**
+1. SSH to SiteGround: `ssh -p 18765 giowm1155.siteground.biz -i ~/.ssh/sg-reyco`
+2. Check PHP error log: `tail -100 ~/glvmarketing.ca/logs/php_error.log`
+3. View current template: `cat ~/glvmarketing.ca/public_html/wp-content/themes/glv-marketing/template-service.php`
+4. Compare with reyco-marine: `cat ~/reyco-marine.com/public_html/wp-content/themes/reyco-marine/template-service.php` (same server)
+5. If syntax/fatal error: SCP the clean version from `deliverables/template-service-fix/template-service.php`
+6. Verify 200 on a service page, then commit fix to `glvcrypto/glvmarketing`
+
+### P0-2: Remaining 11 pages (after 500 fixed)
+
+Pages needing proper content + template-service.php assignment:
+`LocalSEO`, `GEO`, `WebsiteDesign`, `PaidAdvertising`, `ContentMarketing`, `AIAutomation`, `GoogleBusinessProfile`, `case-studies/titan`, `case-studies/fusion`, `MarketingHub`, `AutomationHub`, `CustomAIHub`
+
+Use WP REST API or WP-CLI to assign `template-service.php` to each:
+```bash
+wp post meta update <ID> _wp_page_template template-service.php
+wp post list --post_type=page --fields=ID,post_title,post_name --posts_per_page=50
+```
+
+### P0-3: /case-studies/{titan,fusion} 404
+
+Rewrite cache issue. Fix: `wp rewrite flush` + verify page slugs/parents match expected URLs.
+
+### P0-4: FAQ visual match
+
+`page-faq.php` uses vanilla JS accordion — styling needs to match Vite design tokens. Low priority vs 500 fix.
+
+### P0-5: deploy.yml fix (glvmarketing PR #3 prereq)
+
+Already documented in GOALS.md Priority 1 table (glvmarketing #3). Still needs:
+- Remove SPA `.htaccess` step from deploy.yml
+- Change FTP target to `dist/assets/` → `wp-content/themes/glv-marketing/assets/`
+- Local agent apply: exact YAML in PR #3 description
 
 ## Priority 1 — Merge Queue (blocked on Aiden review)
 
