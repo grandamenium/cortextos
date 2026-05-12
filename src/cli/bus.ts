@@ -2821,3 +2821,6 @@ function sleepMs(ms: number): Promise<void> {
 function pct(v: number): string {
   return `${Math.round(v * 100)}%`;
 }
+
+import { registerTokenAuditCommands } from './token-audit.js';
+registerTokenAuditCommands(busCommand);

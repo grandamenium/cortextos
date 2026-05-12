@@ -1,0 +1,41 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "model": "claude-haiku-4-5-20251001",
+  "startup_delay": 0,
+  "max_session_seconds": 28800,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "",
+  "day_mode_start": "",
+  "day_mode_end": "",
+  "communication_style": "",
+  "approval_rules": {
+    "always_ask": ["edit-other-agent-config", "edit-cron-schedule", "remove-cron"],
+    "never_ask": []
+  },
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update heartbeat, check inbox, work on highest-priority proposal."
+    },
+    {
+      "name": "weekly-review",
+      "type": "cron",
+      "schedule": "0 9 * * 0",
+      "prompt": "Run: cortextos bus token-audit recommend --since 7d. Review each generated proposal. For each: read .claude/skills/token-audit/SKILL.md section 'Recommendations'. Attach an executive summary, then post the top-3 summary to the activity channel + notify the user via Telegram. Write proposals to ~/.cortextos/$CTX_INSTANCE_ID/orgs/$CTX_ORG/analytics/reports/token-audit/recommendations/. Then route each via the approvals skill."
+    },
+    {
+      "name": "outcome-measurement",
+      "type": "recurring",
+      "interval": "24h",
+      "prompt": "Run: cortextos bus token-audit list-recommendations --state applied --format json. For each: compare post-apply window to expected_savings_usd_per_week. If hypothesis_held=false, file a revert proposal. Update each recommendation's state to 'measured' then 'kept' or 'reverted'."
+    }
+  ],
+  "ecosystem": {},
+  "ctx_warning_threshold": 70,
+  "ctx_handoff_threshold": 80
+}

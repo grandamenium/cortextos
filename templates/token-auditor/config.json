@@ -1,0 +1,47 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "model": "claude-haiku-4-5-20251001",
+  "startup_delay": 0,
+  "max_session_seconds": 28800,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "",
+  "day_mode_start": "",
+  "day_mode_end": "",
+  "communication_style": "",
+  "approval_rules": {
+    "always_ask": [],
+    "never_ask": []
+  },
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, then run the token-audit ingest + threshold check."
+    },
+    {
+      "name": "hourly-ingest",
+      "type": "recurring",
+      "interval": "1h",
+      "prompt": "Run: cortextos bus token-audit run --since 1h. Keep the fact store fresh. If turns_new > 0, briefly note the count in memory. If there are anomalies, summarize them and route critical ones through boss-relay."
+    },
+    {
+      "name": "daily-digest",
+      "type": "recurring",
+      "interval": "24h",
+      "prompt": "Run: cortextos bus token-audit run --since 24h. Then read .claude/skills/token-audit/SKILL.md section 'Daily digest' and follow the digest-composition recipe. Post the digest to the activity channel via `cortextos bus log-event action token_audit_digest info`. Plain English: what was spent, who's worth watching, top files, anomalies. No raw IDs in the message body."
+    },
+    {
+      "name": "threshold-check",
+      "type": "recurring",
+      "interval": "30m",
+      "prompt": "Run: cortextos bus token-audit alert-check. On non-zero exit, route a Telegram alert through boss (per the boss-relay rule). On a sustained breach (>=2 consecutive checks), direct-DM Saurav."
+    }
+  ],
+  "ecosystem": {},
+  "ctx_warning_threshold": 70,
+  "ctx_handoff_threshold": 80
+}
