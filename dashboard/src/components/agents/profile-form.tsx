@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -14,6 +15,7 @@ interface ProfileFormProps {
   org: string;
   identity: IdentityFields;
   soul: SoulFields;
+  actionSlot?: HTMLElement | null;
 }
 
 export function ProfileForm({
@@ -21,6 +23,7 @@ export function ProfileForm({
   org,
   identity: initialIdentity,
   soul: initialSoul,
+  actionSlot,
 }: ProfileFormProps) {
   const [identity, setIdentity] = useState<IdentityFields>(initialIdentity);
   const [soul, setSoul] = useState<SoulFields>(initialSoul);
@@ -68,8 +71,16 @@ export function ProfileForm({
     }
   };
 
+  const saveButton = (
+    <Button size="sm" onClick={handleSave} disabled={saving}>
+      <IconDeviceFloppy size={16} data-icon="inline-start" />
+      {saving ? 'Saving...' : 'Save Changes'}
+    </Button>
+  );
+
   return (
     <div className="space-y-6">
+      {actionSlot && createPortal(saveButton, actionSlot)}
       {/* Warning banner after save */}
       {saved && (
         <div className="flex items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 px-4 py-3 text-sm text-warning">
@@ -209,13 +220,6 @@ export function ProfileForm({
         </CardContent>
       </Card>
 
-      {/* Save button */}
-      <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={saving}>
-          <IconDeviceFloppy size={16} data-icon="inline-start" />
-          {saving ? 'Saving...' : 'Save Changes'}
-        </Button>
-      </div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { ProfileForm } from './profile-form';
 import { TasksTab } from './tasks-tab';
@@ -34,17 +35,22 @@ export function AgentDetailTabs({
     workStyle: detail.identity.workStyle,
   };
 
+  const [profileActionSlot, setProfileActionSlot] = useState<HTMLDivElement | null>(null);
+
   return (
     <Tabs defaultValue="profile">
-      <TabsList variant="line">
-        <TabsTrigger value="profile">Profile</TabsTrigger>
-        <TabsTrigger value="tasks">Tasks</TabsTrigger>
-        <TabsTrigger value="crons">Crons</TabsTrigger>
-        <TabsTrigger value="memory">Memory</TabsTrigger>
-        <TabsTrigger value="logs">Logs</TabsTrigger>
-        <TabsTrigger value="goals">Goals</TabsTrigger>
-        <TabsTrigger value="settings">Settings</TabsTrigger>
-      </TabsList>
+      <div className="flex items-center justify-between gap-3">
+        <TabsList variant="line">
+          <TabsTrigger value="profile">Profile</TabsTrigger>
+          <TabsTrigger value="tasks">Tasks</TabsTrigger>
+          <TabsTrigger value="crons">Crons</TabsTrigger>
+          <TabsTrigger value="memory">Memory</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="goals">Goals</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+        </TabsList>
+        <div ref={setProfileActionSlot} className="flex items-center" />
+      </div>
 
       <TabsContent value="profile">
         <ProfileForm
@@ -52,6 +58,7 @@ export function AgentDetailTabs({
           org={detail.org}
           identity={identityFields}
           soul={soulFields}
+          actionSlot={profileActionSlot}
         />
       </TabsContent>
 
