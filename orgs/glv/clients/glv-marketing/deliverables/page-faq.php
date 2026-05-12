@@ -28,7 +28,18 @@ get_header();
 
 <section class="pb-16 md:pb-24">
     <div class="container max-w-3xl">
-        <div class="space-y-10 glv-animate-in">
+
+        <!-- Expand / Collapse All -->
+        <div class="flex justify-end mb-6">
+            <button id="glv-expand-all"
+                    class="inline-flex items-center gap-2 text-xs font-medium text-primary border border-primary/30 rounded-md px-3 py-1.5 hover:bg-primary/10 transition-colors"
+                    data-state="collapsed">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                Expand All
+            </button>
+        </div>
+
+        <div class="space-y-12 md:space-y-16 glv-animate-in">
 
             <?php
             $faq_categories = [
@@ -85,17 +96,22 @@ get_header();
             foreach ($faq_categories as $cat_title => $questions) :
             ?>
             <div>
-                <h2 class="text-xl md:text-2xl font-heading font-bold mb-1"><?php echo $cat_title; ?></h2>
-                <div class="h-px bg-border mb-4"></div>
-                <div class="space-y-2">
+                <!-- Category heading with red accent line -->
+                <h2 class="text-2xl md:text-3xl font-heading font-bold mb-2"><?php echo $cat_title; ?></h2>
+                <div class="mb-5">
+                    <div class="h-0.5 w-12 bg-primary rounded-full mb-px"></div>
+                    <div class="h-px bg-border/60"></div>
+                </div>
+                <!-- Accordion items -->
+                <div class="space-y-3">
                     <?php foreach ($questions as $item) : ?>
-                    <div class="glv-faq-item rounded-xl border border-border/50 bg-card overflow-hidden">
-                        <button class="glv-faq-trigger w-full text-left px-5 sm:px-6 py-4 font-heading font-semibold text-foreground flex items-center justify-between gap-4 hover:bg-muted/30 transition-colors"
+                    <div class="glv-faq-item rounded-xl border border-border/50 bg-card overflow-hidden transition-colors duration-200 hover:border-primary/25">
+                        <button class="glv-faq-trigger w-full text-left px-5 sm:px-6 py-5 font-heading font-medium text-foreground flex items-center justify-between gap-4 hover:bg-primary/[0.03] transition-colors duration-150"
                                 aria-expanded="false">
-                            <span class="text-sm sm:text-base"><?php echo esc_html($item['q']); ?></span>
-                            <svg class="glv-faq-chevron shrink-0 text-primary transition-transform duration-200" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                            <span class="text-sm sm:text-base leading-snug"><?php echo esc_html($item['q']); ?></span>
+                            <svg class="glv-faq-chevron shrink-0 text-primary/60 transition-transform duration-200" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                         </button>
-                        <div class="glv-faq-content hidden px-5 sm:px-6 pb-5 pt-1 text-muted-foreground leading-relaxed text-sm border-t border-border/30">
+                        <div class="glv-faq-content hidden px-5 sm:px-6 pb-6 pt-2 text-muted-foreground leading-relaxed text-sm border-t border-border/30">
                             <?php echo wp_kses_post($item['a']); ?>
                         </div>
                     </div>
@@ -104,7 +120,7 @@ get_header();
             </div>
             <?php endforeach; ?>
 
-        </div>
+        </div><!-- end space-y-12 -->
     </div>
 </section>
 
@@ -123,17 +139,40 @@ get_header();
 
 <script>
 (function(){
+    function setOpen(item, open) {
+        var content = item.querySelector('.glv-faq-content');
+        var chevron = item.querySelector('.glv-faq-chevron');
+        var btn     = item.querySelector('.glv-faq-trigger');
+        content.classList.toggle('hidden', !open);
+        chevron.style.transform = open ? 'rotate(180deg)' : '';
+        btn.setAttribute('aria-expanded', String(open));
+    }
+
+    // Individual toggle
     document.querySelectorAll('.glv-faq-trigger').forEach(function(btn){
         btn.addEventListener('click', function(){
             var item = btn.closest('.glv-faq-item');
-            var content = item.querySelector('.glv-faq-content');
-            var chevron = item.querySelector('.glv-faq-chevron');
-            var open = !content.classList.contains('hidden');
-            content.classList.toggle('hidden', open);
-            chevron.style.transform = open ? '' : 'rotate(180deg)';
-            btn.setAttribute('aria-expanded', String(!open));
+            var open = btn.getAttribute('aria-expanded') === 'true';
+            setOpen(item, !open);
         });
     });
+
+    // Expand / Collapse All
+    var expandBtn = document.getElementById('glv-expand-all');
+    if (expandBtn) {
+        expandBtn.addEventListener('click', function(){
+            var expanding = expandBtn.getAttribute('data-state') === 'collapsed';
+            document.querySelectorAll('.glv-faq-item').forEach(function(item){
+                setOpen(item, expanding);
+            });
+            expandBtn.setAttribute('data-state', expanding ? 'expanded' : 'collapsed');
+            expandBtn.querySelector('svg').style.transform = expanding ? 'rotate(180deg)' : '';
+            expandBtn.innerHTML = expandBtn.innerHTML.replace(
+                expanding ? 'Expand All' : 'Collapse All',
+                expanding ? 'Collapse All' : 'Expand All'
+            );
+        });
+    }
 })();
 </script>
 
