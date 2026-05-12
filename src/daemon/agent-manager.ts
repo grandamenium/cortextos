@@ -10,6 +10,7 @@ import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
+import { logEvent } from '../bus/event.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
@@ -179,7 +180,7 @@ export class AgentManager {
     }
 
     if (!config) {
-      config = this.loadAgentConfig(agentDir);
+      config = this.loadAgentConfig(agentDir, name, resolvedOrg);
     }
 
     const env: CtxEnv = {
@@ -929,7 +930,7 @@ export class AgentManager {
 
         for (const name of dirs) {
           const dir = join(agentsBase, name);
-          const config = this.loadAgentConfig(dir);
+          const config = this.loadAgentConfig(dir, name, org);
           agents.push({ name, dir, org, config });
         }
       } catch {
@@ -942,17 +943,60 @@ export class AgentManager {
 
   /**
    * Load agent config from config.json.
+   *
+   * On JSON parse failure (e.g. trailing comma): logs to daemon stderr,
+   * writes a visible warning file to the agent state dir, emits a bus
+   * event so the dashboard surfaces the failure. Without this, malformed
+   * configs silently produce cron-dead agents (issue #387).
    */
-  private loadAgentConfig(agentDir: string): AgentConfig {
+  private loadAgentConfig(agentDir: string, agentName?: string, org?: string): AgentConfig {
     const configPath = join(agentDir, 'config.json');
+    if (!existsSync(configPath)) return {};
+
+    let raw: string;
     try {
-      if (existsSync(configPath)) {
-        return JSON.parse(readFileSync(configPath, 'utf-8'));
-      }
-    } catch {
-      // Ignore parse errors
+      raw = readFileSync(configPath, 'utf-8');
+    } catch (err) {
+      console.error(`[agent-manager] Failed to read config.json for ${agentName ?? agentDir}: ${(err as Error).message}`);
+      return {};
     }
-    return {}; // Default config
+
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      const resolvedName = agentName ?? agentDir.split('/').pop() ?? 'unknown';
+      const resolvedOrg = org ?? this.org;
+      console.error(`[agent-manager] config.json parse failure for ${resolvedName}: ${errMsg} — agent will boot with empty config (all crons disabled)`);
+
+      // Write a visible warning to the agent state dir so operators can find it.
+      try {
+        const paths = resolvePaths(resolvedName, this.instanceId, resolvedOrg);
+        mkdirSync(paths.stateDir, { recursive: true });
+        const warningPath = join(paths.stateDir, 'config-parse-error.txt');
+        const timestamp = new Date().toISOString();
+        writeFileSync(
+          warningPath,
+          `config.json parse failure detected at ${timestamp}\n` +
+          `Path: ${configPath}\n` +
+          `Error: ${errMsg}\n\n` +
+          `Agent booted with empty default config — all crons disabled, all custom settings lost.\n` +
+          `Fix the JSON and restart the agent.\n`,
+          'utf-8',
+        );
+
+        // Emit a bus event so the dashboard surfaces this on the activity feed.
+        logEvent(paths, resolvedName, resolvedOrg, 'error', 'config_parse_failure', 'critical', {
+          path: configPath,
+          error: errMsg,
+        });
+      } catch (innerErr) {
+        // Never let a logging failure block the daemon — but surface it to stderr.
+        console.error(`[agent-manager] Failed to surface config_parse_failure for ${resolvedName}: ${(innerErr as Error).message}`);
+      }
+
+      return {};
+    }
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
@@ -346,6 +346,135 @@ describe('buildReplyContext - Telegram reply context (BUG fix: media replies los
     const msg = { message_id: 11, chat: { id: 1 }, text: 'Hello\x00world' };
     const result = buildReplyContext(msg);
     expect(result).not.toContain('\x00');
+  });
+});
+
+describe('AgentManager.loadAgentConfig - issue #387 (config.json parse failure surfacing)', () => {
+  // Regression: a single trailing comma or stray character in an agent's
+  // config.json silently produced an empty config, which meant every cron the
+  // agent depended on never registered. The agent looked alive (heartbeat
+  // green, process running) but did no scheduled work. This block pins the
+  // fix in place: parse failures must (a) leave the agent discoverable so
+  // operators see it boot, (b) write a visible warning file to the agent's
+  // state dir, (c) emit a critical bus event so the dashboard surfaces it,
+  // and (d) log to stderr.
+
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+  let fakeHome: string;
+  let prevHome: string | undefined;
+  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-cfgparse-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    fakeHome = join(testDir, 'home');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+    mkdirSync(fakeHome, { recursive: true });
+    // resolvePaths() in src/utils/paths.ts uses os.homedir() to derive
+    // ~/.cortextos/<instance>/state/<agent>/. On macOS/Linux that reads
+    // process.env.HOME, so overriding HOME here redirects the warning
+    // file and event jsonl into the sandbox tmpdir for cleanup.
+    prevHome = process.env.HOME;
+    process.env.HOME = fakeHome;
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = prevHome;
+    }
+    consoleErrorSpy.mockRestore();
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('keeps a malformed config.json agent discoverable and surfaces the failure', async () => {
+    // Trailing comma — the exact incident shape that motivated #387.
+    writeFileSync(
+      join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice', 'config.json'),
+      '{"enabled": true,}',
+    );
+
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.discoverAndStart();
+
+    // (a) Agent must still boot — pre-fix it was just silently cron-dead.
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledWith('alice', expect.any(String), expect.any(Object), 'acme');
+
+    // (b) Visible warning file in the agent state dir.
+    const warningPath = join(fakeHome, '.cortextos', 'test-instance', 'state', 'alice', 'config-parse-error.txt');
+    expect(existsSync(warningPath)).toBe(true);
+    const warning = readFileSync(warningPath, 'utf-8');
+    expect(warning).toContain('config.json parse failure');
+    expect(warning).toContain(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice', 'config.json'));
+
+    // (c) Critical bus event so the dashboard surfaces it on the activity feed.
+    const eventsDir = join(fakeHome, '.cortextos', 'test-instance', 'orgs', 'acme', 'analytics', 'events', 'alice');
+    expect(existsSync(eventsDir)).toBe(true);
+    const eventFiles = readdirSync(eventsDir).filter(f => f.endsWith('.jsonl'));
+    expect(eventFiles.length).toBeGreaterThan(0);
+    const eventLines = readFileSync(join(eventsDir, eventFiles[0]), 'utf-8').trim().split('\n');
+    const parsedEvents = eventLines.map(line => JSON.parse(line));
+    const parseFailureEvent = parsedEvents.find(e => e.event === 'config_parse_failure');
+    expect(parseFailureEvent).toBeDefined();
+    expect(parseFailureEvent.severity).toBe('critical');
+    expect(parseFailureEvent.category).toBe('error');
+    expect(parseFailureEvent.org).toBe('acme');
+    expect(parseFailureEvent.metadata.path).toContain('config.json');
+
+    // (d) stderr log so anyone tailing daemon output sees it.
+    expect(consoleErrorSpy).toHaveBeenCalled();
+    const stderrCalls = consoleErrorSpy.mock.calls.flat().join(' ');
+    expect(stderrCalls).toContain('config.json parse failure');
+    expect(stderrCalls).toContain('alice');
+  });
+
+  it('treats a missing config.json as empty config without warnings (legacy behavior preserved)', async () => {
+    // No config.json on disk at all — alice's dir was created in beforeEach but is empty.
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.discoverAndStart();
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+
+    // No warning file, no event dir, no console.error — missing is the default,
+    // not a failure.
+    const warningPath = join(fakeHome, '.cortextos', 'test-instance', 'state', 'alice', 'config-parse-error.txt');
+    expect(existsSync(warningPath)).toBe(false);
+    const eventsDir = join(fakeHome, '.cortextos', 'test-instance', 'orgs', 'acme', 'analytics', 'events', 'alice');
+    expect(existsSync(eventsDir)).toBe(false);
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+  });
+
+  it('parses a valid config.json without surfacing any warning', async () => {
+    writeFileSync(
+      join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice', 'config.json'),
+      JSON.stringify({ enabled: true, runtime: 'claude-code' }),
+    );
+
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.discoverAndStart();
+
+    // Verify the parsed config was passed through to startAgent.
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    const passedConfig = startSpy.mock.calls[0][2] as { enabled?: boolean; runtime?: string };
+    expect(passedConfig.enabled).toBe(true);
+    expect(passedConfig.runtime).toBe('claude-code');
+
+    const warningPath = join(fakeHome, '.cortextos', 'test-instance', 'state', 'alice', 'config-parse-error.txt');
+    expect(existsSync(warningPath)).toBe(false);
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 });
 
