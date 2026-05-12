@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { extname, join } from 'path';
 import { homedir } from 'os';
 import type { BusPaths } from '../types/index.js';
 import { normalizeOrgName } from '../utils/org.js';
@@ -238,6 +238,11 @@ export function queryKnowledgeBase(
   return { results: [], total: 0, query: question, collection: `shared-${org}` };
 }
 
+/** Image extensions that the Gemini image-description API processes.
+ *  When skipImages is true these are filtered out before invoking mmrag.py
+ *  to prevent the ingest process from hanging on API calls for each file. */
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif']);
+
 /**
  * Ingest files into the knowledge base.
  */
@@ -248,11 +253,12 @@ export function ingestKnowledgeBase(
     agent?: string;
     scope?: 'shared' | 'private';
     force?: boolean;
+    skipImages?: boolean;
     frameworkRoot: string;
     instanceId: string;
   },
 ): void {
-  const { agent, scope = 'shared', force, frameworkRoot, instanceId } = options;
+  const { agent, scope = 'shared', force, skipImages, frameworkRoot, instanceId } = options;
   // Normalize once (see queryKnowledgeBase for rationale).
   const org = normalizeOrgName(frameworkRoot, options.org);
 
@@ -293,12 +299,35 @@ export function ingestKnowledgeBase(
     mkdirSync(chromaDir, { recursive: true });
   }
 
+  // Filter out image files when --skip-images is set. The Gemini
+  // image-description API is called for each image file; with large screenshot
+  // batches (e.g. 260 PNGs from playwright-qa/) this hangs the ingest process
+  // for hours. Skipped files are logged so the operator knows what was omitted.
+  let ingestPaths = paths;
+  if (skipImages) {
+    const skipped: string[] = [];
+    ingestPaths = paths.filter((p) => {
+      if (IMAGE_EXTENSIONS.has(extname(p).toLowerCase())) {
+        skipped.push(p);
+        return false;
+      }
+      return true;
+    });
+    if (skipped.length > 0) {
+      console.log(`[kb-ingest] Skipping ${skipped.length} image file(s) (--skip-images)`);
+    }
+    if (ingestPaths.length === 0) {
+      console.log('[kb-ingest] No non-image files to ingest after filtering.');
+      return;
+    }
+  }
+
   console.log(`Ingesting into collection: ${collection}`);
-  for (const p of paths) {
+  for (const p of ingestPaths) {
     console.log(`  Source: ${p}`);
   }
 
-  const args = [mmragPath, 'ingest', ...paths, '--collection', collection];
+  const args = [mmragPath, 'ingest', ...ingestPaths, '--collection', collection];
   if (force) args.push('--force');
 
   // Multimodal PDF ingestion via Gemini Flash routinely takes 2–5 min for

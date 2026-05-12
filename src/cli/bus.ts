@@ -1127,7 +1127,8 @@ busCommand
   .option('--agent <name>', 'Agent name (for private scope)')
   .option('--scope <s>', 'Scope: shared or private', 'shared')
   .option('--force', 'Re-ingest even if already indexed')
-  .action((paths: string[], opts: { org?: string; agent?: string; scope?: string; force?: boolean }) => {
+  .option('--skip-images', 'Skip PNG/JPG/GIF/WebP files (prevents hanging on image-description API)')
+  .action((paths: string[], opts: { org?: string; agent?: string; scope?: string; force?: boolean; skipImages?: boolean }) => {
     const env = resolveEnv();
     const org = opts.org || env.org;
     if (!org) {
@@ -1142,6 +1143,7 @@ busCommand
       agent: opts.agent || env.agentName,
       scope: (opts.scope as 'shared' | 'private') || 'shared',
       force: opts.force,
+      skipImages: opts.skipImages,
       frameworkRoot: env.frameworkRoot || process.cwd(),
       instanceId: env.instanceId,
     });

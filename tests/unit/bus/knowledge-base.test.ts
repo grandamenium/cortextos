@@ -181,6 +181,72 @@ describe('queryKnowledgeBase — graceful missing-config', () => {
   });
 });
 
+// Regression: --skip-images filters image files before invoking mmrag.py
+// to prevent hangs on the Gemini image-description API (260 PNGs observed
+// locking the ingest process for hours during overnight analyst runs).
+describe('ingestKnowledgeBase — --skip-images flag', () => {
+  beforeEach(() => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue('');
+  });
+
+  it('with skipImages: PNG files are excluded from the mmrag.py argv', () => {
+    ingestKnowledgeBase(
+      ['/docs/readme.md', '/screenshots/page1.png', '/screenshots/page2.PNG'],
+      { ...baseOptions, skipImages: true },
+    );
+
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    const [, argv] = execFileSyncMock.mock.calls[0] as [string, string[], object];
+    expect(argv).toContain('/docs/readme.md');
+    expect(argv).not.toContain('/screenshots/page1.png');
+    expect(argv).not.toContain('/screenshots/page2.PNG');
+  });
+
+  it('with skipImages: JPG/JPEG/GIF/WebP are also excluded', () => {
+    const imagePaths = ['/a.jpg', '/b.jpeg', '/c.gif', '/d.webp', '/e.bmp'];
+    ingestKnowledgeBase(
+      ['/docs/spec.md', ...imagePaths],
+      { ...baseOptions, skipImages: true },
+    );
+
+    const [, argv] = execFileSyncMock.mock.calls[0] as [string, string[], object];
+    expect(argv).toContain('/docs/spec.md');
+    for (const img of imagePaths) {
+      expect(argv).not.toContain(img);
+    }
+  });
+
+  it('with skipImages: logs count of skipped images', () => {
+    ingestKnowledgeBase(
+      ['/docs/readme.md', '/img/a.png', '/img/b.jpg'],
+      { ...baseOptions, skipImages: true },
+    );
+
+    expect(logLog.some((m) => m.includes('Skipping 2 image file(s)'))).toBe(true);
+  });
+
+  it('with skipImages: early-returns cleanly when all paths are images', () => {
+    ingestKnowledgeBase(
+      ['/img/a.png', '/img/b.jpg'],
+      { ...baseOptions, skipImages: true },
+    );
+
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(logLog.some((m) => m.includes('No non-image files'))).toBe(true);
+  });
+
+  it('without skipImages: PNG files pass through to mmrag.py unchanged', () => {
+    ingestKnowledgeBase(
+      ['/docs/readme.md', '/screenshots/page1.png'],
+      { ...baseOptions, skipImages: false },
+    );
+
+    const [, argv] = execFileSyncMock.mock.calls[0] as [string, string[], object];
+    expect(argv).toContain('/screenshots/page1.png');
+  });
+});
+
 describe('kb warn messages — UX invariants', () => {
   it('both warn messages name the org and suggest "run setup"', () => {
     // Drive ingest path
