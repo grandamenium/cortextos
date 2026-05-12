@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run --root .. dashboard/src",
+    "test:codex": "vitest run --root .. dashboard/src/lib/__tests__/cost-parser-codex.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

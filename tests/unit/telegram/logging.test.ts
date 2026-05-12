@@ -5,10 +5,12 @@ import { tmpdir } from 'os';
 import {
   logOutboundMessage,
   logInboundMessage,
+  recordInboundTelegram,
   cacheLastSent,
   readLastSent,
 } from '../../../src/telegram/logging';
 import { TelegramAPI } from '../../../src/telegram/api';
+import type { BusPaths, TelegramMessage } from '../../../src/types';
 
 describe('Telegram Logging', () => {
   let testDir: string;
@@ -62,6 +64,121 @@ describe('Telegram Logging', () => {
       expect(entry.from).toEqual({ id: 1 });
       expect(entry.agent).toBe('bot2');
       expect(entry.archived_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    });
+  });
+
+  describe('recordInboundTelegram', () => {
+    function buildPaths(ctxRoot: string, agent: string): BusPaths {
+      return {
+        ctxRoot,
+        inbox: join(ctxRoot, 'inbox', agent),
+        inflight: join(ctxRoot, 'inflight', agent),
+        processed: join(ctxRoot, 'processed', agent),
+        logDir: join(ctxRoot, 'logs', agent),
+        stateDir: join(ctxRoot, 'state', agent),
+        taskDir: join(ctxRoot, 'tasks'),
+        approvalDir: join(ctxRoot, 'approvals'),
+        analyticsDir: join(ctxRoot, 'analytics'),
+        heartbeatDir: join(ctxRoot, 'heartbeats'),
+      };
+    }
+
+    it('writes both the inbound JSONL row AND the telegram_received bus event', () => {
+      const paths = buildPaths(testDir, 'spark');
+      mkdirSync(paths.stateDir, { recursive: true });
+
+      const msg: TelegramMessage = {
+        message_id: 12345,
+        date: 1714214400,
+        from: { id: 6595584963, is_bot: false, first_name: 'Eros' },
+        chat: { id: 6595584963, type: 'private' },
+        text: 'Doe maar',
+      };
+
+      recordInboundTelegram(paths, testDir, 'spark', 'eros-os', 'Eros', msg);
+
+      const inboundPath = join(testDir, 'logs', 'spark', 'inbound-messages.jsonl');
+      const inboundEntry = JSON.parse(readFileSync(inboundPath, 'utf-8').trim());
+      expect(inboundEntry).toMatchObject({
+        message_id: 12345,
+        from: 6595584963,
+        from_name: 'Eros',
+        chat_id: 6595584963,
+        text: 'Doe maar',
+        agent: 'spark',
+      });
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventPath = join(testDir, 'analytics', 'events', 'spark', `${today}.jsonl`);
+      const eventEntry = JSON.parse(readFileSync(eventPath, 'utf-8').trim());
+      expect(eventEntry).toMatchObject({
+        agent: 'spark',
+        org: 'eros-os',
+        category: 'message',
+        event: 'telegram_received',
+        severity: 'info',
+        metadata: {
+          chat_id: '6595584963',
+          message_id: 12345,
+          from_id: 6595584963,
+          from_name: 'Eros',
+          has_media: false,
+          text_chars: 8,
+        },
+      });
+    });
+
+    it('marks has_media=true and uses caption length when the message carries a photo', () => {
+      const paths = buildPaths(testDir, 'bolt');
+      mkdirSync(paths.stateDir, { recursive: true });
+
+      const msg: TelegramMessage = {
+        message_id: 99,
+        date: 1714214400,
+        from: { id: 100, is_bot: false, first_name: 'Eros' },
+        chat: { id: 100, type: 'private' },
+        caption: 'screenshot of the dashboard',
+        photo: [{ file_id: 'a', file_unique_id: 'b', width: 1, height: 1 }],
+      };
+
+      recordInboundTelegram(paths, testDir, 'bolt', 'eros-os', 'Eros', msg);
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventPath = join(testDir, 'analytics', 'events', 'bolt', `${today}.jsonl`);
+      const eventEntry = JSON.parse(readFileSync(eventPath, 'utf-8').trim());
+      expect(eventEntry.metadata.has_media).toBe(true);
+      expect(eventEntry.metadata.text_chars).toBe('screenshot of the dashboard'.length);
+    });
+
+    it('still writes the JSONL row when the bus-event emit throws', () => {
+      const paths = buildPaths(testDir, 'spark');
+      mkdirSync(paths.stateDir, { recursive: true });
+
+      // Force a logEvent failure: writing to a path under a regular file
+      // (not a dir) makes mkdirSync recursive throw with EEXIST/ENOTDIR.
+      writeFileSync(join(testDir, 'analytics'), 'i am a regular file, not a dir', 'utf-8');
+
+      const msg: TelegramMessage = {
+        message_id: 7,
+        date: 1714214400,
+        from: { id: 1, is_bot: false, first_name: 'Eros' },
+        chat: { id: 1, type: 'private' },
+        text: 'hi',
+      };
+
+      const logSpy = vi.fn();
+      // Must not throw
+      expect(() => {
+        recordInboundTelegram(paths, testDir, 'spark', 'eros-os', 'Eros', msg, logSpy);
+      }).not.toThrow();
+
+      // JSONL still written.
+      const inboundPath = join(testDir, 'logs', 'spark', 'inbound-messages.jsonl');
+      const inboundEntry = JSON.parse(readFileSync(inboundPath, 'utf-8').trim());
+      expect(inboundEntry.text).toBe('hi');
+
+      // Failure surfaced through the log callback.
+      expect(logSpy).toHaveBeenCalled();
     });
   });
 

@@ -9,12 +9,6 @@
       "WebSearch"
     ]
   },
-  "statusLine": {
-    "type": "command",
-    "command": "cortextos bus hook-context-status",
-    "refreshInterval": 5,
-    "timeout": 2
-  },
   "hooks": {
     "PermissionRequest": [
       {

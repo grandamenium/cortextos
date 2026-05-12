@@ -1,10 +1,12 @@
 // cortextOS Dashboard - Cost parser
-// Parses ~/.claude/projects/*.jsonl for token usage and calculates cost.
+// Parses ~/.claude/projects/*.jsonl AND <ctxRoot>/logs/<agent>/codex-tokens.jsonl
+// for token usage and calculates cost.
 
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { db } from '@/lib/db';
+import { CTX_ROOT, getAgentsForOrg, getAllAgents, getOrgs } from '@/lib/config';
 import type { CostEntry } from '@/lib/types';
 
 // -- Pricing per million tokens --
@@ -20,16 +22,21 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   opus: { inputPerMillion: 15, outputPerMillion: 75, cacheWritePerMillion: 3.75, cacheReadPerMillion: 1.50 },
   sonnet: { inputPerMillion: 3, outputPerMillion: 15, cacheWritePerMillion: 3.75, cacheReadPerMillion: 0.30 },
   haiku: { inputPerMillion: 0.8, outputPerMillion: 4, cacheWritePerMillion: 1.00, cacheReadPerMillion: 0.08 },
+  // gpt-5-codex: OpenAI list pricing as of 2026-01. cache write n/a (no separate
+  // write cost on cached input). Update when codex pricing changes upstream.
+  'gpt-5-codex': { inputPerMillion: 1.25, outputPerMillion: 10, cacheWritePerMillion: 0, cacheReadPerMillion: 0.125 },
 };
 
 /**
- * Resolve model name to pricing key. Matches substrings like
- * "claude-3-opus-20240229" -> "opus".
+ * Resolve model name to pricing key. Matches substrings: claude variants map to
+ * opus/sonnet/haiku; gpt-5-codex (and bare "codex" / "gpt-5" variants) map to
+ * gpt-5-codex pricing rather than silently defaulting to sonnet.
  */
 function resolvePricingKey(model: string): string {
   const lower = model.toLowerCase();
   if (lower.includes('opus')) return 'opus';
   if (lower.includes('haiku')) return 'haiku';
+  if (lower.includes('codex') || lower.includes('gpt-5')) return 'gpt-5-codex';
   // Default to sonnet for all other claude models
   return 'sonnet';
 }
@@ -135,8 +142,6 @@ export function scanClaudeProjectsCosts(): CostEntry[] {
   const claudeDir = path.join(os.homedir(), '.claude', 'projects');
   if (!fs.existsSync(claudeDir)) return [];
 
-  // Import here to avoid circular deps — config imports db
-  const { getOrgs, CTX_FRAMEWORK_ROOT } = require('./config') as typeof import('./config');
   const allowedOrgs = new Set(getOrgs());
 
   // Also allow the instance ID itself as a fallback org label
@@ -184,6 +189,98 @@ export function scanClaudeProjectsCosts(): CostEntry[] {
 }
 
 // ---------------------------------------------------------------------------
+// Codex JSONL scanning
+// ---------------------------------------------------------------------------
+
+interface CodexTokenEntry {
+  timestamp?: string;
+  model?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  session_id?: string;
+  turn_id?: string;
+}
+
+/**
+ * Parse a single codex-tokens.jsonl file. Schema differs from claude JSONL:
+ * one record per `thread/tokenUsage/updated` notification with the shape
+ * written by CodexAppServerPTY.appendCodexTokenLog.
+ */
+function parseCodexJsonlFile(filePath: string, agent: string, org: string): CostEntry[] {
+  const entries: CostEntry[] = [];
+  let content: string;
+  try {
+    content = fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return [];
+  }
+
+  const lines = content.split('\n').filter((l) => l.trim());
+  for (const line of lines) {
+    try {
+      const raw = JSON.parse(line) as CodexTokenEntry;
+      const model = raw.model;
+      if (!model) continue;
+
+      const inputTokens = raw.input_tokens ?? 0;
+      const outputTokens = raw.output_tokens ?? 0;
+      const cacheReadTokens = raw.cache_read_tokens ?? 0;
+      const cacheWriteTokens = raw.cache_write_tokens ?? 0;
+      if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0) continue;
+
+      const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+      const costUsd = calculateCost(model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens);
+      const timestamp = raw.timestamp ?? new Date().toISOString();
+
+      entries.push({
+        timestamp,
+        agent,
+        org,
+        model,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        total_tokens: totalTokens,
+        cost_usd: costUsd,
+        source_file: filePath,
+      });
+    } catch {
+      // Skip malformed lines
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Scan <ctxRoot>/logs/<agent>/codex-tokens.jsonl for every enabled agent.
+ * Codex token logs are written per-agent under the instance's logs dir, not
+ * under ~/.claude/projects, so we walk the agent registry instead of a single
+ * root directory.
+ */
+export function scanCodexLogsCosts(): CostEntry[] {
+  const allEntries: CostEntry[] = [];
+
+  // Build (agent, org) pairs. Prefer getAllAgents so we pick up CLI-created
+  // agents; fall back to per-org enumeration if it returns nothing.
+  const pairs: Array<{ name: string; org: string }> = getAllAgents();
+  if (pairs.length === 0) {
+    for (const org of getOrgs()) {
+      for (const name of getAgentsForOrg(org)) pairs.push({ name, org });
+    }
+  }
+
+  for (const { name, org } of pairs) {
+    const filePath = path.join(CTX_ROOT, 'logs', name, 'codex-tokens.jsonl');
+    if (!fs.existsSync(filePath)) continue;
+    allEntries.push(...parseCodexJsonlFile(filePath, name, org));
+  }
+
+  return allEntries;
+}
+
+// ---------------------------------------------------------------------------
 // SQLite persistence
 // ---------------------------------------------------------------------------
 
@@ -218,12 +315,30 @@ export function persistCostEntries(entries: CostEntry[]): number {
 }
 
 /**
- * Full sync: scan JSONL files and persist to DB.
+ * Full sync: scan claude JSONL + codex JSONL files and persist to DB.
+ *
+ * Dedup contract: an (agent, model, source_file, timestamp) tuple from claude
+ * scan and codex scan should never collide in practice, because codex turns are
+ * only ever written to <ctxRoot>/logs/<agent>/codex-tokens.jsonl while claude
+ * turns are only ever written under ~/.claude/projects/. We still build the
+ * union explicitly so any future overlap (e.g., a codex agent that also gets
+ * scanned through claude's projects dir) does not double-count.
  */
 export function syncCosts(): { scanned: number; inserted: number } {
-  const entries = scanClaudeProjectsCosts();
-  const inserted = entries.length > 0 ? persistCostEntries(entries) : 0;
-  return { scanned: entries.length, inserted };
+  const claudeEntries = scanClaudeProjectsCosts();
+  const codexEntries = scanCodexLogsCosts();
+
+  const seen = new Set<string>();
+  const merged: CostEntry[] = [];
+  for (const entry of [...claudeEntries, ...codexEntries]) {
+    const key = `${entry.source_file ?? ''}|${entry.timestamp}|${entry.model}|${entry.agent}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(entry);
+  }
+
+  const inserted = merged.length > 0 ? persistCostEntries(merged) : 0;
+  return { scanned: merged.length, inserted };
 }
 
 // ---------------------------------------------------------------------------

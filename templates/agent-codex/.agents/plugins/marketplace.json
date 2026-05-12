@@ -1,0 +1,20 @@
+{
+  "name": "{{agent_name}}",
+  "interface": {
+    "displayName": "{{agent_name}}"
+  },
+  "plugins": [
+    {
+      "name": "cortextos-agent-skills",
+      "source": {
+        "source": "local",
+        "path": "./plugins/cortextos-agent-skills"
+      },
+      "policy": {
+        "installation": "INSTALLED_BY_DEFAULT",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

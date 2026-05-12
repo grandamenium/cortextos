@@ -11,7 +11,7 @@ import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
-import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
+import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
@@ -243,8 +243,8 @@ export class AgentManager {
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
-    // Issue #330: pass the Telegram handle into AgentProcess so CodexPTY can
-    // emit sendChatAction directly from the JSONL stream. Has no effect for
+    // Issue #330: pass the Telegram handle into AgentProcess so CodexAppServerPTY
+    // can emit sendChatAction directly from the JSONL stream. Has no effect for
     // claude-code / hermes runtimes — those still use fast-checker.
     if (telegramApi && chatId) {
       agentProcess.setTelegramHandle(telegramApi, chatId);
@@ -332,15 +332,14 @@ export class AgentManager {
         const effectiveChatId = msgChatId ?? chatId ?? '';
         const stateDir = join(this.ctxRoot, 'state', name);
 
-        // Log inbound message to JSONL
-        logInboundMessage(this.ctxRoot, name, {
-          message_id: msg.message_id,
-          from: msg.from?.id,
-          from_name: from,
-          chat_id: msgChatId,
-          text: stripControlChars(msg.text || msg.caption || ''),
-          timestamp: new Date().toISOString(),
-        });
+        // Persist the inbound message to JSONL AND emit a
+        // `message/telegram_received` bus event in one helper so
+        // experiment cycles and dashboards can count inbound traffic.
+        // Without the event, Rubi's v3 fleet measurement found 0
+        // inbound messages on a window where Eros replied to multiple
+        // agents — the JSONL had the data but it never reached the
+        // event log.
+        recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
 
         // Check for media messages (photo, document, voice, audio, video, video_note)
         const isMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
@@ -373,7 +372,7 @@ export class AgentManager {
             } else if (media.type === 'document') {
               formatted = FastChecker.formatTelegramDocumentMessage(from, effectiveChatId, media.text, relFilePath, media.file_name!);
             } else if (media.type === 'voice' || media.type === 'audio') {
-              formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relFilePath, media.duration);
+              formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relFilePath, media.duration, media.transcript);
             } else {
               // video or video_note
               formatted = FastChecker.formatTelegramVideoMessage(from, effectiveChatId, media.text, relFilePath, media.file_name || '', media.duration);

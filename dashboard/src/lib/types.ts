@@ -23,12 +23,15 @@ export interface Agent {
   lastHeartbeat?: string; // ISO timestamp
 }
 
+export type AgentRuntime = 'claude-code' | 'codex-app-server' | 'hermes';
+
 export interface AgentSummary {
   name: string;
   org: string;
   health: HealthStatus;
   currentTask?: string;
   lastHeartbeat?: string;
+  runtime?: AgentRuntime;
 }
 
 export interface Heartbeat {
@@ -298,6 +301,7 @@ export interface AgentDetail {
   health: HealthStatus;
   logFiles: LogFile[];
   agentDir: string;
+  runtime?: AgentRuntime;
 }
 
 export interface MemoryFile {

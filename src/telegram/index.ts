@@ -3,6 +3,7 @@ export { TelegramPoller } from './poller.js';
 export {
   logOutboundMessage,
   logInboundMessage,
+  recordInboundTelegram,
   cacheLastSent,
   readLastSent,
 } from './logging.js';
