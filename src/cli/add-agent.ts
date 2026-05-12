@@ -239,6 +239,7 @@ export const addAgentCommand = new Command('add-agent')
             '',
             '- Agent-to-agent: `cortextos bus send-message <agent> <priority> "<text>"`',
             '- Telegram to user: `cortextos bus send-telegram <chat_id> "<text>"`',
+            '- React to a Telegram message (single emoji ack, no verbal noise): `cortextos bus react-telegram <chat_id> <message_id> 👍`',
             '- Check inbox: `cortextos bus check-inbox`',
             '',
           ].join('\n');
@@ -447,5 +448,6 @@ Complete tasks: \`cortextos bus complete-task <id> --result "<text>"\`
 Log events: \`cortextos bus log-event <category> <event> <severity>\`
 Update heartbeat: \`cortextos bus update-heartbeat "<status>"\`
 Send Telegram: \`cortextos bus send-telegram <chat_id> "<text>"\`
+React to Telegram message (single emoji ack): \`cortextos bus react-telegram <chat_id> <message_id> 👍\`
 `;
 }

@@ -1023,6 +1023,54 @@ busCommand
   });
 
 busCommand
+  .command('react-telegram')
+  .description("Set the bot's reaction on a Telegram message (single emoji ack)")
+  .argument('<chat-id>', 'Telegram chat ID')
+  .argument('<message-id>', 'ID of the message to react to')
+  .argument('[emoji]', 'Reaction emoji (default: 👍). Pass an empty string to clear.', '👍')
+  .action(async (chatId: string, messageIdRaw: string, emoji: string) => {
+    const messageId = Number(messageIdRaw);
+    if (!Number.isFinite(messageId) || messageId <= 0) {
+      console.error(`Invalid message-id '${messageIdRaw}'. Must be a positive integer.`);
+      process.exit(1);
+    }
+
+    // Resolve bot token: agent .env first, then process.env (same flow as
+    // send-telegram so the agent identity / personality of the reaction
+    // matches the agent that owns the conversation).
+    const env = resolveEnv();
+    let botToken = '';
+    if (env.agentDir) {
+      const { readFileSync, existsSync } = require('fs');
+      const { join } = require('path');
+      const agentEnv = join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const content = readFileSync(agentEnv, 'utf-8');
+        const match = content.match(/^BOT_TOKEN=(.+)$/m);
+        if (match && match[1].trim()) botToken = match[1].trim();
+      }
+    }
+    if (!botToken) botToken = process.env.BOT_TOKEN || '';
+    if (!botToken) {
+      console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
+      process.exit(1);
+    }
+
+    const api = new TelegramAPI(botToken);
+    try {
+      // Empty string clears the reaction; otherwise send a single-emoji array.
+      // Telegram limits bots to one reaction per message; we treat that as the
+      // primitive here. Multi-emoji is a future feature if/when needed.
+      const emojis = emoji === '' ? [] : [emoji];
+      await api.setMessageReaction(chatId, messageId, emojis);
+      console.log(emojis.length > 0 ? `Reacted ${emoji}` : 'Reaction cleared');
+    } catch (err: any) {
+      console.error(`Failed to react: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
   .command('create-approval')
   .description('Request human approval for a high-stakes action')
   .argument('<title>', 'What you are requesting approval for')

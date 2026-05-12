@@ -515,6 +515,37 @@ export class TelegramAPI {
   }
 
   /**
+   * Set the bot's reaction on a message.
+   *
+   * Wraps Telegram's setMessageReaction Bot API method. Use this when an
+   * agent wants to acknowledge a message with a single emoji instead of
+   * sending a full verbal reply. Cleaner than message-spam acks ("got it",
+   * "on it", "sounds good") -- the reaction is one bit of signal that lives
+   * on the original message.
+   *
+   * Pass an empty `emojis` array to clear the bot's reactions on the message.
+   *
+   * Telegram limits bots to ONE reaction per message. The full list of
+   * reaction emojis the API accepts is documented here:
+   * https://core.telegram.org/bots/api#reactiontypeemoji
+   *
+   * Note: bots can only react to messages within ~48h of the message being
+   * sent (the same window that applies to deleteMessage). Older messages
+   * return an error.
+   */
+  async setMessageReaction(
+    chatId: string | number,
+    messageId: number,
+    emojis: string[] = [],
+  ): Promise<any> {
+    return this.post('setMessageReaction', {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: emojis.map((emoji) => ({ type: 'emoji', emoji })),
+    });
+  }
+
+  /**
    * Edit a message's text.
    */
   async editMessageText(
