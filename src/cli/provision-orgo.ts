@@ -113,12 +113,37 @@ async function resolveWorkspace(
 // Create a new Orgo computer
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Free-tier limits (Orgo documented maximums)
+// ---------------------------------------------------------------------------
+
+const FREE_TIER_MAX_RAM_GB = 4;
+const FREE_TIER_MAX_CPU = 1;
+const FREE_TIER_MAX_DISK_GB = 50;
+
+function assertFreeTierLimits(ram: number, cpu: number, disk: number): void {
+  const errors: string[] = [];
+  if (ram > FREE_TIER_MAX_RAM_GB)
+    errors.push(`--ram ${ram} exceeds free-tier max ${FREE_TIER_MAX_RAM_GB} GB`);
+  if (cpu > FREE_TIER_MAX_CPU)
+    errors.push(`--cpu ${cpu} exceeds free-tier max ${FREE_TIER_MAX_CPU} core(s)`);
+  if (disk > FREE_TIER_MAX_DISK_GB)
+    errors.push(`--disk ${disk} exceeds free-tier max ${FREE_TIER_MAX_DISK_GB} GB`);
+  if (errors.length > 0) {
+    console.error('Error: free-tier limit exceeded:');
+    errors.forEach(e => console.error(`  ${e}`));
+    console.error('Use a paid Orgo plan or lower the values.');
+    process.exit(1);
+  }
+}
+
 async function createComputer(
   workspaceId: string,
   computerName: string,
   apiKey: string,
   ram = 4,
-  cpu = 1
+  cpu = 1,
+  disk = 50
 ): Promise<{ id: string; name: string; status: string }> {
   const response = await orgoPost<CreateComputerResponse>(
     'computers',
@@ -130,7 +155,7 @@ async function createComputer(
       ram,
       cpu,
       gpu: 'none',
-      disk_size_gb: 50,
+      disk_size_gb: disk,
       resolution: '1280x720x24',
     },
     90_000
@@ -250,6 +275,7 @@ export const provisionOrgoCommand = new Command('provision-orgo')
   .option('--agent-name <name>', 'Name for the cortextos agent on the VM', 'cortextos-agent')
   .option('--ram <gb>', 'RAM in GB for new computer (default: 4, free tier max: 4)', parseInt)
   .option('--cpu <cores>', 'CPU cores for new computer (default: 1, free tier max: 1)', parseInt)
+  .option('--disk <gb>', 'Disk size in GB for new computer (default: 50, free tier max: 50)', parseInt)
   .action(
     async (options: {
       apiKey: string;
@@ -259,6 +285,7 @@ export const provisionOrgoCommand = new Command('provision-orgo')
       agentName: string;
       ram?: number;
       cpu?: number;
+      disk?: number;
     }) => {
       const apiKey = options.apiKey || process.env['ORGO_API_KEY'] || '';
       if (!apiKey) {
@@ -294,8 +321,10 @@ export const provisionOrgoCommand = new Command('provision-orgo')
 
           const ramGb = options.ram ?? 4;
           const cpuCores = options.cpu ?? 1;
-          console.log(`Creating Orgo computer '${desiredName}' in workspace '${workspace.name}' (ram:${ramGb}GB cpu:${cpuCores})...`);
-          const computer = await createComputer(workspace.id, desiredName, apiKey, ramGb, cpuCores);
+          const diskGb = options.disk ?? 50;
+          assertFreeTierLimits(ramGb, cpuCores, diskGb);
+          console.log(`Creating Orgo computer '${desiredName}' in workspace '${workspace.name}' (ram:${ramGb}GB cpu:${cpuCores} disk:${diskGb}GB)...`);
+          const computer = await createComputer(workspace.id, desiredName, apiKey, ramGb, cpuCores, diskGb);
           computerId = computer.id;
           computerName = computer.name;
           console.log(`  Computer created: ${computerName} (${computerId}) — status: ${computer.status}`);
