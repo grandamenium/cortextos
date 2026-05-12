@@ -1373,20 +1373,6 @@ busCommand
   });
 
 busCommand
-  .command('send-telegram-voice')
-  .description('Synthesize text with OpenAI tts-1 and send it as a Telegram voice message')
-  .argument('<chat-id>', 'Telegram chat ID')
-  .argument('<text>', 'Text to speak')
-  .action(async (chatId: string, text: string) => {
-    const result = await sendTelegramVoice(chatId, text);
-    if (!result.ok) {
-      console.error(`send-telegram-voice failed: ${result.error}`);
-      process.exit(1);
-    }
-    console.log(JSON.stringify({ ok: true, message_id: result.messageId ?? null }));
-  });
-
-busCommand
   .command('voice-reply')
   .description(
     "Generate an MP3 from text and send to Telegram. Engine: google-tts-neural2 (default when GOOGLE_TTS_API_KEY set) " +
