@@ -118,11 +118,15 @@ Full reference: `.claude/skills/knowledge-base/SKILL.md`
 Keep your memory collection searchable and current:
 
 ```bash
-cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+timeout 120 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force \
+  >> /tmp/kb-ingest-${CTX_AGENT_NAME}.log 2>&1 &
+echo "[heartbeat] kb-ingest detached (PID $!)"
 ```
 
-This runs automatically on every heartbeat cycle. It ensures past experiences, user preferences, and learned patterns are semantically searchable for future tasks. Skip if GEMINI_API_KEY is not configured.
+This runs in the background on every heartbeat cycle. It ensures past experiences, user preferences, and learned patterns are semantically searchable for future tasks. Skip if GEMINI_API_KEY is not configured.
+
+Running detached (`&`) ensures a stalled kb-ingest cannot block the heartbeat shell. Output is logged to `/tmp/kb-ingest-${CTX_AGENT_NAME}.log` for debugging. The `timeout 120` kills any stalled process after 2 minutes.
 
 ---
 

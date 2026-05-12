@@ -132,12 +132,14 @@ Keep your memory collection searchable and current:
 
 ```bash
 timeout 120 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force || true
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force \
+  >> /tmp/kb-ingest-${CTX_AGENT_NAME}.log 2>&1 &
+echo "[heartbeat] kb-ingest detached (PID $!)"
 ```
 
-This runs automatically on every heartbeat cycle. It ensures past experiences, user preferences, and learned patterns are semantically searchable for future tasks. Skip if GEMINI_API_KEY is not configured.
+This runs in the background on every heartbeat cycle. It ensures past experiences, user preferences, and learned patterns are semantically searchable for future tasks. Skip if GEMINI_API_KEY is not configured.
 
-`timeout 120` ensures a stalled kb-ingest (e.g. a hung Gemini API call on a large PNG) cannot freeze the heartbeat shell. Exit code 124 (timeout) is suppressed by `|| true` so the heartbeat continues normally.
+Running detached (`&`) ensures a stalled kb-ingest (e.g. a hung Gemini API call or large file) cannot block the heartbeat shell. Output is logged to `/tmp/kb-ingest-${CTX_AGENT_NAME}.log` for debugging. The `timeout 120` kills any stalled process after 2 minutes.
 
 ---
 

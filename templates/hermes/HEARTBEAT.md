@@ -61,7 +61,9 @@ MEMORY
 
 ```bash
 timeout 120 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force || true
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force \
+  >> /tmp/kb-ingest-${CTX_AGENT_NAME}.log 2>&1 &
+echo "[heartbeat] kb-ingest detached (PID $!)"
 ```
 
 ## Step 7: Check GOALS.md
