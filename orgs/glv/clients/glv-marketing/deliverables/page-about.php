@@ -36,16 +36,16 @@
             <h2 class="text-2xl md:text-3xl font-heading font-bold mb-6">How GLV Started</h2>
             <div class="glv-about-prose">
                 <p>
-                    I spent six years working at a digital marketing firm. That experience gave me a clear picture of what good marketing strategy looks like when it is executed well, and what the industry standard actually requires to produce results that hold up over time.
+                    GLV Marketing is a digital marketing agency based in Sault Ste. Marie, Ontario, serving businesses across Northern Ontario and the rest of Canada. The agency started after six years working inside a digital marketing firm, long enough to see what good strategy requires when it is executed well, and what separates results that hold up over time from work that just looks busy.
                 </p>
                 <p>
-                    I wanted to bring that back to Sault Ste. Marie and Northern Ontario. The businesses here are real, the market is real, and the need for quality marketing is exactly the same as anywhere else in Canada. What was missing was access to that level of strategy without having to send your business to a large city agency that treats you as a small account.
+                    Most local businesses in Northern Ontario get one of two options when they hire help: cookie-cutter packages from a national chain agency that treats them as a small account, or a freelancer who specialises in a single channel and outsources the rest. Neither produces the integrated strategy (SEO, paid advertising, content, AI-powered automation, web development) that actually moves a small or mid-sized business forward.
                 </p>
                 <p>
-                    Modern tools and systems now make it possible to deliver that quality as a solo operation. Automated workflows, purpose-built content systems, and up-to-date platforms mean I can do in a day what used to require a full agency team. The efficiency goes into the work, not into internal overhead.
+                    What changed is that the technology available now lets a single experienced operator deliver the depth of work that used to require a full agency team. Strategy, technical execution, content systems, performance reporting, all of it at industry-standard quality, without the overhead of coordinating across departments, account managers, and middlemen. The model works because the work itself is no less rigorous than it was inside a large firm.
                 </p>
                 <p>
-                    GLV is the result. Based in Northern Ontario, working with businesses across Canada, and built around the idea that customized, high-quality marketing should not require a large-agency budget or a junior account manager as your main point of contact.
+                    GLV is the result. Founder-run, based in Northern Ontario, building marketing systems for businesses anywhere in Canada. Customised to the business, not the package.
                 </p>
             </div>
         </div>
@@ -181,9 +181,15 @@
                 $services = [
                     'WordPress and WooCommerce builds: production-ready sites, not templates',
                     'SEO and local search, built into the site from day one, not added later',
+                    'Email marketing: campaign strategy, automation, and list management',
+                    'Social media content strategy and planning',
+                    'Google Business Profile management and local search optimisation',
                     'Marketing automation and content workflows using current tools',
                     'GEO (Generative Engine Optimisation): positioning your business in AI-driven search results',
                     'Google and Meta advertising for businesses that want measurable results',
+                    'Custom AI tools and automations for regulated industries (PIPEDA and PHIPA compliant by default)',
+                    'Reputation and review management: generation, monitoring, and response workflows',
+                    'Analytics and performance reporting: GA4 and Search Console dashboards',
                     'Ongoing site management for clients who want a long-term partner, not a one-off build',
                 ];
                 foreach ($services as $item) : ?>
