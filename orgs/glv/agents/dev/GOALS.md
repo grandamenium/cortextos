@@ -1,6 +1,6 @@
 # Dev Agent Goals
 
-_Last updated: 2026-05-12 ~08:00 UTC — cloud session. Client repos: reyco-marine 0 open PRs ✅; titantinyhomes PR #5 MERGED+DEPLOYED (SHA 3d8dc88); glvmarketing PR #2 OPEN (WP Phase 2 live via FTP — PR is version-control only); fusionfinancial 0 open PRs ✅. 95 cortextos PRs waiting Aiden (#6–#95); PRs #89–#94 new this session (test coverage gaps + checkUpstream); PR #95 feat(skills): blotato-posting (Socials Phase 0 → Blotato pipeline). ✅ Coverage scan complete — all src/ files covered on main or in open PRs. ⚠️ PHPCompatibility PHPCS DEADLINE PASSED (midnight May 10) — local agent must install before May 20 PHP cutover (8 days). ⚠️ Node 22 deadline June 2 = 21 days. ⚠️ PHP 7.4 cutover May 20 = 8 days. ⏸ exp_1778496458_smku (smoke gate REQUIRED_MARKERS fix) closes May 13T10:57Z — implement after close._
+_Last updated: 2026-05-12 ~19:30 UTC — cloud session. Client repos: reyco-marine PR #239 OPEN (llms.txt routing — awaiting Aiden); titantinyhomes PR #5 MERGED+DEPLOYED; glvmarketing PR #2 OPEN (WP Phase 2 source-control only — SLA expired 19:01 UTC, no merge action); **glvmarketing PR #3 OPEN** (Phase 2 regressions: logos + partner row — local agent must apply deploy.yml fix before merge); fusionfinancial 0 open PRs ✅. 95 cortextos PRs waiting Aiden (#6–#95). ✅ Coverage scan complete. ⚠️ PHPCompatibility PHPCS DEADLINE PASSED (midnight May 10) — local agent must install before May 20 PHP cutover (8 days). ⚠️ Node 22 deadline June 2 = 21 days. ⚠️ PHP 7.4 cutover May 20 = 8 days. ⏸ exp_1778496458_smku closes 2026-05-13T10:57Z — implement REQUIRED_MARKERS fix after close. ⚠️ glvmarketing WP-CLI items: permalink revert (pages 10/11/12 parent=9) + RankMath sitemap + CF7 form verify — need SSH to glvmarketing.ca SiteGround (separate from reyco SSH)._
 
 ## Priority 1 — Merge Queue (blocked on Aiden review)
 
@@ -49,6 +49,9 @@ These PRs are complete and tested. Waiting for merge approval.
 
 | PR | Title | Notes |
 |----|-------|-------|
+| glvmarketing #3 | fix: glvmarketing.ca Phase 2 regressions — logos + Reyco partner row | **Local agent action required before merge**: apply deploy.yml change (remove SPA .htaccess step, re-target dist/assets/ → WP theme assets dir). Exact YAML in PR description. WP-CLI items (permalink, PHP template, RankMath, CF7) also in PR description. |
+| glvmarketing #2 | feat(wp-theme): GLV Marketing custom WordPress theme — Phase 1 | WP Phase 2 live via FTP. PR is source-control only. SLA expired 19:01 UTC May 12. Safe to merge or close. |
+| reyco-marine #239 | feat(routing): serve /llms.txt and /llms-full.txt via template_redirect | PR open since 16:02 UTC May 12. No SLA concern. Awaiting Aiden review. |
 | #95 | feat(skills): blotato-posting — Remotion carousel → Blotato schedule pipeline | Socials Phase 1 skill. Bridges orgs/glv Remotion pipeline to Blotato API. No src/ changes — docs only. Can merge independently. |
 | #94 | test(bus): checkUpstream coverage — 8 cases | Fills last untested export in src/bus/metrics.ts. Real git repos in mkdtemp. Test-only. ⚠️ local agent must run npm test before Aiden reviews. |
 | #93 | test(bus): saveOutput coverage — copy/move/noLink/collision/error/posix (10 cases) | First dedicated unit test for src/bus/save-output.ts. Test-only. ⚠️ local agent must run npm test. |
