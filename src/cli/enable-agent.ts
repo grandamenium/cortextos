@@ -29,6 +29,63 @@ export function discoverProjectRoot(): string {
   return process.cwd();
 }
 
+/**
+ * Read the agent's `telegram_polling` flag from its `config.json`.
+ *
+ * Used by `cortextos enable` to decide whether to run the Telegram preflight
+ * (BOT_TOKEN/CHAT_ID presence check + live API validation). Telegram-disabled
+ * specialist agents (telegram_polling: false in config.json) intentionally
+ * ship with empty BOT_TOKEN= / CHAT_ID= in their `.env` and would
+ * incorrectly fail the preflight if it were unconditional.
+ *
+ * Defaults to `false` (Telegram disabled) when:
+ *   - config.json is missing
+ *   - config.json is unparseable JSON
+ *   - the `telegram_polling` field is absent or non-boolean
+ *
+ * Returns `true` only when `telegram_polling === true` is explicit. The
+ * permissive default avoids gratuitous Telegram preflight failures during
+ * test setups, ad-hoc spawns, and minimal-config flows where Telegram was
+ * never the intent.
+ *
+ * Logs warnings to stderr on parse / read failure so operators can see the
+ * fallback occurred without having to read source.
+ */
+export function readTelegramPollingFromConfig(configJsonPath: string): boolean {
+  if (!existsSync(configJsonPath)) return false;
+  let raw: string;
+  try {
+    raw = readFileSync(configJsonPath, 'utf-8');
+  } catch (err) {
+    console.error(
+      `[enable] WARNING: failed to read ${configJsonPath} — ` +
+        `${err instanceof Error ? err.message : String(err)}. ` +
+        `Defaulting telegram_polling to false (Telegram preflight skipped).`,
+    );
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    console.error(
+      `[enable] WARNING: ${configJsonPath} contains invalid JSON — ` +
+        `${err instanceof Error ? err.message : String(err)}. ` +
+        `Defaulting telegram_polling to false (Telegram preflight skipped).`,
+    );
+    return false;
+  }
+  if (
+    parsed !== null &&
+    typeof parsed === 'object' &&
+    'telegram_polling' in parsed &&
+    (parsed as { telegram_polling: unknown }).telegram_polling === true
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function parseEnvFile(path: string): Record<string, string> {
   const vars: Record<string, string> = {};
   try {
@@ -174,50 +231,66 @@ export const enableAgentCommand = new Command('enable')
       process.exit(1);
     }
 
-    const env = parseEnvFile(agentEnvPath);
-    const missing = (['BOT_TOKEN', 'CHAT_ID'] as const).filter(k => !env[k]);
-    if (missing.length > 0) {
-      console.error(`Error: .env for agent "${agent}" is missing required values: ${missing.join(', ')}`);
-      console.error(`Edit ${agentEnvPath} and set BOT_TOKEN and CHAT_ID before enabling.`);
-      process.exit(1);
-    }
+    // Telegram-polling gate: agents with telegram_polling: false in config.json
+    // (no-Telegram specialists like redteam/blueteam/home-net/research/forge in
+    // subbu-ops) intentionally ship with empty BOT_TOKEN= / CHAT_ID= in their
+    // .env and would fail the unconditional preflight below. Read the flag from
+    // config.json (sibling of .env) and gate both the preflight + Telegram API
+    // validation on it. Default false (skip preflight) when config.json is
+    // missing or telegram_polling is not explicitly true.
+    const agentConfigPath = agentEnvPath.replace(/\.env$/, 'config.json');
+    const telegramPolling = readTelegramPollingFromConfig(agentConfigPath);
 
-    // self-chat trap preflight: validate BOT_TOKEN + CHAT_ID against the live
-    // Telegram API before registering. Catches bad tokens, unreachable chats,
-    // bot-recipient configs, and the self_chat trap (CHAT_ID == bot's own
-    // user id) BEFORE the agent boots up on a silently broken config. Without
-    // this, the first real sendMessage call fails with a cryptic 401/400/403
-    // buried in the agent's stdout log, and the dashboard happily shows the
-    // agent as alive.
-    //
-    // Hard-fails on config-level reasons (bad_token, chat_not_found,
-    // bot_recipient, self_chat). Warns but does not block on transient
-    // reasons (network_error, rate_limited) so offline enable and burst
-    // enables during the morning cascade still succeed.
-    try {
-      const telegramApi = new TelegramAPI(env.BOT_TOKEN);
-      const validation = await telegramApi.validateCredentials(env.CHAT_ID);
-      if (validation.ok) {
-        const label = validation.chatTitle ? ` (${validation.chatTitle})` : '';
-        console.log(
-          `Telegram validated: bot=@${validation.botUsername} chat=${env.CHAT_ID} type=${validation.chatType}${label}`,
-        );
-      } else if (validation.reason === 'network_error' || validation.reason === 'rate_limited') {
-        console.error(`Warning: could not verify Telegram credentials (${validation.reason}).`);
-        console.error(`  ${formatValidateError(validation)}`);
-        console.error('  Continuing anyway — re-run enable after connectivity is restored to confirm.');
-      } else {
-        console.error(`Error: Telegram credentials for agent "${agent}" failed validation.`);
-        console.error(`  ${formatValidateError(validation)}`);
-        console.error(`  Edit ${agentEnvPath} and re-run: cortextos enable ${agent}`);
+    if (telegramPolling) {
+      const env = parseEnvFile(agentEnvPath);
+      const missing = (['BOT_TOKEN', 'CHAT_ID'] as const).filter(k => !env[k]);
+      if (missing.length > 0) {
+        console.error(`Error: .env for agent "${agent}" is missing required values: ${missing.join(', ')}`);
+        console.error(`Edit ${agentEnvPath} and set BOT_TOKEN and CHAT_ID before enabling.`);
         process.exit(1);
       }
-    } catch (err) {
-      // Defensive: validateCredentials should never throw, but if it does,
-      // fall through with a warning rather than blocking enable on a bug in
-      // the validator itself.
-      console.error(`Warning: Telegram credential validation crashed: ${err instanceof Error ? err.message : String(err)}`);
-      console.error('  Continuing enable. Investigate the validator if this recurs.');
+
+      // self-chat trap preflight: validate BOT_TOKEN + CHAT_ID against the live
+      // Telegram API before registering. Catches bad tokens, unreachable chats,
+      // bot-recipient configs, and the self_chat trap (CHAT_ID == bot's own
+      // user id) BEFORE the agent boots up on a silently broken config. Without
+      // this, the first real sendMessage call fails with a cryptic 401/400/403
+      // buried in the agent's stdout log, and the dashboard happily shows the
+      // agent as alive.
+      //
+      // Hard-fails on config-level reasons (bad_token, chat_not_found,
+      // bot_recipient, self_chat). Warns but does not block on transient
+      // reasons (network_error, rate_limited) so offline enable and burst
+      // enables during the morning cascade still succeed.
+      try {
+        const telegramApi = new TelegramAPI(env.BOT_TOKEN);
+        const validation = await telegramApi.validateCredentials(env.CHAT_ID);
+        if (validation.ok) {
+          const label = validation.chatTitle ? ` (${validation.chatTitle})` : '';
+          console.log(
+            `Telegram validated: bot=@${validation.botUsername} chat=${env.CHAT_ID} type=${validation.chatType}${label}`,
+          );
+        } else if (validation.reason === 'network_error' || validation.reason === 'rate_limited') {
+          console.error(`Warning: could not verify Telegram credentials (${validation.reason}).`);
+          console.error(`  ${formatValidateError(validation)}`);
+          console.error('  Continuing anyway — re-run enable after connectivity is restored to confirm.');
+        } else {
+          console.error(`Error: Telegram credentials for agent "${agent}" failed validation.`);
+          console.error(`  ${formatValidateError(validation)}`);
+          console.error(`  Edit ${agentEnvPath} and re-run: cortextos enable ${agent}`);
+          process.exit(1);
+        }
+      } catch (err) {
+        // Defensive: validateCredentials should never throw, but if it does,
+        // fall through with a warning rather than blocking enable on a bug in
+        // the validator itself.
+        console.error(`Warning: Telegram credential validation crashed: ${err instanceof Error ? err.message : String(err)}`);
+        console.error('  Continuing enable. Investigate the validator if this recurs.');
+      }
+    } else {
+      console.log(
+        `Telegram disabled for agent "${agent}" (telegram_polling=false in config.json) — skipping BOT_TOKEN/CHAT_ID + Telegram preflight.`,
+      );
     }
 
     const agents = readEnabledAgents(options.instance);
