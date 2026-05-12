@@ -196,6 +196,21 @@ export interface AgentConfig {
    */
   telegram_polling?: boolean;
   /**
+   * UTC time (HH:MM) at which the daemon triggers a scheduled daily session
+   * rotation for this agent. The daemon injects a handoff prompt into the
+   * agent's PTY, giving it 5 minutes to write a handoff doc and call
+   * hard-restart itself. If the agent does not comply, the daemon force-restarts.
+   *
+   * Designed to prevent unbounded context growth. Use a low-traffic window,
+   * e.g. "01:00" (03:00 Oslo / Europe/Oslo in summer).
+   *
+   * Only fires when the agent is running. No-op if the agent is stopped.
+   *
+   * @example "01:00"
+   */
+  daily_restart_time?: string;
+
+  /**
    * Cron delivery mode. Defaults to 'inject' (existing behaviour — prompt is
    * injected into the running PTY session, accumulating in context).
    *
@@ -412,6 +427,22 @@ export interface CronDefinition {
    * @default false (manual fire is allowed by default — opt-out model)
    */
   manualFireDisabled?: boolean;
+
+  /**
+   * Per-cron delivery mode override. Overrides the agent-level `cron_mode`
+   * from AgentConfig when set.
+   *
+   * 'inject' — prompt is injected into the running PTY (--continue) session.
+   * 'print'  — prompt is dispatched via a fresh `claude --print` subprocess.
+   *
+   * Use 'print' for heavy/infrequent crons (morning-review, weekly-review)
+   * where a clean context is beneficial. Use 'inject' (or leave unset) for
+   * high-frequency lightweight crons (heartbeat, check-approvals) where the
+   * 5-min Anthropic prompt cache provides savings.
+   *
+   * Only effective when the agent runtime is 'claude-code'.
+   */
+  cron_mode?: 'inject' | 'print';
 }
 
 // ---------------------------------------------------------------------------

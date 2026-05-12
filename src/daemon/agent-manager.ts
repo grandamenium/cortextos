@@ -28,6 +28,8 @@ export class AgentManager {
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
+  /** Daily restart timer handles, keyed by agent name. */
+  private dailyRestartTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
   private pendingRestarts: Set<string> = new Set();
@@ -294,6 +296,9 @@ export class AgentManager {
     // the agent PTY via injectAgent().  This is the Phase 2 daemon-managed
     // external cron system — agents no longer need to call CronCreate on boot.
     this.startAgentCronScheduler(name);
+
+    // Wire daily session-rotation timer if configured.
+    this.scheduleDailyRestart(name);
 
     // Start fast checker in background
     checker.start().catch(err => {
@@ -587,6 +592,13 @@ export class AgentManager {
       this.cronSchedulers.delete(name);
     }
 
+    // Clear any pending daily restart timer
+    const restartTimer = this.dailyRestartTimers.get(name);
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      this.dailyRestartTimers.delete(name);
+    }
+
     // BUG-031: honor any restart that was queued while we were stopping.
     // After PR #11 (BUG-011 fix) this branch should never fire — see the
     // matching warning comment in startAgent(). The honor logic is preserved
@@ -852,7 +864,8 @@ export class AgentManager {
 
     const onFire = async (cron: CronDefinition): Promise<void> => {
       const firedAt = new Date().toISOString();
-      const cronMode = entry.process.getConfig().cron_mode ?? 'inject';
+      // Per-cron mode overrides agent-level mode, which overrides global default 'inject'.
+      const cronMode = cron.cron_mode ?? entry.process.getConfig().cron_mode ?? 'inject';
 
       if (cronMode === 'print') {
         const runtime = entry.process.getConfig().runtime ?? 'claude-code';
@@ -959,6 +972,117 @@ export class AgentManager {
         reject(new Error(`Failed to spawn ${bin} for cron "${cron.name}": ${err.message}`));
       });
     });
+  }
+
+  /**
+   * Schedule (or reschedule) the daily session-rotation restart for an agent.
+   *
+   * Reads `config.daily_restart_time` (UTC HH:MM). If set, computes the next
+   * wall-clock occurrence and sets a one-shot setTimeout. When it fires, injects
+   * a SCHEDULED DAILY ROTATION handoff prompt, giving the agent 5 minutes to
+   * write a handoff doc and call hard-restart. After firing, reschedules for
+   * the following day.
+   *
+   * Clears any existing timer before scheduling a new one so this method is
+   * safe to call on config reload.
+   */
+  private scheduleDailyRestart(agentName: string): void {
+    // Clear any existing timer first
+    const existing = this.dailyRestartTimers.get(agentName);
+    if (existing) {
+      clearTimeout(existing);
+      this.dailyRestartTimers.delete(agentName);
+    }
+
+    const entry = this.agents.get(agentName);
+    if (!entry) return;
+
+    const restartTime = entry.process.getConfig().daily_restart_time;
+    if (!restartTime) return;
+
+    const match = restartTime.match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) {
+      console.warn(`[daemon] daily_restart_time "${restartTime}" for "${agentName}" is not HH:MM — skipping`);
+      return;
+    }
+
+    const targetHour = parseInt(match[1], 10);
+    const targetMin  = parseInt(match[2], 10);
+
+    const msUntilNext = (): number => {
+      const now = new Date();
+      const next = new Date(Date.UTC(
+        now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
+        targetHour, targetMin, 0, 0,
+      ));
+      if (next.getTime() <= now.getTime()) {
+        next.setUTCDate(next.getUTCDate() + 1);
+      }
+      return next.getTime() - now.getTime();
+    };
+
+    const scheduleNext = () => {
+      const delay = msUntilNext();
+      console.log(
+        `[daemon] Daily restart for "${agentName}" scheduled in ${Math.round(delay / 60_000)}min ` +
+        `(next ${restartTime} UTC)`,
+      );
+      const timer = setTimeout(() => {
+        this.dailyRestartTimers.delete(agentName);
+        this.fireDailyRestart(agentName);
+        // Reschedule for next day regardless of outcome
+        scheduleNext();
+      }, delay);
+      this.dailyRestartTimers.set(agentName, timer);
+    };
+
+    scheduleNext();
+  }
+
+  /**
+   * Inject the daily rotation handoff prompt into the agent's PTY.
+   * Mirrors the ctx_handoff_threshold mechanic: agent writes a handoff doc,
+   * then calls hard-restart. Daemon force-restarts if agent does not comply
+   * within 5 minutes.
+   */
+  private fireDailyRestart(agentName: string): void {
+    const entry = this.agents.get(agentName);
+    if (!entry) {
+      console.log(`[daemon] Daily restart: agent "${agentName}" not running — skipping`);
+      return;
+    }
+
+    console.log(`[daemon] Daily restart: firing handoff prompt for "${agentName}"`);
+
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + 'Z';
+    const handoffPrompt =
+      `[SCHEDULED DAILY ROTATION] Daily session rotation triggered. ` +
+      `Write a handoff document to memory/handoffs/daily-${ts}.md with these sections: ` +
+      `## Current Tasks, ## Next Actions, ## Active Crons, ## Key Context, ## Files Modified This Session. ` +
+      `Then run: cortextos bus hard-restart --reason "daily session rotation" ` +
+      `--handoff-doc <absolute path to handoff doc you just wrote>. ` +
+      `Do this NOW — you have 5 minutes before the daemon force-restarts.`;
+
+    const injected = this.injectAgent(agentName, handoffPrompt);
+    if (!injected) {
+      // Agent not running or not bootstrapped — just hard-restart directly
+      console.log(`[daemon] Daily restart: inject failed for "${agentName}" — force-restarting`);
+      this.restartAgent(agentName).catch(err => {
+        console.error(`[daemon] Daily restart: restart error for "${agentName}": ${err}`);
+      });
+      return;
+    }
+
+    // 5-minute grace period, then force-restart if agent hasn't self-restarted
+    setTimeout(() => {
+      const currentEntry = this.agents.get(agentName);
+      if (currentEntry) {
+        console.log(`[daemon] Daily restart: 5min grace expired for "${agentName}" — force-restarting`);
+        this.restartAgent(agentName).catch(err => {
+          console.error(`[daemon] Daily restart: force-restart error for "${agentName}": ${err}`);
+        });
+      }
+    }, 5 * 60_000);
   }
 
   /**

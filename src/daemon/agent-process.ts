@@ -11,6 +11,7 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { buildRecentHistory } from '../telegram/logging.js';
 
 type LogFn = (msg: string) => void;
 
@@ -569,6 +570,7 @@ export class AgentProcess {
     const reminderBlock = this.buildReminderBlock();
     const deliverablesBlock = this.buildDeliverablesBlock();
     const handoffBlock = this.consumeHandoffBlock();
+    const recentTelegramBlock = this.buildRecentTelegramBlock();
     const isHandoffRestart = handoffBlock.length > 0;
     // HANDOFF UX: the pickup message MUST be the first action after reading the handoff doc —
     // before cron restoration, before heartbeat, before anything else. Placing this instruction
@@ -579,7 +581,7 @@ export class AgentProcess {
     const onlineMessage = isHandoffRestart
       ? ''
       : ' Send a Telegram message to the user saying you are back online.';
-    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onlineMessage}${onboardingAppend}`;
+    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${recentTelegramBlock}${onlineMessage}${onboardingAppend}`;
   }
 
   private buildContinuePrompt(): string {
@@ -644,6 +646,40 @@ export class AgentProcess {
       unlinkSync(markerPath);
       if (!docPath || !existsSync(docPath)) return '';
       return ` CONTEXT HANDOFF: Before restoring crons or checking inbox, read the handoff document at ${docPath} to resume your prior session state.`;
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Build a "[RECENT TELEGRAM]" block carrying the last 20 chat messages
+   * (inbound + outbound) for this agent's primary chat. Used to preserve
+   * user-facing conversation context across a fresh-session restart (daily
+   * rotation, context handoff, manual hard-restart) — the agent's own
+   * "thoughts" are not persisted anywhere and remain lost by design.
+   *
+   * Returns an empty string if the agent has no CHAT_ID configured or
+   * has no logged messages yet.
+   */
+  private buildRecentTelegramBlock(): string {
+    try {
+      const envFile = join(this.env.agentDir, '.env');
+      if (!existsSync(envFile)) return '';
+      let chatId: string | null = null;
+      for (const line of readFileSync(envFile, 'utf-8').split('\n')) {
+        const t = line.trim();
+        if (!t || t.startsWith('#')) continue;
+        const eq = t.indexOf('=');
+        if (eq <= 0) continue;
+        if (t.slice(0, eq).trim() === 'CHAT_ID') {
+          chatId = t.slice(eq + 1).trim();
+          break;
+        }
+      }
+      if (!chatId) return '';
+      const recent = buildRecentHistory(this.env.ctxRoot, this.name, chatId, 20);
+      if (!recent) return '';
+      return ` [RECENT TELEGRAM — last 20 chat messages, oldest first; your prior reasoning is gone but the conversation is not]\n${recent}\n[END RECENT TELEGRAM]`;
     } catch {
       return '';
     }

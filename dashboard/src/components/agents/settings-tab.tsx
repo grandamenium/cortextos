@@ -19,6 +19,7 @@ interface AgentConfig {
   startup_delay?: number;
   runtime?: 'claude-code' | 'codex-app-server' | 'hermes';
   cron_mode?: 'inject' | 'print';
+  daily_restart_time?: string;
 }
 
 const MODEL_PLACEHOLDER: Record<NonNullable<AgentConfig['runtime']>, string> = {
@@ -165,6 +166,7 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
         max_crashes_per_day: config.max_crashes_per_day,
         startup_delay: config.startup_delay,
         cron_mode: config.cron_mode,
+        daily_restart_time: config.daily_restart_time || undefined,
       },
       setAgSaving,
       setAgMessage,
@@ -395,6 +397,20 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
               placeholder={MODEL_PLACEHOLDER[config.runtime ?? 'claude-code']}
               className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
             />
+          </div>
+
+          <div>
+            <label className="text-xs text-muted-foreground">Daily Restart Time (UTC HH:MM)</label>
+            <input
+              type="text"
+              value={config.daily_restart_time || ''}
+              onChange={e => setConfig(p => ({ ...p, daily_restart_time: e.target.value || undefined }))}
+              placeholder="01:00 (disabled if blank)"
+              className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Daemon injects a handoff prompt daily at this UTC time, then hard-restarts the session. Caps context growth.
+            </p>
           </div>
 
           <div className="grid grid-cols-3 gap-3">

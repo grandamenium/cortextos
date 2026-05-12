@@ -68,7 +68,7 @@ export async function PATCH(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'communication_style', 'approval_rules', 'runtime', 'max_session_seconds', 'max_crashes_per_day', 'startup_delay', 'model', 'ctx_warning_threshold', 'ctx_handoff_threshold', 'cron_mode'];
+  const allowed = ['timezone', 'day_mode_start', 'day_mode_end', 'communication_style', 'approval_rules', 'runtime', 'max_session_seconds', 'max_crashes_per_day', 'startup_delay', 'model', 'ctx_warning_threshold', 'ctx_handoff_threshold', 'cron_mode', 'daily_restart_time'];
   const runtimeValues = ['claude-code', 'codex-app-server', 'hermes'] as const;
   const cronModeValues = ['inject', 'print'] as const;
   const timeRegex = /^\d{2}:\d{2}$/;
@@ -88,6 +88,12 @@ export async function PATCH(
   if (body.cron_mode !== undefined) {
     if (typeof body.cron_mode !== 'string' || !cronModeValues.includes(body.cron_mode as typeof cronModeValues[number])) {
       return Response.json({ error: 'cron_mode must be one of inject, print' }, { status: 400 });
+    }
+  }
+
+  if (body.daily_restart_time !== undefined) {
+    if (body.daily_restart_time !== null && (typeof body.daily_restart_time !== 'string' || !/^\d{1,2}:\d{2}$/.test(body.daily_restart_time as string))) {
+      return Response.json({ error: 'daily_restart_time must be HH:MM (UTC) or null to disable' }, { status: 400 });
     }
   }
 
