@@ -23,6 +23,7 @@ import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, 
 import { drainRetryQueue, readRetryQueue, retryQueuePath, isEnabled } from '../bus/rgos-mirror.js';
 import { createSkillPr } from '../bus/skill-autopr.js';
 import { sendSlack } from '../bus/send-slack.js';
+import { sendTelegramVoice } from '../bus/send-telegram-voice.js';
 import { generateSkill } from '../bus/generate-skill.js';
 import { syncSkills } from '../bus/sync-skills.js';
 import { runWorkflow } from '../bus/run-workflow.js';
@@ -1351,6 +1352,20 @@ busCommand
       console.error(`Failed to send: ${err.message || err}`);
       process.exit(1);
     }
+  });
+
+busCommand
+  .command('send-telegram-voice')
+  .description('Synthesize text with OpenAI tts-1 and send it as a Telegram voice message')
+  .argument('<chat-id>', 'Telegram chat ID')
+  .argument('<text>', 'Text to speak')
+  .action(async (chatId: string, text: string) => {
+    const result = await sendTelegramVoice(chatId, text);
+    if (!result.ok) {
+      console.error(`send-telegram-voice failed: ${result.error}`);
+      process.exit(1);
+    }
+    console.log(JSON.stringify({ ok: true, message_id: result.messageId ?? null }));
   });
 
 busCommand
@@ -3806,12 +3821,27 @@ busCommand
   .option('--workdir <dir>', 'Working directory for Codex on the Mac')
   .option('--timeout <seconds>', 'Max wait time in seconds (default: 300)', '300')
   .option('--ssh-host <host>', 'SSH host (default: gregs-mac)', 'gregs-mac')
-  .action(async (prompt: string, opts: { noPlugin?: boolean; workdir?: string; timeout?: string; sshHost?: string }) => {
+  .option('--dispatch-script <path>', 'Path to codex-dispatch.sh on the Mac', '/Users/gregharned/work/team-brain/scripts/codex-dispatch.sh')
+  .option('--disable-fallback', 'Disable localhost codex exec fallback when Mac SSH is unreachable')
+  .action(async (
+    prompt: string,
+    opts: {
+      noPlugin?: boolean;
+      plugin?: boolean;
+      workdir?: string;
+      timeout?: string;
+      sshHost?: string;
+      dispatchScript?: string;
+      disableFallback?: boolean;
+    },
+  ) => {
     const result = await computerUse(prompt, {
-      noPlugin: opts.noPlugin,
+      noPlugin: opts.noPlugin === true || opts.plugin === false,
       workdir: opts.workdir,
       timeout: parseInt(opts.timeout ?? '300', 10),
       sshHost: opts.sshHost,
+      dispatchScript: opts.dispatchScript,
+      noFallback: opts.disableFallback,
     });
 
     if (!result.ok) {

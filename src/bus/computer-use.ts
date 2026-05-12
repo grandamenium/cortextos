@@ -34,6 +34,7 @@
  */
 
 import { execFileSync } from 'child_process';
+import { existsSync } from 'fs';
 
 /**
  * Shell-safe single-quote escape for a string value used inside a remote
@@ -98,6 +99,7 @@ export interface ComputerUseResult {
 
 const DEFAULT_SSH_HOST = 'gregs-mac';
 const DEFAULT_DISPATCH_SCRIPT = '/Users/gregharned/work/team-brain/scripts/codex-dispatch.sh';
+const DEFAULT_MAC_CODEX_BIN = '/Applications/Codex.app/Contents/Resources/codex';
 
 /**
  * Patterns that indicate an SSH connection-level failure (not a task failure).
@@ -118,6 +120,62 @@ const SSH_CONNECTION_ERROR_PATTERNS = [
 
 function isSshConnectionError(msg: string): boolean {
   return SSH_CONNECTION_ERROR_PATTERNS.some((re) => re.test(msg));
+}
+
+function resolveLocalCodexBin(): string {
+  if (process.env.CODEX_BIN) return process.env.CODEX_BIN;
+  if (existsSync(DEFAULT_MAC_CODEX_BIN)) return DEFAULT_MAC_CODEX_BIN;
+  return 'codex';
+}
+
+function parseCodexExecOutput(raw: string): { output: string; exitCode: number } {
+  const trimmed = raw.trim();
+
+  try {
+    const parsed = JSON.parse(trimmed) as { message?: string; exit_code?: number };
+    return {
+      output: parsed.message ?? trimmed,
+      exitCode: typeof parsed.exit_code === 'number' ? parsed.exit_code : 0,
+    };
+  } catch {
+    // Newer Codex CLI --json emits newline-delimited events. Ignore non-JSON
+    // warning lines and return the final agent message when one is present.
+  }
+
+  const messages: string[] = [];
+  let exitCode = 0;
+  let sawJsonEvent = false;
+
+  for (const line of trimmed.split(/\r?\n/)) {
+    const eventText = line.trim();
+    if (!eventText) continue;
+
+    try {
+      const event = JSON.parse(eventText) as {
+        exit_code?: number;
+        message?: string;
+        item?: { type?: string; text?: string };
+      };
+      sawJsonEvent = true;
+
+      if (typeof event.exit_code === 'number') {
+        exitCode = event.exit_code;
+      }
+      if (event.item?.type === 'agent_message' && typeof event.item.text === 'string') {
+        messages.push(event.item.text);
+      } else if (typeof event.message === 'string') {
+        messages.push(event.message);
+      }
+    } catch {
+      // Keep scanning; Codex may interleave warning lines with JSON events.
+    }
+  }
+
+  if (messages.length > 0) {
+    return { output: messages[messages.length - 1], exitCode };
+  }
+
+  return { output: trimmed, exitCode: sawJsonEvent ? exitCode : 0 };
 }
 
 export async function computerUse(
@@ -200,7 +258,8 @@ export async function computerUse(
 
     // Fallback: run codex exec --json locally on the cortex VM
     try {
-      const raw = execFileSync('codex', ['exec', '--json', prompt], {
+      const codexBin = resolveLocalCodexBin();
+      const raw = execFileSync(codexBin, ['exec', '--json', prompt], {
         timeout: timeoutSec * 1000,
         encoding: 'utf-8',
         cwd: opts.workdir,
@@ -208,22 +267,16 @@ export async function computerUse(
       });
 
       let output: string;
-      try {
-        const parsed = JSON.parse(raw) as { message?: string; exit_code?: number };
-        const exitCode = typeof parsed.exit_code === 'number' ? parsed.exit_code : 0;
-        if (exitCode !== 0) {
-          return {
-            ok: false,
-            error: `codex exec exited with code ${exitCode}: ${parsed.message ?? ''}`,
-            durationMs: Date.now() - start,
-            usedFallback: true,
-          };
-        }
-        output = parsed.message ?? raw.trim();
-      } catch {
-        // If --json output isn't parseable, use raw output
-        output = raw.trim();
+      const parsed = parseCodexExecOutput(raw);
+      if (parsed.exitCode !== 0) {
+        return {
+          ok: false,
+          error: `codex exec exited with code ${parsed.exitCode}: ${parsed.output}`,
+          durationMs: Date.now() - start,
+          usedFallback: true,
+        };
       }
+      output = parsed.output;
 
       // Log successful fallback use
       try {

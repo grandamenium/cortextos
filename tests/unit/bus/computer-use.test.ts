@@ -28,6 +28,14 @@ import { computerUse } from '../../../src/bus/computer-use';
 
 const mockExecFileSync = execFileSync as unknown as Mock;
 
+beforeEach(() => {
+  process.env.CODEX_BIN = 'codex';
+});
+
+afterEach(() => {
+  delete process.env.CODEX_BIN;
+});
+
 // Proper SSH connection-error messages (full format that matches regex patterns)
 const SSH_CONNECTION_ERRORS = [
   'ssh: connect to host gregs-mac port 22: Connection refused',
@@ -260,6 +268,25 @@ describe('computerUse — SSH connection failure, code-only task (noPlugin=true)
 
     expect(result.ok).toBe(true);
     expect(result.output).toBe('plain text output from codex');
+    expect(result.usedFallback).toBe(true);
+  });
+
+  it('extracts the final agent message from Codex JSONL fallback output', async () => {
+    mockSshConnectionError('Connection timed out after 10 seconds');
+    mockExecFileSync
+      .mockReturnValueOnce([
+        'WARN noisy startup line',
+        JSON.stringify({ type: 'thread.started', thread_id: 'thread_123' }),
+        JSON.stringify({ type: 'turn.started' }),
+        JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'CORTEXTOS_CODEX_BUS_OK' } }),
+        JSON.stringify({ type: 'turn.completed' }),
+      ].join('\n')) // codex exec — JSONL
+      .mockReturnValueOnce(''); // fallback log-event
+
+    const result = await computerUse('smoke', { noPlugin: true });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toBe('CORTEXTOS_CODEX_BUS_OK');
     expect(result.usedFallback).toBe(true);
   });
 
