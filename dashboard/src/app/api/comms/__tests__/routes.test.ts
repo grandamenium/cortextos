@@ -123,9 +123,13 @@ describe('GET /api/comms/feed', () => {
 // ---------------------------------------------------------------------------
 describe('GET /api/comms/channels', () => {
   it('groups messages by pair and reports last-message metadata', async () => {
+    // Use relative timestamps so the channel stays within the 7-day archive
+    // threshold regardless of when the test runs.
+    const ts1 = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2h ago
+    const ts2 = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(); // 1h ago (most recent)
     writeHistory([
-      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: '2026-04-15T09:00:00Z', text: 'hi', reply_to: null },
-      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: '2026-04-15T10:00:00Z', text: 'reply', reply_to: null },
+      { id: 'm1', from: 'boris', to: 'nick', priority: 'normal', timestamp: ts1, text: 'hi', reply_to: null },
+      { id: 'm2', from: 'nick', to: 'boris', priority: 'normal', timestamp: ts2, text: 'reply', reply_to: null },
     ]);
 
     const res = await channels.GET(makeRequest('/api/comms/channels'));
