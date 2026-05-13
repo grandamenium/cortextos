@@ -23,6 +23,7 @@ import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, 
 import { drainRetryQueue, readRetryQueue, retryQueuePath, isEnabled } from '../bus/rgos-mirror.js';
 import { createSkillPr } from '../bus/skill-autopr.js';
 import { sendSlack } from '../bus/send-slack.js';
+import { enforceControlPolicy } from '../bus/orch-control-policy.js';
 import { sendTelegramVoice } from '../bus/send-telegram-voice.js';
 import { generateSkill } from '../bus/generate-skill.js';
 import { syncSkills } from '../bus/sync-skills.js';
@@ -111,6 +112,26 @@ function readAgentVoice(agentDir: string | undefined): string {
     return typeof cfg.voice === 'string' && cfg.voice ? cfg.voice : 'en-US-AndrewNeural';
   } catch {
     return 'en-US-AndrewNeural';
+  }
+}
+
+async function enforcePolicyOrExit(
+  gate: string,
+  action: string,
+  target?: string,
+  opts?: { policyApprovalId?: string; exemptOrchestrator?: boolean },
+): Promise<void> {
+  try {
+    await enforceControlPolicy({
+      gate,
+      action,
+      target,
+      approvalId: opts?.policyApprovalId,
+      exemptOrchestrator: opts?.exemptOrchestrator,
+    });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
   }
 }
 
@@ -215,7 +236,8 @@ busCommand
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
   .option('--trace-id <id>', 'OTel-style trace ID to correlate this message with a workflow or task')
-  .action(async (to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string; traceId?: string }) => {
+  .option('--policy-approval-id <id>', 'Approval ID authorizing a policy-gated live user send')
+  .action(async (to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string; traceId?: string; policyApprovalId?: string }) => {
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
@@ -239,6 +261,10 @@ busCommand
     if (!agentExists) {
       // If target isn't a known agent, it's the user (dashboard/Telegram identity).
       // Fall through to user-destination handling below — no warning.
+      await enforcePolicyOrExit('externalEmail', 'send-message user delivery', to, {
+        policyApprovalId: opts.policyApprovalId,
+        exemptOrchestrator: true,
+      });
     }
 
     // -----------------------------------------------------------------------
@@ -1262,11 +1288,16 @@ busCommand
   .option('--image <path>', 'Send a photo with caption')
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
-  .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
+  .option('--policy-approval-id <id>', 'Approval ID authorizing a policy-gated direct Telegram send')
+  .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean; policyApprovalId?: string }) => {
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
     // Telegram renders them as visible text. Normalize before send + log.
     message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    await enforcePolicyOrExit('externalEmail', 'send-telegram', chatId, {
+      policyApprovalId: opts.policyApprovalId,
+      exemptOrchestrator: true,
+    });
     // Resolve bot token: agent .env first, then process.env
     const env = resolveEnv();
     let botToken = '';
@@ -1363,7 +1394,12 @@ busCommand
   .description('Synthesize text with OpenAI tts-1 and send it as a Telegram voice message')
   .argument('<chat-id>', 'Telegram chat ID')
   .argument('<text>', 'Text to speak')
-  .action(async (chatId: string, text: string) => {
+  .option('--policy-approval-id <id>', 'Approval ID authorizing a policy-gated direct Telegram send')
+  .action(async (chatId: string, text: string, opts: { policyApprovalId?: string }) => {
+    await enforcePolicyOrExit('externalEmail', 'send-telegram-voice', chatId, {
+      policyApprovalId: opts.policyApprovalId,
+      exemptOrchestrator: true,
+    });
     const result = await sendTelegramVoice(chatId, text);
     if (!result.ok) {
       console.error(`send-telegram-voice failed: ${result.error}`);
@@ -3664,7 +3700,10 @@ busCommand
   .option('--thread-ts <ts>', 'Thread anchor ts; set to keep the reply in the original thread')
   .option('--inbox-id <id>', 'agent_slack_inbox.id — marks the row processed + records response_ts')
   .option('--agent <title>', 'Override agent title (default: derived from CORTEXTOS_AGENT_NAME)')
-  .action(async (channel: string, text: string, opts: { threadTs?: string; inboxId?: string; agent?: string }) => {
+  .option('--policy-approval-id <id>', 'Approval ID authorizing a policy-gated Slack post')
+  .action(async (channel: string, text: string, opts: { threadTs?: string; inboxId?: string; agent?: string; policyApprovalId?: string }) => {
+    const gate = channel.startsWith('C') || channel.startsWith('G') ? 'slackPublicPost' : 'internalSlack';
+    await enforcePolicyOrExit(gate, 'send-slack', channel, { policyApprovalId: opts.policyApprovalId });
     const result = await sendSlack(channel, text, {
       threadTs: opts.threadTs,
       inboxId: opts.inboxId,

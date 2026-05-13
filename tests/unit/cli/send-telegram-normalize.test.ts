@@ -42,6 +42,7 @@ let tempCwd: string;
 let originalCtxRoot: string | undefined;
 let originalAgentName: string | undefined;
 let originalBotToken: string | undefined;
+let originalPolicyExternalEmail: string | undefined;
 let originalCwd: string;
 
 async function parseSendTelegram(argv: string[]): Promise<void> {
@@ -66,10 +67,12 @@ beforeEach(() => {
   originalCtxRoot = process.env.CTX_ROOT;
   originalAgentName = process.env.CTX_AGENT_NAME;
   originalBotToken = process.env.BOT_TOKEN;
+  originalPolicyExternalEmail = process.env.CORTEXTOS_POLICY_EXTERNALEMAIL;
   originalCwd = process.cwd();
   process.env.CTX_ROOT = tempCtx;
   process.env.CTX_AGENT_NAME = 'test-agent';
   process.env.BOT_TOKEN = 'fake-token-for-test';
+  process.env.CORTEXTOS_POLICY_EXTERNALEMAIL = 'enabled';
   process.chdir(tempCwd);
 
   sendMessageSpy.mockClear();
@@ -83,6 +86,8 @@ afterEach(() => {
   else process.env.CTX_AGENT_NAME = originalAgentName;
   if (originalBotToken === undefined) delete process.env.BOT_TOKEN;
   else process.env.BOT_TOKEN = originalBotToken;
+  if (originalPolicyExternalEmail === undefined) delete process.env.CORTEXTOS_POLICY_EXTERNALEMAIL;
+  else process.env.CORTEXTOS_POLICY_EXTERNALEMAIL = originalPolicyExternalEmail;
   rmSync(tempCtx, { recursive: true, force: true });
   rmSync(tempCwd, { recursive: true, force: true });
 });
