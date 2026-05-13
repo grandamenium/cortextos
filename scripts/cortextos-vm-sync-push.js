@@ -505,6 +505,7 @@ async function syncRotationEvents(sinceTsStr) {
       const taskMatch = line.match(/last_task=(.+?)$/);
 
       const eventType = typeMatch ? typeMatch[1] : "crash";
+      const isUnplannedCrash = eventType === "crash";
 
       rows.push({
         agent_id: agentName,
@@ -512,7 +513,7 @@ async function syncRotationEvents(sinceTsStr) {
         checkpoint_size: null,
         rotation_at: rotationAt,
         resume_at: null,
-        resume_success: false,
+        resume_success: isUnplannedCrash ? false : null,
         task_id: null,
         notes: [
           `type=${eventType}`,
