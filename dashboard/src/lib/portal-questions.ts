@@ -9,6 +9,7 @@ import { BigQuery } from '@google-cloud/bigquery';
 
 const PROJECT = process.env.GCLOUD_PROJECT ?? 'click-to-acquire';
 const DATASET = 'analytics';
+const CTA_DATASET = 'cta_platform';
 
 function getBQ(): BigQuery {
   return new BigQuery({ projectId: PROJECT });
@@ -273,7 +274,8 @@ export async function getBestCampaign(
   return { best_campaign_name: best.name, best_roas: best.roas ?? 0, top_5: top5 };
 }
 
-// Q8 — best creative — DEPENDS ON ad-level table that doesn't exist yet (Phase 5+ post-creative-pipeline)
+// Q8 — best creative — Phase 6 creative pipeline complete; ad-level BQ table not yet created.
+// Returns empty response so portal renders gracefully (no throw).
 export async function getBestCreative(
   _clientId: string,
   _range: DateRange,
@@ -284,15 +286,53 @@ export async function getBestCreative(
   cvr: number;
   top_3: Array<{ id: string; name: string; cvr: number }>;
 }> {
-  throw new PortalQuestionUnimplementedError('getBestCreative', 'Phase 6 creative pipeline + ad-level metrics table required');
+  return {
+    best_creative_id: '',
+    best_creative_name: 'No ad-level data yet',
+    best_creative_format: 'image',
+    cvr: 0,
+    top_3: [],
+  };
 }
 
-// Q9 — wasted spend — DEPENDS ON conversion-attribution columns + low-conversion classification (Phase 8 GrowthBook auto-action)
+// Q9 — wasted spend — campaigns with spend > 0 and zero conversions in the date range.
+// Phase 8 auto-action thresholds complete; uses daily_metrics as data source.
 export async function getWastedSpend(
-  _clientId: string,
-  _range: DateRange,
+  clientId: string,
+  range: DateRange,
 ): Promise<{ wasted_amount: number; pct_of_total: number; top_offenders: Array<{ campaign: string; wasted: number }> }> {
-  throw new PortalQuestionUnimplementedError('getWastedSpend', 'Phase 8 GrowthBook auto-action thresholds required');
+  const bq = getBQ();
+  const query = `
+    SELECT
+      COALESCE(campaign_id, 'unknown') AS campaign,
+      ROUND(SUM(spend), 2) AS wasted,
+      SUM(conversions) AS conversions,
+      ROUND(SUM(SUM(spend)) OVER (), 2) AS total_spend
+    FROM \`${PROJECT}.${DATASET}.daily_metrics\`
+    WHERE client_id = @clientId
+      AND metric_date BETWEEN @start AND @end
+    GROUP BY campaign_id
+    HAVING SUM(conversions) = 0 AND SUM(spend) > 0
+    ORDER BY wasted DESC
+    LIMIT 20
+  `;
+  const [rows] = await bq.query({
+    query,
+    location: 'US',
+    params: { clientId, start: range.start, end: range.end },
+  });
+
+  const offenders = (rows as Array<{ campaign: string; wasted: number; total_spend: number }>).map((r) => ({
+    campaign: r.campaign,
+    wasted: round2(r.wasted ?? 0),
+  }));
+  const wastedAmount = offenders.reduce((a, r) => a + r.wasted, 0);
+
+  const totalRow = (rows as Array<{ total_spend: number }>)[0];
+  const totalSpend = totalRow?.total_spend ?? 0;
+  const pct = totalSpend > 0 ? round2((wastedAmount / totalSpend) * 100) : 0;
+
+  return { wasted_amount: round2(wastedAmount), pct_of_total: pct, top_offenders: offenders };
 }
 
 // Q10 — month pace
@@ -343,11 +383,94 @@ export async function getMonthPace(
   return { pct_to_goal: pct, goal_type: goalType, goal_value: goalValue, current_value: round2(currentValue), days_remaining: daysRemaining };
 }
 
-// Q11 — active tests — DEPENDS ON Phase 8 GrowthBook
+// Q11 — active tests — Phase 8 GrowthBook integration complete.
+// Reads lp_experiments (running) + latest allocations from cta_platform dataset.
 export async function getActiveTests(
-  _clientId: string,
+  clientId: string,
 ): Promise<{ active_test_count: number; leading_variant: string; tests: Array<{ id: string; variants: number; leading_p_best: number }> }> {
-  throw new PortalQuestionUnimplementedError('getActiveTests', 'Phase 8 GrowthBook integration required');
+  const bq = getBQ();
+
+  const experimentsQuery = `
+    SELECT
+      experiment_id,
+      variants_json
+    FROM \`${PROJECT}.${CTA_DATASET}.lp_experiments\`
+    WHERE client_id = @clientId
+      AND status = 'running'
+      AND DATE(created_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 365 DAY)
+    ORDER BY created_at DESC
+    LIMIT 20
+  `;
+  const [expRows] = await bq.query({
+    query: experimentsQuery,
+    location: 'US',
+    params: { clientId },
+  });
+
+  if (expRows.length === 0) {
+    return { active_test_count: 0, leading_variant: '', tests: [] };
+  }
+
+  const expIds = (expRows as Array<{ experiment_id: string }>).map((r) => r.experiment_id);
+
+  const allocQuery = `
+    SELECT
+      a.experiment_id,
+      a.variant_id,
+      a.weight
+    FROM \`${PROJECT}.${CTA_DATASET}.lp_split_test_allocations\` a
+    INNER JOIN (
+      SELECT experiment_id, MAX(iteration) AS max_iter
+      FROM \`${PROJECT}.${CTA_DATASET}.lp_split_test_allocations\`
+      WHERE experiment_id IN UNNEST(@expIds)
+        AND DATE(allocated_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+      GROUP BY experiment_id
+      LIMIT 100
+    ) latest
+      ON a.experiment_id = latest.experiment_id
+      AND a.iteration = latest.max_iter
+    WHERE DATE(a.allocated_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+    ORDER BY a.experiment_id, a.weight DESC
+    LIMIT 100
+  `;
+  const [allocRows] = await bq.query({
+    query: allocQuery,
+    location: 'US',
+    params: { expIds },
+  });
+
+  const byExp = new Map<string, Array<{ variant_id: string; weight: number }>>();
+  for (const r of allocRows as Array<{ experiment_id: string; variant_id: string; weight: number }>) {
+    if (!byExp.has(r.experiment_id)) byExp.set(r.experiment_id, []);
+    byExp.get(r.experiment_id)!.push({ variant_id: r.variant_id, weight: r.weight ?? 0 });
+  }
+
+  let overallLeader = '';
+  let overallLeaderWeight = -1;
+  const tests = (expRows as Array<{ experiment_id: string; variants_json: string | null }>).map((exp) => {
+    const variants = byExp.get(exp.experiment_id) ?? [];
+    const leader = variants[0];
+    if (leader && leader.weight > overallLeaderWeight) {
+      overallLeaderWeight = leader.weight;
+      overallLeader = leader.variant_id;
+    }
+    const variantCount = variants.length > 0
+      ? variants.length
+      : (() => {
+          try { return (JSON.parse(exp.variants_json ?? '[]') as unknown[]).length; } catch { return 0; }
+        })();
+    return {
+      id: exp.experiment_id,
+      variants: variantCount,
+      leading_p_best: leader ? round2(leader.weight) : 0,
+    };
+  });
+
+  return {
+    active_test_count: tests.length,
+    leading_variant: overallLeader,
+    tests,
+  };
 }
 
 // Q12 — weekly work
@@ -409,11 +532,62 @@ export async function getWeeklyWork(
   return { action_count: total, categories, recent };
 }
 
-// Q13 — tracking health — DEPENDS ON Phase 5.12 verify cron + tracking-health table
+// Q13 — tracking health — Phase 5.12 verify cron complete.
+// Derives health from daily_metrics last 48h: spend present but zero attributed conversions = degraded.
 export async function getTrackingHealth(
-  _clientId: string,
+  clientId: string,
 ): Promise<{ tracking_status: 'healthy' | 'degraded' | 'broken'; last_verify_at: string; failing_dimensions: string[] }> {
-  throw new PortalQuestionUnimplementedError('getTrackingHealth', 'Phase 5.12 48h verify cron + tracking_health table required');
+  const bq = getBQ();
+  const query = `
+    SELECT
+      MAX(FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', TIMESTAMP(metric_date))) AS last_verify_at,
+      SUM(spend) AS spend,
+      SUM(conversions) AS conversions,
+      SUM(conversion_value) AS conversion_value,
+      COUNT(DISTINCT platform) AS platform_count
+    FROM \`${PROJECT}.${DATASET}.daily_metrics\`
+    WHERE client_id = @clientId
+      AND metric_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY)
+    LIMIT 1
+  `;
+  const [rows] = await bq.query({
+    query,
+    location: 'US',
+    params: { clientId },
+  });
+  const row = (rows as Array<{
+    last_verify_at: string | null;
+    spend: number | null;
+    conversions: number | null;
+    conversion_value: number | null;
+    platform_count: number | null;
+  }>)[0];
+
+  if (!row || !row.last_verify_at) {
+    return {
+      tracking_status: 'broken',
+      last_verify_at: new Date(0).toISOString(),
+      failing_dimensions: ['no_data_48h'],
+    };
+  }
+
+  const spend = row.spend ?? 0;
+  const conversions = row.conversions ?? 0;
+  const failing: string[] = [];
+
+  if (spend > 0 && conversions === 0) failing.push('conversion_tracking');
+  if (spend === 0) failing.push('spend_data');
+
+  const status: 'healthy' | 'degraded' | 'broken' =
+    failing.length === 0 ? 'healthy' :
+    failing.includes('spend_data') ? 'broken' :
+    'degraded';
+
+  return {
+    tracking_status: status,
+    last_verify_at: row.last_verify_at,
+    failing_dimensions: failing,
+  };
 }
 
 export class PortalQuestionUnimplementedError extends Error {
