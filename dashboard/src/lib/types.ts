@@ -175,6 +175,7 @@ export interface Lead {
   outreach_sent_at?: string;
   notes?: string;
   source?: string;
+}
 
 // -- Content Types --
 
