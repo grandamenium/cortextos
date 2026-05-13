@@ -159,6 +159,12 @@ const IDENTITY_HEADINGS: Record<string, string> = {
   'work style': 'workStyle',
 };
 
+/** Strip HTML comments (including multi-line) so unfilled template placeholders
+ * like `<!-- Agent name (set during onboarding) -->` don't render as data. */
+function stripHtmlComments(s: string): string {
+  return s.replace(/<!--[\s\S]*?-->/g, '');
+}
+
 export function parseIdentityMd(
   content: string,
 ): { fields: IdentityFields; parsed: ParsedMarkdown } {
@@ -174,7 +180,7 @@ export function parseIdentityMd(
   for (const section of parsed.sections) {
     const key = IDENTITY_HEADINGS[section.heading.toLowerCase()];
     if (key) {
-      fields[key] = section.content.trim();
+      fields[key] = stripHtmlComments(section.content).trim();
     }
   }
 

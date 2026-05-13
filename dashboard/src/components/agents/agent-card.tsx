@@ -9,6 +9,7 @@ import { RuntimeBadge } from '@/components/shared/runtime-badge';
 import { AgentAvatar } from '@/components/shared/agent-avatar';
 import { AgentActions } from './agent-actions';
 import { IconChecklist } from '@tabler/icons-react';
+import { sanitizeEmoji, sanitizeName } from '@/lib/agent-display';
 import type { AgentRuntime, HealthStatus } from '@/lib/types';
 
 export interface AgentCardData {
@@ -35,17 +36,20 @@ export function AgentCard({ agent }: AgentCardProps) {
     agent.health === 'healthy' ? 'Online' :
     agent.health === 'stale' ? 'Stale' : 'Offline';
 
+  const displayName = sanitizeName(agent.name, agent.systemName);
+  const displayEmoji = sanitizeEmoji(agent.emoji);
+
   return (
     <Link href={`/agents/${encodeURIComponent(agent.systemName)}`}>
-      <Card className="group relative h-full cursor-pointer transition-all hover:shadow-md hover:border-primary/20">
+      <Card className="group relative h-full cursor-pointer overflow-hidden transition-all hover:shadow-md hover:border-primary/20">
         <CardContent className="space-y-3">
           {/* Header: avatar + name + health */}
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-3">
-              <AgentAvatar name={agent.name} emoji={agent.emoji} size="md" />
-              <div className="min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <AgentAvatar name={displayName} emoji={displayEmoji} size="md" />
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <p className="text-sm font-semibold leading-tight">{agent.name}</p>
+                  <p className="text-sm font-semibold leading-tight truncate">{displayName}</p>
                   <HealthDot status={agent.health} />
                 </div>
                 {agent.systemName && agent.systemName !== agent.name && (
@@ -54,7 +58,7 @@ export function AgentCard({ agent }: AgentCardProps) {
                   </p>
                 )}
                 {agent.role && (
-                  <p className="text-[11px] text-muted-foreground truncate max-w-[180px] mt-0.5">
+                  <p className="text-[11px] text-muted-foreground line-clamp-2 mt-0.5">
                     {agent.role}
                   </p>
                 )}

@@ -102,42 +102,37 @@ export default function LoginPage() {
     body.set('password', passwordInput?.value || '');
 
     try {
-      const res = await fetch(form.action, {
+      // Use redirect: 'manual' so we never chase NextAuth's 302 Location.
+      // NextAuth v5 derives the redirect target from its own URL config and,
+      // in dev, can emit `Location: http://localhost:<port>/...` even when the
+      // request was served via a different host (Tailscale, mDNS, reverse
+      // proxy). A remote browser following that redirect lands on its own
+      // localhost and throws a network error. We don't actually need the
+      // redirect — Set-Cookie headers from the 302 are still applied — so we
+      // probe /api/auth/session afterward to determine success/failure.
+      await fetch(form.action, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
         credentials: 'same-origin',
-        redirect: 'follow',
+        redirect: 'manual',
       });
-      if (res.redirected) {
-        const target = new URL(res.url);
-        if (target.pathname.startsWith('/login')) {
-          const code = target.searchParams.get('error') || 'Unknown';
-          // CallbackRouteError usually means the rate limiter blocked the request.
-          // Show a human-readable message instead of the raw error code.
-          const msg = code === 'CallbackRouteError'
-            ? 'Too many attempts. Please wait a few minutes and try again.'
-            : `Sign-in failed: ${code}`;
-          setError(msg);
-          setLoading(false);
-          return;
-        }
-        // Navigate to the original destination the user tried to reach, or /
-        // if none was recorded. Use window.location.origin to build a safe
-        // relative-only target — res.url can be http://localhost:3000/ behind
-        // a reverse proxy (when AUTH_URL is not set), which would send the
-        // browser to the wrong host.
+
+      const sessionRes = await fetch('/api/auth/session', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      const session = await sessionRes.json().catch(() => null);
+
+      if (session?.user) {
         const callbackParam = new URL(window.location.href).searchParams.get('callbackUrl');
-        // Validate same-origin: must start with / but not // (which is a protocol-relative URL)
+        // Validate same-origin: must start with / but not // (protocol-relative).
         const safeTarget = callbackParam && callbackParam.startsWith('/') && !callbackParam.startsWith('//') ? callbackParam : '/';
         window.location.href = safeTarget;
         return;
       }
-      if (res.ok) {
-        window.location.href = '/';
-        return;
-      }
-      setError(`Sign-in failed with status ${res.status}`);
+
+      setError('Sign-in failed: check username and password.');
       setLoading(false);
     } catch (err) {
       console.error('[login] submit error:', err);

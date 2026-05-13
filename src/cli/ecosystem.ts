@@ -109,7 +109,7 @@ export const ecosystemCommand = new Command('ecosystem')
       args: ${JSON.stringify(dashboardArgs)},
       cwd: ${JSON.stringify(dashboardDir)},
       env: {
-        PORT: process.env.PORT || '3000',
+        PORT: process.env.PORT || '3010',
       },
       // Dashboard reads its real config from dashboard/.env.local — populated
       // by /onboarding Phase 7. PM2 just supervises the dashboard process.

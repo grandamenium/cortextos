@@ -299,7 +299,7 @@ function unloadService(): void {
 
 const startCommand = new Command('start')
   .option('--instance <id>', 'Instance ID', 'default')
-  .option('--port <port>', 'Dashboard port', '3000')
+  .option('--port <port>', 'Dashboard port', '3010')
   .description('Create (or reuse) the Cloudflare tunnel and start it as a launchd service')
   .action(async (options: { instance: string; port: string }) => {
     const port = parseInt(options.port, 10);
