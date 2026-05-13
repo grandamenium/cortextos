@@ -11,7 +11,10 @@
  *   3. POST /exec (×N) — poll until { still_running: false, exit_code }
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { provisionOrgoCommand } from '../../../src/cli/provision-orgo';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { provisionOrgoCommand, resolveInstallScriptPath } from '../../../src/cli/provision-orgo';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -79,6 +82,40 @@ function pollRunning(logTail = '[provision] Installing cortextos...') {
 // ---------------------------------------------------------------------------
 // Tests: option validation
 // ---------------------------------------------------------------------------
+
+describe('provision-orgo — install script path resolution', () => {
+  it('resolves the built dist layout before falling through to parent directories', () => {
+    const root = join(tmpdir(), `ctx-orgo-path-${Date.now()}`);
+    const distDir = join(root, 'dist');
+    const scriptPath = join(root, 'scripts', 'install-cortextos-on-orgo.sh');
+
+    try {
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      mkdirSync(distDir, { recursive: true });
+      writeFileSync(scriptPath, '#!/usr/bin/env bash\n');
+
+      expect(resolveInstallScriptPath(distDir, join(root, 'other-cwd'))).toBe(scriptPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves the source TypeScript layout', () => {
+    const root = join(tmpdir(), `ctx-orgo-source-path-${Date.now()}`);
+    const srcCliDir = join(root, 'src', 'cli');
+    const scriptPath = join(root, 'scripts', 'install-cortextos-on-orgo.sh');
+
+    try {
+      mkdirSync(join(root, 'scripts'), { recursive: true });
+      mkdirSync(srcCliDir, { recursive: true });
+      writeFileSync(scriptPath, '#!/usr/bin/env bash\n');
+
+      expect(resolveInstallScriptPath(srcCliDir, join(root, 'other-cwd'))).toBe(scriptPath);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('provision-orgo — option validation', () => {
   let exitSpy: ReturnType<typeof mockExit>;

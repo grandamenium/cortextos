@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -9,6 +9,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Orgo API base URL (matches OrgoHTTPClient.swift defaultBaseURL)
 // ---------------------------------------------------------------------------
 const ORGO_API_BASE = 'https://www.orgo.ai/api';
+const INSTALL_SCRIPT_RELATIVE_PATH = 'scripts/install-cortextos-on-orgo.sh';
+
+export function resolveInstallScriptPath(baseDir = __dirname, cwd = process.cwd()): string {
+  const candidates = [
+    // Built CLI: dist/cli.js -> repo root is one level up.
+    join(baseDir, '..', INSTALL_SCRIPT_RELATIVE_PATH),
+    // Source/test runtime: src/cli/provision-orgo.ts -> repo root is two levels up.
+    join(baseDir, '..', '..', INSTALL_SCRIPT_RELATIVE_PATH),
+    // Last resort for local development when the CLI is launched from repo root.
+    join(cwd, INSTALL_SCRIPT_RELATIVE_PATH),
+  ];
+
+  const installScriptPath = candidates.find(candidate => existsSync(candidate));
+  if (!installScriptPath) {
+    throw new Error(
+      `Cannot read install script. Tried: ${candidates.join(', ')}. Ensure ${INSTALL_SCRIPT_RELATIVE_PATH} is present.`
+    );
+  }
+  return installScriptPath;
+}
 
 // ---------------------------------------------------------------------------
 // Wire types (mirror OrgoCatalogService.swift + OrgoHermesInstaller.swift)
@@ -186,7 +206,7 @@ async function runInstaller(
   apiKey: string
 ): Promise<InstallScriptResponse> {
   // Load the install script bundled alongside this CLI
-  const installShPath = join(__dirname, '../../scripts/install-cortextos-on-orgo.sh');
+  const installShPath = resolveInstallScriptPath();
   let installShSource: string;
   try {
     installShSource = readFileSync(installShPath, 'utf-8');
