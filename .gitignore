@@ -27,6 +27,9 @@ templates/*/.env
 orgs/*/agents/*/memory/
 agents/*/local/
 agents/*/telegram-images/
+
+# Local instance state (per-operator runtime spillover; never canonical)
+.cortextOS/
 agents/*/memory/
 
 # macOS metadata
