@@ -209,19 +209,47 @@ describe('Bus System', () => {
 
   describe('autoCommit', () => {
     let gitDir: string;
+    let savedGitEnv: Record<string, string | undefined> = {};
+
+    // Strip GIT_* env vars at process scope (and pass a scrubbed env to direct execSync
+    // calls below). Otherwise an inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE /
+    // GIT_OBJECT_DIRECTORY (e.g. when these tests run from inside a pre-push hook,
+    // where the parent `git push` exports them) makes git subprocesses operate on the
+    // OUTER repo instead of `gitDir` — breaking tests *and* corrupting the outer
+    // repo's .git/config with the test fixtures. The autoCommit() function under test
+    // also spawns git via process.env, so we must clean process.env, not just child env.
+    const cleanGitEnv = () => {
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      for (const k of Object.keys(env)) {
+        if (k.startsWith('GIT_')) delete env[k];
+      }
+      return env;
+    };
 
     beforeEach(() => {
+      savedGitEnv = {};
+      for (const k of Object.keys(process.env)) {
+        if (k.startsWith('GIT_')) {
+          savedGitEnv[k] = process.env[k];
+          delete process.env[k];
+        }
+      }
       gitDir = mkdtempSync(join(tmpdir(), 'cortextos-autocommit-test-'));
-      execSync('git init', { cwd: gitDir, stdio: 'pipe' });
-      execSync('git config user.email "test@test.com"', { cwd: gitDir, stdio: 'pipe' });
-      execSync('git config user.name "Test"', { cwd: gitDir, stdio: 'pipe' });
+      const env = cleanGitEnv();
+      execSync('git init', { cwd: gitDir, stdio: 'pipe', env });
+      execSync('git config user.email "test@test.com"', { cwd: gitDir, stdio: 'pipe', env });
+      execSync('git config user.name "Test"', { cwd: gitDir, stdio: 'pipe', env });
       // Create initial commit so git status works properly
       writeFileSync(join(gitDir, '.gitkeep'), '');
-      execSync('git add .gitkeep && git commit -m "init"', { cwd: gitDir, stdio: 'pipe' });
+      execSync('git add .gitkeep && git commit -m "init"', { cwd: gitDir, stdio: 'pipe', env });
     });
 
     afterEach(() => {
       rmSync(gitDir, { recursive: true, force: true });
+      for (const [k, v] of Object.entries(savedGitEnv)) {
+        if (v !== undefined) process.env[k] = v;
+      }
+      savedGitEnv = {};
     });
 
     it('filters out .env files', () => {
@@ -272,7 +300,7 @@ describe('Bus System', () => {
       expect(report.status).toBe('dry_run');
 
       // Verify nothing is staged
-      const staged = execSync('git diff --cached --name-only', { cwd: gitDir, encoding: 'utf-8' });
+      const staged = execSync('git diff --cached --name-only', { cwd: gitDir, encoding: 'utf-8', env: cleanGitEnv() });
       expect(staged.trim()).toBe('');
     });
 
@@ -289,7 +317,7 @@ describe('Bus System', () => {
       expect(report.staged).toContain('newfile.txt');
 
       // Verify file is actually staged
-      const staged = execSync('git diff --cached --name-only', { cwd: gitDir, encoding: 'utf-8' });
+      const staged = execSync('git diff --cached --name-only', { cwd: gitDir, encoding: 'utf-8', env: cleanGitEnv() });
       expect(staged.trim()).toContain('newfile.txt');
     });
 
