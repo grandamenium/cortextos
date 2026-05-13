@@ -792,7 +792,14 @@ busCommand
   .option('--cycle <name>', 'Cycle name')
   .action((action: string, agent: string, opts: { metric?: string; metricType?: string; surface?: string; direction?: string; window?: string; measurement?: string; loopInterval?: string; enabled?: string; cycle?: string }) => {
     const env = resolveEnv();
-    const agentDir = env.agentDir || process.cwd();
+    // Resolve target agent dir from the <agent> argument, not caller's CWD.
+    // Without this, `manage-cycle <action> dev` run from boss's CWD would modify boss's config.
+    const agentDir = (() => {
+      const { org, projectRoot } = env;
+      if (org && projectRoot) return join(projectRoot, 'orgs', org, 'agents', agent);
+      if (projectRoot) return join(projectRoot, 'agents', agent);
+      return env.agentDir || process.cwd();
+    })();
     if (opts.direction && opts.direction !== 'higher' && opts.direction !== 'lower') {
       console.error(`Invalid --direction '${opts.direction}'. Must be 'higher' or 'lower'`);
       process.exit(1);
