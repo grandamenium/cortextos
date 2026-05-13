@@ -43,6 +43,17 @@
         ]
       }
     ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortextos bus hook-session-start",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -61,6 +72,11 @@
             "type": "command",
             "command": "cortextos crash-alert",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "cortextos bus hook-session-end",
+            "timeout": 15
           }
         ]
       }
