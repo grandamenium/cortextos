@@ -18,6 +18,9 @@ import {
   IconClock,
   IconTarget,
   IconMessages,
+  IconDatabase,
+  IconMessageQuestion,
+  IconBulb,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -43,7 +46,10 @@ const navItems: NavItem[] = [
   { label: 'Approvals', href: '/approvals', icon: IconShieldCheck, section: 'ops' },
   { label: 'Workflows', href: '/workflows', icon: IconClock, section: 'ops' },
   { label: 'Strategy', href: '/strategy', icon: IconTarget, section: 'ops' },
+  { label: 'Answers', href: '/answers', icon: IconMessageQuestion, section: 'ops' },
+  { label: 'Recommendations', href: '/recommendations', icon: IconBulb, section: 'ops' },
   { label: 'Analytics', href: '/analytics', icon: IconChartDots3, section: 'ops' },
+  { label: 'Warehouse', href: '/warehouse', icon: IconDatabase, section: 'ops' },
 
   // Intelligence
   { label: 'Knowledge Base', href: '/knowledge-base', icon: IconBook2, section: 'intel' },
