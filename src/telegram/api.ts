@@ -109,16 +109,25 @@ export class TelegramAPI {
    *   5. Italic (_..._) — word-boundary aware to avoid snake_case false positives
    *   6. Links ([text](url)) → <a href="url">text</a>
    *
-   * Pass `plainText: true` to skip conversion (just HTML-escape and send raw).
+   * Pass `plainText: true` to skip both Markdown conversion AND HTML-escaping.
+   * sendChunk calls sendMessage without parse_mode in that case, so Telegram
+   * renders the raw text -- escaping would leak visible `&gt;` / `&lt;` /
+   * `&amp;` into the message.
    */
   private markdownToHtml(text: string, plainText = false): string {
+    // Plain-text mode: skip both HTML-escaping AND Markdown conversion.
+    // sendChunk calls sendMessage without parse_mode, so Telegram renders
+    // the raw text. HTML-escaping in this path leaks visible &gt; / &lt; /
+    // &amp; into the rendered message — agents emitting "->" or "5 > 4" in
+    // plain-text bodies were getting "-&gt;" and "5 &gt; 4" in customer-
+    // facing copy. Fixed by short-circuiting before the escape step.
+    if (plainText) return text;
+
     // Step 1: HTML-escape (& must be first to avoid double-escaping)
     let html = text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
-
-    if (plainText) return html;
 
     // Step 2: Fenced code blocks — multiline, processed before inline `
     html = html.replace(/```(?:\w*\n?)?([\s\S]*?)```/g, (_, code) =>
