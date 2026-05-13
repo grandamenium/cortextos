@@ -500,6 +500,11 @@ export function completeTask(
 /**
  * List tasks with optional filters.
  * Matches bash list-tasks.sh behavior.
+ *
+ * With allOrgs:true, scans every sibling org's tasks/ dir under
+ * <ctxRoot>/orgs/*\/tasks and returns the union. Caller's org comes from
+ * paths.taskDir already, so the cross-org scan just adds the peers. The
+ * Task.org field on each record is authoritative — we do not rewrite it.
  */
 export function listTasks(
   paths: BusPaths,
@@ -508,33 +513,55 @@ export function listTasks(
     status?: TaskStatus;
     priority?: Priority;
     respectDeps?: boolean;
+    allOrgs?: boolean;
   },
 ): Task[] {
-  const { taskDir } = paths;
-  let files: string[];
-  try {
-    files = readdirSync(taskDir).filter(
-      f => f.startsWith('task_') && f.endsWith('.json'),
-    );
-  } catch {
-    return [];
+  const taskDirs: string[] = [paths.taskDir];
+
+  if (filters?.allOrgs) {
+    const orgsRoot = join(paths.ctxRoot, 'orgs');
+    try {
+      for (const entry of readdirSync(orgsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const peerDir = join(orgsRoot, entry.name, 'tasks');
+        if (peerDir === paths.taskDir) continue; // already included
+        if (existsSync(peerDir)) taskDirs.push(peerDir);
+      }
+    } catch {
+      // orgs/ missing — fall back to single-org scan
+    }
   }
 
   const tasks: Task[] = [];
-  for (const file of files) {
+  const seenIds = new Set<string>();
+
+  for (const dir of taskDirs) {
+    let files: string[];
     try {
-      const content = readFileSync(join(taskDir, file), 'utf-8');
-      const task: Task = JSON.parse(content);
-
-      // Apply filters
-      if (filters?.agent && task.assigned_to !== filters.agent) continue;
-      if (filters?.status && task.status !== filters.status) continue;
-      if (filters?.priority && task.priority !== filters.priority) continue;
-      if (task.archived) continue;
-
-      tasks.push(task);
+      files = readdirSync(dir).filter(
+        f => f.startsWith('task_') && f.endsWith('.json'),
+      );
     } catch {
-      // Skip corrupt files
+      continue;
+    }
+
+    for (const file of files) {
+      try {
+        const content = readFileSync(join(dir, file), 'utf-8');
+        const task: Task = JSON.parse(content);
+
+        // Apply filters
+        if (filters?.agent && task.assigned_to !== filters.agent) continue;
+        if (filters?.status && task.status !== filters.status) continue;
+        if (filters?.priority && task.priority !== filters.priority) continue;
+        if (task.archived) continue;
+        if (seenIds.has(task.id)) continue;
+        seenIds.add(task.id);
+
+        tasks.push(task);
+      } catch {
+        // Skip corrupt files
+      }
     }
   }
 
