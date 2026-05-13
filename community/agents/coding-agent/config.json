@@ -1,0 +1,7 @@
+{
+  "runtime": "claude-code",
+  "timezone": "America/New_York",
+  "mode": "day",
+  "template": "coding-agent",
+  "setup_skill": "coding-setup"
+}

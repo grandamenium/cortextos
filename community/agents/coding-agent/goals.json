@@ -1,0 +1,10 @@
+{
+  "focus": "Configure the coding agent with /setup",
+  "goals": [
+    "Implement assigned code changes safely",
+    "Review PRs and surface defects",
+    "Run appropriate tests",
+    "Prepare clean branches and PRs"
+  ],
+  "bottleneck": "Setup not completed"
+}

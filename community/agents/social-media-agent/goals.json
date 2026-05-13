@@ -1,0 +1,10 @@
+{
+  "focus": "Configure the social media agent with /setup",
+  "goals": [
+    "Maintain a content pipeline for configured platforms",
+    "Draft platform-native content for approval",
+    "Track analytics and recommend experiments",
+    "Protect brand voice, privacy, and approval boundaries"
+  ],
+  "bottleneck": "Setup not completed"
+}

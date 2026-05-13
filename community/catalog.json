@@ -1,7 +1,55 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-04-06T00:00:00Z",
+  "updated_at": "2026-05-13T00:00:00Z",
   "items": [
+    {
+      "name": "social-media-agent",
+      "description": "Tool-agnostic social media and content operations agent — interactive /setup, content pipeline, platform-native drafts, approvals, analytics digests, and recurring content crons",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["social-media", "content", "marketing", "analytics", "approvals", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/social-media-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "research-agent",
+      "description": "Tool-agnostic research and intelligence agent — interactive /setup, watchlists, recurring source scans, sourced reports, confidence tracking, routing, and KB handoff",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["research", "intelligence", "web", "reports", "knowledge-base", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/research-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "coding-agent",
+      "description": "Tool-agnostic coding agent — interactive /setup, repository rules, implementation workflow, bug-first code review, test discipline, CI checks, and PR preparation",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["coding", "software", "github", "tests", "code-review", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/coding-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "fitness-agent",
+      "description": "Tool-agnostic fitness and accountability agent — interactive /setup, workout and habit check-ins, local logs, weekly reviews, safety boundaries, and recurring health crons",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["fitness", "habits", "accountability", "health", "check-ins", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/fitness-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
     {
       "name": "agentic-crm-assistant",
       "description": "Agentic CRM personal assistant — reusable executive/personal assistant template with structured relationship memory, inbox/calendar/meeting workflows, full interactive setup, tool-agnostic connectors, CRM skills, and recurring assistant crons",

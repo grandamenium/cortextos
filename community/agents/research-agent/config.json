@@ -1,0 +1,7 @@
+{
+  "runtime": "claude-code",
+  "timezone": "America/New_York",
+  "mode": "day",
+  "template": "research-agent",
+  "setup_skill": "research-setup"
+}

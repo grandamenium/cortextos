@@ -1,0 +1,7 @@
+{
+  "runtime": "claude-code",
+  "timezone": "America/New_York",
+  "mode": "day",
+  "template": "social-media-agent",
+  "setup_skill": "social-media-setup"
+}
