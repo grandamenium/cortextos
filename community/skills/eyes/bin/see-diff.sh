@@ -33,6 +33,11 @@ MODEL="${OLLAMA_VISION_MODEL:-qwen2.5vl:7b}"
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 OUT_FILE="/tmp/eyes-diff-$$.json"
 
+# Cleanup on exit — drop temp files on any path out.
+TMP_FILES=()
+cleanup() { for f in "${TMP_FILES[@]:-}"; do [ -n "$f" ] && rm -f "$f"; done; }
+trap cleanup EXIT
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --reference)      REF="$2"; shift 2 ;;
@@ -52,16 +57,30 @@ if [ -z "$REF" ] || [ ! -f "$REF" ]; then
   exit 2
 fi
 
+# Validate --target-display is a small integer (passed to screencapture -D).
+if ! [[ "$TARGET_DISPLAY" =~ ^[0-9]{1,3}$ ]]; then
+  echo '{"verdict":"error","error":"--target-display must be a small integer"}' >&2
+  exit 2
+fi
+
+# Validate --target-window against AppleScript injection — allow only safe chars.
+# osascript -e "tell application \"$NAME\"..." is the injection sink; restrict NAME
+# to alphanumerics + space + dot + dash + underscore.
+if [ -n "$TARGET_WINDOW" ] && ! [[ "$TARGET_WINDOW" =~ ^[A-Za-z0-9\ ._-]{1,64}$ ]]; then
+  echo '{"verdict":"error","error":"--target-window contains unsupported characters (allowed: A-Z a-z 0-9 space . _ -)"}' >&2
+  exit 2
+fi
+
 # Get target screenshot
 if [ -n "$TARGET_FILE" ]; then
   TARGET="$TARGET_FILE"
 elif [ -n "$TARGET_WINDOW" ]; then
-  TARGET="/tmp/eyes-target-$$.png"
-  osascript -e "tell application \"$TARGET_WINDOW\" to activate" 2>/dev/null || true
+  TARGET="/tmp/eyes-target-$$.png"; TMP_FILES+=("$TARGET")
+  /usr/bin/osascript -e "tell application \"$TARGET_WINDOW\" to activate" 2>/dev/null || true
   sleep 0.4
   /usr/sbin/screencapture -x -D "$TARGET_DISPLAY" -t png "$TARGET" 2>/dev/null
 else
-  TARGET="/tmp/eyes-target-$$.png"
+  TARGET="/tmp/eyes-target-$$.png"; TMP_FILES+=("$TARGET")
   /usr/sbin/screencapture -x -D "$TARGET_DISPLAY" -t png "$TARGET" 2>/dev/null
 fi
 
@@ -84,12 +103,10 @@ downsample_if_large() {
     cp "$src" "$dst"
   fi
 }
-REF_SMALL="/tmp/eyes-ref-$$.png"
-TARGET_SMALL="/tmp/eyes-tgt-$$.png"
+REF_SMALL="/tmp/eyes-ref-$$.png"; TMP_FILES+=("$REF_SMALL")
+TARGET_SMALL="/tmp/eyes-tgt-$$.png"; TMP_FILES+=("$TARGET_SMALL")
 downsample_if_large "$REF" "$REF_SMALL"
 downsample_if_large "$TARGET" "$TARGET_SMALL"
-REF="$REF_SMALL"
-TARGET="$TARGET_SMALL"
 
 PROMPT='You are an expert frontend reviewer. Two images are attached: a REFERENCE design and a CURRENT live rendering. The CURRENT view should match the REFERENCE.
 
@@ -100,51 +117,64 @@ Output ONLY valid JSON with this exact schema (no prose, no markdown fences):
 
 If there are no meaningful differences, return {"differences":[],"summary":"matches reference"}.'
 
-# Send BOTH images to ollama via stdin payload file. Avoids shell-arg-length and
-# quoting issues when base64 blobs are large.
-PAYLOAD_FILE="/tmp/eyes-payload-$$.json"
-python3 - "$REF" "$TARGET" "$MODEL" "$PROMPT" > "$PAYLOAD_FILE" <<'PYEOF'
+# Build payload + drive everything via stdin to avoid shell-quoting & python-eval
+# injection: untrusted/large values (image bytes, model output) NEVER hit a shell
+# string or a python `-c` interpolation; argv carries only validated args.
+PAYLOAD_FILE="/tmp/eyes-payload-$$.json"; TMP_FILES+=("$PAYLOAD_FILE")
+python3 - "$REF_SMALL" "$TARGET_SMALL" "$MODEL" "$PROMPT" "$PAYLOAD_FILE" <<'PYEOF'
 import base64, json, sys
-ref_path, tgt_path, model, prompt = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+ref_path, tgt_path, model, prompt, out_path = sys.argv[1:6]
 ref = base64.b64encode(open(ref_path, 'rb').read()).decode('ascii')
 tgt = base64.b64encode(open(tgt_path, 'rb').read()).decode('ascii')
-print(json.dumps({
-    'model': model,
-    'prompt': f"{prompt}\n\nThe FIRST image is the REFERENCE. The SECOND image is the CURRENT live view.",
-    'images': [ref, tgt],
-    'stream': False,
-    'format': 'json',
-    'keep_alive': '20m',
-    'options': {'num_predict': 2048, 'temperature': 0.15},
-}))
+with open(out_path, 'w') as f:
+    json.dump({
+        'model': model,
+        'prompt': f"{prompt}\n\nThe FIRST image is the REFERENCE. The SECOND image is the CURRENT live view.",
+        'images': [ref, tgt],
+        'stream': False,
+        'format': 'json',
+        'keep_alive': '20m',
+        'options': {'num_predict': 2048, 'temperature': 0.15},
+    }, f)
 PYEOF
 
 T0=$(date +%s)
-RESP=$(curl -s -m 600 -H "Content-Type: application/json" --data-binary "@$PAYLOAD_FILE" "$OLLAMA_HOST/api/generate" 2>/dev/null)
+RESP_FILE="/tmp/eyes-resp-$$.json"; TMP_FILES+=("$RESP_FILE")
+curl -s -m 600 -H "Content-Type: application/json" --data-binary "@$PAYLOAD_FILE" -o "$RESP_FILE" "$OLLAMA_HOST/api/generate" 2>/dev/null
 ELAPSED=$(($(date +%s) - T0))
-rm -f "$PAYLOAD_FILE" "$REF_SMALL" "$TARGET_SMALL"
 
-JSON_TEXT=$(printf '%s' "$RESP" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('response','').strip())" 2>/dev/null)
+# Parse the response entirely in Python via stdin — never interpolate raw model
+# output into shell or `python -c`. Also writes the validated diff JSON to OUT_FILE
+# and emits the envelope.
+python3 - "$RESP_FILE" "$OUT_FILE" "$REF" "$TARGET" "$MODEL" "$ELAPSED" <<'PYEOF'
+import json, sys
+resp_path, out_path, ref, target, model, elapsed = sys.argv[1:7]
+elapsed = int(elapsed)
 
-# Try to parse the response as JSON. If not, save it raw + error.
-if printf '%s' "$JSON_TEXT" | python3 -c "import sys,json; json.loads(sys.stdin.read())" 2>/dev/null; then
-  printf '%s\n' "$JSON_TEXT" > "$OUT_FILE"
-  python3 -c "
-import json
-d = json.loads('''$JSON_TEXT''')
-env = {
-    'verdict': 'ok',
-    'reference': '$REF',
-    'target': '$TARGET',
-    'model': '$MODEL',
-    'elapsed_s': $ELAPSED,
-    'diff_path': '$OUT_FILE',
-    'diff_count': len(d.get('differences', [])),
-    'summary': d.get('summary', ''),
-}
-print(json.dumps(env, indent=2))
-"
-else
-  echo '{"verdict":"error","error":"vision model did not return parseable JSON","raw_response":'"$(printf '%s' "$JSON_TEXT" | head -c 500 | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')"'}' >&2
-  exit 4
-fi
+try:
+    with open(resp_path) as f:
+        body = json.load(f)
+    text = (body.get('response') or '').strip()
+    parsed = json.loads(text)  # validate diff JSON
+    with open(out_path, 'w') as f:
+        json.dump(parsed, f, indent=2)
+    env = {
+        'verdict': 'ok',
+        'reference': ref,
+        'target': target,
+        'model': model,
+        'elapsed_s': elapsed,
+        'diff_path': out_path,
+        'diff_count': len(parsed.get('differences', [])),
+        'summary': parsed.get('summary', ''),
+    }
+    print(json.dumps(env, indent=2))
+except (json.JSONDecodeError, FileNotFoundError, KeyError) as e:
+    err = {
+        'verdict': 'error',
+        'error': f'vision model did not return parseable JSON: {type(e).__name__}: {e}',
+        'elapsed_s': elapsed,
+    }
+    print(json.dumps(err, indent=2), file=sys.stderr)
+    sys.exit(4)
+PYEOF
