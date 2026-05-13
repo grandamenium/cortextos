@@ -6,6 +6,7 @@
  */
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { CTX_FRAMEWORK_ROOT } from './config';
 
 export const PARA_DIRS = [
@@ -20,7 +21,8 @@ export const PARA_DIRS = [
 
 export type ParaDir = (typeof PARA_DIRS)[number];
 
-const VAULT_FALLBACK = '/root/storage/Documents/Github/sondres-orchestrator/vault';
+const VAULT_FALLBACK = process.env.CTX_VAULT_PATH
+  ?? path.join(os.homedir(), 'storage', 'Documents', 'Github', 'sondres-orchestrator', 'vault');
 
 export function getVaultRoot(org: string): string | null {
   // 1. Try parsing orgs/<org>/knowledge.md for an "Obsidian vault" path entry
