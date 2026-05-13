@@ -556,8 +556,16 @@ export class FastChecker {
     let utilization = -1;
     try {
       const data = JSON.parse(rawJson);
-      const fiveH = typeof data?.five_hour?.utilization === 'number' ? data.five_hour.utilization : -1;
-      const sevenD = typeof data?.seven_day?.utilization === 'number' ? data.seven_day.utilization : -1;
+      const fiveH = typeof data?.five_hour?.utilization === 'number'
+        ? data.five_hour.utilization
+        : typeof data?.five_hour_utilization === 'number'
+          ? data.five_hour_utilization
+          : -1;
+      const sevenD = typeof data?.seven_day?.utilization === 'number'
+        ? data.seven_day.utilization
+        : typeof data?.seven_day_utilization === 'number'
+          ? data.seven_day_utilization
+          : -1;
       utilization = Math.max(fiveH, sevenD);
     } catch {
       this.log('Usage check: could not parse response');

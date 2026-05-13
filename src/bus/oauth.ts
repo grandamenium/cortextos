@@ -12,7 +12,7 @@
  * - Usage cache TTL = 3 minutes (API rate limit ~5 req/token)
  */
 
-import { existsSync, readFileSync, chmodSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
@@ -109,6 +109,23 @@ function usageDailyPath(ctxRoot: string): string {
   return join(usageDir(ctxRoot), `${today}.jsonl`);
 }
 
+export function readClaudeCredentialsToken(): string | undefined {
+  const path = join(homedir(), '.claude', '.credentials.json');
+  if (!existsSync(path)) return undefined;
+
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as {
+      claudeAiOauth?: {
+        accessToken?: string;
+        access_token?: string;
+      };
+    };
+    return parsed.claudeAiOauth?.accessToken ?? parsed.claudeAiOauth?.access_token;
+  } catch {
+    return undefined;
+  }
+}
+
 // --- Account store helpers ---
 
 export function loadAccounts(ctxRoot: string): AccountsStore | null {
@@ -159,7 +176,6 @@ function saveCache(ctxRoot: string, snapshot: UsageSnapshot): void {
   atomicWriteSync(usageLatestPath(ctxRoot), JSON.stringify(snapshot, null, 2));
 
   // Append to daily JSONL log
-  const { appendFileSync } = require('fs');
   try {
     appendFileSync(usageDailyPath(ctxRoot), JSON.stringify(snapshot) + '\n');
   } catch { /* ignore */ }
@@ -200,7 +216,7 @@ export async function checkUsageApi(
       accessToken = active.account.access_token;
       accountName = active.name;
     } else {
-      accessToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      accessToken = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? readClaudeCredentialsToken();
       accountName = 'env';
       if (!accessToken) throw new Error('No OAuth token available (no accounts.json and CLAUDE_CODE_OAUTH_TOKEN not set)');
     }
@@ -227,6 +243,8 @@ export async function checkUsageApi(
   }
 
   const data = await response.json() as {
+    five_hour?: { utilization?: number };
+    seven_day?: { utilization?: number };
     five_hour_utilization?: number;
     seven_day_utilization?: number;
     fiveHourUtilization?: number;
@@ -239,8 +257,12 @@ export async function checkUsageApi(
     return v > 1 ? v / 100 : v;
   };
 
-  const fiveHour = normalize(data.five_hour_utilization ?? data.fiveHourUtilization);
-  const sevenDay = normalize(data.seven_day_utilization ?? data.sevenDayUtilization);
+  const fiveHour = normalize(
+    data.five_hour?.utilization ?? data.five_hour_utilization ?? data.fiveHourUtilization,
+  );
+  const sevenDay = normalize(
+    data.seven_day?.utilization ?? data.seven_day_utilization ?? data.sevenDayUtilization,
+  );
   const fetchedAt = new Date().toISOString();
 
   const snapshot: UsageSnapshot = {
