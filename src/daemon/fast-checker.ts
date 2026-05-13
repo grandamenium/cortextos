@@ -59,11 +59,25 @@ export class FastChecker {
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
 
+  // PR1 of pluggable connectors: holds the agent's MessageConnector handle.
+  // Coexists with legacy telegramApi/chatId/allowedUserId for one release.
+  // The 5 outbound `telegramApi.sendMessage(chatId, text)` call sites in
+  // this file remain Telegram-direct in PR1; PR2 routes them through the
+  // connector once hooks + CLI are generalized.
+  private connector?: import('../connectors/index.js').MessageConnector;
+
   constructor(
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: {
+      pollInterval?: number;
+      log?: LogFn;
+      telegramApi?: TelegramAPI;
+      chatId?: string;
+      allowedUserId?: number;
+      connector?: import('../connectors/index.js').MessageConnector;
+    } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
@@ -73,6 +87,7 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+    this.connector = options.connector;
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');

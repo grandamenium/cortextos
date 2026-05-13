@@ -9,12 +9,76 @@ import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
+import { TelegramConnector } from '../connectors/index.js';
+import type { MessageConnector } from '../connectors/index.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+
+/**
+ * Legacy-compat Telegram enablement resolver (PR1 of pluggable connectors).
+ *
+ * Reproduces byte-identically the existing inline gate at this file's
+ * startAgent() block (the BOT_TOKEN format check, the numeric ALLOWED_USER
+ * check, the "BOT_TOKEN set + ALLOWED_USER missing → refuse" security
+ * gate). Returns the parsed values when all three gates pass; otherwise
+ * returns `{ enabled: false }` after firing the same WARNING/SECURITY log
+ * lines today's code emits.
+ *
+ * Used by startAgent() to drive both the legacy `telegramApi`/`chatId`/
+ * `allowedUserId` field population AND the new connector instantiation —
+ * a single source of truth so the two stay in lock-step.
+ *
+ * @param agentEnvFile  Path to the agent's .env file (may not exist).
+ * @param log           Optional log sink. Defaults to a no-op so test
+ *                      contexts can call this without console noise; the
+ *                      daemon passes its real agent-scoped log.
+ */
+function resolveLegacyTelegramEnablement(
+  agentEnvFile: string,
+  log: LogFn = () => {},
+):
+  | { enabled: true; botToken: string; chatId: string; allowedUserId: string }
+  | { enabled: false }
+{
+  if (!existsSync(agentEnvFile)) return { enabled: false };
+
+  const envContent = readFileSync(agentEnvFile, 'utf-8');
+  const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
+  const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
+  const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
+  let botToken = botTokenMatch?.[1]?.trim();
+  const chatId = chatIdMatch?.[1]?.trim();
+  let allowedUserId = allowedUserMatch?.[1]?.trim() || undefined;
+
+  // Validate BOT_TOKEN format: must be numeric_id:alphanumeric_secret
+  if (botToken && !/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
+    log(`WARNING: BOT_TOKEN format invalid (expected: 123456:ABC...). Telegram will not start.`);
+    botToken = undefined;
+  }
+
+  // ALLOWED_USER must be a numeric Telegram user ID, not a username
+  if (allowedUserId && !/^\d+$/.test(allowedUserId)) {
+    log(`SECURITY: ALLOWED_USER is not a numeric ID. Telegram user IDs are numbers (e.g. 123456789). Refusing to enable Telegram. Fix the .env file.`);
+    allowedUserId = undefined;
+  }
+
+  // Security: ALLOWED_USER is REQUIRED when BOT_TOKEN is set.
+  if (botToken && !allowedUserId) {
+    log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
+    botToken = undefined;
+  }
+
+  if (botToken && chatId && allowedUserId) {
+    return { enabled: true, botToken, chatId, allowedUserId };
+  }
+  return { enabled: false };
+}
+
+export { resolveLegacyTelegramEnablement };
 
 type LogFn = (msg: string) => void;
 
@@ -198,49 +262,43 @@ export class AgentManager {
       console.log(`[${name}] ${msg}`);
     };
 
-    // Read agent .env for Telegram credentials
+    // Read agent .env for Telegram credentials via the legacy-compat
+    // resolver (PR1 of pluggable connectors). The resolver reproduces the
+    // existing BOT_TOKEN + CHAT_ID + numeric ALLOWED_USER gate byte-
+    // identically, including the same WARNING/SECURITY log lines. Output
+    // drives both the legacy `telegramApi`/`chatId`/`allowedUserId` fields
+    // and the new MessageConnector instantiation below — single source of
+    // truth.
     const agentEnvFile = join(agentDir, '.env');
+    const legacy = resolveLegacyTelegramEnablement(agentEnvFile, log);
     let telegramApi: TelegramAPI | undefined;
     let chatId: string | undefined;
     let allowedUserId: string | undefined;
     let botToken: string | undefined;
+    let connector: MessageConnector | null = null;
 
-    if (existsSync(agentEnvFile)) {
-      const envContent = readFileSync(agentEnvFile, 'utf-8');
-      const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
-      const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
-      const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
-      botToken = botTokenMatch?.[1]?.trim();
-      chatId = chatIdMatch?.[1]?.trim();
-      allowedUserId = allowedUserMatch?.[1]?.trim() || undefined;
-
-      // Validate BOT_TOKEN format: must be numeric_id:alphanumeric_secret
-      if (botToken && !/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
-        log(`WARNING: BOT_TOKEN format invalid (expected: 123456:ABC...). Telegram will not start.`);
-        botToken = undefined;
-      }
-
-      // ALLOWED_USER must be a numeric Telegram user ID, not a username
-      if (allowedUserId && !/^\d+$/.test(allowedUserId)) {
-        log(`SECURITY: ALLOWED_USER is not a numeric ID. Telegram user IDs are numbers (e.g. 123456789). Refusing to enable Telegram. Fix the .env file.`);
-        allowedUserId = undefined;
-      }
-
-      // Security: ALLOWED_USER is REQUIRED when BOT_TOKEN is set. Without it,
-      // ANY Telegram user who finds the bot @handle could control the agent.
-      // Fail closed: refuse to start Telegram unless the operator explicitly
-      // whitelists their numeric user ID.
-      if (botToken && !allowedUserId) {
-        log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
-        botToken = undefined;
-      }
-
-      if (botToken && chatId) {
-        telegramApi = new TelegramAPI(botToken);
-        // Don't log sensitive user IDs — just indicate the gate is enabled
-        log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
-      }
+    if (legacy.enabled) {
+      botToken = legacy.botToken;
+      chatId = legacy.chatId;
+      allowedUserId = legacy.allowedUserId;
+      telegramApi = new TelegramAPI(botToken);
+      // Build the TelegramConnector alongside the legacy fields. The
+      // connector wraps the SAME TelegramAPI for any code path that wants
+      // to dispatch through the generic interface; the legacy fields stay
+      // populated for code paths PR1 leaves Telegram-direct (FastChecker
+      // callback-edit, activity channel, approval ping, daemon crash
+      // alert). PR2 migrates those to use the connector and removes the
+      // legacy fields.
+      connector = new TelegramConnector(agentDir, {
+        BOT_TOKEN: legacy.botToken,
+        CHAT_ID: legacy.chatId,
+        ALLOWED_USER: legacy.allowedUserId,
+      });
+      // Don't log sensitive user IDs — just indicate the gate is enabled
+      log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
     }
+    // (else: connector remains null — byte-identical to today's behavior of
+    // leaving telegramApi/chatId/allowedUserId undefined when the gate fails.)
 
     const agentProcess = new AgentProcess(name, env, config, log);
     // Issue #330: pass the Telegram handle into AgentProcess so CodexAppServerPTY
@@ -249,11 +307,21 @@ export class AgentManager {
     if (telegramApi && chatId) {
       agentProcess.setTelegramHandle(telegramApi, chatId);
     }
+    // PR1 of pluggable connectors: also wire the MessageConnector handle
+    // when present. AgentProcess.setConnector populates the legacy
+    // telegramApi/telegramChatId fields when the connector is a
+    // TelegramConnector (one-way mirror), so this call after
+    // setTelegramHandle is idempotent for the legacy fields and additive
+    // for the new connector field.
+    if (connector) {
+      agentProcess.setConnector(connector);
+    }
     const checker = new FastChecker(agentProcess, paths, this.frameworkRoot, {
       log,
       telegramApi,
       chatId,
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
+      connector: connector ?? undefined,
     });
 
     // Send Telegram notification on crashes and session refreshes
