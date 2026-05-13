@@ -18,6 +18,7 @@ import {
   IconClock,
   IconTarget,
   IconMessages,
+  IconGitBranch,
   IconChartHistogram,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
@@ -52,6 +53,7 @@ const navItems: NavItem[] = [
   { label: 'Skills', href: '/skills', icon: IconPuzzle, section: 'intel' },
 
   // Other
+  { label: 'Git Repo', href: '/git-repo', icon: IconGitBranch, section: 'other' },
   { label: 'Usage', href: '/usage', icon: IconChartHistogram, section: 'other' },
 ];
 

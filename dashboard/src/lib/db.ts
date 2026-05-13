@@ -168,6 +168,13 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_cost_entries_timestamp ON cost_entries(timestamp);
     CREATE INDEX IF NOT EXISTS idx_cost_entries_agent ON cost_entries(agent);
     CREATE INDEX IF NOT EXISTS idx_cost_entries_org ON cost_entries(org);
+    -- Remove any pre-existing duplicates before creating the unique index.
+    -- Safe on fresh DBs (no rows to delete). Required on existing DBs where
+    -- syncCosts() may have re-inserted rows before this index existed.
+    DELETE FROM cost_entries WHERE rowid NOT IN (
+      SELECT MIN(rowid) FROM cost_entries
+      GROUP BY timestamp, agent, model, source_file, total_tokens, cost_usd
+    );
     -- Dedup: INSERT OR IGNORE only works when there is a UNIQUE constraint.
     -- Without this, syncCosts() re-inserts every row on every sync, inflating costs.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_entries_dedup
