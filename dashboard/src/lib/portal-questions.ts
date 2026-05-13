@@ -48,15 +48,14 @@ export async function getClientSpend(
   const bq = getBQ();
   const query = `
     SELECT
-      FORMAT_DATE('%Y-%m-%d', date) AS date,
+      FORMAT_DATE('%Y-%m-%d', metric_date) AS date,
       platform,
-      ROUND(SUM(cost_micros) / 1e6, 2) AS spend
+      ROUND(SUM(spend), 2) AS spend
     FROM \`${PROJECT}.${DATASET}.daily_metrics\`
     WHERE client_id = @clientId
-      AND date BETWEEN @start AND @end
-      AND _PARTITIONTIME >= TIMESTAMP(@start)
-    GROUP BY date, platform
-    ORDER BY date ASC
+      AND metric_date BETWEEN @start AND @end
+    GROUP BY metric_date, platform
+    ORDER BY metric_date ASC
     LIMIT 100
   `;
   const [rows] = await bq.query({
@@ -79,7 +78,7 @@ export async function getClientSpend(
   };
 }
 
-// Q2 — revenue
+// Q2 — revenue (conversion value)
 export async function getClientRevenue(
   clientId: string,
   range: DateRange,
@@ -91,15 +90,14 @@ export async function getClientRevenue(
   const bq = getBQ();
   const query = `
     SELECT
-      FORMAT_DATE('%Y-%m-%d', date) AS date,
-      ROUND(SUM(revenue), 2) AS revenue,
-      ROUND(SUM(cost_micros) / 1e6, 2) AS spend
+      FORMAT_DATE('%Y-%m-%d', metric_date) AS date,
+      ROUND(SUM(conversion_value), 2) AS revenue,
+      ROUND(SUM(spend), 2) AS spend
     FROM \`${PROJECT}.${DATASET}.daily_metrics\`
     WHERE client_id = @clientId
-      AND date BETWEEN @start AND @end
-      AND _PARTITIONTIME >= TIMESTAMP(@start)
-    GROUP BY date
-    ORDER BY date ASC
+      AND metric_date BETWEEN @start AND @end
+    GROUP BY metric_date
+    ORDER BY metric_date ASC
     LIMIT 100
   `;
   const [rows] = await bq.query({
@@ -130,15 +128,14 @@ export async function getClientCpa(
   const bq = getBQ();
   const dailyQuery = `
     SELECT
-      FORMAT_DATE('%Y-%m-%d', date) AS date,
-      SUM(cost_micros) / 1e6 AS spend,
+      FORMAT_DATE('%Y-%m-%d', metric_date) AS date,
+      SUM(spend) AS spend,
       SUM(conversions) AS conversions
     FROM \`${PROJECT}.${DATASET}.daily_metrics\`
     WHERE client_id = @clientId
-      AND date BETWEEN @start AND @end
-      AND _PARTITIONTIME >= TIMESTAMP(@start)
-    GROUP BY date
-    ORDER BY date ASC
+      AND metric_date BETWEEN @start AND @end
+    GROUP BY metric_date
+    ORDER BY metric_date ASC
     LIMIT 100
   `;
   const [rows] = await bq.query({
@@ -156,7 +153,7 @@ export async function getClientCpa(
 
   const prior = priorRange(range);
   const [priorRows] = await bq.query({
-    query: dailyQuery.replace('ORDER BY date ASC', 'ORDER BY date ASC').replace('LIMIT 100', 'LIMIT 100'),
+    query: dailyQuery,
     location: 'US',
     params: { clientId, start: prior.start, end: prior.end },
   });
@@ -176,7 +173,7 @@ export async function getCpaVsTarget(
 ): Promise<{ target_cpa: number; actual_cpa: number; status: 'on_target' | 'above' | 'below' }> {
   const bq = getBQ();
   const targetQuery = `
-    SELECT cpa_target
+    SELECT cpl_target
     FROM \`${PROJECT}.${DATASET}.clients\`
     WHERE client_id = @clientId
     LIMIT 1
@@ -186,7 +183,7 @@ export async function getCpaVsTarget(
     location: 'US',
     params: { clientId },
   });
-  const target = (targetRows[0] as { cpa_target: number | null } | undefined)?.cpa_target ?? 0;
+  const target = (targetRows[0] as { cpl_target: number | null } | undefined)?.cpl_target ?? 0;
 
   const cpaResult = await getClientCpa(clientId, range);
   const actual = cpaResult.avg_cpa;
@@ -201,17 +198,16 @@ export async function getClientLeads(
   range: DateRange,
 ): Promise<{ lead_count: number; qualified_count: number; daily: Array<{ date: string; leads: number }> }> {
   const bq = getBQ();
+  // qualified_conversions column does not exist in daily_metrics — stub to 0
   const query = `
     SELECT
-      FORMAT_DATE('%Y-%m-%d', date) AS date,
-      SUM(conversions) AS leads,
-      SUM(qualified_conversions) AS qualified
+      FORMAT_DATE('%Y-%m-%d', metric_date) AS date,
+      SUM(conversions) AS leads
     FROM \`${PROJECT}.${DATASET}.daily_metrics\`
     WHERE client_id = @clientId
-      AND date BETWEEN @start AND @end
-      AND _PARTITIONTIME >= TIMESTAMP(@start)
-    GROUP BY date
-    ORDER BY date ASC
+      AND metric_date BETWEEN @start AND @end
+    GROUP BY metric_date
+    ORDER BY metric_date ASC
     LIMIT 100
   `;
   const [rows] = await bq.query({
@@ -219,13 +215,12 @@ export async function getClientLeads(
     location: 'US',
     params: { clientId, start: range.start, end: range.end },
   });
-  const daily = (rows as Array<{ date: string; leads: number; qualified: number | null }>).map((r) => ({
+  const daily = (rows as Array<{ date: string; leads: number }>).map((r) => ({
     date: r.date,
     leads: r.leads ?? 0,
   }));
   const total = daily.reduce((a, r) => a + r.leads, 0);
-  const qualified = (rows as Array<{ qualified: number | null }>).reduce((a, r) => a + (r.qualified ?? 0), 0);
-  return { lead_count: total, qualified_count: qualified, daily };
+  return { lead_count: total, qualified_count: 0, daily };
 }
 
 // Q6 — lead growth
@@ -240,7 +235,7 @@ export async function getLeadGrowth(
   return { pct_change: pct, trend, rolling_14d: current.daily.slice(-14) };
 }
 
-// Q7 — best campaign
+// Q7 — best campaign (by campaign_id — no campaign_name column in daily_metrics)
 export async function getBestCampaign(
   clientId: string,
   range: DateRange,
@@ -252,15 +247,14 @@ export async function getBestCampaign(
   const bq = getBQ();
   const query = `
     SELECT
-      campaign_name AS name,
-      SUM(cost_micros) / 1e6 AS spend,
-      SUM(revenue) AS revenue
+      campaign_id AS name,
+      SUM(spend) AS spend,
+      SUM(conversion_value) AS revenue
     FROM \`${PROJECT}.${DATASET}.daily_metrics\`
     WHERE client_id = @clientId
-      AND date BETWEEN @start AND @end
-      AND _PARTITIONTIME >= TIMESTAMP(@start)
-      AND campaign_name IS NOT NULL
-    GROUP BY campaign_name
+      AND metric_date BETWEEN @start AND @end
+      AND campaign_id IS NOT NULL
+    GROUP BY campaign_id
     HAVING spend > 0
     ORDER BY revenue / NULLIF(spend, 0) DESC
     LIMIT 5
@@ -317,8 +311,9 @@ export async function getMonthPace(
   const start = monthStart.toISOString().slice(0, 10);
   const end = new Date().toISOString().slice(0, 10);
 
+  // primary_goal_type column does not exist — use primary_funnel_type
   const clientQuery = `
-    SELECT monthly_budget, primary_goal_type
+    SELECT monthly_budget, primary_funnel_type
     FROM \`${PROJECT}.${DATASET}.clients\`
     WHERE client_id = @clientId
     LIMIT 1
@@ -328,11 +323,11 @@ export async function getMonthPace(
     location: 'US',
     params: { clientId },
   });
-  const client = (clientRows[0] as { monthly_budget: number | null; primary_goal_type: string | null } | undefined) ?? {
+  const client = (clientRows[0] as { monthly_budget: number | null; primary_funnel_type: string | null } | undefined) ?? {
     monthly_budget: null,
-    primary_goal_type: null,
+    primary_funnel_type: null,
   };
-  const goalType = (client.primary_goal_type as 'leads' | 'revenue' | 'spend' | null) ?? 'spend';
+  const goalType = (client.primary_funnel_type as 'leads' | 'revenue' | 'spend' | null) ?? 'spend';
   const goalValue = client.monthly_budget ?? 0;
 
   const range: DateRange = { start, end };
@@ -364,16 +359,18 @@ export async function getWeeklyWork(
   recent: Array<{ ts: string; action: string; agent: string }>;
 }> {
   const bq = getBQ();
+  // audit_findings has: ingested_at (partition), dimension (STRING), findings (JSON), recommendations (JSON)
+  // Extract summary from findings JSON for action, dimension for category
   const query = `
     SELECT
-      action,
-      agent,
-      FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', ts) AS ts
+      FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', ingested_at) AS ts,
+      JSON_VALUE(findings, '$.summary') AS action,
+      'system' AS agent,
+      dimension AS category
     FROM \`${PROJECT}.${DATASET}.audit_findings\`
     WHERE client_id = @clientId
-      AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
-      AND _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 8 DAY)
-    ORDER BY ts DESC
+      AND ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+    ORDER BY ingested_at DESC
     LIMIT 30
   `;
   const [rows] = await bq.query({
@@ -381,16 +378,21 @@ export async function getWeeklyWork(
     location: 'US',
     params: { clientId },
   });
-  const recent = rows as Array<{ ts: string; action: string; agent: string }>;
+
+  const recent = (rows as Array<{ ts: string; action: string | null; agent: string; category: string | null }>).map((r) => ({
+    ts: r.ts,
+    action: r.action ?? 'audit completed',
+    agent: r.agent,
+  }));
+
   const categoriesQuery = `
     SELECT
-      category,
+      dimension AS category,
       COUNT(*) AS n
     FROM \`${PROJECT}.${DATASET}.audit_findings\`
     WHERE client_id = @clientId
-      AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
-      AND _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 8 DAY)
-    GROUP BY category
+      AND ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+    GROUP BY dimension
     ORDER BY n DESC
     LIMIT 20
   `;
