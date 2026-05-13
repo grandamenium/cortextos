@@ -11,6 +11,7 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { detectContextCap, archiveCappedSession } from './context-cap-detect.js';
 
 type LogFn = (msg: string) => void;
 
@@ -485,10 +486,48 @@ export class AgentProcess {
 
     try {
       const files = require('fs').readdirSync(convDir);
-      return files.some((f: string) => f.endsWith('.jsonl'));
+      if (!files.some((f: string) => f.endsWith('.jsonl'))) return false;
     } catch {
       return false;
     }
+
+    // Context-cap zombie guard: if the most recent session jsonl ends
+    // with Claude Code's "Context limit reached" marker, --continue
+    // would restore that stuck state and re-zombie the agent on
+    // restart. Archive the capped session aside so --continue has
+    // nothing to pick up, then force a fresh session. Observed
+    // 2026-04-19 with FRIDAY; full incident + design in
+    // src/daemon/context-cap-detect.ts.
+    const cap = detectContextCap(convDir);
+    if (cap.capped && cap.sessionFile) {
+      const archivePath = archiveCappedSession(cap.sessionFile);
+      if (archivePath) {
+        this.log(
+          `Context-cap detected in prior session ${cap.sessionFile} — ` +
+          `archived to ${archivePath}, forcing fresh session to break zombie loop.`,
+        );
+      } else {
+        this.log(
+          `Context-cap detected in ${cap.sessionFile} but archive rename failed — ` +
+          `forcing fresh session anyway; --continue may restore the capped state.`,
+        );
+      }
+      // Re-check whether any non-archived jsonl remains. If all sessions
+      // were capped (or the only one was), we must start fresh.
+      try {
+        const remaining = require('fs').readdirSync(convDir);
+        if (!remaining.some((f: string) => f.endsWith('.jsonl'))) return false;
+      } catch {
+        return false;
+      }
+      // An older non-capped session still exists — safer to start fresh
+      // anyway, since --continue would pick up the next-most-recent
+      // which may itself be stale. One zombie is enough evidence to
+      // distrust the whole recent history for this agent.
+      return false;
+    }
+
+    return true;
   }
 
   private buildStartupPrompt(): string {
