@@ -32,3 +32,19 @@ npm test
 - No external runtime dependencies beyond what's in `package.json`
 - File operations use atomic writes (see `src/utils/atomic.ts`)
 - All bus operations go through `src/bus/` modules
+
+## Fork sync hygiene (saurav-yirifi/sb-cortextos-fork)
+
+**Only the merged items matter when bringing them in.** When syncing from `upstream/main` or auditing branches, the canonical question is "did this work get merged?" — not "does this branch have unique commits?"
+
+- A branch with unique commits whose upstream PR was **MERGED** is dead workshop. The work flows to us via `upstream/main` sync — the original branch is just a stale workshop copy. Delete it.
+- A branch with unique commits whose upstream PR was **CLOSED without merge** is rejected/abandoned work. Delete it (unless you want a local-only patch, in which case PR it to `saurav-yirifi/sb-cortextos-fork:main` directly — see `docs_sb/upstream-sync.md`).
+- A branch with unique commits and an **OPEN upstream PR** is live work. Keep it.
+- A branch with unique commits and **no PR ever opened** is abandoned WIP. Delete it (or open the PR if it's still relevant).
+
+Don't preserve branches solely because `git rev-list main..branch` returns commits — that signal can't tell merged-via-squash from never-merged. Always cross-reference upstream PR state.
+
+Procedural audit (one-liner):
+```bash
+gh pr list --repo grandamenium/cortextos --state all --head <branch-name> --json number,state,title
+```
