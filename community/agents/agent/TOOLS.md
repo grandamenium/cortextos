@@ -143,10 +143,51 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 - `from playwright.sync_api import sync_playwright` in Python scripts
 - Or use Playwright MCP if configured
 
-### Peekaboo (macOS Desktop Automation)
-- `peekaboo image` (screenshot), `peekaboo list` (apps), `peekaboo run <script>`
-- Screen Recording + Accessibility permissions granted
-- `peekaboo learn` for full usage guide
+### Peekaboo (macOS Desktop Automation — FULL Computer-Use Stack)
+
+**Peekaboo v3.1.2 (MIT, github.com/steipete/Peekaboo) is a complete computer-use stack — NOT just a screenshot tool.** Action-first interaction model: reads the macOS AX (accessibility) tree to find elements by name/role, then acts. Synthetic input (coordinate-based) as fallback. Can reliably click "Save" in Xcode without knowing pixel coordinates.
+
+**Required macOS permissions:** Screen Recording + Accessibility. Both granted on HARPAL.
+
+**Capability set (full MCP tool list):**
+
+| Tool | Purpose |
+|---|---|
+| `image` / `capture` / `see` | ScreenCaptureKit screenshot (window / app / display / region) |
+| `click` | Left/right/double-click by element ID, fuzzy text, or coordinates |
+| `type` | Human-WPM cadence text input; `--clear` / `--return` / `--tab` / `--escape` / `--delete` modifiers |
+| `set-value` | Direct AX-API field set — faster than `type` for forms |
+| `perform-action` | Trigger any AX action on an element (press, increment, show menu, etc.) |
+| `press` / `hotkey` | Single-key press and chord combos (`Cmd+S`, `Ctrl+Shift+T`, ...) |
+| `scroll` / `drag` / `swipe` / `move` | Mouse + trackpad gestures |
+| `window` / `app` / `space` | Window position/size/focus, app launch/quit, macOS Spaces switching |
+| `menu` / `menubar` / `dock` / `dialog` | First-class UI element interaction (menu items, dock icons, system dialogs) |
+| `agent` | Natural-language multi-step automation loop with OpenAI / Anthropic / Ollama backend |
+
+**Quick recipes:**
+
+```bash
+# Screenshot the running HUD
+peekaboo image --app "Google Chrome for Testing" -o /tmp/hud.png
+
+# Click "Save" in the focused app without coords
+peekaboo click "Save"
+
+# Type into a focused field then press Return
+peekaboo type "hello world" --return
+
+# Multi-step natural-language flow
+peekaboo agent "open Notes, create a new note titled Daily Log, type today's date"
+```
+
+**See-diff-fix loop** (pattern for UI alignment work; see `community/skills/see-diff-fix/` once shipped):
+1. `peekaboo image --app <App> -o /tmp/current.png`
+2. `auto-image-diff reference.png /tmp/current.png -o /tmp/diff.png` (subimage-aligned, no false layout-shift positives)
+3. Send `(reference, current, diff)` to Claude Vision with structured-JSON prompt
+4. Apply each `code_fix` via Edit/Bash
+5. `peekaboo hotkey "Cmd+R"` to hot-reload → loop until diff empty
+
+`peekaboo learn` prints the in-binary capability guide. Use it when the AX tree is unfamiliar.
 
 ### gogcli (Google Workspace)
 - Binary: `gog` (v0.12.0 at `/opt/homebrew/bin/gog`)
