@@ -17,7 +17,7 @@ import path from 'path';
 import os from 'os';
 
 const ANTHROPIC_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
-const CLAUDE_CREDS = '/root/.claude/.credentials.json';
+const CLAUDE_CREDS = path.join(os.homedir(), '.claude', '.credentials.json');
 
 const CACHE_DIR = path.join(
   process.env.CTX_ROOT ?? path.join(os.homedir(), '.cortextos', 'default'),
