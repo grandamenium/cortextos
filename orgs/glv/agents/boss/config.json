@@ -29,7 +29,7 @@
       "name": "check-approvals",
       "type": "recurring",
       "interval": "2h",
-      "prompt": "Check for pending approvals and human tasks. (1) cortextos bus list-approvals --format json — for any pending approval older than 1h, send user a Telegram reminder. (2) cortextos bus list-tasks --project human-tasks --status pending — for any [HUMAN] task pending >4h, send user a Telegram reminder with the task title and what's blocked. ACK any approval/human-task inbox messages."
+      "prompt": "Check for pending approvals and human tasks. (1) cortextos bus list-approvals --format json — for any pending approval older than 1h, send user a Telegram reminder. (2) cortextos bus list-tasks --project human-tasks --status pending — for any [HUMAN] task pending >4h, send user a Telegram reminder with the task title and what's blocked. ACK any approval/human-task inbox messages. When done, run: cortextos bus update-cron-fire check-approvals --interval 2h"
     },
     {
       "name": "morning-review",
@@ -53,13 +53,13 @@
       "name": "slack-internal-digest",
       "type": "recurring",
       "interval": "30m",
-      "prompt": "Digest internal GLV Slack channels + Ben DM. Read new messages since last digest from: #all-glv-marketing (C0APBV1SZPZ), #glv-life-os (C0AQFQ8FRBP), #internal-reyco (C0AQWLHQJJC), #internal-dev (C0APQ0TFS93), #internal-seo (C0APTS6DLCA), #internal-ops (C0APRM6FCF8), #internal-sales (C0APTSFSHU2), #internal-agents (C0APQEK4MT7), #overnight-proposals (C0ATHEL5VJL), AND Ben↔Aiden DM (channel_id=U0APQB167K7, Ben Pelta). Use mcp__claude_ai_Slack__slack_read_channel (pass Ben's user_id as channel_id for the DM). For each: extract decisions, asks, blockers, action items. Ben DM priority rules: (a) if Ben sent a message to Aiden that's un-replied-to, either reply directly (user authorized 2026-04-23) OR surface via Telegram if it requires Aiden's judgment; (b) any Aiden↔Ben thread with open asks always surfaces. For channels: if time-sensitive or user-actionable, send Telegram summary immediately; otherwise append to daily memory under Slack Digest. Log action slack_digest_internal with meta {channels_read, items_surfaced, ben_dm_new}."
+      "prompt": "Digest internal GLV Slack channels + Ben DM. Read new messages since last digest from: #all-glv-marketing (C0APBV1SZPZ), #glv-life-os (C0AQFQ8FRBP), #internal-reyco (C0AQWLHQJJC), #internal-dev (C0APQ0TFS93), #internal-seo (C0APTS6DLCA), #internal-ops (C0APRM6FCF8), #internal-sales (C0APTSFSHU2), #internal-agents (C0APQEK4MT7), #overnight-proposals (C0ATHEL5VJL), AND Ben↔Aiden DM (channel_id=U0APQB167K7, Ben Pelta). Use mcp__claude_ai_Slack__slack_read_channel (pass Ben's user_id as channel_id for the DM). For each: extract decisions, asks, blockers, action items. Ben DM priority rules: (a) if Ben sent a message to Aiden that's un-replied-to, either reply directly (user authorized 2026-04-23) OR surface via Telegram if it requires Aiden's judgment; (b) any Aiden↔Ben thread with open asks always surfaces. For channels: if time-sensitive or user-actionable, send Telegram summary immediately; otherwise append to daily memory under Slack Digest. Log action slack_digest_internal with meta {channels_read, items_surfaced, ben_dm_new}. When done, run: cortextos bus update-cron-fire slack-internal-digest --interval 30m"
     },
     {
       "name": "slack-client-digest",
       "type": "recurring",
       "interval": "4h",
-      "prompt": "Digest GLV client Slack channels. Read new messages since last digest from: #c-reyco-marine (C0APQEXEL4V), #c-fusion-financial (C0AQ6RG4933), #c-titan-tiny-homes (C0APCF5S1HD). Use mcp__claude_ai_Slack__slack_read_channel. For each client channel: extract client asks, approvals given/requested, deadlines, blockers. Client-side items are almost always user-actionable — send Telegram summary immediately. Log action slack_digest_client with meta {channels_read, items_surfaced}."
+      "prompt": "Digest GLV client Slack channels. Read new messages since last digest from: #c-reyco-marine (C0APQEXEL4V), #c-fusion-financial (C0AQ6RG4933), #c-titan-tiny-homes (C0APCF5S1HD). Use mcp__claude_ai_Slack__slack_read_channel. For each client channel: extract client asks, approvals given/requested, deadlines, blockers. Client-side items are almost always user-actionable — send Telegram summary immediately. Log action slack_digest_client with meta {channels_read, items_surfaced}. When done, run: cortextos bus update-cron-fire slack-client-digest --interval 4h"
     },
     {
       "name": "ben-transcripts-digest",

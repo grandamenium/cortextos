@@ -8,7 +8,8 @@ import { MessageDedup, injectMessage } from '../pty/inject.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
-import { readCronState, parseDurationMs } from '../bus/cron-state.js';
+import { readCronState, parseDurationMs, updateCronFire } from '../bus/cron-state.js';
+import { checkMemorySize } from '../bus/memory-size.js';
 import { resolvePaths } from '../utils/paths.js';
 
 type LogFn = (msg: string) => void;
@@ -798,6 +799,10 @@ export class AgentProcess {
           if (this.pty && this.status === 'running') {
             injectMessage((data) => this.pty?.write(data), nudge);
             lastNudgedAt.set(cronDef.name, now);
+            // Auto-stamp cron-state.json on gap nudge so the daemon resets the
+            // clock after notifying the agent. Without this a daemon restart
+            // would re-nudge immediately because the stale timestamp persists.
+            updateCronFire(stateDir, cronDef.name, cronDef.interval);
             // Stagger: wait between nudges so the agent can process each one
             // before the next arrives. Without this, N simultaneous stale crons
             // fire N back-to-back injections, spiking context and triggering
@@ -805,6 +810,14 @@ export class AgentProcess {
             await sleep(30_000);
           }
         }
+      }
+
+      // Memory size enforcement: warn at >70%, auto-archive stale entries at >90%
+      const memResult = checkMemorySize(this.env.agentDir);
+      if (memResult.action === 'warning') {
+        this.log(`MEMORY.md size warning: ${memResult.bytes}B (${Math.round(memResult.pct * 100)}% of limit)`);
+      } else if (memResult.action === 'archived') {
+        this.log(`MEMORY.md auto-archived ${memResult.archivedCount} stale entries (was ${memResult.bytes}B, ${Math.round(memResult.pct * 100)}% of limit)`);
       }
 
       await sleep(GAP_POLL_MS);
