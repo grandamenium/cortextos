@@ -119,8 +119,11 @@ export class TelegramConnector implements MessageConnector {
     // 'plain' or explicit null disables HTML; 'markdown' or absence enables (TelegramAPI does Markdown→HTML internally).
     const parseMode = opts?.parseMode === 'plain' || opts?.parseMode === null ? null : 'HTML';
     const result = await this.api.sendMessage(this.chatId, text, replyMarkup, { parseMode });
+    // TelegramAPI returns the full response shape { ok, result } — extract
+    // message_id from result.result; fall back to '' if absent (e.g. an empty
+    // multi-chunk send where the last chunk has no body).
     return {
-      id: String(result?.message_id ?? ''),
+      id: String(result?.result?.message_id ?? ''),
       ts: Date.now(),
     };
   }
@@ -134,8 +137,11 @@ export class TelegramConnector implements MessageConnector {
       media.kind === 'photo'
         ? await this.api.sendPhoto(this.chatId, media.localPath, media.caption)
         : await this.api.sendDocument(this.chatId, media.localPath, media.caption);
+    // TelegramAPI returns the full response shape { ok, result } — extract
+    // message_id from result.result; fall back to '' if absent (e.g. an empty
+    // multi-chunk send where the last chunk has no body).
     return {
-      id: String(result?.message_id ?? ''),
+      id: String(result?.result?.message_id ?? ''),
       ts: Date.now(),
     };
   }
