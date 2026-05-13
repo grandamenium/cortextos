@@ -41,29 +41,52 @@ import { appendExecutionLog } from './cron-execution-log.js';
 /**
  * Expand a single cron field string into the set of matching integers.
  *
- * @param field - Raw field token (e.g. "*", "*\/5", "0,15,30,45", "1-5").
+ * Supports: "*", "*\/N", "lo-hi", "lo-hi/N", "n", and comma-lists of any of
+ * the above (e.g. "0,15-30/5,45").
+ *
+ * @param field - Raw field token.
  * @param min   - Minimum valid value for this field (0 or 1).
  * @param max   - Maximum valid value (e.g. 59, 23, 31, 12, 6).
  */
 function expandField(field: string, min: number, max: number): number[] {
   const result = new Set<number>();
 
-  for (const part of field.split(',')) {
-    if (part === '*') {
-      for (let i = min; i <= max; i++) result.add(i);
-    } else if (part.startsWith('*/')) {
-      const step = parseInt(part.slice(2), 10);
-      if (isNaN(step) || step <= 0) throw new Error(`Invalid cron step: ${part}`);
-      for (let i = min; i <= max; i += step) result.add(i);
-    } else if (part.includes('-')) {
-      const [lo, hi] = part.split('-').map(s => parseInt(s, 10));
-      if (isNaN(lo) || isNaN(hi) || lo > hi) throw new Error(`Invalid cron range: ${part}`);
-      for (let i = lo; i <= hi; i++) result.add(i);
-    } else {
-      const n = parseInt(part, 10);
-      if (isNaN(n)) throw new Error(`Invalid cron value: ${part}`);
-      result.add(n);
+  for (const rawPart of field.split(',')) {
+    const part = rawPart.trim();
+
+    // Split off the optional "/step" suffix (applies to *, ranges, and bare nums).
+    let stepStr: string | null = null;
+    let body = part;
+    const slashIdx = part.indexOf('/');
+    if (slashIdx >= 0) {
+      body = part.slice(0, slashIdx);
+      stepStr = part.slice(slashIdx + 1);
     }
+    let step = 1;
+    if (stepStr !== null) {
+      step = parseInt(stepStr, 10);
+      if (isNaN(step) || step <= 0) throw new Error(`Invalid cron step: ${part}`);
+    }
+
+    let lo: number, hi: number;
+    if (body === '*') {
+      lo = min;
+      hi = max;
+    } else if (body.includes('-')) {
+      const [loStr, hiStr] = body.split('-');
+      lo = parseInt(loStr, 10);
+      hi = parseInt(hiStr, 10);
+      if (isNaN(lo) || isNaN(hi) || lo > hi) throw new Error(`Invalid cron range: ${part}`);
+    } else {
+      const n = parseInt(body, 10);
+      if (isNaN(n)) throw new Error(`Invalid cron value: ${part}`);
+      // Bare-number with /step (e.g. "5/10") means "starting at 5, every 10".
+      // Without step it's just the single value n.
+      lo = n;
+      hi = stepStr === null ? n : max;
+    }
+
+    for (let i = lo; i <= hi; i += step) result.add(i);
   }
 
   return [...result].sort((a, b) => a - b);
