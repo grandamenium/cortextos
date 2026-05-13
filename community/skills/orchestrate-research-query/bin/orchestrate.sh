@@ -50,21 +50,41 @@ log "query=${QUERY:0:80}... mode=$([ $FAST -eq 1 ] && echo fast || ([ $NO_SYNTH 
 log "stage 1: research lanes (claude || codex)"
 T0=$(date +%s)
 
-# Claude lane via bus inbox to research agent
-# Wrap with timeout to ensure stage doesn't stall forever
+# Claude lane via bus-rpc (synchronous request-reply to `research` agent)
 (
-  # In production: send-message research; await reply. For Phase-3 smoke we
-  # delegate to a stub that captures the query for inspection.
-  if [ -n "${CLAUDE_LANE_STUB:-}" ]; then
-    sleep 1
-    cat > "$WORK/claude-out.json" <<EOF
-{"verdict":"ok","lane":"claude","body":"[STUB] research-claude output for query: $QUERY","sources":[]}
-EOF
+  BUS_RPC="$CTX_FRAMEWORK_ROOT/community/skills/bus-rpc/bin/rpc.sh"
+  if [ -x "$BUS_RPC" ]; then
+    # Lane-specific timeout slightly less than the orchestrator overall budget
+    # so we leave headroom for synth + draft stages.
+    LANE_TIMEOUT=$((TIMEOUT - 60))
+    [ $LANE_TIMEOUT -lt 30 ] && LANE_TIMEOUT=30
+    rpc_out=$("$BUS_RPC" research "$QUERY" --timeout $LANE_TIMEOUT --from "${CTX_AGENT_NAME:-dev}" 2>"$WORK/claude.err")
+    # Reshape into lane-output envelope (extract reply.text → body)
+    python3 - <<PY > "$WORK/claude-out.json"
+import json
+try:
+    d = json.loads('''$rpc_out''')
+    if d.get("verdict") == "ok":
+        print(json.dumps({
+            "verdict": "ok",
+            "lane": "claude",
+            "body": d.get("reply", {}).get("text", ""),
+            "elapsed_s": d.get("elapsed_s", 0),
+            "sent_msg_id": d.get("sent_msg_id"),
+        }))
+    else:
+        print(json.dumps({
+            "verdict": d.get("verdict","error"),
+            "lane": "claude",
+            "body": "",
+            "error": d.get("note") or d.get("error"),
+        }))
+except Exception as e:
+    print(json.dumps({"verdict":"error","lane":"claude","body":"","error":f"rpc parse fail: {e}"}))
+PY
   else
-    # Real path: bus dispatch + await reply (synchronous helper not yet built —
-    # use the v0 stub-with-warning until research agents are running)
     cat > "$WORK/claude-out.json" <<EOF
-{"verdict":"stub","lane":"claude","reason":"research agents not yet wired to bus; orchestrator returns structural stub. To activate: enable research agent + research-codex agent and replace this stub with: cortextos bus send-message research high QUERY + poll inbox for reply.","sources":[]}
+{"verdict":"error","lane":"claude","error":"bus-rpc not found at $BUS_RPC — install community/skills/bus-rpc"}
 EOF
   fi
 ) &
