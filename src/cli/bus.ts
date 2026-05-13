@@ -2824,3 +2824,6 @@ function pct(v: number): string {
 
 import { registerTokenAuditCommands } from './token-audit.js';
 registerTokenAuditCommands(busCommand);
+
+import { registerAgentEventsCommands } from './agent-events.js';
+registerAgentEventsCommands(busCommand);
