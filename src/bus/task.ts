@@ -23,6 +23,7 @@ export function createTask(
     dueDate?: string;
     blockedBy?: string[];
     blocks?: string[];
+    meta?: Record<string, unknown>;
   } = {},
 ): string {
   const {
@@ -34,6 +35,7 @@ export function createTask(
     dueDate = '',
     blockedBy = [],
     blocks = [],
+    meta,
   } = options;
 
   validatePriority(priority);
@@ -80,6 +82,7 @@ export function createTask(
     archived: false,
     ...(blockedBy.length ? { blocked_by: [...blockedBy] } : {}),
     ...(blocks.length ? { blocks: [...blocks] } : {}),
+    ...(meta && Object.keys(meta).length ? { meta } : {}),
   };
 
   ensureDir(paths.taskDir);
