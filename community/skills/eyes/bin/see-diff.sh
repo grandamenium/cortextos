@@ -71,6 +71,16 @@ if [ -n "$TARGET_WINDOW" ] && ! [[ "$TARGET_WINDOW" =~ ^[A-Za-z0-9\ ._-]{1,64}$ 
   exit 2
 fi
 
+# F1+F2 hardening (post security-vp review of b5d704f).
+# F1: SSRF allow-list on --ollama-host; loopback-only unless
+#     EYES_ALLOW_REMOTE_OLLAMA=1 in env.
+# F2: workspace-scope --reference and --target paths (realpath + prefix
+#     check against /tmp, /private/tmp, $EYES_WORKSPACE, cwd).
+. "$(dirname "$0")/_validate.sh"
+__validate_ollama_host "$OLLAMA_HOST" || exit 5
+__validate_workspace_path "--reference" "$REF" || exit 6
+[ -n "$TARGET_FILE" ] && { __validate_workspace_path "--target" "$TARGET_FILE" || exit 6; }
+
 # Get target screenshot
 if [ -n "$TARGET_FILE" ]; then
   TARGET="$TARGET_FILE"
