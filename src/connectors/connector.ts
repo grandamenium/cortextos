@@ -20,6 +20,7 @@ import type {
   SendOptions,
   SendResult,
   PollingHandlers,
+  ConnectorAction,
 } from './types.js';
 
 export interface MessageConnector {
@@ -106,6 +107,6 @@ export interface MessageConnector {
   editMessage?(
     messageId: string,
     text: string,
-    opts?: { buttons?: Array<Array<{ text: string; callback_data: string }>> },
+    opts?: { buttons?: Array<Array<ConnectorAction>> },
   ): Promise<void>;
 }

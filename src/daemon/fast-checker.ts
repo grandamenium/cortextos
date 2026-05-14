@@ -491,7 +491,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     chatId: number | undefined,
     messageId: number | undefined,
     text: string,
-    buttons?: Array<Array<{ text: string; callback_data: string }>>,
+    buttons?: Array<Array<import('../connectors/index.js').ConnectorAction>>,
   ): Promise<void> {
     if (messageId === undefined) return;
     if (this.connector?.capabilities.messageEdits && this.connector.editMessage) {
@@ -503,9 +503,15 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         }
       } catch { /* ignore */ }
     } else if (this.telegramApi && chatId !== undefined) {
+      // PR4 c9: legacy non-connector path translates ConnectorAction back
+      // to the Telegram inline_keyboard shape `{text, callback_data}` at
+      // the boundary. The connector path above keeps the typed shape.
       try {
         if (buttons) {
-          await this.telegramApi.editMessageText(chatId, messageId, text, { inline_keyboard: buttons });
+          const tgKeyboard = buttons.map((row) =>
+            row.map((a) => ({ text: a.label, callback_data: a.actionId })),
+          );
+          await this.telegramApi.editMessageText(chatId, messageId, text, { inline_keyboard: tgKeyboard });
         } else {
           await this.telegramApi.editMessageText(chatId, messageId, text);
         }
@@ -782,12 +788,14 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
             const question = state.questions?.[qIdx];
             const options: string[] = question?.options || [];
 
-            // Build keyboard with toggle buttons + submit
-            const keyboard: Array<Array<{ text: string; callback_data: string }>> = options.map((opt: string, i: number) => [{
-              text: opt || `Option ${i + 1}`,
-              callback_data: `asktoggle_${qIdx}_${i}`,
+            // Build keyboard with toggle buttons + submit. PR4 c9
+            // (Codex P1.G): keyboard is now ConnectorAction[][] — the
+            // connector translates to the provider's native form.
+            const keyboard: Array<Array<import('../connectors/index.js').ConnectorAction>> = options.map((opt: string, i: number) => [{
+              label: opt || `Option ${i + 1}`,
+              actionId: `asktoggle_${qIdx}_${i}`,
             }]);
-            keyboard.push([{ text: 'Submit Selections', callback_data: `asksubmit_${qIdx}` }]);
+            keyboard.push([{ label: 'Submit Selections', actionId: `asksubmit_${qIdx}` }]);
 
             const text = chosenDisplay
               ? `Selected: ${chosenDisplay}\nTap more options or Submit`
@@ -915,18 +923,19 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         msg += `\n${i + 1}. ${qOptions[i] || `Option ${i + 1}`}`;
       }
 
-      // Build inline keyboard
-      let keyboard: Array<Array<{ text: string; callback_data: string }>>;
+      // Build inline keyboard. PR4 c9 (Codex P1.G): ConnectorAction[][]
+      // — connector translates to provider-native at sendMessage time.
+      let keyboard: Array<Array<import('../connectors/index.js').ConnectorAction>>;
       if (qMulti) {
         keyboard = qOptions.map((opt, i) => [{
-          text: opt || `Option ${i + 1}`,
-          callback_data: `asktoggle_${questionIdx}_${i}`,
+          label: opt || `Option ${i + 1}`,
+          actionId: `asktoggle_${questionIdx}_${i}`,
         }]);
-        keyboard.push([{ text: 'Submit Selections', callback_data: `asksubmit_${questionIdx}` }]);
+        keyboard.push([{ label: 'Submit Selections', actionId: `asksubmit_${questionIdx}` }]);
       } else {
         keyboard = qOptions.map((opt, i) => [{
-          text: opt || `Option ${i + 1}`,
-          callback_data: `askopt_${questionIdx}_${i}`,
+          label: opt || `Option ${i + 1}`,
+          actionId: `askopt_${questionIdx}_${i}`,
         }]);
       }
 
@@ -939,7 +948,12 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (this.connector) {
         await this.connector.sendMessage(msg, { buttons: keyboard });
       } else if (this.telegramApi && this.chatId) {
-        await this.telegramApi.sendMessage(this.chatId, msg, { inline_keyboard: keyboard });
+        // PR4 c9: legacy fallback translates ConnectorAction[][] back to
+        // Telegram inline_keyboard shape for the direct-API path.
+        const tgKeyboard = keyboard.map((row) =>
+          row.map((a) => ({ text: a.label, callback_data: a.actionId })),
+        );
+        await this.telegramApi.sendMessage(this.chatId, msg, { inline_keyboard: tgKeyboard });
       }
       this.log(`Sent question ${questionIdx + 1}/${totalQ} to operator connector`);
     } catch (err) {

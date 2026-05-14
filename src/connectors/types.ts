@@ -155,10 +155,43 @@ export interface NormalizedReactionPayload {
   raw: unknown;
 }
 
+/**
+ * Connector-agnostic inline action (button) descriptor. PR4 c9 (Codex
+ * P1.G) lifted this out of the Telegram-specific
+ * `{text, callback_data}` shape so Discord components, Mattermost
+ * attachment actions, and RocketChat triggers can share a single
+ * `SendOptions.buttons` schema. Each connector translates to its
+ * native form at send time (Telegram inline_keyboard with
+ * `{text:label, callback_data:actionId}`; Discord components with
+ * `{type:2, label, custom_id:actionId, style:<mapped>}`; Mattermost
+ * attachment actions with `{name:label, integration:{url, context:
+ * {action_id:actionId}}}`; RocketChat blocks with
+ * `{type:'button', text:label, value:actionId}`).
+ *
+ * The `actionId` round-trips back as `CallbackPayload.data` when the
+ * user clicks — byte-identical across all four target providers, so
+ * the agent's parser of `callback.data` is provider-agnostic.
+ */
+export interface ConnectorAction {
+  /** Visible label rendered on the button. */
+  label: string;
+  /** Opaque action id round-tripped as CallbackPayload.data when clicked. */
+  actionId: string;
+  /** Visual style hint — connectors may ignore. `primary`=affirmative
+   *  (Discord blurple, Mattermost good), `danger`=destructive (Discord
+   *  red, Mattermost danger), `secondary`=neutral (default). */
+  style?: 'primary' | 'secondary' | 'danger';
+}
+
 export interface SendOptions {
   parseMode?: 'markdown' | 'plain' | null;
   replyToId?: string;
-  buttons?: Array<Array<{ text: string; callback_data: string }>>;
+  /** 2D layout: outer array = rows, inner array = buttons in row.
+   *  Telegram inline_keyboard, Discord components rows, etc.
+   *  Connectors with row limits (Telegram: 8 buttons per row max)
+   *  truncate or refuse — capability flag `inlineButtons` is the
+   *  precondition for using this. */
+  buttons?: Array<Array<ConnectorAction>>;
   /** Skip Markdown→provider conversion entirely. Caller is sending pre-formatted text. */
   raw?: boolean;
 }

@@ -87,8 +87,11 @@ describe('TelegramConnector', () => {
         CHAT_ID: '12345',
         ALLOWED_USER: '67890',
       });
+      // PR4 c9 (Codex P1.G): buttons now use ConnectorAction shape
+      // ({label, actionId}); TelegramConnector translates to
+      // {text, callback_data} for the inline_keyboard wire format.
       await c.sendMessage('approve?', {
-        buttons: [[{ text: '✓', callback_data: 'yes' }, { text: '✗', callback_data: 'no' }]],
+        buttons: [[{ label: '✓', actionId: 'yes' }, { label: '✗', actionId: 'no' }]],
       });
       expect(calls[0].body.reply_markup).toEqual({
         inline_keyboard: [[{ text: '✓', callback_data: 'yes' }, { text: '✗', callback_data: 'no' }]],
@@ -264,7 +267,7 @@ describe('TelegramConnector', () => {
       expect(calls[0].body.text).toBe('Approved');
     });
 
-    it('opts.buttons becomes reply_markup.inline_keyboard', async () => {
+    it('opts.buttons (ConnectorAction[][]) becomes reply_markup.inline_keyboard ({text, callback_data})', async () => {
       const calls: Array<{ body: any }> = [];
       installFetchMock((_url, init) => {
         calls.push({ body: JSON.parse(init.body) });
@@ -276,9 +279,29 @@ describe('TelegramConnector', () => {
         CHAT_ID: '12345',
         ALLOWED_USER: '67890',
       });
-      const keyboard = [[{ text: 'Submit', callback_data: 'submit' }]];
-      await c.editMessage!('42', 'Pick one', { buttons: keyboard });
-      expect(calls[0].body.reply_markup).toEqual({ inline_keyboard: keyboard });
+      // PR4 c9: caller passes ConnectorAction { label, actionId };
+      // TelegramConnector.editMessage translates to Telegram
+      // inline_keyboard { text, callback_data } shape.
+      await c.editMessage!('42', 'Pick one', {
+        buttons: [[{ label: 'Submit', actionId: 'submit' }]],
+      });
+      expect(calls[0].body.reply_markup).toEqual({
+        inline_keyboard: [[{ text: 'Submit', callback_data: 'submit' }]],
+      });
+    });
+
+    it('editMessage rejects non-integer message_id (Codex P2)', async () => {
+      installFetchMock(() => ({ body: { ok: true } }));
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      // Telegram message_ids must be numeric; the connector validates so
+      // a bad id throws a typed error at the call site instead of
+      // silently producing a Telegram API failure with NaN.
+      await expect(c.editMessage!('not-a-number', 'text')).rejects.toThrow(/invalid Telegram message_id/);
+      await expect(c.editMessage!('', 'text')).rejects.toThrow(/invalid Telegram message_id/);
     });
 
     it('declares interactiveCallbacks and messageEdits capabilities', () => {

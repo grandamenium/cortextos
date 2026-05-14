@@ -9,6 +9,7 @@ import type {
   NormalizedMessage,
   NormalizedReactionPayload,
   ConnectorReaction,
+  ConnectorAction,
   CallbackPayload,
 } from '../types.js';
 import { TelegramAPI } from './api.js';
@@ -217,7 +218,14 @@ export class TelegramConnector implements MessageConnector {
   }
 
   async sendMessage(text: string, opts?: SendOptions): Promise<SendResult> {
-    const replyMarkup = opts?.buttons ? { inline_keyboard: opts.buttons } : undefined;
+    // PR4 c9 (Codex P1.G): SendOptions.buttons is a 2D array of
+    // ConnectorAction. Translate to Telegram inline_keyboard at the
+    // boundary — Telegram doesn't use `style`, so we drop it. Future
+    // Discord / Mattermost / RocketChat translations would consume
+    // `style` to map to the provider's native button color.
+    const replyMarkup = opts?.buttons
+      ? { inline_keyboard: opts.buttons.map((row) => row.map(this.toTelegramButton)) }
+      : undefined;
     // SendOptions.parseMode: 'markdown' | 'plain' | null → TelegramAPI parseMode: 'HTML' | null
     // 'plain' or explicit null disables HTML; 'markdown' or absence enables (TelegramAPI does Markdown→HTML internally).
     const parseMode = opts?.parseMode === 'plain' || opts?.parseMode === null ? null : 'HTML';
@@ -383,15 +391,39 @@ export class TelegramConnector implements MessageConnector {
   async editMessage(
     messageId: string,
     text: string,
-    opts?: { buttons?: Array<Array<{ text: string; callback_data: string }>> },
+    opts?: { buttons?: Array<Array<ConnectorAction>> },
   ): Promise<void> {
-    // Telegram message_ids are numeric; the connector accepts strings for
-    // cross-connector consistency (Slack ts is "1690000000.000001",
-    // RocketChat _id is opaque) but the wire format here is number.
+    // PR4 c9 + P2 Codex EDIT_MESSAGE_ACCEPTS_NAN: Telegram message_ids
+    // are numeric; the connector accepts strings for cross-connector
+    // consistency (Slack ts is "1690000000.000001", RocketChat _id is
+    // opaque) but the wire format here is number. Validate that the
+    // string represents a safe integer so a bad id throws a typed error
+    // at the call site instead of silently producing a Telegram API
+    // failure with NaN. Tests for this live under "editMessage".
     const numericId = Number(messageId);
-    const replyMarkup = opts?.buttons ? { inline_keyboard: opts.buttons } : undefined;
+    // Telegram message_ids are positive integers. Number('') === 0 is a
+    // safe integer but not a valid message id, so reject both `<= 0` and
+    // non-integers in one check.
+    if (!Number.isSafeInteger(numericId) || numericId <= 0) {
+      throw new Error(`editMessage: invalid Telegram message_id ${JSON.stringify(messageId)}`);
+    }
+    const replyMarkup = opts?.buttons
+      ? { inline_keyboard: opts.buttons.map((row) => row.map(this.toTelegramButton)) }
+      : undefined;
     await this.api.editMessageText(this.chatId, numericId, text, replyMarkup);
   }
+
+  /**
+   * Translate a single connector-agnostic `ConnectorAction` to
+   * Telegram's `InlineKeyboardButton` shape. Telegram doesn't render
+   * `style` (no button colors in Bot API) so we drop it — future
+   * connectors (Discord, Mattermost) consume `style` to map to their
+   * native color palette. Arrow form so `.map(this.toTelegramButton)`
+   * keeps `this` unbound.
+   */
+  private toTelegramButton = (a: ConnectorAction): { text: string; callback_data: string } => {
+    return { text: a.label, callback_data: a.actionId };
+  };
 
   // ---------------------------------------------------------------------
   // Normalizers — Telegram update shape → generic connector shape

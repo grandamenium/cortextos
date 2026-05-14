@@ -1037,10 +1037,13 @@ describe('FastChecker', () => {
       expect(editArgs[0]).toBe('42');
       expect(editArgs[2]).toBeDefined();
       expect(editArgs[2].buttons).toBeDefined();
-      const keyboard = editArgs[2].buttons as Array<Array<{ text: string; callback_data: string }>>;
+      // PR4 c9 (Codex P1.G): keyboard is ConnectorAction[][] now,
+      // not Telegram { text, callback_data } rows.
+      const keyboard = editArgs[2].buttons as Array<Array<import('../../../src/connectors/index.js').ConnectorAction>>;
       // 3 option rows + 1 submit row
       expect(keyboard).toHaveLength(4);
-      expect(keyboard[3][0].callback_data).toBe('asksubmit_0');
+      expect(keyboard[3][0].actionId).toBe('asksubmit_0');
+      expect(keyboard[3][0].label).toBe('Submit Selections');
     });
   });
 });
