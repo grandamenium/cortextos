@@ -375,11 +375,14 @@ export class AgentManager {
               // reads text rather than a raw file path. Best-effort — an empty
               // transcript still produces a usable message with the file path.
               const absoluteVoicePath = media.file_path ?? '';
+              const STT_FAIL_MSG = 'Voice transcription failed — please type your message.';
               const transcript = absoluteVoicePath
-                ? await transcribeVoice(absoluteVoicePath).catch(() => '')
-                : '';
-              if (transcript) {
+                ? await transcribeVoice(absoluteVoicePath).catch(() => STT_FAIL_MSG)
+                : STT_FAIL_MSG;
+              if (transcript && transcript !== STT_FAIL_MSG) {
                 log(`[voice-stt] transcribed ${absoluteVoicePath}: "${transcript.slice(0, 80)}..."`);
+              } else if (transcript === STT_FAIL_MSG) {
+                log(`[voice-stt] transcription failed for ${absoluteVoicePath}`);
               }
               formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relFilePath, media.duration, transcript);
             } else {
