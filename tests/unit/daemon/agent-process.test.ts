@@ -42,6 +42,11 @@ vi.mock('../../../src/utils/paths.js', () => ({
   resolvePaths: vi.fn().mockReturnValue({}),
 }));
 
+const mockCheckNodeModulesMtime = vi.fn().mockReturnValue({ stale: false });
+vi.mock('../../../src/utils/node-modules-mtime.js', () => ({
+  checkNodeModulesMtime: mockCheckNodeModulesMtime,
+}));
+
 const mockLogEvent = vi.fn();
 vi.mock('../../../src/bus/event.js', () => ({
   logEvent: mockLogEvent,
@@ -110,6 +115,7 @@ beforeEach(() => {
   fsMocks.writeFileSync.mockReset();
   fsMocks.appendFileSync.mockReset();
   fsMocks.statSync.mockReset();
+  mockCheckNodeModulesMtime.mockReset().mockReturnValue({ stale: false });
   mockLogEvent.mockReset();
 });
 
@@ -633,6 +639,64 @@ describe('AgentProcess - fleet-resilience #7 (crash-budget reset on planned rest
 
     expect(ap.getStatus().crashCount).toBe(2);
     expect(fsMocks.appendFileSync).not.toHaveBeenCalled();
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentProcess - fleet-resilience #8 (node_modules mtime warning)', () => {
+  const daemonStartedAt = new Date('2026-05-15T10:00:00Z');
+
+  it('emits node_modules_mtime_warning + log line when checker reports stale', async () => {
+    const staleMtime = new Date('2026-05-15T10:05:00Z');
+    mockCheckNodeModulesMtime.mockReturnValue({ stale: true, mtime: staleMtime });
+
+    const logs: string[] = [];
+    const ap = new AgentProcess('alice', mockEnv, {}, (m) => logs.push(m), daemonStartedAt);
+    await ap.start();
+
+    expect(mockCheckNodeModulesMtime).toHaveBeenCalledWith(mockEnv.frameworkRoot, daemonStartedAt);
+    expect(logs.some((l) => l.includes('node_modules newer than daemon start'))).toBe(true);
+    expect(mockLogEvent).toHaveBeenCalledTimes(1);
+    const [, agentArg, , category, action, severity, meta] = mockLogEvent.mock.calls[0];
+    expect(agentArg).toBe('alice');
+    expect(category).toBe('action');
+    expect(action).toBe('node_modules_mtime_warning');
+    expect(severity).toBe('warning');
+    expect(meta).toEqual({
+      agent: 'alice',
+      node_modules_mtime: staleMtime.toISOString(),
+      daemon_started_at: daemonStartedAt.toISOString(),
+    });
+  });
+
+  it('is silent when checker reports fresh mtime', async () => {
+    mockCheckNodeModulesMtime.mockReturnValue({ stale: false });
+
+    const logs: string[] = [];
+    const ap = new AgentProcess('alice', mockEnv, {}, (m) => logs.push(m), daemonStartedAt);
+    await ap.start();
+
+    expect(mockCheckNodeModulesMtime).toHaveBeenCalledTimes(1);
+    expect(logs.some((l) => l.includes('node_modules newer than daemon start'))).toBe(false);
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+
+  it('skips the check entirely when daemonStartedAt is omitted (unit-test friendly)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    expect(mockCheckNodeModulesMtime).not.toHaveBeenCalled();
+    expect(mockLogEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not throw if the checker throws (telemetry must never block boot)', async () => {
+    mockCheckNodeModulesMtime.mockImplementation(() => {
+      throw new Error('disk on fire');
+    });
+
+    const ap = new AgentProcess('alice', mockEnv, {}, undefined, daemonStartedAt);
+    await expect(ap.start()).resolves.toBeUndefined();
+    expect(ap.getStatus().status).toBe('running');
     expect(mockLogEvent).not.toHaveBeenCalled();
   });
 });

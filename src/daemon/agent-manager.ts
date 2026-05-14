@@ -45,12 +45,25 @@ export class AgentManager {
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
+  // Fleet-resilience #8: when present, plumbed into each AgentProcess so
+  // start() can detect a node_modules reinstall that happened AFTER the
+  // daemon booted (the 2026-05-14 root cause). Optional so unit tests that
+  // construct AgentManager without it stay green; the production daemon
+  // entry-point always supplies it from `Daemon.daemonStartedAt`.
+  private daemonStartedAt?: Date;
 
-  constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
+  constructor(
+    instanceId: string,
+    ctxRoot: string,
+    frameworkRoot: string,
+    org: string,
+    daemonStartedAt?: Date,
+  ) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+    this.daemonStartedAt = daemonStartedAt;
   }
 
   /**
@@ -260,7 +273,7 @@ export class AgentManager {
       }
     }
 
-    const agentProcess = new AgentProcess(name, env, config, log);
+    const agentProcess = new AgentProcess(name, env, config, log, this.daemonStartedAt);
     // Issue #330: pass the Telegram handle into AgentProcess so CodexAppServerPTY
     // can emit sendChatAction directly from the JSONL stream. Has no effect for
     // claude-code / hermes runtimes — those still use fast-checker.

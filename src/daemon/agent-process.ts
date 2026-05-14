@@ -18,6 +18,7 @@ import {
   readLastRestart,
   readLastSpawnFailureAge,
 } from '../utils/agent-status.js';
+import { checkNodeModulesMtime } from '../utils/node-modules-mtime.js';
 import { logEvent } from '../bus/event.js';
 
 type LogFn = (msg: string) => void;
@@ -86,8 +87,14 @@ export class AgentProcess {
   // Always cleared after the first start() observes it — never persists across
   // multiple lifecycles.
   private pendingPlannedRestart: boolean = false;
+  // Fleet-resilience #8: when supplied (Daemon → AgentManager → here), start()
+  // checks `node_modules/package.json` mtime against this on every spawn. A
+  // newer mtime means deps were reinstalled while the daemon was running —
+  // the precondition for the 2026-05-14 outage class. Optional so unit tests
+  // constructing AgentProcess in isolation skip the check entirely.
+  private daemonStartedAt?: Date;
 
-  constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
+  constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn, daemonStartedAt?: Date) {
     this.name = name;
     this.env = env;
     this.config = config;
@@ -96,6 +103,7 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
+    this.daemonStartedAt = daemonStartedAt;
   }
 
   /**
@@ -197,6 +205,8 @@ export class AgentProcess {
 
       this.maybeResetCrashBudgetForPlannedRestart();
 
+      this.warnIfNodeModulesStale();
+
       // Start session timer
       this.startSessionTimer();
 
@@ -213,6 +223,30 @@ export class AgentProcess {
    */
   markPlannedRestart(): void {
     this.pendingPlannedRestart = true;
+  }
+
+  /**
+   * Fleet-resilience #8 precondition surface — non-blocking warning after
+   * the agent reports `running`. See `checkNodeModulesMtime`'s JSDoc for
+   * the underlying signal and motivation.
+   */
+  private warnIfNodeModulesStale(): void {
+    if (!this.daemonStartedAt) return;
+    try {
+      const result = checkNodeModulesMtime(this.env.frameworkRoot, this.daemonStartedAt);
+      if (!result.stale || !result.mtime) return;
+      this.log(
+        `⚠️ node_modules newer than daemon start (mtime=${result.mtime.toISOString()}, daemon=${this.daemonStartedAt.toISOString()}) — possible reinstall during daemon lifetime; recommend pm2 restart cortextos-daemon`,
+      );
+      const paths = resolvePaths(this.name, this.env.instanceId, this.env.org);
+      logEvent(paths, this.name, this.env.org, 'action', 'node_modules_mtime_warning', 'warning', {
+        agent: this.name,
+        node_modules_mtime: result.mtime.toISOString(),
+        daemon_started_at: this.daemonStartedAt.toISOString(),
+      });
+    } catch {
+      /* swallow — telemetry must never block agent boot */
+    }
   }
 
   /**
