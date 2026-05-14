@@ -316,9 +316,10 @@ async function main(): Promise<void> {
   }
 
   // Real-crash agent alerts: notify chief + analyst on crash and daemon-crashed
-  // so silent failures get visibility on the bus, not just on Telegram. Gated
-  // by the same dedup window as the Telegram send (handled above), and skipped
-  // for clean exits / planned restarts / rate-limit pauses.
+  // so silent failures get visibility on the bus, not just on Telegram. Fires
+  // unconditionally for these two types — not dedup-gated, since the bus
+  // recipients handle their own dedup. Skipped for clean exits, planned
+  // restarts, and rate-limit pauses.
   if (endType === 'crash' || endType === 'daemon-crashed') {
     const agentDir = process.env.CTX_AGENT_DIR || process.cwd();
     const maxCrashes = readMaxCrashesPerDay(agentDir);
