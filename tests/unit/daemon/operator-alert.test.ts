@@ -130,6 +130,37 @@ describe('resolveOperatorChatCreds', () => {
     });
   });
 
+  it('skips activity-channel.env with only one of ACTIVITY_BOT_TOKEN / ACTIVITY_CHAT_ID and falls through to agent .env', () => {
+    delete process.env.CTX_OPERATOR_CHAT_ID;
+    delete process.env.CTX_OPERATOR_BOT_TOKEN;
+    const orgDir = join(frameworkRoot, 'orgs', 'acme');
+    const agentDir = join(orgDir, 'agents', 'alice');
+    mkdirSync(agentDir, { recursive: true });
+    // Token present, chat_id missing — tier 2 must reject and fall through.
+    writeFileSync(
+      join(orgDir, 'activity-channel.env'),
+      'ACTIVITY_BOT_TOKEN=22222:activityCHANNELTOKEN_ABCDEFGHIJ\n',
+    );
+    writeFileSync(
+      join(agentDir, '.env'),
+      'BOT_TOKEN=11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ\nCHAT_ID=98765\n',
+    );
+    expect(resolveOperatorChatCreds(frameworkRoot)).toEqual({
+      chatId: '98765',
+      botToken: '11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+
+    // Now the inverse: chat_id present, token missing — also reject.
+    writeFileSync(
+      join(orgDir, 'activity-channel.env'),
+      'ACTIVITY_CHAT_ID=-1009999\n',
+    );
+    expect(resolveOperatorChatCreds(frameworkRoot)).toEqual({
+      chatId: '98765',
+      botToken: '11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+  });
+
   it('skips activity-channel.env with malformed token and falls through to agent .env', () => {
     delete process.env.CTX_OPERATOR_CHAT_ID;
     delete process.env.CTX_OPERATOR_BOT_TOKEN;
