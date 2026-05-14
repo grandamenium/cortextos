@@ -446,3 +446,98 @@ describe('AgentManager.reloadCrons - silent-success bug fix (iter 7)', () => {
     expect((am as any).cronSchedulers.has('ghost')).toBe(false);
   });
 });
+
+describe('AgentManager.discoverAndStart - CTX_REQUIRE_EXPLICIT_ENABLE flag (multi-machine bug 1778770012799)', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+  const savedEnv = process.env['CTX_REQUIRE_EXPLICIT_ENABLE'];
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-explicit-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    // Simulates the MacBook scenario: agent dirs exist on disk for both sam
+    // (intended to run here) and chief/dev/etc (relayed from Mac mini, must
+    // NOT run here).
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'sam'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'chief'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'dev'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    if (savedEnv === undefined) delete process.env['CTX_REQUIRE_EXPLICIT_ENABLE'];
+    else process.env['CTX_REQUIRE_EXPLICIT_ENABLE'] = savedEnv;
+  });
+
+  it('skips unlisted agents when CTX_REQUIRE_EXPLICIT_ENABLE=1 is set', async () => {
+    // sam is the only host-local agent; chief and dev are foreign mirrors.
+    writeFileSync(
+      join(ctxRoot, 'config', 'enabled-agents.json'),
+      JSON.stringify({ sam: { enabled: true, org: 'acme' } }),
+    );
+    process.env['CTX_REQUIRE_EXPLICIT_ENABLE'] = '1';
+
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.discoverAndStart();
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledWith('sam', expect.any(String), expect.any(Object), 'acme');
+  });
+
+  it('preserves default-on behavior when CTX_REQUIRE_EXPLICIT_ENABLE is unset', async () => {
+    writeFileSync(
+      join(ctxRoot, 'config', 'enabled-agents.json'),
+      JSON.stringify({ sam: { enabled: true, org: 'acme' } }),
+    );
+    delete process.env['CTX_REQUIRE_EXPLICIT_ENABLE'];
+
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.discoverAndStart();
+
+    // All 3 start — chief and dev default to enabled because not listed.
+    expect(startSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('still skips explicitly-disabled entries when CTX_REQUIRE_EXPLICIT_ENABLE=1', async () => {
+    // Strict mode + an explicit disabled entry should still skip — strict
+    // mode tightens the unlisted default, it doesn't loosen explicit disables.
+    writeFileSync(
+      join(ctxRoot, 'config', 'enabled-agents.json'),
+      JSON.stringify({
+        sam: { enabled: true, org: 'acme' },
+        chief: { enabled: false, org: 'acme' },
+      }),
+    );
+    process.env['CTX_REQUIRE_EXPLICIT_ENABLE'] = '1';
+
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.discoverAndStart();
+
+    // Only sam starts: chief explicit-false, dev unlisted-under-strict.
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledWith('sam', expect.any(String), expect.any(Object), 'acme');
+  });
+
+  it('treats CTX_REQUIRE_EXPLICIT_ENABLE=0 / false / empty as off', async () => {
+    writeFileSync(
+      join(ctxRoot, 'config', 'enabled-agents.json'),
+      JSON.stringify({ sam: { enabled: true, org: 'acme' } }),
+    );
+    for (const falsy of ['0', 'false', 'no', 'off', '']) {
+      process.env['CTX_REQUIRE_EXPLICIT_ENABLE'] = falsy;
+      const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+      const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+      await am.discoverAndStart();
+      expect(startSpy, `value=${JSON.stringify(falsy)}`).toHaveBeenCalledTimes(3);
+    }
+  });
+});

@@ -19,6 +19,16 @@ import { processMediaMessage } from '../telegram/media.js';
 type LogFn = (msg: string) => void;
 
 /**
+ * Treat unset, empty, "0", "false", "no", "off" as falsy; anything else truthy.
+ * Used for env-driven feature flags read at daemon startup.
+ */
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) return false;
+  const v = value.trim().toLowerCase();
+  return v !== '' && v !== '0' && v !== 'false' && v !== 'no' && v !== 'off';
+}
+
+/**
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
@@ -54,16 +64,29 @@ export class AgentManager {
     // re-discover and re-start any agent dir on disk regardless of user intent.
     const instanceEnabled = this.readInstanceEnableList();
 
+    // Multi-machine setups (e.g. framework-relay mirroring agent dirs across
+    // hosts) need a way to refuse spawn for any agent that isn't on the
+    // allow-list for THIS host. CTX_REQUIRE_EXPLICIT_ENABLE=1 flips the
+    // default: an agent dir on disk that lacks an entry in
+    // enabled-agents.json is treated as disabled (instead of the default-on
+    // behavior preserved for single-machine installs).
+    const requireExplicit = isTruthyEnv(process.env['CTX_REQUIRE_EXPLICIT_ENABLE']);
+
     for (const { name, dir, org, config } of agentDirs) {
       // Per-agent config.json `enabled: false` (existing behavior, unchanged)
       if (config.enabled === false) {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (per-agent config.json)`);
         continue;
       }
-      // Instance-level enabled-agents.json `enabled: false` (BUG-028 fix)
       const entry = instanceEnabled[name];
+      // Instance-level enabled-agents.json `enabled: false` (BUG-028 fix)
       if (entry && entry.enabled === false) {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
+        continue;
+      }
+      // Strict mode: an unlisted agent is treated as disabled.
+      if (requireExplicit && !entry) {
+        console.log(`[agent-manager] Skipping unlisted agent: ${name} (CTX_REQUIRE_EXPLICIT_ENABLE — not in enabled-agents.json)`);
         continue;
       }
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead
