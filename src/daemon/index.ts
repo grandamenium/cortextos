@@ -152,10 +152,25 @@ function sendCrashLoopAlertBestEffort(
   crashCount: number,
   errStr: string,
 ): boolean {
+  // PR2: consult getOperatorConnector() for opt-out gate. When the
+  // operator opted out (`CTX_OPERATOR_CONNECTOR=none`), skip the alert
+  // entirely — log to stderr only. When opted in (default telegram),
+  // resolve creds the legacy way and shell out via curl.
+  //
+  // The actual send remains synchronous via `spawnSync('curl', ...)`
+  // because this code path runs inside Node's uncaughtException /
+  // unhandledRejection handler, where awaiting async `sendMessage()`
+  // would race the process exit. PR3+ may revisit if a sync-safe
+  // connector helper emerges (or if the daemon's fatal-error flow is
+  // refactored to be async-safe).
+  if (process.env.CTX_OPERATOR_CONNECTOR === 'none') {
+    console.error('[daemon] Crash-loop alert: operator opted out (CTX_OPERATOR_CONNECTOR=none) — skipping notification');
+    return false;
+  }
   const creds = getOperatorChatCreds(frameworkRoot);
   if (!creds) {
     console.error('[daemon] Crash-loop alert: no operator chat configured ' +
-      '(set CTX_OPERATOR_CHAT_ID + CTX_OPERATOR_BOT_TOKEN, or ensure at least one agent .env exists)');
+      '(set CTX_OPERATOR_CHAT_ID + CTX_OPERATOR_BOT_TOKEN, set CTX_OPERATOR_CONNECTOR=none to suppress, or ensure at least one agent .env exists)');
     return false;
   }
   const message =

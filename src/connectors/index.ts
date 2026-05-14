@@ -47,6 +47,43 @@ export function getConnector(
   }
 }
 
+/**
+ * Build the operator-level (daemon-wide) MessageConnector from
+ * `CTX_OPERATOR_*` env vars. Translates the operator-prefixed env
+ * contract into the per-connector typed env that `getConnector()`
+ * expects. Used by the daemon's crash-loop alert + other daemon-level
+ * notifications that don't belong to any single agent.
+ *
+ * Returns null when:
+ *   - `CTX_OPERATOR_CONNECTOR === 'none'` (operator opted out), OR
+ *   - The operator's Telegram creds are not set (no `CTX_OPERATOR_BOT_TOKEN`).
+ *
+ * The connector returned is SEND-ONLY — it must NEVER be passed to
+ * `startPolling()`. The empty `agentDir` argument is safe under that
+ * constraint (`TelegramConnector` reads agentDir only for the poller's
+ * stateDir; send/validate paths don't touch it).
+ *
+ * Added in PR2 of the pluggable-connectors stack (Codex H5 fix).
+ */
+export function getOperatorConnector(): MessageConnector | null {
+  const kind = (process.env.CTX_OPERATOR_CONNECTOR ?? 'telegram') as ConnectorKind;
+  if (kind === 'none') return null;
+  if (kind === 'telegram') {
+    const token = process.env.CTX_OPERATOR_BOT_TOKEN;
+    if (!token || !/^\d+:[A-Za-z0-9_-]+$/.test(token)) return null;
+    const translated: NodeJS.ProcessEnv = {
+      BOT_TOKEN: token,
+      CHAT_ID: process.env.CTX_OPERATOR_CHAT_ID,
+      ALLOWED_USER: process.env.CTX_OPERATOR_ALLOWED_USER,
+    };
+    return getConnector(kind, '', translated);
+  }
+  // Future kinds: factory dispatch. process.env passes through; the
+  // future connector defines its own CTX_OPERATOR_* → connector-env
+  // translation (or accepts process.env directly).
+  return getConnector(kind, '', process.env);
+}
+
 export type { MessageConnector } from './connector.js';
 export { TelegramConnector } from './telegram/telegram-connector.js';
 export { NullConnector } from './none/null-connector.js';

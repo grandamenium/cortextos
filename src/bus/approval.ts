@@ -5,9 +5,9 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { parseEnvFile } from '../utils/env.js';
 import { randomString } from '../utils/random.js';
 import { validateApprovalCategory } from '../utils/validate.js';
-import { TelegramAPI } from '../telegram/api.js';
 import { sendMessage } from './message.js';
 import { postActivity } from './system.js';
+import { getConnector } from '../connectors/index.js';
 
 /**
  * Build the inline keyboard posted to the activity channel alongside a
@@ -98,22 +98,27 @@ function postApprovalToActivityChannel(
 }
 
 /**
- * Best-effort: ping the requesting agent's own Telegram chat (the operator's
- * 1:1 conversation with the agent's bot) when a new approval is created.
- * The activity-channel post handles "Approve / Deny" inline routing for the
- * operator-via-orchestrator UX, but operators on a per-agent bot would
- * otherwise miss approvals entirely — that's the source of the observed
- * 50h+ Repo-B-style stalls. This pings them on the bot they're actually
- * watching so they can hop to the orchestrator chat or dashboard to act.
+ * Best-effort: ping the requesting agent's connector (the operator's
+ * 1:1 conversation with the agent's bot, or future Matrix/RocketChat
+ * equivalent) when a new approval is created. The activity-channel
+ * post handles "Approve / Deny" inline routing for the operator-via-
+ * orchestrator UX, but operators on a per-agent connector would
+ * otherwise miss approvals entirely — that's the source of the
+ * observed 50h+ Repo-B-style stalls. This pings them on the channel
+ * they're actually watching so they can hop to the orchestrator chat
+ * or dashboard to act.
  *
- * Reads BOT_TOKEN + CHAT_ID from `<agentDir>/.env`. Skips silently with a
- * single warn line when either is missing — approvals from a bot-less
- * agent (e.g. a hermes runtime, or pre-onboarding) must still succeed.
+ * PR2 of the pluggable-connectors stack: replaced raw `TelegramAPI`
+ * construction with `getConnector(...)` dispatch. The agent's
+ * `config.json:connector` field gates the path:
+ *   - `connector: 'none'` → silent skip (no remote channel).
+ *   - `connector: 'telegram'` (or absent → legacy inference from .env) →
+ *     constructs the agent's connector and calls `sendMessage()`.
  *
- * Errors from the network round-trip are suppressed: a Telegram outage
- * must not block approval creation.
+ * Errors from the network round-trip are suppressed: a connector
+ * outage must not block approval creation.
  */
-function pingAgentChatId(
+function pingAgentViaConnector(
   agentDir: string | undefined,
   approvalId: string,
   title: string,
@@ -123,10 +128,31 @@ function pingAgentChatId(
 ): Promise<void> {
   if (!agentDir) {
     console.warn(
-      `[approval] No agentDir available for ${approvalId} — skipping agent-bot Telegram ping.`,
+      `[approval] No agentDir available for ${approvalId} — skipping agent connector ping.`,
     );
     return Promise.resolve();
   }
+
+  // Resolve the agent's connector via config.json + .env.
+  // PR2 routes through getConnector (imported at top) instead of
+  // constructing TelegramAPI directly. For 'none' or unconfigured, skip
+  // silently.
+  const configPath = join(agentDir, 'config.json');
+  let connectorKind: 'telegram' | 'none' | undefined;
+  if (existsSync(configPath)) {
+    try {
+      connectorKind = JSON.parse(readFileSync(configPath, 'utf-8')).connector;
+    } catch { /* leave undefined → infer below */ }
+  }
+
+  if (connectorKind === 'none') {
+    // Operator explicitly opted out — no ping. The activity-channel
+    // post still handles approval delivery for the orchestrator path.
+    return Promise.resolve();
+  }
+
+  // Read .env for credentials (Telegram-flavored when kind === 'telegram'
+  // or undefined). Future connectors land here once they exist.
   const envPath = join(agentDir, '.env');
   if (!existsSync(envPath)) {
     return Promise.resolve();
@@ -136,7 +162,7 @@ function pingAgentChatId(
   const chatId = env.CHAT_ID;
   if (!botToken || !chatId) {
     console.warn(
-      `[approval] BOT_TOKEN or CHAT_ID missing in ${envPath} — skipping agent-bot Telegram ping for ${approvalId}.`,
+      `[approval] BOT_TOKEN or CHAT_ID missing in ${envPath} — skipping agent connector ping for ${approvalId}.`,
     );
     return Promise.resolve();
   }
@@ -153,10 +179,16 @@ function pingAgentChatId(
   lines.push('', 'Approve via the orchestrator chat (Approve/Deny buttons) or the dashboard.');
   const message = lines.join('\n');
 
-  const api = new TelegramAPI(botToken);
-  return api.sendMessage(chatId, message, undefined, { parseMode: null })
+  // Resolve kind for getConnector. Absent → 'telegram' (matches PR1's
+  // legacy inference: env presence implies telegram). The 'none' early-
+  // return above already handled the opt-out path.
+  const resolvedKind: 'telegram' = (connectorKind ?? 'telegram') as 'telegram';
+  // getConnector unpacks per-kind env. For telegram it reads
+  // BOT_TOKEN/CHAT_ID/ALLOWED_USER from the passed env dict.
+  const connector = getConnector(resolvedKind, agentDir, env);
+  return connector.sendMessage(message, { parseMode: 'plain' })
     .then(() => undefined)
-    .catch(() => undefined); // Telegram outage must not fail approval creation.
+    .catch(() => undefined); // Connector outage must not fail approval creation.
 }
 
 /**
@@ -223,7 +255,7 @@ export async function createApproval(
   // operator's 1:1 conversation with the agent). Closes the gap where
   // operators not in the activity channel would miss approvals entirely
   // (the 50h+ Repo-B-style stall). Errors suppressed — see helper.
-  await pingAgentChatId(agentDir, approvalId, title, category, agentName, context);
+  await pingAgentViaConnector(agentDir, approvalId, title, category, agentName, context);
 
   return approvalId;
 }
