@@ -80,6 +80,107 @@ describe('resolveOperatorChatCreds', () => {
     });
   });
 
+  it('prefers activity-channel.env over agent .env when env vars are missing', () => {
+    delete process.env.CTX_OPERATOR_CHAT_ID;
+    delete process.env.CTX_OPERATOR_BOT_TOKEN;
+    const orgDir = join(frameworkRoot, 'orgs', 'acme');
+    const agentDir = join(orgDir, 'agents', 'alice');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      join(orgDir, 'activity-channel.env'),
+      'ACTIVITY_BOT_TOKEN=22222:activityCHANNELTOKEN_ABCDEFGHIJ\nACTIVITY_CHAT_ID=-1009999\n',
+    );
+    // Agent .env exists — must be ignored because activity-channel takes priority.
+    writeFileSync(
+      join(agentDir, '.env'),
+      'BOT_TOKEN=11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ\nCHAT_ID=98765\n',
+    );
+    expect(resolveOperatorChatCreds(frameworkRoot)).toEqual({
+      chatId: '-1009999',
+      botToken: '22222:activityCHANNELTOKEN_ABCDEFGHIJ',
+    });
+  });
+
+  it('uses activity-channel.env alone (no agent .env present)', () => {
+    delete process.env.CTX_OPERATOR_CHAT_ID;
+    delete process.env.CTX_OPERATOR_BOT_TOKEN;
+    const orgDir = join(frameworkRoot, 'orgs', 'acme');
+    mkdirSync(orgDir, { recursive: true });
+    writeFileSync(
+      join(orgDir, 'activity-channel.env'),
+      'ACTIVITY_BOT_TOKEN=22222:activityCHANNELTOKEN_ABCDEFGHIJ\nACTIVITY_CHAT_ID=-1009999\n',
+    );
+    expect(resolveOperatorChatCreds(frameworkRoot)).toEqual({
+      chatId: '-1009999',
+      botToken: '22222:activityCHANNELTOKEN_ABCDEFGHIJ',
+    });
+  });
+
+  it('env vars still beat activity-channel.env when both present', () => {
+    // env vars left at default beforeEach values — should win.
+    const orgDir = join(frameworkRoot, 'orgs', 'acme');
+    mkdirSync(orgDir, { recursive: true });
+    writeFileSync(
+      join(orgDir, 'activity-channel.env'),
+      'ACTIVITY_BOT_TOKEN=22222:activityCHANNELTOKEN_ABCDEFGHIJ\nACTIVITY_CHAT_ID=-1009999\n',
+    );
+    expect(resolveOperatorChatCreds(frameworkRoot)).toEqual({
+      chatId: '12345',
+      botToken: '99999:fakefakefakefakefakeABCDEFGHIJ',
+    });
+  });
+
+  it('skips activity-channel.env with only one of ACTIVITY_BOT_TOKEN / ACTIVITY_CHAT_ID and falls through to agent .env', () => {
+    delete process.env.CTX_OPERATOR_CHAT_ID;
+    delete process.env.CTX_OPERATOR_BOT_TOKEN;
+    const orgDir = join(frameworkRoot, 'orgs', 'acme');
+    const agentDir = join(orgDir, 'agents', 'alice');
+    mkdirSync(agentDir, { recursive: true });
+    // Token present, chat_id missing — tier 2 must reject and fall through.
+    writeFileSync(
+      join(orgDir, 'activity-channel.env'),
+      'ACTIVITY_BOT_TOKEN=22222:activityCHANNELTOKEN_ABCDEFGHIJ\n',
+    );
+    writeFileSync(
+      join(agentDir, '.env'),
+      'BOT_TOKEN=11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ\nCHAT_ID=98765\n',
+    );
+    expect(resolveOperatorChatCreds(frameworkRoot)).toEqual({
+      chatId: '98765',
+      botToken: '11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+
+    // Now the inverse: chat_id present, token missing — also reject.
+    writeFileSync(
+      join(orgDir, 'activity-channel.env'),
+      'ACTIVITY_CHAT_ID=-1009999\n',
+    );
+    expect(resolveOperatorChatCreds(frameworkRoot)).toEqual({
+      chatId: '98765',
+      botToken: '11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+  });
+
+  it('skips activity-channel.env with malformed token and falls through to agent .env', () => {
+    delete process.env.CTX_OPERATOR_CHAT_ID;
+    delete process.env.CTX_OPERATOR_BOT_TOKEN;
+    const orgDir = join(frameworkRoot, 'orgs', 'acme');
+    const agentDir = join(orgDir, 'agents', 'alice');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      join(orgDir, 'activity-channel.env'),
+      'ACTIVITY_BOT_TOKEN=not-a-real-token\nACTIVITY_CHAT_ID=-1009999\n',
+    );
+    writeFileSync(
+      join(agentDir, '.env'),
+      'BOT_TOKEN=11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ\nCHAT_ID=98765\n',
+    );
+    expect(resolveOperatorChatCreds(frameworkRoot)).toEqual({
+      chatId: '98765',
+      botToken: '11111:tokenABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    });
+  });
+
   it('returns null when env is missing and no agent .env is present', () => {
     delete process.env.CTX_OPERATOR_CHAT_ID;
     delete process.env.CTX_OPERATOR_BOT_TOKEN;

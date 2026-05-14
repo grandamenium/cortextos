@@ -79,12 +79,20 @@ function writeOperatorAlertState(ctxRoot: string, state: OperatorAlertState): vo
 }
 
 /**
- * Resolve Telegram creds via env-or-`.env` scan. Hoisted out of
- * spawn-failure-tracker.ts so all watchdog callers share one lookup.
+ * Resolve Telegram creds via env > activity-channel.env > agent .env.
+ * Hoisted out of spawn-failure-tracker.ts so all watchdog callers share one
+ * lookup.
  *
  * 1. Prefer `CTX_OPERATOR_CHAT_ID` + `CTX_OPERATOR_BOT_TOKEN` env vars.
- * 2. Fall back to scanning `orgs/<org>/agents/<agent>/.env` for the first
- *    file with `BOT_TOKEN=...` + `CHAT_ID=...` (env CHAT_ID wins if set).
+ * 2. Then scan `orgs/<org>/activity-channel.env` for `ACTIVITY_BOT_TOKEN`
+ *    + `ACTIVITY_CHAT_ID`. Routes watchdog alerts (heartbeat_stale,
+ *    cron_dispatch_storm, etc.) to the org's activity supergroup instead of
+ *    Saurav's DM. Without this tier, watchdog alerts fall through to the
+ *    first per-agent `.env` found, which is typically the analyst bot — and
+ *    DM'ing Saurav directly with heartbeat_stale spam is wrong.
+ * 3. Finally, fall back to scanning `orgs/<org>/agents/<agent>/.env` for the
+ *    first file with `BOT_TOKEN=...` + `CHAT_ID=...` (env CHAT_ID wins if
+ *    set). This is the legacy path for setups without an activity channel.
  */
 export function resolveOperatorChatCreds(
   frameworkRoot: string,
@@ -94,31 +102,63 @@ export function resolveOperatorChatCreds(
   if (envChat && envToken && /^\d+:[A-Za-z0-9_-]+$/.test(envToken)) {
     return { chatId: envChat, botToken: envToken };
   }
+
+  const orgsRoot = join(frameworkRoot, 'orgs');
+  if (!existsSync(orgsRoot)) return null;
+
+  let orgs: string[];
   try {
-    const orgsRoot = join(frameworkRoot, 'orgs');
-    if (!existsSync(orgsRoot)) return null;
-    const orgs = readdirSync(orgsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
-    for (const org of orgs) {
-      const agentsRoot = join(orgsRoot, org.name, 'agents');
-      if (!existsSync(agentsRoot)) continue;
-      const agents = readdirSync(agentsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
-      for (const a of agents) {
-        const envFile = join(agentsRoot, a.name, '.env');
-        if (!existsSync(envFile)) continue;
-        try {
-          const content = readFileSync(envFile, 'utf-8');
-          const tokenMatch = content.match(/^BOT_TOKEN=(.+)$/m);
-          const chatMatch = content.match(/^CHAT_ID=(.+)$/m);
-          if (!tokenMatch || !chatMatch) continue;
-          const botToken = tokenMatch[1].trim();
-          const chatId = envChat || chatMatch[1].trim();
-          if (/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
-            return { chatId, botToken };
-          }
-        } catch { /* skip this agent */ }
+    orgs = readdirSync(orgsRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return null;
+  }
+
+  // Tier 2: activity-channel.env per org.
+  for (const org of orgs) {
+    const acFile = join(orgsRoot, org, 'activity-channel.env');
+    if (!existsSync(acFile)) continue;
+    try {
+      const content = readFileSync(acFile, 'utf-8');
+      const tokenMatch = content.match(/^ACTIVITY_BOT_TOKEN=(.+)$/m);
+      const chatMatch = content.match(/^ACTIVITY_CHAT_ID=(.+)$/m);
+      if (!tokenMatch || !chatMatch) continue;
+      const botToken = tokenMatch[1].trim();
+      const chatId = envChat || chatMatch[1].trim();
+      if (botToken && chatId && /^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
+        return { chatId, botToken };
       }
+    } catch { /* skip this org */ }
+  }
+
+  // Tier 3: legacy per-agent .env fallback.
+  for (const org of orgs) {
+    const agentsRoot = join(orgsRoot, org, 'agents');
+    if (!existsSync(agentsRoot)) continue;
+    let agents: string[];
+    try {
+      agents = readdirSync(agentsRoot, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name);
+    } catch { continue; }
+    for (const a of agents) {
+      const envFile = join(agentsRoot, a, '.env');
+      if (!existsSync(envFile)) continue;
+      try {
+        const content = readFileSync(envFile, 'utf-8');
+        const tokenMatch = content.match(/^BOT_TOKEN=(.+)$/m);
+        const chatMatch = content.match(/^CHAT_ID=(.+)$/m);
+        if (!tokenMatch || !chatMatch) continue;
+        const botToken = tokenMatch[1].trim();
+        const chatId = envChat || chatMatch[1].trim();
+        if (/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
+          return { chatId, botToken };
+        }
+      } catch { /* skip this agent */ }
     }
-  } catch { /* fall through */ }
+  }
+
   return null;
 }
 
