@@ -189,8 +189,8 @@ implementation must do.
 | `ts` | yes | Unix **milliseconds**. |
 | `from.{id,username,name}` | as above | Same rules as `NormalizedMessage.from`. |
 | `chat_id` | optional | Same rule as `NormalizedMessage.chat_id`. |
-| `message_id` | yes | **Number, not stringified** — matches `FastChecker.formatTelegramReaction(messageId: number)`. Pragma carried over from Telegram; future connectors stringify by mapping their own id to a numeric or revisiting this field. |
-| `old_reaction`, `new_reaction` | yes | `TelegramReactionType[]` arrays. Empty array means "no reaction"; the diff is `(new) \ (old)`. This carries a **Telegram-specific tagged union** today because `FastChecker.formatTelegramReaction` consumes that exact shape (and preserves custom-emoji info via the `{type:'custom_emoji',custom_emoji_id}` variant). A follow-up PR will generalize it to `ConnectorReaction`. Out of scope for the initial multi-connector landing. |
+| `message_id` | yes | **Stringified** — provider-format-agnostic (PR4 c8 generalized from numeric to string for cross-connector consistency with NormalizedMessage.id). |
+| `old_reaction`, `new_reaction` | yes | `ConnectorReaction[]` arrays — `{ kind: 'unicode' \| 'custom'; value: string }`. Empty array means "no reaction"; the diff is `(new) \ (old)`. PR4 c8 generalized from the Telegram tagged-union shape; the Telegram connector translates Telegram's `{type, emoji \| custom_emoji_id}` to `ConnectorReaction` at normalization time. |
 | `raw` | yes | Provider payload. Same constraints as `NormalizedMessage.raw`. |
 
 ### `CallbackPayload`
@@ -989,23 +989,48 @@ failing on the broader union.
 
 ## 16. Out-of-scope (today)
 
-* **Webhook-only connectors** with no poll loop. The
-  `inbound: false` path exists for NullConnector but no
-  push-inbound HTTP server is wired into the daemon yet. Discord +
-  Slack will force this.
-* **Cross-provider thread mapping.** Each provider's thread model is
-  different (Discord first-class thread channels vs Mattermost
-  `root_id` vs RocketChat `tmid`). The `threads` capability flag will
-  be added in PR5; the cross-provider thread shape on
-  `NormalizedMessage` will follow.
-* **Rich block schema.** Every provider has its own (Discord embeds,
-  Slack blocks, Mattermost attachments, RocketChat UIKit). A shared
-  schema is out of scope until at least three of them are
-  implemented; until then `SendOptions.blocks: unknown` is a typed
-  escape hatch.
-* **Generalizing `NormalizedReactionPayload`.** Today it carries
-  `TelegramReactionType[]` because `FastChecker.formatTelegramReaction`
-  consumes that shape. Generalization to `ConnectorReaction` is PR5+.
+* **Streaming media downloads.** The Telegram `downloadFile()` path
+  still materializes the entire response body in memory before the
+  post-arrayBuffer size check kicks in. PR4 c5's Content-Length
+  precheck eliminates the worst case (large declared file) but
+  Content-Length-less responses still buffer up to `perFileBytes`.
+  A future PR replaces `response.arrayBuffer()` with a streaming
+  pipeline (fetch ReadableStream → write stream with byte counting).
+* **Push-inbound HTTP server in the daemon.** The connector's
+  `inbound: 'push'` tri-state covers the contract; what's missing is
+  the daemon-side webhook receiver that a Discord / Mattermost /
+  RocketChat connector would call into. The connector can already
+  start a WebSocket subscription inside its own `startInbound`
+  implementation (Discord gateway WS, RocketChat DDP) — the gap is
+  the case where the provider POSTs to us. Lands alongside the first
+  push-inbound connector.
+* **CodexAppServerPTY connector migration.** The last
+  `rawTelegramApi()` caller (gated by
+  `config.runtime === 'codex-app-server'`) goes away when
+  CodexAppServerPTY is migrated to accept a `MessageConnector` and
+  call `connector.setTypingIndicator(true)` instead of
+  `api.sendChatAction(chatId, 'typing')`. Separate PR; not blocking
+  for multi-connector landing.
+* **Matrix E2E encryption.** First-pass Matrix connector will DECLINE
+  to join encrypted rooms (the bot sees `m.room.encrypted` events
+  with no decryptable body). Adding Olm/Megolm support
+  (matrix-rust-sdk or matrix-bot-sdk-js with Olm) is a follow-up PR.
+* **`fileSizeLimitBytes` capability flag.** Numeric (not boolean) max
+  bytes for `sendMedia`. Useful to let callers chunk or refuse
+  pre-emptively. Deferred — the existing `mediaLimits` constructor
+  option covers the inbound side; outbound size-cap surfacing is
+  cosmetic until at least one connector hits a different cap than
+  Telegram's 50 MB. See §3 future-flags table.
+* **Rich block schema standardization.** `SendOptions.blocks: unknown`
+  is the typed escape hatch today. Each `richBlocks: true` connector
+  documents its own shape in its README. A cross-provider shared
+  schema only makes sense once three providers ship with native
+  blocks and a useful intersection emerges from the union.
+* **Daemon-level operator alerts via `getOperatorConnector()`.** The
+  factory exists in `src/connectors/index.ts` but the daemon's
+  crash-loop alert path at `src/daemon/index.ts` still uses a
+  direct Telegram env+curl invocation. Migration is straightforward
+  but not blocking for the connector layer itself.
 
 ---
 

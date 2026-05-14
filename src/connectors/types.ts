@@ -84,23 +84,34 @@ export interface ConnectorCapabilities {
   /** Connector can edit a previously-sent message in its bound chat (Telegram editMessageText, Slack chat.update, RocketChat updateMessage). */
   messageEdits: boolean;
   /**
-   * Provider has first-class threads — a parent message acts as a
-   * root with child replies grouped under it, distinct from inline
-   * `reply_to`. Discord native thread channels, Mattermost `root_id`,
-   * RocketChat `tmid`, Slack `thread_ts`, Matrix `m.thread` relation.
-   * Telegram groups have "topics" (forum supergroups) but those are
-   * chat-level not message-level; Telegram bots advertise `false`.
+   * Provider has a first-class concept of threaded conversations —
+   * subgroups of messages addressable as a unit, distinct from inline
+   * `reply_to`. The provider-specific shape varies:
+   *   - Discord: thread CHANNEL (a sub-channel under a parent channel).
+   *   - Mattermost / RocketChat / Slack: thread ROOT MESSAGE
+   *     (a message id; replies carry root_id / tmid / thread_ts).
+   *   - Matrix: thread ROOT EVENT (m.thread relation).
+   *   - Telegram forum supergroups: forum TOPIC
+   *     (a message_thread_id on each message). PR4 c21 (round-4 H2.5)
+   *     reconsidered whether Telegram should advertise `true` here —
+   *     forum topics ARE message_thread_id-tagged and conceptually map
+   *     to threads. For now Telegram advertises `false` because the
+   *     existing TelegramConnector ignores `message_thread_id` and a
+   *     proper forum-topic implementation is its own PR; flipping the
+   *     flag without that wiring would silently drop messages outside
+   *     the bot's default topic.
    *
    * When `true`:
-   *   - `NormalizedMessage.thread_id` is populated when the inbound
-   *     message belongs to a thread (the thread root's id).
-   *   - `SendOptions.thread_id` posts the outbound message INTO the
-   *     named thread.
+   *   - `NormalizedMessage.thread_id` carries the opaque
+   *     provider-specific thread target id on inbound.
+   *   - `SendOptions.thread_id` round-trips that value to post into
+   *     the same thread on outbound.
    *
-   * Added in PR4 c20 of the pluggable-connectors stack. The
-   * NormalizedMessage + SendOptions extensions are additive — agents
-   * that don't care about threads (and connectors that don't support
-   * them) can ignore the field.
+   * Added in PR4 c20. The thread_id field's contract is "opaque
+   * provider thread target id" — see the NormalizedMessage.thread_id
+   * and SendOptions.thread_id docstrings for the per-provider mapping
+   * each connector implements internally. Agents must not interpret
+   * the value beyond round-tripping.
    */
   threads: boolean;
   /**
@@ -123,17 +134,17 @@ export interface ConnectorCapabilities {
   /**
    * Provider exposes online/offline/typing presence updates as a
    * separate event stream from chat messages. Discord gateway
-   * `PRESENCE_UPDATE` + `TYPING_START`, Matrix `m.presence` +
-   * `m.typing` ephemeral events. Telegram has no presence concept
-   * for bots.
+   * `PRESENCE_UPDATE` (guild-scoped) + `TYPING_START` (channel-scoped),
+   * Matrix `m.presence` (global) + `m.typing` (room-scoped) ephemeral
+   * events. Telegram has no presence concept for bots.
    *
    * When `true`:
    *   - `PollingHandlers.onPresence` is invoked for each presence
-   *     update.
+   *     update with a `NormalizedPresenceUpdate` carrying a
+   *     discriminated `scope` ('global' / 'chat' / 'guild') so the
+   *     daemon can route per-scope correctly.
    *
-   * Added in PR4 c20. The handler is optional — connectors that
-   * support presence emit; daemon code can ignore or surface to
-   * agents per its own policy.
+   * Added in PR4 c20; scope discriminator added in c21.
    */
   presence: boolean;
 }
@@ -201,13 +212,23 @@ export interface NormalizedMessage {
    *  daemon doesn't have to read provider-specific media flags off `raw`
    *  to render reply context. */
   reply_to?: { id: string; text?: string };
-  /** Thread root id (stringified). Present iff the inbound message
-   *  belongs to a thread AND the connector advertises
-   *  `capabilities.threads === true`. The value is the connector-
-   *  specific id of the thread's root message: Discord native thread
-   *  channel id, Mattermost `root_id`, RocketChat `tmid`, Slack
-   *  `thread_ts`, Matrix `m.thread` event_id. Telegram bots leave
-   *  this undefined. Added in PR4 c20. */
+  /** Thread target id (stringified). Opaque, provider-specific. The
+   *  semantic varies by provider:
+   *    - Discord: thread CHANNEL id (sending to a thread is
+   *      `POST /channels/{thread_channel_id}/messages`).
+   *    - Matrix: the root event_id (used in `m.relates_to.event_id`).
+   *    - Mattermost: `root_id` (parent message id).
+   *    - RocketChat: `tmid` (parent message id).
+   *    - Slack: `thread_ts` (parent message timestamp-id).
+   *    - Telegram forum supergroups: `message_thread_id` (topic id).
+   *
+   *  The daemon/agent must NOT attempt to interpret the value beyond
+   *  round-tripping it: pass it back unchanged via `SendOptions.thread_id`
+   *  to post into the same thread. Each connector knows how to translate
+   *  its native shape both directions. PR4 c21 (Codex round-4 H2.3)
+   *  reframed this field's contract from "thread root message id" to
+   *  "opaque thread target id" because Discord and Telegram forum
+   *  topics don't fit the root-message-id model. */
   thread_id?: string;
   /** Original provider payload. Debug only; NEVER serialized to bus events. */
   raw: unknown;
@@ -299,10 +320,11 @@ export interface SendOptions {
    *  precondition for using this. */
   buttons?: Array<Array<ConnectorAction>>;
   /** Post the outbound message INTO the named thread. The value is the
-   *  connector-specific id of the thread's root message (matches the
-   *  shape of `NormalizedMessage.thread_id` on the corresponding inbound
-   *  message). Gated by `capabilities.threads === true`; connectors that
-   *  don't support threads ignore this field. Added in PR4 c20. */
+   *  opaque provider-specific thread target id round-tripped from
+   *  `NormalizedMessage.thread_id` (see that field's docstring for the
+   *  per-provider semantic). Gated by `capabilities.threads === true`;
+   *  connectors that don't support threads ignore this field. Added in
+   *  PR4 c20; contract clarified in c21. */
   thread_id?: string;
   /** Provider-native rich-content payload (Discord embeds, Slack blocks,
    *  Mattermost attachments, Matrix HTML, etc.). Deliberately untyped
@@ -370,6 +392,18 @@ export interface CallbackPayload {
  *     on the provider's side after ~10s; the connector does not need
  *     to emit a "stopped typing" event explicitly.
  *
+ * `scope` (PR4 c21, Codex round-4 H2.4) discriminates how the presence
+ * is bound. Pre-c21 we had `chat_id?: string` which couldn't represent
+ * Discord's guild-scoped PRESENCE_UPDATE cleanly. The discriminated
+ * shape covers all cross-provider cases:
+ *   - `'global'` — user-wide presence (Matrix `m.presence`, Discord
+ *     online/offline relative to the whole user, Slack user.presence).
+ *     `id` is absent.
+ *   - `'chat'` — chat / room / channel scoped (typing in a specific
+ *     conversation). `id` is the chat/room/channel id.
+ *   - `'guild'` — Discord guild-scoped presence (a user came online
+ *     in this guild). `id` is the guild id. Matrix has no equivalent.
+ *
  * Telegram bots don't expose presence and advertise
  * `capabilities.presence === false`; no Telegram presence updates fire.
  */
@@ -377,9 +411,11 @@ export interface NormalizedPresenceUpdate {
   id: string;
   ts: number;
   from: { id: string; username?: string; name?: string };
-  /** Chat / room id (stringified) when the presence is scoped to a
-   *  conversation (typing). Absent for global presence (online/offline). */
-  chat_id?: string;
+  /** Discriminated scope of the presence event. Replaces the c20 `chat_id?` field. */
+  scope:
+    | { kind: 'global' }
+    | { kind: 'chat'; id: string }
+    | { kind: 'guild'; id: string };
   kind: 'online' | 'offline' | 'typing';
   raw: unknown;
 }
