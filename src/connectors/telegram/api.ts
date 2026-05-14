@@ -515,6 +515,39 @@ export class TelegramAPI {
   }
 
   /**
+   * Set the bot's reaction on a message (Bot API 7.0+, Feb 2024). Pass
+   * an empty `reaction` array to remove. Each reaction element is the
+   * Telegram tagged-union variant — for the cortextOS connector we
+   * always emit `{ type: 'emoji', emoji }` (the standard allowed set);
+   * custom emoji require Telegram Premium for users to react, but the
+   * bot endpoint accepts the union shape so we keep the door open.
+   *
+   * `isBig`: whether the reaction should display the "big" animation
+   * (only honored on private chats). Defaults to false.
+   *
+   * Returns the parsed Telegram API response. Errors from the underlying
+   * `post` are propagated; the connector's `sendReaction` wraps them
+   * with caller-friendly text.
+   *
+   * Added in PR4 c10 of the pluggable-connectors stack to back the
+   * connector-layer `MessageConnector.sendReaction` capability (Codex
+   * P1.H — reaction-as-acknowledgement UX, docs §11).
+   */
+  async setMessageReaction(
+    chatId: string | number,
+    messageId: number,
+    reaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
+    isBig: boolean = false,
+  ): Promise<any> {
+    return this.post('setMessageReaction', {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction,
+      is_big: isBig,
+    });
+  }
+
+  /**
    * Edit a message's text.
    */
   async editMessageText(

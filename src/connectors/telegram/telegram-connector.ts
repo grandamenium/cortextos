@@ -72,6 +72,7 @@ export class TelegramConnector implements MessageConnector {
     longPolling: true,
     typingIndicator: true,
     reactions: true,
+    outboundReactions: true,
     interactiveCallbacks: true,
     messageEdits: true,
   };
@@ -386,6 +387,32 @@ export class TelegramConnector implements MessageConnector {
 
   async acknowledgeCallback(callbackId: string, text?: string): Promise<void> {
     await this.api.answerCallbackQuery(callbackId, text);
+  }
+
+  /**
+   * Send (or remove) a reaction emoji on a message. PR4 c10 (Codex
+   * P1.H) wires Telegram Bot API 7.0+'s `setMessageReaction` into the
+   * connector layer.
+   *
+   * Telegram's contract is "set the bot's reactions on this message to
+   * this list", not "add to existing". The connector exposes the
+   * narrower add/remove view: `sendReaction(id, emoji)` sets to
+   * `[emoji]`, `sendReaction(id, _, { remove: true })` sets to `[]`.
+   * To CHANGE the bot's reaction emoji (e.g. swap 🛠 for ✅ on task
+   * completion), call sendReaction again with the new emoji — Telegram
+   * replaces the old reaction.
+   */
+  async sendReaction(
+    messageId: string,
+    emoji: string,
+    opts?: { remove?: boolean; isBig?: boolean },
+  ): Promise<void> {
+    const numericId = Number(messageId);
+    if (!Number.isSafeInteger(numericId) || numericId <= 0) {
+      throw new Error(`sendReaction: invalid Telegram message_id ${JSON.stringify(messageId)}`);
+    }
+    const reaction = opts?.remove ? [] : [{ type: 'emoji' as const, emoji }];
+    await this.api.setMessageReaction(this.chatId, numericId, reaction, opts?.isBig ?? false);
   }
 
   async editMessage(

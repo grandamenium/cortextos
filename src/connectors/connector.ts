@@ -109,4 +109,46 @@ export interface MessageConnector {
     text: string,
     opts?: { buttons?: Array<Array<ConnectorAction>> },
   ): Promise<void>;
+
+  /**
+   * Send (or remove) a reaction emoji on a message in the connector's
+   * bound chat. The cortextOS UX pattern: agents react ON the user's
+   * message instead of replying with a text ack — 👀 seen, ✅ done,
+   * ❌ failed, 👍 acknowledged, 🛠 working on it, ⏸ paused, 🤔
+   * ambiguous. See docs/architecture/connectors.md §11.
+   *
+   * `messageId`: the connector-specific message id (round-tripped from
+   * NormalizedMessage.id). The agent's tool layer typically gets this
+   * from the inbound message being acknowledged.
+   *
+   * `emoji`: a unicode emoji character. Connectors validate against
+   * their provider's allowed set when one exists (Telegram restricts
+   * bots to a fixed standard set on a per-chat basis; Discord /
+   * Mattermost / RocketChat are permissive). On rejection the
+   * connector throws — callers decide whether to fall back to a text
+   * reply.
+   *
+   * `opts.remove`: when true, the agent's reaction is REMOVED (Telegram
+   * `setMessageReaction` with empty reaction array; Discord/Mattermost
+   * have native delete endpoints). Useful for state-machine UX:
+   * react 🛠 while working, swap for ✅ on completion (which is
+   * actually a sendReaction with the new emoji — Telegram's contract is
+   * "set to this list", not "add").
+   *
+   * `opts.isBig`: Telegram-specific flag for the "big animation"
+   * display on private chats. Other connectors ignore.
+   *
+   * Errors are NOT auto-swallowed (unlike acknowledgeCallback and
+   * editMessage). The caller decides whether a failed reaction needs a
+   * text-ack fallback or can be silently dropped — different agent
+   * surfaces (proactive ack vs completion signal) have different
+   * sensitivity.
+   *
+   * Added in PR4 c10 of the pluggable-connectors stack (Codex P1.H).
+   */
+  sendReaction?(
+    messageId: string,
+    emoji: string,
+    opts?: { remove?: boolean; isBig?: boolean },
+  ): Promise<void>;
 }

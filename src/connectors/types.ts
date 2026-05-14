@@ -50,8 +50,15 @@ export interface ConnectorCapabilities {
   longPolling: boolean;
   /** Connector supports a "typing..." indicator before replies. */
   typingIndicator: boolean;
-  /** Connector emits reaction-add/change/remove updates. */
+  /** Connector emits reaction-add/change/remove updates (INBOUND). */
   reactions: boolean;
+  /** Connector can SEND a reaction on a user's message — agents acknowledge
+   *  with emoji instead of (or alongside) a text reply. Telegram backs this
+   *  via `setMessageReaction` (Bot API 7.0+); Discord, Mattermost, RocketChat
+   *  all support it natively. See docs/architecture/connectors.md §11 for
+   *  the UX patterns (👀 seen / ✅ done / ❌ failed / 👍 ack / 🛠 working /
+   *  ⏸ paused / 🤔 ambiguous) and connector method `sendReaction`. */
+  outboundReactions: boolean;
   /** Connector can acknowledge an inline-button callback (Telegram answerCallbackQuery, Slack ack response, RocketChat triggerId reply). */
   interactiveCallbacks: boolean;
   /** Connector can edit a previously-sent message in its bound chat (Telegram editMessageText, Slack chat.update, RocketChat updateMessage). */

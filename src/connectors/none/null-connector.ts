@@ -28,6 +28,7 @@ export class NullConnector implements MessageConnector {
     longPolling: false,
     typingIndicator: false,
     reactions: false,
+    outboundReactions: false,
     interactiveCallbacks: false,
     messageEdits: false,
   };

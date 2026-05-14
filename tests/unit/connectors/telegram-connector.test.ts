@@ -245,6 +245,75 @@ describe('TelegramConnector', () => {
     });
   });
 
+  describe('sendReaction (PR4 c10 — outbound reactions)', () => {
+    it('routes through TelegramAPI.setMessageReaction with bound chatId and {type:emoji, emoji}', async () => {
+      const calls: Array<{ url: string; body: any }> = [];
+      installFetchMock((url, init) => {
+        calls.push({ url, body: JSON.parse(init.body) });
+        return { body: { ok: true, result: true } };
+      });
+
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      await c.sendReaction!('100', '👀');
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toContain('/setMessageReaction');
+      expect(calls[0].body.chat_id).toBe('12345'); // connector's bound chat
+      expect(calls[0].body.message_id).toBe(100);
+      expect(calls[0].body.reaction).toEqual([{ type: 'emoji', emoji: '👀' }]);
+      expect(calls[0].body.is_big).toBe(false);
+    });
+
+    it('remove: true sends empty reaction array (Telegram contract: set-to-list)', async () => {
+      const calls: Array<{ body: any }> = [];
+      installFetchMock((_url, init) => {
+        calls.push({ body: JSON.parse(init.body) });
+        return { body: { ok: true, result: true } };
+      });
+
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      await c.sendReaction!('100', '👀', { remove: true });
+      // Telegram's setMessageReaction with `reaction: []` clears the bot's reactions.
+      expect(calls[0].body.reaction).toEqual([]);
+    });
+
+    it('isBig: true sets is_big in the wire payload', async () => {
+      const calls: Array<{ body: any }> = [];
+      installFetchMock((_url, init) => {
+        calls.push({ body: JSON.parse(init.body) });
+        return { body: { ok: true, result: true } };
+      });
+
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      await c.sendReaction!('100', '🎉', { isBig: true });
+      expect(calls[0].body.is_big).toBe(true);
+    });
+
+    it('rejects non-integer or non-positive message_id', async () => {
+      installFetchMock(() => ({ body: { ok: true, result: true } }));
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      await expect(c.sendReaction!('not-a-number', '👀')).rejects.toThrow(/invalid Telegram message_id/);
+      await expect(c.sendReaction!('', '👀')).rejects.toThrow(/invalid Telegram message_id/);
+      await expect(c.sendReaction!('0', '👀')).rejects.toThrow(/invalid Telegram message_id/);
+    });
+  });
+
   describe('editMessage (PR3)', () => {
     it('routes through TelegramAPI.editMessageText with the connector’s bound chatId', async () => {
       const calls: Array<{ url: string; body: any }> = [];

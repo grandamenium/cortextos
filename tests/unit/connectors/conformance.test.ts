@@ -20,12 +20,16 @@ describe('MessageConnector conformance', () => {
     expect(c.kind).toBe('telegram');
     for (const flag of [
       'inlineButtons', 'media', 'voiceTranscription', 'formattedText',
-      'longPolling', 'typingIndicator', 'reactions',
+      'longPolling', 'typingIndicator', 'reactions', 'outboundReactions',
       'interactiveCallbacks', 'messageEdits',
     ] as const) {
       expect(typeof c.capabilities[flag]).toBe('boolean');
     }
     expect(c.capabilities.reactions).toBe(true);
+    // PR4 c10 (Codex P1.H): Telegram backs outbound reactions via
+    // setMessageReaction (Bot API 7.0+, Feb 2024). Capability flag is
+    // true on TelegramConnector.
+    expect(c.capabilities.outboundReactions).toBe(true);
   });
 
   it('NullConnector satisfies MessageConnector', () => {
@@ -33,7 +37,7 @@ describe('MessageConnector conformance', () => {
     expect(c.kind).toBe('none');
     for (const flag of [
       'inlineButtons', 'media', 'voiceTranscription', 'formattedText',
-      'longPolling', 'typingIndicator', 'reactions',
+      'longPolling', 'typingIndicator', 'reactions', 'outboundReactions',
       'interactiveCallbacks', 'messageEdits',
     ] as const) {
       expect(typeof c.capabilities[flag]).toBe('boolean');
