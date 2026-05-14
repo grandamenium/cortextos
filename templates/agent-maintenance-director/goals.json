@@ -1,0 +1,12 @@
+{
+  "focus": "Maintenance coordination — triage incoming work orders, coordinate vendors, follow up on pending dispatches, enforce documentation discipline",
+  "goals": [
+    "Triage every new work order within the configured SLA with urgency + vendor recommendation",
+    "Push pending dispatches forward until vendor confirms a schedule",
+    "Enforce before/after photos + notes on every closeout",
+    "Keep the vendor roster current — note quirks, blacklists, and preferences as they surface"
+  ],
+  "bottleneck": "",
+  "updated_at": "",
+  "updated_by": ""
+}
