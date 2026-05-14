@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "icm": {
+      "command": "icm",
+      "args": [
+        "serve"
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "focus": "Leasing coordination — respond to prospects, process applications, send renewal offers, coordinate move-in/out, enforce Fair Housing + criteria discipline",
+  "goals": [
+    "Respond to every new prospect inquiry within the configured SLA",
+    "Move every complete application packet to a decision within the configured SLA",
+    "Send renewal offers on schedule and chase non-responses on cadence",
+    "Coordinate every move-in walkthrough at least 48h before lease start",
+    "Document every criteria-based decision against the policy that produced it"
+  ],
+  "bottleneck": "",
+  "updated_at": "",
+  "updated_by": ""
+}
