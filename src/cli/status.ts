@@ -7,8 +7,9 @@ import type { AgentStatus, Heartbeat } from '../types/index.js';
 
 export const statusCommand = new Command('status')
   .option('--instance <id>', 'Instance ID')
+  .option('--json', 'Emit raw AgentStatus[] as JSON instead of the table view (fleet-resilience #5)')
   .description('Show agent health and status')
-  .action(async (options: { instance?: string }) => {
+  .action(async (options: { instance?: string; json?: boolean }) => {
     const instanceId = options.instance || process.env.CTX_INSTANCE_ID || 'default';
     const ipc = new IPCClient(instanceId);
     const daemonRunning = await ipc.isDaemonRunning();
@@ -18,9 +19,35 @@ export const statusCommand = new Command('status')
       const response = await ipc.send({ type: 'status', source: 'cortextos status' });
       if (response.success) {
         const statuses = response.data as AgentStatus[];
+        if (options.json) {
+          process.stdout.write(JSON.stringify(statuses, null, 2) + '\n');
+          return;
+        }
         displayStatuses(statuses);
+        return;
       }
-    } else {
+      // Daemon responded with an error. In --json mode emit [] so scripts
+      // get a parseable answer; in table mode surface the daemon error so
+      // operators don't get a silent return.
+      if (options.json) {
+        process.stdout.write(JSON.stringify([], null, 2) + '\n');
+      } else {
+        const errMsg = (response as { error?: string }).error ?? 'unknown error';
+        console.error(`Daemon returned an error: ${errMsg}`);
+        process.exitCode = 1;
+      }
+      return;
+    }
+
+    if (options.json) {
+      // Daemon-down JSON path: emit an empty array rather than a chatty
+      // human-oriented message. Scripts consuming `--json` parse first;
+      // a missing daemon is a queryable state (length === 0), not an error.
+      process.stdout.write(JSON.stringify([], null, 2) + '\n');
+      return;
+    }
+
+    {
       // Fall back to reading heartbeat files
       console.log('Daemon is not running. Showing last known heartbeats:\n');
       const ctxRoot = join(homedir(), '.cortextos', instanceId);

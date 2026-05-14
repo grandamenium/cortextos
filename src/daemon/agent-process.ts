@@ -11,6 +11,13 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import {
+  readHeartbeatStatus,
+  readLastInboxMessageAge,
+  readCrashBudget,
+  readLastRestart,
+  readLastSpawnFailureAge,
+} from '../utils/agent-status.js';
 
 type LogFn = (msg: string) => void;
 
@@ -314,7 +321,10 @@ export class AgentProcess {
   }
 
   /**
-   * Get current agent status.
+   * Get the lightweight in-memory status — no disk reads. Called from the
+   * status-change notifier on every transition, so it must be cheap.
+   * The deep-health fields populated by getStatusDeep() are left undefined
+   * here; consumers that need them call getStatusDeep() explicitly.
    */
   getStatus(): AgentStatus {
     return {
@@ -327,6 +337,38 @@ export class AgentProcess {
       sessionStart: this.sessionStart?.toISOString(),
       crashCount: this.crashCount,
       model: this.config.model,
+    };
+  }
+
+  /**
+   * Like getStatus() but also reads the on-disk health surface
+   * (heartbeat.json, .crash_count_today, restarts.log tail,
+   * .spawn-failure-history.json, newest inbox mtime). Used at IPC-status
+   * time; NOT in the per-mutation notifier path because the inbox-scan
+   * is O(messages) and the other reads are still fs syscalls.
+   *
+   * Each helper handles its own missing-file / corrupt-JSON case so a
+   * partial filesystem never causes a throw here.
+   */
+  getStatusDeep(): AgentStatus {
+    const base = this.getStatus();
+    const ctxRoot = this.env.ctxRoot;
+    const hb = readHeartbeatStatus(ctxRoot, this.name);
+    const inboxAge = readLastInboxMessageAge(ctxRoot, this.name);
+    const budget = readCrashBudget(ctxRoot, this.name, this.maxCrashesPerDay, this.crashCount);
+    const lastRestart = readLastRestart(ctxRoot, this.name);
+    const lastSpawnFail = readLastSpawnFailureAge(ctxRoot, this.name);
+    return {
+      ...base,
+      lastHeartbeatAgeSeconds: hb.lastHeartbeatAgeSeconds,
+      lastHeartbeatTask: hb.lastHeartbeatTask,
+      lastInboxMessageAgeSeconds: inboxAge,
+      crashCountToday: budget.crashCountToday,
+      maxCrashesPerDay: budget.maxCrashesPerDay,
+      crashesRemaining: budget.crashesRemaining,
+      lastRestartReason: lastRestart.lastRestartReason,
+      lastRestartKind: lastRestart.lastRestartKind,
+      lastSpawnFailureAgeSeconds: lastSpawnFail,
     };
   }
 

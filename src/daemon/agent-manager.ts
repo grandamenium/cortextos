@@ -804,22 +804,24 @@ export class AgentManager {
   }
 
   /**
-   * Get status of all agents.
+   * Get status of all agents (with on-disk deep-health fields). Used by the
+   * IPC `status` handler; called at most once per CLI invocation, so the
+   * cost of the per-agent disk reads is acceptable.
    */
   getAllStatuses(): AgentStatus[] {
     const statuses: AgentStatus[] = [];
     for (const [, entry] of this.agents) {
-      statuses.push(entry.process.getStatus());
+      statuses.push(entry.process.getStatusDeep());
     }
     return statuses;
   }
 
   /**
-   * Get status of a specific agent.
+   * Get status of a specific agent (with on-disk deep-health fields).
    */
   getAgentStatus(name: string): AgentStatus | null {
     const entry = this.agents.get(name);
-    return entry ? entry.process.getStatus() : null;
+    return entry ? entry.process.getStatusDeep() : null;
   }
 
   /**

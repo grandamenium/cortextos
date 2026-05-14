@@ -472,3 +472,44 @@ describe('AgentProcess - issue #07: pty.spawn() failure recovery', () => {
     expect(fsMocks.appendFileSync).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fleet-resilience #5 — getStatusDeep() wiring.
+// Helper-level behaviour is exercised in tests/unit/utils/agent-status.test.ts;
+// here we just confirm AgentProcess routes the deep-health helpers and stays
+// crash-free when every on-disk state file is missing (the mock returns
+// existsSync=false unconditionally).
+// ---------------------------------------------------------------------------
+describe('AgentProcess - issue #07 follow-up #5: getStatusDeep wiring', () => {
+  it('getStatus() returns the cheap shape — none of the deep-health fields populated', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    const s = ap.getStatus();
+    expect(s.name).toBe('alice');
+    expect(s.status).toBe('running');
+    expect(s.lastHeartbeatAgeSeconds).toBeUndefined();
+    expect(s.crashCountToday).toBeUndefined();
+    expect(s.lastRestartKind).toBeUndefined();
+    expect(s.lastSpawnFailureAgeSeconds).toBeUndefined();
+  });
+
+  it('getStatusDeep() returns crash-budget + null-spawn-failure even with empty state dir', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    const s = ap.getStatusDeep();
+    expect(s.name).toBe('alice');
+    expect(s.status).toBe('running');
+    // No heartbeat/restart/inbox state on disk → fields stay undefined.
+    expect(s.lastHeartbeatAgeSeconds).toBeUndefined();
+    expect(s.lastHeartbeatTask).toBeUndefined();
+    expect(s.lastInboxMessageAgeSeconds).toBeUndefined();
+    expect(s.lastRestartKind).toBeUndefined();
+    expect(s.lastRestartReason).toBeUndefined();
+    // Crash-budget always populates from in-memory fallback.
+    expect(s.crashCountToday).toBe(0);
+    expect(s.maxCrashesPerDay).toBe(10);
+    expect(s.crashesRemaining).toBe(10);
+    // No spawn-failure history file → null (definitively no event), not undefined.
+    expect(s.lastSpawnFailureAgeSeconds).toBeNull();
+  });
+});

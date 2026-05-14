@@ -855,4 +855,25 @@ export interface AgentStatus {
   sessionStart?: string;
   crashCount?: number;
   model?: string;
+  // Fleet-resilience plan #5 — deep-health fields. All optional so older
+  // consumers / the daemon-down fallback path remain compatible. Populated
+  // by AgentProcess.getStatus(); read lazily from on-disk state at IPC time.
+  lastHeartbeatAgeSeconds?: number;
+  lastHeartbeatTask?: string;
+  lastInboxMessageAgeSeconds?: number;
+  crashCountToday?: number;
+  maxCrashesPerDay?: number;
+  crashesRemaining?: number;
+  lastRestartReason?: string;
+  lastRestartKind?:
+    | 'CRASH'
+    | 'HALTED'
+    | 'SPAWN-FAIL'
+    | 'SPAWN-FAIL-HALTED'
+    | 'SELF-RESTART'
+    | 'HARD-RESTART';
+  /** Age in seconds of the most recent spawn-failure event for this agent.
+   * `null` means definitively no spawn-failure on record; `undefined` means
+   * the history file couldn't be read. */
+  lastSpawnFailureAgeSeconds?: number | null;
 }
