@@ -480,40 +480,66 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
-   * PR3 of pluggable-connectors: edit a previously-sent message through
-   * the active connector when wired, falling back to legacy
-   * `telegramApi.editMessageText`. `chatId`+`messageId` come from the
-   * incoming callback query — for the agent's own-bot path these
-   * always match the connector's bound chat, so the connector
-   * variant ignores chatId. Errors are swallowed.
+   * Edit a previously-sent message. PR3 of pluggable-connectors
+   * routed this through the active connector when wired; PR4 c15
+   * (Codex round-2 P1.B) changed the signature to accept string
+   * `chatId` / `messageId` so non-Telegram providers
+   * (Slack ts `"1690000000.000001"`, RocketChat opaque ids) survive
+   * the call without lossy `Number(...)` conversion. The legacy
+   * `telegramApi.editMessageText` fallback (only reached for the
+   * codex-app-server runtime path today) does its own
+   * string→numeric conversion locally and only proceeds if the id
+   * is actually a safe integer.
+   *
+   * The connector path is provider-agnostic — `connector.editMessage`
+   * takes a string `messageId` and the connector decides how to
+   * marshal it on the wire (TelegramConnector validates positive
+   * integer; a Discord connector would use the snowflake string
+   * unchanged; a Slack connector would use the float-string ts
+   * unchanged).
+   *
+   * Errors are swallowed (non-fatal per spec §2).
    */
   private async editCallbackMessage(
-    chatId: number | undefined,
-    messageId: number | undefined,
+    chatId: string | undefined,
+    messageId: string | undefined,
     text: string,
     buttons?: Array<Array<import('../connectors/index.js').ConnectorAction>>,
   ): Promise<void> {
-    if (messageId === undefined) return;
+    if (!messageId) return;
     if (this.connector?.capabilities.messageEdits && this.connector.editMessage) {
       try {
         if (buttons) {
-          await this.connector.editMessage(String(messageId), text, { buttons });
+          await this.connector.editMessage(messageId, text, { buttons });
         } else {
-          await this.connector.editMessage(String(messageId), text);
+          await this.connector.editMessage(messageId, text);
         }
       } catch { /* ignore */ }
     } else if (this.telegramApi && chatId !== undefined) {
-      // PR4 c9: legacy non-connector path translates ConnectorAction back
-      // to the Telegram inline_keyboard shape `{text, callback_data}` at
-      // the boundary. The connector path above keeps the typed shape.
+      // PR4 c9 + c15: legacy non-connector path translates
+      // ConnectorAction back to the Telegram inline_keyboard shape and
+      // converts the string ids back to numeric for the
+      // `telegramApi.editMessageText` wire call. A non-integer string
+      // (Slack ts) here is a sign of a misrouted Discord/Slack
+      // callback reaching the Telegram fallback path — skip the
+      // edit rather than send NaN to Telegram.
+      const numChatId = Number(chatId);
+      const numMsgId = Number(messageId);
+      if (!Number.isSafeInteger(numChatId) || !Number.isSafeInteger(numMsgId) || numMsgId <= 0) return;
       try {
         if (buttons) {
+          // PR4 c15 (Codex round-2 P1.C): handle both ConnectorAction
+          // variants. URL buttons translate to Telegram `{text, url}`;
+          // callback buttons to `{text, callback_data}`.
           const tgKeyboard = buttons.map((row) =>
-            row.map((a) => ({ text: a.label, callback_data: a.actionId })),
+            row.map((a) => a.kind === 'url'
+              ? { text: a.label, url: a.url }
+              : { text: a.label, callback_data: a.actionId },
+            ),
           );
-          await this.telegramApi.editMessageText(chatId, messageId, text, { inline_keyboard: tgKeyboard });
+          await this.telegramApi.editMessageText(numChatId, numMsgId, text, { inline_keyboard: tgKeyboard });
         } else {
-          await this.telegramApi.editMessageText(chatId, messageId, text);
+          await this.telegramApi.editMessageText(numChatId, numMsgId, text);
         }
       } catch { /* ignore */ }
     }
@@ -651,13 +677,16 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    */
   async handleCallback(callback: import('../connectors/index.js').CallbackPayload): Promise<void> {
     const data = stripControlChars(callback.data || '');
-    // PR4 c7 (Codex P1.A): chat_id and message_id arrive as strings on the
-    // typed payload. The connector path consumes them as strings; the
-    // legacy non-connector edit path (editCallbackMessage's
-    // telegramApi.editMessageText branch) needs numerics, so we convert
-    // ONCE here and pass through the existing internal helper signature.
-    const chatId = callback.chat_id ? Number(callback.chat_id) : undefined;
-    const messageId = callback.message_id ? Number(callback.message_id) : undefined;
+    // PR4 c7 + c15 (Codex round-2 P1.B): chat_id and message_id stay as
+    // strings throughout the connector dispatch. Pre-c15 they were
+    // Number()-converted here, which produced NaN for non-integer
+    // provider ids (Slack ts `"1690000000.000001"` precision-lost,
+    // RocketChat opaque ids → NaN). Slack and RocketChat connectors
+    // would have had every editCallbackMessage call no-op silently.
+    // The legacy Telegram fallback inside editCallbackMessage does its
+    // own numeric conversion locally with safe-integer validation.
+    const chatId = callback.chat_id;
+    const messageId = callback.message_id;
     const callbackQueryId = callback.id;
 
     // SECURITY: callbacks must come from the whitelisted user. Without this,
@@ -788,14 +817,16 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
             const question = state.questions?.[qIdx];
             const options: string[] = question?.options || [];
 
-            // Build keyboard with toggle buttons + submit. PR4 c9
-            // (Codex P1.G): keyboard is now ConnectorAction[][] — the
-            // connector translates to the provider's native form.
+            // Build keyboard with toggle buttons + submit. PR4 c9 +
+            // c15: keyboard is ConnectorAction[][] with explicit
+            // `kind: 'callback'` discriminator (Codex round-2 P1.C
+            // added the URL variant; callback is the existing case).
             const keyboard: Array<Array<import('../connectors/index.js').ConnectorAction>> = options.map((opt: string, i: number) => [{
+              kind: 'callback' as const,
               label: opt || `Option ${i + 1}`,
               actionId: `asktoggle_${qIdx}_${i}`,
             }]);
-            keyboard.push([{ label: 'Submit Selections', actionId: `asksubmit_${qIdx}` }]);
+            keyboard.push([{ kind: 'callback' as const, label: 'Submit Selections', actionId: `asksubmit_${qIdx}` }]);
 
             const text = chosenDisplay
               ? `Selected: ${chosenDisplay}\nTap more options or Submit`
@@ -923,17 +954,20 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         msg += `\n${i + 1}. ${qOptions[i] || `Option ${i + 1}`}`;
       }
 
-      // Build inline keyboard. PR4 c9 (Codex P1.G): ConnectorAction[][]
-      // — connector translates to provider-native at sendMessage time.
+      // Build inline keyboard. PR4 c9 + c15: ConnectorAction[][] with
+      // discriminator (`kind: 'callback'` for the existing case;
+      // `kind: 'url'` reserved for future link-button UX).
       let keyboard: Array<Array<import('../connectors/index.js').ConnectorAction>>;
       if (qMulti) {
         keyboard = qOptions.map((opt, i) => [{
+          kind: 'callback' as const,
           label: opt || `Option ${i + 1}`,
           actionId: `asktoggle_${questionIdx}_${i}`,
         }]);
-        keyboard.push([{ label: 'Submit Selections', actionId: `asksubmit_${questionIdx}` }]);
+        keyboard.push([{ kind: 'callback' as const, label: 'Submit Selections', actionId: `asksubmit_${questionIdx}` }]);
       } else {
         keyboard = qOptions.map((opt, i) => [{
+          kind: 'callback' as const,
           label: opt || `Option ${i + 1}`,
           actionId: `askopt_${questionIdx}_${i}`,
         }]);
@@ -948,10 +982,13 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (this.connector) {
         await this.connector.sendMessage(msg, { buttons: keyboard });
       } else if (this.telegramApi && this.chatId) {
-        // PR4 c9: legacy fallback translates ConnectorAction[][] back to
-        // Telegram inline_keyboard shape for the direct-API path.
+        // PR4 c9 + c15: legacy fallback translates both ConnectorAction
+        // variants back to Telegram inline_keyboard shapes.
         const tgKeyboard = keyboard.map((row) =>
-          row.map((a) => ({ text: a.label, callback_data: a.actionId })),
+          row.map((a) => a.kind === 'url'
+            ? { text: a.label, url: a.url }
+            : { text: a.label, callback_data: a.actionId },
+          ),
         );
         await this.telegramApi.sendMessage(this.chatId, msg, { inline_keyboard: tgKeyboard });
       }

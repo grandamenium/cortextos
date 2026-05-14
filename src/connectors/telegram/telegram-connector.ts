@@ -512,8 +512,16 @@ export class TelegramConnector implements MessageConnector {
    * connectors (Discord, Mattermost) consume `style` to map to their
    * native color palette. Arrow form so `.map(this.toTelegramButton)`
    * keeps `this` unbound.
+   *
+   * PR4 c15 (Codex round-2 P1.C) handles both ConnectorAction variants:
+   * - `kind: 'callback'` → Telegram `{text, callback_data}` (default)
+   * - `kind: 'url'` → Telegram `{text, url}` (opens external link, no
+   *   callback fires; matches Discord ButtonStyle.Link)
    */
-  private toTelegramButton = (a: ConnectorAction): { text: string; callback_data: string } => {
+  private toTelegramButton = (a: ConnectorAction): { text: string; callback_data: string } | { text: string; url: string } => {
+    if (a.kind === 'url') {
+      return { text: a.label, url: a.url };
+    }
     return { text: a.label, callback_data: a.actionId };
   };
 

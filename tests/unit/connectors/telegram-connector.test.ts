@@ -91,7 +91,10 @@ describe('TelegramConnector', () => {
       // ({label, actionId}); TelegramConnector translates to
       // {text, callback_data} for the inline_keyboard wire format.
       await c.sendMessage('approve?', {
-        buttons: [[{ label: '✓', actionId: 'yes' }, { label: '✗', actionId: 'no' }]],
+        buttons: [[
+          { kind: 'callback' as const, label: '✓', actionId: 'yes' },
+          { kind: 'callback' as const, label: '✗', actionId: 'no' },
+        ]],
       });
       expect(calls[0].body.reply_markup).toEqual({
         inline_keyboard: [[{ text: '✓', callback_data: 'yes' }, { text: '✗', callback_data: 'no' }]],
@@ -352,7 +355,7 @@ describe('TelegramConnector', () => {
       // TelegramConnector.editMessage translates to Telegram
       // inline_keyboard { text, callback_data } shape.
       await c.editMessage!('42', 'Pick one', {
-        buttons: [[{ label: 'Submit', actionId: 'submit' }]],
+        buttons: [[{ kind: 'callback' as const, label: 'Submit', actionId: 'submit' }]],
       });
       expect(calls[0].body.reply_markup).toEqual({
         inline_keyboard: [[{ text: 'Submit', callback_data: 'submit' }]],

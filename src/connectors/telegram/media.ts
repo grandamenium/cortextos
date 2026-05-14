@@ -216,10 +216,21 @@ export async function processMediaMessage(
     };
   }
 
+  // PR4 c15 (Codex round-2 P1.F): prefix non-photo downloads with the
+  // Telegram message_id so two media messages with the same provider
+  // filename (`report.pdf` arrives twice in a chat) write to distinct
+  // local paths. Pre-c15 the second arrival overwrote the first BEFORE
+  // the agent finished reading it — silent content loss.
+  // The prefix `msg<message_id>_` is short, sortable, and survives
+  // `sanitizeFilename` (alphanumeric + `_`). The photo case already
+  // had a unique-suffix derivation from Telegram's file_path; the doc /
+  // audio / video / voice / video_note cases get this prefix.
+  const collisionPrefix = `msg${msg.message_id}_`;
+
   // Document
   if (msg.document) {
     if (rejectOversize(msg.document.file_size, 'document', perFile)) return null;
-    const fileName = sanitizeFilename(msg.document.file_name);
+    const fileName = `${collisionPrefix}${sanitizeFilename(msg.document.file_name)}`;
     const fileResponse = await api.getFile(msg.document.file_id);
     const filePath = fileResponse?.result?.file_path;
     if (!filePath) return null;
@@ -244,9 +255,7 @@ export async function processMediaMessage(
   if (msg.audio) {
     if (rejectOversize(msg.audio.file_size, 'audio', perFile)) return null;
     const defaultName = `audio_${date}.ogg`;
-    const fileName = msg.audio.file_name
-      ? sanitizeFilename(msg.audio.file_name)
-      : defaultName;
+    const fileName = `${collisionPrefix}${msg.audio.file_name ? sanitizeFilename(msg.audio.file_name) : defaultName}`;
     const fileResponse = await api.getFile(msg.audio.file_id);
     const filePath = fileResponse?.result?.file_path;
     if (!filePath) return null;
@@ -271,7 +280,7 @@ export async function processMediaMessage(
   // Voice
   if (msg.voice) {
     if (rejectOversize(msg.voice.file_size, 'voice', perFile)) return null;
-    const fileName = `voice_${date}.ogg`;
+    const fileName = `${collisionPrefix}voice_${date}.ogg`;
     const fileResponse = await api.getFile(msg.voice.file_id);
     const filePath = fileResponse?.result?.file_path;
     if (!filePath) return null;
@@ -299,9 +308,7 @@ export async function processMediaMessage(
   if (msg.video) {
     if (rejectOversize(msg.video.file_size, 'video', perFile)) return null;
     const defaultName = `video_${date}.mp4`;
-    const fileName = msg.video.file_name
-      ? sanitizeFilename(msg.video.file_name)
-      : defaultName;
+    const fileName = `${collisionPrefix}${msg.video.file_name ? sanitizeFilename(msg.video.file_name) : defaultName}`;
     const fileResponse = await api.getFile(msg.video.file_id);
     const filePath = fileResponse?.result?.file_path;
     if (!filePath) return null;
@@ -326,7 +333,7 @@ export async function processMediaMessage(
   // Video Note (round video)
   if (msg.video_note) {
     if (rejectOversize(msg.video_note.file_size, 'video_note', perFile)) return null;
-    const fileName = `videonote_${date}.mp4`;
+    const fileName = `${collisionPrefix}videonote_${date}.mp4`;
     const fileResponse = await api.getFile(msg.video_note.file_id);
     const filePath = fileResponse?.result?.file_path;
     if (!filePath) return null;

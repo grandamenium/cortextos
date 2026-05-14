@@ -187,28 +187,46 @@ export interface NormalizedReactionPayload {
  * P1.G) lifted this out of the Telegram-specific
  * `{text, callback_data}` shape so Discord components, Mattermost
  * attachment actions, and RocketChat triggers can share a single
- * `SendOptions.buttons` schema. Each connector translates to its
- * native form at send time (Telegram inline_keyboard with
- * `{text:label, callback_data:actionId}`; Discord components with
- * `{type:2, label, custom_id:actionId, style:<mapped>}`; Mattermost
- * attachment actions with `{name:label, integration:{url, context:
- * {action_id:actionId}}}`; RocketChat blocks with
- * `{type:'button', text:label, value:actionId}`).
+ * `SendOptions.buttons` schema.
  *
- * The `actionId` round-trips back as `CallbackPayload.data` when the
- * user clicks — byte-identical across all four target providers, so
- * the agent's parser of `callback.data` is provider-agnostic.
+ * PR4 c15 (Codex round-2 P1.C) made the shape a discriminated union
+ * so the two distinct button semantics — callback button (sends an
+ * event to the bot when clicked) vs URL button (opens an external
+ * link, no callback to the bot) — are both expressible:
+ *
+ * - `'callback'` — Telegram inline_keyboard `{text, callback_data}`,
+ *   Discord ButtonStyle.Primary/Secondary/Danger with custom_id,
+ *   Mattermost attachment action with integration.context.action_id,
+ *   RocketChat block button with value.
+ * - `'url'` — Telegram inline_keyboard `{text, url}`, Discord
+ *   ButtonStyle.Link (NO custom_id allowed, url is mandatory),
+ *   Mattermost attachment action with url field, RocketChat block
+ *   button with url.
+ *
+ * `actionId` on callback actions round-trips back as
+ * `CallbackPayload.data` when the user clicks — byte-identical
+ * across all four target providers, so the agent's parser of
+ * `callback.data` is provider-agnostic.
  */
-export interface ConnectorAction {
-  /** Visible label rendered on the button. */
-  label: string;
-  /** Opaque action id round-tripped as CallbackPayload.data when clicked. */
-  actionId: string;
-  /** Visual style hint — connectors may ignore. `primary`=affirmative
-   *  (Discord blurple, Mattermost good), `danger`=destructive (Discord
-   *  red, Mattermost danger), `secondary`=neutral (default). */
-  style?: 'primary' | 'secondary' | 'danger';
-}
+export type ConnectorAction =
+  | {
+      kind: 'callback';
+      /** Visible label rendered on the button. */
+      label: string;
+      /** Opaque action id round-tripped as CallbackPayload.data when clicked. */
+      actionId: string;
+      /** Visual style hint — connectors may ignore. `primary`=affirmative
+       *  (Discord blurple, Mattermost good), `danger`=destructive (Discord
+       *  red, Mattermost danger), `secondary`=neutral (default). */
+      style?: 'primary' | 'secondary' | 'danger';
+    }
+  | {
+      kind: 'url';
+      /** Visible label rendered on the button. */
+      label: string;
+      /** External URL to open when clicked. No callback fires. */
+      url: string;
+    };
 
 export interface SendOptions {
   parseMode?: 'markdown' | 'plain' | null;
