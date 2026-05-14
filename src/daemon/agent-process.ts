@@ -195,12 +195,6 @@ export class AgentProcess {
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
 
-      // Fleet-resilience #7: if this start was preceded by a planned restart
-      // (CLI bus self/hard/soft-restart → IPC restart-agent), and the agent
-      // has accrued crashes today, reset the budget. Earned trust: the
-      // operator chose to restart cleanly and the agent came up healthy.
-      // Crash/spawn-fail auto-restarts never set the flag, so their crash
-      // budget keeps accruing per the existing maxCrashesPerDay halt.
       this.maybeResetCrashBudgetForPlannedRestart();
 
       // Start session timer

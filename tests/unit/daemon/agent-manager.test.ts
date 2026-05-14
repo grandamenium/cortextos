@@ -6,13 +6,17 @@ import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
 
 // Mock the PTY layer so we don't load native bindings or spawn real processes.
 // AgentManager → AgentProcess → AgentPTY → node-pty. We mock at AgentProcess.
+const agentProcessConstructions: Array<{ name: string; markPlannedRestart: ReturnType<typeof vi.fn> }> = [];
 vi.mock('../../../src/daemon/agent-process.js', () => ({
   AgentProcess: class {
     name: string;
     dir: string;
+    markPlannedRestart: ReturnType<typeof vi.fn>;
     constructor(name: string, dir: string) {
       this.name = name;
       this.dir = dir;
+      this.markPlannedRestart = vi.fn();
+      agentProcessConstructions.push({ name, markPlannedRestart: this.markPlannedRestart });
     }
     async start() { /* no-op */ }
     async stop() { /* no-op */ }
@@ -297,7 +301,7 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
     await am.restartAgent('alice');
 
     expect(stopSpy).toHaveBeenCalledWith('alice');
-    expect(startSpy).toHaveBeenCalledWith('alice', '');
+    expect(startSpy).toHaveBeenCalledWith('alice', '', undefined, undefined, undefined);
     // Verify call order: stop must complete before start, so the old poller
     // is fully torn down before the new one is constructed
     const stopOrder = stopSpy.mock.invocationCallOrder[0];
@@ -316,40 +320,70 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
     expect(startSpy).not.toHaveBeenCalled();
   });
 
-  // Fleet-resilience #7: { planned: true } plumbs through to
-  // AgentProcess.markPlannedRestart() before the stop/start sequence so
-  // the next successful start() can reset .crash_count_today.
-  it('passes { planned: true } through to AgentProcess.markPlannedRestart()', async () => {
+  // Fleet-resilience #7: the planned flag MUST plumb through to the
+  // freshly-constructed AgentProcess inside startAgent — NOT to the old
+  // AgentProcess instance still in `this.agents` before stopAgent discards it.
+  // Setting the flag on the stale instance would be a silent no-op (the new
+  // process has its own pendingPlannedRestart=false default).
+  it('forwards { planned: true } to startAgent so the new AgentProcess gets the flag', async () => {
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
-    const markPlanned = vi.fn();
     (am as any).agents.set('alice', {
-      process: { markPlannedRestart: markPlanned },
+      process: {},  // stale instance — flag MUST NOT be set here
       checker: {},
       poller: { stop() {} },
     });
-    vi.spyOn(am, 'stopAgent').mockResolvedValue();
-    vi.spyOn(am, 'startAgent').mockResolvedValue();
+    const stopSpy = vi.spyOn(am, 'stopAgent').mockResolvedValue();
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
 
     await am.restartAgent('alice', { planned: true });
-    expect(markPlanned).toHaveBeenCalledTimes(1);
+
+    expect(stopSpy).toHaveBeenCalledWith('alice');
+    // Critical: startAgent receives the planned flag so it can apply it to
+    // the AgentProcess it constructs internally.
+    expect(startSpy).toHaveBeenCalledWith('alice', '', undefined, undefined, { planned: true });
   });
 
-  it('does NOT call markPlannedRestart when opts omitted (auto-restart safety)', async () => {
+  // Integration check: the planned flag must reach the NEW AgentProcess that
+  // startAgent constructs — NOT the stale one in the registry that stopAgent
+  // discards. Without the plumbing through startAgent's opts param, this is
+  // a silent no-op. Letting stopAgent + startAgent run for real (not stubbed)
+  // is the only way to catch that gap.
+  it('actually applies markPlannedRestart to the NEW AgentProcess constructed by startAgent', async () => {
+    agentProcessConstructions.length = 0;
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    // Stand the agent up via real startAgent so a real AgentProcess lives in
+    // the registry. stopAgent will discard this one; restartAgent's startAgent
+    // call will construct a second.
+    await am.startAgent('alice', '');
+    expect(agentProcessConstructions).toHaveLength(1);
+    const initialProcess = agentProcessConstructions[0];
+    expect(initialProcess.markPlannedRestart).not.toHaveBeenCalled();
+
+    await am.restartAgent('alice', { planned: true });
+
+    // Two AgentProcess instances exist over the lifetime: the original
+    // (now discarded) and the post-restart (live in registry).
+    expect(agentProcessConstructions).toHaveLength(2);
+    const restartedProcess = agentProcessConstructions[1];
+    expect(restartedProcess.markPlannedRestart).toHaveBeenCalledTimes(1);
+    // Critical: the flag was NOT set on the stale instance (would have been
+    // a silent no-op since stopAgent discarded it before startAgent constructed
+    // the new one).
+    expect(initialProcess.markPlannedRestart).not.toHaveBeenCalled();
+  });
+
+  it('forwards omitted opts as undefined (auto-restart paths stay neutral)', async () => {
     // Internal callers that don't pass { planned: true } — e.g. a future
     // daemon-internal restart that's effectively a crash recovery — must
     // not get the trust-reset side-effect.
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
-    const markPlanned = vi.fn();
-    (am as any).agents.set('alice', {
-      process: { markPlannedRestart: markPlanned },
-      checker: {},
-      poller: { stop() {} },
-    });
+    (am as any).agents.set('alice', { process: {}, checker: {}, poller: { stop() {} } });
     vi.spyOn(am, 'stopAgent').mockResolvedValue();
-    vi.spyOn(am, 'startAgent').mockResolvedValue();
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
 
     await am.restartAgent('alice');
-    expect(markPlanned).not.toHaveBeenCalled();
+    expect(startSpy).toHaveBeenCalledWith('alice', '', undefined, undefined, undefined);
   });
 });
 

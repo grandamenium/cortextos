@@ -149,13 +149,9 @@ export interface LastRestartFields {
  * `[<ts>] <KIND>: <details>`. The kind must be one of the known restart
  * kinds — anything else parses as `lastRestartReason` text without a kind.
  *
- * Fleet-resilience #7: `CRASH-RESET` lines are audit annotations emitted by
- * agent-process.ts when a planned restart zeroes the crash budget. They
- * record the budget event, not a restart kind, so they are skipped during
- * tailread — the user-visible lastRestartKind continues to surface the real
- * restart (SELF-RESTART / HARD-RESTART / etc.) underneath. Multiple
- * back-to-back CRASH-RESET lines are skipped together (defensive against
- * future reset paths).
+ * Trailing `CRASH-RESET:` lines are skipped because they're audit annotations
+ * for the crash-budget reset, not a restart kind themselves — the real
+ * restart underneath is what users want to see in `lastRestartKind`.
  */
 export function readLastRestart(ctxRoot: string, agentName: string): LastRestartFields {
   try {
