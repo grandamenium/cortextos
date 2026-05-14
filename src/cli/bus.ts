@@ -4108,6 +4108,7 @@ busCommand
   .option('--timeout <seconds>', 'Max wait time in seconds (default: 300)', '300')
   .option('--ssh-host <host>', 'SSH host (default: gregs-mac)', 'gregs-mac')
   .option('--dispatch-script <path>', 'Path to codex-dispatch.sh on the Mac', '/Users/gregharned/work/team-brain/scripts/codex-dispatch.sh')
+  .option('--orgo-failure-artifact <path>', 'Recent failed Orgo lease attempt artifact required before Mac SSH fallback')
   .option('--disable-fallback', 'Disable localhost codex exec fallback when Mac SSH is unreachable')
   .action(async (
     prompt: string,
@@ -4118,6 +4119,7 @@ busCommand
       timeout?: string;
       sshHost?: string;
       dispatchScript?: string;
+      orgoFailureArtifact?: string;
       disableFallback?: boolean;
     },
   ) => {
@@ -4127,6 +4129,7 @@ busCommand
       timeout: parseInt(opts.timeout ?? '300', 10),
       sshHost: opts.sshHost,
       dispatchScript: opts.dispatchScript,
+      orgoFailureArtifact: opts.orgoFailureArtifact,
       noFallback: opts.disableFallback,
     });
 
