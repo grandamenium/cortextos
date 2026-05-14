@@ -4,9 +4,10 @@ import {
   readFileSync,
   unlinkSync,
 } from 'fs';
-import { basename, extname, join, posix, relative, sep } from 'path';
+import { basename, dirname, extname, join, posix, relative, sep } from 'path';
 import type { BusPaths, Task, TaskOutput } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { findTaskFile } from './task.js';
 
 export interface SaveOutputOptions {
   /** Source file to copy or move into the deliverables tree. */
@@ -60,13 +61,13 @@ export function saveOutput(
     throw new Error(`Source file not found: ${sourcePath}`);
   }
 
-  const taskFile = join(paths.taskDir, `${taskId}.json`);
-  if (!existsSync(taskFile)) {
+  const taskFile = findTaskFile(paths, taskId);
+  if (!taskFile || !existsSync(taskFile)) {
     throw new Error(`Task not found: ${taskId}`);
   }
   const task: Task = JSON.parse(readFileSync(taskFile, 'utf-8'));
 
-  const taskDir = join(paths.deliverablesDir, task.assigned_to, taskId);
+  const taskDir = join(deliverablesDirForTaskFile(paths, taskFile), task.assigned_to, taskId);
   ensureDir(taskDir);
 
   const sourceName = basename(sourcePath);
@@ -99,6 +100,18 @@ export function saveOutput(
   atomicWriteSync(taskFile, JSON.stringify(task, null, 2));
 
   return { targetPath, storedPath, linked: true };
+}
+
+function deliverablesDirForTaskFile(paths: BusPaths, taskFile: string): string {
+  const taskDir = dirname(taskFile);
+  const globalTaskDir = join(paths.ctxRoot, 'tasks');
+  if (taskDir === globalTaskDir) {
+    return join(paths.ctxRoot, 'deliverables');
+  }
+  if (taskDir.endsWith(`${sep}tasks`)) {
+    return join(dirname(taskDir), 'deliverables');
+  }
+  return paths.deliverablesDir;
 }
 
 /**

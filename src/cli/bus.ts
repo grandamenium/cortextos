@@ -5,7 +5,7 @@ import { join, dirname } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { randomString } from '../utils/random.js';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks, findTaskFile } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -43,7 +43,7 @@ import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, Approval
  * Check if the org requires deliverables and the task has none attached.
  * Returns an error message if the transition should be blocked, or null if allowed.
  */
-function checkDeliverableRequirement(taskId: string, frameworkRoot: string, org: string, taskDir: string): string | null {
+function checkDeliverableRequirement(taskId: string, frameworkRoot: string, org: string, paths: ReturnType<typeof resolvePaths>): string | null {
   // Read org context to check require_deliverables setting
   const contextPath = join(frameworkRoot, 'orgs', org, 'context.json');
   if (!existsSync(contextPath)) return null;
@@ -58,8 +58,8 @@ function checkDeliverableRequirement(taskId: string, frameworkRoot: string, org:
   if (!ctx.require_deliverables) return null;
 
   // Check if the task has outputs
-  const taskFile = join(taskDir, `${taskId}.json`);
-  if (!existsSync(taskFile)) return null;
+  const taskFile = findTaskFile(paths, taskId);
+  if (!taskFile || !existsSync(taskFile)) return null;
 
   let task: Task;
   try {
@@ -456,7 +456,7 @@ busCommand
     // Checks both ready_for_review (approval workflow) and completed (vanilla upstream)
     // so the validator works regardless of which status set is installed.
     if ((status === 'ready_for_review' || status === 'completed') && env.org) {
-      const err = checkDeliverableRequirement(id, env.frameworkRoot, env.org, paths.taskDir);
+      const err = checkDeliverableRequirement(id, env.frameworkRoot, env.org, paths);
       if (err) {
         console.error(err);
         process.exit(1);
@@ -570,7 +570,7 @@ busCommand
 
     // Guard: block completion when deliverables are required but missing
     if (env.org) {
-      const err = checkDeliverableRequirement(id, env.frameworkRoot, env.org, paths.taskDir);
+      const err = checkDeliverableRequirement(id, env.frameworkRoot, env.org, paths);
       if (err) {
         console.error(err);
         process.exit(1);

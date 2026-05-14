@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile } from '../../../src/bus/task';
+import { saveOutput } from '../../../src/bus/save-output';
 import { acquireLock, releaseLock } from '../../../src/utils/lock';
 import type { BusPaths } from '../../../src/types';
 import { makeTempDir, removeTempDir, makeBusPaths } from '../../setup';
@@ -406,6 +407,44 @@ describe('claimTask — atomic claim (beads-inspired)', () => {
     const again = claimTask(paths, id, 'alice');
     expect(again.assigned_to).toBe('alice');
     expect(again.status).toBe('in_progress');
+  });
+
+  it('claims and audits global tasks from an org-scoped agent path', () => {
+    const orgScopedPaths = { ...paths, taskDir: join(testDir, 'orgs', 'acme', 'tasks') };
+    mkdirSync(paths.taskDir, { recursive: true });
+    mkdirSync(orgScopedPaths.taskDir, { recursive: true });
+    const id = 'task_1778742229707_58940333';
+    writeFileSync(join(paths.taskDir, `${id}.json`), JSON.stringify({
+      id,
+      title: 'Orgo node lease',
+      description: '',
+      type: 'agent',
+      needs_approval: false,
+      status: 'pending',
+      assigned_to: 'orgo-1',
+      created_by: 'cortextos',
+      org: '',
+      priority: 'high',
+      project: 'CortexOS',
+      kpi_key: null,
+      created_at: '2026-05-14T07:03:49Z',
+      updated_at: '2026-05-14T07:03:49Z',
+      completed_at: null,
+      due_date: null,
+      archived: false,
+    }));
+
+    const claimed = claimTask(orgScopedPaths, id, 'orgo-1');
+    expect(claimed.status).toBe('in_progress');
+    expect(existsSync(join(paths.taskDir, '.claims', `${id}.claim`))).toBe(true);
+    expect(readTaskAudit(orgScopedPaths, id).map(e => e.event)).toEqual(['claim']);
+
+    const artifact = join(testDir, 'proof.txt');
+    writeFileSync(artifact, 'ok');
+    const saved = saveOutput(orgScopedPaths, { taskId: id, sourcePath: artifact, label: 'proof' });
+    expect(saved.storedPath).toBe(`deliverables/orgo-1/${id}/proof.txt`);
+    const onDisk = JSON.parse(readFileSync(join(paths.taskDir, `${id}.json`), 'utf-8'));
+    expect(onDisk.outputs).toEqual([{ type: 'file', value: saved.storedPath, label: 'proof' }]);
   });
 
   it('rejects claim on a non-pending task with a clear status message', () => {
