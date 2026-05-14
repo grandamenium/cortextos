@@ -657,7 +657,6 @@ rename.
 | `outboundReactions` (proposed) | yes | `POST /api/v4/reactions` |
 | `threads` (proposed) | yes | `root_id` on Post |
 | `richBlocks` (proposed) | yes | Attachments (Slack-style) |
-| `webhookInbound` (proposed) | yes | Outgoing webhooks |
 | `presence` (proposed) | yes | WS event `presence_change` |
 
 **Mattermost is the cleanest fit.** Either long-poll or WS, full
@@ -680,7 +679,6 @@ the second connector to land after Telegram.
 | `outboundReactions` (proposed) | yes | `POST /api/v1/chat.react` |
 | `threads` (proposed) | yes | `tmid` on Message (Thread Message ID) |
 | `richBlocks` (proposed) | yes | Attachments + UIKit blocks |
-| `webhookInbound` (proposed) | yes | Outgoing webhooks |
 | `presence` (proposed) | yes | DDP user-status stream |
 
 **RocketChat needs DDP.** The REST API is enough for outbound but the
@@ -895,12 +893,16 @@ tracked under the spec's out-of-scope items.
 
 ### `CallbackPayload.raw: unknown`
 
-Tagged `@internal @deprecated PR3+`. Used by
-`FastChecker.handleCallback` and the activity-channel callback path so
-those paths can cast back to `TelegramCallbackQuery` for fields the
-generic `CallbackPayload` doesn't carry. PR5 of the pluggable-
-connectors stack will design the proper interactive-callback
-abstraction and drop this field.
+Tagged `@internal @deprecated PR4+`. PR4 c7 migrated
+`FastChecker.handleCallback`, `handleActivityCallback`, and
+`routeApprovalCallback` off `callback.raw` — they read the typed
+`CallbackPayload.from.{id, username, name}`, `data`, `message_id`,
+and `chat_id` fields directly. The `raw` field stays as a
+transitional producer-side payload so connector implementations
+that need to expose provider-specific data not yet on the generic
+type can populate it for unanticipated callers. PR5 will drop the
+field entirely once the spec confirms no fallback caller has
+emerged.
 
 ### `FastChecker` legacy constructor opts
 

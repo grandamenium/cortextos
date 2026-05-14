@@ -46,6 +46,21 @@ class GenerationMismatchError extends Error {
 }
 
 /**
+ * Max retries per media message before degrading to text-only.
+ * Telegram redelivers acked-but-failed updates on each getUpdates poll
+ * (poller advances offset only on handler success); without a cap, a
+ * permanently-broken media message wedges the inbound loop. PR4 c18
+ * (Codex round-3 P1.R3-1A).
+ *
+ * Three attempts is a balance: a transient outage (network blip, brief
+ * Telegram getFile 5xx) almost always recovers within 3 polls (~3s at
+ * the default 1000ms poll interval). Beyond that the agent is better
+ * served by the caption text than by waiting indefinitely for the
+ * media.
+ */
+const MEDIA_MAX_RETRIES = 3;
+
+/**
  * Derive a human-readable reply-context string from a Telegram replied-to
  * message. Priority: text > caption > media-type label.
  *
@@ -106,16 +121,36 @@ export class TelegramConnector implements MessageConnector {
   private readonly mediaLimits: MediaLimits;
   private poller: TelegramPoller | null = null;
   /**
-   * Monotonic generation counter incremented on every `stopPolling()`.
+   * Monotonic generation counter incremented on every `stopInbound()`.
    * Async work kicked off inside the poller handler (today: the media-
    * enrichment pipeline) snapshots this at entry and re-checks after
-   * each await. A mismatch means stopPolling fired during the await —
+   * each await. A mismatch means stopInbound fired during the await —
    * the in-flight delivery is suppressed so a stopped/restarted agent
    * does not receive stale media. Without this guard the daemon would
    * inject media originated against the previous PTY lifecycle into
    * the next one.
    */
   private pollGeneration: number = 0;
+
+  /**
+   * Per-message retry counter for the media-enrichment pipeline. PR4
+   * c14 (Codex round-2 P0.A) made transient `processMediaMessage`
+   * failures rethrow so the poller doesn't ACK the update — Telegram
+   * redelivers and we retry. But a persistently-failing media message
+   * (the connector itself has a bug, the file is corrupted, etc.)
+   * would wedge the inbound loop in an infinite redelivery cycle.
+   *
+   * PR4 c18 (Codex round-3 P1.R3-1A) caps the retry count per
+   * `tgMsg.message_id` at MEDIA_MAX_RETRIES. Once exhausted, the
+   * connector degrades to text-only delivery (the agent still sees
+   * the caption + sender) and clears the counter. The map is
+   * in-memory only; a restart resets all counts, which is the right
+   * behavior (a transient outage that recovers during downtime gets
+   * the original retry budget back).
+   *
+   * Cleared on `stopInbound`.
+   */
+  private mediaRetryCount = new Map<number, number>();
 
   /**
    * `opts.pollerNamespace`: passed through to TelegramPoller as the
@@ -359,21 +394,54 @@ export class TelegramConnector implements MessageConnector {
       const hasMedia = !!(tgMsg.photo || tgMsg.document || tgMsg.voice || tgMsg.audio || tgMsg.video || tgMsg.video_note);
       if (hasMedia && this.downloadDir) {
         const downloadDir = this.downloadDir;
-        // RETHROW transient errors. processMediaMessage's contract:
-        // null = known permanent, throw = transient (retry-eligible).
-        const processed = await processMediaMessage(tgMsg, this.api, downloadDir, this.mediaLimits);
+        // PR4 c18 (Codex round-3 P1.R3-1A): retry cap. Track attempts
+        // per tgMsg.message_id; after MEDIA_MAX_RETRIES, degrade to
+        // text-only delivery so a permanently-broken media message
+        // doesn't wedge the inbound loop forever. The retry counter
+        // increments BEFORE the await so an exception path still bumps.
+        const attempts = (this.mediaRetryCount.get(tgMsg.message_id) ?? 0) + 1;
+        this.mediaRetryCount.set(tgMsg.message_id, attempts);
+
+        let processed = null;
+        try {
+          processed = await processMediaMessage(tgMsg, this.api, downloadDir, this.mediaLimits);
+        } catch (err) {
+          if (attempts >= MEDIA_MAX_RETRIES) {
+            // Exhausted retries — degrade to text-only delivery so the
+            // poller advances past this update. Log the giving-up so
+            // operators see the failure mode without flooding (this
+            // fires at most once per message — subsequent updates are
+            // tracked under their own message_ids).
+            console.error(`[connector:telegram] media pipeline exhausted ${MEDIA_MAX_RETRIES} retries for message ${tgMsg.message_id}, degrading to text-only: ${err instanceof Error ? err.message : String(err)}`);
+            this.mediaRetryCount.delete(tgMsg.message_id);
+            // Fall through to the !processed branch which emits text.
+          } else {
+            // Re-throw so the poller leaves the offset un-advanced and
+            // Telegram redelivers. The retry counter persists.
+            throw err;
+          }
+        }
+
         if (this.pollGeneration !== generationAtStart) {
           // Throw so the poller's handlerFailed branch leaves the
-          // offset un-advanced. Telegram redelivers on restart.
+          // offset un-advanced. Telegram redelivers on restart. The
+          // retry counter persists (resets only on stopInbound, but
+          // a generation bump means stopInbound already happened).
           throw new GenerationMismatchError();
         }
+
         if (processed) {
+          // Successful delivery — clear the retry counter for this id.
+          this.mediaRetryCount.delete(tgMsg.message_id);
           handlers.onMessage({ ...baseMessage, media: this.toNormalizedMedia(processed) });
         } else {
-          // Media flag set but processMediaMessage returned null
-          // (file expired on Telegram's side, file_path missing on the
-          // getFile response — known PERMANENT failure). Fall back to
-          // text-only so the agent still sees the caption.
+          // Either:
+          //   - processMediaMessage returned null (file expired on
+          //     Telegram's side, file_path missing — known permanent),
+          //   - OR we exhausted retries and degraded above.
+          // Either way: emit text-only and clear the counter so future
+          // media messages aren't accidentally degraded.
+          this.mediaRetryCount.delete(tgMsg.message_id);
           handlers.onMessage(baseMessage);
         }
       } else {
@@ -421,6 +489,11 @@ export class TelegramConnector implements MessageConnector {
       this.poller.stop();
       this.poller = null;
     }
+    // PR4 c18: clear media retry counters. A fresh startInbound starts
+    // every message with a clean retry budget — a transient outage
+    // that recovered during downtime shouldn't burn the post-restart
+    // retry budget.
+    this.mediaRetryCount.clear();
   }
 
   async setTypingIndicator(on: boolean): Promise<void> {

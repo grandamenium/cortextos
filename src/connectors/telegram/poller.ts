@@ -130,7 +130,16 @@ export class TelegramPoller {
           try {
             await handler(update.message);
           } catch (err) {
-            console.error('[telegram-poller] Message handler error:', err);
+            // PR4 c18 (Codex round-3 P2.R3-1B): GenerationMismatchError
+            // is a legitimate stop-during-await signal, not a real
+            // error — the connector intentionally throws it from
+            // stopInbound during in-flight media so the poller leaves
+            // the offset un-advanced. Suppress the noise log for that
+            // specific case. Other thrown errors stay logged.
+            const isGenMismatch = err instanceof Error && err.name === 'GenerationMismatchError';
+            if (!isGenMismatch) {
+              console.error('[telegram-poller] Message handler error:', err);
+            }
             handlerFailed = true;
             break;
           }

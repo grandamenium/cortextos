@@ -221,11 +221,15 @@ export async function processMediaMessage(
   // filename (`report.pdf` arrives twice in a chat) write to distinct
   // local paths. Pre-c15 the second arrival overwrote the first BEFORE
   // the agent finished reading it — silent content loss.
-  // The prefix `msg<message_id>_` is short, sortable, and survives
-  // `sanitizeFilename` (alphanumeric + `_`). The photo case already
-  // had a unique-suffix derivation from Telegram's file_path; the doc /
-  // audio / video / voice / video_note cases get this prefix.
-  const collisionPrefix = `msg${msg.message_id}_`;
+  //
+  // PR4 c18 (Codex round-3 P1.R3-1D): defensively strip `/` and `\`
+  // from the stringified message_id before using it as a path
+  // component. Telegram's `message_id` is a number today and can't
+  // contain separators, but the code structure invites future
+  // connectors to reuse the helper with their own provider ids
+  // (RocketChat opaque ids, Discord snowflakes-as-strings) which can
+  // contain or be coerced to strings with `/`. Sanitize at the source.
+  const collisionPrefix = `msg${String(msg.message_id).replace(/[/\\]/g, '_')}_`;
 
   // Document
   if (msg.document) {
