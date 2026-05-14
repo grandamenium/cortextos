@@ -33,6 +33,7 @@ import { generateSkill } from '../bus/generate-skill.js';
 import { syncSkills } from '../bus/sync-skills.js';
 import { runWorkflow } from '../bus/run-workflow.js';
 import { computerUse } from '../bus/computer-use.js';
+import { checkOrgoLeaseWatchdog, claimOrgoLease, formatLeaseStatus, listOrgoLeaseStatus, releaseOrgoLease } from '../bus/orgo-lease.js';
 
 import { atomicWriteSync } from '../utils/atomic.js';
 import { resolvePaths } from '../utils/paths.js';
@@ -759,6 +760,118 @@ busCommand
     // via setImmediate → drainRetryQueue. The drain is disk-persisted and runs
     // on the next daemon cycle; exiting here does not lose data.
     process.exit(0);
+  });
+
+busCommand
+  .command('orgo-lease-claim')
+  .description('Claim an Orgo fleet node lease in Supabase orch_fleet_nodes')
+  .requiredOption('--node <node_key>', 'Orgo node_key to claim')
+  .requiredOption('--focus <text>', 'Current focus/workload for the lease')
+  .option('--holder <agent>', 'Lease holder (defaults to CTX_AGENT_NAME)')
+  .option('--preconditions <json>', 'Required app/session/tool preconditions as JSON object', '{}')
+  .option('--artifact <text>', 'Expected artifact/deliverable')
+  .option('--release <text>', 'Release condition')
+  .option('--escalation <text>', 'Escalation rule')
+  .option('--ttl <minutes>', 'Artifact TTL / lease expiry in minutes', '60')
+  .option('--value <text>', 'Throughput/cost/value signal')
+  .option('--task <id>', 'Linked task id')
+  .option('--force', 'Claim even when node is already busy or leased')
+  .option('--json', 'Emit JSON')
+  .action(async (opts: { node: string; focus: string; holder?: string; preconditions?: string; artifact?: string; release?: string; escalation?: string; ttl?: string; value?: string; task?: string; force?: boolean; json?: boolean }) => {
+    try {
+      const result = await claimOrgoLease({
+        node: opts.node,
+        focus: opts.focus,
+        holder: opts.holder,
+        preconditions: opts.preconditions,
+        artifact: opts.artifact,
+        release: opts.release,
+        escalation: opts.escalation,
+        ttl: parseInt(opts.ttl ?? '60', 10),
+        value: opts.value,
+        task: opts.task,
+        force: opts.force ?? false,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(`Claimed ${result.node.node_key} lease ${result.lease.lease_id}`);
+        console.log(`  holder: ${result.lease.holder}`);
+        console.log(`  focus: ${result.lease.focus}`);
+        console.log(`  expires_at: ${result.lease.expires_at}`);
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('orgo-lease-release')
+  .description('Release an active Orgo fleet node lease')
+  .option('--lease <uuid>', 'Lease id to release')
+  .option('--node <node_key>', 'Node key whose active lease should be released')
+  .option('--result <text>', 'Result or produced artifact summary')
+  .option('--json', 'Emit JSON')
+  .action(async (opts: { lease?: string; node?: string; result?: string; json?: boolean }) => {
+    if (!opts.lease && !opts.node) {
+      console.error('Either --lease or --node is required');
+      process.exit(1);
+    }
+    try {
+      const result = await releaseOrgoLease({ lease: opts.lease, node: opts.node, result: opts.result });
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(`Released ${result.node.node_key} lease ${result.released.lease_id}`);
+        if (result.released.result) console.log(`  result: ${result.released.result}`);
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('orgo-lease-status')
+  .description('Show Orgo fleet lease status from Supabase orch_fleet_nodes')
+  .option('--node <node_key>', 'Filter to a node')
+  .option('--status <status>', 'busy, idle, or all', 'all')
+  .option('--json', 'Emit JSON')
+  .action(async (opts: { node?: string; status?: string; json?: boolean }) => {
+    if (opts.status && !['busy', 'idle', 'all'].includes(opts.status)) {
+      console.error('--status must be one of: busy, idle, all');
+      process.exit(1);
+    }
+    try {
+      const nodes = await listOrgoLeaseStatus({ node: opts.node, status: opts.status as 'busy' | 'idle' | 'all' });
+      console.log(opts.json ? JSON.stringify(nodes, null, 2) : formatLeaseStatus(nodes));
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('orgo-lease-watchdog')
+  .description('List expired Orgo leases that need escalation')
+  .option('--json', 'Emit JSON')
+  .action(async (opts: { json?: boolean }) => {
+    try {
+      const expired = await checkOrgoLeaseWatchdog();
+      if (opts.json) {
+        console.log(JSON.stringify(expired, null, 2));
+      } else if (expired.length === 0) {
+        console.log('No expired Orgo leases.');
+      } else {
+        for (const item of expired) {
+          console.log(`${item.node_key} expired at ${item.expired_at}: ${item.lease.escalation_rule}`);
+        }
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
   });
 
 busCommand
