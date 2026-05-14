@@ -251,6 +251,27 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Real-crash agent alerts: notify chief + analyst on crash and daemon-crashed
+  // so silent failures get visibility on the bus, not just on Telegram. Gated
+  // by the same dedup window as the Telegram send (handled above), and skipped
+  // for clean exits / planned restarts / rate-limit pauses. Hoisted above the
+  // Telegram-credential gate so agents without BOT_TOKEN/CHAT_ID still reach
+  // the bus (issue #317).
+  if (endType === 'crash' || endType === 'daemon-crashed') {
+    const agentDir = process.env.CTX_AGENT_DIR || process.cwd();
+    const maxCrashes = readMaxCrashesPerDay(agentDir);
+    const restartAttempted = maxCrashes === null || crashCount < maxCrashes;
+    notifyAgents({
+      agentName,
+      endType,
+      reason,
+      lastTask,
+      crashCount,
+      restartAttempted,
+      recipients: ['chief', 'analyst'],
+    });
+  }
+
   const botToken = process.env.BOT_TOKEN;
   const chatId = process.env.CHAT_ID;
   if (!botToken || !chatId) return;
@@ -309,25 +330,6 @@ async function main(): Promise<void> {
         body: JSON.stringify({ chat_id: chatId, text: message }),
       });
     } catch { /* ignore send failures */ }
-  }
-
-  // Real-crash agent alerts: notify chief + analyst on crash and daemon-crashed
-  // so silent failures get visibility on the bus, not just on Telegram. Gated
-  // by the same dedup window as the Telegram send (handled above), and skipped
-  // for clean exits / planned restarts / rate-limit pauses.
-  if (endType === 'crash' || endType === 'daemon-crashed') {
-    const agentDir = process.env.CTX_AGENT_DIR || process.cwd();
-    const maxCrashes = readMaxCrashesPerDay(agentDir);
-    const restartAttempted = maxCrashes === null || crashCount < maxCrashes;
-    notifyAgents({
-      agentName,
-      endType,
-      reason,
-      lastTask,
-      crashCount,
-      restartAttempted,
-      recipients: ['chief', 'analyst'],
-    });
   }
 }
 
