@@ -114,7 +114,14 @@ export const ecosystemCommand = new Command('ecosystem')
       // Dashboard reads its real config from dashboard/.env.local — populated
       // by /onboarding Phase 7. PM2 just supervises the dashboard process.
       windowsHide: true,
-      max_restarts: 50,
+      // Fleet-resilience cleanup B: was 50, dropped to 3 after the 2026-05-14
+      // post-mortem traced a 327-PM2-restart thrash to the dashboard hitting
+      // EADDRINUSE on :3000 forever. PR #43 added a port-probe to fail fast
+      // INSIDE the dashboard process; this cap stops PM2 from hammering an
+      // unrecoverable failure for hours. Operator-side launchd plists or
+      // external PM2 registries that supervise dashboard outside the repo
+      // need a parallel fix — see docs_sb/runbooks/dashboard-supervisor-investigation.md.
+      max_restarts: 3,
       restart_delay: 5000,
       autorestart: true,
     }`
