@@ -631,6 +631,138 @@ describe('TelegramConnector', () => {
 
       fs.rmSync(stateDir, { recursive: true, force: true });
     });
+
+    it('transient downloadFile failure does NOT advance offset (Codex round-2 P0.A)', async () => {
+      // Pre-PR4-c14 behavior: transient processMediaMessage failures
+      // were caught and fell through to text-only delivery — the handler
+      // returned successfully and the poller advanced the offset,
+      // permanently ACKing a message whose media never reached the
+      // agent. Post-c14: transient errors RETHROW, the poller's
+      // handlerFailed branch fires, and the offset stays put so
+      // Telegram redelivers on the next poll.
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-transient-'));
+      const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-transient-dl-'));
+
+      const photoUpdate = {
+        update_id: 1,
+        message: {
+          message_id: 100,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          caption: 'transient',
+          photo: [{ file_id: 'transient_id', file_size: 5000, width: 800, height: 600 }],
+        },
+      };
+
+      let getUpdatesCalls = 0;
+      let getFileCalls = 0;
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          getUpdatesCalls++;
+          // Re-deliver the same update on every poll — pre-c14 we'd see this
+          // ACKed after the first cycle and Telegram would stop sending it.
+          // Post-c14 the offset stays put so it KEEPS arriving.
+          return { body: { ok: true, result: [photoUpdate] } };
+        }
+        if (url.includes('/getFile')) {
+          getFileCalls++;
+          // Simulate transient 500 every time — never resolves to file_path.
+          return { status: 500, body: { ok: false, description: 'Internal error' } };
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      }, { downloadDir });
+
+      const received: any[] = [];
+      vi.useRealTimers();
+      await c.startInbound({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await new Promise((r) => setTimeout(r, 300));
+      await c.stopInbound();
+
+      // Critical: no NormalizedMessage delivered. Pre-c14 we'd see at
+      // least one text-only fallback in `received`.
+      expect(received).toHaveLength(0);
+      // Offset file either doesn't exist OR stays at 0 — Telegram's
+      // getUpdates was called multiple times (the update kept arriving).
+      expect(getUpdatesCalls).toBeGreaterThanOrEqual(1);
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(downloadDir, { recursive: true, force: true });
+    });
+
+    it('stopInbound during in-flight media throws GenerationMismatchError so offset stays put (Codex round-2 P0.B)', async () => {
+      // Pre-PR4-c14 behavior: the generation guard returned undefined on
+      // mismatch, the poller saw a successful handler, and the offset
+      // advanced — the in-flight media was suppressed AND permanently
+      // ACKed. Post-c14: throw a sentinel error so the poller's
+      // handlerFailed branch fires and the offset stays put.
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-genguard-'));
+      const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-genguard-dl-'));
+
+      const photoUpdate = {
+        update_id: 1,
+        message: {
+          message_id: 100,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          caption: 'in-flight at stop',
+          photo: [{ file_id: 'slow_id', file_size: 5000, width: 800, height: 600 }],
+        },
+      };
+
+      let getFileResolve: ((value: any) => void) | null = null;
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          return { body: { ok: true, result: [photoUpdate] } };
+        }
+        if (url.includes('/getFile')) {
+          // Park getFile until we bump the generation. The handler
+          // awaits inside processMediaMessage → api.getFile, so the
+          // await captures.
+          return new Promise((resolve) => { getFileResolve = resolve as any; }) as any;
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      }, { downloadDir });
+
+      const received: any[] = [];
+      vi.useRealTimers();
+      await c.startInbound({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      // Give the poller time to call getFile (parked)
+      await new Promise((r) => setTimeout(r, 100));
+      // Now stop — generation bumps while getFile is parked.
+      await c.stopInbound();
+      // Unblock getFile so the in-flight handler resumes and hits the
+      // generation guard.
+      if (getFileResolve) {
+        (getFileResolve as any)({ status: 200, body: { ok: true, result: { file_path: 'photos/slow.jpg' } } });
+      }
+      await new Promise((r) => setTimeout(r, 100));
+
+      // No delivery to the agent (generation mismatch).
+      expect(received).toHaveLength(0);
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(downloadDir, { recursive: true, force: true });
+    });
   });
 
   describe('message normalization (PR4 commit 2): chat_id + reply_to.text', () => {

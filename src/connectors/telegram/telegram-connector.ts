@@ -27,6 +27,25 @@ import type {
 import { stripControlChars } from '../../utils/validate.js';
 
 /**
+ * Sentinel thrown by the connector's poller-onMessage handler when
+ * `stopInbound()` bumped the generation counter during an in-flight
+ * media-pipeline await. The poller treats any thrown handler as failure
+ * (poller.ts:117-122) and leaves the offset un-advanced — so the
+ * update redelivers on the next `getUpdates`. The agent that restarts
+ * after the stop sees the media correctly under the new generation.
+ *
+ * Pre-PR4-c14 the generation guard returned `undefined` (handler
+ * "succeeded"); the poller advanced the offset and the media was
+ * permanently dropped. Codex round-2 P0.B.
+ */
+class GenerationMismatchError extends Error {
+  constructor() {
+    super('telegram-connector: pollGeneration mismatch — stopInbound fired during in-flight handler');
+    this.name = 'GenerationMismatchError';
+  }
+}
+
+/**
  * Derive a human-readable reply-context string from a Telegram replied-to
  * message. Priority: text > caption > media-type label.
  *
@@ -300,49 +319,67 @@ export class TelegramConnector implements MessageConnector {
 
     const generationAtStart = this.pollGeneration;
     this.poller.onMessage(async (tgMsg: TelegramMessage) => {
-      // PR4 c4 (Codex P0): media enrichment now AWAITS processMediaMessage
-      // before the poller advances its offset. The previous .then() pattern
-      // let the poller ACK the update with Telegram (advance offset, persist
-      // to disk) BEFORE the agent ever saw the media-formatted message —
-      // a crash or stopPolling between offset-advance and the .then firing
-      // dropped the message permanently because Telegram does not redeliver
-      // acked updates. Now the offset only moves after the full pipeline
-      // (download + transcription + handler emit) settles.
+      // PR4 c4 (Codex P0.1): media enrichment AWAITS processMediaMessage
+      // before the poller advances its offset. The previous .then()
+      // pattern let the poller ACK the update with Telegram (advance
+      // offset, persist to disk) BEFORE the agent ever saw the
+      // media-formatted message — a crash or stopInbound between
+      // offset-advance and the .then firing dropped the message
+      // permanently because Telegram does not redeliver acked updates.
+      // Now the offset only moves after the full pipeline (download +
+      // transcription + handler emit) settles.
       //
-      // The poller supports awaitable handlers (poller.ts:7 MessageHandler
-      // signature) and applies the same offset-after-handler semantics it
-      // already used for sync handlers — a thrown handler / rejected promise
-      // leaves the offset untouched and the update is redelivered.
+      // PR4 c14 (Codex round-2 P0.A): exceptions from processMediaMessage
+      // RETHROW instead of falling through to text-only. Pre-c14, any
+      // transient network blip caught the exception, logged it, then
+      // emitted a text-only NormalizedMessage — the handler returned
+      // successfully and the poller advanced the offset. Telegram never
+      // redelivered, the media payload was permanently lost. Post-c14,
+      // only `processMediaMessage`'s explicit `null` return (= known
+      // permanent failure: Telegram getFile returned no file_path, the
+      // file expired on Telegram's side) triggers text-only fallback.
+      // Anything else (network 5xx, download stream abort, disk-write
+      // failure) throws out of the handler so the poller leaves the
+      // offset un-advanced and Telegram redelivers the update on the
+      // next getUpdates call. This matches the same retry-on-throw
+      // contract the poller already uses for sync handlers.
       //
-      // Generation guard: if stopPolling() fires between the await and the
-      // emit, suppress delivery so a stopped/restarted agent never sees
-      // stale media injected into the next PTY lifecycle. The guard sits
-      // AFTER the await so an in-flight download completes and is
-      // dropped cleanly rather than racing the poller's stop signal.
+      // PR4 c14 (Codex round-2 P0.B): generation guard mismatch now
+      // throws GenerationMismatchError instead of silently returning.
+      // Pre-c14 the early-return on `this.pollGeneration !==
+      // generationAtStart` looked like a successful handler — the
+      // poller advanced the offset and Telegram acked the update. Any
+      // media in-flight at stop/restart was both suppressed AND
+      // permanently ACKed. Post-c14 the throw signals "no delivery
+      // happened" so the poller's handlerFailed branch fires and the
+      // offset stays put. The update will be re-delivered when the
+      // connector restarts; the generation check there will pass under
+      // the new generation and the agent gets the media correctly.
       const baseMessage = this.toNormalizedMessage(tgMsg);
       const hasMedia = !!(tgMsg.photo || tgMsg.document || tgMsg.voice || tgMsg.audio || tgMsg.video || tgMsg.video_note);
       if (hasMedia && this.downloadDir) {
         const downloadDir = this.downloadDir;
-        let processed = null;
-        try {
-          processed = await processMediaMessage(tgMsg, this.api, downloadDir, this.mediaLimits);
-        } catch (err) {
-          console.error('[telegram-connector] media processing error:', err);
-        }
+        // RETHROW transient errors. processMediaMessage's contract:
+        // null = known permanent, throw = transient (retry-eligible).
+        const processed = await processMediaMessage(tgMsg, this.api, downloadDir, this.mediaLimits);
         if (this.pollGeneration !== generationAtStart) {
-          // stopPolling() fired during the await — suppress emit.
-          return;
+          // Throw so the poller's handlerFailed branch leaves the
+          // offset un-advanced. Telegram redelivers on restart.
+          throw new GenerationMismatchError();
         }
         if (processed) {
           handlers.onMessage({ ...baseMessage, media: this.toNormalizedMedia(processed) });
         } else {
           // Media flag set but processMediaMessage returned null
-          // (Telegram getFile failed, file_path missing, etc.). Fall
-          // back to text-only so the agent still sees the caption.
+          // (file expired on Telegram's side, file_path missing on the
+          // getFile response — known PERMANENT failure). Fall back to
+          // text-only so the agent still sees the caption.
           handlers.onMessage(baseMessage);
         }
       } else {
-        if (this.pollGeneration !== generationAtStart) return;
+        if (this.pollGeneration !== generationAtStart) {
+          throw new GenerationMismatchError();
+        }
         handlers.onMessage(baseMessage);
       }
     });
