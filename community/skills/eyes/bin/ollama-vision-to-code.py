@@ -97,6 +97,41 @@ def extract_code(text: str) -> str:
     return text.strip()
 
 
+def _validate_ollama_host(host: str) -> str | None:
+    """F1: SSRF allow-list. Returns error message or None if OK."""
+    import re, urllib.parse
+    if not re.match(r"^https?://[A-Za-z0-9._:\-\[\]]+(/.*)?$", host):
+        return f"--ollama-host must be http(s)://...; got: {host}"
+    if os.environ.get("EYES_ALLOW_REMOTE_OLLAMA") == "1":
+        return None
+    hostname = urllib.parse.urlparse(host).hostname or ""
+    if hostname in ("127.0.0.1", "::1", "localhost"):
+        return None
+    return f"--ollama-host '{hostname}' not in loopback allow-list; set EYES_ALLOW_REMOTE_OLLAMA=1 to override"
+
+
+def _validate_workspace_path(label: str, path: Path) -> str | None:
+    """F2: realpath + prefix check against /tmp, /private/tmp, $EYES_WORKSPACE, cwd.
+    Note: on macOS /tmp is a symlink → /private/tmp; resolve() returns /private/tmp.
+    Allow both the directory itself AND its subpaths."""
+    if not path.exists():
+        return f"{label} '{path}' does not exist"
+    real = path.resolve()
+    real_str = str(real)
+    for prefix in ("/tmp", "/private/tmp"):
+        if real_str == prefix or real_str.startswith(prefix + "/"):
+            return None
+    ws = os.environ.get("EYES_WORKSPACE")
+    if ws:
+        ws_real = str(Path(ws).resolve())
+        if real_str == ws_real or real_str.startswith(ws_real + "/"):
+            return None
+    cwd = str(Path.cwd().resolve())
+    if real_str == cwd or real_str.startswith(cwd + "/"):
+        return None
+    return f"{label} '{path}' (real: {real}) outside workspace; allowed: /tmp, /private/tmp, $EYES_WORKSPACE, cwd"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--screenshot", required=True, type=Path)
@@ -106,6 +141,18 @@ def main():
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--timeout", type=int, default=600)
     args = ap.parse_args()
+
+    # F1+F2 hardening (post security-vp review of b5d704f).
+    if err := _validate_ollama_host(args.ollama_host):
+        print(json.dumps({"verdict": "error", "error": err}, indent=2))
+        sys.exit(5)
+    if err := _validate_workspace_path("--screenshot", args.screenshot):
+        print(json.dumps({"verdict": "error", "error": err}, indent=2))
+        sys.exit(6)
+    # --out parent dir must be in workspace (file itself may not exist yet)
+    if err := _validate_workspace_path("--out parent", args.out.parent):
+        print(json.dumps({"verdict": "error", "error": err}, indent=2))
+        sys.exit(6)
 
     if not args.screenshot.exists():
         envelope = {"verdict": "error", "error": f"screenshot {args.screenshot} not found"}

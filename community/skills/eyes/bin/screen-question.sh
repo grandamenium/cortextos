@@ -54,6 +54,14 @@ if [ -n "$WINDOW" ] && ! [[ "$WINDOW" =~ ^[A-Za-z0-9\ ._-]{1,64}$ ]]; then
   exit 2
 fi
 
+# F1 hardening: SSRF allow-list on --ollama-host (loopback-only unless EYES_ALLOW_REMOTE_OLLAMA=1).
+# F2 hardening: workspace-scope --save-to so the screenshot lands inside an allowed prefix.
+. "$(dirname "$0")/_validate.sh"
+__validate_ollama_host "$OLLAMA_HOST" || exit 5
+# --save-to may not exist yet (we're about to create it). Validate the PARENT dir instead.
+SAVE_TO_PARENT=$(dirname "$SAVE_TO")
+__validate_workspace_path "--save-to parent dir" "$SAVE_TO_PARENT" || exit 6
+
 # Capture
 if [ -n "$WINDOW" ]; then
   /usr/bin/osascript -e "tell application \"$WINDOW\" to activate" 2>/dev/null || true
