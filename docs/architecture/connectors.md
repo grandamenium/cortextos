@@ -776,8 +776,47 @@ For a contributor adding e.g. `MattermostConnector`:
 14. **Update this doc.** Add a row to §12 if your audit revealed
     capability nuances, and update §7 with your stateDir convention.
 
-Files touched: 6–8. Lines of new code: ~300–800 depending on the
-provider's API surface. Existing tests: none should need changes.
+Files touched (realistic count, from tracing what Mattermost would
+need against the current code):
+
+* `src/types/index.ts` — extend `AgentConfig.connector` union
+* `src/connectors/index.ts` — `CONNECTOR_ALLOWLIST`, factory `switch`,
+  re-export, and `getOperatorConnector` if applicable
+* `src/connectors/types.ts` — `<Kind>ConnectorEnv` interface
+* `src/connectors/<kind>/api.ts` — provider client
+* `src/connectors/<kind>/<kind>-connector.ts` — implementation
+* `src/connectors/<kind>/poller.ts` (or `gateway.ts` for push-inbound) —
+  inbound loop
+* `src/connectors/<kind>/media.ts` — only if `capabilities.media` is `true`
+* `src/cli/add-agent.ts` — extend `--connector` choices + help
+* `src/cli/setup.ts` — interactive wizard prompt + env-write path
+* `src/cli/enable-agent.ts` — preflight env-check copy
+* `src/bus/approval.ts` — extend the kind dispatch (PR4 c4 onward
+  removed the Telegram-hardcoded cast at line 185, so this is just
+  adding your kind to the switch)
+* `src/daemon/agent-manager.ts` — extend the connector dispatch in
+  `startAgent` if your kind needs construction args beyond what
+  `getConnector` covers (most don't)
+* `tests/unit/connectors/conformance.test.ts` — add cases for kind +
+  capability flags
+* `tests/unit/connectors/<kind>-connector.test.ts` — full unit suite
+* `tests/unit/connectors/index-allowlist.test.ts` — extend allowlist
+  expectation
+* `CHANGELOG.md` — `## [unreleased] — Pluggable Communications
+  Connectors (PR<n> — <kind>)` entry
+* `docs/architecture/connectors.md` — append a row to §12 if the audit
+  surfaced new capabilities, and §7 with your stateDir convention
+
+That is **13–15 files**, not "6–8". Lines of new code: ~600–1200
+depending on whether the provider needs a long-poll loop, a WS client,
+or a gateway protocol (RocketChat's DDP path is the heaviest).
+
+Existing tests that will need changes: at minimum
+`tests/unit/connectors/index-allowlist.test.ts` (extend the expected
+allowlist) and any test that imports the `ConnectorKind` literal type
+in a way that needs widening. The conformance test gets an additive
+case; legacy-compat-resolver and null-connector tests should not
+change.
 
 ---
 

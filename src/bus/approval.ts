@@ -8,6 +8,7 @@ import { validateApprovalCategory } from '../utils/validate.js';
 import { sendMessage } from './message.js';
 import { postActivity } from './system.js';
 import { getConnector } from '../connectors/index.js';
+import type { ConnectorKind } from '../connectors/index.js';
 
 /**
  * Build the inline keyboard posted to the activity channel alongside a
@@ -136,9 +137,11 @@ function pingAgentViaConnector(
   // Resolve the agent's connector via config.json + .env.
   // PR2 routes through getConnector (imported at top) instead of
   // constructing TelegramAPI directly. For 'none' or unconfigured, skip
-  // silently.
+  // silently. PR4 c6 (Codex P1.D) dropped the hard 'telegram' cast at
+  // the bottom of this function so non-Telegram kinds in config.connector
+  // dispatch correctly through the factory.
   const configPath = join(agentDir, 'config.json');
-  let connectorKind: 'telegram' | 'none' | undefined;
+  let connectorKind: ConnectorKind | undefined;
   if (existsSync(configPath)) {
     try {
       connectorKind = JSON.parse(readFileSync(configPath, 'utf-8')).connector;
@@ -151,20 +154,32 @@ function pingAgentViaConnector(
     return Promise.resolve();
   }
 
-  // Read .env for credentials (Telegram-flavored when kind === 'telegram'
-  // or undefined). Future connectors land here once they exist.
+  // Read .env for credentials. Today's only kinds (telegram, none) share
+  // the same `.env` convention — for non-telegram kinds the relevant
+  // env keys differ but the parser shape stays the same. The connector's
+  // factory is the one that knows which keys to read for the resolved
+  // kind, so we pass the full parsed env down and let it pick.
   const envPath = join(agentDir, '.env');
   if (!existsSync(envPath)) {
     return Promise.resolve();
   }
   const env = parseEnvFile(envPath);
-  const botToken = env.BOT_TOKEN;
-  const chatId = env.CHAT_ID;
-  if (!botToken || !chatId) {
-    console.warn(
-      `[approval] BOT_TOKEN or CHAT_ID missing in ${envPath} — skipping agent connector ping for ${approvalId}.`,
-    );
-    return Promise.resolve();
+
+  // Telegram-specific precheck: if we already know the kind is telegram
+  // (or absent → legacy inference), warn loudly when the .env is missing
+  // the credentials the Telegram connector needs. For other kinds we
+  // skip the precheck — the connector's send-or-validate path produces
+  // a more accurate error for that provider. This still works today
+  // because telegram is the only non-'none' kind in CONNECTOR_ALLOWLIST,
+  // but the structure now scales additively as kinds land.
+  const resolvedKind: ConnectorKind = connectorKind ?? 'telegram';
+  if (resolvedKind === 'telegram') {
+    if (!env.BOT_TOKEN || !env.CHAT_ID) {
+      console.warn(
+        `[approval] BOT_TOKEN or CHAT_ID missing in ${envPath} — skipping agent connector ping for ${approvalId}.`,
+      );
+      return Promise.resolve();
+    }
   }
 
   const lines = [
@@ -179,12 +194,9 @@ function pingAgentViaConnector(
   lines.push('', 'Approve via the orchestrator chat (Approve/Deny buttons) or the dashboard.');
   const message = lines.join('\n');
 
-  // Resolve kind for getConnector. Absent → 'telegram' (matches PR1's
-  // legacy inference: env presence implies telegram). The 'none' early-
-  // return above already handled the opt-out path.
-  const resolvedKind: 'telegram' = (connectorKind ?? 'telegram') as 'telegram';
   // getConnector unpacks per-kind env. For telegram it reads
-  // BOT_TOKEN/CHAT_ID/ALLOWED_USER from the passed env dict.
+  // BOT_TOKEN/CHAT_ID/ALLOWED_USER from the passed env dict; future
+  // kinds will read their own env keys from the same dict.
   const connector = getConnector(resolvedKind, agentDir, env);
   return connector.sendMessage(message, { parseMode: 'plain' })
     .then(() => undefined)

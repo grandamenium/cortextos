@@ -850,12 +850,18 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
-   * Send the next AskUserQuestion to Telegram.
+   * Send the next AskUserQuestion to the operator's connector.
    * Reads ask-state.json and builds the question message and inline keyboard.
+   *
+   * PR4 c6 (Codex P1.E): gate on connector OR legacy Telegram handle —
+   * the dispatch below already preferred `this.connector` when present,
+   * but this preflight check was Telegram-only and silently dropped
+   * AskUser flows on connector-only agents (e.g. an agent with
+   * `config.connector: 'mattermost'` would never see question 2+).
    */
   async sendNextQuestion(questionIdx: number): Promise<void> {
-    if (!this.telegramApi || !this.chatId) {
-      this.log('sendNextQuestion: no Telegram API or chatId configured');
+    if (!this.connector && (!this.telegramApi || !this.chatId)) {
+      this.log('sendNextQuestion: no connector or Telegram API/chatId configured');
       return;
     }
 
@@ -910,9 +916,10 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       // to the legacy `telegramApi`/`chatId` fields only when the connector
       // path is absent. The connector's sendMessage takes a generic
       // `buttons` option that TelegramConnector translates to inline_keyboard.
+      // PR4 c6 narrowed the preflight gate to allow connector-only agents.
       if (this.connector) {
         await this.connector.sendMessage(msg, { buttons: keyboard });
-      } else {
+      } else if (this.telegramApi && this.chatId) {
         await this.telegramApi.sendMessage(this.chatId, msg, { inline_keyboard: keyboard });
       }
       this.log(`Sent question ${questionIdx + 1}/${totalQ} to operator connector`);
