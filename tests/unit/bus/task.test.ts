@@ -336,6 +336,31 @@ describe('Cross-org task lifecycle', () => {
     expect(warn).toContain('OrgC');
   });
 
+  it('findTaskFile instance-root fallback: finds tasks at ctxRoot/tasks/ when absent from all orgs', () => {
+    // Tasks created without an org land at <ctxRoot>/tasks/ rather than
+    // <ctxRoot>/orgs/<org>/tasks/. findTaskFile must check this path as a
+    // final fallback so complete-task / update-task do not throw "not found".
+    const taskId = 'task_instance_001';
+    const instanceTaskDir = join(testDir, 'tasks');
+    mkdirSync(instanceTaskDir, { recursive: true });
+    writeFileSync(
+      join(instanceTaskDir, `${taskId}.json`),
+      JSON.stringify({
+        id: taskId,
+        title: 'Instance-root task',
+        status: 'in_progress',
+        org: '',
+        updated_at: '2026-05-14T17:00:00Z',
+        created_at: '2026-05-14T17:00:00Z',
+      }),
+      'utf-8',
+    );
+
+    const result = findTaskFile(orgAPaths, taskId);
+    expect(result).not.toBeNull();
+    expect(result).toBe(join(instanceTaskDir, `${taskId}.json`));
+  });
+
   it('listTasks scoping regression: must remain single-org, NO cross-org leakage', () => {
     // CRITICAL regression guard. Scoping contract:
     // listTasks must remain single-org by default — cross-org listing

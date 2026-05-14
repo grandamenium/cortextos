@@ -249,13 +249,17 @@ export function checkTaskDependencies(
  * cross-org assignment required a manual workaround dance where the filer
  * ran update/complete on behalf of the assignee.
  *
- * This helper fixes that by using a two-tier lookup:
+ * This helper fixes that by using a three-tier lookup:
  *
  *   1. Fast path: check the caller's OWN org tasks dir first. Most tasks
  *      live there and this check pays zero scan cost when it hits.
  *   2. Fallback: scan every sibling org under `<ctxRoot>/orgs/*` for a
  *      matching task file. Only runs when the fast path missed, so
  *      same-org operations take no perf hit.
+ *   3. Instance-root fallback: check `<ctxRoot>/tasks/` for tasks created
+ *      without an org (e.g. by daemon-level agents that run at instance
+ *      root rather than under an org subdirectory). This prevents
+ *      complete-task from throwing "not found in any org" for system tasks.
  *
  * Task IDs are generated as `task_<epoch_ms>_<3digit_random>` so real
  * collisions are effectively impossible — but if the scan ever finds the
@@ -289,7 +293,12 @@ export function findTaskFile(paths: BusPaths, taskId: string): string | null {
     return null; // orgs/ missing or unreadable
   }
 
-  if (matches.length === 0) return null;
+  if (matches.length === 0) {
+    // Instance-root fallback: tasks created without an org land directly at
+    // <ctxRoot>/tasks/ rather than <ctxRoot>/orgs/<org>/tasks/.
+    const instanceRoot = join(paths.ctxRoot, 'tasks', `${taskId}.json`);
+    return existsSync(instanceRoot) ? instanceRoot : null;
+  }
   if (matches.length > 1) {
     const orgList = matches.map((m) => m.org).join(', ');
     console.warn(
