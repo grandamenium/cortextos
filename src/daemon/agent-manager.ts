@@ -26,6 +26,7 @@ import { processMediaMessage } from '../telegram/media.js';
 import { recordAndMaybeEscalate as recordSpawnFailureAndMaybeEscalate } from './spawn-failure-tracker.js';
 import { recordCronDispatchAndMaybeEscalate } from './cron-dispatch-tracker.js';
 import { HeartbeatStalenessWatcher } from './heartbeat-staleness-watcher.js';
+import { loadDaemonConfig } from '../utils/daemon-config.js';
 
 type LogFn = (msg: string) => void;
 
@@ -1043,16 +1044,20 @@ export class AgentManager {
 
     // Fleet-resilience plan #1 — feed the cron-dispatch storm tracker on
     // any dispatch failure. ctxRoot + frameworkRoot are captured from the
-    // AgentManager instance so the scheduler itself stays agnostic.
+    // AgentManager instance so the scheduler itself stays agnostic. Threshold
+    // is read lazily from ~/.cortextos/<instance>/config/daemon.json — opt-in
+    // override of the default (3 distinct crons / 30 min).
     const ctxRoot = this.ctxRoot;
     const frameworkRoot = this.frameworkRoot;
+    const instanceId = this.instanceId;
     const scheduler = new CronScheduler({
       agentName,
       onFire,
       logger: (msg) => console.log(`[daemon] ${msg}`),
       onDispatchFailed: (cronName: string) => {
         try {
-          recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, agentName, cronName);
+          const threshold = loadDaemonConfig(instanceId).cron_dispatch_storm_threshold;
+          recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, agentName, cronName, threshold);
         } catch (err) {
           console.error(`[daemon] cron-dispatch tracker threw (non-fatal): ${err}`);
         }

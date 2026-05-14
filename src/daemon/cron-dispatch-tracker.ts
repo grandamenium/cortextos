@@ -91,9 +91,13 @@ export function countRecentDistinctCrons(history: CronDispatchHistory, agent: st
   return [...seen];
 }
 
-export function shouldEscalate(history: CronDispatchHistory, agent: string): boolean {
+export function shouldEscalate(
+  history: CronDispatchHistory,
+  agent: string,
+  threshold: number = CRON_DISPATCH_DISTINCT_THRESHOLD,
+): boolean {
   const distinct = countRecentDistinctCrons(history, agent);
-  if (distinct.length < CRON_DISPATCH_DISTINCT_THRESHOLD) return false;
+  if (distinct.length < threshold) return false;
   if (history.lastAlertAt) {
     const cooldownEnd = Date.parse(history.lastAlertAt) + CRON_DISPATCH_COOLDOWN_MS;
     if (Date.now() < cooldownEnd) return false;
@@ -128,10 +132,14 @@ export function recordCronDispatchAndMaybeEscalate(
   frameworkRoot: string,
   agent: string,
   cronName: string,
+  /** Optional override for CRON_DISPATCH_DISTINCT_THRESHOLD. Falls back to
+   *  the default when undefined. Wired from daemon.json's
+   *  `cron_dispatch_storm_threshold` field. */
+  threshold?: number,
 ): { escalated: boolean; history: CronDispatchHistory } {
   const history = appendEvent(readCronDispatchHistory(ctxRoot), agent, cronName);
 
-  if (!shouldEscalate(history, agent)) {
+  if (!shouldEscalate(history, agent, threshold)) {
     writeCronDispatchHistory(ctxRoot, history);
     return { escalated: false, history };
   }

@@ -42,7 +42,26 @@ Detection-side events emitted by daemon watchdogs and user-foreground CLIs (e.g.
 | `heartbeat_recovered` | `src/daemon/heartbeat-staleness-watcher.ts` | heartbeat ts updates after a stale period — clears watcher state | `agent`, `was_stale_for_seconds` |
 | `doctor_delta_detected` | `src/daemon/doctor-cron.ts` | periodic doctor run sees a `pass→warn`, `pass→fail`, `warn→fail` transition (or first run after daemon start with current warn/fail) | `new_failures` (string[]), `new_warnings` (string[]), `resolved` (string[]) |
 
-CLI emissions today are surfaced as a single console line (`event=port_collision_recovered port=... fallback_port=... holder_pid=...`) rather than a JSONL event, because the dashboard CLI runs in the operator's shell rather than under an agent identity. When the dashboard is supervised by the daemon (future), the same emission becomes a structured `logEvent` call under a system pseudo-agent.
+### Transport: stderr structured lines today, JSONL later
+
+Both the dashboard CLI and the daemon-side watchdogs surface these events as **stderr-style structured log lines** rather than `cortextos bus log-event` JSONL. The shape on the wire is a single stable line per event:
+
+```
+[<source>] <action> <key>=<value> <key>=<value> ...
+```
+
+Examples:
+
+```
+[heartbeat-watcher] heartbeat_stale_detected agent="boss" age_seconds=672 threshold_seconds=600
+[heartbeat-watcher] heartbeat_recovered agent="boss" was_stale_for_seconds=240
+[doctor-cron] doctor_delta_detected new_failures=1 new_warnings=0 resolved=0
+event=port_collision_recovered port=3010 fallback_port=3020 holder_pid=54321
+```
+
+The reason for stderr-only today: `logEvent` requires `(BusPaths, agentName, org)` and these watchers run in daemon/CLI scope, not under an agent identity. Once a "daemon" pseudo-agent identity is plumbed (separate follow-up), the same emissions become structured JSONL queryable via `cortextos bus read-agent-events --event <action>` and this table becomes the canonical contract.
+
+**Until then:** to query these events, grep the daemon log: `grep -E 'heartbeat_(stale_detected|recovered)' ~/.cortextos/<instance>/logs/daemon.log` (or whatever your PM2 `out_file` resolves to).
 
 ## State-delta semantics
 

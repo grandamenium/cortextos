@@ -277,4 +277,20 @@ describe('recordCronDispatchAndMaybeEscalate', () => {
     expect(r1.escalated).toBe(false);
     expect(r1.history.events.length).toBe(1);
   });
+
+  it('threshold override (from daemon.json) tightens the gate', () => {
+    // Default threshold is 3; override to 2 → escalates on the second distinct cron.
+    expect(recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'a', 2).escalated).toBe(false);
+    const r = recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'b', 2);
+    expect(r.escalated).toBe(true);
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
+  });
+
+  it('threshold override (looser) suppresses an alert that would have fired at default', () => {
+    recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'a', 5);
+    recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'b', 5);
+    const r = recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'c', 5);
+    expect(r.escalated).toBe(false); // 3 distinct, but threshold is 5
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
 });
