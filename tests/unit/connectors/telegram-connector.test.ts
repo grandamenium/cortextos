@@ -361,6 +361,133 @@ describe('TelegramConnector', () => {
       fs.rmSync(downloadDir, { recursive: true, force: true });
     });
 
+    it('rejects media when declared file_size exceeds perFileBytes cap (Codex P0.2)', async () => {
+      // Pre-getFile reject: msg.<media>.file_size on the update tells us
+      // the file is too large; the connector returns null from
+      // processMediaMessage and the connector emits a text-only fallback.
+      // Confirms no `getFile` call was made (declared-size cap dropped it
+      // before hitting Telegram).
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-cap-'));
+      const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-cap-dl-'));
+
+      const bigPhotoUpdate = {
+        update_id: 1,
+        message: {
+          message_id: 100,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          caption: 'too big',
+          // 100 MB declared — far above the 1 MB cap configured below
+          photo: [{ file_id: 'big_id', file_size: 100 * 1024 * 1024, width: 4000, height: 3000 }],
+        },
+      };
+
+      let getFileCalls = 0;
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          return { body: { ok: true, result: getFileCalls === 0 ? [bigPhotoUpdate] : [] } };
+        }
+        if (url.includes('/getFile')) {
+          getFileCalls++;
+          return { body: { ok: true, result: { file_path: 'photos/big.jpg' } } };
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      }, { downloadDir, mediaLimits: { perFileBytes: 1 * 1024 * 1024 } });
+
+      const received: any[] = [];
+      vi.useRealTimers();
+      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await new Promise((r) => setTimeout(r, 200));
+      await c.stopPolling();
+
+      expect(received).toHaveLength(1);
+      // text-only fallback: media should be undefined, caption flows through as text
+      expect(received[0].media).toBeUndefined();
+      expect(received[0].text).toBe('too big');
+      // Critical: getFile was NEVER called — the precheck rejected before
+      // hitting Telegram's API for the file path.
+      expect(getFileCalls).toBe(0);
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(downloadDir, { recursive: true, force: true });
+    });
+
+    it('LRU-evicts oldest files when totalQuotaBytes would be exceeded (Codex P0.2)', async () => {
+      // Pre-seed downloadDir with two files near the quota; download a new
+      // photo that pushes us over. Expect the older file to be unlinked.
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-quota-'));
+      const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-quota-dl-'));
+
+      // Seed two 4KB files; quota 12KB. Incoming download ~5KB.
+      // 4 + 4 = 8KB used → +5KB incoming = 13KB > 12KB → evict the
+      // oldest (4KB), 4KB used + 5KB incoming = 9KB ≤ 12KB → stop.
+      // Newer file should survive.
+      const oldFile = path.join(downloadDir, 'old.bin');
+      const newerFile = path.join(downloadDir, 'newer.bin');
+      fs.writeFileSync(oldFile, Buffer.alloc(4000));
+      // Touch with earlier mtime
+      const oldMtime = new Date(Date.now() - 60000);
+      fs.utimesSync(oldFile, oldMtime, oldMtime);
+      fs.writeFileSync(newerFile, Buffer.alloc(4000));
+
+      const photoUpdate = {
+        update_id: 1,
+        message: {
+          message_id: 100,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          caption: 'fits after eviction',
+          photo: [{ file_id: 'small_id', file_size: 5000, width: 800, height: 600 }],
+        },
+      };
+
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          return { body: { ok: true, result: [photoUpdate] } };
+        }
+        if (url.includes('/getFile')) {
+          return { body: { ok: true, result: { file_path: 'photos/small.jpg' } } };
+        }
+        if (url.includes('file/bot')) {
+          // ~5KB body so quota check (16KB used + 5KB > 12KB) triggers eviction
+          return { body: 'x'.repeat(5000) as any };
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      }, { downloadDir, mediaLimits: { perFileBytes: 50 * 1024, totalQuotaBytes: 12 * 1024 } });
+
+      vi.useRealTimers();
+      await c.startPolling({ onMessage: () => {} }, { stateDir });
+      await new Promise((r) => setTimeout(r, 200));
+      await c.stopPolling();
+
+      // Oldest file evicted; newer file kept.
+      expect(fs.existsSync(oldFile)).toBe(false);
+      expect(fs.existsSync(newerFile)).toBe(true);
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(downloadDir, { recursive: true, force: true });
+    });
+
     it('emits text-only NormalizedMessage when downloadDir is NOT set, even for media messages', async () => {
       const fs = await import('fs');
       const os = await import('os');

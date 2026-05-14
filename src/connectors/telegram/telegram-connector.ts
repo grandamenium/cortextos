@@ -12,7 +12,7 @@ import type {
 } from '../types.js';
 import { TelegramAPI } from './api.js';
 import { TelegramPoller } from './poller.js';
-import { processMediaMessage, type ProcessedMedia } from './media.js';
+import { processMediaMessage, type ProcessedMedia, type MediaLimits } from './media.js';
 import type {
   NormalizedMedia,
 } from '../types.js';
@@ -80,6 +80,7 @@ export class TelegramConnector implements MessageConnector {
   private readonly agentDir: string;
   private readonly pollerNamespace?: string;
   private readonly downloadDir?: string;
+  private readonly mediaLimits: MediaLimits;
   private poller: TelegramPoller | null = null;
   /**
    * Monotonic generation counter incremented on every `stopPolling()`.
@@ -110,11 +111,18 @@ export class TelegramConnector implements MessageConnector {
    * flags on inbound messages are ignored and a text-only normalized
    * message is emitted. Added in PR4 of the pluggable-connectors
    * stack (first-class `NormalizedMessage.media`).
+   *
+   * `opts.mediaLimits`: DoS-protection caps for the media pipeline
+   * (PR4 c5 / Codex P0.2). Defaults: 20 MB per file, 500 MB total
+   * quota per downloadDir. Override to `{ perFileBytes: undefined,
+   * totalQuotaBytes: undefined }` to disable both (tests that need
+   * full backwards compatibility). Both limits enforced inside
+   * `processMediaMessage`. See src/connectors/telegram/media.ts.
    */
   constructor(
     agentDir: string,
     env: TelegramConnectorEnv,
-    opts?: { pollerNamespace?: string; downloadDir?: string },
+    opts?: { pollerNamespace?: string; downloadDir?: string; mediaLimits?: MediaLimits },
   ) {
     this.agentDir = agentDir;
     this.api = new TelegramAPI(env.BOT_TOKEN);
@@ -122,6 +130,19 @@ export class TelegramConnector implements MessageConnector {
     this.allowedUserId = env.ALLOWED_USER ? parseInt(env.ALLOWED_USER, 10) : undefined;
     this.pollerNamespace = opts?.pollerNamespace;
     this.downloadDir = opts?.downloadDir;
+    // Defaults: 20 MB per file (matches Telegram's stated bot-API ceiling
+    // for downloads); 500 MB total quota per downloadDir (sane fallback
+    // — agents that need more override). `undefined` in opts.mediaLimits
+    // means "use defaults"; explicit `undefined` on a sub-field disables
+    // that specific cap.
+    this.mediaLimits = {
+      perFileBytes: opts?.mediaLimits && 'perFileBytes' in opts.mediaLimits
+        ? opts.mediaLimits.perFileBytes
+        : 20 * 1024 * 1024,
+      totalQuotaBytes: opts?.mediaLimits && 'totalQuotaBytes' in opts.mediaLimits
+        ? opts.mediaLimits.totalQuotaBytes
+        : 500 * 1024 * 1024,
+    };
   }
 
   /**
@@ -285,7 +306,7 @@ export class TelegramConnector implements MessageConnector {
         const downloadDir = this.downloadDir;
         let processed = null;
         try {
-          processed = await processMediaMessage(tgMsg, this.api, downloadDir);
+          processed = await processMediaMessage(tgMsg, this.api, downloadDir, this.mediaLimits);
         } catch (err) {
           console.error('[telegram-connector] media processing error:', err);
         }

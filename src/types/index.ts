@@ -569,33 +569,39 @@ export interface TelegramPhotoSize {
   file_id: string;
   width: number;
   height: number;
+  file_size?: number;
 }
 
 export interface TelegramDocument {
   file_id: string;
   file_name?: string;
+  file_size?: number;
 }
 
 export interface TelegramVoice {
   file_id: string;
   duration: number;
+  file_size?: number;
 }
 
 export interface TelegramAudio {
   file_id: string;
   duration: number;
   file_name?: string;
+  file_size?: number;
 }
 
 export interface TelegramVideo {
   file_id: string;
   duration: number;
   file_name?: string;
+  file_size?: number;
 }
 
 export interface TelegramVideoNote {
   file_id: string;
   duration: number;
+  file_size?: number;
 }
 
 // Task Management Report Types

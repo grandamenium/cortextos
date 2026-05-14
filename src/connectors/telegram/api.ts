@@ -550,14 +550,44 @@ export class TelegramAPI {
 
   /**
    * Download a file from Telegram servers.
+   *
+   * `opts.maxBytes` enforces a hard ceiling at TWO points: the
+   * `Content-Length` header BEFORE the body is read (cheapest reject)
+   * AND the materialized buffer after read (defensive — covers servers
+   * that misreport Content-Length). When the cap is hit, the response
+   * stream is cancelled and an error is thrown so the caller can fall
+   * back to text-only delivery. Added in PR4 c5 (Codex P0.2 —
+   * UNBOUNDED_MEDIA_DOWNLOAD_DOS).
+   *
+   * Note: this still calls `arrayBuffer()` so the whole file lands in
+   * memory before the cap re-check. A future PR replaces this with a
+   * streaming pipeline (fetch ReadableStream → write stream with byte
+   * counting). For now the Content-Length precheck eliminates the
+   * worst case (server-declared 1 GB file) without that refactor.
    */
-  async downloadFile(filePath: string): Promise<Buffer> {
+  async downloadFile(filePath: string, opts?: { maxBytes?: number }): Promise<Buffer> {
     const url = `https://api.telegram.org/file/bot${this.getToken()}/${filePath}`;
     const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
     if (!response.ok) {
       throw new Error(`Failed to download file: ${response.status}`);
     }
+    if (opts?.maxBytes !== undefined) {
+      const contentLength = response.headers.get('content-length');
+      if (contentLength) {
+        const declared = parseInt(contentLength, 10);
+        if (Number.isFinite(declared) && declared > opts.maxBytes) {
+          // Drop the body without reading. Best-effort — older Node
+          // builds may not support cancel(); the await on the
+          // arrayBuffer() below is skipped either way.
+          await response.body?.cancel?.().catch(() => {});
+          throw new Error(`File exceeds max bytes (declared ${declared} > cap ${opts.maxBytes})`);
+        }
+      }
+    }
     const arrayBuffer = await response.arrayBuffer();
+    if (opts?.maxBytes !== undefined && arrayBuffer.byteLength > opts.maxBytes) {
+      throw new Error(`File exceeds max bytes (actual ${arrayBuffer.byteLength} > cap ${opts.maxBytes})`);
+    }
     return Buffer.from(arrayBuffer);
   }
 
