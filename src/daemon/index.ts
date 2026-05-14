@@ -1,5 +1,7 @@
 import { AgentManager } from './agent-manager.js';
 import { IPCServer } from './ipc-server.js';
+import { DoctorCron } from './doctor-cron.js';
+import { loadDaemonConfig } from '../utils/daemon-config.js';
 import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
@@ -221,6 +223,9 @@ function handleFatal(
 class Daemon {
   private agentManager: AgentManager | null = null;
   private ipcServer: IPCServer | null = null;
+  private doctorCron: DoctorCron | null = null;
+  /** Fleet-resilience plan #4 / #8 — daemon start time, exposed for downstream watchers. */
+  readonly daemonStartedAt: Date = new Date();
   private instanceId: string;
   private ctxRoot: string;
 
@@ -294,6 +299,20 @@ class Daemon {
     // Discover and start agents
     await this.agentManager.discoverAndStart();
 
+    // Fleet-resilience plan #4 — start the periodic doctor cron. Picks up
+    // the interval from ~/.cortextos/<instance>/config/daemon.json if
+    // present (lazy-loaded; zero-config installs use defaults). Set
+    // doctor_cron_interval_minutes=0 to disable.
+    const daemonCfg = loadDaemonConfig(this.instanceId);
+    this.doctorCron = new DoctorCron({
+      ctxRoot: this.ctxRoot,
+      frameworkRoot,
+      instanceId: this.instanceId,
+      intervalMinutes: daemonCfg.doctor_cron_interval_minutes ?? 30,
+      logger: (msg) => console.error(`[daemon] ${msg}`),
+    });
+    this.doctorCron.start();
+
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
     // Handle shutdown signals
@@ -305,6 +324,9 @@ class Daemon {
         }
       } catch (err) {
         console.error('[daemon] Error during shutdown:', err);
+      }
+      if (this.doctorCron) {
+        this.doctorCron.stop();
       }
       if (this.ipcServer) {
         this.ipcServer.stop();
