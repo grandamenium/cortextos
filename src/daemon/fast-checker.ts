@@ -842,8 +842,17 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         }]);
       }
 
-      await this.telegramApi.sendMessage(this.chatId, msg, { inline_keyboard: keyboard });
-      this.log(`Sent question ${questionIdx + 1}/${totalQ} to Telegram`);
+      // PR2 of pluggable-connectors: route through the active connector
+      // when wired (covers no-Telegram agents transparently). Falls back
+      // to the legacy `telegramApi`/`chatId` fields only when the connector
+      // path is absent. The connector's sendMessage takes a generic
+      // `buttons` option that TelegramConnector translates to inline_keyboard.
+      if (this.connector) {
+        await this.connector.sendMessage(msg, { buttons: keyboard });
+      } else {
+        await this.telegramApi.sendMessage(this.chatId, msg, { inline_keyboard: keyboard });
+      }
+      this.log(`Sent question ${questionIdx + 1}/${totalQ} to operator connector`);
     } catch (err) {
       this.log(`sendNextQuestion error: ${err}`);
     }
@@ -1028,7 +1037,11 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       this.saveCtxCircuit();
       const msg = `Context circuit breaker TRIPPED for ${this.agent.name}: 3 restarts in 15min. Watchdog paused 30min. Check logs/${this.agent.name}/restarts.log for details.`;
       this.log(msg);
-      if (this.telegramApi && this.chatId) {
+      // PR2 of pluggable-connectors: route through active connector.
+      // Falls back to legacy fields for any caller that hasn't migrated.
+      if (this.connector) {
+        this.connector.sendMessage(msg).catch(() => {});
+      } else if (this.telegramApi && this.chatId) {
         this.telegramApi.sendMessage(this.chatId, msg).catch(() => {});
       }
       return;

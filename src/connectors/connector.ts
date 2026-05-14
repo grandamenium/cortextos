@@ -45,8 +45,16 @@ export interface MessageConnector {
    * happens when stopPolling() is called). Matches the existing
    * `poller.start().catch(...)` fire-and-forget pattern at
    * `src/daemon/agent-manager.ts:455-463` so `startAgent` does not hang.
+   *
+   * `opts.stateDir`: directory where the connector persists its inbound
+   * polling state (e.g. Telegram's `.telegram-offset` file). When
+   * omitted, the connector uses an implementation-specific default
+   * (Telegram falls back to `agentDir`). The daemon should pass
+   * `<ctxRoot>/state/<name>/` explicitly to keep offset files in their
+   * historical location across the PR2 wire migration. Added in PR2 of
+   * the pluggable-connectors stack (Codex Q5 lock).
    */
-  startPolling(handlers: PollingHandlers): Promise<void>;
+  startPolling(handlers: PollingHandlers, opts?: { stateDir?: string }): Promise<void>;
   stopPolling(): Promise<void>;
 
   /**

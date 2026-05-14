@@ -166,12 +166,13 @@ export class TelegramConnector implements MessageConnector {
    * interface contract holds, and PR2 will migrate the daemon to use
    * it once hook + CLI generalization is in place.
    */
-  async startPolling(handlers: PollingHandlers): Promise<void> {
-    // stateDir: kept inside agentDir for PR1 simplicity (path matches
-    // tests' mock-server invocation pattern). The production daemon
-    // path uses `<ctxRoot>/state/<name>/` and constructs its own
-    // poller; this implementation is for tests + PR2's migration.
-    const stateDir = this.agentDir;
+  async startPolling(handlers: PollingHandlers, opts?: { stateDir?: string }): Promise<void> {
+    // PR2 Codex Q5 lock: caller can pass `stateDir` explicitly (the daemon
+    // does, to preserve the historical `<ctxRoot>/state/<name>/.telegram-offset`
+    // path across the wire migration from direct TelegramPoller construction
+    // to connector.startPolling). When omitted, fall back to agentDir — same
+    // PR1 behavior for tests that construct TelegramConnector standalone.
+    const stateDir = opts?.stateDir ?? this.agentDir;
     this.poller = new TelegramPoller(this.api, stateDir);
 
     this.poller.onMessage((tgMsg: TelegramMessage) => {

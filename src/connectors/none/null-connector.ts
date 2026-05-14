@@ -42,8 +42,9 @@ export class NullConnector implements MessageConnector {
     return { id: 'noop', ts: Date.now() };
   }
 
-  async startPolling(_handlers: PollingHandlers): Promise<void> {
+  async startPolling(_handlers: PollingHandlers, _opts?: { stateDir?: string }): Promise<void> {
     // No-op. Resolves immediately; no background loop to schedule.
+    // Signature kept in sync with the interface (PR2 added opts arg).
   }
 
   async stopPolling(): Promise<void> {

@@ -216,15 +216,28 @@ export interface AgentConfig {
    */
   require_remote_approval?: boolean;
   /**
-   * Whether this agent runs a Telegram poller. Defaults to true when absent
-   * (preserves existing behaviour). Set to false on specialist agents that
-   * should not own a Telegram bot — only the designated orchestrator agent
-   * should poll. Requires BOT_TOKEN + CHAT_ID to already be unset or the
-   * poller will be skipped regardless.
+   * Whether this agent runs an inbound polling loop on its connector.
+   * Defaults to true when absent. Set to `false` on specialist agents
+   * that should not own a bot — only the designated orchestrator agent
+   * should poll. Connector-agnostic (replaces the legacy
+   * `telegram_polling` field below).
    *
-   * Note: for connectors other than `'telegram'`, this field is IGNORED
-   * (not an error) — the generic `inbound_polling` successor field lands
-   * with PR2 of the connector stack.
+   * Added in PR2 of the pluggable-connectors stack. When both
+   * `inbound_polling` and `telegram_polling` are set, `inbound_polling`
+   * takes precedence. The legacy field is honored for one release cycle
+   * for backwards compat.
+   */
+  inbound_polling?: boolean;
+  /**
+   * @deprecated Use `inbound_polling` (introduced in PR2 of the
+   * pluggable-connectors stack). Retained for one release cycle —
+   * agents on disk that pre-date `inbound_polling` keep working. When
+   * both fields are set, `inbound_polling` wins.
+   *
+   * Original semantics: whether this agent runs a Telegram poller.
+   * Defaults to true when absent. Requires BOT_TOKEN + CHAT_ID to be
+   * set or the poller is skipped regardless. For non-Telegram
+   * connectors this field is IGNORED, not an error.
    */
   telegram_polling?: boolean;
 }
