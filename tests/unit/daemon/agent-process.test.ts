@@ -493,6 +493,30 @@ describe('AgentProcess - issue #07 follow-up #5: getStatusDeep wiring', () => {
     expect(s.lastSpawnFailureAgeSeconds).toBeUndefined();
   });
 
+  it('onStatusChanged is multi-subscriber — every registered handler fires', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    const calls: string[] = [];
+    ap.onStatusChanged((s) => calls.push(`a:${s.status}`));
+    ap.onStatusChanged((s) => calls.push(`b:${s.status}`));
+    ap.onStatusChanged((s) => calls.push(`c:${s.status}`));
+    await ap.start();
+    // start() runs notifyStatusChange for each transition; we just need at
+    // least one fan-out to confirm all three handlers fired.
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(calls.some((c) => c.startsWith('a:'))).toBe(true);
+    expect(calls.some((c) => c.startsWith('b:'))).toBe(true);
+    expect(calls.some((c) => c.startsWith('c:'))).toBe(true);
+  });
+
+  it('a throwing onStatusChanged handler does not abort the rest of the chain', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    const calls: string[] = [];
+    ap.onStatusChanged(() => { throw new Error('boom'); });
+    ap.onStatusChanged((s) => calls.push(`b:${s.status}`));
+    await ap.start();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+  });
+
   it('getStatusDeep() returns crash-budget + null-spawn-failure even with empty state dir', async () => {
     const ap = new AgentProcess('alice', mockEnv, {});
     await ap.start();

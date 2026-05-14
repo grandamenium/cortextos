@@ -131,14 +131,18 @@ export class HeartbeatStalenessWatcher {
     if (justWentStale) {
       this.staleSince = nowMs;
     }
-    // Re-alert cadence: only fire on first transition OR when realertMs has
-    // elapsed since the last alert. Without this, the operator-alert cooldown
-    // would still gate sends but the watcher would call emit on every tick.
-    const dueForAlert =
-      this.lastAlertAt === null || (nowMs - this.lastAlertAt) >= this.realertMs;
-    if (!dueForAlert) return;
+    // Re-alert cadence — the watcher owns gating. Use strict `<` to mirror
+    // operator-alert's boundary semantics: both fire AT exactly the cadence.
+    // We pass a small cooldown to operator-alert (1s) so its state file still
+    // records `lastSentAt[key]` for daemon-restart audit, but doesn't itself
+    // gate (would double-gate at the same boundary with inconsistent < vs >=).
+    const elapsed = this.lastAlertAt === null ? Infinity : nowMs - this.lastAlertAt;
+    if (elapsed < this.realertMs) return;
 
-    const ageDisplay = ageSeconds < 0 ? 'unknown' : `${Math.floor(ageSeconds / 60)}m ${ageSeconds % 60}s`;
+    const filePresent = ageSeconds >= 0;
+    const ageDisplay = filePresent
+      ? `${Math.floor(ageSeconds / 60)}m ${ageSeconds % 60}s`
+      : 'heartbeat file missing (≥2 consecutive reads)';
     const message =
       `⚠️ Agent "${this.agentName}" heartbeat stale: ${ageDisplay} (threshold ${Math.floor(thresholdSeconds / 60)}m)\n` +
       (task ? `Last task: "${task}"\n` : '') +
@@ -150,7 +154,7 @@ export class HeartbeatStalenessWatcher {
       agent: this.agentName,
       text: message,
       cooldownKey: `heartbeat_stale-${this.agentName}`,
-      cooldownMs: this.realertMs,
+      cooldownMs: 1_000, // negligible — watcher.lastAlertAt is the real gate
     });
     this.lastAlertAt = nowMs;
     this.logger(

@@ -60,7 +60,11 @@ export class AgentProcess {
   private resolveExit: (() => void) | null = null;
   private dedup: MessageDedup;
   private log: LogFn;
-  private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // Multi-subscriber (fleet-resilience #2): the AgentManager now registers
+  // two handlers — the existing crash/halt Telegram + a new heartbeat-watcher
+  // halt-stop. Each subscriber is invoked with try/catch so one throwing
+  // doesn't break the rest of the status-change chain.
+  private onStatusChange: Array<(status: AgentStatus) => void> = [];
   // Issue #07 fix: catch-side spawn failure recovery. Until this callback,
   // `posix_spawnp failed` from pty.spawn() left the agent silently stuck in
   // 'crashed' state (no retry, no escalation). AgentManager registers this
@@ -376,7 +380,7 @@ export class AgentProcess {
    * Register a status change handler.
    */
   onStatusChanged(handler: (status: AgentStatus) => void): void {
-    this.onStatusChange = handler;
+    this.onStatusChange.push(handler);
   }
 
   /**
@@ -885,8 +889,14 @@ export class AgentProcess {
   }
 
   private notifyStatusChange(): void {
-    if (this.onStatusChange) {
-      this.onStatusChange(this.getStatus());
+    if (this.onStatusChange.length === 0) return;
+    const status = this.getStatus();
+    for (const handler of this.onStatusChange) {
+      try {
+        handler(status);
+      } catch (err) {
+        this.log(`[agent-process] status-change handler threw (non-fatal): ${err}`);
+      }
     }
   }
 }

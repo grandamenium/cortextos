@@ -205,6 +205,22 @@ describe('HeartbeatStalenessWatcher', () => {
     expect(() => w.stop()).not.toThrow();
   });
 
+  it('file-missing path renders a clearer alert text', () => {
+    const w = makeWatcher();
+    writeHeartbeat(30_000); // arm
+    w.tick();
+    expect(w.isArmed).toBe(true);
+    rmSync(join(ctxRoot, 'state', AGENT), { recursive: true, force: true });
+    w.tick(); // first miss
+    w.tick(); // second miss → alert
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
+    const call = spawnSyncMock.mock.calls[0];
+    const args = call[1] as string[];
+    const dataArg = args.find((a) => a.startsWith('text='));
+    expect(dataArg).toBeDefined();
+    expect(dataArg).toContain('heartbeat file missing');
+  });
+
   it('cooldown elapsed BUT heartbeat already recovered means no re-alert', () => {
     const w = makeWatcher();
     writeHeartbeat(11 * 60_000);

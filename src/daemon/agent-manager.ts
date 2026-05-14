@@ -354,6 +354,13 @@ export class AgentManager {
     // Per-agent ownership; lifecycle piggybacked on stopAgent's existing
     // teardown loop. Skipped entirely when the operator sets threshold=0
     // (e.g. on agents with intentionally infrequent heartbeats).
+    //
+    // We also subscribe to status changes to stop the watcher when the agent
+    // is permanently halted. We deliberately keep the watcher RUNNING during
+    // a 'crashed' state, because a prolonged crash-loop without recovery is
+    // exactly the staleness signal the watcher exists to catch. For 'halted'
+    // the operator already gets the dedicated halt Telegram (above) — further
+    // 30-min re-alerts about a knowingly-down agent are noise.
     const hbThresholdMin = config.heartbeat_stale_threshold_minutes ?? 10;
     const hbRealertMin = config.heartbeat_stale_realert_minutes ?? 30;
     let heartbeatWatcher: HeartbeatStalenessWatcher | undefined;
@@ -365,6 +372,12 @@ export class AgentManager {
         thresholdMs: hbThresholdMin * 60_000,
         realertMs: hbRealertMin * 60_000,
         logger: (msg) => log(msg),
+      });
+      const watcher = heartbeatWatcher;
+      agentProcess.onStatusChanged((status) => {
+        if (status.status === 'halted') {
+          watcher.stop();
+        }
       });
       heartbeatWatcher.start();
     }
