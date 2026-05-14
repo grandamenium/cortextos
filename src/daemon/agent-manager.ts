@@ -23,7 +23,8 @@ import { shouldForwardMessage, type BotIdentity } from '../telegram/filter.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
-import { recordAndMaybeEscalate } from './spawn-failure-tracker.js';
+import { recordAndMaybeEscalate as recordSpawnFailureAndMaybeEscalate } from './spawn-failure-tracker.js';
+import { recordCronDispatchAndMaybeEscalate } from './cron-dispatch-tracker.js';
 
 type LogFn = (msg: string) => void;
 
@@ -289,7 +290,7 @@ export class AgentManager {
       // from running.
       let escalated = false;
       try {
-        const result = recordAndMaybeEscalate(ctxRoot, frameworkRoot, name, errSig);
+        const result = recordSpawnFailureAndMaybeEscalate(ctxRoot, frameworkRoot, name, errSig);
         escalated = result.escalated;
       } catch (e) {
         console.error('[agent-manager] spawn-failure tracker error (non-fatal):', e);
@@ -1006,10 +1007,22 @@ export class AgentManager {
       }
     };
 
+    // Fleet-resilience plan #1 — feed the cron-dispatch storm tracker on
+    // any dispatch failure. ctxRoot + frameworkRoot are captured from the
+    // AgentManager instance so the scheduler itself stays agnostic.
+    const ctxRoot = this.ctxRoot;
+    const frameworkRoot = this.frameworkRoot;
     const scheduler = new CronScheduler({
       agentName,
       onFire,
       logger: (msg) => console.log(`[daemon] ${msg}`),
+      onDispatchFailed: (cronName: string) => {
+        try {
+          recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, agentName, cronName);
+        } catch (err) {
+          console.error(`[daemon] cron-dispatch tracker threw (non-fatal): ${err}`);
+        }
+      },
     });
 
     scheduler.start();

@@ -1,8 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { spawnSync } from 'child_process';
-import { readdirSync } from 'fs';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { emitOperatorAlert } from './operator-alert.js';
 
 // ---------------------------------------------------------------------------
 // Issue #07 phase 2: cross-agent spawn-failure storm detector.
@@ -39,7 +38,6 @@ export const SPAWN_FAIL_HISTORY_MAX = 50;
 export const SPAWN_FAIL_WINDOW_MS = 5 * 60 * 1000;        // 5 min detection window
 export const SPAWN_FAIL_DISTINCT_AGENTS_THRESHOLD = 2;     // ≥2 agents trips escalation
 export const SPAWN_FAIL_COOLDOWN_MS = 30 * 60 * 1000;      // 30 min between daemon self-restarts
-const TELEGRAM_SEND_TIMEOUT_MS = 3000;
 
 export function spawnFailureHistoryPath(ctxRoot: string): string {
   return join(ctxRoot, 'state', '.spawn-failure-history.json');
@@ -171,82 +169,30 @@ export function buildEscalationMessage(history: SpawnFailureHistory): string {
 }
 
 /**
- * Best-effort Telegram alert to the operator chat. Uses curl via spawnSync
- * to stay synchronous (we're about to process.exit) and bounded (3s
- * timeout). Returns true on send success. Failure is non-fatal — the exit
- * still happens.
+ * Best-effort operator alert for a spawn-failure storm. Delegates to the
+ * shared `operator-alert.ts` helper (cred lookup + Telegram send + cooldown).
  *
- * Credential resolution mirrors getOperatorChatCreds in daemon/index.ts:
- *   1. CTX_OPERATOR_CHAT_ID + CTX_OPERATOR_BOT_TOKEN (preferred)
- *   2. First agent's .env BOT_TOKEN + CHAT_ID (fallback)
+ * Kept as a named export so the rest of the daemon (and any future caller)
+ * can fire a spawn-storm alert without re-implementing the wiring.
  *
- * Kept as a separate helper from daemon/index.ts's sendCrashLoopAlertBestEffort
- * so storm-detector tests don't pull in the entire daemon module graph.
+ * Pre-extraction this function inlined curl + cred lookup. Post-extraction
+ * it's a thin wrapper — behavior identical, just sourced from the shared
+ * module so cron-dispatch, heartbeat, and doctor watchdogs share the
+ * cooldown gate.
  */
 export function sendStormAlertBestEffort(
+  ctxRoot: string,
   frameworkRoot: string,
   message: string,
 ): boolean {
-  const creds = resolveOperatorChatCreds(frameworkRoot);
-  if (!creds) {
-    console.error('[daemon] Spawn-failure storm alert: no operator chat configured ' +
-      '(set CTX_OPERATOR_CHAT_ID + CTX_OPERATOR_BOT_TOKEN, or ensure at least one agent .env exists)');
-    return false;
-  }
-  try {
-    const r = spawnSync('curl', [
-      '-s', '--max-time', '3',
-      '-X', 'POST',
-      `https://api.telegram.org/bot${creds.botToken}/sendMessage`,
-      '-d', `chat_id=${creds.chatId}`,
-      '--data-urlencode', `text=${message}`,
-    ], { timeout: TELEGRAM_SEND_TIMEOUT_MS, stdio: 'pipe' });
-    if (r.status === 0) {
-      console.error('[daemon] Spawn-failure storm alert sent to operator chat');
-      return true;
-    }
-    console.error('[daemon] Spawn-failure storm alert send failed (non-fatal)');
-    return false;
-  } catch {
-    return false;
-  }
-}
-
-// Kept intentionally local (duplicates getOperatorChatCreds in daemon/index.ts)
-// so this tracker module — imported by agent-manager — doesn't pull in the
-// full daemon entry-point graph in tests. Don't naively dedupe.
-function resolveOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken: string } | null {
-  const envChat = process.env.CTX_OPERATOR_CHAT_ID;
-  const envToken = process.env.CTX_OPERATOR_BOT_TOKEN;
-  if (envChat && envToken && /^\d+:[A-Za-z0-9_-]+$/.test(envToken)) {
-    return { chatId: envChat, botToken: envToken };
-  }
-  try {
-    const orgsRoot = join(frameworkRoot, 'orgs');
-    if (!existsSync(orgsRoot)) return null;
-    const orgs = readdirSync(orgsRoot, { withFileTypes: true }).filter(d => d.isDirectory());
-    for (const org of orgs) {
-      const agentsRoot = join(orgsRoot, org.name, 'agents');
-      if (!existsSync(agentsRoot)) continue;
-      const agents = readdirSync(agentsRoot, { withFileTypes: true }).filter(d => d.isDirectory());
-      for (const a of agents) {
-        const envFile = join(agentsRoot, a.name, '.env');
-        if (!existsSync(envFile)) continue;
-        try {
-          const content = readFileSync(envFile, 'utf-8');
-          const tokenMatch = content.match(/^BOT_TOKEN=(.+)$/m);
-          const chatMatch = content.match(/^CHAT_ID=(.+)$/m);
-          if (!tokenMatch || !chatMatch) continue;
-          const botToken = tokenMatch[1].trim();
-          const chatId = envChat || chatMatch[1].trim();
-          if (/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
-            return { chatId, botToken };
-          }
-        } catch { /* skip this agent */ }
-      }
-    }
-  } catch { /* fall through */ }
-  return null;
+  const result = emitOperatorAlert(ctxRoot, frameworkRoot, {
+    kind: 'spawn_storm',
+    severity: 'CRITICAL',
+    text: message,
+    cooldownKey: 'spawn_storm',
+    cooldownMs: SPAWN_FAIL_COOLDOWN_MS,
+  });
+  return result.sent;
 }
 
 /**
@@ -289,6 +235,6 @@ export function recordAndMaybeEscalate(
 
   const message = buildEscalationMessage(history);
   console.error(`[daemon] ${message}`);
-  sendStormAlertBestEffort(frameworkRoot, message);
+  sendStormAlertBestEffort(ctxRoot, frameworkRoot, message);
   return { escalated: true, history };
 }

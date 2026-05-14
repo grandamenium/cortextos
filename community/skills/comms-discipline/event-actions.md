@@ -37,6 +37,7 @@ Detection-side events emitted by daemon watchdogs and user-foreground CLIs (e.g.
 | Action | Emitted by | When | Required meta keys |
 |---|---|---|---|
 | `port_collision_recovered` | `cortextos dashboard` (CLI) | preferred port is occupied and the pre-bind probe falls through to a free fallback | `port`, `fallback_port`, `holder_pid` |
+| `cron_dispatch_storm_detected` | `src/daemon/cron-dispatch-tracker.ts` | ≥3 distinct cron names fail to dispatch to the same agent inside a 30-min window (same cron repeating does NOT count) | `agent`, `crons` (string[]), `window_minutes` |
 
 CLI emissions today are surfaced as a single console line (`event=port_collision_recovered port=... fallback_port=... holder_pid=...`) rather than a JSONL event, because the dashboard CLI runs in the operator's shell rather than under an agent identity. When the dashboard is supervised by the daemon (future), the same emission becomes a structured `logEvent` call under a system pseudo-agent.
 
