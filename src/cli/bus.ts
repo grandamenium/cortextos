@@ -25,6 +25,7 @@ import { createSkillPr } from '../bus/skill-autopr.js';
 import { sendSlack } from '../bus/send-slack.js';
 import { enforceControlPolicy } from '../bus/orch-control-policy.js';
 import { sendTelegramVoice } from '../bus/send-telegram-voice.js';
+import { checkDuplicate } from '../bus/p6-dedup.js';
 import { generateSkill } from '../bus/generate-skill.js';
 import { syncSkills } from '../bus/sync-skills.js';
 import { runWorkflow } from '../bus/run-workflow.js';
@@ -1294,6 +1295,23 @@ busCommand
     // does not expand escapes, so they arrive at argv as 2-char literals and
     // Telegram renders them as visible text. Normalize before send + log.
     message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+
+    // P6 Duplicate Suppression: drop sends that are near-duplicates of a
+    // recent outbound message (<60s, >70% Jaccard token overlap).
+    {
+      const dupEnv = resolveEnv();
+      if (dupEnv.ctxRoot && dupEnv.agentName) {
+        const dup = checkDuplicate(dupEnv.ctxRoot, dupEnv.agentName, chatId, message);
+        if (dup.isDuplicate) {
+          const paths = resolvePaths(dupEnv.agentName, dupEnv.instanceId, dupEnv.org);
+          logEvent(paths, dupEnv.agentName, dupEnv.org, 'action', 'p6_dup_suppressed', 'info',
+            JSON.stringify({ chat_id: chatId, matched_at: dup.matchedTimestamp, score: dup.matchedScore }));
+          console.log('p6_dup_suppressed: duplicate message dropped');
+          process.exit(0);
+        }
+      }
+    }
+
     await enforcePolicyOrExit('externalEmail', 'send-telegram', chatId, {
       policyApprovalId: opts.policyApprovalId,
       exemptOrchestrator: true,
