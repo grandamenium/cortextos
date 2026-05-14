@@ -55,6 +55,12 @@
       "type": "recurring",
       "interval": "2h",
       "prompt": "Run PR stuck watcher: cd /home/cortextos/cortextos && cortextos bus pr-stuck-watcher --notify-agent orchestrator. Review the report and only escalate if the command reports PRs over the 24h alert threshold."
+    },
+    {
+      "name": "goal-progress-probe",
+      "type": "recurring",
+      "interval": "6h",
+      "prompt": "Run goal progress probe: cd /home/cortextos/cortextos && cortextos bus goal-progress-probe --notify-agent orchestrator. Review the rollup written to orchestrator memory; only escalate externally if more than two agents are stalled."
     }
   ],
   "ctx_autoreset_threshold": 90,

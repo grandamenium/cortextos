@@ -12,6 +12,7 @@ import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { pollWatchdog } from '../bus/watchdog.js';
 import { runPrStuckWatcher } from '../bus/pr-stuck-watcher.js';
 import { runDocDriftChecker } from '../bus/doc-drift-checker.js';
+import { runGoalProgressProbe } from '../bus/goal-progress-probe.js';
 import { runCodebaseScan } from '../bus/codebase-scan.js';
 import { runSecurityAudit } from '../bus/security-audit.js';
 import { selfRestart, hardRestart, autoCommit, autoCompactAgent, checkGoalStaleness, postActivity } from '../bus/system.js';
@@ -987,6 +988,41 @@ busCommand
     console.log(`Threshold: ${report.thresholdLines}`);
     console.log(`Task created: ${report.taskCreated ? report.taskId : 'no'}`);
     if (report.reportPath) console.log(`Report: ${report.reportPath}`);
+  });
+
+busCommand
+  .command('goal-progress-probe')
+  .description('Check whether each agent memory mentions its active goals in the last 24h')
+  .option('--notify-agent <agent>', 'Agent to notify when more than two agents appear stalled', 'orchestrator')
+  .option('--dry-run', 'Do not send stall notifications')
+  .option('--format <fmt>', 'Output format: json or text', 'text')
+  .action((opts: { notifyAgent?: string; dryRun?: boolean; format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const projectRoot = env.projectRoot || env.frameworkRoot || process.cwd();
+    const outputDir = join(projectRoot, 'orgs', env.org, 'agents', env.agentName, 'output');
+    const result = runGoalProgressProbe(paths, env.agentName, env.org, projectRoot, { outputDir });
+
+    if (!opts.dryRun && result.stalledAgents.length > 2 && opts.notifyAgent) {
+      const targetPaths = resolvePaths(opts.notifyAgent, env.instanceId, env.org);
+      sendMessage(
+        targetPaths,
+        env.agentName,
+        opts.notifyAgent,
+        'normal',
+        `Goal-progress probe flagged ${result.stalledAgents.length} agents with no goal mentions in last 24h memory: ${result.stalledAgents.map(a => a.agent).join(', ')}. Report: ${result.reportPath || 'not written'}`,
+      );
+    }
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    console.log(`Agents checked: ${result.agentsChecked}`);
+    console.log(`Stalled agents: ${result.stalledAgents.length}`);
+    if (result.reportPath) console.log(`Report: ${result.reportPath}`);
+    if (result.memoryPath) console.log(`Memory: ${result.memoryPath}`);
   });
 
 busCommand
