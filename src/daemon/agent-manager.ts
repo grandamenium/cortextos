@@ -301,11 +301,15 @@ export class AgentManager {
         // the new daemon's startAllEnabledAgents() loop re-spawns every
         // enabled agent against fresh native bindings.
         //
-        // Done from a setImmediate so any pending notifyStatusChange
-        // listeners and the alert send have one tick to complete before
-        // the exit takes us down. The exit happens whether they finish or
-        // not — the bound 3s curl timeout in sendStormAlertBestEffort
-        // already caps how long the alert can block.
+        // setImmediate defers exit until after this callback returns AND
+        // the synchronous notifyStatusChange chain (from
+        // AgentProcess.handleSpawnFailure) completes. That lets the
+        // status-change handler above queue its async tgApi.sendMessage
+        // ("failed to spawn" alert) before we tear down. The sendMessage
+        // Promise itself won't resolve before exit — best-effort is the
+        // contract — but the synchronous spawnSync curl in
+        // sendStormAlertBestEffort already finished while this callback
+        // ran, so the operator alert IS sent before the exit.
         setImmediate(() => {
           console.error('[daemon] Exiting for PM2 respawn — spawn-failure storm detected');
           process.exit(1);

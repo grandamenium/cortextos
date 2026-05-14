@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
 import { readdirSync } from 'fs';
-import { ensureDir } from '../utils/atomic.js';
+import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 
 // ---------------------------------------------------------------------------
 // Issue #07 phase 2: cross-agent spawn-failure storm detector.
@@ -63,19 +63,29 @@ export function readSpawnFailureHistory(ctxRoot: string): SpawnFailureHistory {
 export function writeSpawnFailureHistory(ctxRoot: string, history: SpawnFailureHistory): void {
   try {
     ensureDir(join(ctxRoot, 'state'));
-    writeFileSync(spawnFailureHistoryPath(ctxRoot), JSON.stringify(history, null, 2), 'utf-8');
+    // atomicWriteSync writes to a .tmp sibling then renames — a torn write
+    // here would leave readSpawnFailureHistory silently resetting to
+    // {events: []} (its corrupt-JSON branch), wiping the cooldown gate and
+    // letting PM2 thrash on the next escalation.
+    atomicWriteSync(spawnFailureHistoryPath(ctxRoot), JSON.stringify(history, null, 2));
   } catch {
     // disk full / permission — don't block recovery
     console.error('[daemon] Failed to persist spawn-failure history (non-fatal)');
   }
 }
 
-export function recordSpawnFailure(
-  ctxRoot: string,
+/**
+ * Append a new spawn-failure event to history, capping at
+ * SPAWN_FAIL_HISTORY_MAX. Pure: caller is responsible for persisting via
+ * writeSpawnFailureHistory if they want this on disk. recordAndMaybeEscalate
+ * collapses the append + (optional) lastSelfRestartAt mutation into a single
+ * write to keep the escalation path atomic across process.exit.
+ */
+function appendEvent(
+  history: SpawnFailureHistory,
   agent: string,
   errStr: string,
 ): SpawnFailureHistory {
-  const history = readSpawnFailureHistory(ctxRoot);
   history.events.push({
     ts: new Date().toISOString(),
     agent,
@@ -84,6 +94,20 @@ export function recordSpawnFailure(
   if (history.events.length > SPAWN_FAIL_HISTORY_MAX) {
     history.events = history.events.slice(-SPAWN_FAIL_HISTORY_MAX);
   }
+  return history;
+}
+
+/**
+ * Append + persist a spawn-failure event. Standalone helper kept for tests
+ * and callers that don't need the escalation decision. Production code goes
+ * through recordAndMaybeEscalate (single-write path).
+ */
+export function recordSpawnFailure(
+  ctxRoot: string,
+  agent: string,
+  errStr: string,
+): SpawnFailureHistory {
+  const history = appendEvent(readSpawnFailureHistory(ctxRoot), agent, errStr);
   writeSpawnFailureHistory(ctxRoot, history);
   return history;
 }
@@ -188,6 +212,9 @@ export function sendStormAlertBestEffort(
   }
 }
 
+// Kept intentionally local (duplicates getOperatorChatCreds in daemon/index.ts)
+// so this tracker module — imported by agent-manager — doesn't pull in the
+// full daemon entry-point graph in tests. Don't naively dedupe.
 function resolveOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken: string } | null {
   const envChat = process.env.CTX_OPERATOR_CHAT_ID;
   const envToken = process.env.CTX_OPERATOR_BOT_TOKEN;
@@ -227,6 +254,13 @@ function resolveOperatorChatCreds(frameworkRoot: string): { chatId: string; botT
  * fire the operator alert + persist lastSelfRestartAt + return true (caller
  * is expected to process.exit(1) so PM2 respawns the daemon).
  *
+ * Single-write atomicity: the event append + (optional) lastSelfRestartAt
+ * mutation are collapsed into ONE writeSpawnFailureHistory call. If we did
+ * the old "append then update" sequence and the caller exit()'d between
+ * writes, the persisted history would lack lastSelfRestartAt — the fresh
+ * daemon would re-read history, find no cooldown, escalate again, and PM2
+ * thrash would defeat the entire cooldown.
+ *
  * Caller-controlled exit because tests need to assert the return value
  * without actually terminating the test runner.
  */
@@ -236,15 +270,25 @@ export function recordAndMaybeEscalate(
   agent: string,
   errStr: string,
 ): { escalated: boolean; history: SpawnFailureHistory } {
-  const history = recordSpawnFailure(ctxRoot, agent, errStr);
+  // Append the event in memory — we'll decide cooldown + persist atomically.
+  const history = appendEvent(readSpawnFailureHistory(ctxRoot), agent, errStr);
+
   if (!shouldEscalate(history)) {
+    writeSpawnFailureHistory(ctxRoot, history);
     return { escalated: false, history };
   }
+
+  // Set cooldown markers BEFORE persisting and BEFORE firing the alert.
+  // Even if the alert send fails or the daemon dies mid-curl, the next
+  // boot reads history with lastSelfRestartAt populated and respects the
+  // cooldown — preventing PM2 thrash.
+  const nowIso = new Date().toISOString();
+  history.lastAlertAt = nowIso;
+  history.lastSelfRestartAt = nowIso;
+  writeSpawnFailureHistory(ctxRoot, history);
+
   const message = buildEscalationMessage(history);
   console.error(`[daemon] ${message}`);
   sendStormAlertBestEffort(frameworkRoot, message);
-  history.lastAlertAt = new Date().toISOString();
-  history.lastSelfRestartAt = history.lastAlertAt;
-  writeSpawnFailureHistory(ctxRoot, history);
   return { escalated: true, history };
 }

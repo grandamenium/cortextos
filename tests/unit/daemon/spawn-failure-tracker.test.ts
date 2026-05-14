@@ -234,4 +234,30 @@ describe('recordAndMaybeEscalate', () => {
     expect(reloaded.events.length).toBe(1);
     expect(reloaded.events[0].agent).toBe('alice');
   });
+
+  it('persists lastSelfRestartAt atomically with the escalating event (cooldown survives exit)', () => {
+    // Regression guard for the eval-found blocker: previously,
+    // recordAndMaybeEscalate did two writes (append event, then set
+    // lastSelfRestartAt). If the daemon exited between them (which the
+    // escalation path does via setImmediate(process.exit)), the persisted
+    // state lacked the cooldown marker, the fresh daemon would re-escalate
+    // immediately, and PM2 would thrash. Single-write fix is now in place.
+    recordAndMaybeEscalate(ctxRoot, frameworkRoot, 'alice', 'err');
+    const r = recordAndMaybeEscalate(ctxRoot, frameworkRoot, 'bob', 'err');
+    expect(r.escalated).toBe(true);
+    // Read fresh from disk — the SAME write that recorded the escalating
+    // event must have set lastSelfRestartAt.
+    const reloaded = readSpawnFailureHistory(ctxRoot);
+    expect(reloaded.lastSelfRestartAt).toBeDefined();
+    // And the escalating event itself must be persisted.
+    expect(reloaded.events.length).toBe(2);
+    expect(reloaded.events[1].agent).toBe('bob');
+  });
+
+  // Note on concurrent calls: the daemon runs single-threaded inside one
+  // Node process. Two spawn failures from different agents arrive
+  // serialized on the same event loop, so recordAndMaybeEscalate cannot
+  // be invoked concurrently in production. No test guards this assumption
+  // — if the daemon ever moves to worker threads, this contract changes
+  // and the tracker needs file-locking.
 });
