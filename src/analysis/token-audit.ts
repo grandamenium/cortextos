@@ -54,7 +54,13 @@ export interface RunResult {
   run_id: string;
   turns_ingested: number;
   turns_new: number;
+  // Freshly minted from this invocation — anomaly_id is a new UUID each call.
+  // appendAnomalies dedupes by (kind, agent, session_id, evidence_turn_ids),
+  // so on re-runs these UUIDs are NOT what's on disk. Read the store via
+  // readAnomalies if you need the durable id (e.g. for `explain anomaly:<id>`).
   anomalies: Anomaly[];
+  // Same caveat as `anomalies`: re-runs return new in-memory rows; the store
+  // is rewritten per (agent, snapshot_date) by appendIdleBurn.
   idle_burn_rows: IdleBurnRow[];
   scanned_files: number;
   duration_ms: number;

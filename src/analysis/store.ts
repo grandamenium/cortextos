@@ -249,6 +249,13 @@ export function appendIdleBurn(s: StorePaths, rows: IdleBurnRow[]): void {
   }
 }
 
+/**
+ * Day-granularity reader. Unlike `readAnomalies` (which filters intra-day on
+ * `detected_at`), idle-burn rows are inherently per (agent, snapshot_date) —
+ * `appendIdleBurn` rewrites the day file rather than appending — so a
+ * timestamp-precise filter would be meaningless. Day-bounded is the right
+ * granularity for this data shape.
+ */
 export function readIdleBurn(s: StorePaths, since: Date, until: Date): IdleBurnRow[] {
   if (!existsSync(s.idleBurnDir)) return [];
   const sinceDay = dayOf(since.toISOString());
