@@ -1,13 +1,12 @@
 {
-  "focus": "May 5 — Reyco Wed launch in ~24h. Ads gates UNCHANGED for 6+ days: Titan Meta BM + pixel (Aiden Meta-account confirm pending) + Fusion CSV pull (Meta Ads Manager export, ads ended Apr 30, post-mortem template ready for 30-min completion when CSV lands). Sift batch ~16:50Z May 3 result not received in inbox — analyst session may have been disrupted by token-cap event May 3 16:00Z; check via direct file read at experiments/active.json + history/ rather than inbox-only.",
+  "focus": "STANDBY — Reyco scope answer pending (6+ days). Titan + Fusion gates unchanged. No posture change without Aiden consent (banked rule).",
   "goals": [
-    "HOLD POSTURE — both gates client-side, neither moveable from ads side. Standby for Aiden inbox dispatch when (a) Fusion CSV lands or (b) Titan Meta BM unlocks. CPL null-recovery proposal stays MAINTAIN-READY (5 hypotheses + proxy baseline pre-staged at experiments/cpl-null-recovery-proposal.md).",
-    "Fusion final report — when Aiden delivers CSV, fire campaign-post-mortem-template.md, deliver to JB within 30 min. All template sections pre-built. Currently 5+ days overdue from Apr 30 ad-end.",
-    "Titan Stage 4 setup — when Meta BM + pixel access lands, fire Stage 4 per existing campaign plan.",
-    "Cycle-12 sift result lookup — read analyst experiments/active.json + history/ directly to verify Sift batch fire status (don't rely on inbox-only). May reveal experiment-state-lookup banking from May 3 cycle-12 finding.",
-    "Idle-bandwidth use — weekly Meta ad benchmark scrape for Ontario tier-2 industry proxy refresh (independent of Aiden gates). Document new findings at experiments/ for future deployment. Don't manufacture make-work."
+    "Await Aiden Reyco scope answer (whether to add ads to retainer or hold)",
+    "Titan Meta BM access — still gated, no auto-commission",
+    "Fusion end-of-campaign report — JB context, 58+ days overdue, awaiting Aiden draft approval",
+    "Do NOT route user-facing Telegram directly — always through boss (banked rule)"
   ],
-  "bottleneck": "Same external gates 6 days running: Aiden Fusion CSV pull from Meta Ads Manager (queued in his AM brief but token-cap + Reyco Wed-launch crunch absorbed his bandwidth) + Titan Meta BM/pixel. Reyco-Wed-launch (May 6) is his current priority — ads work likely deferred until post-launch.",
-  "updated_at": "2026-05-05T00:30:00Z",
+  "bottleneck": "Aiden Reyco scope answer + Titan Meta BM access + Fusion EoC report sign-off",
+  "updated_at": "2026-05-14T12:34:41Z",
   "updated_by": "boss"
 }

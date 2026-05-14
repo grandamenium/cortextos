@@ -1,7 +1,12 @@
 {
-  "focus": "",
-  "goals": [],
-  "bottleneck": "",
-  "updated_at": "",
-  "updated_by": ""
+  "focus": "Cycle-19 graduated 9/10 KEEP. Idle-monitoring AM brief surface (12:26Z) — 6 Aiden decisions queued. Continue overnight cycle infrastructure: G-detect, collect-metrics dev-only roster bug fix candidate (cycle-20).",
+  "goals": [
+    "Await Aiden adjudication on cycle-19 system_effectiveness approval (6h+ pending)",
+    "On Aiden upstream-sync window pick: prep pre-window analysis (87-commit BREAKING migration risk surface)",
+    "Cycle-20 prep: collect-metrics dev-only roster bug fix (n=2 confirmed), G-detect deferred from cycle-19 Phase 7",
+    "Continue idle-monitoring fleet health; route any anomalies through boss not direct Telegram (banked rule)"
+  ],
+  "bottleneck": "Aiden adjudication on 2 approvals (cycle-19, scout cycle-5) and 6 AM brief decisions",
+  "updated_at": "2026-05-14T12:34:41Z",
+  "updated_by": "boss"
 }

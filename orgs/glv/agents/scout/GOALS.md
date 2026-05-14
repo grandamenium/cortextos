@@ -4,18 +4,17 @@
 > To regenerate: `cortextos goals generate-md --agent scout --org glv`
 
 ## Focus
-Meta-agent for the GLV fleet. Keep every specialist sharper over time by monitoring the AI ecosystem, per-specialist domain news, and the cortextOS community catalog — then routing concrete, actionable upgrade suggestions to the right agent (not the user). Weekly: audit each agent against its goals and propose goal/config/skill updates.
+Daytime ops. Cycle-5 approval pending (17h+ on dashboard). Commit-after-write Vector E detector banked. Continue scout-stream digesting + actionable-now routing tags.
 
 ## Goals
-1. Daily ecosystem scan: Anthropic news/blog (new models, prompt techniques, Claude Code features), popular agentic repos (GitHub trending, HN, r/ClaudeAI), cortextOS community catalog. Surface anything directly upgrade-worthy.
-2. Weekly domain scan per specialist: SEO agent (Search Engine Journal, Moz, Ahrefs), content agent (copywriting + creator playbooks), dev agent (WP dev + CTA/CRO), prospector (cold outreach frameworks), ads agent (Google/Meta/TikTok platform changes). One concrete suggestion per specialist per week.
-3. Weekly agent audit: per specialist, review goals + skills + last 7 days of activity log; produce a report of what's working, drift from goals, skill gaps, and recommended changes. Report goes to boss, not user — boss decides what to route up.
-4. Route suggestions as agent-to-agent messages (not user Telegram) — specialists act on them within their own approval rules. Do NOT dispatch work, propose code changes, or ship anything yourself: you are a research + suggestion layer only.
-5. Log every scan as a dashboard event (ecosystem_scan, domain_scan, agent_audit) with meta summaries so the analyst can measure upgrade cadence + adoption rate.
-6. Maintain a canonical source list skill (skills/ecosystem-sources/SKILL.md) with Anthropic blog, key domain blogs, GitHub trending queries, and #glv-life-os Slack channel. Keep it current as new sources are discovered.
+1. Await Aiden adjudication on cycle-5 (action-pairing on digest items, 17h+)
+2. On approve: launch experiment with action layer + measure digest_items_adopted_per_7d
+3. On kill: roll back to cycle-4 baseline + propose cycle-6 alternative
+4. Continue scout-stream digesting + actionable-now routing tags + tier classification
+5. Vector E commit-after-write detector — already banked, await analyst Phase 7 integration
 
 ## Bottleneck
-none
+Aiden cycle-5 adjudication (17h+ pending)
 
 ## Updated
-2026-04-20T00:00:00Z (by scout)
+2026-05-14T12:34:41Z (by boss)

@@ -4,19 +4,15 @@
 > To regenerate: `cortextos goals generate-md --agent imagegen --org glv`
 
 ## Focus
-AI-generated product imagery + video for GLV clients via fal.ai (Nano Banana 2 for stills, Seedance 2.0 for video). Reference-image-conditioned only — no hallucination. User approves spend ceiling + 5-product test results before any full rollout.
+Idle — capacity available; no active dispatch. Casey-intake 9d phantom worked example banked (self-check banked-trigger before dispatch).
 
 ## Goals
-1. PROTOCOL (user-defined 2026-04-23): (1) read the requested fal.ai model documentation FULLY before calling it — no training-data-memory shortcuts; (2) based on docs, ask user clarifying questions about settings — ALWAYS surface if reference-image / source-image conditioning is available (this is required, not optional); (3) only after user answers do you call the API and return results in Telegram.
-2. fal.ai API key management: acquire from user (sign-up blocker), stash securely, track per-call cost. NEVER run a batch without user-approved spend ceiling.
-3. Nano Banana 2 (NB2) skill: docs at fal.ai/models/fal-ai/nano-banana-2. $0.08/image at 1K, up to 14 reference images per request. Use for white-bg product photos (primary) + lifestyle photos (secondary).
-4. Seedance 2.0 skill: docs at fal.ai/models/bytedance/seedance-2.0. Per-second pricing ($0.24-0.30/s at 720p). Image-to-video supported. Bake the skill in now even though we are NOT using it for launch (deferred post-Apr-26 per user).
-5. First job — Reyco launch (Apr 26): generate white-bg product photos for ALL failed-seed products (categories: zero-image, wrong-aspect like Mercury portraits, blurry mfr shots, no-HD-source). Scope ~123 Mercury + others. Budget ~$12 at 1K. 5-product test first, user approves, then full batch.
-6. Reference image required for every generation — pull from Reyco WP product page, mfr site, or Lightspeed. If no reference exists for a product, escalate to user, do not generate from text alone.
-7. Output: return generated images in Telegram for user approval, then post to Slack #internal-reyco, then hand off to dev for WordPress upload.
+1. Stay heartbeat-current; flag any new image-gen dispatch via boss
+2. Use peer-banked-rule cross-agent application discipline — refuse bad dispatch at receive-time
+3. Reference images required for any new product seeding (AI gen last resort, banked rule)
 
 ## Bottleneck
-Awaiting /onboarding cycle + user fal.ai API key. Reyco launch Apr 26 — tight.
+No active scope — capacity available
 
 ## Updated
-2026-04-23T22:50:00Z (by boss)
+2026-05-14T12:34:41Z (by boss)

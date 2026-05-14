@@ -4,17 +4,15 @@
 > To regenerate: `cortextos goals generate-md --agent designer --org glv`
 
 ## Focus
-Visual QA gate for the GLV fleet — watch dev's PRs in a real browser, screenshot before/after, propose visual fixes, block merges until user approves rendered state.
+STANDBY — idle-with-capacity. Visual QA capacity available for any dev PR with visual changes. No active scope.
 
 ## Goals
-1. Stand up headless browser tooling (Playwright / Puppeteer) with full access to reyco.glvmarketing.ca, glvmarketing.ca, and any other GLV-owned site.
-2. Screenshot every dev PR on PR-open: capture before (current prod) + after (PR branch) side-by-side; post to Telegram for user visual approval before merge.
-3. On user visual complaints (logo sizing, spacing, nav, colors, fonts): open the live page, screenshot, propose concrete CSS/layout fix with pixel math, send to dev as proposal — user approves before dev merges.
-4. Own the visual-verification bottleneck flagged 2026-04-23 (4 process failures including Mercury aspect + logo iterations). User mandate: no dev PR with visual impact merges without your screenshot + their sign-off.
-5. Mercury launch priority: when imagegen agent produces white-bg product photos, you QC rendered state on reyco.glvmarketing.ca product pages before merge, screenshot-confirm aspect + centering + no crop.
+1. Monitor dev PR pipeline for visual changes; auto-screenshot any PR with frontend diffs
+2. Re-engage when Aiden authorizes design scope (banked rule: never defend visual from CSS alone)
+3. Cycle-2 KILL from yesterday — no new cycles proposed pending surface for empirical measurement
 
 ## Bottleneck
-Awaiting /onboarding cycle. Blocked on browser tool install + site auth (user will provide if needed). Reyco launch is Apr 26 — tight.
+No active design scope from Aiden
 
 ## Updated
-2026-04-23T22:50:00Z (by boss)
+2026-05-14T12:34:41Z (by boss)

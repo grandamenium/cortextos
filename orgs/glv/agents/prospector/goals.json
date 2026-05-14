@@ -1,18 +1,12 @@
 {
-  "focus": "T-1 Reyco launch (tomorrow Apr 26). Stay parallel-not-blocking the launch: keep iterating v6 batch 1 in #internal-sales thread until user posts 'good, send these', then ship same day. While waiting on user feedback, process batch 2 (next 5 drafts of 40 staged) through Ben's 9-step research + copy rules so v7 is queued the moment v6 ships. Primary KPI: booked meetings toward 2 new retainers by end of Q3 2026.",
+  "focus": "STANDBY — 15 leads behind silent Aiden+Ben copy-iteration gate (~17h+). Send-gate RED. No posture change without explicit Aiden consent.",
   "goals": [
-    "v6 batch 1 (5 drafts in #internal-sales thread 1776909722.199959) — keep ready for instant send the moment user greenlights; iterate v7 same-thread on any feedback. Send gate RED until user posts 'good, send these'.",
-    "while waiting on v6 approval: pull next 5 drafts from staged 40, run full 9-step (Google → WEBSITE FIRST → GMB → LinkedIn → directories → NAP → SEMrush → priority-rated issues → triple-check → impact estimate → one competitor) and post v6.2 batch to #internal-sales — do NOT wait idle.",
-    "apply Ben's copy rules to every draft: lead with TOP priority factor only (no stacked secondaries), triple-check every claim against Playwright + SEMrush + directories before draft, small positive anecdote, CTA states who/what/how in few words, 80-125 words, positive emotion only.",
-    "TAM is all of Canada — Northern Ontario beachhead only. SSM excluded (manual in-person).",
-    "scout's qualified shortlist IS the send list once copy is approved — no per-lead SEND/EDIT/SKIP gate.",
-    "target 50 outbound emails/day ASAP once copy converges and user flips auto-send on. Hard cap 100/day without explicit override.",
-    "CASL: one cold email per prospect ever — no follow-ups, no sequences.",
-    "log every outreach action (prospect added, email drafted, email sent, reply received, meeting booked) as a dashboard event so analyst can baseline reply-rate and booked-meeting rate.",
-    "ping Ben or other agents directly when unblockers come up (n8n spec, infra asks) — do not wait for boss to relay.",
-    "post-Reyco-launch (Apr 26+): expect user bandwidth to free up — be ready with v6 perfected and batch 2 staged so ship volume can ramp toward 50/day quickly."
+    "Do NOT send any outreach until Aiden+Ben copy lock signal",
+    "8 cycle-19 KEEPs + 5 v6.3 + 2 path D = 15 email-ready candidates staged",
+    "On Aiden copy-lock signal: send all 15 in batched waves, log per email approval proxy event",
+    "Continue scout-stream intake for v6.4 candidates while gated"
   ],
-  "bottleneck": "User + Ben iteration on v6 batch 1 thread. Send gate RED. Reyco launch tomorrow (Apr 26) is consuming user attention — prospector iteration is lower-priority for user input today. Use the waiting time to stage batch 2 so post-launch ramp is immediate. NOTE: fleet was down ~24h post-restart Apr 24; user fixed at ~11:30 ET Apr 25.",
-  "updated_at": "2026-04-25T15:32:00Z",
+  "bottleneck": "Aiden+Ben copy iteration gate (~17h+ silent)",
+  "updated_at": "2026-05-14T12:34:41Z",
   "updated_by": "boss"
 }

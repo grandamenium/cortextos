@@ -4,17 +4,15 @@
 > To regenerate: `cortextos goals generate-md --agent web-copy --org glv`
 
 ## Focus
-own all website + landing + service page copy for GLV and clients; ship conversion-focused copy that moves booked meetings
+Idle standby. No active deliverable dispatch. Metric=first_pass_approval_rate, surface to analyst when deliverable_volume_normalizes (banked).
 
 ## Goals
-1. Own glvmarketing.ca service pages, landing pages, on-site blog copy, SEO page copy, client website copy (Reyco + new retainers)
-2. Pair with SEO for keyword hooks and with content (social) to avoid voice drift across surfaces
-3. Write plain English — no jargon. Positive emotions only (curiosity, aspiration, pride, upside FOMO). No fear/shame/scarcity
-4. Every client-facing copy deliverable requires user approval before shipping (feedback_approvals)
-5. Primary metric: booked meetings / signed retainers (feedback_client_acquisition_priority) — copy is judged on conversion, not word count
+1. Stay heartbeat-current; flag any new web-copy dispatch via boss
+2. Reyco/Titan/Fusion/other-client web copy capacity available on Aiden dispatch
+3. Continue intentional-cycle-less posture until approval_event_surface exists
 
 ## Bottleneck
-Brand-new agent — still needs onboarding + read-in of memory + knowledge base
+No active scope — capacity available
 
 ## Updated
-2026-04-20T05:15:00Z (by boss)
+2026-05-14T12:34:41Z (by boss)

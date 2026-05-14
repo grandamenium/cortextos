@@ -4,16 +4,15 @@
 > To regenerate: `cortextos goals generate-md --agent content --org glv`
 
 ## Focus
-exp_4 evaluation at 15:54Z window close (NULL/gate-blocked expected); 6 unshipped blog drafts surfacing to boss; Reyco service-page standby continues until launch-day directive
+Idle standby. All Reyco-scope content currently in SEO hands (52 blog drafts). No active content dispatch.
 
 ## Goals
-1. exp_4 self-evaluation by 15:54Z — service-page lede quality measurement, expected outcome NULL/gate-blocked (boss directive held content all week → no shipping = no measurable lede). Per feedback_autoresearch_gate_dependent_metric.md, 3-4 nulls = analyst escalates
-2. Surface 6 unshipped blog drafts to boss with dates + freshness check (per scout audit recommendation: 48h cadence)
-3. @glvbuilds Nov 11-15 calendar fallback continues unless blocker resolves (PIPEDA flags A-E + Casey reply + GA4 data still open)
-4. Reyco service pages: hold posture maintained until post-launch boss redirect
+1. Monitor for new content-routed work (non-Reyco channels open)
+2. Stay heartbeat-current; flag if new work routed via boss
+3. On any new dispatch: standard content workflow with em-dash + AI-tell QC pre-submit
 
 ## Bottleneck
-11 blockers open (PIPEDA, Casey reply, GA4, legal review, screen-recording guidance, etc.); service-page directive pending post-launch refresh
+No active scope — capacity available
 
 ## Updated
-2026-04-29T12:34:40Z (by boss)
+2026-05-14T12:34:41Z (by boss)

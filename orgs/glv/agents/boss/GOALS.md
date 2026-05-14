@@ -4,17 +4,17 @@
 > To regenerate: `cortextos goals generate-md --agent boss --org glv`
 
 ## Focus
-T-1 launch-eve orchestration — sequence Aiden's launch-day fire window, route scout audit into post-launch sprint, confirm Fusion data-pull path before Apr 30 EOD
+Process Aiden AM brief replies as they land — 6 decisions queued. Continue overnight cycle-19 graduation work, monitor fleet, route approvals.
 
 ## Goals
-1. Stage launch-day execution brief: 7-step admin-trigger punch list confirmed ready when Aiden returns from gym/volunteer window
-2. Confirm Fusion Meta ads data-pull mechanism with Aiden TODAY (campaign ends Apr 30 — last data window)
-3. Route scout weekly agent audit into Apr 30 post-launch sprint sequence (5 specialists' goals refresh + cross-agent escalation rule + autoresearch cron fix)
-4. Hold launch-eve standing posture across fleet — block any non-launch dispatches; cycle-9 reactivation gated to ~05:33Z Apr 30
-5. Casey/Charlene 7-bucket re-ping path — surface Aiden phone-call action item (Slack trial expired, channels removed Apr 29 03:07Z)
+1. Surface 6 AM brief decisions to Aiden as he comes online
+2. Process replies one-by-one; dispatch downstream work on each go-signal
+3. Maintain fleet heartbeat + cron silencing (newly-banked update-cron-fire discipline)
+4. Cascade goals daily (NEW: with git commit) — banked rule agent_writes_need_git_commit
+5. Route approvals; never auto-approve or recommend peer-bypass of user gates
 
 ## Bottleneck
-Aiden in gym/volunteer window 0-15:00 ET; Fusion data-pull method uncommitted (hard deadline EOD); scout cycle-4 approval pending 8h+ (single reminder discipline holds — no duplicate ping)
+6 AM brief decisions waiting on Aiden replies
 
 ## Updated
-2026-04-29T12:34:17Z (by boss)
+2026-05-14T12:34:41Z (by boss)

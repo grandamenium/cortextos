@@ -4,17 +4,16 @@
 > To regenerate: `cortextos goals generate-md --agent seo --org glv`
 
 ## Focus
-May 4 Reyco Wed-launch sprint — A1/A2 batches gate-blocked on Aiden A/B disposition (path A: Aiden manual upload via PR #125 admin handler, path B: boss WP-CLI direct write). PR #125 deployed clean to prod 18:49Z May 4 (seo-meta-tools.php verified). 196 desc + 160 alt CSVs ready. When Aiden replies, fire same heartbeat.
+STANDBY at 52 pre-drafted Reyco blog posts (22 TOFU + 20 MOFU + 10 BOFU). Awaiting Aiden Phase 1+2 framework feedback before resuming Phase 3 BOFU continuation. No posture change without explicit Aiden consent (banked rule).
 
 ## Goals
-1. PRIMARY — when Aiden picks path A or B: fire A1 batch (133 product rank_math_description writes) + A2 batch (165 non-Echo product alt-text writes) immediately. Report counts back to boss. ETA 5-10 min once unblocked.
-2. Post-launch SEO retainer activation prep: GSC verification on reycomarine.com, baseline-rankings-snapshot pull (was waiting on May 1 cutover anchor — domain now live so anchor-pull is now possible). Coordinate with Aiden to fetch GSC CSV for 28-day baseline.
-3. Person schema deploy-readiness — staff stubs for 6 Person blocks (Casey/Aaron/Lynn/Ron/Kory/Lee/Damian) staged. Casey/Charlene 6+ days silent on bio data; deploy whenever they reply OR Aiden authorizes the 'generic placeholder' fallback.
-4. Princecraft category reorg coordination — boss is shipping (or has shipped) PR #135 (empty-tab filter) + planning PR for Princecraft tab reorg (Sport+Platinum → Fishing Boats / Pontoons / Deck Boats). When that lands, re-audit Princecraft + sister brand pages for rank_math meta + alt text completeness on the renamed tabs.
-5. Backlog tactical: (a) Soo Sackers post-PR #6 verify (gsc-verify-protocol.md staged); (b) Fusion title-fix RE-verify on the 4 generic-title-blocked blog URLs; (c) Titan retainer-gated polish.
+1. Hold at 52 posts; do NOT proceed past current count until Aiden framework feedback lands
+2. On Aiden feedback: integrate framework revisions and continue Phase 3 BOFU posts 43-52 series (or revise prior batches per feedback)
+3. Phase 3 completion = full 62-post 12-month content calendar shipped
+4. Backlog: Reyco GSC retainer activation prep, Person schema staff stubs (Casey/Charlene bio data 6+ days silent), Fusion title-fix re-verify
 
 ## Bottleneck
-Aiden A/B decision on SEO batch upload (CSVs verified clean, PR #125 admin handler live, both paths ready to fire). 4h+ pending. Casey/Charlene 6+ day silence on Person schema bio data still blocking E-E-A-T strongest play.
+Aiden Phase 1+2 framework feedback on the 42 already-drafted posts (TOFU 22 + MOFU 20)
 
 ## Updated
-2026-05-04T19:25:00Z (by boss)
+2026-05-14T12:34:41Z (by boss)

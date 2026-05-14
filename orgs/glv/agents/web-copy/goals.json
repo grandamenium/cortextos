@@ -1,13 +1,11 @@
 {
-  "focus": "own all website + landing + service page copy for GLV and clients; ship conversion-focused copy that moves booked meetings",
+  "focus": "Idle standby. No active deliverable dispatch. Metric=first_pass_approval_rate, surface to analyst when deliverable_volume_normalizes (banked).",
   "goals": [
-    "Own glvmarketing.ca service pages, landing pages, on-site blog copy, SEO page copy, client website copy (Reyco + new retainers)",
-    "Pair with SEO for keyword hooks and with content (social) to avoid voice drift across surfaces",
-    "Write plain English — no jargon. Positive emotions only (curiosity, aspiration, pride, upside FOMO). No fear/shame/scarcity",
-    "Every client-facing copy deliverable requires user approval before shipping (feedback_approvals)",
-    "Primary metric: booked meetings / signed retainers (feedback_client_acquisition_priority) — copy is judged on conversion, not word count"
+    "Stay heartbeat-current; flag any new web-copy dispatch via boss",
+    "Reyco/Titan/Fusion/other-client web copy capacity available on Aiden dispatch",
+    "Continue intentional-cycle-less posture until approval_event_surface exists"
   ],
-  "bottleneck": "Brand-new agent — still needs onboarding + read-in of memory + knowledge base",
-  "updated_at": "2026-04-20T05:15:00Z",
+  "bottleneck": "No active scope — capacity available",
+  "updated_at": "2026-05-14T12:34:41Z",
   "updated_by": "boss"
 }

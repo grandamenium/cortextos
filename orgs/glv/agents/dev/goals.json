@@ -1,31 +1,13 @@
 {
-  "focus": "Reyco PR #100 standby (FULL GREEN merged-pending) + cortextos PR queue (13 stacked) + AM brief items; Aiden mid-repopulation",
+  "focus": "Idle-monitor cloud session. PR #98 + soosackers permanent fixes + upstream sync window all gated on Aiden AM brief replies. Continue PR-monitor sweep + memory commits.",
   "goals": [
-    "PR #100 (carousel taxonomy + slug fix + Minn Kota nav + W1 brand-slug-rename action + W3 auto-tag dry-run/apply) — FULL GREEN per pentester final-final vet on 0ef7927; holds for Aiden's path-A repopulation completion OR explicit GO on script-apply via /wp-admin/tools.php?page=reyco-launch-setup&setup_action=tag_dry_run_v3",
-    "Cortextos PR queue (13 stacked: #6 #10 #14 #15 #16 #17 #18 #19 #20 #21 #22 #23 #24) — banked for AM brief, all conflict-free against main per dev triage 2026-04-27 22:50 UTC; suggested merge order in boss daily memory",
-    "PR #7 close-as-stale + PR #8 Clients-tab-supersession decisions — banked for AM brief alongside PR queue",
-    "PR #75 (reyco-marine visual regression CI) Q2/Q3/Q4 ACK — still awaiting Aiden, asked 2026-04-26 ~16:42 EDT, 5+ heartbeat cycles silent",
-    "Reyco mobile responsive nav investigation (/service/, /powersports/, /boats-and-marine/) — banked for AM brief queue, post-launch backlog",
-    "Reyco product-naming pass — Aiden flagged ~150 of 374 raw-SKU products need consumer-friendly rename; queued for dispatch after taxonomy work completes",
-    "Task #11 (Reyco bulk product load) — held on credentials gate per pentester routing",
-    "Task #20 (Reyco 4-tag taxonomy mapping) — held on Casey tag-confirm batch"
+    "Monitor PR #98 (Lead interface CI fix, all green) — flag Aiden merge in next heartbeat",
+    "On Aiden go: implement soosackers fixes (workflow OAuth scope + dangerous-clean-slate FTP)",
+    "PHPCompatibility PHPCS install — 6 days to May 20 SiteGround PHP cutover (Aiden terminal required)",
+    "Reyco GSC tasks #23-26 (noindex/canonicals/5xx/404s) — re-scope via REST app-password path now available",
+    "exp_rmkr closes 2026-05-15T10:57Z — close cleanly and start PHPCompatibility PHPCS experiment"
   ],
-  "bottleneck": "Aiden's path-A repopulation completion signal (or script-apply GO via PR #100 dry-run preview) — every active code workstream is FULL GREEN and holds on him",
-  "post_phase_a_focus": [
-    "Aiden's manual ~136-term taxonomy repopulation per simplified-category-list.md PDF",
-    "Auto-tag script run (POST-merge, via admin-URL-trigger action) covers 207 mapped SKUs; ~167 unmapped products manual-tag fallback",
-    "Pre-apply snapshot at uploads/reyco-tag-pre-apply-snapshot-{time()}.json provides reversibility",
-    "Phase B work post-Apr-30 cutover: full WC product_cat migration (half-day mechanical), product-naming pass on raw-SKU products"
-  ],
-  "post_launch_backlog": [
-    "N4: Add PHP syntax lint step to deploy.yml (per pentester recommendation 2026-04-27)",
-    "N5: Add PR-triggered CI on glvcrypto/reyco-marine (php -l + Tailwind dry-run)",
-    "N6: Add wp_create_nonce + check_admin_referer to all reyco-launch-setup setup_action handlers + relocate uploads/reyco-tag-results.csv to private (per pentester PR #100 W3 review)",
-    "Defensive hardening for brand-catalogue.php: explicit file_exists() guard with error_log on include miss",
-    "Deploy-hook cache-purge automation: GHA cache-purge step OR WP mu-plugin theme-change hook",
-    "WP-CLI post-content update pass to scrub Troy-Bilt fabricated-authorisation in already-seeded blog post DB content",
-    "A.6 candidate: product_brand taxonomy seeder if post-probe verification confirms cross-brand leak hypothesis"
-  ],
-  "updated_at": "2026-04-28T01:00:00Z",
+  "bottleneck": "Aiden replies on AM brief items 3 (soosackers) + 4 (git divergence reset auth) + PR #98 merge; PHPCS install gated on Aiden terminal",
+  "updated_at": "2026-05-14T12:34:41Z",
   "updated_by": "boss"
 }
