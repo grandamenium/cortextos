@@ -13,7 +13,8 @@ import {
   detectIdleBurn,
   detectAll,
 } from '../../../src/analysis/anomalies';
-import { runAudit, readWindow } from '../../../src/analysis/token-audit';
+import { runAudit, readWindow, getStorePaths } from '../../../src/analysis/token-audit';
+import { readAnomalies, readIdleBurn } from '../../../src/analysis/store';
 import type { TurnFact } from '../../../src/analysis/types';
 
 // -- pricing drift check ----------------------------------------------------
@@ -373,6 +374,62 @@ describe('runAudit end-to-end', () => {
     const content = readFileSync(join(eventsDir, files[0]), 'utf-8');
     expect(content).toContain('audit_run_started');
     expect(content).toContain('audit_run_completed');
+  });
+
+  // Regression: Bug 1 — anomalies persisted at detection time so explain finds them.
+  // Bug 2 — evidence_turn_ids returned by detection refer to turns already in the
+  // store (no in-memory-only IDs that explain can't resolve).
+  it('persists anomalies & turns such that every evidence_turn_id resolves in the store', () => {
+    // Seed a usd-positive turn for "lazy" with no task_completed events -> idle_burn fires.
+    const lazyLogDir = join(ctxRoot, 'logs', 'lazy');
+    mkdirSync(lazyLogDir, { recursive: true });
+    mkdirSync(join(ctxRoot, 'state', 'lazy'), { recursive: true });
+    const ts = new Date().toISOString();
+    writeFileSync(join(lazyLogDir, 'codex-tokens.jsonl'),
+      JSON.stringify({
+        timestamp: ts, model: 'gpt-5-codex',
+        input_tokens: 50_000, output_tokens: 20_000,
+        session_id: 'lazy-s', turn_id: 'lazy-t',
+      }) + '\n',
+    );
+
+    const since = new Date(Date.now() - 3_600_000);
+    const until = new Date();
+    const result = runAudit({ since, ctxRoot, org: '' });
+    expect(result.error).toBeNull();
+    expect(result.anomalies.length).toBeGreaterThan(0);
+
+    // Read back from the store as `cortextos bus token-audit anomalies` now does.
+    const store = getStorePaths(ctxRoot, '');
+    const persisted = readAnomalies(store, since, until);
+    expect(persisted.length).toBe(result.anomalies.length);
+
+    // Every anomaly returned by run must be findable in the store by id —
+    // this is exactly what `explain anomaly:<id>` relies on.
+    const persistedIds = new Set(persisted.map((a) => a.anomaly_id));
+    for (const a of result.anomalies) {
+      expect(persistedIds.has(a.anomaly_id)).toBe(true);
+    }
+
+    // Every evidence_turn_id must exist in the persisted turns (no phantom IDs).
+    const storedTurnIds = new Set(readWindow({ ctxRoot, org: '', since, until }).map((t) => t.turn_id));
+    for (const a of persisted) {
+      for (const tid of a.evidence_turn_ids) {
+        expect(storedTurnIds.has(tid)).toBe(true);
+      }
+    }
+  });
+
+  // Regression: idle-burn CLI now reads readIdleBurn() — `run` is the writer.
+  it('persists idle-burn rows so readIdleBurn returns the same data run produced', () => {
+    const since = new Date(Date.now() - 3_600_000);
+    const until = new Date();
+    const result = runAudit({ since, ctxRoot, org: '' });
+    expect(result.error).toBeNull();
+
+    const store = getStorePaths(ctxRoot, '');
+    const persisted = readIdleBurn(store, since, until);
+    expect(persisted.length).toBe(result.idle_burn_rows.length);
   });
 });
 
