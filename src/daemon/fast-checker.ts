@@ -530,11 +530,19 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * is the org's orchestrator (see agent-manager.ts for the wiring). Only
    * appr_(allow|deny)_<approvalId> prefixes are accepted here — the
    * activity-channel bot only ever posts approval buttons, so any other
-   * callback is rejected. The responding API must be the activity-channel
-   * API (not the agent's own bot) so answerCallbackQuery + editMessageText
-   * target the right message on the right bot.
+   * callback is rejected. The responding connector must be the activity-
+   * channel connector (not the agent's own bot) so the ack +
+   * editMessage target the right bot.
+   *
+   * PR3 commit 3 of pluggable-connectors: signature changed from
+   * `(query, activityApi: TelegramAPI)` → `(query, activityConnector:
+   * MessageConnector)`. The connector knows its bound chatId, so the
+   * editMessage call doesn't need an explicit chat-id argument.
    */
-  async handleActivityCallback(query: TelegramCallbackQuery, activityApi: TelegramAPI): Promise<void> {
+  async handleActivityCallback(
+    query: TelegramCallbackQuery,
+    activityConnector: import('../connectors/index.js').MessageConnector,
+  ): Promise<void> {
     const data = stripControlChars(query.data || '');
     const callbackQueryId = query.id;
 
@@ -545,7 +553,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const fromUserId = query.from?.id;
       if (fromUserId !== this.allowedUserId) {
         this.log(`SECURITY: activity-channel callback from unauthorized user ${fromUserId} - rejecting`);
-        try { await activityApi.answerCallbackQuery(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
+        if (activityConnector.capabilities.interactiveCallbacks && activityConnector.acknowledgeCallback) {
+          try { await activityConnector.acknowledgeCallback(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
+        }
         return;
       }
     }
@@ -553,32 +563,36 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const apprMatch = data.match(/^appr_(allow|deny)_(approval_\d+_[a-zA-Z0-9]+)$/);
     if (!apprMatch) {
       this.log(`activity-channel callback ignored (unknown prefix): ${data.slice(0, 40)}`);
-      try { await activityApi.answerCallbackQuery(callbackQueryId, 'Unknown button'); } catch { /* ignore */ }
+      if (activityConnector.capabilities.interactiveCallbacks && activityConnector.acknowledgeCallback) {
+        try { await activityConnector.acknowledgeCallback(callbackQueryId, 'Unknown button'); } catch { /* ignore */ }
+      }
       return;
     }
 
-    await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, activityApi);
+    await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, activityConnector);
   }
 
   /**
    * Shared approval-callback resolution path. Called by both handleCallback
-   * (agent's own bot) and handleActivityCallback (activity-channel bot).
+   * (agent's own bot, passing `this.connector`) and handleActivityCallback
+   * (activity-channel bot, passing the activity connector).
    *
    * Resolves the approval via updateApproval (which moves the file from
    * pending/ to resolved/ and notifies the requesting agent via inbox),
-   * answers the Telegram callback so the spinner stops, and edits the
+   * acknowledges the callback so the spinner stops, and edits the
    * original message to show who approved/denied for the audit trail.
    *
-   * `api` is the TelegramAPI that owns the bot the callback came from —
-   * answerCallbackQuery and editMessageText must target the same bot.
+   * `connector` is the MessageConnector that owns the bot the callback
+   * came from — ack + editMessage must target the same bot, so the
+   * connector knowing its bound chatId is the contract that makes this
+   * routing implicit. PR3 commit 3 of pluggable-connectors.
    */
   private async routeApprovalCallback(
     decision: 'allow' | 'deny',
     approvalId: string,
     query: TelegramCallbackQuery,
-    api: TelegramAPI | undefined,
+    connector: import('../connectors/index.js').MessageConnector | undefined,
   ): Promise<void> {
-    const chatId = query.message?.chat?.id;
     const messageId = query.message?.message_id;
     const callbackQueryId = query.id;
     const status = decision === 'allow' ? 'approved' : 'rejected';
@@ -597,18 +611,18 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       updateApproval(this.paths, approvalId, status, auditNote);
     } catch (err) {
       this.log(`Approval callback: updateApproval failed for ${approvalId}: ${err}`);
-      if (api) {
-        try { await api.answerCallbackQuery(callbackQueryId, 'Approval not found or already resolved'); } catch { /* ignore */ }
+      if (connector?.capabilities.interactiveCallbacks && connector.acknowledgeCallback) {
+        try { await connector.acknowledgeCallback(callbackQueryId, 'Approval not found or already resolved'); } catch { /* ignore */ }
       }
       return;
     }
 
-    if (api) {
-      try { await api.answerCallbackQuery(callbackQueryId, decision === 'allow' ? 'Approved' : 'Denied'); } catch { /* ignore */ }
-      if (chatId && messageId) {
-        const label = decision === 'allow' ? `✅ Approved by ${auditWho}` : `❌ Denied by ${auditWho}`;
-        try { await api.editMessageText(chatId, messageId, label); } catch { /* ignore */ }
-      }
+    if (connector?.capabilities.interactiveCallbacks && connector.acknowledgeCallback) {
+      try { await connector.acknowledgeCallback(callbackQueryId, decision === 'allow' ? 'Approved' : 'Denied'); } catch { /* ignore */ }
+    }
+    if (messageId !== undefined && connector?.capabilities.messageEdits && connector.editMessage) {
+      const label = decision === 'allow' ? `✅ Approved by ${auditWho}` : `❌ Denied by ${auditWho}`;
+      try { await connector.editMessage(String(messageId), label); } catch { /* ignore */ }
     }
     this.log(`Approval callback: ${decision} for ${approvalId} by ${auditWho}`);
   }
@@ -640,7 +654,12 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     // prefix check is cheap and routing-agnostic.
     const apprMatch = data.match(/^appr_(allow|deny)_(approval_\d+_[a-zA-Z0-9]+)$/);
     if (apprMatch) {
-      await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, this.telegramApi);
+      // PR3 commit 3: pass the agent's own connector for the (rare) case
+      // an approval button is routed through the agent's primary bot
+      // rather than the activity channel. The activity-channel path
+      // calls routeApprovalCallback through handleActivityCallback with
+      // the activity connector instead.
+      await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, this.connector);
       return;
     }
 

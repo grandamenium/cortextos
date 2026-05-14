@@ -44,13 +44,28 @@ export class TelegramConnector implements MessageConnector {
   private readonly chatId: string;
   private readonly allowedUserId?: number;
   private readonly agentDir: string;
+  private readonly pollerNamespace?: string;
   private poller: TelegramPoller | null = null;
 
-  constructor(agentDir: string, env: TelegramConnectorEnv) {
+  /**
+   * `opts.pollerNamespace`: passed through to TelegramPoller as the
+   * `offsetFileSuffix` so multiple TelegramConnector instances sharing
+   * a stateDir (agent's primary connector + org's activity-channel
+   * connector, today's only case) keep their offset files distinct —
+   * primary uses `.telegram-offset`, activity uses
+   * `.telegram-offset-activity`. Added in PR3 of the pluggable-
+   * connectors stack so activity-channel pluggability can land.
+   */
+  constructor(
+    agentDir: string,
+    env: TelegramConnectorEnv,
+    opts?: { pollerNamespace?: string },
+  ) {
     this.agentDir = agentDir;
     this.api = new TelegramAPI(env.BOT_TOKEN);
     this.chatId = env.CHAT_ID;
     this.allowedUserId = env.ALLOWED_USER ? parseInt(env.ALLOWED_USER, 10) : undefined;
+    this.pollerNamespace = opts?.pollerNamespace;
   }
 
   /**
@@ -175,7 +190,10 @@ export class TelegramConnector implements MessageConnector {
     // to connector.startPolling). When omitted, fall back to agentDir — same
     // PR1 behavior for tests that construct TelegramConnector standalone.
     const stateDir = opts?.stateDir ?? this.agentDir;
-    this.poller = new TelegramPoller(this.api, stateDir);
+    // 4th arg is offsetFileSuffix — distinguishes the offset file across
+    // multiple connector instances sharing a stateDir. Undefined keeps
+    // the default `.telegram-offset` filename (byte-identical to PR2).
+    this.poller = new TelegramPoller(this.api, stateDir, 1000, this.pollerNamespace);
 
     this.poller.onMessage((tgMsg: TelegramMessage) => {
       handlers.onMessage(this.toNormalizedMessage(tgMsg));

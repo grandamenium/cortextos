@@ -8,7 +8,6 @@ import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
-import { TelegramPoller } from '../telegram/poller.js';
 import { TelegramConnector, NullConnector, getConnector } from '../connectors/index.js';
 import type {
   MessageConnector,
@@ -91,7 +90,7 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; connector?: MessageConnector; activityPoller?: TelegramPoller }> = new Map();
+  private agents: Map<string, { process: AgentProcess; checker: FastChecker; connector?: MessageConnector; activityConnector?: MessageConnector }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
@@ -424,8 +423,9 @@ export class AgentManager {
       // CallbackPayload / NormalizedReactionPayload; raw provider payload
       // is read from `.raw` where Telegram-specific fields (media kinds,
       // reply_to_message) still need to be inspected. The activity-
-      // channel poller below remains direct TelegramPoller construction
-      // pending activity-channel pluggability (CHANGELOG out-of-scope).
+      // channel poller (`maybeStartActivityChannelPoller` below) uses
+      // the same connector lifecycle through a SECOND TelegramConnector
+      // instance with `pollerNamespace: 'activity'`.
       const onMessage = (m: NormalizedMessage) => {
         // ALLOWED_USER gate: NormalizedMessage.from.id is the stringified
         // provider user id, so comparison is string-equality with the
@@ -601,8 +601,8 @@ export class AgentManager {
 
   /**
    * If this agent is the org's orchestrator AND the org has an
-   * activity-channel.env configured, start a second TelegramPoller bound
-   * to ACTIVITY_BOT_TOKEN. Callbacks route to fast-checker's
+   * activity-channel.env configured, start a second TelegramConnector
+   * bound to ACTIVITY_BOT_TOKEN. Callbacks route to fast-checker's
    * handleActivityCallback. Safe no-op in every other case — if the
    * context.json is missing/corrupt, the orchestrator field is empty,
    * this agent is not the orchestrator, or the activity-channel.env
@@ -653,38 +653,50 @@ export class AgentManager {
       return;
     }
 
-    const activityApi = new TelegramAPI(activityBotToken);
     const stateDir = join(this.ctxRoot, 'state', name);
-    // offsetFileSuffix keeps the activity poller's offset file distinct
-    // from the primary bot's .telegram-offset — without this they would
-    // clobber each other in the same stateDir.
-    const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity');
+    // PR3 activity-channel pluggability: the activity channel is now
+    // its own MessageConnector instance. `pollerNamespace: 'activity'`
+    // keeps the activity poller's offset file at
+    // `.telegram-offset-activity` so it doesn't clobber the agent's
+    // primary `.telegram-offset` in the shared stateDir. `agentDir` is
+    // unused for the activity connector (we always pass `stateDir`
+    // explicitly via startPolling), so the orchestrator's stateDir is
+    // a safe placeholder.
+    const activityConnector = new TelegramConnector(stateDir, {
+      BOT_TOKEN: activityBotToken,
+      CHAT_ID: activityChatId,
+      ALLOWED_USER: '',
+    }, { pollerNamespace: 'activity' });
 
-    activityPoller.onCallback((query) => {
+    const onCallback = (c: CallbackPayload) => {
       const entry = this.agents.get(name);
       if (!entry) return;
-      entry.checker.handleActivityCallback(query, activityApi).catch((err) => {
+      // PR3 final-stage migration: handleActivityCallback now accepts a
+      // MessageConnector instead of a TelegramAPI; the connector knows
+      // its own chatId so the callback's chat-routing is implicit.
+      const query = c.raw as TelegramCallbackQuery;
+      entry.checker.handleActivityCallback(query, activityConnector).catch((err) => {
         log(`Activity-channel callback error: ${err}`);
       });
-    });
+    };
 
     // Best-effort message logger — activity channel is primarily outbound
     // but any inbound chatter (broadcasts, user DMs, etc.) gets logged
     // so operators can see what is flowing. No PTY injection.
-    activityPoller.onMessage((msg) => {
-      const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
-      const text = stripControlChars(msg.text || msg.caption || '');
+    const onMessage = (m: NormalizedMessage) => {
+      const from = stripControlChars(m.from.name || m.from.username || 'Unknown');
+      const text = stripControlChars(m.text);
       log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
-    });
+    };
 
-    activityPoller.start().catch((err) => {
+    activityConnector.startPolling({ onMessage, onCallback }, { stateDir }).catch((err) => {
       log(`Activity-channel poller error: ${err}`);
     });
 
     const entry = this.agents.get(name);
-    if (entry) entry.activityPoller = activityPoller;
+    if (entry) entry.activityConnector = activityConnector;
 
-    log(`Activity-channel poller started (chat ${activityChatId})`);
+    log(`Activity-channel poller started via ${activityConnector.kind} connector (chat ${activityChatId})`);
   }
 
   /**
@@ -697,15 +709,20 @@ export class AgentManager {
       return;
     }
 
-    // PR3: primary poller is owned by the connector now — stopPolling is
-    // a no-op when the connector never started polling (e.g. NullConnector
-    // or pollingEnabled=false), so calling unconditionally is safe.
+    // PR3: primary + activity pollers are both owned by their connectors
+    // now. stopPolling is a no-op when the connector never started polling
+    // (e.g. NullConnector or pollingEnabled=false), so calling
+    // unconditionally is safe.
     if (entry.connector) {
       await entry.connector.stopPolling().catch((err) => {
         console.log(`[agent-manager] connector.stopPolling error for ${name}: ${err}`);
       });
     }
-    if (entry.activityPoller) entry.activityPoller.stop();
+    if (entry.activityConnector) {
+      await entry.activityConnector.stopPolling().catch((err) => {
+        console.log(`[agent-manager] activity connector.stopPolling error for ${name}: ${err}`);
+      });
+    }
     entry.checker.stop();
     await entry.process.stop();
     this.agents.delete(name);

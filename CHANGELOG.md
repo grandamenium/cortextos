@@ -76,17 +76,56 @@ to 5 (all in the dual-path `routeApprovalCallback` /
   the env-var value (no `parseInt` indirection); reasoning in the
   migrated comments.
 
+### Migrated (PR3 commit 3 — activity-channel pluggability)
+- **Activity-channel poller now uses a second `TelegramConnector`
+  instance.** Constructed with the new
+  `opts.pollerNamespace: 'activity'` so its offset file stays at
+  `.telegram-offset-activity` (byte-identical to PR2's direct
+  TelegramPoller wiring). Routes inbound through
+  `connector.startPolling({onMessage, onCallback}, {stateDir})` —
+  the same generic lifecycle as the agent's primary connector.
+- **`FastChecker.handleActivityCallback` signature changed**:
+  `(query, activityApi: TelegramAPI)` →
+  `(query, activityConnector: MessageConnector)`. The connector knows
+  its bound chatId, so `editMessage` is now `(messageId, text)` with
+  no chat-id arg.
+- **`FastChecker.routeApprovalCallback` signature changed**:
+  `(decision, approvalId, query, api: TelegramAPI | undefined)` →
+  `(decision, approvalId, query, connector: MessageConnector | undefined)`.
+  Both callers (own-bot path via `this.connector`, activity path via
+  the activity connector) now pass connectors instead of raw APIs.
+- **5 final FastChecker direct-call sites migrated**:
+  - `handleActivityCallback`: lines 484 ("Not authorized" ack), 492
+    ("Unknown button" ack) — both now route through
+    `activityConnector.acknowledgeCallback`.
+  - `routeApprovalCallback`: lines 537 ("Approval not found" ack), 543
+    ("Approved"/"Denied" ack), 546 ("✅ Approved by …" edit) — all
+    three now route through `connector.acknowledgeCallback` /
+    `connector.editMessage` with capability gating.
+- **`AgentManager.agents` map field renamed `activityPoller` →
+  `activityConnector`.** stopAgent calls
+  `activityConnector.stopPolling()` unconditionally — no-op when the
+  activity connector was never started.
+- **`TelegramConnector` constructor accepts
+  `opts.pollerNamespace?: string`** — passed through to
+  TelegramPoller as `offsetFileSuffix` so multiple connector instances
+  in the same stateDir don't clobber each other's offset files.
+
+### Net direct-call count after PR3 (3 commits)
+- Pre-PR3 FastChecker direct calls (sendChatAction/answerCallbackQuery/
+  editMessageText/editMessageText): **17 sites**
+- Post-PR3: **3 sites**, all inside the connector-fallback helpers
+  (`sendTyping`, `ackCallback`, `editCallbackMessage`) — exercised only
+  when an agent has no connector wired but has a legacy `telegramApi`
+  set on FastChecker. PR4 cleanup will remove these once the legacy
+  `telegramApi`/`chatId` constructor options can be retired.
+- Pre-PR3 AgentManager direct `TelegramPoller` constructions: **2**
+  (primary + activity). Post-PR3: **0**. Both pollers now flow through
+  `connector.startPolling()`.
+
 ### Out of scope (deferred to PR4+)
-- `routeApprovalCallback` (3 sites at `fast-checker.ts:537/543/546`) —
-  shared between `handleCallback` (agent's own bot) and
-  `handleActivityCallback` (activity-channel bot). Migrating requires
-  the activity channel to also expose a `MessageConnector`, which is
-  the still-named "Activity channel pluggability" deferred item.
-- `handleActivityCallback` (2 sites at `fast-checker.ts:484/492`) —
-  activity-channel direct path. Same blocker.
-- Activity-channel `new TelegramPoller(...)` (1 site at
-  `agent-manager.ts:661`) — same blocker; would naturally migrate
-  alongside the activity-channel connector PR.
+- Removing the legacy `telegramApi`/`chatId` constructor options on
+  FastChecker (currently kept for one-release backwards-compat).
 - Implementing Matrix / RocketChat connectors.
 - First-class `NormalizedMessage.media` payload (replacing the
   `m.raw` cast in onMessage's media branch).

@@ -97,21 +97,48 @@ describe('FastChecker', () => {
       writeFileSync(join(pendingDir, `${id}.json`), JSON.stringify(approval));
     }
 
+    // PR3 commit 3: handleActivityCallback now accepts a MessageConnector
+    // instead of a raw TelegramAPI. The connector knows its bound chatId,
+    // so editMessage takes (messageId, text) — no chat-id arg.
+    function createMockActivityConnector() {
+      return {
+        kind: 'telegram' as const,
+        capabilities: {
+          inlineButtons: true,
+          media: true,
+          voiceTranscription: false,
+          formattedText: true,
+          longPolling: true,
+          typingIndicator: true,
+          reactions: true,
+          interactiveCallbacks: true,
+          messageEdits: true,
+        },
+        validateCredentials: vi.fn(),
+        sendMessage: vi.fn().mockResolvedValue({ id: '1', ts: 0 }),
+        sendMedia: vi.fn(),
+        startPolling: vi.fn(),
+        stopPolling: vi.fn(),
+        acknowledgeCallback: vi.fn().mockResolvedValue(undefined),
+        editMessage: vi.fn().mockResolvedValue(undefined),
+        setTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      } as any;
+    }
+
     it('appr_allow_<id>: resolves approval to approved, answers callback, edits message', async () => {
       const approvalId = 'approval_1234567890_abcde';
       writeTestApproval(approvalId);
 
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
       const query = createCallbackQuery(`appr_allow_${approvalId}`, {
         from: { id: 42, first_name: 'Alice', username: 'alice' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
       // Approval file moved from pending/ to resolved/ with status approved.
       const pendingFile = join(paths.approvalDir, 'pending', `${approvalId}.json`);
@@ -123,11 +150,13 @@ describe('FastChecker', () => {
       expect(approval.resolved_by).toContain('Alice');
       expect(approval.resolved_by).toContain('@alice');
 
-      // Telegram side effects: answerCallbackQuery + editMessageText called.
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Approved');
-      expect(activityApi.editMessageText).toHaveBeenCalled();
-      const editCall = activityApi.editMessageText.mock.calls[0];
-      expect(String(editCall[2])).toMatch(/Approved by Alice/);
+      // Connector side effects: acknowledgeCallback + editMessage called.
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Approved');
+      expect(activityConnector.editMessage).toHaveBeenCalled();
+      const editCall = activityConnector.editMessage.mock.calls[0];
+      // editMessage(messageId, text) — connector knows the chatId itself.
+      expect(editCall[0]).toBe('42');
+      expect(String(editCall[1])).toMatch(/Approved by Alice/);
     });
 
     it('appr_deny_<id>: resolves approval to denied with audit label', async () => {
@@ -135,24 +164,23 @@ describe('FastChecker', () => {
       writeTestApproval(approvalId);
 
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
       const query = createCallbackQuery(`appr_deny_${approvalId}`, {
         from: { id: 42, first_name: 'Alice', username: 'alice' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
       const resolvedFile = join(paths.approvalDir, 'resolved', `${approvalId}.json`);
       expect(existsSync(resolvedFile)).toBe(true);
       const approval = JSON.parse(readFileSync(resolvedFile, 'utf-8'));
       expect(approval.status).toBe('rejected');
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Denied');
-      const editCall = activityApi.editMessageText.mock.calls[0];
-      expect(String(editCall[2])).toMatch(/Denied by Alice/);
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Denied');
+      const editCall = activityConnector.editMessage.mock.calls[0];
+      expect(String(editCall[1])).toMatch(/Denied by Alice/);
     });
 
     it('rejects callbacks from non-whitelisted users with no state change', async () => {
@@ -160,44 +188,42 @@ describe('FastChecker', () => {
       writeTestApproval(approvalId);
 
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
       const query = createCallbackQuery(`appr_allow_${approvalId}`, {
         from: { id: 9999, first_name: 'Attacker', username: 'evil' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
       // Approval NOT resolved — still in pending/.
       const pendingFile = join(paths.approvalDir, 'pending', `${approvalId}.json`);
       expect(existsSync(pendingFile)).toBe(true);
       // Security callback answered but edit NEVER called.
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Not authorized');
-      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Not authorized');
+      expect(activityConnector.editMessage).not.toHaveBeenCalled();
     });
 
     it('unknown approval_id: fails gracefully, answers with error, no state mutation', async () => {
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
       const query = createCallbackQuery('appr_allow_approval_1_ghost', {
         from: { id: 42, first_name: 'Alice', username: 'alice' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
-      // No resolved file created, editMessageText not called (approval
+      // No resolved file created, editMessage not called (approval
       // file never existed so no successful resolution path).
       expect(existsSync(join(paths.approvalDir, 'resolved'))).toBe(false);
-      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+      expect(activityConnector.editMessage).not.toHaveBeenCalled();
       // User gets a friendly "not found" on the callback spinner.
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith(
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith(
         'cb-123',
         expect.stringMatching(/not found|already resolved/i),
       );
@@ -205,9 +231,8 @@ describe('FastChecker', () => {
 
     it('non-appr_* prefix: ignored with "Unknown button" response, no state mutation', async () => {
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
@@ -218,10 +243,10 @@ describe('FastChecker', () => {
       const query = createCallbackQuery('perm_allow_deadbeef', {
         from: { id: 42, first_name: 'Alice', username: 'alice' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Unknown button');
-      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Unknown button');
+      expect(activityConnector.editMessage).not.toHaveBeenCalled();
     });
   });
 
