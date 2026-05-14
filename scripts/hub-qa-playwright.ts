@@ -822,6 +822,18 @@ async function runDashboardChecks(page: Page): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
   const sp = 'dashboard';
 
+  // Wait for the dashboard shell to render before assertions.
+  // Real-time Supabase subscriptions keep the network active, so waitForLoadState('networkidle')
+  // fires on its 5s timeout rather than a real idle — the DOM may still be hydrating.
+  // Use waitForSelector instead of a static timeout so we proceed as soon as actual content
+  // appears rather than always burning N seconds even when the page loads fast.
+  await Promise.race([
+    page.waitForSelector(
+      'button, nav, header, aside, [class*="metric"], [class*="card"], [class*="agent"], [class*="sidebar"], [class*="nav"]',
+      { timeout: 25000 }
+    ).catch(() => {}),
+    new Promise<void>(r => setTimeout(r, 25000)),
+  ]);
   const loadResult = await checkLoad(page, sp);
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
