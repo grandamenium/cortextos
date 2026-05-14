@@ -3,6 +3,7 @@ import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { spawnSync } from 'child_process';
+import { uninstallSelfHealing } from './install-self-healing.js';
 
 export const uninstallCommand = new Command('uninstall')
   .option('--instance <id>', 'Instance ID', 'default')
@@ -47,6 +48,21 @@ export const uninstallCommand = new Command('uninstall')
       }
     } catch {
       // PM2 not available, skip
+    }
+
+    // Fleet-resilience #6: unload + remove self-healing launchd plists.
+    // No-op on Linux. Runs before state-dir removal so its logs (which live
+    // under ctxRoot) get cleaned up by the subsequent rmSync.
+    const shResult = uninstallSelfHealing(ctxRoot, instanceId);
+    if (shResult.unloaded.length > 0) {
+      console.log(`  Unloaded self-healing: ${shResult.unloaded.join(', ')}`);
+    }
+    if (shResult.failed.length > 0) {
+      console.log(`  ! Some self-healing unloads failed: ${shResult.failed.join('; ')}`);
+      console.log('    Services may still be registered with launchd. Verify with:');
+      console.log('      launchctl list | grep cortextos');
+      console.log('    To clean up by hand:');
+      console.log('      launchctl bootout gui/$(id -u)/<label>');
     }
 
     if (options.keepState) {

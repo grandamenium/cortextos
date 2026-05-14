@@ -4,6 +4,7 @@ import { join } from 'path';
 import { homedir, platform, arch } from 'os';
 import { execSync, spawnSync } from 'child_process';
 import { randomBytes } from 'crypto';
+import { installSelfHealing } from './install-self-healing.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const IS_MAC = platform() === 'darwin';
@@ -81,8 +82,9 @@ function tryInstallFfmpeg(): boolean {
 
 export const installCommand = new Command('install')
   .option('--instance <id>', 'Instance ID', 'default')
+  .option('--skip-self-healing', 'Skip the macOS launchd self-healing daemons (#6)')
   .description('Install cortextOS — create state directories, check and install dependencies')
-  .action(async (options: { instance: string }) => {
+  .action(async (options: { instance: string; skipSelfHealing?: boolean }) => {
     const instanceId = options.instance;
     const ctxRoot = join(homedir(), '.cortextos', instanceId);
 
@@ -433,6 +435,25 @@ export const installCommand = new Command('install')
     } else {
       console.log('  ! npm link failed. Run manually: npm link (from the cortextOS directory)');
       console.log('    Without this, agents cannot use bus commands in PTY sessions.');
+    }
+
+    // Fleet-resilience #6: install + load the launchd self-healing daemons.
+    // The 2026-05-14 outage post-mortem identified the manual `launchctl load`
+    // step as the gap that left this machine with zero self-healing scripts.
+    console.log('Installing self-healing daemons...');
+    const shResult = installSelfHealing(ctxRoot, instanceId, { skip: options.skipSelfHealing });
+    if (options.skipSelfHealing) {
+      console.log('  ! Skipped via --skip-self-healing');
+    } else if (shResult.installed.length > 0) {
+      console.log(`  ✓ Loaded ${shResult.installed.length}: ${shResult.installed.join(', ')}`);
+    }
+    if (shResult.skipped.length > 0 && !options.skipSelfHealing) {
+      console.log(`  ✓ Already loaded: ${shResult.skipped.join(', ')}`);
+    }
+    if (shResult.failed.length > 0) {
+      for (const f of shResult.failed) {
+        console.log(`  ! ${f.name}: ${f.reason}`);
+      }
     }
 
     console.log('\n  Installation complete.');

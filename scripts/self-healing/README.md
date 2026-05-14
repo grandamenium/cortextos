@@ -17,6 +17,10 @@ Each script is matched by a launchd plist template you customize once.
 
 ## Install (macOS)
 
+**Automatic:** `cortextos install` now copies the scripts into `~/.cortextos/<instance>/scripts/`, renders the plist templates, and `launchctl bootstrap`s each into your user session — no manual sed/copy/load needed. The 2026-05-14 fleet-resilience post-mortem traced a 9-hour silent outage to this manual step being skipped. Folding the install closes that gap.
+
+Opt-out: `cortextos install --skip-self-healing` if you'd rather wire your own supervision.
+
 Prerequisites:
 
 - `pm2` (already required by cortextOS)
@@ -24,38 +28,49 @@ Prerequisites:
 - `ccusage` for `usage-monitor.sh` only (`npm install -g ccusage`)
 - A registered Telegram bot for alerts. By default the scripts auto-detect the first enabled orchestrator's bot from `~/.cortextos/<instance>/config/enabled-agents.json`. You can override with `CORTEXTOS_ALERT_BOT_ENV`.
 
-Steps:
+Verify after install:
 
 ```bash
-# 1. Copy scripts into your local cortextOS state dir (so they live with your instance, not the repo)
+launchctl list | grep cortextos    # expect 4 lines (one per service)
+```
+
+### Manual install (rarely needed)
+
+If `cortextos install` couldn't complete the launchd step for some reason (Gatekeeper, locked-down macOS, etc.), the manual version is:
+
+```bash
+# 1. Copy scripts into your local cortextOS state dir
 mkdir -p ~/.cortextos/default/scripts ~/.cortextos/default/logs
 cp scripts/self-healing/{watchdog,agent-recover,usage-monitor,compact-boundary-watcher}.sh ~/.cortextos/default/scripts/
 chmod +x ~/.cortextos/default/scripts/*.sh
 
-# 2. Render plist templates (substitute {USER}, {HOME}, {INSTANCE} for your values, then drop into ~/Library/LaunchAgents)
-USER=$(whoami) HOME_DIR="$HOME" INSTANCE=default
+# 2. Render plist templates ({HOME}, {INSTANCE} are the only tokens used)
+INSTANCE=default
 for f in scripts/self-healing/*.plist.template; do
   out="$HOME/Library/LaunchAgents/$(basename "${f%.template}")"
-  sed -e "s|{USER}|$USER|g" -e "s|{HOME}|$HOME_DIR|g" -e "s|{INSTANCE}|$INSTANCE|g" "$f" > "$out"
+  sed -e "s|{HOME}|$HOME|g" -e "s|{INSTANCE}|$INSTANCE|g" "$f" > "$out"
 done
 
-# 3. Load the launchd jobs
+# 3. Bootstrap the launchd jobs (modern macOS) — falls back to `launchctl load -w` if bootstrap fails
+UID_=$(id -u)
 for f in ~/Library/LaunchAgents/com.cortextos.{watchdog,agent-recover,usage-monitor,compact-boundary-watcher}.plist; do
-  launchctl load "$f"
+  launchctl bootstrap gui/$UID_ "$f"
 done
-
-# 4. Verify
-launchctl list | grep cortextos
 ```
 
 Each script writes to `~/.cortextos/<instance>/logs/<scriptname>.log`. Tail those to see what they're doing.
 
 ## Uninstall
 
+**Automatic:** `cortextos uninstall` bootouts the services and removes the plist files.
+
+**Manual:** 
+
 ```bash
-for f in ~/Library/LaunchAgents/com.cortextos.{watchdog,agent-recover,usage-monitor,compact-boundary-watcher}.plist; do
-  launchctl unload "$f"
-  rm "$f"
+UID_=$(id -u)
+for s in watchdog agent-recover usage-monitor compact-boundary-watcher; do
+  launchctl bootout gui/$UID_/com.cortextos.$s
+  rm "$HOME/Library/LaunchAgents/com.cortextos.$s.plist"
 done
 ```
 
