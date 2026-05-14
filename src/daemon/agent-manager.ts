@@ -269,14 +269,37 @@ export class AgentManager {
       const tgApi = telegramApi;
       const tgChatId = chatId;
       let prevStatus: string | null = null;
+      // Issue #07 fix: AgentProcess.handleSpawnFailure fires this callback
+      // BEFORE notifyStatusChange. We capture the error signature here so the
+      // status-change handler (which fires next) can pick a spawn-fail-specific
+      // message instead of the generic "crashed — auto-restarting" one. The
+      // signature is consumed (cleared) on each announcement to keep the
+      // alert flow 1:1 with failure events.
+      let pendingSpawnFailErr: string | null = null;
+      agentProcess.onSpawnFailureRaised((errSig) => {
+        pendingSpawnFailErr = errSig;
+      });
       agentProcess.onStatusChanged((status) => {
         if (status.status === 'crashed') {
           const crashNum = status.crashCount ?? '?';
-          tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
+          if (pendingSpawnFailErr !== null) {
+            const errSig = pendingSpawnFailErr;
+            pendingSpawnFailErr = null;
+            tgApi.sendMessage(tgChatId, `Agent ${name} failed to spawn (crash #${crashNum}) — ${errSig}. Daemon may need restart if this persists.`).catch(() => {});
+          } else {
+            tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
+          }
         } else if (status.status === 'halted') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
+          if (pendingSpawnFailErr !== null) {
+            const errSig = pendingSpawnFailErr;
+            pendingSpawnFailErr = null;
+            tgApi.sendMessage(tgChatId, `Agent ${name} HALTED on spawn failure — ${errSig}. Daemon restart required: pm2 restart cortextos-daemon`).catch(() => {});
+          } else {
+            tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
+          }
         } else if (status.status === 'running' && prevStatus === 'crashed') {
           tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
+          pendingSpawnFailErr = null;
         }
         prevStatus = status.status;
       });

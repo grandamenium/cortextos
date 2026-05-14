@@ -346,3 +346,125 @@ describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
     expect(refreshSpy).not.toHaveBeenCalled();
   });
 });
+
+// Issue #07 fix: pty.spawn() rejection (e.g. `posix_spawnp failed` after a
+// pnpm install stales the daemon's node-pty binding) used to leave the agent
+// silently stuck in 'crashed' state forever. These tests guard the symmetry
+// with handleExit: bounded retry, SPAWN-FAIL row, HALT at maxCrashesPerDay,
+// side-channel callback for the cross-agent storm detector.
+describe('AgentProcess - issue #07: pty.spawn() failure recovery', () => {
+  it('records SPAWN-FAIL to restarts.log and schedules a retry', async () => {
+    mockPty.spawn.mockRejectedValueOnce(new Error('posix_spawnp failed.'));
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(1);
+    // restarts.log must have a SPAWN-FAIL row carrying the error signature
+    // and the backoff window the operator can expect.
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    const [logPath, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logPath)).toContain('/logs/alice/restarts.log');
+    expect(String(logLine)).toMatch(/\] SPAWN-FAIL: crash_count=1 backoff_s=5 err=.*posix_spawnp failed/);
+  });
+
+  it('fires onSpawnFailureRaised with the err signature before status change', async () => {
+    mockPty.spawn.mockRejectedValueOnce(new Error('posix_spawnp failed.'));
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    const callOrder: string[] = [];
+    let capturedSig: string | null = null;
+    ap.onSpawnFailureRaised(sig => { callOrder.push('spawn-fail'); capturedSig = sig; });
+    ap.onStatusChanged(() => { callOrder.push('status-change'); });
+
+    await ap.start();
+
+    // Storm detector must hear BEFORE the alert handler — that's how the
+    // alert handler picks the spawn-fail-specific message over the generic
+    // "auto-restarting" one.
+    expect(callOrder[0]).toBe('spawn-fail');
+    expect(callOrder).toContain('status-change');
+    expect(capturedSig).toMatch(/posix_spawnp failed/);
+  });
+
+  it('schedules retry with exponential backoff and triggers it after the window', async () => {
+    vi.useFakeTimers();
+    try {
+      // First spawn fails, second succeeds — covers a transient resource
+      // failure (e.g. EAGAIN) that resolves between retries.
+      mockPty.spawn
+        .mockRejectedValueOnce(new Error('posix_spawnp failed.'))
+        .mockResolvedValueOnce(undefined);
+
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+      expect(ap.getStatus().status).toBe('crashed');
+
+      // Advance just past 5s (crash #1 backoff) — second spawn fires, succeeds.
+      await vi.advanceTimersByTimeAsync(5100);
+      expect(mockPty.spawn).toHaveBeenCalledTimes(2);
+      expect(ap.getStatus().status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('HALTS at max_crashes_per_day and writes SPAWN-FAIL-HALTED', async () => {
+    // max=2 → first failure schedules retry (crashCount becomes 1, halt
+    // gate not yet tripped). Construct an agent that's ALREADY one crash
+    // away from halt to keep the test concise.
+    mockPty.spawn.mockRejectedValueOnce(new Error('posix_spawnp failed.'));
+    const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 1 });
+
+    await ap.start();
+
+    expect(ap.getStatus().status).toBe('halted');
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toMatch(/\] SPAWN-FAIL-HALTED: crash_count=1 max_crashes=1 err=.*posix_spawnp failed/);
+  });
+
+  it('does NOT retry or increment crashCount when stop is in flight', async () => {
+    // Operator-initiated teardown that races with a spawn failure: we should
+    // record the failure (storm detector still cares) but not schedule a
+    // recovery — the user asked to stop.
+    mockPty.spawn.mockImplementationOnce(async () => {
+      // Simulate concurrent stop() while spawn is in flight. We poke the
+      // internal flag directly because triggering it via the public API in
+      // a single synchronous tick is awkward and not what we're testing.
+      (ap as unknown as { stopRequested: boolean }).stopRequested = true;
+      throw new Error('posix_spawnp failed.');
+    });
+    const ap = new AgentProcess('alice', mockEnv, {});
+
+    await ap.start();
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount ?? 0).toBe(0);
+    // No restarts.log row, no .crash_count_today increment — this is a
+    // stop-race, not a real crash from the agent's perspective.
+    expect(fsMocks.appendFileSync).not.toHaveBeenCalled();
+  });
+
+  it('does NOT retry during daemon shutdown', async () => {
+    fsMocks.existsSync.mockImplementation((p: unknown) =>
+      typeof p === 'string' && p.endsWith('/state/alice/.daemon-stop'),
+    );
+    fsMocks.statSync.mockImplementation(() => ({ mtimeMs: Date.now() - 2_000 } as never));
+    mockPty.spawn.mockRejectedValueOnce(new Error('posix_spawnp failed.'));
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    let spawnFailHeard = false;
+    ap.onSpawnFailureRaised(() => { spawnFailHeard = true; });
+
+    await ap.start();
+
+    // Storm detector still hears — a stale binding caused this regardless of
+    // why we were starting an agent. But no per-agent retry / crash count
+    // increment, because the daemon is on its way down.
+    expect(spawnFailHeard).toBe(true);
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount ?? 0).toBe(0);
+    expect(fsMocks.appendFileSync).not.toHaveBeenCalled();
+  });
+});

@@ -20,6 +20,7 @@ vi.mock('../../../src/daemon/agent-process.js', () => ({
     onExit() { /* no-op */ }
     setTelegramHandle() { /* no-op */ }
     onStatusChanged() { /* no-op */ }
+    onSpawnFailureRaised() { /* no-op */ }
   },
 }));
 

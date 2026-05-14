@@ -54,6 +54,15 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // Issue #07 fix: catch-side spawn failure recovery. Until this callback,
+  // `posix_spawnp failed` from pty.spawn() left the agent silently stuck in
+  // 'crashed' state (no retry, no escalation). AgentManager registers this
+  // handler to feed the cross-agent spawn-failure tracker, which decides
+  // whether the daemon's node-pty binding has gone stale (e.g. after a
+  // pnpm/npm reinstall replaced spawn-helper) and needs a full daemon
+  // respawn via process.exit(1). errSignature is `${err.code ?? err.name}:${err.message}`
+  // (truncated) — short enough to compare, long enough to attribute.
+  private onSpawnFailure: ((errSignature: string) => void) | null = null;
   // Issue #330: held here so CodexAppServerPTY can be re-wired across session refresh
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
@@ -172,9 +181,7 @@ export class AgentProcess {
 
       this.notifyStatusChange();
     } catch (err) {
-      this.log(`Failed to start: ${err}`);
-      this.status = 'crashed';
-      this.notifyStatusChange();
+      this.handleSpawnFailure(err);
     }
   }
 
@@ -328,6 +335,15 @@ export class AgentProcess {
    */
   onStatusChanged(handler: (status: AgentStatus) => void): void {
     this.onStatusChange = handler;
+  }
+
+  /**
+   * Register a spawn-failure handler. Fires once per failed pty.spawn() —
+   * separate from status-change events because the cross-agent storm
+   * detector needs the error signature, not just the agent's status.
+   */
+  onSpawnFailureRaised(handler: (errSignature: string) => void): void {
+    this.onSpawnFailure = handler;
   }
 
   /**
@@ -685,21 +701,117 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED',
+    kind: 'CRASH' | 'HALTED' | 'SPAWN-FAIL' | 'SPAWN-FAIL-HALTED',
+    errSignature?: string,
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
       ensureDir(logDir);
       const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-      const details =
-        kind === 'HALTED'
-          ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
-          : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+      let details: string;
+      if (kind === 'HALTED') {
+        details = `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`;
+      } else if (kind === 'SPAWN-FAIL') {
+        details = `crash_count=${this.crashCount} backoff_s=${backoffMs / 1000} err=${errSignature ?? 'unknown'}`;
+      } else if (kind === 'SPAWN-FAIL-HALTED') {
+        details = `crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay} err=${errSignature ?? 'unknown'}`;
+      } else {
+        details = `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+      }
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {
       /* swallow — never break crash recovery on a logging failure */
     }
+  }
+
+  /**
+   * Issue #07 fix: peer of handleExit() for the case where pty.spawn() itself
+   * throws (child never started — typically `posix_spawnp failed`). Previously
+   * the catch block only set status='crashed' and stopped, which on
+   * 2026-05-14 left the fleet silently down for 9h after a pnpm install
+   * staled the daemon's node-pty binding.
+   *
+   * Mirrors handleExit's flow:
+   *   - bail if shutdown/stop intentional,
+   *   - increment crashCount,
+   *   - HALT at max_crashes_per_day,
+   *   - otherwise schedule retry with exponential backoff,
+   *   - persist a SPAWN-FAIL / SPAWN-FAIL-HALTED row to restarts.log,
+   *   - notify status (alert handler distinguishes via restarts.log tail or
+   *     the onSpawnFailure side-channel — see AgentManager wiring),
+   *   - fire onSpawnFailure so the cross-agent storm detector can decide
+   *     whether the daemon itself needs to respawn.
+   *
+   * Retry won't fix a stale node-pty binding (every retry hits the same
+   * cached path), so the per-agent retry loop is bounded by maxCrashesPerDay
+   * and the cross-agent detector is the actual recovery path for that class
+   * of failure. For transient kernel-level failures (RLIMIT_NPROC, etc.) the
+   * retry alone is the fix.
+   */
+  private handleSpawnFailure(err: unknown): void {
+    const errSignature = this.extractErrSignature(err);
+    this.log(`Failed to start: ${errSignature}`);
+
+    // Honor in-flight stop / daemon shutdown — never recover an intentional teardown.
+    if (this.stopRequested || this.stopping || this.isDaemonShuttingDown()) {
+      // Fire side-channel BEFORE status change so the storm detector sees the
+      // failure even on intentional teardown (a stale binding caused the
+      // failure regardless of whether the operator asked to stop).
+      this.onSpawnFailure?.(errSignature);
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      return;
+    }
+
+    this.crashCount++;
+    const today = new Date().toISOString().split('T')[0];
+    this.resetCrashCountIfNewDay(today);
+
+    if (this.crashCount >= this.maxCrashesPerDay) {
+      this.log(`HALTED on spawn failure: exceeded ${this.maxCrashesPerDay} crashes today`);
+      this.appendCrashToRestartsLog(0, 0, 'SPAWN-FAIL-HALTED', errSignature);
+      // Side-channel first: AgentManager uses the spawn-fail signal to
+      // suppress the generic "crashed — auto-restarting" alert and emit a
+      // spawn-fail-specific one instead. Order matters for alert dedup.
+      this.onSpawnFailure?.(errSignature);
+      this.status = 'halted';
+      this.notifyStatusChange();
+      return;
+    }
+
+    const backoff = Math.min(5000 * Math.pow(2, this.crashCount - 1), 300000);
+    this.log(`Spawn-fail recovery: retry in ${backoff / 1000}s (crash #${this.crashCount}) err=${errSignature}`);
+    this.appendCrashToRestartsLog(0, backoff, 'SPAWN-FAIL', errSignature);
+    // Side-channel first (see HALTED branch for ordering rationale). The
+    // storm detector may decide to process.exit(1) the daemon — in that
+    // case PM2 respawns and the setTimeout below never fires, but the new
+    // daemon's startup loop re-spawns the agent against fresh bindings.
+    this.onSpawnFailure?.(errSignature);
+    this.status = 'crashed';
+    this.notifyStatusChange();
+
+    setTimeout(() => {
+      if (this.status === 'crashed' && !this.stopping && !this.stopRequested) {
+        this.start().catch(retryErr => this.log(`Spawn-fail retry failed: ${retryErr}`));
+      }
+    }, backoff);
+  }
+
+  /**
+   * Reduce a thrown spawn error to a compact, comparable signature for the
+   * storm detector and restarts.log. node-pty's posix_spawnp failures arrive
+   * as `Error: posix_spawnp failed.` (Error instance); kernel resource
+   * failures look like `Error: EAGAIN: resource temporarily unavailable`.
+   * Both reduce cleanly here.
+   */
+  private extractErrSignature(err: unknown): string {
+    if (err instanceof Error) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const base = `${code ? code + ':' : ''}${err.message}`;
+      return base.slice(0, 200);
+    }
+    return String(err).slice(0, 200);
   }
 
   private resetCrashCountIfNewDay(today: string): void {
