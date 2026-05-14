@@ -9,7 +9,7 @@ import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
-import { TelegramConnector, NullConnector } from '../connectors/index.js';
+import { TelegramConnector, NullConnector, getConnector } from '../connectors/index.js';
 import type { MessageConnector } from '../connectors/index.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -278,15 +278,25 @@ export class AgentManager {
 
     // Dispatch on explicit `config.connector` first; fall back to the legacy
     // gate when absent. Codex M1.cr — without this branch the override was
-    // declared in AgentConfig but silently ignored by startAgent.
+    // declared in AgentConfig but silently ignored by startAgent. Three-way
+    // dispatch (Codex M1.crv refinement) so future connector kinds reach the
+    // factory without revisiting this site.
     if (config.connector === 'none') {
       // Explicit no-comms agent. Skip the legacy Telegram gate entirely
       // (including its WARNING/SECURITY log lines — none of them apply when
       // the operator has opted out of Telegram by config).
       connector = new NullConnector();
+    } else if (config.connector && config.connector !== 'telegram') {
+      // Future connector kinds (Matrix, RocketChat, etc.). Dormant today —
+      // CONNECTOR_ALLOWLIST is just ['telegram', 'none'] — but the factory
+      // is the dispatch point so adding a new kind is purely additive
+      // (extend the union in AgentConfig, extend CONNECTOR_ALLOWLIST, add
+      // the implementation under src/connectors/<kind>/, add to the
+      // factory's switch). No edit to startAgent required.
+      connector = getConnector(config.connector, agentDir, process.env);
     } else {
-      // config.connector === 'telegram' or undefined (today's default
-      // inference path). Resolve the legacy gate.
+      // config.connector === 'telegram' explicit, or undefined (today's
+      // default inference path). Resolve the legacy gate against .env.
       const legacy = resolveLegacyTelegramEnablement(agentEnvFile, log);
       if (legacy.enabled) {
         botToken = legacy.botToken;
