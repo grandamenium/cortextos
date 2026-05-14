@@ -52,5 +52,7 @@ WINDOWS-IMPLEMENTATION-PLAN.md
 WINDOWS-SUPPORT-INVESTIGATION.md
 BRAINDUMP*.md
 AGENTS.md
+# But AGENTS.md inside templates/ is a static template file that must ship.
+!templates/**/AGENTS.md
 dashboard/screenshots/
 dashboard/test-*.py

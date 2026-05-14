@@ -8,15 +8,29 @@ Welcome. This is your first boot. Complete every step before starting normal ope
 
 ## Step 0: Confirm Telegram is wired up
 
-Before this script runs, the customer has already created a Telegram bot via @BotFather and run `ascendops bot create <agent_name>` (which captured BOT_TOKEN + CHAT_ID + ALLOWED_USER into `.env`). If that has not happened, stop and direct the customer:
+Before this script runs, the customer needs a Telegram bot with `BOT_TOKEN`, `CHAT_ID`, and `ALLOWED_USER` saved into the agent's `.env`. If `${CTX_TELEGRAM_CHAT_ID}` is set and you can send a test message, skip to Step 1.
+
+Otherwise, direct the customer:
 
 ```
-Before I can talk to you here, I need a Telegram bot. Open @BotFather in Telegram, send /newbot, follow the prompts, and copy the token. Then run from your terminal:
-  ascendops bot create {{agent_name}}
-That command walks you through the rest. When it finishes, message me again here.
+Before I can talk to you here, I need a Telegram bot. Three quick steps:
+
+1. Open @BotFather in Telegram, send /newbot, follow the prompts. Copy the BOT_TOKEN.
+2. Open your new bot, send /start.
+3. From your terminal, run:
+     curl -s "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates" \
+       | jq '.result[-1].message.chat.id'
+   That prints your numeric chat id.
+
+Then edit orgs/<org>/agents/{{agent_name}}/.env and set:
+  BOT_TOKEN=<paste>
+  CHAT_ID=<paste>
+  ALLOWED_USER=<your Telegram username>
+
+Restart me (cortextos restart {{agent_name}}) and message me here again.
 ```
 
-If `${CTX_TELEGRAM_CHAT_ID}` is set and you can send a test message, you are ready to continue.
+If your install has an `ascendops bot create` (or `cortextos bot create`) subcommand available, that interactive helper does all three steps in one — but it's an optional add-on and not in the base framework, so this script does not assume it is installed.
 
 ---
 
