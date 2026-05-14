@@ -49,12 +49,6 @@
       "type": "recurring",
       "cron": "17,47 * * * *",
       "prompt": "Kanban hygiene sweep: (1) cortextos bus list-tasks --agent orchestrator status filters; (2) mcp__rgos__cortex_list_tasks for tasks created_by orchestrator and tasks assigned_to orchestrator — compare to current dispatches in today's memory file. (3) For any RGOS task stuck in approved/in_progress that's actually done, complete it via mcp__rgos__cortex_complete_task. (4) For any in-flight work without an RGOS task, create one. (5) update-heartbeat. Silent unless something requires action."
-    },
-    {
-      "name": "goal-progress-probe",
-      "type": "recurring",
-      "interval": "6h",
-      "prompt": "Run goal progress probe: cd /home/cortextos/cortextos && cortextos bus goal-progress-probe --notify-agent orchestrator. Review the rollup written to orchestrator memory; only escalate externally if more than two agents are stalled."
     }
   ],
   "ctx_autoreset_threshold": 90,

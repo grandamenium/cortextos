@@ -13,6 +13,9 @@ interface AgentGoals {
 export interface GoalProbeAgentResult {
   agent: string;
   goalCount: number;
+  goalsUpdatedAt: string;
+  goalsAgeHours: number | null;
+  staleGoalsFile: boolean;
   mentioned: boolean;
   matchedTerms: string[];
   latestMemoryFiles: string[];
@@ -99,6 +102,13 @@ function goalTerms(goals: AgentGoals): string[] {
   return Array.from(new Set(parts.flatMap(keywords)));
 }
 
+function hoursSince(iso: string | undefined, nowMs: number): number | null {
+  if (!iso) return null;
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, (nowMs - parsed) / 3_600_000);
+}
+
 function renderReport(result: GoalProgressProbeResult): string {
   const lines = [
     '# Goal Progress Probe',
@@ -112,16 +122,20 @@ function renderReport(result: GoalProgressProbeResult): string {
   if (result.stalledAgents.length > 0) {
     lines.push('## Stalled', '');
     for (const agent of result.stalledAgents) {
-      lines.push(`- ${agent.agent}: ${agent.goalCount} goals, no goal keywords found in last 24h memory. Bottleneck: ${agent.bottleneck || 'none'}`);
+      const reasons = [
+        agent.staleGoalsFile ? `goals.json age ${agent.goalsAgeHours === null ? 'unknown' : `${agent.goalsAgeHours.toFixed(1)}h`}` : '',
+        !agent.mentioned ? 'no goal keywords found in last 24h memory' : '',
+      ].filter(Boolean).join('; ');
+      lines.push(`- ${agent.agent}: ${agent.goalCount} goals, ${reasons}. Bottleneck: ${agent.bottleneck || 'none'}`);
     }
     lines.push('');
   }
 
   lines.push('## Agent Results', '');
-  lines.push('| Agent | Goals | Mentioned | Matched terms |');
-  lines.push('| --- | ---: | --- | --- |');
+  lines.push('| Agent | Goals | Goals age | Mentioned | Matched terms |');
+  lines.push('| --- | ---: | ---: | --- | --- |');
   for (const agent of result.agents) {
-    lines.push(`| ${agent.agent} | ${agent.goalCount} | ${agent.mentioned ? 'yes' : 'no'} | ${agent.matchedTerms.join(', ') || '-'} |`);
+    lines.push(`| ${agent.agent} | ${agent.goalCount} | ${agent.goalsAgeHours === null ? '-' : agent.goalsAgeHours.toFixed(1)}h | ${agent.mentioned ? 'yes' : 'no'} | ${agent.matchedTerms.join(', ') || '-'} |`);
   }
   lines.push('');
   return lines.join('\n');
@@ -135,6 +149,7 @@ export function runGoalProgressProbe(
   options: { outputDir?: string; orchestratorMemoryDir?: string } = {},
 ): GoalProgressProbeResult {
   const generatedAt = new Date().toISOString();
+  const nowMs = Date.now();
   const agentsDir = join(projectRoot, 'orgs', org, 'agents');
   const agents: GoalProbeAgentResult[] = [];
 
@@ -146,9 +161,13 @@ export function runGoalProgressProbe(
       const terms = goalTerms(goals);
       const memory = memoryText(agentDir);
       const matchedTerms = terms.filter(term => memory.text.includes(term));
+      const goalsAgeHours = hoursSince(goals.updated_at, nowMs);
       agents.push({
         agent: entry.name,
         goalCount: goals.goals?.length || 0,
+        goalsUpdatedAt: goals.updated_at || '',
+        goalsAgeHours,
+        staleGoalsFile: goalsAgeHours === null || goalsAgeHours > 24,
         mentioned: matchedTerms.length > 0,
         matchedTerms: matchedTerms.slice(0, 8),
         latestMemoryFiles: memory.files,
@@ -158,7 +177,7 @@ export function runGoalProgressProbe(
   }
 
   agents.sort((a, b) => a.agent.localeCompare(b.agent));
-  const stalledAgents = agents.filter(agent => !agent.mentioned);
+  const stalledAgents = agents.filter(agent => agent.staleGoalsFile || !agent.mentioned);
   const result: GoalProgressProbeResult = {
     generatedAt,
     agentsChecked: agents.length,

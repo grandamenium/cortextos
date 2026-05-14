@@ -24,7 +24,7 @@
       "name": "heartbeat",
       "type": "recurring",
       "interval": "4h",
-      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task. Piggyback goal-progress probe: cd /home/cortextos/cortextos && cortextos bus goal-progress-probe --notify-agent orchestrator. Review stale-goal flags in the report; do not create a separate cron for this probe."
     },
     {
       "name": "nightly-metrics",
