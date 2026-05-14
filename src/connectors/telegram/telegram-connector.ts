@@ -12,6 +12,10 @@ import type {
 } from '../types.js';
 import { TelegramAPI } from './api.js';
 import { TelegramPoller } from './poller.js';
+import { processMediaMessage, type ProcessedMedia } from './media.js';
+import type {
+  NormalizedMedia,
+} from '../types.js';
 import type {
   TelegramMessage,
   TelegramCallbackQuery,
@@ -45,6 +49,7 @@ export class TelegramConnector implements MessageConnector {
   private readonly allowedUserId?: number;
   private readonly agentDir: string;
   private readonly pollerNamespace?: string;
+  private readonly downloadDir?: string;
   private poller: TelegramPoller | null = null;
 
   /**
@@ -55,17 +60,27 @@ export class TelegramConnector implements MessageConnector {
    * primary uses `.telegram-offset`, activity uses
    * `.telegram-offset-activity`. Added in PR3 of the pluggable-
    * connectors stack so activity-channel pluggability can land.
+   *
+   * `opts.downloadDir`: when set, the connector's inbound polling
+   * pipeline downloads media (photo/document/voice/audio/video/
+   * video_note) to this directory and emits a `NormalizedMessage`
+   * with `media` populated. When unset (e.g. activity-channel
+   * connector — outbound primarily, inbound is logged-only), media
+   * flags on inbound messages are ignored and a text-only normalized
+   * message is emitted. Added in PR4 of the pluggable-connectors
+   * stack (first-class `NormalizedMessage.media`).
    */
   constructor(
     agentDir: string,
     env: TelegramConnectorEnv,
-    opts?: { pollerNamespace?: string },
+    opts?: { pollerNamespace?: string; downloadDir?: string },
   ) {
     this.agentDir = agentDir;
     this.api = new TelegramAPI(env.BOT_TOKEN);
     this.chatId = env.CHAT_ID;
     this.allowedUserId = env.ALLOWED_USER ? parseInt(env.ALLOWED_USER, 10) : undefined;
     this.pollerNamespace = opts?.pollerNamespace;
+    this.downloadDir = opts?.downloadDir;
   }
 
   /**
@@ -196,7 +211,36 @@ export class TelegramConnector implements MessageConnector {
     this.poller = new TelegramPoller(this.api, stateDir, 1000, this.pollerNamespace);
 
     this.poller.onMessage((tgMsg: TelegramMessage) => {
-      handlers.onMessage(this.toNormalizedMessage(tgMsg));
+      // PR4: media enrichment pipeline. When the inbound message
+      // carries any media flag AND the connector was constructed with
+      // a `downloadDir`, we kick off media download + transcription
+      // fire-and-forget exactly as the pre-PR4 daemon's
+      // `processMediaMessage(...).then(...)` pattern did. The
+      // poller's offset advance happens synchronously after this
+      // handler returns; the user's onMessage fires AFTER the media
+      // pipeline settles (or immediately for text). Order matches the
+      // pre-migration behavior byte-for-byte — see
+      // `agent-manager.ts:466-509` (pre-PR4) for the old call site.
+      const baseMessage = this.toNormalizedMessage(tgMsg);
+      const hasMedia = !!(tgMsg.photo || tgMsg.document || tgMsg.voice || tgMsg.audio || tgMsg.video || tgMsg.video_note);
+      if (hasMedia && this.downloadDir) {
+        const downloadDir = this.downloadDir;
+        processMediaMessage(tgMsg, this.api, downloadDir).then((processed) => {
+          if (processed) {
+            handlers.onMessage({ ...baseMessage, media: this.toNormalizedMedia(processed) });
+          } else {
+            // Media flag set but processMediaMessage returned null
+            // (Telegram getFile failed, file_path missing, etc.). Fall
+            // back to text-only so the agent still sees the caption.
+            handlers.onMessage(baseMessage);
+          }
+        }).catch((err) => {
+          console.error('[telegram-connector] media processing error:', err);
+          handlers.onMessage(baseMessage);
+        });
+      } else {
+        handlers.onMessage(baseMessage);
+      }
     });
 
     if (handlers.onCallback) {
@@ -300,6 +344,26 @@ export class TelegramConnector implements MessageConnector {
       old_reaction: reaction.old_reaction ?? [],
       new_reaction: reaction.new_reaction ?? [],
       raw: reaction,
+    };
+  }
+
+  /**
+   * Translate `processMediaMessage`'s `ProcessedMedia` shape into the
+   * connector-agnostic `NormalizedMedia` shape. ProcessedMedia is a
+   * legacy Telegram-specific structure (photo uses `image_path`,
+   * everything else uses `file_path`); NormalizedMedia collapses both
+   * into a single `localPath` so downstream consumers don't care which
+   * provider produced the file. Added in PR4 of the pluggable-
+   * connectors stack.
+   */
+  private toNormalizedMedia(processed: ProcessedMedia): NormalizedMedia {
+    const localPath = processed.image_path ?? processed.file_path ?? '';
+    return {
+      kind: processed.type,
+      localPath,
+      fileName: processed.file_name,
+      duration: processed.duration,
+      transcription: processed.transcript,
     };
   }
 }

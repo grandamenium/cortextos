@@ -20,7 +20,6 @@ import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
-import { processMediaMessage } from '../telegram/media.js';
 
 /**
  * Legacy-compat Telegram enablement resolver (PR1 of pluggable connectors).
@@ -312,11 +311,16 @@ export class AgentManager {
         // warning dedup (api.ts:88) stay in lock-step across the connector
         // path and the legacy-field path. Previously these were two
         // distinct instances against the same bot token.
+        // PR4: `downloadDir` enables the connector's media-enrichment
+        // pipeline (photo / document / voice / audio / video /
+        // video_note → `NormalizedMessage.media`). Path matches the
+        // pre-PR4 daemon-inline `join(agentDir, 'telegram-images')`
+        // byte-for-byte so existing downloaded files keep their paths.
         connector = new TelegramConnector(agentDir, {
           BOT_TOKEN: legacy.botToken,
           CHAT_ID: legacy.chatId,
           ALLOWED_USER: legacy.allowedUserId,
-        });
+        }, { downloadDir: join(agentDir, 'telegram-images') });
         telegramApi = (connector as TelegramConnector).rawTelegramApi();
         // Don't log sensitive user IDs — just indicate the gate is enabled
         log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
@@ -438,11 +442,13 @@ export class AgentManager {
           }
         }
 
-        // PR3 transitional escape hatch: media detection + media download
-        // still rely on the Telegram tagged-union shape. The connector's
-        // NormalizedMessage exposes `text` (msg.text || msg.caption) but
-        // not the media-kind flags, so we read those off `m.raw` until
-        // a future PR introduces `m.media` as a first-class shape.
+        // PR4: media processing now happens inside TelegramConnector's
+        // polling pipeline, so `m.media` is pre-populated when this
+        // handler fires for a media message. The remaining `m.raw`
+        // cast is only for `msg.chat?.id` (provider chat id, used as
+        // effectiveChatId fallback) and `msg.reply_to_message` (full
+        // reply-message body for reply-context rendering). A future
+        // PR will normalize those too.
         const msg = m.raw as TelegramMessage;
         const from = stripControlChars(m.from.name || m.from.username || 'Unknown');
         const msgChatId = msg.chat?.id;
@@ -458,60 +464,45 @@ export class AgentManager {
         // event log.
         recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
 
-        // Check for media messages (photo, document, voice, audio, video, video_note)
-        const isMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
+        // PR4: media-formatted-message path uses `m.media` directly.
+        if (m.media) {
+          // BUG-046: Convert absolute paths to relative (from agent working
+          // dir). Claude Code strips absolute paths from pasted user input,
+          // so the agent never sees them. Relative paths survive injection.
+          // BUG-049: Use the agent's actual launch cwd
+          // (config.working_directory if set, else agentDir) so the path
+          // resolves when Read() is invoked.
+          const launchDir = config?.working_directory || agentDir;
+          const relLocalPath = relative(launchDir, m.media.localPath);
 
-        if (isMedia && telegramApi) {
-          const downloadDir = join(agentDir, 'telegram-images');
-          processMediaMessage(msg, telegramApi, downloadDir).then((media) => {
-            if (!media) {
-              log('Media processing returned null - falling back to text format');
-              const text = stripControlChars(msg.caption || '');
-              const formatted = FastChecker.formatTelegramTextMessage(from, effectiveChatId, text, this.frameworkRoot);
-              if (!checker.isDuplicate(formatted)) checker.queueTelegramMessage(formatted);
-              return;
-            }
+          log(`[DEBUG] media.kind=${m.media.kind} localPath=${JSON.stringify(relLocalPath)}`);
+          let formatted: string;
+          if (m.media.kind === 'photo') {
+            formatted = FastChecker.formatTelegramPhotoMessage(from, effectiveChatId, m.text, relLocalPath);
+          } else if (m.media.kind === 'document') {
+            formatted = FastChecker.formatTelegramDocumentMessage(from, effectiveChatId, m.text, relLocalPath, m.media.fileName ?? '');
+          } else if (m.media.kind === 'voice' || m.media.kind === 'audio') {
+            formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relLocalPath, m.media.duration, m.media.transcription);
+          } else {
+            // video or video_note
+            formatted = FastChecker.formatTelegramVideoMessage(from, effectiveChatId, m.text, relLocalPath, m.media.fileName ?? '', m.media.duration);
+          }
 
-            // BUG-046: Convert absolute paths to relative (from agent working dir).
-            // Claude Code strips absolute paths from pasted user input, so the
-            // agent never sees them. Relative paths survive injection.
-            // BUG-049: Use the agent's actual launch cwd (config.working_directory
-            // if set, else agentDir) so the path resolves when Read() is invoked.
-            const launchDir = config?.working_directory || agentDir;
-            const toRel = (p: string | undefined) => p ? relative(launchDir, p) : '';
-            const relImagePath = toRel(media.image_path);
-            const relFilePath = toRel(media.file_path);
-
-            log(`[DEBUG] media.type=${media.type} image_path=${JSON.stringify(relImagePath)} file_path=${JSON.stringify(relFilePath)}`);
-            let formatted: string;
-            if (media.type === 'photo') {
-              formatted = FastChecker.formatTelegramPhotoMessage(from, effectiveChatId, media.text, relImagePath);
-            } else if (media.type === 'document') {
-              formatted = FastChecker.formatTelegramDocumentMessage(from, effectiveChatId, media.text, relFilePath, media.file_name!);
-            } else if (media.type === 'voice' || media.type === 'audio') {
-              formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relFilePath, media.duration, media.transcript);
-            } else {
-              // video or video_note
-              formatted = FastChecker.formatTelegramVideoMessage(from, effectiveChatId, media.text, relFilePath, media.file_name || '', media.duration);
-            }
-
-            if (checker.isDuplicate(formatted)) {
-              log('Duplicate Telegram media message suppressed');
-              return;
-            }
-            log(`Media message received: type=${media.type}, path=${media.image_path || media.file_path}`);
-            checker.queueTelegramMessage(formatted);
-          }).catch((err) => {
-            log(`Media processing error: ${err} - falling back to text format`);
-            const text = stripControlChars(msg.caption || '');
-            const formatted = FastChecker.formatTelegramTextMessage(from, effectiveChatId, text, this.frameworkRoot);
-            if (!checker.isDuplicate(formatted)) checker.queueTelegramMessage(formatted);
-          });
+          if (checker.isDuplicate(formatted)) {
+            log('Duplicate Telegram media message suppressed');
+            return;
+          }
+          log(`Media message received: kind=${m.media.kind}, path=${m.media.localPath}`);
+          checker.queueTelegramMessage(formatted);
           return;
         }
 
-        // Text message (non-media)
-        const text = stripControlChars(msg.text || '');
+        // Text message (non-media). The connector emits this path either
+        // because the inbound message had no media flags, OR because
+        // media processing returned null (e.g. Telegram getFile failed) —
+        // in both cases `m.text` carries the right body (msg.text or
+        // msg.caption fallback per TelegramConnector.toNormalizedMessage).
+        const text = stripControlChars(m.text);
         const lastSent = FastChecker.readLastSent(stateDir, effectiveChatId);
         // Build reply context from the replied-to message.
         const replyToText = buildReplyContext(msg.reply_to_message);

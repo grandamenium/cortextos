@@ -291,6 +291,128 @@ describe('TelegramConnector', () => {
     });
   });
 
+  describe('media enrichment (PR4)', () => {
+    it('emits NormalizedMessage with m.media populated when downloadDir is set and message has photo', async () => {
+      // Mock the entire fetch surface used by both the poller (getUpdates)
+      // and the media pipeline (getFile + downloadFile).
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-media-'));
+      const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-media-dl-'));
+
+      const photoUpdate = {
+        update_id: 1,
+        message: {
+          message_id: 100,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          caption: 'a caption',
+          photo: [
+            { file_id: 'small_id', file_size: 100, width: 90, height: 90 },
+            { file_id: 'large_id', file_size: 5000, width: 800, height: 600 },
+          ],
+        },
+      };
+
+      let getUpdatesCalls = 0;
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          getUpdatesCalls++;
+          // Serve the photo update once; then return empty for subsequent polls
+          if (getUpdatesCalls === 1) {
+            return { body: { ok: true, result: [photoUpdate] } };
+          }
+          return { body: { ok: true, result: [] } };
+        }
+        if (url.includes('/getFile')) {
+          return { body: { ok: true, result: { file_path: 'photos/large_id.jpg' } } };
+        }
+        if (url.includes('file/bot')) {
+          // downloadFile path — return a tiny binary payload
+          return { body: 'fake-image-bytes' as any };
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      }, { downloadDir });
+
+      const received: any[] = [];
+      vi.useRealTimers();
+      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+
+      // Wait long enough for one poll cycle + the async media download
+      await new Promise((r) => setTimeout(r, 200));
+      await c.stopPolling();
+
+      expect(received).toHaveLength(1);
+      expect(received[0].media).toBeDefined();
+      expect(received[0].media.kind).toBe('photo');
+      expect(received[0].media.localPath).toContain(downloadDir);
+      expect(received[0].text).toBe('a caption');
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(downloadDir, { recursive: true, force: true });
+    });
+
+    it('emits text-only NormalizedMessage when downloadDir is NOT set, even for media messages', async () => {
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-no-media-'));
+
+      const photoUpdate = {
+        update_id: 1,
+        message: {
+          message_id: 100,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          caption: 'caption-only',
+          photo: [{ file_id: 'large_id', file_size: 5000, width: 800, height: 600 }],
+        },
+      };
+
+      let getUpdatesCalls = 0;
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          getUpdatesCalls++;
+          if (getUpdatesCalls === 1) {
+            return { body: { ok: true, result: [photoUpdate] } };
+          }
+          return { body: { ok: true, result: [] } };
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      // No downloadDir → no media enrichment, no getFile calls expected
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+
+      const received: any[] = [];
+      vi.useRealTimers();
+      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+
+      await new Promise((r) => setTimeout(r, 200));
+      await c.stopPolling();
+
+      expect(received).toHaveLength(1);
+      expect(received[0].media).toBeUndefined();
+      // Caption still flows through as text
+      expect(received[0].text).toBe('caption-only');
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    });
+  });
+
   describe('pollerNamespace (PR3)', () => {
     it('namespaced connector writes its offset file with the suffix', async () => {
       // Stub fetch so the inner poller's getUpdates resolves immediately

@@ -1,5 +1,62 @@
 # CHANGELOG
 
+## [unreleased] — Pluggable Communications Connectors (PR4 commit 1 — first-class media)
+
+Lifts media handling out of the daemon's onMessage handler into the
+connector itself. `NormalizedMessage.media` becomes a first-class
+shape (the standalone `NormalizedMedia` interface), and TelegramConnector
+owns the photo / document / voice / audio / video / video_note
+download + transcription pipeline that the daemon used to do inline
+via `processMediaMessage(...).then(...)`. The daemon's onMessage
+handler now dispatches synchronously on `m.media.kind` — one less
+`m.raw as TelegramMessage` cast in the hot path. Removes the PR3
+CHANGELOG out-of-scope item naming this work.
+
+### Added
+- **`NormalizedMedia` interface** at `src/connectors/types.ts` —
+  exported shape for pre-processed media attachments. Fields: `kind`
+  (photo/voice/document/video/audio/**video_note** — added in this PR),
+  `localPath` (absolute), `mime?`, `fileName?`, `duration?`,
+  `transcription?`.
+- **`TelegramConnector` constructor option `opts.downloadDir?: string`** —
+  when set, the connector's inbound polling pipeline downloads media
+  files to this directory and emits `NormalizedMessage.media` populated.
+  When unset (e.g. activity-channel connector — outbound primarily,
+  inbound is logged-only), media flags on inbound messages are ignored
+  and a text-only normalized message is emitted (caption still flows
+  through `m.text`).
+- **`TelegramConnector.toNormalizedMedia` private helper** — translates
+  the legacy Telegram-specific `ProcessedMedia` shape (where photo
+  uses `image_path`, everything else uses `file_path`) into the
+  generic `NormalizedMedia.localPath` field.
+
+### Changed
+- **`NormalizedMessage.media`** now references `NormalizedMedia`
+  instead of its previous inline shape. The previous shape required
+  `mime: string`; the new shape makes `mime` optional (no Telegram
+  caller populated it). `kind` union gained `'video_note'`.
+- **`AgentManager.startAgent` constructs the agent's primary
+  TelegramConnector with `downloadDir: join(agentDir,
+  'telegram-images')`** — path matches the pre-PR4 daemon-inline
+  download dir byte-for-byte so existing downloaded files keep their
+  paths. The activity-channel connector is constructed without
+  downloadDir (out-of-scope by design — activity channel doesn't
+  receive media).
+- **`AgentManager.startAgent` onMessage handler** drops the
+  `if (isMedia && telegramApi) { processMediaMessage(...).then(...) }`
+  block (44 lines), replaced by synchronous dispatch on `m.media.kind`.
+  Path-relativization (`relative(launchDir, localPath)` per BUG-046 +
+  BUG-049) still lives in the daemon — the connector returns absolute
+  paths, the daemon makes them relative to the agent's launch cwd.
+
+### Out of scope (deferred to PR4+)
+- Removing the legacy `telegramApi`/`chatId` constructor options on
+  FastChecker (currently kept for one-release backwards-compat).
+- Implementing Matrix / RocketChat connectors.
+- Normalizing `msg.reply_to_message` into a first-class shape (the
+  daemon's onMessage text path still reads it off `m.raw` for reply-
+  context rendering).
+
 ## [unreleased] — Pluggable Communications Connectors (PR3 — interactive lifecycle)
 
 Lands the interactive-message lifecycle abstraction PR2's CHANGELOG

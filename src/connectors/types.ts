@@ -49,6 +49,33 @@ export type ValidateResult =
       detail: string;
     };
 
+/**
+ * Pre-processed media attachment. The connector downloads the file (and
+ * transcribes voice/audio where supported) before emitting the
+ * NormalizedMessage that carries this, so the daemon can dispatch by
+ * `kind` without owning provider-specific media plumbing. PR4+ of the
+ * pluggable-connectors stack lifted this from a transitional inline
+ * type into a first-class shape so future connectors (Matrix,
+ * RocketChat) populate the same fields.
+ */
+export interface NormalizedMedia {
+  /** Discriminator the daemon uses to pick the right format function. */
+  kind: 'photo' | 'voice' | 'document' | 'video' | 'audio' | 'video_note';
+  /** Absolute path to the downloaded file on the connector's local disk. */
+  localPath: string;
+  /** MIME type when the provider exposed one. Optional — pre-PR4 Telegram
+   *  callers never populated this and the daemon doesn't read it; reserved
+   *  for future connectors that need MIME-based dispatch. */
+  mime?: string;
+  /** Original filename (document attachments + named audio uploads). */
+  fileName?: string;
+  /** Duration in seconds (voice/audio/video/video_note). */
+  duration?: number;
+  /** Transcribed text from voice/audio messages, when the connector's
+   *  transcription pipeline is wired and produced a result. */
+  transcription?: string;
+}
+
 export interface NormalizedMessage {
   /** Connector-specific message id, stringified. */
   id: string;
@@ -57,15 +84,13 @@ export interface NormalizedMessage {
   /** Originating user. `id` is stringified for cross-connector consistency
    *  (Telegram numeric, Matrix MXID, RocketChat username). */
   from: { id: string; username?: string; name?: string };
-  /** Text body. Empty when message is purely media. */
+  /** Text body. For media messages, this carries the caption. */
   text: string;
-  /** Optional attached media (downloaded by the connector to local disk). */
-  media?: {
-    kind: 'photo' | 'voice' | 'document' | 'video' | 'audio';
-    localPath: string;
-    mime: string;
-    transcription?: string;
-  };
+  /** Pre-processed media attachment. Present iff the inbound message
+   *  carried media AND the connector was configured with a downloadDir.
+   *  When absent (text-only message, or media-without-downloadDir), the
+   *  daemon dispatches the text path. */
+  media?: NormalizedMedia;
   /** Reply chain — connector-specific id of the message being replied to. */
   reply_to?: { id: string };
   /** Original provider payload. Debug only; NEVER serialized to bus events. */
