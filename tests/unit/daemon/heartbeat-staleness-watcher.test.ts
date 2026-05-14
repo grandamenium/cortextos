@@ -240,3 +240,81 @@ describe('HeartbeatStalenessWatcher', () => {
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('HeartbeatStalenessWatcher — fleet-resilience cleanup A (daemon JSONL events)', () => {
+  function makeJsonlWatcher(): HeartbeatStalenessWatcher {
+    // Construct WITH instanceId + org so the watcher fires JSONL emissions
+    // alongside the stderr lines.
+    return new HeartbeatStalenessWatcher({
+      agentName: AGENT,
+      ctxRoot,
+      frameworkRoot,
+      thresholdMs: 10 * 60_000,
+      realertMs: 30 * 60_000,
+      logger: () => {},
+      now: () => clock.ms,
+      instanceId: 'test-instance',
+      org: 'acme',
+    });
+  }
+
+  function readDaemonEvents(): Array<{ event: string; metadata: Record<string, unknown> }> {
+    const today = new Date(clock.ms).toISOString().slice(0, 10);
+    const file = join(ctxRoot, 'orgs', 'acme', 'analytics', 'events', '_daemon', `${today}.jsonl`);
+    try {
+      const { readFileSync, existsSync } = require('fs');
+      if (!existsSync(file)) return [];
+      return readFileSync(file, 'utf-8').split('\n').filter(Boolean).map((l: string) => JSON.parse(l));
+    } catch {
+      return [];
+    }
+  }
+
+  it('emits a heartbeat_stale_detected JSONL row under _daemon when stale', () => {
+    const w = makeJsonlWatcher();
+    writeHeartbeat(11 * 60_000);
+    w.tick();
+
+    const rows = readDaemonEvents();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].event).toBe('heartbeat_stale_detected');
+    expect(rows[0].metadata).toMatchObject({ agent: AGENT });
+    expect(typeof rows[0].metadata.age_seconds).toBe('number');
+    expect(typeof rows[0].metadata.threshold_seconds).toBe('number');
+  });
+
+  it('emits a heartbeat_recovered JSONL row on the recovery transition', () => {
+    const w = makeJsonlWatcher();
+    writeHeartbeat(11 * 60_000);
+    w.tick();
+    expect(readDaemonEvents()).toHaveLength(1);
+
+    advance(2 * 60_000);
+    writeHeartbeat(0);
+    w.tick();
+    expect(w.isStale).toBe(false);
+
+    const rows = readDaemonEvents();
+    expect(rows).toHaveLength(2);
+    expect(rows[1].event).toBe('heartbeat_recovered');
+    expect(rows[1].metadata).toMatchObject({ agent: AGENT });
+    expect(typeof rows[1].metadata.was_stale_for_seconds).toBe('number');
+  });
+
+  it('without instanceId+org, falls back to stderr-only (no JSONL row written)', () => {
+    const w = new HeartbeatStalenessWatcher({
+      agentName: AGENT,
+      ctxRoot,
+      frameworkRoot,
+      thresholdMs: 10 * 60_000,
+      realertMs: 30 * 60_000,
+      logger: () => {},
+      now: () => clock.ms,
+      // instanceId + org intentionally omitted
+    });
+    writeHeartbeat(11 * 60_000);
+    w.tick();
+
+    expect(readDaemonEvents()).toHaveLength(0);
+  });
+});

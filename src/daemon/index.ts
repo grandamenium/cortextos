@@ -310,6 +310,9 @@ class Daemon {
       instanceId: this.instanceId,
       intervalMinutes: daemonCfg.doctor_cron_interval_minutes ?? 30,
       logger: (msg) => console.error(`[daemon] ${msg}`),
+      // Fleet-resilience cleanup A: forward org so doctor_delta_detected
+      // events ALSO land as queryable JSONL under `_daemon`.
+      org,
     });
     this.doctorCron.start();
 

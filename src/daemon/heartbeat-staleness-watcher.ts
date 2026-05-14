@@ -1,5 +1,6 @@
 import { readHeartbeatStatus } from '../utils/agent-status.js';
 import { emitOperatorAlert } from './operator-alert.js';
+import { logDaemonEvent } from './daemon-event-logger.js';
 
 // ---------------------------------------------------------------------------
 // Fleet-resilience plan #2 — daemon-side heartbeat-staleness watchdog.
@@ -40,6 +41,14 @@ export interface HeartbeatStalenessWatcherOptions {
   logger?: (msg: string) => void;
   /** Injectable clock for tests. Returns now() in ms. */
   now?: () => number;
+  /**
+   * Fleet-resilience cleanup A: when both are present, emit `heartbeat_stale_detected`
+   * and `heartbeat_recovered` as queryable JSONL under the `_daemon` synthetic agent
+   * (in addition to the existing stderr lines). Omit in tests that don't need to
+   * exercise the wire — the events become stderr-only no-ops, identical to today.
+   */
+  instanceId?: string;
+  org?: string;
 }
 
 export class HeartbeatStalenessWatcher {
@@ -51,6 +60,8 @@ export class HeartbeatStalenessWatcher {
   private readonly realertMs: number;
   private readonly logger: (msg: string) => void;
   private readonly now: () => number;
+  private readonly instanceId?: string;
+  private readonly org?: string;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   /** True once we have seen at least one successful heartbeat read — gates the alert. */
@@ -71,6 +82,8 @@ export class HeartbeatStalenessWatcher {
     this.realertMs = opts.realertMs;
     this.logger = opts.logger ?? ((msg) => console.error(msg));
     this.now = opts.now ?? Date.now;
+    this.instanceId = opts.instanceId;
+    this.org = opts.org;
   }
 
   start(): void {
@@ -161,6 +174,13 @@ export class HeartbeatStalenessWatcher {
       `[heartbeat-watcher] heartbeat_stale_detected agent="${this.agentName}" age_seconds=${ageSeconds} ` +
       `threshold_seconds=${thresholdSeconds}`,
     );
+    if (this.instanceId && this.org !== undefined) {
+      logDaemonEvent(
+        this.ctxRoot, this.instanceId, this.org,
+        'action', 'heartbeat_stale_detected', 'warning',
+        { agent: this.agentName, age_seconds: ageSeconds, threshold_seconds: thresholdSeconds },
+      );
+    }
   }
 
   private emitRecovered(nowMs: number): void {
@@ -173,6 +193,13 @@ export class HeartbeatStalenessWatcher {
       `[heartbeat-watcher] heartbeat_recovered agent="${this.agentName}" ` +
       `was_stale_for_seconds=${wasStaleForSeconds}`,
     );
+    if (this.instanceId && this.org !== undefined) {
+      logDaemonEvent(
+        this.ctxRoot, this.instanceId, this.org,
+        'action', 'heartbeat_recovered', 'info',
+        { agent: this.agentName, was_stale_for_seconds: wasStaleForSeconds },
+      );
+    }
   }
 
   /** Test-only introspection. */

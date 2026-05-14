@@ -3,6 +3,7 @@ import { join } from 'path';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { runAllChecks, type Check } from '../utils/health-checks.js';
 import { emitOperatorAlert } from './operator-alert.js';
+import { logDaemonEvent } from './daemon-event-logger.js';
 
 // ---------------------------------------------------------------------------
 // Fleet-resilience plan #4 — daemon-side periodic doctor cron.
@@ -108,6 +109,10 @@ export interface DoctorCronOptions {
   instanceId: string;
   /** Default 30 min. 0 disables. */
   intervalMinutes: number;
+  /** Daemon's startup org. When present, doctor_delta_detected events fire as
+   *  queryable JSONL under the `_daemon` synthetic agent identity. Optional so
+   *  tests that don't exercise the wire stay simple. */
+  org?: string;
   /** Override for tests. */
   logger?: (msg: string) => void;
   /** Injectable clock for tests. */
@@ -121,6 +126,7 @@ export class DoctorCron {
   private readonly intervalMs: number;
   private readonly logger: (msg: string) => void;
   private readonly now: () => number;
+  private readonly org?: string;
   private timer: ReturnType<typeof setInterval> | null = null;
   private inFlight = false;
 
@@ -131,6 +137,7 @@ export class DoctorCron {
     this.intervalMs = opts.intervalMinutes * 60_000;
     this.logger = opts.logger ?? ((m) => console.error(m));
     this.now = opts.now ?? Date.now;
+    this.org = opts.org;
   }
 
   start(): void {
@@ -236,5 +243,13 @@ export class DoctorCron {
       `[doctor-cron] doctor_delta_detected new_failures=${failures.length} ` +
       `new_warnings=${warnings.length} resolved=${resolved.length}`,
     );
+    if (this.org !== undefined) {
+      logDaemonEvent(
+        this.ctxRoot, this.instanceId, this.org,
+        'action', 'doctor_delta_detected',
+        failures.length > 0 ? 'critical' : 'warning',
+        { new_failures: failures, new_warnings: warnings, resolved },
+      );
+    }
   }
 }

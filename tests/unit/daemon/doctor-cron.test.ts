@@ -192,4 +192,40 @@ describe('DoctorCron.runOnce', () => {
     expect(onDisk.ranAt).toBeTruthy();
     expect(onDisk.checks).toEqual({ a: 'pass' });
   });
+
+  // Fleet-resilience cleanup A: when org is supplied, doctor_delta_detected
+  // also lands as JSONL under the `_daemon` synthetic agent identity.
+  it('emits doctor_delta_detected JSONL under _daemon when org is configured', async () => {
+    runAllChecksMock.mockResolvedValue([chk('a', 'fail'), chk('b', 'pass')]);
+    const cron = new DoctorCron({
+      ctxRoot, frameworkRoot, instanceId: 'test',
+      intervalMinutes: 30, logger: () => {}, org: 'acme',
+    });
+    await cron.runOnce(); // baseline emit on first run with current fails
+
+    const today = new Date().toISOString().slice(0, 10);
+    const file = join(ctxRoot, 'orgs', 'acme', 'analytics', 'events', '_daemon', `${today}.jsonl`);
+    expect(existsSync(file)).toBe(true);
+    const rows = readFileSync(file, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].event).toBe('doctor_delta_detected');
+    expect(rows[0].severity).toBe('critical');
+    expect(rows[0].metadata).toMatchObject({
+      new_failures: ['a'],
+      new_warnings: [],
+      resolved: [],
+    });
+  });
+
+  it('skips JSONL emission when org is omitted (stderr-only fallback)', async () => {
+    runAllChecksMock.mockResolvedValue([chk('a', 'fail')]);
+    const cron = new DoctorCron({
+      ctxRoot, frameworkRoot, instanceId: 'test',
+      intervalMinutes: 30, logger: () => {},
+      // org intentionally omitted
+    });
+    await cron.runOnce();
+
+    expect(existsSync(join(ctxRoot, 'orgs'))).toBe(false);
+  });
 });

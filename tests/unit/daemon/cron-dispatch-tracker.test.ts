@@ -293,4 +293,32 @@ describe('recordCronDispatchAndMaybeEscalate', () => {
     expect(r.escalated).toBe(false); // 3 distinct, but threshold is 5
     expect(spawnSyncMock).not.toHaveBeenCalled();
   });
+
+  // Fleet-resilience cleanup A: when instanceId+org are passed, escalation
+  // also writes a JSONL event under the `_daemon` synthetic agent identity
+  // (alongside the existing stderr line + operator alert).
+  it('emits a cron_dispatch_storm_detected JSONL row under _daemon when escalating', () => {
+    recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'a', undefined, 'test-instance', 'acme');
+    recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'b', undefined, 'test-instance', 'acme');
+    const r = recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'c', undefined, 'test-instance', 'acme');
+    expect(r.escalated).toBe(true);
+
+    const today = new Date().toISOString().slice(0, 10);
+    const file = join(ctxRoot, 'orgs', 'acme', 'analytics', 'events', '_daemon', `${today}.jsonl`);
+    expect(existsSync(file)).toBe(true);
+    const rows = readFileSync(file, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].event).toBe('cron_dispatch_storm_detected');
+    expect(rows[0].metadata).toMatchObject({ agent: 'boss', window_minutes: 30 });
+    expect(rows[0].metadata.crons).toEqual(expect.arrayContaining(['a', 'b', 'c']));
+  });
+
+  it('skips JSONL emission when instanceId/org omitted (stderr-only fallback)', () => {
+    recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'a');
+    recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'b');
+    const r = recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, 'boss', 'c');
+    expect(r.escalated).toBe(true);
+
+    expect(existsSync(join(ctxRoot, 'orgs'))).toBe(false);
+  });
 });

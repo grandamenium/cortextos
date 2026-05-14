@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { emitOperatorAlert } from './operator-alert.js';
+import { logDaemonEvent } from './daemon-event-logger.js';
 
 // ---------------------------------------------------------------------------
 // Fleet-resilience plan #1 — cron-dispatch storm detector.
@@ -136,6 +137,12 @@ export function recordCronDispatchAndMaybeEscalate(
    *  the default when undefined. Wired from daemon.json's
    *  `cron_dispatch_storm_threshold` field. */
   threshold?: number,
+  /** Fleet-resilience cleanup A: when both are present, the escalation
+   *  ALSO emits `cron_dispatch_storm_detected` as JSONL under `_daemon`
+   *  (in addition to the existing stderr line). Optional so existing
+   *  unit tests stay green. */
+  instanceId?: string,
+  org?: string,
 ): { escalated: boolean; history: CronDispatchHistory } {
   const history = appendEvent(readCronDispatchHistory(ctxRoot), agent, cronName);
 
@@ -157,5 +164,16 @@ export function recordCronDispatchAndMaybeEscalate(
     cooldownKey: `cron_dispatch_storm-${agent}`,
     cooldownMs: CRON_DISPATCH_COOLDOWN_MS,
   });
+  if (instanceId && org !== undefined) {
+    logDaemonEvent(
+      ctxRoot, instanceId, org,
+      'action', 'cron_dispatch_storm_detected', 'critical',
+      {
+        agent,
+        crons: countRecentDistinctCrons(history, agent),
+        window_minutes: CRON_DISPATCH_WINDOW_MS / 60_000,
+      },
+    );
+  }
   return { escalated: true, history };
 }

@@ -373,6 +373,11 @@ export class AgentManager {
         thresholdMs: hbThresholdMin * 60_000,
         realertMs: hbRealertMin * 60_000,
         logger: (msg) => log(msg),
+        // Fleet-resilience cleanup A: forward instance + org so the watcher
+        // can ALSO emit stale/recovered events as queryable JSONL under the
+        // `_daemon` synthetic agent identity.
+        instanceId: this.instanceId,
+        org: resolvedOrg,
       });
       const watcher = heartbeatWatcher;
       agentProcess.onStatusChanged((status) => {
@@ -1057,7 +1062,13 @@ export class AgentManager {
       onDispatchFailed: (cronName: string) => {
         try {
           const threshold = loadDaemonConfig(instanceId).cron_dispatch_storm_threshold;
-          recordCronDispatchAndMaybeEscalate(ctxRoot, frameworkRoot, agentName, cronName, threshold);
+          // Fleet-resilience cleanup A: instanceId + resolveAgentOrg() let the
+          // tracker also emit JSONL under `_daemon` when it escalates.
+          const agentOrg = this.resolveAgentOrg(agentName);
+          recordCronDispatchAndMaybeEscalate(
+            ctxRoot, frameworkRoot, agentName, cronName, threshold,
+            instanceId, agentOrg,
+          );
         } catch (err) {
           console.error(`[daemon] cron-dispatch tracker threw (non-fatal): ${err}`);
         }

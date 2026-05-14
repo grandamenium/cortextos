@@ -42,26 +42,41 @@ Detection-side events emitted by daemon watchdogs and user-foreground CLIs (e.g.
 | `heartbeat_recovered` | `src/daemon/heartbeat-staleness-watcher.ts` | heartbeat ts updates after a stale period — clears watcher state | `agent`, `was_stale_for_seconds` |
 | `doctor_delta_detected` | `src/daemon/doctor-cron.ts` | periodic doctor run sees a `pass→warn`, `pass→fail`, `warn→fail` transition (or first run after daemon start with current warn/fail) | `new_failures` (string[]), `new_warnings` (string[]), `resolved` (string[]) |
 
-### Transport: stderr structured lines today, JSONL later
+### Transport: stderr + JSONL under `_daemon`
 
-Both the dashboard CLI and the daemon-side watchdogs surface these events as **stderr-style structured log lines** rather than `cortextos bus log-event` JSONL. The shape on the wire is a single stable line per event:
+The daemon-side watchdogs (`heartbeat-staleness-watcher`, `doctor-cron`, `cron-dispatch-tracker`) emit each event TWICE:
 
-```
-[<source>] <action> <key>=<value> <key>=<value> ...
-```
+1. **Stderr structured line** — captured by the daemon log file. Shape:
+   ```
+   [<source>] <action> <key>=<value> <key>=<value> ...
+   ```
+2. **Structured JSONL** under the synthetic agent identity `_daemon` — queryable via `cortextos bus read-agent-events _daemon --event <action>`.
 
-Examples:
+Examples on the wire:
 
 ```
 [heartbeat-watcher] heartbeat_stale_detected agent="boss" age_seconds=672 threshold_seconds=600
 [heartbeat-watcher] heartbeat_recovered agent="boss" was_stale_for_seconds=240
 [doctor-cron] doctor_delta_detected new_failures=1 new_warnings=0 resolved=0
-event=port_collision_recovered port=3010 fallback_port=3020 holder_pid=54321
 ```
 
-The reason for stderr-only today: `logEvent` requires `(BusPaths, agentName, org)` and these watchers run in daemon/CLI scope, not under an agent identity. Once a "daemon" pseudo-agent identity is plumbed (separate follow-up), the same emissions become structured JSONL queryable via `cortextos bus read-agent-events --event <action>` and this table becomes the canonical contract.
+And the parallel JSONL row (one of many; written to `~/.cortextos/<instance>/orgs/<org>/analytics/events/_daemon/<YYYY-MM-DD>.jsonl`):
 
-**Until then:** to query these events, grep the daemon log: `grep -E 'heartbeat_(stale_detected|recovered)' ~/.cortextos/<instance>/logs/daemon.log` (or whatever your PM2 `out_file` resolves to).
+```json
+{"id":"...","agent":"_daemon","org":"acme","timestamp":"2026-05-15T...","category":"action","event":"heartbeat_stale_detected","severity":"warning","metadata":{"agent":"boss","age_seconds":672,"threshold_seconds":600}}
+```
+
+The `port_collision_recovered` event is the only daemon-scope watchdog still stderr-only — it fires from the dashboard CLI, not the daemon, and so doesn't have a stable daemon identity in scope. Grep the dashboard log for it.
+
+The `_daemon` agent identity passes `AGENT_NAME_REGEX` in `src/utils/validate.ts` (`/^[a-z0-9_-]+$/`) and is auto-discovered by `cortextos bus read-agent-events` via the `analytics/events/*` directory scan — no CLI flag changes needed. The underscore prefix sorts the synthetic identity ahead of real agents in directory listings.
+
+**Querying examples:**
+
+```bash
+cortextos bus read-agent-events _daemon --event heartbeat_stale_detected --since 24h
+cortextos bus read-agent-events _daemon --event cron_dispatch_storm_detected --since 7d
+cortextos bus read-agent-events _daemon --event doctor_delta_detected --since 24h --format json
+```
 
 ## State-delta semantics
 
