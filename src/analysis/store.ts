@@ -155,17 +155,38 @@ export function readSessions(s: StorePaths, since: Date, until: Date): SessionFa
 
 // --- anomalies --------------------------------------------------------------
 
+/**
+ * Stable signature identifying "the same underlying anomaly" across re-detects.
+ * Two anomalies with the same kind/agent/session_id/evidence_turn_ids set are
+ * the same observation; only one row should persist. Without this, the hourly
+ * `runAudit` cron would multiply rows for unchanged conditions every cycle.
+ */
+function anomalySig(a: Anomaly): string {
+  const evidence = [...a.evidence_turn_ids].sort().join(',');
+  return `${a.kind}::${a.agent}::${a.session_id ?? ''}::${evidence}`;
+}
+
 export function appendAnomalies(s: StorePaths, anomalies: Anomaly[]): void {
   if (anomalies.length === 0) return;
   ensureDirs(s);
-  const byDay = new Map<string, string[]>();
+  const byDay = new Map<string, Anomaly[]>();
   for (const a of anomalies) {
     const day = dayOf(a.detected_at);
     if (!byDay.has(day)) byDay.set(day, []);
-    byDay.get(day)!.push(JSON.stringify(a));
+    byDay.get(day)!.push(a);
   }
-  for (const [day, lines] of byDay) {
-    appendFileSync(join(s.anomaliesDir, `${day}.jsonl`), lines.join('\n') + '\n', 'utf-8');
+  for (const [day, dayAnomalies] of byDay) {
+    const filePath = join(s.anomaliesDir, `${day}.jsonl`);
+    const existingSigs = new Set<string>();
+    if (existsSync(filePath)) {
+      for (const line of readFileSync(filePath, 'utf-8').split('\n')) {
+        if (!line.trim()) continue;
+        try { existingSigs.add(anomalySig(JSON.parse(line) as Anomaly)); } catch { /* skip malformed */ }
+      }
+    }
+    const fresh = dayAnomalies.filter((a) => !existingSigs.has(anomalySig(a)));
+    if (fresh.length === 0) continue;
+    appendFileSync(filePath, fresh.map((a) => JSON.stringify(a)).join('\n') + '\n', 'utf-8');
   }
 }
 
@@ -173,6 +194,8 @@ export function readAnomalies(s: StorePaths, since: Date, until: Date): Anomaly[
   if (!existsSync(s.anomaliesDir)) return [];
   const sinceDay = dayOf(since.toISOString());
   const untilDay = dayOf(until.toISOString());
+  const sinceMs = since.getTime();
+  const untilMs = until.getTime();
   const out: Anomaly[] = [];
   for (const file of readdirSync(s.anomaliesDir).filter((f) => f.endsWith('.jsonl'))) {
     const day = file.replace('.jsonl', '');
@@ -180,7 +203,10 @@ export function readAnomalies(s: StorePaths, since: Date, until: Date): Anomaly[
     for (const line of readFileSync(join(s.anomaliesDir, file), 'utf-8').split('\n')) {
       if (!line.trim()) continue;
       try {
-        out.push(JSON.parse(line) as Anomaly);
+        const a = JSON.parse(line) as Anomaly;
+        const aMs = new Date(a.detected_at).getTime();
+        if (!Number.isFinite(aMs) || aMs < sinceMs || aMs > untilMs) continue;
+        out.push(a);
       } catch {
         // skip
       }
@@ -191,19 +217,45 @@ export function readAnomalies(s: StorePaths, since: Date, until: Date): Anomaly[
 
 // --- idle-burn snapshots ----------------------------------------------------
 
+/**
+ * Idle-burn rows are keyed by (agent, snapshot_date): only the latest snapshot
+ * for that key is meaningful. Append-only would multiply rows on every hourly
+ * run; instead, rewrite the day file with this run's rows for any agent
+ * present, preserving rows for agents not in `rows`.
+ */
 export function appendIdleBurn(s: StorePaths, rows: IdleBurnRow[]): void {
   if (rows.length === 0) return;
   ensureDirs(s);
-  const byDay = new Map<string, string[]>();
+  const byDay = new Map<string, IdleBurnRow[]>();
   for (const r of rows) {
     if (!byDay.has(r.snapshot_date)) byDay.set(r.snapshot_date, []);
-    byDay.get(r.snapshot_date)!.push(JSON.stringify(r));
+    byDay.get(r.snapshot_date)!.push(r);
   }
-  for (const [day, lines] of byDay) {
-    appendFileSync(join(s.idleBurnDir, `${day}.jsonl`), lines.join('\n') + '\n', 'utf-8');
+  for (const [day, freshRows] of byDay) {
+    const filePath = join(s.idleBurnDir, `${day}.jsonl`);
+    const updatedAgents = new Set(freshRows.map((r) => r.agent));
+    const merged: IdleBurnRow[] = [...freshRows];
+    if (existsSync(filePath)) {
+      for (const line of readFileSync(filePath, 'utf-8').split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const existing = JSON.parse(line) as IdleBurnRow;
+          if (!updatedAgents.has(existing.agent)) merged.push(existing);
+        } catch { /* skip malformed */ }
+      }
+    }
+    const data = merged.map((r) => JSON.stringify(r)).join('\n') + '\n';
+    atomicWriteSync(filePath, data);
   }
 }
 
+/**
+ * Day-granularity reader. Unlike `readAnomalies` (which filters intra-day on
+ * `detected_at`), idle-burn rows are inherently per (agent, snapshot_date) —
+ * `appendIdleBurn` rewrites the day file rather than appending — so a
+ * timestamp-precise filter would be meaningless. Day-bounded is the right
+ * granularity for this data shape.
+ */
 export function readIdleBurn(s: StorePaths, since: Date, until: Date): IdleBurnRow[] {
   if (!existsSync(s.idleBurnDir)) return [];
   const sinceDay = dayOf(since.toISOString());

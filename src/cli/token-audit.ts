@@ -8,8 +8,9 @@
 import { Command } from 'commander';
 import { resolveEnv } from '../utils/env.js';
 import { parseDurationMs } from '../bus/cron-state.js';
-import { runAudit, readWindow } from '../analysis/token-audit.js';
+import { runAudit, readWindow, getStorePaths } from '../analysis/token-audit.js';
 import { aggregate, type GroupDimension } from '../analysis/aggregate.js';
+import { readAnomalies, readIdleBurn } from '../analysis/store.js';
 import type { Anomaly, AnomalyKind, TurnFact } from '../analysis/types.js';
 
 import { getPhase2Registrar, getPhase3Registrar } from './token-audit-registrars.js';
@@ -170,11 +171,13 @@ export function registerTokenAuditCommands(bus: Command): void {
     });
 
   // -------------------------------------------------------------------------
-  // anomalies — list anomalies (since window)
+  // anomalies — list persisted anomalies in window (reads fact store).
+  // `run` is the writer; this verb is a read-only viewer so the IDs it returns
+  // match what `explain anomaly:<id>` can drill back into.
   // -------------------------------------------------------------------------
   ta
     .command('anomalies')
-    .description('List detected anomalies in the window')
+    .description('List detected anomalies in the window (reads persisted fact store; run `token-audit run` to refresh)')
     .option('--since <window>', 'Time window (default 24h)', '24h')
     .option('--kind <kind>', 'outlier_session | cache_runaway | compact_candidate | idle_burn | trigger_addiction | model_mismatch')
     .option('--format <fmt>', 'text | json', 'text')
@@ -182,19 +185,15 @@ export function registerTokenAuditCommands(bus: Command): void {
       const env = resolveEnv();
       const since = parseSince(opts.since, '24h');
       const until = new Date();
-      const result = runAudit({
-        since,
-        until,
-        ctxRoot: env.ctxRoot,
-        org: env.org || '',
-        dryRun: true,
-      });
-      let anomalies: Anomaly[] = result.anomalies;
+      const store = getStorePaths(env.ctxRoot, env.org || '');
+      let anomalies: Anomaly[] = readAnomalies(store, since, until);
       if (opts.kind) {
         const kinds: AnomalyKind[] = ['outlier_session', 'cache_runaway', 'compact_candidate', 'idle_burn', 'trigger_addiction', 'model_mismatch'];
-        if (kinds.includes(opts.kind as AnomalyKind)) {
-          anomalies = anomalies.filter((a) => a.kind === opts.kind);
+        if (!kinds.includes(opts.kind as AnomalyKind)) {
+          console.error(`Unknown --kind "${opts.kind}". Valid: ${kinds.join(', ')}`);
+          process.exit(2);
         }
+        anomalies = anomalies.filter((a) => a.kind === opts.kind);
       }
       if (isFormatJson(opts)) {
         console.log(JSON.stringify({
@@ -218,39 +217,36 @@ export function registerTokenAuditCommands(bus: Command): void {
     });
 
   // -------------------------------------------------------------------------
-  // idle-burn — per-agent usd-vs-tasks table
+  // idle-burn — per-agent usd-vs-tasks table (reads persisted snapshots).
+  // `run` writes snapshots; this verb reads them so the rows match what
+  // anomaly drill-backs reference.
   // -------------------------------------------------------------------------
   ta
     .command('idle-burn')
-    .description('Per-agent throughput-vs-spend table')
+    .description('Per-agent throughput-vs-spend table (reads persisted snapshots; run `token-audit run` to refresh)')
     .option('--since <window>', 'Time window (default 24h)', '24h')
     .option('--format <fmt>', 'text | json', 'text')
     .action((opts: { since: string; format: string }) => {
       const env = resolveEnv();
       const since = parseSince(opts.since, '24h');
       const until = new Date();
-      const result = runAudit({
-        since,
-        until,
-        ctxRoot: env.ctxRoot,
-        org: env.org || '',
-        dryRun: true,
-      });
+      const store = getStorePaths(env.ctxRoot, env.org || '');
+      const rows = readIdleBurn(store, since, until);
       if (isFormatJson(opts)) {
         console.log(JSON.stringify({
           since: since.toISOString(),
           until: until.toISOString(),
-          rows: result.idle_burn_rows,
+          rows,
         }, null, 2));
         return;
       }
       console.log(`Idle-burn — ${fmtRange(since, until)}`);
-      if (result.idle_burn_rows.length === 0) {
+      if (rows.length === 0) {
         console.log('(no data)');
         return;
       }
       console.log(`${'agent'.padEnd(20)}  usd_spent  tasks  usd/task   verdict`);
-      for (const r of result.idle_burn_rows) {
+      for (const r of rows) {
         console.log(
           `${r.agent.padEnd(20).slice(0, 20)}  ` +
           `${fmtUsd(r.usd_spent).padStart(9)}  ` +

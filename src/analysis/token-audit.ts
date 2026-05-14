@@ -54,7 +54,13 @@ export interface RunResult {
   run_id: string;
   turns_ingested: number;
   turns_new: number;
+  // Freshly minted from this invocation — anomaly_id is a new UUID each call.
+  // appendAnomalies dedupes by (kind, agent, session_id, evidence_turn_ids),
+  // so on re-runs these UUIDs are NOT what's on disk. Read the store via
+  // readAnomalies if you need the durable id (e.g. for `explain anomaly:<id>`).
   anomalies: Anomaly[];
+  // Same caveat as `anomalies`: re-runs return new in-memory rows; the store
+  // is rewritten per (agent, snapshot_date) by appendIdleBurn.
   idle_burn_rows: IdleBurnRow[];
   scanned_files: number;
   duration_ms: number;
@@ -242,6 +248,25 @@ export function runAudit(opts: RunOpts): RunResult {
     }
     turns_new = fresh.length;
 
+    // Persist turns + seen-index + sessions BEFORE running anomaly detection.
+    // Detection's evidence_turn_ids must already exist in the store so that
+    // `explain anomaly:<id>` and downstream drill-backs find them; persisting
+    // first removes the in-memory-only window that produced phantom IDs.
+    if (!opts.dryRun) {
+      if (fresh.length > 0) appendTurns(store, fresh);
+      persistSeenTurns(store, seen);
+      // Sessions: re-roll up the full window (deterministic; previous rows
+      // from the same days are replaced). Group by day-of-start_at.
+      const sessions = rollupSessions(turns);
+      const byDay = new Map<string, typeof sessions>();
+      for (const s of sessions) {
+        const day = s.started_at.slice(0, 10);
+        if (!byDay.has(day)) byDay.set(day, []);
+        byDay.get(day)!.push(s);
+      }
+      for (const [day, list] of byDay) writeSessions(store, day, list);
+    }
+
     // Detect over the full window (not just fresh turns) so re-runs surface
     // anomalies that depend on cross-turn comparison (e.g. session outliers).
     const completed = countCompletedTasksByAgent(
@@ -257,18 +282,6 @@ export function runAudit(opts: RunOpts): RunResult {
     idleBurnRows = det.idleBurnRows;
 
     if (!opts.dryRun) {
-      if (fresh.length > 0) appendTurns(store, fresh);
-      persistSeenTurns(store, seen);
-      // Sessions: re-roll up the full window (deterministic; previous rows
-      // from the same days are replaced). Group by day-of-start_at.
-      const sessions = rollupSessions(turns);
-      const byDay = new Map<string, typeof sessions>();
-      for (const s of sessions) {
-        const day = s.started_at.slice(0, 10);
-        if (!byDay.has(day)) byDay.set(day, []);
-        byDay.get(day)!.push(s);
-      }
-      for (const [day, list] of byDay) writeSessions(store, day, list);
       appendAnomalies(store, anomalies);
       appendIdleBurn(store, idleBurnRows);
     }
