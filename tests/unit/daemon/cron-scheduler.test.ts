@@ -805,4 +805,71 @@ describe('CronScheduler', () => {
     expect(names).toContain('b');
     expect(names).not.toContain('c'); // disabled, not scheduled
   });
+
+  // -------------------------------------------------------------------------
+  // Fleet-resilience plan #1 — onDispatchFailed hook fires on all-retries-failed
+  // -------------------------------------------------------------------------
+
+  it('onDispatchFailed callback is invoked with the cron name after retries exhausted', async () => {
+    const failingFire = vi.fn().mockRejectedValue(new Error('PTY unavailable'));
+    const dispatchFailed = vi.fn();
+
+    // Long enough schedule that the cron only fires once during the test —
+    // we want to assert the hook fires *per failed dispatch*, not per tick.
+    mockReadCrons.mockReturnValue([
+      makeCron({
+        schedule:      '24h',
+        last_fired_at: new Date(Date.now() - 25 * 3_600_000).toISOString(),
+      }),
+    ]);
+
+    const trackerScheduler = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: failingFire,
+      logger: () => {},
+      onDispatchFailed: dispatchFailed,
+    });
+
+    trackerScheduler.start();
+    // Tick + all 3 retry back-offs (1s + 4s + 16s).
+    await vi.advanceTimersByTimeAsync(TICK + 1_000 + 4_000 + 16_000 + 1_000);
+
+    expect(failingFire).toHaveBeenCalledTimes(4); // 1 + 3 retries
+    expect(dispatchFailed).toHaveBeenCalledOnce();
+    expect(dispatchFailed).toHaveBeenCalledWith('test-cron');
+
+    trackerScheduler.stop();
+  });
+
+  it('onDispatchFailed callback errors are swallowed so the scheduler stays alive', async () => {
+    const failingFire = vi.fn().mockRejectedValue(new Error('PTY unavailable'));
+    const dispatchFailed = vi.fn().mockImplementation(() => { throw new Error('tracker exploded'); });
+    const trackerLogs: string[] = [];
+
+    mockReadCrons.mockReturnValue([
+      makeCron({
+        schedule:      '24h',
+        last_fired_at: new Date(Date.now() - 25 * 3_600_000).toISOString(),
+      }),
+    ]);
+
+    const trackerScheduler = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: failingFire,
+      logger: (msg) => trackerLogs.push(msg),
+      onDispatchFailed: dispatchFailed,
+    });
+
+    trackerScheduler.start();
+    await vi.advanceTimersByTimeAsync(TICK + 1_000 + 4_000 + 16_000 + 1_000);
+
+    expect(dispatchFailed).toHaveBeenCalledOnce();
+    // The "non-fatal" log line confirms the throw was caught.
+    expect(trackerLogs.some((l) => l.includes('onDispatchFailed handler threw'))).toBe(true);
+    // Scheduler tick handle should still be live; advance another tick and
+    // confirm the tick fired (no exception bubbled out).
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    trackerScheduler.stop();
+  });
 });

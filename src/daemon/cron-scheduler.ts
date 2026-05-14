@@ -238,12 +238,22 @@ export interface CronSchedulerOptions {
   agentName: string;
   onFire: (cron: CronDefinition) => Promise<void> | void;
   logger?: (msg: string) => void;
+  /**
+   * Fleet-resilience plan #1 — optional hook fired when a cron's onFire
+   * fails all retries (the "advance the slot" branch). Receives the cron
+   * name so the caller can record into the cron-dispatch-failure tracker
+   * without giving the scheduler ctxRoot / frameworkRoot knowledge.
+   * Best-effort: thrown errors here are swallowed so the scheduler tick
+   * stays alive.
+   */
+  onDispatchFailed?: (cronName: string) => void;
 }
 
 export class CronScheduler {
   private readonly agentName: string;
   private readonly onFire: (cron: CronDefinition) => Promise<void> | void;
   private readonly logger: (msg: string) => void;
+  private readonly onDispatchFailed?: (cronName: string) => void;
 
   /** In-memory schedule, keyed by cron name. */
   private scheduled: Map<string, ScheduledCron> = new Map();
@@ -271,6 +281,7 @@ export class CronScheduler {
     this.agentName = opts.agentName;
     this.onFire    = opts.onFire;
     this.logger    = opts.logger ?? ((msg: string) => process.stdout.write(msg + '\n'));
+    this.onDispatchFailed = opts.onDispatchFailed;
   }
 
   // -------------------------------------------------------------------------
@@ -536,6 +547,16 @@ export class CronScheduler {
           this.scheduled.delete(name);
           this.logger(`[cron-scheduler] WARNING: removed "${name}" from schedule after failure — schedule unparseable`);
           continue;
+        }
+        // Fleet-resilience plan #1 — notify the storm tracker. Best-effort:
+        // a throw here must not kill the scheduler tick or the rest of the
+        // due-cron loop iteration.
+        if (this.onDispatchFailed) {
+          try {
+            this.onDispatchFailed(name);
+          } catch (err) {
+            this.logger(`[cron-scheduler] onDispatchFailed handler threw (non-fatal): ${err}`);
+          }
         }
       }
       sc.firing = false;
