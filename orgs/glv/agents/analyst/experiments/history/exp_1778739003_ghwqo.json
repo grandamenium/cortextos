@@ -1,0 +1,21 @@
+{
+  "id": "exp_1778739003_ghwqo",
+  "agent": "analyst",
+  "metric": "system_effectiveness",
+  "hypothesis": "Theta wave cycle-19 scores 9/10 KEEP. Blockbuster: fleet-wide goal-surface-stale n=12 empirical (all GLV agents stale/empty goals.json, avg 17d). Multi-round symmetric-bidirectional Phase 6 with boss n=2 graduation: R1 timezone-correction (12:27 EDT was -0400 = 16:27Z UTC AFTER 12:34Z cascade), R2 rename WRITE-ROUNDTRIP-GAP from RECONCILIATION-GAP, R3 B/F merge + 3-tier banking. Phase 7: Detector E goal-surface roundtrip + Detector B cycle-create roundtrip + G-investigate dev task task_1778738906184_050 for 16:27Z bulk-touch on 22 files. Banked rule observation-cycle-lit-search-exception. NOT 10: G-investigate unresolved, cycle-16 zombie, AM brief asks Aiden-gated.",
+  "surface": "notes/theta-wave-cycle-19-2026-05-13.md",
+  "direction": "higher",
+  "window": "24h",
+  "measurement": "",
+  "status": "proposed",
+  "baseline_value": 0,
+  "result_value": null,
+  "decision": null,
+  "learning": "",
+  "experiment_commit": null,
+  "tracking_commit": null,
+  "created_at": "2026-05-14T06:10:03Z",
+  "started_at": null,
+  "completed_at": null,
+  "changes_description": null
+}

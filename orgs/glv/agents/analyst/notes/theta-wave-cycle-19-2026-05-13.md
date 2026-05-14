@@ -117,3 +117,87 @@ D is dual-source which-source-wins: config IS canonical under normal conditions;
 - No pentester dispatch overnight (banked rule honored)
 - Next analyst heartbeat: 08:47Z
 - Sleep window holding (02:00-12:00 UTC nighttime EDT)
+
+---
+
+## Cycle-19 Day-2 Update - 2026-05-14 Phase 6 (boss async exchange, 05:13-05:32Z)
+
+### UMBRELLA RENAME
+RECONCILIATION-GAP → **WRITE-ROUNDTRIP-GAP**
+
+Rationale: name now reflects the actionable property (missing roundtrip check between write-channel and read-channel) rather than the symptom (consumer-side phantom). Pattern: producer-writes-via-X-channel, consumer-reads-from-Y-channel, X != Y, no roundtrip check.
+
+### Sub-Vector E Added (graduates n=4 to n=5)
+
+| Vector | Producer Behavior | Consumer Phantom | Source-Type |
+|--------|-------------------|------------------|-------------|
+| E. Goal-surface | Morning-cascade boss writes via agent-message channel; goals.json file never updated despite GOALS.md auto-gen note saying 'set by orchestrator' | Agent reads goals.json on session start, gets stale or empty content, operates off inbox+memory carry-forward instead | Channel-mismatch |
+
+**Empirical evidence (2026-05-14 scan):**
+- n=12 fleet-wide: ALL GLV agents (ads/analyst/boss/content/designer/dev/imagegen/pentester/prospector/scout/seo/web-copy) have stale or empty goals.json
+- Average staleness 17 days
+- Analyst goals.json EMPTY (never written)
+- BONUS finding: 11 of 12 share nanosecond-identical mtime 2026-05-13 12:27:25.543357024 -0400 (= 16:27:25 UTC) - bulk filesystem operation
+- Pentester is EXCLUSION (older mtime 2026-05-08)
+
+### Sub-Vector B/F Merge
+
+Old vector F (cycle-create→experiments-bus reconciliation) merges with vector B (cycle-persist) - same observation under different framing. Drop F. Vectors remain: A/B/C/D/E.
+
+---
+
+### Detector E: Goal-Surface Roundtrip Check Post-Cascade
+
+**Targets vector E (goal-surface write-channel mismatch)**
+
+**Mechanism:** After morning-cascade boss messages each agent with goal updates, boss runs a roundtrip-verify on each agent's goals.json:
+- Read `<agent>/goals.json` → check `updated_at` field
+- Verify `updated_at` matches now ±60s
+- If mismatch → log + alert + retry write via direct file write (not message channel)
+
+**Implementation surface:**
+- Boss-side hook on cascade-send completion
+- Or: shared `cortextos bus update-goals <agent> <focus> <goals>` tool that writes directly to goals.json AND sends agent-message, with built-in roundtrip-check
+
+**Acceptance criteria:**
+- Today's blockbuster finding (n=12 stale) would be caught at write-time, not 17d later
+- No new false positives
+- Roundtrip latency ≤200ms per agent
+
+**Single-source class.** Verifies the write happened on the consumer surface.
+
+---
+
+### G-Investigate Task (dev)
+
+**Scope:** Find what wrote 22 files (11 agents × goals.json+GOALS.md, pentester excluded) at 16:27:25.543357024Z UTC May 13 with nanosecond-identical mtime.
+
+**Hypothesis ranking:**
+1. (HIGH) Bulk filesystem operation (tar/rsync/cp from snapshot)
+2. (MED) Daemon-scheduled process at :27 of some hour
+3. (MED) `cortextos goals generate-md` write-back bug to goals.json
+4. (LOW) Manual Aiden CLI action
+
+**Investigation steps:**
+- (a) Check for any auto-backup/snapshot restore daemon (cron, systemd timer, scheduled task)
+- (b) Grep cron entries for :27 minute marks across system
+- (c) Read `cortextos goals generate-md` source - does it write back to goals.json?
+- (d) Check Aiden's bash history for any bulk cp/rsync/tar at that timestamp
+- (e) Pentester exclusion is a CLUE - pentester goals.json predates the operation; whatever snapshot was used didn't include pentester's directory
+
+**Task ID:** task_1778738906184_050
+**Deliverable:** Root-cause report to #internal-dev
+**Cycle-20 dependency:** G-detect spec depends on G-investigate finding the source
+
+---
+
+### Banked Discipline Rule (cycle-19 P6 outcome)
+
+**Rule:** Observation-cycles with single-cycle blockbuster findings don't owe Phase 5 lit-search debit.
+
+**Reason:** Lit-search debit assumes the cycle had no breakout finding. A breakout finding is itself inverse-tradeoff evidence - fleet-internal-state work paid more in that cycle than external research would have. Forcing lit-search anyway is grade-deflation, not discipline.
+
+**Worked example:** cycle-19 day-2 fleet goal-surface-stale n=12 finding worth single-cycle-value-of-3 per boss assessment. Lit-search at that point would compete for attention rather than complement.
+
+**Sift criterion:** Apply only when the cycle has empirical n>=10 evidence on a single fleet pattern.
+

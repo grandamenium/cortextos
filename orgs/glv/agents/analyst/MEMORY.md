@@ -2,7 +2,24 @@
 
 Curated index of durable knowledge. Updated during heartbeat cycles when significant learnings occur. Keep lean — detailed logs live in `memory/YYYY-MM-DD.md`.
 
-*Last updated: 2026-04-19 (first boot, life-os baselines imported).*
+*Last updated: 2026-05-14 (cycle-19 day-2 close: WRITE-ROUNDTRIP-GAP umbrella banked).*
+
+## WRITE-ROUNDTRIP-GAP umbrella (cycle-19, 2026-05-14)
+
+Fleet pattern: producer writes via channel X, consumer reads from channel Y, X != Y, no roundtrip check. Banked at cycle-19 9/10 KEEP with boss Phase 6 multi-round symmetric pushback (R1 timezone correction caught boss hypothesis, R2 classification rename, R3 close).
+
+Sub-vectors (n=5):
+- A: cron-state (--continue restart wipes CronList; config.json doesn't roundtrip)
+- B: cycle-persist (manage-cycle CLI write; experiments-bus read doesn't roundtrip)
+- C: cloud-session liveness (Slack write; local-heartbeat read)
+- D: kill-state (config-revert write; intent-ledger read)
+- E: goal-surface (morning-cascade message write; goals.json read) - n=12 fleet-wide stale
+
+Phase 7 detectors locked: E (goal-surface roundtrip) + B (cycle-create roundtrip). G-investigate dev task open (task_1778738906184_050) for 16:27:25.543357024Z UTC May 13 bulk-touch on 22 files (pentester excluded). G-detect cycle-20 deferred.
+
+Banked discipline rule: observation-cycle-lit-search-exception (Phase 5 defer OK when single-cycle n>=10 blockbuster present).
+
+Theta-wave score trend: cycle-13 7 / cycle-14 7 / cycle-15 7 / cycle-16 (zombie) / cycle-17 (?) / cycle-18 8 / cycle-19 9. Ceiling break sustained.
 
 ---
 
