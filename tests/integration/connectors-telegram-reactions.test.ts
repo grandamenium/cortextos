@@ -48,7 +48,7 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
     // Point the underlying TelegramAPI at the mock server
     (connector as any).api.baseUrl = server.getBaseUrl() + '/bot123:abc_DEF';
 
-    await connector.startPolling({
+    await connector.startInbound({
       onMessage: () => {},
       onReaction: (r) => { received.push(r); },
     });
@@ -69,7 +69,7 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
       newReaction: [{ type: 'emoji', emoji: '👍' }],
     });
     await waitForReactions(1);
-    await connector.stopPolling();
+    await connector.stopInbound();
 
     expect(received).toHaveLength(1);
     const r = received[0];
@@ -87,7 +87,7 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
       newReaction: [{ type: 'emoji', emoji: '❤️' }],
     });
     await waitForReactions(1);
-    await connector.stopPolling();
+    await connector.stopInbound();
 
     expect(received[0].old_reaction).toEqual([{ kind: 'unicode', value: '👍' }]);
     expect(received[0].new_reaction).toEqual([{ kind: 'unicode', value: '❤️' }]);
@@ -99,7 +99,7 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
       newReaction: [],
     });
     await waitForReactions(1);
-    await connector.stopPolling();
+    await connector.stopInbound();
 
     expect(received[0].old_reaction).toEqual([{ kind: 'unicode', value: '👍' }]);
     expect(received[0].new_reaction).toEqual([]);
@@ -112,7 +112,7 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
       newReaction: [{ type: 'custom_emoji', custom_emoji_id: 'premium-thumbs-up-id-12345' }],
     });
     await waitForReactions(1);
-    await connector.stopPolling();
+    await connector.stopInbound();
 
     const r = received[0].new_reaction[0];
     expect(r.kind).toBe('custom');
@@ -125,7 +125,7 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
       newReaction: [{ type: 'emoji', emoji: '🎉' }],
     });
     await waitForReactions(1);
-    await connector.stopPolling();
+    await connector.stopInbound();
 
     // id shape: `${message_id}-${date}` (date is unix seconds from the mock)
     expect(received[0].id).toMatch(/^42-\d+$/);

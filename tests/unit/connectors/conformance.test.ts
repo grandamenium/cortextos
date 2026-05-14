@@ -20,11 +20,13 @@ describe('MessageConnector conformance', () => {
     expect(c.kind).toBe('telegram');
     for (const flag of [
       'inlineButtons', 'media', 'voiceTranscription', 'formattedText',
-      'longPolling', 'typingIndicator', 'reactions', 'outboundReactions',
+      'typingIndicator', 'reactions', 'outboundReactions',
       'interactiveCallbacks', 'messageEdits',
     ] as const) {
       expect(typeof c.capabilities[flag]).toBe('boolean');
     }
+    // PR4 c11 (Codex P1.I): `inbound` is tri-state, not boolean.
+    expect(['poll', 'push', 'none']).toContain(c.capabilities.inbound);
     expect(c.capabilities.reactions).toBe(true);
     // PR4 c10 (Codex P1.H): Telegram backs outbound reactions via
     // setMessageReaction (Bot API 7.0+, Feb 2024). Capability flag is
@@ -37,13 +39,15 @@ describe('MessageConnector conformance', () => {
     expect(c.kind).toBe('none');
     for (const flag of [
       'inlineButtons', 'media', 'voiceTranscription', 'formattedText',
-      'longPolling', 'typingIndicator', 'reactions', 'outboundReactions',
+      'typingIndicator', 'reactions', 'outboundReactions',
       'interactiveCallbacks', 'messageEdits',
     ] as const) {
       expect(typeof c.capabilities[flag]).toBe('boolean');
-      // NullConnector has every capability false
+      // NullConnector has every boolean capability false
       expect(c.capabilities[flag]).toBe(false);
     }
+    // PR4 c11 (Codex P1.I): NullConnector's inbound tri-state is 'none'.
+    expect(c.capabilities.inbound).toBe('none');
   });
 
   it('TelegramConnector exposes the typed escape hatch rawTelegramApi', () => {

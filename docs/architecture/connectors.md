@@ -71,14 +71,15 @@ interface MessageConnector {
   validateCredentials(): Promise<ValidateResult>;
   sendMessage(text: string, opts?: SendOptions): Promise<SendResult>;
   sendMedia(media: MediaPayload): Promise<SendResult>;
-  startPolling(handlers: PollingHandlers, opts?: { stateDir?: string }): Promise<void>;
-  stopPolling(): Promise<void>;
+  startInbound(handlers: PollingHandlers, opts?: { stateDir?: string }): Promise<void>;
+  stopInbound(): Promise<void>;
 
   // Optional surfaces — gated by capabilities
   setTypingIndicator?(on: boolean): Promise<void>;
   registerCommands?(commands: Array<{ name; description }>): Promise<void>;
   acknowledgeCallback?(callbackId: string, text?: string): Promise<void>;
   editMessage?(messageId, text, opts?): Promise<void>;
+  sendReaction?(messageId, emoji, opts?): Promise<void>;
 }
 ```
 
@@ -119,7 +120,7 @@ Today's set, defined in `src/connectors/types.ts`:
 | `media` | Provider supports media upload (photo / document). When `true`, `sendMedia()` works. |
 | `voiceTranscription` | Connector's inbound pipeline transcribes voice/audio to text. Determines whether `NormalizedMedia.transcription` is populated. |
 | `formattedText` | Provider supports formatted text (HTML / Markdown / blocks). Callers may pass `SendOptions.parseMode`. |
-| `longPolling` | Connector exposes a long-poll loop for inbound messages. When `false`, the daemon does NOT start an inbound poller for this agent (e.g. NullConnector, or a future webhook-only connector). |
+| `inbound` | Tri-state: `'poll'` / `'push'` / `'none'`. `'poll'` runs an internal long-poll loop (Telegram getUpdates). `'push'` subscribes to a provider push channel (Discord gateway WS, Mattermost webhook, RocketChat DDP). `'none'` is the explicit opt-out; daemon skips `startInbound`. The daemon treats `'poll'` and `'push'` identically at the wiring site — both go through `startInbound(handlers, opts)`. PR4 c11 replaced the previous `longPolling: boolean` flag. |
 | `typingIndicator` | Connector supports a "typing…" hint before replies. |
 | `reactions` | Connector emits reaction-add / change / remove updates via `PollingHandlers.onReaction`. **Inbound only.** Outbound reactions (agent reacts to a message) are tracked under `outboundReactions` — see §12. |
 | `interactiveCallbacks` | Connector can acknowledge an inline-button callback. When `true`, `acknowledgeCallback()` is present. |

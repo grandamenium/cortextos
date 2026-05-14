@@ -69,7 +69,7 @@ export class TelegramConnector implements MessageConnector {
     media: true,
     voiceTranscription: true,
     formattedText: true,
-    longPolling: true,
+    inbound: 'poll',
     typingIndicator: true,
     reactions: true,
     outboundReactions: true,
@@ -270,7 +270,7 @@ export class TelegramConnector implements MessageConnector {
    * interface contract holds, and PR2 will migrate the daemon to use
    * it once hook + CLI generalization is in place.
    */
-  async startPolling(handlers: PollingHandlers, opts?: { stateDir?: string }): Promise<void> {
+  async startInbound(handlers: PollingHandlers, opts?: { stateDir?: string }): Promise<void> {
     // PR2 Codex Q5 lock: caller can pass `stateDir` explicitly (the daemon
     // does, to preserve the historical `<ctxRoot>/state/<name>/.telegram-offset`
     // path across the wire migration from direct TelegramPoller construction
@@ -282,7 +282,7 @@ export class TelegramConnector implements MessageConnector {
     // double-startPolling can't leak two concurrent loops sharing handlers
     // and racing on offset state.
     if (this.poller) {
-      await this.stopPolling();
+      await this.stopInbound();
     }
     // 4th arg is offsetFileSuffix — distinguishes the offset file across
     // multiple connector instances sharing a stateDir. Undefined keeps
@@ -358,7 +358,7 @@ export class TelegramConnector implements MessageConnector {
     });
   }
 
-  async stopPolling(): Promise<void> {
+  async stopInbound(): Promise<void> {
     // Bump generation BEFORE clearing the poller — any in-flight async
     // media-pipeline handler that finishes after this call will see the
     // mismatched generation and suppress its `handlers.onMessage` emit.

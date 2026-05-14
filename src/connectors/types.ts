@@ -46,8 +46,28 @@ export interface ConnectorCapabilities {
   voiceTranscription: boolean;
   /** Connector supports formatted text (HTML/Markdown/blocks); caller may pass a parseMode hint. */
   formattedText: boolean;
-  /** Connector exposes a long-poll loop for inbound messages. */
-  longPolling: boolean;
+  /**
+   * Inbound delivery model. PR4 c11 (Codex P1.I) replaced the previous
+   * `longPolling: boolean` flag with this tri-state so push-inbound
+   * providers (Discord gateway WS, Mattermost outgoing webhooks,
+   * RocketChat DDP) fit the model.
+   *
+   * - `'poll'` — connector runs a long-poll loop on its own clock
+   *   (Telegram getUpdates today, Mattermost REST polling fallback).
+   * - `'push'` — connector subscribes to a provider push channel
+   *   (Discord gateway WebSocket, Mattermost outgoing webhook
+   *   listener, RocketChat DDP subscription). The connector still
+   *   exposes the same `startInbound` lifecycle method; the only
+   *   visible difference is no internal poll-interval clock.
+   * - `'none'` — no inbound (NullConnector; send-only operator
+   *   connector).
+   *
+   * The daemon treats `'poll'` and `'push'` identically at the wiring
+   * site — it calls `startInbound(handlers, opts)` and the connector
+   * decides how to receive. `'none'` is the explicit opt-out: the
+   * daemon does NOT call `startInbound` and skips inbound wiring.
+   */
+  inbound: 'poll' | 'push' | 'none';
   /** Connector supports a "typing..." indicator before replies. */
   typingIndicator: boolean;
   /** Connector emits reaction-add/change/remove updates (INBOUND). */

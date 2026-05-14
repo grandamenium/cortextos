@@ -24,15 +24,15 @@ describe('NullConnector', () => {
     expect(res.id).toBe('noop');
   });
 
-  it('startPolling resolves immediately without throwing', async () => {
+  it('startInbound resolves immediately without throwing', async () => {
     const c = new NullConnector();
     // SYNC handler — the contract is sync ()=>void
-    await c.startPolling({ onMessage: () => {} });
+    await c.startInbound({ onMessage: () => {} });
   });
 
-  it('stopPolling is a no-op even when startPolling was never called', async () => {
+  it('stopInbound is a no-op even when startInbound was never called', async () => {
     const c = new NullConnector();
-    await c.stopPolling(); // must not throw
+    await c.stopInbound(); // must not throw
   });
 
   it('declares interactiveCallbacks=false and messageEdits=false (PR3)', () => {

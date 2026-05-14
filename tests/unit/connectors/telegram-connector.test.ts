@@ -437,11 +437,11 @@ describe('TelegramConnector', () => {
 
       const received: any[] = [];
       vi.useRealTimers();
-      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await c.startInbound({ onMessage: (m) => { received.push(m); } }, { stateDir });
 
       // Wait long enough for one poll cycle + the async media download
       await new Promise((r) => setTimeout(r, 200));
-      await c.stopPolling();
+      await c.stopInbound();
 
       expect(received).toHaveLength(1);
       expect(received[0].media).toBeDefined();
@@ -498,9 +498,9 @@ describe('TelegramConnector', () => {
 
       const received: any[] = [];
       vi.useRealTimers();
-      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await c.startInbound({ onMessage: (m) => { received.push(m); } }, { stateDir });
       await new Promise((r) => setTimeout(r, 200));
-      await c.stopPolling();
+      await c.stopInbound();
 
       expect(received).toHaveLength(1);
       // text-only fallback: media should be undefined, caption flows through as text
@@ -568,9 +568,9 @@ describe('TelegramConnector', () => {
       }, { downloadDir, mediaLimits: { perFileBytes: 50 * 1024, totalQuotaBytes: 12 * 1024 } });
 
       vi.useRealTimers();
-      await c.startPolling({ onMessage: () => {} }, { stateDir });
+      await c.startInbound({ onMessage: () => {} }, { stateDir });
       await new Promise((r) => setTimeout(r, 200));
-      await c.stopPolling();
+      await c.stopInbound();
 
       // Oldest file evicted; newer file kept.
       expect(fs.existsSync(oldFile)).toBe(false);
@@ -619,10 +619,10 @@ describe('TelegramConnector', () => {
 
       const received: any[] = [];
       vi.useRealTimers();
-      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await c.startInbound({ onMessage: (m) => { received.push(m); } }, { stateDir });
 
       await new Promise((r) => setTimeout(r, 200));
-      await c.stopPolling();
+      await c.stopInbound();
 
       expect(received).toHaveLength(1);
       expect(received[0].media).toBeUndefined();
@@ -668,9 +668,9 @@ describe('TelegramConnector', () => {
 
       const received: any[] = [];
       vi.useRealTimers();
-      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await c.startInbound({ onMessage: (m) => { received.push(m); } }, { stateDir });
       await new Promise((r) => setTimeout(r, 200));
-      await c.stopPolling();
+      await c.stopInbound();
 
       expect(received).toHaveLength(1);
       // `chat_id` must be a STRING (matching the `String(msg.chat.id)` contract)
@@ -720,9 +720,9 @@ describe('TelegramConnector', () => {
 
       const received: any[] = [];
       vi.useRealTimers();
-      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await c.startInbound({ onMessage: (m) => { received.push(m); } }, { stateDir });
       await new Promise((r) => setTimeout(r, 200));
-      await c.stopPolling();
+      await c.stopInbound();
 
       expect(received).toHaveLength(1);
       expect(received[0].reply_to).toEqual({ id: '99', text: '[voice message]' });
@@ -764,9 +764,9 @@ describe('TelegramConnector', () => {
 
       const received: any[] = [];
       vi.useRealTimers();
-      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await c.startInbound({ onMessage: (m) => { received.push(m); } }, { stateDir });
       await new Promise((r) => setTimeout(r, 200));
-      await c.stopPolling();
+      await c.stopInbound();
 
       expect(received).toHaveLength(1);
       expect(received[0].reply_to).toBeUndefined();
@@ -857,12 +857,12 @@ describe('TelegramConnector', () => {
       }, { pollerNamespace: 'activity' });
 
       vi.useRealTimers();
-      await c.startPolling({ onMessage: () => {} });
+      await c.startInbound({ onMessage: () => {} });
       // Give the loop one tick so the poller has a chance to read/write
       // its offset file. The default poll interval is 1000ms, so a 50ms
       // tick is well under one iteration.
       await new Promise((r) => setTimeout(r, 50));
-      await c.stopPolling();
+      await c.stopInbound();
 
       // The offset file for a namespaced connector is `.telegram-offset-<ns>`.
       // We don't assert on the file's content (the inner poller writes it
@@ -877,8 +877,8 @@ describe('TelegramConnector', () => {
     });
   });
 
-  describe('startPolling', () => {
-    it('resolves promptly (does NOT await the forever-running poller)', async () => {
+  describe('startInbound', () => {
+    it('resolves promptly (does NOT await the forever-running inbound loop)', async () => {
       // Stub fetch so the internal poller's getUpdates doesn't actually hit the network
       installFetchMock(() => ({ body: { ok: true, result: [] } }));
       const c = new TelegramConnector('/tmp/agent', {
@@ -889,12 +889,12 @@ describe('TelegramConnector', () => {
       // Use real timers so the inner poll loop doesn't lock up
       vi.useRealTimers();
       const start = Date.now();
-      await c.startPolling({ onMessage: () => {} });
+      await c.startInbound({ onMessage: () => {} });
       const elapsed = Date.now() - start;
-      // Must resolve in well under 1s — proves the contract that startPolling
+      // Must resolve in well under 1s — proves the contract that startInbound
       // returns once the loop is scheduled, not when it completes.
       expect(elapsed).toBeLessThan(500);
-      await c.stopPolling();
+      await c.stopInbound();
     });
   });
 });

@@ -415,7 +415,7 @@ export class AgentManager {
     const pollingEnabled = config.inbound_polling !== undefined
       ? config.inbound_polling !== false
       : config.telegram_polling !== false;
-    if (connector?.capabilities.longPolling && pollingEnabled) {
+    if (connector && connector.capabilities.inbound !== 'none' && pollingEnabled) {
       const stateDir = join(this.ctxRoot, 'state', name);
 
       // PR3 of pluggable-connectors: route inbound polling through the
@@ -575,16 +575,19 @@ export class AgentManager {
 
       // Fire-and-forget per the connector's contract (resolves AFTER the
       // loop is scheduled, NOT after it completes). Matches the prior
-      // `poller.start().catch(...)` pattern byte-for-byte.
-      connector.startPolling({ onMessage, onCallback, onReaction }, { stateDir }).catch(err => {
-        log(`Connector poller error: ${err}`);
+      // `poller.start().catch(...)` pattern byte-for-byte. PR4 c11
+      // renamed startPolling → startInbound to accommodate push-inbound
+      // connectors (Discord gateway WS, Mattermost webhooks, RocketChat
+      // DDP) that don't poll.
+      connector.startInbound({ onMessage, onCallback, onReaction }, { stateDir }).catch(err => {
+        log(`Connector inbound error: ${err}`);
       });
 
-      // Store connector reference so stopAgent() can call stopPolling().
+      // Store connector reference so stopAgent() can call stopInbound().
       const entry = this.agents.get(name);
       if (entry) entry.connector = connector;
 
-      log(`Inbound poller started via ${connector.kind} connector`);
+      log(`Inbound delivery started via ${connector.kind} connector (${connector.capabilities.inbound})`);
 
       // Orchestrator-only: start a second poller for the org's activity
       // channel bot so Telegram inline-button callbacks (currently just
@@ -688,8 +691,8 @@ export class AgentManager {
       log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
     };
 
-    activityConnector.startPolling({ onMessage, onCallback }, { stateDir }).catch((err) => {
-      log(`Activity-channel poller error: ${err}`);
+    activityConnector.startInbound({ onMessage, onCallback }, { stateDir }).catch((err) => {
+      log(`Activity-channel inbound error: ${err}`);
     });
 
     const entry = this.agents.get(name);
@@ -708,18 +711,18 @@ export class AgentManager {
       return;
     }
 
-    // PR3: primary + activity pollers are both owned by their connectors
-    // now. stopPolling is a no-op when the connector never started polling
+    // PR3: primary + activity inbound channels are both owned by their
+    // connectors. stopInbound is a no-op when the connector never started
     // (e.g. NullConnector or pollingEnabled=false), so calling
-    // unconditionally is safe.
+    // unconditionally is safe. PR4 c11 renamed stopPolling → stopInbound.
     if (entry.connector) {
-      await entry.connector.stopPolling().catch((err) => {
-        console.log(`[agent-manager] connector.stopPolling error for ${name}: ${err}`);
+      await entry.connector.stopInbound().catch((err) => {
+        console.log(`[agent-manager] connector.stopInbound error for ${name}: ${err}`);
       });
     }
     if (entry.activityConnector) {
-      await entry.activityConnector.stopPolling().catch((err) => {
-        console.log(`[agent-manager] activity connector.stopPolling error for ${name}: ${err}`);
+      await entry.activityConnector.stopInbound().catch((err) => {
+        console.log(`[agent-manager] activity connector.stopInbound error for ${name}: ${err}`);
       });
     }
     entry.checker.stop();

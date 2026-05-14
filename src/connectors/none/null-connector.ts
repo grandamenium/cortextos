@@ -25,7 +25,7 @@ export class NullConnector implements MessageConnector {
     media: false,
     voiceTranscription: false,
     formattedText: false,
-    longPolling: false,
+    inbound: 'none',
     typingIndicator: false,
     reactions: false,
     outboundReactions: false,
@@ -45,12 +45,12 @@ export class NullConnector implements MessageConnector {
     return { id: 'noop', ts: Date.now() };
   }
 
-  async startPolling(_handlers: PollingHandlers, _opts?: { stateDir?: string }): Promise<void> {
+  async startInbound(_handlers: PollingHandlers, _opts?: { stateDir?: string }): Promise<void> {
     // No-op. Resolves immediately; no background loop to schedule.
-    // Signature kept in sync with the interface (PR2 added opts arg).
+    // Renamed from startPolling in PR4 c11 (Codex P1.I).
   }
 
-  async stopPolling(): Promise<void> {
-    // No-op.
+  async stopInbound(): Promise<void> {
+    // No-op. Renamed from stopPolling in PR4 c11.
   }
 }
