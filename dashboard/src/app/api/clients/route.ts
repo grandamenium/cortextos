@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { BigQuery } from '@google-cloud/bigquery';
 import { auth } from '@/lib/auth';
 import { listClients } from '@/lib/bq-clients';
+import { clientWelcome } from '@/lib/emails';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,6 +77,11 @@ export async function POST(req: NextRequest) {
         ingested_at: new Date().toISOString(),
       },
     ]);
+    const contactEmail = typeof body['contact_email'] === 'string' ? body['contact_email'] : null;
+    if (contactEmail) {
+      clientWelcome({ to: contactEmail, clientName: displayName, clientId }).catch(() => {});
+    }
+
     return NextResponse.json({ client_id: clientId, status: 'onboarding' }, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'BQ insert failed';
