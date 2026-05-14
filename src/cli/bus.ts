@@ -11,6 +11,7 @@ import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { pollWatchdog } from '../bus/watchdog.js';
 import { runPrStuckWatcher } from '../bus/pr-stuck-watcher.js';
+import { runDocDriftChecker } from '../bus/doc-drift-checker.js';
 import { runCodebaseScan } from '../bus/codebase-scan.js';
 import { runSecurityAudit } from '../bus/security-audit.js';
 import { selfRestart, hardRestart, autoCommit, autoCompactAgent, checkGoalStaleness, postActivity } from '../bus/system.js';
@@ -957,6 +958,35 @@ busCommand
         console.log(`- ${failure.repo}: ${failure.error.split('\n')[0]}`);
       }
     }
+  });
+
+busCommand
+  .command('doc-drift-checker')
+  .description('Compare cortextOS docs against actual project, skill, and cron structure')
+  .option('--threshold-lines <n>', 'Create a task when drift findings exceed this count', '5')
+  .option('--no-create-tasks', 'Write the report without creating a follow-up task')
+  .option('--format <fmt>', 'Output format: json or text', 'text')
+  .action((opts: { thresholdLines?: string; createTasks?: boolean; format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const projectRoot = env.projectRoot || env.frameworkRoot || process.cwd();
+    const outputDir = join(projectRoot, 'orgs', env.org, 'agents', env.agentName, 'output');
+    const threshold = Number(opts.thresholdLines ?? 5);
+    const report = runDocDriftChecker(paths, env.agentName, env.org, projectRoot, {
+      thresholdLines: Number.isFinite(threshold) && threshold >= 0 ? threshold : 5,
+      outputDir,
+      createTasks: opts.createTasks,
+    });
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(`Doc drift findings: ${report.findings.length}`);
+    console.log(`Threshold: ${report.thresholdLines}`);
+    console.log(`Task created: ${report.taskCreated ? report.taskId : 'no'}`);
+    if (report.reportPath) console.log(`Report: ${report.reportPath}`);
   });
 
 busCommand

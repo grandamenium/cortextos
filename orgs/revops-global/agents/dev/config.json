@@ -1,0 +1,67 @@
+{
+  "agent_name": "dev",
+  "enabled": true,
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "tier": "sonnet",
+  "working_directory": "/home/cortextos/cortextos/orgs/revops-global/agents/dev",
+  "timezone": "America/Los_Angeles",
+  "crons_tz": "All cron expressions use local timezone (America/Los_Angeles). 0 7 = 7 AM PT = 14:00 UTC.",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+    },
+    {
+      "name": "rgos-task-poll",
+      "type": "recurring",
+      "interval": "15m",
+      "prompt": "Check for tasks assigned to you in the RGOS kanban: use mcp__rgos__cortex_list_tasks with assigned_to=\"dev\" and status=\"approved\". If any tasks are found, claim each one with mcp__rgos__cortex_claim_task (agent_id=\"dev\"), then work them in priority order. Log a cortextos bus log-event for each claimed task. If no tasks, do nothing."
+    },
+    {
+      "name": "vm-sync-push",
+      "type": "recurring",
+      "interval": "15m",
+      "prompt": "node /home/cortextos/cortextos/scripts/cortextos-vm-sync-push.js"
+    },
+    {
+      "name": "memory-sync",
+      "type": "recurring",
+      "interval": "30m",
+      "prompt": "node /home/cortextos/cortextos/scripts/sync-agent-memories.js"
+    },
+    {
+      "name": "codebase-scanner",
+      "type": "recurring",
+      "interval": "24h",
+      "prompt": "Run the codebase improvement scanner: execute `cortextos bus codebase-scan` in /home/cortextos/cortextos. This scans src/ for TODO/FIXME/HACK/XXX markers and files >500 lines, writes a report to dev/output/YYYY-MM-DD-codebase-scan.md, and creates RGOS tasks for the top 3 actionable items. Update heartbeat to reflect this work."
+    },
+    {
+      "name": "doc-drift-checker",
+      "type": "recurring",
+      "cron": "13 9 * * *",
+      "prompt": "Run the doc drift checker: cd /home/cortextos/cortextos && cortextos bus doc-drift-checker --threshold-lines 5. Review the report in dev/output and work any task it creates in normal priority order. Update heartbeat when finished."
+    }
+  ],
+  "ctx_autoreset_threshold": 85,
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    }
+  },
+  "day_mode_start": "07:00",
+  "day_mode_end": "20:00",
+  "communication_style": "technical",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  }
+}
