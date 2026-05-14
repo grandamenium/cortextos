@@ -70,7 +70,13 @@ export async function main(): Promise<void> {
   const env = loadEnv();
   const config = readAgentConfig();
   const strict = config?.require_remote_approval === true;
-  const noCreds = !env.botToken || !env.chatId;
+  // Codex M3.cr code-review fix: `connector: 'none'` is the operator's
+  // explicit "no remote approval channel" signal. Treat it as the no-
+  // creds branch REGARDLESS of whether BOT_TOKEN/CHAT_ID happen to be
+  // in env (e.g. inherited from the parent shell). Without this gate,
+  // a 'none' agent could accidentally take the Telegram approval path
+  // and post to whichever chat the inherited creds point at.
+  const noRemoteChannel = config?.connector === 'none' || !env.botToken || !env.chatId;
 
   // Auto-approve .claude/ directory writes (preserved from
   // hook-permission-telegram pre-PR2 behavior)
@@ -79,7 +85,7 @@ export async function main(): Promise<void> {
     return;
   }
 
-  if (noCreds) {
+  if (noRemoteChannel) {
     if (strict) {
       // Operator opt-in: strict-mode keeps deny-by-default for the no-
       // remote-channel case. Pre-PR2 behavior.
@@ -159,11 +165,27 @@ export async function main(): Promise<void> {
 }
 
 // CommonJS self-execution guard. tsup builds CommonJS output, so
-// `require.main === module` is the reliable guard. ESM `import.meta.url`
-// patterns are silently dead in the built dist/hooks/*.js output.
-if (require.main === module) {
-  main().catch((err) => {
-    process.stderr.write(`hook-permission-request error: ${err}\n`);
-    outputDecision('deny', `Hook error: ${err}`);
-  });
+// `require.main === module` would be the reliable guard — BUT tsup
+// bundles imports into shim entrypoints (e.g. dist/hooks/hook-permission-
+// telegram.js contains BOTH the canonical hook's code AND the shim's
+// explicit main() call). At runtime, when the shim file is the entrypoint,
+// `require.main === module` inside the bundled canonical code ALSO
+// evaluates true — the bundle shares the same module identity — so the
+// canonical's main() would fire alongside the shim's explicit call,
+// producing a double-execution (duplicate Telegram messages). Codex
+// code-review H1.cr.
+//
+// Fix: gate the auto-exec on argv[1] basename matching the canonical
+// hook filename. The shim has a different basename, so the bundled
+// canonical's guard skips when the shim is the entrypoint. Direct
+// `node dist/hooks/hook-permission-request.js` invocation still works.
+{
+  const argv1 = process.argv[1] ?? '';
+  const base = argv1.substring(argv1.lastIndexOf('/') + 1).replace(/^\\\\/, '');
+  if (base.startsWith('hook-permission-request')) {
+    main().catch((err) => {
+      process.stderr.write(`hook-permission-request error: ${err}\n`);
+      outputDecision('deny', `Hook error: ${err}`);
+    });
+  }
 }

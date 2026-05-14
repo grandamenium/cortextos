@@ -145,6 +145,45 @@ describe('hook-permission-request', () => {
     });
   });
 
+  describe('connector: "none" overrides Telegram creds in env (Codex M3.cr)', () => {
+    beforeEach(() => {
+      writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ connector: 'none' }));
+    });
+
+    it('connector "none" + BOT_TOKEN/CHAT_ID in env → still no-remote-channel branch (safe tool allow)', () => {
+      // Without the M3.cr fix, the hook would see env creds and take the
+      // Telegram approval path even though config.connector says 'none'.
+      const result = runHook(
+        'Read',
+        { file_path: '/tmp/x' },
+        {
+          CTX_AGENT_DIR: agentDir,
+          CTX_AGENT_NAME: 'test-agent',
+          BOT_TOKEN: '123456:ABC-fake-token-not-used',
+          CHAT_ID: '12345',
+        },
+      );
+      expect(result.status).toBe(0);
+      const decision = parseDecision(result.stdout);
+      expect(decision?.behavior).toBe('allow');
+    });
+
+    it('connector "none" + BOT_TOKEN/CHAT_ID in env + write tool → pass-through (exit 0 no JSON)', () => {
+      const result = runHook(
+        'Bash',
+        { command: 'echo hi' },
+        {
+          CTX_AGENT_DIR: agentDir,
+          CTX_AGENT_NAME: 'test-agent',
+          BOT_TOKEN: '123456:ABC-fake-token-not-used',
+          CHAT_ID: '12345',
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe('');
+    });
+  });
+
   describe('special-case tools', () => {
     beforeEach(() => {
       writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ connector: 'none' }));

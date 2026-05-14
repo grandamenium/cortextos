@@ -399,11 +399,14 @@ export class AgentManager {
     }
 
     // Start Telegram poller if credentials are available and not explicitly disabled.
-    // PR2 of pluggable-connectors: honor the new `inbound_polling` field with
-    // precedence over legacy `telegram_polling`. Both default to true. Setting
-    // either to false suppresses the poller (specialist agents that should not
-    // own a bot — only the designated orchestrator should poll).
-    const pollingEnabled = config.inbound_polling !== false && config.telegram_polling !== false;
+    // PR2 of pluggable-connectors + Codex M1.cr code-review fix:
+    // `inbound_polling` takes precedence when set. Only fall back to legacy
+    // `telegram_polling` when `inbound_polling` is undefined. Both default
+    // to true. Setting either to false (when it's the active field)
+    // suppresses the poller. Specialist-agent semantics preserved exactly.
+    const pollingEnabled = config.inbound_polling !== undefined
+      ? config.inbound_polling !== false
+      : config.telegram_polling !== false;
     if (telegramApi && chatId && pollingEnabled) {
       const stateDir = join(this.ctxRoot, 'state', name);
       const poller = new TelegramPoller(telegramApi, stateDir);

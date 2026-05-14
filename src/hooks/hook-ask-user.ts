@@ -69,9 +69,17 @@ export async function main(): Promise<void> {
   process.exit(0);
 }
 
-if (require.main === module) {
-  main().catch((err) => {
-    process.stderr.write(`hook-ask-user error: ${err}\n`);
-    process.exit(0);
-  });
+// Self-exec guard with argv[1] basename check — see hook-permission-request.ts
+// for the Codex H1.cr rationale (tsup bundles shim entrypoints, so a plain
+// `require.main === module` guard would double-execute under the legacy
+// shim path).
+{
+  const argv1 = process.argv[1] ?? '';
+  const base = argv1.substring(argv1.lastIndexOf('/') + 1);
+  if (base.startsWith('hook-ask-user')) {
+    main().catch((err) => {
+      process.stderr.write(`hook-ask-user error: ${err}\n`);
+      process.exit(0);
+    });
+  }
 }

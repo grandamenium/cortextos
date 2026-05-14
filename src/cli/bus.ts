@@ -1090,12 +1090,29 @@ busCommand
     // Build the connector. For 'telegram' (explicit or inferred via legacy
     // gate from .env), construct via getConnector which unpacks env keys.
     // Future kinds reach getConnector's factory dispatch.
+    //
+    // Codex M2.cr code-review fix: read the TARGET agent's .env and merge
+    // it onto process.env before passing to getConnector. Without this,
+    // an agent whose BOT_TOKEN/CHAT_ID live only in its own .env (the
+    // common case) would have those credentials missed entirely — or
+    // worse, accidentally pick up the caller's Telegram credentials from
+    // the surrounding shell.
     const { getConnector } = require('../connectors/index.js');
+    const { parseEnvFile } = require('../utils/env.js');
+    const path = require('path');
+    const fs = require('fs');
     const resolvedKind = kind ?? 'telegram'; // PR1's default inference
+
+    // Target agent env wins over the caller's process.env for connector creds.
+    const agentEnvPath = env.agentDir ? path.join(env.agentDir, '.env') : '';
+    const agentEnv: Record<string, string> = agentEnvPath && fs.existsSync(agentEnvPath)
+      ? parseEnvFile(agentEnvPath)
+      : {};
+    const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...agentEnv };
 
     let connector;
     try {
-      connector = getConnector(resolvedKind, env.agentDir || '', process.env);
+      connector = getConnector(resolvedKind, env.agentDir || '', mergedEnv);
     } catch (err: any) {
       console.error(`Error: ${err.message || err}`);
       process.exit(1);
