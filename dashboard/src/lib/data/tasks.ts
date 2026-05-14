@@ -2,7 +2,10 @@
 // Reads from SQLite (synced from JSON task files on disk).
 
 import { db } from '@/lib/db';
-import type { Task, TaskFilters } from '@/lib/types';
+import fs from 'fs';
+import path from 'path';
+import type { Task, TaskFilters, TaskAuditEntry } from '@/lib/types';
+import { getTaskDir, getCTXRoot } from '@/lib/config';
 
 /**
  * Get tasks with optional filters.
@@ -169,6 +172,130 @@ export function getTaskCount(org?: string, status?: string): number {
     console.error('[data/tasks] getTaskCount error:', err);
     return 0;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Task history (audit log)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read all audit entries for a task directly from the JSONL file on disk.
+ * Returns entries in write-order (oldest first). Returns empty array if
+ * the audit log does not exist or cannot be read.
+ *
+ * The audit log lives at: <taskDir>/audit/<taskId>.jsonl
+ * We resolve the task dir by inspecting the task's source_file first,
+ * then fall back to the configured task dir for the task's org.
+ */
+export function getTaskHistory(id: string): TaskAuditEntry[] {
+  // Resolve audit file path. Strategy (in priority order):
+  // 1. source_file from SQLite task record (fast, exact)
+  // 2. org from SQLite task record -> getTaskDir(org)
+  // 3. Cross-org filesystem scan under CTX_ROOT/orgs/*
+  // 4. Default (no-org) task dir
+  // This layered approach means the function works even when SQLite hasn't
+  // synced yet (e.g. in tests that write files directly).
+  let auditPath: string | null = null;
+
+  try {
+    const task = getTaskById(id);
+    if (task?.source_file) {
+      const candidate = path.join(path.dirname(task.source_file), 'audit', `${id}.jsonl`);
+      if (fs.existsSync(candidate)) {
+        auditPath = candidate;
+      }
+    }
+    if (!auditPath) {
+      const taskDir = getTaskDir(task?.org ?? undefined);
+      const candidate = path.join(taskDir, 'audit', `${id}.jsonl`);
+      if (fs.existsSync(candidate)) {
+        auditPath = candidate;
+      }
+    }
+  } catch {
+    // SQLite lookup failed — proceed to filesystem scan
+  }
+
+  // Cross-org scan: walk CTX_ROOT/orgs/*/tasks/audit/<id>.jsonl
+  if (!auditPath) {
+    const ctxRoot = getCTXRoot();
+    const orgsRoot = path.join(ctxRoot, 'orgs');
+    try {
+      for (const entry of fs.readdirSync(orgsRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const candidate = path.join(orgsRoot, entry.name, 'tasks', 'audit', `${id}.jsonl`);
+        if (fs.existsSync(candidate)) {
+          auditPath = candidate;
+          break;
+        }
+      }
+    } catch { /* orgs/ missing */ }
+  }
+
+  // Last resort: default (no-org) task dir
+  if (!auditPath) {
+    const fallback = path.join(getTaskDir(), 'audit', `${id}.jsonl`);
+    if (fs.existsSync(fallback)) auditPath = fallback;
+  }
+
+  if (!auditPath) return [];
+
+  const entries: TaskAuditEntry[] = [];
+  try {
+    const raw = fs.readFileSync(auditPath, 'utf-8');
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        entries.push(JSON.parse(trimmed) as TaskAuditEntry);
+      } catch {
+        // Skip corrupt lines — partial writes under O_APPEND are rare but possible.
+      }
+    }
+  } catch {
+    return [];
+  }
+  return entries;
+}
+
+/**
+ * Append a comment entry to a task's audit log.
+ * Writes a JSONL line directly (same format as commentTask in src/bus/task.ts).
+ * Rejects empty text. Non-fatal: if the write fails, throws so the caller
+ * can surface the error.
+ */
+export function appendComment(id: string, agent: string, text: string, task: Task): void {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error('Comment text is required');
+  if (!agent) throw new Error('Comment agent is required');
+
+  // Resolve audit path from source_file first, then config.
+  let auditDir: string;
+  if (task.source_file) {
+    auditDir = path.join(path.dirname(task.source_file), 'audit');
+  } else {
+    auditDir = path.join(getTaskDir(task.org ?? undefined), 'audit');
+  }
+
+  // Ensure audit dir exists
+  if (!fs.existsSync(auditDir)) {
+    fs.mkdirSync(auditDir, { recursive: true, mode: 0o700 });
+  }
+
+  const entry: TaskAuditEntry = {
+    ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    event: 'comment',
+    agent,
+    note: trimmed,
+  };
+
+  // O_APPEND semantics: atomic for lines under PIPE_BUF (4096 bytes on POSIX).
+  // Our entries are ~200 bytes, so no interleaving risk.
+  fs.appendFileSync(
+    path.join(auditDir, `${id}.jsonl`),
+    JSON.stringify(entry) + '\n',
+    { encoding: 'utf-8', mode: 0o600 },
+  );
 }
 
 // ---------------------------------------------------------------------------
