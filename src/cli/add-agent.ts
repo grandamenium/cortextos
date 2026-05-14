@@ -21,10 +21,15 @@ export const addAgentCommand = new Command('add-agent')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
   .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
+  .option('--connector <kind>', 'Communication connector kind (telegram | none). PR2 of the pluggable connectors stack. Default: telegram.', 'telegram')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string; connector: string }) => {
     if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
       console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
+      process.exit(1);
+    }
+    if (options.connector !== 'telegram' && options.connector !== 'none') {
+      console.error(`Error: --connector must be one of: telegram, none (got "${options.connector}")`);
       process.exit(1);
     }
 
@@ -165,29 +170,49 @@ export const addAgentCommand = new Command('add-agent')
       }
     }
 
-    // Create .env placeholder with helpful comments
-    const envPath = join(agentDir, '.env');
-    if (!existsSync(envPath)) {
-      writeFileSync(envPath, [
-        `# Agent environment for ${name}`,
-        '#',
-        '# BOT_TOKEN: Create a Telegram bot with @BotFather and paste the token here',
-        '# CHAT_ID: Send a message to your bot, then run:',
-        '#   curl -s "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates" | jq \'.result[-1].message.chat.id\'',
-        '#',
-        'BOT_TOKEN=',
-        'CHAT_ID=',
-        '',
-        '# Claude Code v2.1.111+ gives Sonnet 4.6 a 1M context window by default.',
-        '# On plans WITHOUT "extra usage" billing, compaction fails at 100% ctx with:',
-        '#   "Extra usage is required for 1M context"',
-        '# If you see that error on a Sonnet or Haiku agent, uncomment the line below',
-        '# to revert to the standard 200K window.',
-        '# (Opus on Max / Team / Enterprise includes 1M natively — leave this commented.)',
-        '# CLAUDE_CODE_DISABLE_1M_CONTEXT=true',
-        '',
-      ].join('\n'), 'utf-8');
-      chmodSync(envPath, 0o600); // credentials — owner read/write only
+    // Write connector kind to config.json (PR2 of pluggable-connectors stack).
+    // PR1 added `AgentConfig.connector?: 'telegram' | 'none'`. Pre-PR2 agents
+    // (without the field) infer via the legacy resolver from .env content;
+    // PR2 makes new agents explicit. `--connector telegram` (the default) is
+    // still written explicitly so future agents are self-describing.
+    if (existsSync(configPath)) {
+      try {
+        const existingCfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+        existingCfg.connector = options.connector;
+        writeFileSync(configPath, JSON.stringify(existingCfg, null, 2) + '\n', 'utf-8');
+      } catch (err) {
+        console.error(`Warning: failed to set connector field in config.json: ${(err as Error).message}`);
+      }
+    }
+
+    // Create .env placeholder with helpful comments — only for Telegram
+    // connector. `--connector none` agents have no remote-channel creds to
+    // configure, so no .env stub is written. Operators can still create
+    // their own .env later if they want to add custom env vars.
+    if (options.connector === 'telegram') {
+      const envPath = join(agentDir, '.env');
+      if (!existsSync(envPath)) {
+        writeFileSync(envPath, [
+          `# Agent environment for ${name}`,
+          '#',
+          '# BOT_TOKEN: Create a Telegram bot with @BotFather and paste the token here',
+          '# CHAT_ID: Send a message to your bot, then run:',
+          '#   curl -s "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates" | jq \'.result[-1].message.chat.id\'',
+          '#',
+          'BOT_TOKEN=',
+          'CHAT_ID=',
+          '',
+          '# Claude Code v2.1.111+ gives Sonnet 4.6 a 1M context window by default.',
+          '# On plans WITHOUT "extra usage" billing, compaction fails at 100% ctx with:',
+          '#   "Extra usage is required for 1M context"',
+          '# If you see that error on a Sonnet or Haiku agent, uncomment the line below',
+          '# to revert to the standard 200K window.',
+          '# (Opus on Max / Team / Enterprise includes 1M natively — leave this commented.)',
+          '# CLAUDE_CODE_DISABLE_1M_CONTEXT=true',
+          '',
+        ].join('\n'), 'utf-8');
+        chmodSync(envPath, 0o600); // credentials — owner read/write only
+      }
     }
 
     // Generate SYSTEM.md from context.json (static org context only).
