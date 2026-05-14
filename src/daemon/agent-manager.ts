@@ -11,7 +11,7 @@ import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
-import { logInboundMessage, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
+import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
@@ -293,14 +293,6 @@ export class AgentManager {
     // external cron system — agents no longer need to call CronCreate on boot.
     this.startAgentCronScheduler(name);
 
-    // Attach the AgentProcess to its CronScheduler so idle-aware deferral can
-    // query isIdle() / isRunning() before each fire.  attachAgent() is a no-op
-    // if the scheduler wasn't started (Hermes agents, etc.).
-    const scheduler = this.cronSchedulers.get(name);
-    if (scheduler) {
-      scheduler.attachAgent(agentProcess);
-    }
-
     // Start fast checker in background
     checker.start().catch(err => {
       console.error(`[${name}] Fast checker error:`, err);
@@ -338,15 +330,14 @@ export class AgentManager {
         const effectiveChatId = msgChatId ?? chatId ?? '';
         const stateDir = join(this.ctxRoot, 'state', name);
 
-        // Log inbound message to JSONL
-        logInboundMessage(this.ctxRoot, name, {
-          message_id: msg.message_id,
-          from: msg.from?.id,
-          from_name: from,
-          chat_id: msgChatId,
-          text: stripControlChars(msg.text || msg.caption || ''),
-          timestamp: new Date().toISOString(),
-        });
+        // Persist the inbound message to JSONL AND emit a
+        // `message/telegram_received` bus event in one helper so
+        // experiment cycles and dashboards can count inbound traffic.
+        // Without the event, Rubi's v3 fleet measurement found 0
+        // inbound messages on a window where Eros replied to multiple
+        // agents — the JSONL had the data but it never reached the
+        // event log.
+        recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
 
         // Check for media messages (photo, document, voice, audio, video, video_note)
         const isMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);

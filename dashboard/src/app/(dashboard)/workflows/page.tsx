@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useRouter } from 'next/navigation';
 import { useOrg } from '@/hooks/use-org';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -622,9 +622,8 @@ export default function WorkflowsPage() {
                   filteredRows.map(row => {
                     const isSelected = selectedCron?.agent === row.agent && selectedCron?.name === row.cron.name;
                     return (
-                      <>
+                      <Fragment key={`${row.agent}::${row.cron.name}`}>
                         <tr
-                          key={`${row.agent}::${row.cron.name}`}
                           className={`border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors group ${isSelected ? 'bg-muted/70' : ''}`}
                           onClick={() => {
                             if (isSelected) {
@@ -732,7 +731,7 @@ export default function WorkflowsPage() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })
                 )}

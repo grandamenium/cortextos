@@ -11,8 +11,8 @@
  *   - Fire-and-forget mirrorEventToRgos is called (never throws)
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'fs';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { BusPaths } from '../../../src/types/index';
@@ -249,5 +249,49 @@ describe('logEvent — mirrorEventToRgos', () => {
     ).not.toThrow();
     await new Promise(r => setImmediate(r));
     // No unhandled rejection — .catch(() => undefined) swallows it
+  });
+});
+
+describe('logEvent — heartbeat refresh side-effect', () => {
+  beforeEach(() => { mkdirSync(paths.stateDir, { recursive: true }); });
+  afterEach(cleanup);
+
+  it('bumps last_heartbeat on an existing heartbeat.json without overwriting other fields', async () => {
+    const { writeFileSync } = await import('fs');
+    const oldHeartbeat = {
+      agent: 'dev',
+      org: 'revops-global',
+      status: 'online',
+      current_task: 'fix/log-event-refreshes-heartbeat',
+      mode: 'day',
+      last_heartbeat: '2026-04-23T12:00:00Z',
+      loop_interval: '4h',
+    };
+    writeFileSync(join(paths.stateDir, 'heartbeat.json'), JSON.stringify(oldHeartbeat));
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    logEvent(paths, 'dev', 'revops-global', 'action', 'activity_tick', 'info');
+    const refreshed = JSON.parse(readFileSync(join(paths.stateDir, 'heartbeat.json'), 'utf-8'));
+    expect(new Date(refreshed.last_heartbeat).getTime()).toBeGreaterThan(
+      new Date(oldHeartbeat.last_heartbeat).getTime(),
+    );
+    expect(refreshed.status).toBe('online');
+    expect(refreshed.current_task).toBe('fix/log-event-refreshes-heartbeat');
+    expect(refreshed.loop_interval).toBe('4h');
+  });
+
+  it('is a no-op when no heartbeat.json exists yet', () => {
+    expect(existsSync(join(paths.stateDir, 'heartbeat.json'))).toBe(false);
+    logEvent(paths, 'dev', 'revops-global', 'action', 'first_boot', 'info');
+    expect(existsSync(join(paths.stateDir, 'heartbeat.json'))).toBe(false);
+  });
+
+  it('never blocks event persistence when the heartbeat refresh fails', async () => {
+    const { writeFileSync } = await import('fs');
+    writeFileSync(join(paths.stateDir, 'heartbeat.json'), '{not valid json');
+    expect(() =>
+      logEvent(paths, 'dev', 'revops-global', 'action', 'after_corrupt_hb', 'info'),
+    ).not.toThrow();
+    const lines = readEventLines(testRoot, 'dev');
+    expect(lines).toHaveLength(1);
   });
 });
