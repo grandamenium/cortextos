@@ -40,18 +40,16 @@ const DEDUP_WINDOW_MS = 10 * 60 * 1000;         // 10 minutes
 const QUIET_HOUR_START_LA = 22;                 // 22:00 America/Los_Angeles
 const QUIET_HOUR_END_LA = 7;                    // 07:00 America/Los_Angeles
 
-// End types that are routine and should be suppressed during quiet hours.
-// "crash" is deliberately NOT in this list — a genuine unexpected crash at
-// 3am is worth waking up for.
-const QUIET_SUPPRESSED_TYPES = new Set([
-  'planned-restart',
-  'session-refresh',
-  'daemon-stop',
-  'user-restart',
-  'user-disable',
-  'user-stop',
-  'rate-limited',
-]);
+// End types that ping Telegram. All other types (planned-restart,
+// session-refresh, user-restart, user-disable, user-stop, daemon-stop) are
+// planned/expected exits and are log-only per .claude/rules/comms-discipline.md
+// Rule 5 — operational invisible noise, not user signal.
+export const TELEGRAM_PING_TYPES = new Set(['crash', 'daemon-crashed', 'rate-limited']);
+
+// Of the ping types, only 'rate-limited' suppresses during quiet hours.
+// 'crash' and 'daemon-crashed' page through the night — genuine abnormality
+// worth waking for.
+const QUIET_SUPPRESSED_TYPES = new Set(['rate-limited']);
 
 function isQuietHoursLA(now: Date): boolean {
   const laString = now.toLocaleString('en-US', {
@@ -275,74 +273,46 @@ async function main(): Promise<void> {
     appendFileSync(join(logDir, 'crashes.log'), logLine);
   } catch { /* ignore */ }
 
-  // Decide whether to actually send to Telegram.
-  const now = new Date();
-  const quiet = isQuietHoursLA(now);
-  if (quiet && QUIET_SUPPRESSED_TYPES.has(endType)) {
-    return;
-  }
-  if (shouldSuppressDedup(stateDir, endType)) {
-    return;
-  }
-
-  const botToken = process.env.BOT_TOKEN;
-  const chatId = process.env.CHAT_ID;
-  if (!botToken || !chatId) return;
-
-  let message = '';
-  switch (endType) {
-    case 'planned-restart':
-      message = reason?.startsWith('CONTEXT-FORCE-RESTART')
-        ? `🔄 ${agentName} restarting with memory`
-        : `🔄 ${agentName} restarted (planned): ${reason || 'no reason given'}`;
-      break;
-    case 'session-refresh':
-      message = `♻️ ${agentName} session refresh (context exhaustion). Restarting with fresh session.`;
-      break;
-    case 'user-restart':
-      message = `🔄 ${agentName} restarted by user: ${reason || 'no reason given'}`;
-      break;
-    case 'user-disable':
-      message = `⏸️ ${agentName} disabled by user.`;
-      if (reason) message += ` (${reason})`;
-      break;
-    case 'user-stop':
-      message = `⏹️ ${agentName} stopped by user.`;
-      if (reason) message += ` (${reason})`;
-      break;
-    case 'daemon-stop':
-      message = `🛑 ${agentName} stopped (daemon shutdown).`;
-      if (reason) message += ` (${reason})`;
-      break;
-    case 'daemon-crashed':
-      // Deliberately NOT suppressed during quiet hours — a daemon crash at
-      // 3am is genuinely worth waking for (historically it has preceded
-      // fleet-wide restart storms). Crash-loop alerts from the daemon
-      // itself add operator-level urgency; this is the per-agent variant
-      // that replaces the misleading "🚨 agent crashed" message users
-      // were getting on every daemon respawn.
-      message = `🚨 ${agentName} — daemon crashed, session was interrupted. Resuming.`;
-      if (reason) message += `\nCrash time: ${reason}`;
-      break;
-    case 'rate-limited':
-      message = `⏳ ${agentName} paused — Anthropic rate limit hit. Will resume when the window resets.`;
-      break;
-    case 'crash':
-      message = `🚨 CRASH: ${agentName} died unexpectedly.`;
-      if (crashCount > 0) message += ` Crashes today: ${crashCount}.`;
-      if (lastTask) message += `\nLast status: ${lastTask}`;
-      break;
-  }
-
-  if (message) {
-    try {
-      const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-      await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text: message }),
-      });
-    } catch { /* ignore send failures */ }
+  // Telegram is only for genuine abnormality. Planned/expected exits
+  // (restarts, refreshes, user-initiated stops, daemon shutdown) fall through
+  // to crashes.log + bus events but never DM Saurav.
+  if (TELEGRAM_PING_TYPES.has(endType)) {
+    const now = new Date();
+    const quiet = isQuietHoursLA(now);
+    const muted = quiet && QUIET_SUPPRESSED_TYPES.has(endType);
+    if (!muted && !shouldSuppressDedup(stateDir, endType)) {
+      const botToken = process.env.BOT_TOKEN;
+      const chatId = process.env.CHAT_ID;
+      if (botToken && chatId) {
+        let message = '';
+        switch (endType) {
+          case 'daemon-crashed':
+            // Not quiet-hour suppressed — a daemon crash at 3am is worth
+            // waking for (historically precedes fleet-wide restart storms).
+            message = `🚨 ${agentName} — daemon crashed, session was interrupted. Resuming.`;
+            if (reason) message += `\nCrash time: ${reason}`;
+            break;
+          case 'rate-limited':
+            message = `⏳ ${agentName} paused — Anthropic rate limit hit. Will resume when the window resets.`;
+            break;
+          case 'crash':
+            message = `🚨 CRASH: ${agentName} died unexpectedly.`;
+            if (crashCount > 0) message += ` Crashes today: ${crashCount}.`;
+            if (lastTask) message += `\nLast status: ${lastTask}`;
+            break;
+        }
+        if (message) {
+          try {
+            const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+            await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, text: message }),
+            });
+          } catch { /* ignore send failures */ }
+        }
+      }
+    }
   }
 
   // Real-crash agent alerts: notify chief + analyst on crash and daemon-crashed

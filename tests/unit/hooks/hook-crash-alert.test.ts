@@ -8,7 +8,7 @@ vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { readMaxCrashesPerDay, notifyAgents } from '../../../src/hooks/hook-crash-alert';
+import { readMaxCrashesPerDay, notifyAgents, TELEGRAM_PING_TYPES } from '../../../src/hooks/hook-crash-alert';
 
 describe('readMaxCrashesPerDay', () => {
   let tmp: string;
@@ -47,6 +47,27 @@ describe('readMaxCrashesPerDay', () => {
   it('returns null when max_crashes_per_day is not a number', () => {
     writeFileSync(join(tmp, 'config.json'), JSON.stringify({ max_crashes_per_day: 'ten' }), 'utf-8');
     expect(readMaxCrashesPerDay(tmp)).toBeNull();
+  });
+});
+
+describe('TELEGRAM_PING_TYPES', () => {
+  // Contract test for the planned-restart Telegram noise fix.
+  // Saurav explicitly flagged that planned restarts and cron-driven stops
+  // should not DM him — only genuine abnormality. Lock the set so a future
+  // edit can't silently re-introduce a "🔄 restarted (planned)" or
+  // "⏹️ stopped by user" ping by adding a case branch.
+  it('contains exactly the three abnormality end types', () => {
+    expect(Array.from(TELEGRAM_PING_TYPES).sort()).toEqual([
+      'crash',
+      'daemon-crashed',
+      'rate-limited',
+    ]);
+  });
+
+  it('does not include planned/expected exit types', () => {
+    for (const planned of ['planned-restart', 'session-refresh', 'user-restart', 'user-disable', 'user-stop', 'daemon-stop']) {
+      expect(TELEGRAM_PING_TYPES.has(planned)).toBe(false);
+    }
   });
 });
 
