@@ -16,7 +16,7 @@ import type {
   CallbackPayload,
 } from '../connectors/index.js';
 import { resolvePaths } from '../utils/paths.js';
-import { resolveEnv } from '../utils/env.js';
+import { resolveEnv, parseEnvFile } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
@@ -652,24 +652,19 @@ export class AgentManager {
     if (!orchestratorName || orchestratorName !== name) return;
 
     // Parse activity-channel.env for the separate bot token + chat id.
+    // PR4 c13 (Codex P2.5 ACTIVITY_ENV_PARSER_IS_NOT_THE_SHARED_ENV_PARSER):
+    // route through the shared `parseEnvFile` helper instead of the
+    // local loop. parseEnvFile handles quoted values and inline `#`
+    // comments correctly — the previous inline loop did not, so a
+    // quoted ACTIVITY_BOT_TOKEN or one with a trailing `# comment`
+    // would have produced a corrupted token.
     const activityEnvPath = join(orgDir, 'activity-channel.env');
-    let activityBotToken: string | undefined;
-    let activityChatId: string | undefined;
-    try {
-      const content = readFileSync(activityEnvPath, 'utf-8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx <= 0) continue;
-        const key = trimmed.slice(0, eqIdx).trim();
-        const value = trimmed.slice(eqIdx + 1).trim();
-        if (key === 'ACTIVITY_BOT_TOKEN') activityBotToken = value;
-        if (key === 'ACTIVITY_CHAT_ID') activityChatId = value;
-      }
-    } catch {
+    if (!existsSync(activityEnvPath)) {
       return; // activity-channel.env absent — silent no-op
     }
+    const activityEnv = parseEnvFile(activityEnvPath);
+    const activityBotToken = activityEnv.ACTIVITY_BOT_TOKEN;
+    const activityChatId = activityEnv.ACTIVITY_CHAT_ID;
 
     if (!activityBotToken || !activityChatId) {
       log('Activity-channel env present but missing BOT_TOKEN or CHAT_ID — skipping poller');

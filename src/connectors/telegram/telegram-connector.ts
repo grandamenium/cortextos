@@ -12,6 +12,7 @@ import type {
   ConnectorAction,
   CallbackPayload,
 } from '../types.js';
+import { resolve as resolvePath } from 'path';
 import { TelegramAPI } from './api.js';
 import { TelegramPoller } from './poller.js';
 import { processMediaMessage, type ProcessedMedia, type MediaLimits } from './media.js';
@@ -132,7 +133,15 @@ export class TelegramConnector implements MessageConnector {
     this.chatId = env.CHAT_ID;
     this.allowedUserId = env.ALLOWED_USER ? parseInt(env.ALLOWED_USER, 10) : undefined;
     this.pollerNamespace = opts?.pollerNamespace;
-    this.downloadDir = opts?.downloadDir;
+    // PR4 c13 (Codex P2.6 NORMALIZED_MEDIA_ABSOLUTE_PATH_NOT_ENFORCED):
+    // resolve the caller-supplied downloadDir to an absolute path at
+    // construction time. The spec promises NormalizedMedia.localPath is
+    // absolute (rules in §4) but processMediaMessage writes via
+    // `path.join(downloadDir, ...)` which preserves whatever shape the
+    // caller passed. Resolving here means every code path downstream
+    // (media writes, BUG-046 path-relativization, future Discord/
+    // Mattermost connectors copying the pattern) sees an absolute root.
+    this.downloadDir = opts?.downloadDir !== undefined ? resolvePath(opts.downloadDir) : undefined;
     // Defaults: 20 MB per file (matches Telegram's stated bot-API ceiling
     // for downloads); 500 MB total quota per downloadDir (sane fallback
     // — agents that need more override). `undefined` in opts.mediaLimits
@@ -353,8 +362,15 @@ export class TelegramConnector implements MessageConnector {
     }
 
     // Fire-and-forget — DO NOT await. Matches the existing daemon pattern.
+    // PR4 c13 (Codex P2.3 POLLER_START_ERRORS_ARE_NOT_OBSERVABLE_BY_CALLER):
+    // tagged log line so health-grep can spot terminal poller failures.
+    // The `.catch()` already runs INSIDE the connector after the poll
+    // loop exits — by the time we land here, the inbound delivery has
+    // stopped. A proper health-callback contract (PollingHandlers
+    // `onError?`) is tracked for a follow-up PR; for now this log
+    // line is the operator's signal.
     this.poller.start().catch((err: unknown) => {
-      console.error('[telegram-connector] poller error:', err);
+      console.error(`[connector:telegram] inbound loop terminated with error: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 
@@ -371,8 +387,20 @@ export class TelegramConnector implements MessageConnector {
   }
 
   async setTypingIndicator(on: boolean): Promise<void> {
+    // PR4 c13 (Codex P2.4 SET_TYPING_SPEC_AND_CODE_DISAGREE): the spec
+    // (docs/architecture/connectors.md §2 "Capability-gated method
+    // semantics") promises callers don't need to wrap this in try/catch
+    // because the typing indicator is purely cosmetic. Honor that
+    // contract by catching internally so a Telegram outage during a
+    // typing-hint emit can't propagate up to the daemon's hot path.
+    // The error is logged at a tagged level so ops can grep it without
+    // it being load-bearing for any health signal.
     if (on) {
-      await this.api.sendChatAction(this.chatId, 'typing');
+      try {
+        await this.api.sendChatAction(this.chatId, 'typing');
+      } catch (err) {
+        console.error(`[connector:telegram] setTypingIndicator error (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     // off is a no-op — Telegram auto-clears the typing indicator after ~5s.
   }
