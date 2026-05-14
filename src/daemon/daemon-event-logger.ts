@@ -1,6 +1,6 @@
-import type { EventCategory, EventSeverity } from '../types/index.js';
+import type { BusPaths, EventCategory, EventSeverity } from '../types/index.js';
+import { join } from 'path';
 import { logEvent } from '../bus/event.js';
-import { resolvePaths } from '../utils/paths.js';
 
 /**
  * Synthetic agent identity for daemon-scope events.
@@ -34,7 +34,7 @@ export const DAEMON_AGENT_NAME = '_daemon';
  */
 export function logDaemonEvent(
   ctxRoot: string,
-  instanceId: string,
+  _instanceId: string,
   org: string,
   category: EventCategory,
   eventName: string,
@@ -42,17 +42,32 @@ export function logDaemonEvent(
   metadata?: Record<string, unknown>,
 ): void {
   try {
-    const paths = resolvePaths(DAEMON_AGENT_NAME, instanceId, org);
-    // Ensure the path is rooted at our actual ctxRoot (resolvePaths derives
-    // it from homedir()+instanceId — equivalent in production but worth
-    // pinning explicitly for tests that override ctxRoot).
-    paths.ctxRoot = ctxRoot;
-    paths.analyticsDir = org
-      ? `${ctxRoot}/orgs/${org}/analytics`
-      : `${ctxRoot}/analytics`;
-    paths.stateDir = `${ctxRoot}/state/${DAEMON_AGENT_NAME}`;
-    logEvent(paths, DAEMON_AGENT_NAME, org, category, eventName, severity, metadata);
+    logEvent(buildDaemonBusPaths(ctxRoot, org), DAEMON_AGENT_NAME, org, category, eventName, severity, metadata);
   } catch (err) {
     console.error(`[daemon-event-logger] non-fatal: ${(err as Error).message}`);
   }
+}
+
+/**
+ * Construct the minimal `BusPaths` that `logEvent` actually reads
+ * (`analyticsDir` for the JSONL write + `stateDir` for the heartbeat-
+ * refresh side-effect, which no-ops on `_daemon` since no heartbeat.json
+ * exists). Built from `ctxRoot` directly rather than via `resolvePaths`
+ * to avoid leaking `homedir()` defaults into tests that override ctxRoot
+ * to a tempdir.
+ */
+function buildDaemonBusPaths(ctxRoot: string, org: string): BusPaths {
+  const orgBase = org ? join(ctxRoot, 'orgs', org) : ctxRoot;
+  return {
+    ctxRoot,
+    inbox: join(ctxRoot, 'inbox', DAEMON_AGENT_NAME),
+    inflight: join(ctxRoot, 'inflight', DAEMON_AGENT_NAME),
+    processed: join(ctxRoot, 'processed', DAEMON_AGENT_NAME),
+    logDir: join(ctxRoot, 'logs', DAEMON_AGENT_NAME),
+    stateDir: join(ctxRoot, 'state', DAEMON_AGENT_NAME),
+    taskDir: join(orgBase, 'tasks'),
+    approvalDir: join(orgBase, 'approvals'),
+    analyticsDir: join(orgBase, 'analytics'),
+    deliverablesDir: join(orgBase, 'deliverables'),
+  };
 }

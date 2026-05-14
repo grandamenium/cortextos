@@ -243,7 +243,7 @@ export class DoctorCron {
       `[doctor-cron] doctor_delta_detected new_failures=${failures.length} ` +
       `new_warnings=${warnings.length} resolved=${resolved.length}`,
     );
-    if (this.org !== undefined) {
+    if (this.instanceId && this.org !== undefined) {
       logDaemonEvent(
         this.ctxRoot, this.instanceId, this.org,
         'action', 'doctor_delta_detected',

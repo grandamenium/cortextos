@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -261,13 +261,8 @@ describe('HeartbeatStalenessWatcher — fleet-resilience cleanup A (daemon JSONL
   function readDaemonEvents(): Array<{ event: string; metadata: Record<string, unknown> }> {
     const today = new Date(clock.ms).toISOString().slice(0, 10);
     const file = join(ctxRoot, 'orgs', 'acme', 'analytics', 'events', '_daemon', `${today}.jsonl`);
-    try {
-      const { readFileSync, existsSync } = require('fs');
-      if (!existsSync(file)) return [];
-      return readFileSync(file, 'utf-8').split('\n').filter(Boolean).map((l: string) => JSON.parse(l));
-    } catch {
-      return [];
-    }
+    if (!existsSync(file)) return [];
+    return readFileSync(file, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   }
 
   it('emits a heartbeat_stale_detected JSONL row under _daemon when stale', () => {

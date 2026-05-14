@@ -75,4 +75,20 @@ describe('logDaemonEvent', () => {
       logDaemonEvent('/proc/cant-write-here', 'default', 'acme', 'action', 'x', 'info'),
     ).not.toThrow();
   });
+
+  it('does not throw when logEvent rejects an invalid category', () => {
+    // logEvent → validateEventCategory throws on unknown categories. The
+    // wrapper's try/catch must absorb this — a watcher misuse cannot kill
+    // the daemon process.
+    expect(() =>
+      logDaemonEvent(
+        ctxRoot, 'default', 'acme',
+        'bogus' as never, 'heartbeat_stale_detected', 'info',
+      ),
+    ).not.toThrow();
+    // And no file was created (write didn't even start).
+    const today = new Date().toISOString().slice(0, 10);
+    const file = join(ctxRoot, 'orgs', 'acme', 'analytics', 'events', DAEMON_AGENT_NAME, `${today}.jsonl`);
+    expect(existsSync(file)).toBe(false);
+  });
 });
