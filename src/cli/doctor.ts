@@ -1,9 +1,10 @@
 import { Command } from 'commander';
 import { execSync } from 'child_process';
-import { existsSync, readFileSync, readdirSync, statSync, chmodSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { loadProfileRegistry, findDanglingReferences } from '../utils/profiles.js';
+import { ensureSpawnHelperExecutable } from '../utils/node-pty-perms.js';
 
 interface Check {
   name: string;
@@ -83,39 +84,23 @@ export const doctorCommand = new Command('doctor')
       });
     }
 
-    // Fix spawn-helper permissions (Unix only)
-    if (process.platform !== 'win32') {
-      const prebuildsDir = join(process.cwd(), 'node_modules', 'node-pty', 'prebuilds');
-      const buildRelease = join(process.cwd(), 'node_modules', 'node-pty', 'build', 'Release');
-      let permFixed = false;
-
-      // Fix permissions on all spawn-helper binaries
-      for (const dir of [prebuildsDir, buildRelease]) {
-        if (!existsSync(dir)) continue;
-        try {
-          const entries = dir === prebuildsDir ? readdirSync(dir) : ['.'];
-          for (const entry of entries) {
-            const helperPath = dir === prebuildsDir
-              ? join(dir, entry, 'spawn-helper')
-              : join(dir, 'spawn-helper');
-            if (existsSync(helperPath)) {
-              const mode = statSync(helperPath).mode;
-              if ((mode & 0o111) === 0) {
-                chmodSync(helperPath, 0o755);
-                permFixed = true;
-              }
-            }
-          }
-        } catch { /* skip */ }
-      }
-
-      if (permFixed) {
-        checks.push({
-          name: 'node-pty spawn-helper',
-          status: 'warn',
-          message: 'Permissions were missing - fixed automatically',
-        });
-      }
+    // Fix spawn-helper permissions (Unix only). Shared implementation in
+    // utils/node-pty-perms — same helper the daemon and postinstall use.
+    const permResult = ensureSpawnHelperExecutable(process.cwd());
+    if (permResult.fixed.length > 0) {
+      checks.push({
+        name: 'node-pty spawn-helper',
+        status: 'warn',
+        message: `Permissions were missing on ${permResult.fixed.length} binary(s) - fixed automatically`,
+      });
+    }
+    if (permResult.errors.length > 0) {
+      checks.push({
+        name: 'node-pty spawn-helper',
+        status: 'fail',
+        message: `Could not fix permissions: ${permResult.errors.map(e => e.reason).join('; ')}`,
+        fix: 'Manually chmod +x node_modules/node-pty/prebuilds/*/spawn-helper',
+      });
     }
 
     // Actual spawn test (cross-platform)

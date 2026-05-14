@@ -16,7 +16,8 @@
     "lint": "tsc --noEmit",
     "test:playwright": "npx playwright test",
     "prepush": "npm run typecheck && npm test",
-    "prepare": "simple-git-hooks"
+    "prepare": "simple-git-hooks",
+    "postinstall": "node scripts/ensure-node-pty-perms.mjs"
   },
   "simple-git-hooks": {
     "pre-push": "npm run prepush"
