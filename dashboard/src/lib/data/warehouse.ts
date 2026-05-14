@@ -1,6 +1,11 @@
 // Query contract: return aggregated rows, never raw event/metric data.
 // All queries must use GROUP BY + aggregate functions, filter on date partition,
 // and LIMIT to max 100 rows. No SELECT * from daily_metrics. — Rob 2026-04-24
+//
+// Date semantics: queries anchor on MAX(metric_date) in daily_metrics, not
+// CURRENT_DATE(). Ingest runs at 07:30 UTC and writes "yesterday" data, so
+// CURRENT_DATE() - 1 is ahead of the latest available row for ~7h each day.
+// Using the actual latest date eliminates the false "Missing Data" flag.
 import { BigQuery } from '@google-cloud/bigquery';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -21,6 +26,25 @@ async function query<T>(sql: string): Promise<T[]> {
   return rows as T[];
 }
 
+let latestDateCache: { date: string; cachedAt: number } | null = null;
+
+async function getLatestMetricDate(): Promise<string> {
+  if (latestDateCache && Date.now() - latestDateCache.cachedAt < 60_000) {
+    return latestDateCache.date;
+  }
+  const rows = await query<{ latest: { value: string } | string }>(`
+    SELECT FORMAT_DATE('%Y-%m-%d', MAX(metric_date)) AS latest
+    FROM \`click-to-acquire.analytics.daily_metrics\`
+    WHERE entity_type = 'campaign'
+      AND metric_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+  `);
+  const raw = rows[0]?.latest;
+  const date = typeof raw === 'string' ? raw : raw?.value;
+  if (!date) throw new Error('No metric_date found in last 30 days');
+  latestDateCache = { date, cachedAt: Date.now() };
+  return date;
+}
+
 // --- Section 1: Headline Metrics ---
 
 export interface HeadlineMetrics {
@@ -34,13 +58,15 @@ export interface HeadlineMetrics {
 }
 
 export async function getHeadlineMetrics(): Promise<HeadlineMetrics> {
+  const latest = await getLatestMetricDate();
   const rows = await query<HeadlineMetrics>(`
     WITH current_7d AS (
       SELECT SUM(spend) AS spend, SUM(impressions) AS impressions,
              SUM(clicks) AS clicks, SUM(conversions) AS conversions
       FROM \`click-to-acquire.analytics.daily_metrics\`
       WHERE entity_type = 'campaign'
-        AND metric_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+        AND metric_date BETWEEN DATE_SUB(DATE '${latest}', INTERVAL 6 DAY)
+                            AND DATE '${latest}'
         AND client_id != 'test-smoke-n8n'
     ),
     prior_7d AS (
@@ -48,8 +74,8 @@ export async function getHeadlineMetrics(): Promise<HeadlineMetrics> {
              SUM(clicks) AS clicks, SUM(conversions) AS conversions
       FROM \`click-to-acquire.analytics.daily_metrics\`
       WHERE entity_type = 'campaign'
-        AND metric_date BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY)
-                            AND DATE_SUB(CURRENT_DATE(), INTERVAL 8 DAY)
+        AND metric_date BETWEEN DATE_SUB(DATE '${latest}', INTERVAL 13 DAY)
+                            AND DATE_SUB(DATE '${latest}', INTERVAL 7 DAY)
         AND client_id != 'test-smoke-n8n'
     )
     SELECT
@@ -84,8 +110,9 @@ export interface ClientRollup {
 }
 
 export async function getClientRollup(): Promise<ClientRollup[]> {
+  const latest = await getLatestMetricDate();
   return query<ClientRollup>(`
-    WITH yesterday AS (
+    WITH latest_day AS (
       SELECT client_id, platform,
              SUM(spend) AS spend_yesterday,
              SUM(clicks) AS clicks_yesterday,
@@ -93,7 +120,7 @@ export async function getClientRollup(): Promise<ClientRollup[]> {
              SAFE_DIVIDE(SUM(spend), NULLIF(SUM(conversions), 0)) AS cpl_yesterday
       FROM \`click-to-acquire.analytics.daily_metrics\`
       WHERE entity_type = 'campaign'
-        AND metric_date = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+        AND metric_date = DATE '${latest}'
       GROUP BY client_id, platform
     ),
     rolling AS (
@@ -101,7 +128,8 @@ export async function getClientRollup(): Promise<ClientRollup[]> {
              SAFE_DIVIDE(SUM(spend), NULLIF(SUM(conversions), 0)) AS cpl_7d
       FROM \`click-to-acquire.analytics.daily_metrics\`
       WHERE entity_type = 'campaign'
-        AND metric_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+        AND metric_date BETWEEN DATE_SUB(DATE '${latest}', INTERVAL 6 DAY)
+                            AND DATE '${latest}'
       GROUP BY client_id
     )
     SELECT
@@ -112,7 +140,7 @@ export async function getClientRollup(): Promise<ClientRollup[]> {
       ROUND(y.ctr_pct, 2) AS ctr_pct,
       ROUND(y.cpl_yesterday, 2) AS cpl_yesterday,
       ROUND(r.cpl_7d, 2) AS cpl_7d
-    FROM yesterday y
+    FROM latest_day y
     LEFT JOIN \`click-to-acquire.analytics.clients\` cl USING (client_id)
     LEFT JOIN rolling r USING (client_id)
     ORDER BY y.spend_yesterday DESC
@@ -129,6 +157,7 @@ export interface SpendTrend {
 }
 
 export async function getSpendTrend(): Promise<SpendTrend[]> {
+  const latest = await getLatestMetricDate();
   return query<SpendTrend>(`
     SELECT
       FORMAT_DATE('%Y-%m-%d', dm.metric_date) AS metric_date,
@@ -137,7 +166,8 @@ export async function getSpendTrend(): Promise<SpendTrend[]> {
     FROM \`click-to-acquire.analytics.daily_metrics\` dm
     LEFT JOIN \`click-to-acquire.analytics.clients\` cl USING (client_id)
     WHERE dm.entity_type = 'campaign'
-      AND dm.metric_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+      AND dm.metric_date BETWEEN DATE_SUB(DATE '${latest}', INTERVAL 29 DAY)
+                             AND DATE '${latest}'
     GROUP BY dm.metric_date, display_name
     ORDER BY dm.metric_date, display_name
     LIMIT 150
@@ -153,6 +183,7 @@ export interface AnomalyFlag {
 }
 
 export async function getAnomalyFlags(): Promise<AnomalyFlag[]> {
+  const latest = await getLatestMetricDate();
   const flags: AnomalyFlag[] = [];
 
   const spendAnomalies = await query<{
@@ -163,17 +194,18 @@ export async function getAnomalyFlags(): Promise<AnomalyFlag[]> {
       SELECT client_id, metric_date, SUM(spend) AS daily_spend
       FROM \`click-to-acquire.analytics.daily_metrics\`
       WHERE entity_type = 'campaign'
-        AND metric_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 8 DAY)
+        AND metric_date BETWEEN DATE_SUB(DATE '${latest}', INTERVAL 7 DAY)
+                            AND DATE '${latest}'
       GROUP BY client_id, metric_date
     ),
     avg_7d AS (
       SELECT client_id, AVG(daily_spend) AS avg_spend
-      FROM daily WHERE metric_date < DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+      FROM daily WHERE metric_date < DATE '${latest}'
       GROUP BY client_id
     ),
-    yesterday AS (
+    latest_day AS (
       SELECT client_id, daily_spend
-      FROM daily WHERE metric_date = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
+      FROM daily WHERE metric_date = DATE '${latest}'
     )
     SELECT
       COALESCE(cl.display_name, y.client_id) AS display_name,
@@ -183,7 +215,7 @@ export async function getAnomalyFlags(): Promise<AnomalyFlag[]> {
         WHEN y.daily_spend > a.avg_spend * 1.5 THEN 'SPEND_SPIKE'
         WHEN y.daily_spend < a.avg_spend * 0.5 THEN 'SPEND_DROP'
       END AS flag
-    FROM yesterday y
+    FROM latest_day y
     JOIN avg_7d a USING (client_id)
     LEFT JOIN \`click-to-acquire.analytics.clients\` cl USING (client_id)
     WHERE y.daily_spend > a.avg_spend * 1.5 OR y.daily_spend < a.avg_spend * 0.5
@@ -193,26 +225,38 @@ export async function getAnomalyFlags(): Promise<AnomalyFlag[]> {
     flags.push({
       display_name: r.display_name,
       flag: r.flag,
-      detail: `$${r.yesterday_spend} yesterday vs $${r.avg_7d_spend} avg`,
+      detail: `$${r.yesterday_spend} on ${latest} vs $${r.avg_7d_spend} avg`,
     });
   }
 
+  // Only flag MISSING_DATA for clients that have been active in the last 14
+  // days but are absent on the latest date. This excludes offboarded clients
+  // (FR Kitchen etc.) and never-active rows, while still catching real gaps.
   const missingData = await query<{ display_name: string }>(`
-    SELECT COALESCE(cl.display_name, cl.client_id) AS display_name
-    FROM \`click-to-acquire.analytics.clients\` cl
-    LEFT JOIN (
+    WITH active_recently AS (
       SELECT DISTINCT client_id
       FROM \`click-to-acquire.analytics.daily_metrics\`
-      WHERE metric_date = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)
-    ) dm ON cl.client_id = dm.client_id
-    WHERE dm.client_id IS NULL
+      WHERE metric_date BETWEEN DATE_SUB(DATE '${latest}', INTERVAL 13 DAY)
+                            AND DATE '${latest}'
+        AND client_id != 'test-smoke-n8n'
+    ),
+    on_latest AS (
+      SELECT DISTINCT client_id
+      FROM \`click-to-acquire.analytics.daily_metrics\`
+      WHERE metric_date = DATE '${latest}'
+    )
+    SELECT COALESCE(cl.display_name, a.client_id) AS display_name
+    FROM active_recently a
+    LEFT JOIN on_latest o USING (client_id)
+    LEFT JOIN \`click-to-acquire.analytics.clients\` cl USING (client_id)
+    WHERE o.client_id IS NULL
     LIMIT 20
   `);
   for (const r of missingData) {
     flags.push({
       display_name: r.display_name,
       flag: 'MISSING_DATA',
-      detail: 'No data for yesterday',
+      detail: `No data for ${latest}`,
     });
   }
 
@@ -230,17 +274,19 @@ export interface DataFreshness {
 }
 
 export async function getDataFreshness(): Promise<DataFreshness[]> {
+  const latest = await getLatestMetricDate();
   return query<DataFreshness>(`
     SELECT
       COALESCE(cl.display_name, dm.client_id) AS display_name,
       dm.platform,
       FORMAT_DATE('%Y-%m-%d', MAX(dm.metric_date)) AS latest_date,
-      DATE_DIFF(CURRENT_DATE(), MAX(dm.metric_date), DAY) AS days_stale,
+      DATE_DIFF(DATE '${latest}', MAX(dm.metric_date), DAY) AS days_stale,
       COUNT(DISTINCT dm.metric_date) AS total_dates
     FROM \`click-to-acquire.analytics.daily_metrics\` dm
     LEFT JOIN \`click-to-acquire.analytics.clients\` cl USING (client_id)
     WHERE dm.entity_type = 'campaign'
-      AND dm.metric_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+      AND dm.metric_date BETWEEN DATE_SUB(DATE '${latest}', INTERVAL 89 DAY)
+                             AND DATE '${latest}'
     GROUP BY display_name, dm.platform
     ORDER BY display_name, dm.platform
     LIMIT 50
