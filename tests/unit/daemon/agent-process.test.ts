@@ -346,3 +346,52 @@ describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
     expect(refreshSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', () => {
+  it('triggers CRASH_LOOP halt when crash_window fills', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      crash_window: { seconds: 60, max_crashes: 3 },
+    });
+    await ap.start();
+
+    // Fire 3 crashes in rapid succession (well within the 60s window).
+    capturedOnExit!(1, 0);
+    expect(ap.getStatus().status).toBe('crashed'); // first crash — normal recovery
+
+    // Reset mocks and simulate the restart + second crash
+    mockPty.spawn.mockClear();
+    mockPty.onExit.mockClear();
+    capturedOnExit = null;
+    await ap.start();
+    capturedOnExit!(1, 0);
+    expect(ap.getStatus().status).toBe('crashed'); // second crash — still normal
+
+    mockPty.spawn.mockClear();
+    mockPty.onExit.mockClear();
+    capturedOnExit = null;
+    await ap.start();
+    capturedOnExit!(1, 0);
+    // Third crash in window → CRASH_LOOP → halted
+    expect(ap.getStatus().status).toBe('halted');
+  });
+
+  it('does not trigger CRASH_LOOP when no crash_window is configured (backward compat)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      max_crashes_per_day: 5,
+    });
+    await ap.start();
+
+    // 3 crashes — without crash_window, these are just normal crash recovery
+    for (let i = 0; i < 3; i++) {
+      capturedOnExit!(1, 0);
+      if (ap.getStatus().status !== 'halted') {
+        mockPty.spawn.mockClear();
+        mockPty.onExit.mockClear();
+        capturedOnExit = null;
+        await ap.start();
+      }
+    }
+    // Should be 'crashed' (recovering), NOT 'halted', because daily max is 5
+    expect(ap.getStatus().status).not.toBe('halted');
+  });
+});

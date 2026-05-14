@@ -26,6 +26,12 @@ export class AgentProcess {
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
+  // CrashLoopPauser (instar-inspired): sliding-window crash detection.
+  // Timestamps of recent crashes within the configured window. If the
+  // window fills, the agent auto-pauses instead of retrying with backoff.
+  private crashTimestamps: number[] = [];
+  private crashWindowMs: number = 0;
+  private crashWindowMax: number = 0;
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
@@ -65,6 +71,10 @@ export class AgentProcess {
     this.config = config;
     if (config.max_crashes_per_day !== undefined) {
       this.maxCrashesPerDay = config.max_crashes_per_day;
+    }
+    if (config.crash_window?.seconds) {
+      this.crashWindowMs = config.crash_window.seconds * 1000;
+      this.crashWindowMax = config.crash_window.max_crashes ?? 3;
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
@@ -420,7 +430,31 @@ export class AgentProcess {
       return;
     }
 
-    // Check crash limit
+    // CrashLoopPauser (instar-inspired): if a sliding window is configured,
+    // check whether the agent is crash-looping before falling through to
+    // the legacy daily counter. The window is a more precise signal than
+    // the per-day count: 3 crashes in 30 minutes is a crash loop even if
+    // the daily budget of 10 is far from exhausted.
+    if (this.crashWindowMs > 0) {
+      const now = Date.now();
+      this.crashTimestamps.push(now);
+      // Prune timestamps outside the window.
+      this.crashTimestamps = this.crashTimestamps.filter(
+        (ts) => now - ts <= this.crashWindowMs,
+      );
+      if (this.crashTimestamps.length >= this.crashWindowMax) {
+        this.log(
+          `CRASH_LOOP: ${this.crashTimestamps.length} crashes in ${this.crashWindowMs / 1000}s window — auto-pausing`,
+        );
+        this.appendCrashToRestartsLog(exitCode, 0, 'CRASH_LOOP');
+        this.status = 'halted';
+        this.notifyStatusChange();
+        return;
+      }
+    }
+
+    // Legacy daily crash counter (fallback when no crash_window is configured,
+    // or as a secondary gate when the window hasn't filled yet).
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];
     this.resetCrashCountIfNewDay(today);
@@ -678,7 +712,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
