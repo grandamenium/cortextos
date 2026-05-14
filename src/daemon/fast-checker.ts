@@ -48,6 +48,10 @@ export class FastChecker {
   // Guard: prevent concurrent polls (SIGUSR1 can interrupt between inject and ack)
   private isPolling: boolean = false;
 
+  // Queue depth metrics (M-D3c: visibility into potential overflow during long tool calls)
+  private maxQueueDepth: number = 0;
+  private queueOverflowWarningThreshold: number = 20;
+
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
@@ -166,11 +170,33 @@ export class FastChecker {
   }
 
   /**
+   * Get current queue metrics (M-D3c visibility).
+   */
+  getQueueMetrics(): { current: number; max: number; threshold: number } {
+    return {
+      current: this.telegramMessages.length,
+      max: this.maxQueueDepth,
+      threshold: this.queueOverflowWarningThreshold,
+    };
+  }
+
+  /**
    * Queue a formatted Telegram message for injection.
    * Called by the daemon's Telegram handler.
+   * Tracks queue depth for M-D3c visibility (queue overflow during long tool calls).
    */
   queueTelegramMessage(formatted: string): void {
     this.telegramMessages.push({ formatted, ackIds: [] });
+
+    // Track queue depth metrics
+    if (this.telegramMessages.length > this.maxQueueDepth) {
+      this.maxQueueDepth = this.telegramMessages.length;
+    }
+
+    // Warn if queue exceeds threshold (potential overflow during long operations)
+    if (this.telegramMessages.length > this.queueOverflowWarningThreshold) {
+      this.log(`⚠ Queue depth high: ${this.telegramMessages.length} messages pending (max: ${this.maxQueueDepth})`);
+    }
   }
 
   /**
