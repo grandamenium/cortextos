@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile } from '../../../src/bus/task';
+import { createTask, updateTask, completeTask, claimTask, commentTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile } from '../../../src/bus/task';
 import type { BusPaths } from '../../../src/types';
 
 describe('Task Management', () => {
@@ -511,6 +511,82 @@ describe('Task audit log (append-only JSONL)', () => {
 
   it('readTaskAudit returns [] for a task with no history', () => {
     expect(readTaskAudit(paths, 'task_nonexistent_000')).toEqual([]);
+  });
+});
+
+describe('commentTask (mid-task progress notes)', () => {
+  let testDir: string;
+  let paths: BusPaths;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-comment-test-'));
+    paths = {
+      ctxRoot: testDir,
+      inbox: join(testDir, 'inbox', 'x'),
+      inflight: join(testDir, 'inflight', 'x'),
+      processed: join(testDir, 'processed', 'x'),
+      logDir: join(testDir, 'logs', 'x'),
+      stateDir: join(testDir, 'state', 'x'),
+      taskDir: join(testDir, 'tasks'),
+      approvalDir: join(testDir, 'approvals'),
+      analyticsDir: join(testDir, 'analytics'),
+      heartbeatDir: join(testDir, 'heartbeats'),
+    };
+  });
+
+  afterEach(() => { rmSync(testDir, { recursive: true, force: true }); });
+
+  it('appends a comment entry to the audit log without changing the task status', () => {
+    const id = createTask(paths, 'alice', 'acme', 'Commentable', { assignee: 'alice' });
+    claimTask(paths, id, 'alice');
+    commentTask(paths, id, 'alice', 'halfway through, no blockers');
+
+    const log = readTaskAudit(paths, id);
+    expect(log.map(e => e.event)).toEqual(['create', 'claim', 'comment']);
+    expect(log[2].agent).toBe('alice');
+    expect(log[2].note).toBe('halfway through, no blockers');
+    expect(log[2].from).toBeUndefined();
+    expect(log[2].to).toBeUndefined();
+
+    // Task status is unchanged.
+    const taskFile = JSON.parse(readFileSync(join(paths.taskDir, `${id}.json`), 'utf-8'));
+    expect(taskFile.status).toBe('in_progress');
+  });
+
+  it('supports many comments interleaved with status changes', () => {
+    const id = createTask(paths, 'alice', 'acme', 'Chatty');
+    commentTask(paths, id, 'alice', 'thinking…');
+    claimTask(paths, id, 'alice');
+    commentTask(paths, id, 'alice', 'started');
+    commentTask(paths, id, 'bob', 'looks good from over here');
+    completeTask(paths, id, 'shipped');
+
+    const log = readTaskAudit(paths, id);
+    expect(log.map(e => e.event)).toEqual(['create', 'comment', 'claim', 'comment', 'comment', 'complete']);
+    expect(log[3].note).toBe('started');
+    expect(log[4].agent).toBe('bob');
+  });
+
+  it('rejects an empty or whitespace-only comment', () => {
+    const id = createTask(paths, 'alice', 'acme', 'No empty');
+    expect(() => commentTask(paths, id, 'alice', '')).toThrow(/required/);
+    expect(() => commentTask(paths, id, 'alice', '   \n  ')).toThrow(/required/);
+  });
+
+  it('rejects a missing agent', () => {
+    const id = createTask(paths, 'alice', 'acme', 'Need agent');
+    expect(() => commentTask(paths, id, '', 'note')).toThrow(/agent/i);
+  });
+
+  it('rejects a non-existent task id with the same shape as updateTask', () => {
+    expect(() => commentTask(paths, 'task_nonexistent_000', 'alice', 'hi')).toThrow(/not found in any org/);
+  });
+
+  it('trims surrounding whitespace before persisting', () => {
+    const id = createTask(paths, 'alice', 'acme', 'Trim');
+    commentTask(paths, id, 'alice', '   padded note   ');
+    const log = readTaskAudit(paths, id);
+    expect(log[log.length - 1].note).toBe('padded note');
   });
 });
 
