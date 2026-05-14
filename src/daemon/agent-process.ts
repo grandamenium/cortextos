@@ -8,7 +8,8 @@ import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import type { MessageConnector } from '../connectors/index.js';
-import { TelegramConnector } from '../connectors/index.js';
+// PR4 c12 (Codex P1.B): TelegramConnector import dropped. `setConnector`
+// no longer special-cases Telegram via `instanceof`.
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
@@ -352,27 +353,23 @@ export class AgentProcess {
 
   /**
    * Wire the agent's `MessageConnector` handle (PR1 of pluggable
-   * connectors). Coexists with `setTelegramHandle` for one release cycle
-   * — the daemon calls `setConnector` once at startAgent time; legacy
-   * call sites that still use `setTelegramHandle` continue to work.
+   * connectors). Coexists with `setTelegramHandle` for one release
+   * cycle — the daemon calls `setConnector` once at startAgent time;
+   * legacy call sites that still use `setTelegramHandle` continue to
+   * work.
    *
-   * One-way mirror: if `c` is a `TelegramConnector`, the legacy
-   * `telegramApi`/`telegramChatId` fields are populated via
-   * `c.rawTelegramApi()` so CodexAppServerPTY's session-refresh re-wire
-   * (`agent-process.ts:126-128`) continues to find them. For any other
-   * connector kind, the legacy fields are left untouched (a Null- or
-   * future Matrix-connector does not clobber an existing Telegram
-   * handle that was set earlier in the lifecycle).
+   * PR4 c12 (Codex P1.B) dropped the `instanceof TelegramConnector`
+   * mirror that used to populate the legacy `telegramApi`/
+   * `telegramChatId` fields from `c.rawTelegramApi()`. The daemon's
+   * `startAgent` flow already calls `setTelegramHandle(api, chatId)`
+   * BEFORE `setConnector(c)` (agent-manager.ts:336+346), so the mirror
+   * was dead code in production paths and a hidden Telegram-specific
+   * coupling that would have broken when the first non-Telegram
+   * connector (Discord / Mattermost / RocketChat) landed — Discord
+   * doesn't have a `TelegramAPI` analogue to mirror.
    */
   setConnector(c: MessageConnector): void {
     this.connector = c;
-    if (c instanceof TelegramConnector) {
-      this.telegramApi = c.rawTelegramApi();
-      this.telegramChatId = c.getChatId();
-      if (this.config.runtime === 'codex-app-server' && this.pty) {
-        (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
-      }
-    }
   }
 
   /**

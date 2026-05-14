@@ -321,7 +321,24 @@ export class AgentManager {
           CHAT_ID: legacy.chatId,
           ALLOWED_USER: legacy.allowedUserId,
         }, { downloadDir: join(agentDir, 'telegram-images') });
-        telegramApi = (connector as TelegramConnector).rawTelegramApi();
+        // PR4 c12 (Codex P1.C): narrow the `rawTelegramApi()` escape
+        // hatch to the only production caller that genuinely needs a
+        // raw TelegramAPI handle — `CodexAppServerPTY.setTelegramHandle`,
+        // which uses it for the `sendChatAction('typing')` call from
+        // inside the codex-app-server JSONL stream. The shared-instance
+        // contract (rate-limit + self-chat-warning dedup parity per
+        // Codex M2.cr) is preserved because we route the same
+        // TelegramAPI instance that the connector already constructed.
+        //
+        // Other callers (crash notifications, approval pings) now go
+        // through `connector.sendMessage()` directly. When a future PR
+        // migrates CodexAppServerPTY to accept a MessageConnector
+        // (calling `connector.setTypingIndicator(true)` instead of
+        // `api.sendChatAction(chatId, 'typing')`), this last
+        // rawTelegramApi caller goes away.
+        if (config.runtime === 'codex-app-server') {
+          telegramApi = (connector as TelegramConnector).rawTelegramApi();
+        }
         // Don't log sensitive user IDs — just indicate the gate is enabled
         log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
       }
@@ -353,19 +370,23 @@ export class AgentManager {
       connector: connector ?? undefined,
     });
 
-    // Send Telegram notification on crashes and session refreshes
-    if (telegramApi && chatId) {
-      const tgApi = telegramApi;
-      const tgChatId = chatId;
+    // Send connector notification on crashes and session refreshes.
+    // PR4 c12 (Codex P1.C): routes through `connector.sendMessage` instead
+    // of the legacy `telegramApi.sendMessage(chatId, ...)` so the same
+    // crash-loop UX works on any connector kind (Telegram today; Discord
+    // / Mattermost / RocketChat when they land). Uses the connector's
+    // bound chat — the per-message chatId argument is gone.
+    if (connector) {
+      const notifyConnector = connector;
       let prevStatus: string | null = null;
       agentProcess.onStatusChanged((status) => {
         if (status.status === 'crashed') {
           const crashNum = status.crashCount ?? '?';
-          tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
+          notifyConnector.sendMessage(`Agent ${name} crashed (crash #${crashNum}) — auto-restarting`, { parseMode: 'plain' }).catch(() => {});
         } else if (status.status === 'halted') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
+          notifyConnector.sendMessage(`Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`, { parseMode: 'plain' }).catch(() => {});
         } else if (status.status === 'running' && prevStatus === 'crashed') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
+          notifyConnector.sendMessage(`Agent ${name} recovered and is back online`, { parseMode: 'plain' }).catch(() => {});
         }
         prevStatus = status.status;
       });

@@ -846,19 +846,32 @@ introduce equivalents.
 
 ### `TelegramConnector.rawTelegramApi()`
 
-Tagged `@internal @deprecated PR3+`. Three guarded callers:
+Tagged `@internal`. After PR4 c12 (Codex P1.B + P1.C) there is
+**one** production caller, gated by runtime kind:
 
-1. `src/daemon/agent-process.ts` inside `setConnector(c)` — the
-   `instanceof TelegramConnector` branch reads this to populate the
-   legacy `telegramApi`/`telegramChatId` fields used by
-   `CodexAppServerPTY`'s session-refresh path.
-2. `src/daemon/agent-manager.ts` reads it once at construction so the
-   shared `TelegramAPI` instance feeds the legacy `telegramApi`
-   variable (rate-limit + warning-dedup parity).
-3. The connector's own unit tests.
+1. `src/daemon/agent-manager.ts` reads it **only when
+   `config.runtime === 'codex-app-server'`** — the codex-app-server
+   PTY's session-refresh path (`agent-process.ts:setTelegramHandle`)
+   needs a raw `TelegramAPI` to fire `sendChatAction('typing')`
+   inline from the JSONL stream. The shared-instance contract
+   (rate-limit + self-chat-warning dedup parity per Codex M2.cr)
+   is preserved because the same `TelegramAPI` instance constructed
+   inside `TelegramConnector` flows through. Other runtimes
+   (claude-code, hermes) never trigger this branch.
+2. The connector's own unit tests pin the accessor.
 
-A CI grep guard at `tests/lint-no-stray-raw-api.test.ts` (when
-present) enforces no new callers.
+PR4 c12 dropped the `agent-process.ts:setConnector` `instanceof
+TelegramConnector` mirror (was a hidden Telegram-specific coupling
+that would have broken when Discord / Mattermost / RocketChat
+landed). It also routed crash-notifications + recovery messages
+through `connector.sendMessage()` instead of
+`telegramApi.sendMessage(chatId, ...)` so those paths work on any
+connector kind.
+
+The last remaining caller (the codex-app-server typing-indicator
+hook) will go away when CodexAppServerPTY is migrated to accept a
+`MessageConnector` instead of a `TelegramAPI` — separate PR,
+tracked under the spec's out-of-scope items.
 
 ### `CallbackPayload.raw: unknown`
 
