@@ -74,9 +74,11 @@ export async function main(): Promise<void> {
 // `require.main === module` guard would double-execute under the legacy
 // shim path).
 {
+  // Exact basename match (Codex L1.crv) — see hook-permission-request.ts for rationale.
   const argv1 = process.argv[1] ?? '';
-  const base = argv1.substring(argv1.lastIndexOf('/') + 1);
-  if (base.startsWith('hook-ask-user')) {
+  const sep = Math.max(argv1.lastIndexOf('/'), argv1.lastIndexOf('\\'));
+  const base = argv1.substring(sep + 1);
+  if (base === 'hook-ask-user.js' || base === 'hook-ask-user.ts') {
     main().catch((err) => {
       process.stderr.write(`hook-ask-user error: ${err}\n`);
       process.exit(0);

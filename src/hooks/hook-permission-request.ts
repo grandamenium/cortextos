@@ -180,9 +180,13 @@ export async function main(): Promise<void> {
 // canonical's guard skips when the shim is the entrypoint. Direct
 // `node dist/hooks/hook-permission-request.js` invocation still works.
 {
+  // Codex L1.crv tightening: exact basename match (NOT startsWith) so a
+  // hypothetical future filename like `hook-permission-request-extra.js`
+  // doesn't accidentally trigger this canonical's main().
   const argv1 = process.argv[1] ?? '';
-  const base = argv1.substring(argv1.lastIndexOf('/') + 1).replace(/^\\\\/, '');
-  if (base.startsWith('hook-permission-request')) {
+  const sep = Math.max(argv1.lastIndexOf('/'), argv1.lastIndexOf('\\'));
+  const base = argv1.substring(sep + 1);
+  if (base === 'hook-permission-request.js' || base === 'hook-permission-request.ts') {
     main().catch((err) => {
       process.stderr.write(`hook-permission-request error: ${err}\n`);
       outputDecision('deny', `Hook error: ${err}`);

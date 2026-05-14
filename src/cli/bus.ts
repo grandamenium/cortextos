@@ -1103,12 +1103,27 @@ busCommand
     const fs = require('fs');
     const resolvedKind = kind ?? 'telegram'; // PR1's default inference
 
-    // Target agent env wins over the caller's process.env for connector creds.
+    // Target agent env wins over the caller's process.env for connector
+    // creds. Codex M.crv code-review-verification fix: also CLEAR the
+    // caller's connector-credential keys (BOT_TOKEN/CHAT_ID/ALLOWED_USER)
+    // from the base when the agent's own .env doesn't supply them.
+    // Without this, a daemon caller's inherited credentials could leak
+    // through to a target agent that has no .env of its own — sending
+    // via the wrong agent's channel. Other env vars (CTX_*, PATH, etc.)
+    // still pass through from process.env unchanged.
     const agentEnvPath = env.agentDir ? path.join(env.agentDir, '.env') : '';
     const agentEnv: Record<string, string> = agentEnvPath && fs.existsSync(agentEnvPath)
       ? parseEnvFile(agentEnvPath)
       : {};
-    const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...agentEnv };
+    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    // Currently only Telegram has named env keys in CONNECTOR_ALLOWLIST.
+    // Future kinds (Matrix MATRIX_ACCESS_TOKEN, RocketChat
+    // ROCKETCHAT_AUTH_TOKEN, etc.) extend this list when they land.
+    const connectorCredKeys = ['BOT_TOKEN', 'CHAT_ID', 'ALLOWED_USER'];
+    for (const k of connectorCredKeys) {
+      if (!(k in agentEnv)) delete baseEnv[k];
+    }
+    const mergedEnv: NodeJS.ProcessEnv = { ...baseEnv, ...agentEnv };
 
     let connector;
     try {

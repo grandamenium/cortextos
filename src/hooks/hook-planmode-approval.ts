@@ -137,9 +137,11 @@ export async function main(): Promise<void> {
 // Self-exec guard with argv[1] basename check — see hook-permission-request.ts
 // for the Codex H1.cr rationale.
 {
+  // Exact basename match (Codex L1.crv) — see hook-permission-request.ts for rationale.
   const argv1 = process.argv[1] ?? '';
-  const base = argv1.substring(argv1.lastIndexOf('/') + 1);
-  if (base.startsWith('hook-planmode-approval')) {
+  const sep = Math.max(argv1.lastIndexOf('/'), argv1.lastIndexOf('\\'));
+  const base = argv1.substring(sep + 1);
+  if (base === 'hook-planmode-approval.js' || base === 'hook-planmode-approval.ts') {
     main().catch((err) => {
       process.stderr.write(`hook-planmode-approval error: ${err}\n`);
       outputDecision('allow');
