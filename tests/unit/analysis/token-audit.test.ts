@@ -394,8 +394,12 @@ describe('runAudit end-to-end', () => {
     );
 
     const since = new Date(Date.now() - 3_600_000);
-    const until = new Date();
     const result = runAudit({ since, ctxRoot, org: '' });
+    // Capture `until` AFTER runAudit so the window includes anomalies whose
+    // detected_at is set during the run. readAnomalies now filters by
+    // intra-day timestamp, so a stale `until` snapshotted before the run would
+    // wrongly exclude them.
+    const until = new Date();
     expect(result.error).toBeNull();
     expect(result.anomalies.length).toBeGreaterThan(0);
 
@@ -423,13 +427,43 @@ describe('runAudit end-to-end', () => {
   // Regression: idle-burn CLI now reads readIdleBurn() — `run` is the writer.
   it('persists idle-burn rows so readIdleBurn returns the same data run produced', () => {
     const since = new Date(Date.now() - 3_600_000);
-    const until = new Date();
     const result = runAudit({ since, ctxRoot, org: '' });
+    const until = new Date();
     expect(result.error).toBeNull();
 
     const store = getStorePaths(ctxRoot, '');
     const persisted = readIdleBurn(store, since, until);
     expect(persisted.length).toBe(result.idle_burn_rows.length);
+  });
+
+  // Regression: hourly cron must not multiply rows for unchanged conditions.
+  // anomalies dedupe on (kind, agent, session_id, sorted(evidence_turn_ids));
+  // idle-burn rewrites per (agent, snapshot_date) so repeated runs yield 1 row.
+  it('appendAnomalies + appendIdleBurn dedupe across repeated runAudit calls', () => {
+    const lazyLogDir = join(ctxRoot, 'logs', 'lazy');
+    mkdirSync(lazyLogDir, { recursive: true });
+    mkdirSync(join(ctxRoot, 'state', 'lazy'), { recursive: true });
+    const ts = new Date().toISOString();
+    writeFileSync(join(lazyLogDir, 'codex-tokens.jsonl'),
+      JSON.stringify({
+        timestamp: ts, model: 'gpt-5-codex',
+        input_tokens: 50_000, output_tokens: 20_000,
+        session_id: 'lazy-s', turn_id: 'lazy-t',
+      }) + '\n',
+    );
+
+    const since = new Date(Date.now() - 3_600_000);
+    const first = runAudit({ since, ctxRoot, org: '' });
+    expect(first.error).toBeNull();
+    expect(first.anomalies.length).toBeGreaterThan(0);
+
+    const second = runAudit({ since, ctxRoot, org: '' });
+    expect(second.error).toBeNull();
+    const until = new Date();
+
+    const store = getStorePaths(ctxRoot, '');
+    expect(readAnomalies(store, since, until).length).toBe(first.anomalies.length);
+    expect(readIdleBurn(store, since, until).length).toBe(first.idle_burn_rows.length);
   });
 });
 

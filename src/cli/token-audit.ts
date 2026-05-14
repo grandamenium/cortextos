@@ -189,9 +189,11 @@ export function registerTokenAuditCommands(bus: Command): void {
       let anomalies: Anomaly[] = readAnomalies(store, since, until);
       if (opts.kind) {
         const kinds: AnomalyKind[] = ['outlier_session', 'cache_runaway', 'compact_candidate', 'idle_burn', 'trigger_addiction', 'model_mismatch'];
-        if (kinds.includes(opts.kind as AnomalyKind)) {
-          anomalies = anomalies.filter((a) => a.kind === opts.kind);
+        if (!kinds.includes(opts.kind as AnomalyKind)) {
+          console.error(`Unknown --kind "${opts.kind}". Valid: ${kinds.join(', ')}`);
+          process.exit(2);
         }
+        anomalies = anomalies.filter((a) => a.kind === opts.kind);
       }
       if (isFormatJson(opts)) {
         console.log(JSON.stringify({
