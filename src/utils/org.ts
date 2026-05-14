@@ -11,8 +11,8 @@ import { join } from 'path';
  * runtime artifacts across two ghost dirs and pollutes every consumer that
  * scans the orgs/ parent. Before this helper existed, one lowercase
  * `cortextos bus kb-* --org acmecorp` invocation was enough to
- * bootstrap a phantom `~/.cortextos/default/orgs/acmecorp/` with a
- * MMRAG config.json that then haunted dashboard sync forever.
+ * bootstrap a phantom `~/.cortextos/default/orgs/acmecorp/` state tree
+ * that then haunted dashboard sync forever.
  *
  * Resolution order:
  *

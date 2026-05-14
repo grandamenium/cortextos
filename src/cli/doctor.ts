@@ -277,33 +277,15 @@ export const doctorCommand = new Command('doctor')
       fix: !existsSync(catalogPath) ? 'Run: cortextos bus check-upstream --apply to fetch the latest catalog' : undefined,
     });
 
-    // Check GEMINI_API_KEY for Knowledge Base (semantic search / RAG)
-    const orgsDir = join(frameworkRoot, 'orgs');
-    let geminiConfigured = false;
-    let geminiOrgFound = false;
-    if (existsSync(orgsDir)) {
-      try {
-        for (const org of readdirSync(orgsDir)) {
-          const secretsPath = join(orgsDir, org, 'secrets.env');
-          if (existsSync(secretsPath)) {
-            geminiOrgFound = true;
-            const content = readFileSync(secretsPath, 'utf-8');
-            if (/^GEMINI_API_KEY=.+/m.test(content)) {
-              geminiConfigured = true;
-              break;
-            }
-          }
-        }
-      } catch { /* ignore scan errors */ }
-    }
-    if (geminiOrgFound) {
-      checks.push({
-        name: 'Knowledge Base (GEMINI_API_KEY)',
-        status: geminiConfigured ? 'pass' : 'warn',
-        message: geminiConfigured ? 'Configured' : 'Not set — semantic search and RAG disabled',
-        fix: !geminiConfigured ? 'Add GEMINI_API_KEY to orgs/<org>/secrets.env — get a free key at https://aistudio.google.com/app/apikey' : undefined,
-      });
-    }
+    // Check file-backed Knowledge Base source. Chroma/MMRAG/Gemini embeddings
+    // are deprecated; retrieval now uses git grep over the team-brain wiki.
+    const wikiPath = process.env.WIKI_PATH || join(homedir(), 'work', 'team-brain');
+    checks.push({
+      name: 'Knowledge Base (team-brain wiki)',
+      status: existsSync(wikiPath) ? 'pass' : 'warn',
+      message: existsSync(wikiPath) ? 'Configured' : 'Missing wiki checkout',
+      fix: !existsSync(wikiPath) ? 'Clone team-brain or set WIKI_PATH to the wiki checkout' : undefined,
+    });
 
     // Display results
     let hasFailures = false;

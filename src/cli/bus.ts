@@ -2015,68 +2015,40 @@ busCommand
       process.exit(1);
     }
 
-    const { execFileSync } = require('child_process');
-    const { existsSync, readFileSync } = require('fs');
+    const { execSync } = require('child_process');
+    const { existsSync } = require('fs');
     const { join: pjoin } = require('path');
     const { homedir: hdir } = require('os');
 
-    const frameworkRoot = env.frameworkRoot || process.cwd();
-    const instanceId = env.instanceId;
-    const kbRoot = pjoin(hdir(), '.cortextos', instanceId, 'orgs', org, 'knowledge-base');
-    const chromaDir = pjoin(kbRoot, 'chromadb');
-    const isWin = process.platform === 'win32';
-    const venvBin = isWin ? 'Scripts' : 'bin';
-    const pythonExe = isWin ? 'python.exe' : 'python3';
-    const pythonPath = pjoin(frameworkRoot, 'knowledge-base', 'venv', venvBin, pythonExe);
-    const mmragPath = pjoin(frameworkRoot, 'knowledge-base', 'scripts', 'mmrag.py');
+    const wikiDir = process.env.WIKI_PATH || pjoin(hdir(), 'work', 'team-brain');
+    if (!existsSync(wikiDir)) {
+      console.log('Collection        Count');
+      console.log('---------------- -----');
+      console.log('wiki-grep         0');
+      console.log('open-brain        0');
+      return;
+    }
 
-    // Load .env and secrets.env (same as bash `source`)
-    const envFiles = [
-      pjoin(frameworkRoot, '.env'),
-      pjoin(frameworkRoot, 'orgs', org, 'secrets.env'),
-    ];
-    const extraVars: Record<string, string> = {};
-    for (const ef of envFiles) {
-      if (existsSync(ef)) {
-        for (const line of readFileSync(ef, 'utf-8').split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          const idx = trimmed.indexOf('=');
-          if (idx > 0) {
-            let val = trimmed.slice(idx + 1);
-            if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-              val = val.slice(1, -1);
-            }
-            extraVars[trimmed.slice(0, idx)] = val;
-          }
-        }
+    const countFiles = (pattern: string): number => {
+      try {
+        const out = execSync(`find ${pattern} -type f -name '*.md' 2>/dev/null | wc -l`, {
+          cwd: wikiDir,
+          encoding: 'utf-8',
+          timeout: 10000,
+        });
+        return parseInt(out.trim(), 10) || 0;
+      } catch {
+        return 0;
       }
-    }
-
-    if (!existsSync(chromaDir)) {
-      console.log('No collections found. Run kb-ingest first.');
-      process.exit(0);
-    }
-
-    const envVars: Record<string, string | undefined> = {
-      ...process.env,
-      ...extraVars,
-      CTX_ORG: org,
-      CTX_INSTANCE_ID: instanceId,
-      CTX_FRAMEWORK_ROOT: frameworkRoot,
-      MMRAG_DIR: kbRoot,
-      MMRAG_CHROMADB_DIR: chromaDir,
-      MMRAG_CONFIG: pjoin(kbRoot, 'config.json'),
     };
-    try {
-      execFileSync(pythonPath, [mmragPath, 'collections'], {
-        stdio: 'inherit',
-        env: envVars,
-      });
-    } catch {
-      // python printed error already
-      process.exit(1);
-    }
+
+    const wikiCount = countFiles('docs wiki .claude');
+    const openBrainCount = countFiles('wiki/sources/thoughts');
+    console.log('Collection        Count');
+    console.log('---------------- -----');
+    console.log(`wiki-grep         ${wikiCount}`);
+    console.log(`open-brain        ${openBrainCount}`);
+    console.log(`[kb] ChromaDB collections are deprecated for org ${org}; retrieval uses team-brain wiki-grep.`);
   });
 
 // ---------------------------------------------------------------------------

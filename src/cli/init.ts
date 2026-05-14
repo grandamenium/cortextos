@@ -106,9 +106,9 @@ export const initCommand = new Command('init')
         'CHAT_ID=',
         'ACTIVITY_CHAT_ID=',
         '',
-        '# Knowledge Base (RAG) — enables semantic search across agent memory and documents',
-        '# Get your API key from https://aistudio.google.com/app/apikey (free tier available)',
-        'GEMINI_API_KEY=',
+        '# Knowledge Base — file-backed team-brain wiki search',
+        '# Optional: set WIKI_PATH if the checkout is not at ~/work/team-brain',
+        'WIKI_PATH=',
         '',
       ].join('\n'), 'utf-8');
       chmodSync(secretsPath, 0o600); // credentials — owner read/write only
