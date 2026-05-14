@@ -23,6 +23,7 @@ import { shouldForwardMessage, type BotIdentity } from '../telegram/filter.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+import { recordAndMaybeEscalate } from './spawn-failure-tracker.js';
 
 type LogFn = (msg: string) => void;
 
@@ -264,21 +265,59 @@ export class AgentManager {
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
     });
 
+    // Issue #07 phase 2: feed every agent's spawn-failures into the
+    // cross-agent storm detector — independent of Telegram wiring, so a
+    // Telegram-less agent's failures still count toward "≥2 distinct agents
+    // failed in 5 min → daemon needs restart". The phase-1 Telegram routing
+    // (below) layers on top via the SAME callback by registering it AFTER
+    // this one; since we only support one handler today, the alert routing
+    // wraps the storm tracker.
+    const ctxRoot = this.ctxRoot;
+    const frameworkRoot = this.frameworkRoot;
+    // Issue #07 fix: AgentProcess.handleSpawnFailure fires this callback
+    // BEFORE notifyStatusChange. We capture the error signature here so the
+    // status-change handler (which fires next) can pick a spawn-fail-specific
+    // message instead of the generic "crashed — auto-restarting" one. The
+    // signature is consumed (cleared) on each announcement to keep the
+    // alert flow 1:1 with failure events.
+    let pendingSpawnFailErr: string | null = null;
+    agentProcess.onSpawnFailureRaised((errSig) => {
+      pendingSpawnFailErr = errSig;
+      // Cross-agent storm detection: pure side-effect on disk + best-effort
+      // operator alert. Wrapped in try/catch so a tracker failure (e.g. disk
+      // full when writing history) cannot prevent the rest of crash recovery
+      // from running.
+      let escalated = false;
+      try {
+        const result = recordAndMaybeEscalate(ctxRoot, frameworkRoot, name, errSig);
+        escalated = result.escalated;
+      } catch (e) {
+        console.error('[agent-manager] spawn-failure tracker error (non-fatal):', e);
+      }
+      if (escalated) {
+        // The only reliable fix for a stale node-pty binding is to reload
+        // the binding, which means a fresh process. PM2's autorestart: true
+        // (see ecosystem.config.js) brings the daemon back automatically;
+        // the new daemon's startAllEnabledAgents() loop re-spawns every
+        // enabled agent against fresh native bindings.
+        //
+        // Done from a setImmediate so any pending notifyStatusChange
+        // listeners and the alert send have one tick to complete before
+        // the exit takes us down. The exit happens whether they finish or
+        // not — the bound 3s curl timeout in sendStormAlertBestEffort
+        // already caps how long the alert can block.
+        setImmediate(() => {
+          console.error('[daemon] Exiting for PM2 respawn — spawn-failure storm detected');
+          process.exit(1);
+        });
+      }
+    });
+
     // Send Telegram notification on crashes and session refreshes
     if (telegramApi && chatId) {
       const tgApi = telegramApi;
       const tgChatId = chatId;
       let prevStatus: string | null = null;
-      // Issue #07 fix: AgentProcess.handleSpawnFailure fires this callback
-      // BEFORE notifyStatusChange. We capture the error signature here so the
-      // status-change handler (which fires next) can pick a spawn-fail-specific
-      // message instead of the generic "crashed — auto-restarting" one. The
-      // signature is consumed (cleared) on each announcement to keep the
-      // alert flow 1:1 with failure events.
-      let pendingSpawnFailErr: string | null = null;
-      agentProcess.onSpawnFailureRaised((errSig) => {
-        pendingSpawnFailErr = errSig;
-      });
       agentProcess.onStatusChanged((status) => {
         if (status.status === 'crashed') {
           const crashNum = status.crashCount ?? '?';
