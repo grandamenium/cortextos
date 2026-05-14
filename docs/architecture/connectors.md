@@ -96,8 +96,8 @@ Callers must never feature-detect by `typeof connector.foo === 'function'`
 | `validateCredentials()` | NO. Must catch all errors and return a `ValidateResult`. | Used during enable + cold start. Must not page on transient network errors. |
 | `sendMessage(text, opts)` | YES, on network failure. Caller is responsible for try/catch. | Returns `{ id, ts }` so callers can pin a message id for follow-up edits. |
 | `sendMedia({ localPath, caption?, kind })` | YES, on network failure. | Caller supplies an absolute local path. Connector reads the file. |
-| `startPolling(handlers, opts?)` | NO under normal error. Resolves AFTER the loop is **scheduled** (not after it completes). | Loop's own errors are reported via the connector's stderr, never thrown out of `startPolling`. See §6. |
-| `stopPolling()` | NO. Must always succeed or no-op. | Called from daemon shutdown + restart paths. |
+| `startInbound(handlers, opts?)` | NO under normal error. Resolves AFTER the loop is **scheduled** (not after it completes). | Loop's own errors are reported via the connector's stderr, never thrown out of `startInbound`. See §6. |
+| `stopInbound()` | NO. Must always succeed or no-op. | Called from daemon shutdown + restart paths. |
 
 ### Capability-gated method semantics
 
@@ -130,16 +130,18 @@ Today's set, defined in `src/connectors/types.ts`:
 
 | Flag | Purpose | Forced by |
 |---|---|---|
-| `outboundReactions` | Agent can send a reaction emoji ON a user message. Enables emoji-ack UX (§11). | All four — Telegram (Bot API 7+), Discord, Mattermost, RocketChat |
+| `outboundReactions` | ✅ **LANDED PR4 c10.** Agent can send a reaction emoji on a user message. Enables emoji-ack UX (§11). | All four — Telegram (Bot API 7+), Discord, Mattermost, RocketChat |
 | `threads` | Provider has first-class threads (parent message + child replies in a thread tree, distinct from inline reply_to). | Discord, Mattermost, RocketChat, Slack |
 | `richBlocks` | Provider supports structured rich content (embeds, cards, blocks) beyond inline-keyboard buttons. | Discord embeds, Slack blocks, Mattermost attachments |
-| `webhookInbound` | Provider prefers webhook delivery to long-polling. Mutually compatible with `longPolling`; agents may run either or both per provider conventions. | Discord (gateway/webhook), Mattermost (outgoing webhook), RocketChat (outgoing webhook) |
 | `presence` | Provider exposes online/offline/typing presence updates beyond the message stream. | Discord, Matrix |
 | `fileSizeLimitBytes` | Numeric (not boolean): max bytes for `sendMedia`. Callers can chunk or refuse. | All four — Telegram 50MB, Discord 25MB (Nitro 500MB), Mattermost configurable, RocketChat configurable |
 
-These are NOT in `ConnectorCapabilities` today. The next PR (PR5 of the
-pluggable-connectors stack) will land at least `outboundReactions` and
-`threads` because the UX work in §11 needs the former and the Discord/
+`outboundReactions` shipped in PR4 c10. The `webhookInbound` row
+previously listed here was retired by PR4 c11 — `inbound` is a
+tri-state (`'poll' | 'push' | 'none'`) that already covers webhook
+delivery as the `'push'` variant. The remaining flags are not in
+`ConnectorCapabilities` today; the next PR after Discord lands will
+likely add at least `threads` because the Discord/
 Mattermost/RocketChat work in §12 needs the latter.
 
 ---
@@ -263,7 +265,7 @@ own env shape via a `<Kind>ConnectorEnv` interface in `types.ts`).
 If your provider can also serve as the **daemon-level** notification
 channel (crash alerts, ops messages), extend `getOperatorConnector()`
 with the `CTX_OPERATOR_<KIND>_*` env translation. The operator
-connector is **send-only** — it must never be passed to `startPolling()`.
+connector is **send-only** — it must never be passed to `startInbound()`.
 
 ### e. Implementation directory (`src/connectors/<kind>/`)
 
@@ -273,7 +275,7 @@ Mirror `src/connectors/telegram/` structure:
 src/connectors/<kind>/
   api.ts              # provider HTTP / WS / gateway client
   <kind>-connector.ts # implements MessageConnector
-  poller.ts           # inbound loop (if longPolling = true)
+  poller.ts           # inbound loop (if inbound = true)
   media.ts            # media download + transcription (if media = true)
   logging.ts          # JSONL logger for inbound (if any provider-specific logging)
 ```
@@ -295,7 +297,7 @@ the interface grows.
 ## 6. Lifecycle
 
 ```
-construct → validateCredentials → startPolling → … → stopPolling
+construct → validateCredentials → startInbound → … → stopInbound
 ```
 
 ### `validateCredentials()`
@@ -320,12 +322,12 @@ The reasons are deliberately generic. Provider-specific causes
 mapped at the connector to one of these five buckets. The `detail`
 string is free text for operator log lines.
 
-### `startPolling(handlers, opts?)`
+### `startInbound(handlers, opts?)`
 
 Resolves AFTER the loop is **scheduled**, not after it completes. The
 loop's own errors are logged to stderr and recovered from inside the
-connector — they do not propagate out of `startPolling`. This is
-critical: the daemon's `startAgent` calls `startPolling().catch(…)` and
+connector — they do not propagate out of `startInbound`. This is
+critical: the daemon's `startAgent` calls `startInbound().catch(…)` and
 must not hang.
 
 `opts.stateDir` is the directory where the connector persists its
@@ -349,7 +351,7 @@ aborts the batch. Any async work the handler initiates (media download,
 transcription, queueing a PTY injection) must be **fire-and-forget**
 exactly as today.
 
-### `stopPolling()`
+### `stopInbound()`
 
 Idempotent. May be called when no poll loop is running. Connectors
 clear their poller reference inside the method.
@@ -414,7 +416,7 @@ the channel that fires:
 
 Rules:
 
-* **Send-only.** Never pass it to `startPolling()`.
+* **Send-only.** Never pass it to `startInbound()`.
 * Returns `null` when `CTX_OPERATOR_CONNECTOR === 'none'` OR when the
   operator's provider credentials are absent.
 * The empty `agentDir` argument is safe under the send-only constraint
@@ -620,7 +622,7 @@ target provider.
 | `media` | yes | Up to 25 MB (500 MB on Nitro) |
 | `voiceTranscription` | no (provider does not transcribe; connector could integrate Whisper) | Same situation as Telegram |
 | `formattedText` | yes | Markdown |
-| `longPolling` | no — gateway WS only | Forces `webhookInbound` or a gateway implementation |
+| `inbound` | `'push'` — Discord delivers via gateway WS (no long-poll API) | Forces the connector to subscribe to the gateway stream; the existing `inbound` tri-state already accommodates this (PR4 c11). |
 | `typingIndicator` | yes | `POST /channels/{id}/typing` |
 | `reactions` (inbound) | yes | Gateway event `MESSAGE_REACTION_ADD` |
 | `interactiveCallbacks` | yes | Component interaction tokens (15-min expiry; tighter than Telegram callback queries) |
@@ -628,16 +630,16 @@ target provider.
 | `outboundReactions` (proposed) | yes | `PUT /channels/{id}/messages/{id}/reactions/{emoji}/@me` |
 | `threads` (proposed) | yes | First-class: `THREAD_CREATE` event + `POST /channels/{id}/threads` |
 | `richBlocks` (proposed) | yes | Embeds (richer than blocks; up to 10 per message) |
-| `webhookInbound` (proposed) | yes (interactions webhook) or gateway WS |
 | `presence` (proposed) | yes | Gateway `PRESENCE_UPDATE` |
 
-**Discord forces:** `webhookInbound` or a fundamental rework of the
-polling abstraction (gateway WS is push, not poll). Recommended path:
-implement Discord against gateway WS, set `longPolling: false`,
-`webhookInbound: true`, and rename the interface method from
-`startPolling` to `startInbound` (the WS connector starts a long-lived
-WS connection; the long-poll connector starts a poll loop; both
-implement the same lifecycle from the daemon's POV).
+**Discord notes:** the connector advertises `inbound: 'push'`. The
+existing `startInbound(handlers, opts)` lifecycle method handles both
+poll and push semantics — for Discord, `startInbound` opens a gateway
+WebSocket and subscribes to MESSAGE_CREATE / MESSAGE_REACTION_ADD /
+THREAD_CREATE events. The daemon's wiring code does not change. PR4
+c11 introduced the `inbound: 'poll' | 'push' | 'none'` tri-state
+expressly so Discord and RocketChat (DDP) fit without a method
+rename.
 
 ### Mattermost
 
@@ -647,7 +649,7 @@ implement the same lifecycle from the daemon's POV).
 | `media` | yes | Configurable upload size (default 50 MB) |
 | `voiceTranscription` | no | |
 | `formattedText` | yes | Markdown |
-| `longPolling` | yes | `GET /api/v4/users/me/channels/{id}/posts` with `since` param |
+| `inbound` | `'poll'` (REST since-cursor) or `'push'` (WebSocket) — connector picks per deploy | `GET /api/v4/users/me/channels/{id}/posts` with `since` param OR Mattermost WS event stream |
 | `typingIndicator` | yes | WebSocket event `typing` |
 | `reactions` (inbound) | yes | WS event `reaction_added` / `reaction_removed` |
 | `interactiveCallbacks` | yes | Action ack via webhook callback URL |
@@ -670,7 +672,7 @@ the second connector to land after Telegram.
 | `media` | yes | Configurable |
 | `voiceTranscription` | no | |
 | `formattedText` | yes | Markdown |
-| `longPolling` | partial | REST has no native long-poll; emulated via `POST /api/v1/chat.getMessages` with `since`. Native path is realtime WS (DDP/Meteor protocol). |
+| `inbound` | `'push'` (DDP WS) preferred; `'poll'` (REST since-cursor) as a degraded fallback | Native path is realtime WS via Meteor DDP. REST `POST /api/v1/chat.getMessages` with `since` is workable but lossy. |
 | `typingIndicator` | yes | DDP method `stream-notify-room`/`typing` |
 | `reactions` (inbound) | yes | DDP stream event `reactionAdded`/`reactionRemoved` |
 | `interactiveCallbacks` | yes | `triggerId` reply |
@@ -689,23 +691,41 @@ Mattermost validate the gateway/WS pattern.
 
 ### Summary: minimum viable interface extension
 
-To support all three providers as first-class:
+To support all three providers as first-class. PR4 c4..c15
+landed most of this surface; remaining work is called out
+explicitly so contributors know what's done vs TODO.
 
-1. Rename `startPolling` → `startInbound` (covers poll + push); update
-   the `longPolling` flag to `inbound: 'poll' | 'push' | 'none'`
-   tri-state OR keep `longPolling` and add `pushInbound` as a parallel
-   flag. Tri-state is cleaner.
-2. Add `outboundReactions` flag + `sendReaction` method.
-3. Add `threads` flag + `thread_id` field on `NormalizedMessage` and on
-   `SendOptions`.
-4. Generalize `NormalizedReactionPayload.{old,new}_reaction` from
-   `TelegramReactionType[]` to a connector-agnostic `ConnectorReaction[]`
-   shape (or keep it as-is and have non-Telegram connectors translate
-   their native reaction shape into the Telegram tagged union for
-   compatibility — uglier but no caller churn).
-5. Add `richBlocks` capability + a `SendOptions.blocks` payload typed
-   as `unknown` until we design a cross-provider block schema.
-6. (Optional) Add `presence` capability + `PollingHandlers.onPresence`.
+1. ✅ **DONE (PR4 c11)** — `startInbound` / `stopInbound` method
+   names + `inbound: 'poll' | 'push' | 'none'` tri-state
+   capability flag. The daemon's wiring code treats `'poll'` and
+   `'push'` identically — connectors decide how to receive.
+2. ✅ **DONE (PR4 c10)** — `outboundReactions` capability flag +
+   `sendReaction(messageId, emoji, opts?)` method on
+   `MessageConnector`. Backed for Telegram by Bot API 7.0+'s
+   `setMessageReaction`. See §11 for the emoji-ack UX.
+3. ✅ **DONE (PR4 c8)** — `ConnectorReaction { kind: 'unicode' |
+   'custom'; value: string }`; `NormalizedReactionPayload.message_id`
+   stringified. The Telegram connector translates Telegram's
+   tagged union at normalization time.
+4. ✅ **DONE (PR4 c9 + c15)** — `ConnectorAction` is now a
+   discriminated union (`'callback'` with actionId / `'url'` with
+   url). TelegramConnector translates both variants to the
+   appropriate Telegram inline_keyboard shape.
+5. ⏳ **TODO** — `threads` flag + `thread_id` field on
+   `NormalizedMessage` and on `SendOptions`. Discord, Mattermost,
+   RocketChat, Slack all have first-class threads with different
+   shapes (Discord first-class thread channels vs Mattermost
+   `root_id` vs RocketChat `tmid`).
+6. ⏳ **TODO** — `richBlocks` capability + a `SendOptions.blocks`
+   payload typed as `unknown` until at least three of the four
+   target providers are implemented and a shared schema falls out
+   of the union.
+7. ⏳ **TODO (optional)** — `presence` capability +
+   `PollingHandlers.onPresence`.
+
+The MVP for landing Discord / Mattermost / RocketChat is the four
+DONE items; threads + richBlocks + presence can be additive
+follow-ups that don't break the existing interface.
 
 ---
 
@@ -770,7 +790,7 @@ For a contributor adding e.g. `MattermostConnector`:
 12. **Add a connector-specific test** at
     `tests/unit/connectors/mattermost-connector.test.ts` covering at
     least: `validateCredentials` happy/error paths, `sendMessage`
-    happy path, the `startPolling → onMessage` round trip, ALLOWED_USER
+    happy path, the `startInbound → onMessage` round trip, ALLOWED_USER
     gate behavior.
 13. **Add CHANGELOG entry** under
     `## [unreleased] — Pluggable Communications Connectors (PR<n> — mattermost)`.
@@ -828,7 +848,7 @@ A new connector PR is expected to ship with:
 * **Conformance test** (compile-time + boolean-flag pinning).
 * **Unit tests** for every required method, plus optional methods that
   the connector advertises as supported.
-* **An inbound-pipeline test** that exercises `startPolling →
+* **An inbound-pipeline test** that exercises `startInbound →
   onMessage / onCallback / onReaction` end-to-end with mocked HTTP.
 * **An integration test under `tests/integration/`** that runs the
   connector against a mock server (Playwright is fine — see
@@ -902,7 +922,7 @@ failing on the broader union.
 ## 16. Out-of-scope (today)
 
 * **Webhook-only connectors** with no poll loop. The
-  `longPolling: false` path exists for NullConnector but no
+  `inbound: false` path exists for NullConnector but no
   push-inbound HTTP server is wired into the daemon yet. Discord +
   Slack will force this.
 * **Cross-provider thread mapping.** Each provider's thread model is
@@ -929,7 +949,7 @@ failing on the broader union.
 * Telegram implementation: `src/connectors/telegram/`
 * Null implementation: `src/connectors/none/null-connector.ts`
 * Daemon wiring: `src/daemon/agent-manager.ts` (search for
-  `connector.startPolling`)
+  `connector.startInbound`)
 * Bus wiring: `src/bus/approval.ts:188` (`getConnector(...)`)
 * CLI wiring: `src/cli/bus.ts:1100`, `src/cli/setup.ts`,
   `src/cli/add-agent.ts`, `src/cli/enable-agent.ts`
