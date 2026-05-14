@@ -487,7 +487,14 @@ export function completeTask(
   // Activity-feed event. Best-effort — the task is already persisted.
   if (assignee) {
     try {
-      logEvent(paths, assignee, taskOrg, 'task', 'task_completed', 'info', {
+      // Cross-org completion (caller's org ≠ task's org) is allowed via
+      // findTaskFile, but the caller's `paths.analyticsDir` is scoped to
+      // the caller's org. Rewrite the analytics path to the task's actual
+      // org so dashboards/metrics see the completion under the right tree.
+      const eventPaths: BusPaths = taskOrg
+        ? { ...paths, analyticsDir: join(paths.ctxRoot, 'orgs', taskOrg, 'analytics') }
+        : paths;
+      logEvent(eventPaths, assignee, taskOrg, 'task', 'task_completed', 'info', {
         task_id: taskId,
         ...(result ? { result } : {}),
       });
