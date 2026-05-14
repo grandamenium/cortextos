@@ -261,6 +261,15 @@ export class FastChecker {
         this.lastPollCycleCompletedAt = Date.now();
       } catch (err) {
         this.log(`Poll error: ${err}`);
+        // On a timeout (not an unexpected error) the loop is still cycling —
+        // just slowly (e.g. Conflict back-off from a duplicate Telegram poller
+        // after a rapid restart). Update the watchdog timestamp so it does not
+        // trigger another hard-restart, which would create a new poller and
+        // repeat the Conflict, producing a restart loop.
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('pollCycle timeout')) {
+          this.lastPollCycleCompletedAt = Date.now();
+        }
       }
       await this.sleepInterruptible(this.pollInterval);
     }
