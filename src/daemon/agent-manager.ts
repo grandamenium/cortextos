@@ -9,7 +9,7 @@ import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
-import { TelegramConnector } from '../connectors/index.js';
+import { TelegramConnector, NullConnector } from '../connectors/index.js';
 import type { MessageConnector } from '../connectors/index.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -270,35 +270,46 @@ export class AgentManager {
     // and the new MessageConnector instantiation below — single source of
     // truth.
     const agentEnvFile = join(agentDir, '.env');
-    const legacy = resolveLegacyTelegramEnablement(agentEnvFile, log);
     let telegramApi: TelegramAPI | undefined;
     let chatId: string | undefined;
     let allowedUserId: string | undefined;
     let botToken: string | undefined;
     let connector: MessageConnector | null = null;
 
-    if (legacy.enabled) {
-      botToken = legacy.botToken;
-      chatId = legacy.chatId;
-      allowedUserId = legacy.allowedUserId;
-      telegramApi = new TelegramAPI(botToken);
-      // Build the TelegramConnector alongside the legacy fields. The
-      // connector wraps the SAME TelegramAPI for any code path that wants
-      // to dispatch through the generic interface; the legacy fields stay
-      // populated for code paths PR1 leaves Telegram-direct (FastChecker
-      // callback-edit, activity channel, approval ping, daemon crash
-      // alert). PR2 migrates those to use the connector and removes the
-      // legacy fields.
-      connector = new TelegramConnector(agentDir, {
-        BOT_TOKEN: legacy.botToken,
-        CHAT_ID: legacy.chatId,
-        ALLOWED_USER: legacy.allowedUserId,
-      });
-      // Don't log sensitive user IDs — just indicate the gate is enabled
-      log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
+    // Dispatch on explicit `config.connector` first; fall back to the legacy
+    // gate when absent. Codex M1.cr — without this branch the override was
+    // declared in AgentConfig but silently ignored by startAgent.
+    if (config.connector === 'none') {
+      // Explicit no-comms agent. Skip the legacy Telegram gate entirely
+      // (including its WARNING/SECURITY log lines — none of them apply when
+      // the operator has opted out of Telegram by config).
+      connector = new NullConnector();
+    } else {
+      // config.connector === 'telegram' or undefined (today's default
+      // inference path). Resolve the legacy gate.
+      const legacy = resolveLegacyTelegramEnablement(agentEnvFile, log);
+      if (legacy.enabled) {
+        botToken = legacy.botToken;
+        chatId = legacy.chatId;
+        allowedUserId = legacy.allowedUserId;
+        // Construct the TelegramConnector FIRST, then extract its internal
+        // TelegramAPI for the legacy fields. Codex M2.cr — single shared
+        // TelegramAPI instance so rate-limiting (api.ts:85) and self-chat
+        // warning dedup (api.ts:88) stay in lock-step across the connector
+        // path and the legacy-field path. Previously these were two
+        // distinct instances against the same bot token.
+        connector = new TelegramConnector(agentDir, {
+          BOT_TOKEN: legacy.botToken,
+          CHAT_ID: legacy.chatId,
+          ALLOWED_USER: legacy.allowedUserId,
+        });
+        telegramApi = (connector as TelegramConnector).rawTelegramApi();
+        // Don't log sensitive user IDs — just indicate the gate is enabled
+        log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
+      }
+      // (else: connector remains null — byte-identical to today's behavior of
+      // leaving telegramApi/chatId/allowedUserId undefined when the gate fails.)
     }
-    // (else: connector remains null — byte-identical to today's behavior of
-    // leaving telegramApi/chatId/allowedUserId undefined when the gate fails.)
 
     const agentProcess = new AgentProcess(name, env, config, log);
     // Issue #330: pass the Telegram handle into AgentProcess so CodexAppServerPTY
