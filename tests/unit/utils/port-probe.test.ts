@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { probePort, findFreePort, __setPortProbeRunner } from '../../../src/utils/port-probe';
 
 describe('port-probe', () => {
@@ -26,9 +26,16 @@ describe('port-probe', () => {
       expect(probePort(3010)).toEqual({ free: false, holderPid: 12345 });
     });
 
-    it('treats unparseable lsof output as free (lets bind fail loudly downstream)', () => {
+    it('treats unparseable lsof output as free and warns the operator', () => {
       __setPortProbeRunner(() => ({ status: 0, stdout: 'not-a-pid\n' }));
-      expect(probePort(3010)).toEqual({ free: true });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(probePort(3010)).toEqual({ free: true });
+        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy.mock.calls[0][0]).toMatch(/could not parse lsof output for port 3010/);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
     it('handles Buffer stdout', () => {

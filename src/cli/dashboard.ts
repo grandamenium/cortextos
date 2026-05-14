@@ -50,7 +50,11 @@ export const dashboardCommand = new Command('dashboard')
     if (options.portProbe !== false) {
       const requested = Number(options.port);
       if (Number.isFinite(requested) && requested > 0) {
-        const fallbacks = [3010, 3020, 3030].filter((p) => p !== requested);
+        // Only fall through to *higher* standard ports — never sideways into
+        // a port reserved for another role. If --port 3025 is passed, we
+        // still try 3030 but not 3010/3020 (would surprise an operator who
+        // intentionally chose a custom port).
+        const fallbacks = [3010, 3020, 3030].filter((p) => p > requested);
         try {
           const { port: chosen, collisions } = findFreePort(requested, fallbacks);
           if (chosen !== requested) {
