@@ -290,7 +290,7 @@ class Daemon {
     }
 
     // Create agent manager
-    this.agentManager = new AgentManager(this.instanceId, this.ctxRoot, frameworkRoot, org);
+    this.agentManager = new AgentManager(this.instanceId, this.ctxRoot, frameworkRoot, org, this.daemonStartedAt);
 
     // Start IPC server
     this.ipcServer = new IPCServer(this.agentManager, this.instanceId);
