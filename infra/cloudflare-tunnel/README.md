@@ -9,48 +9,37 @@ Exposes the local Next.js dashboard (port 3000) at `https://dashboard.clicktoacq
 
 ---
 
-## One-Minute Setup
+## Setup — 3 commands (one browser click)
 
-### Step 1 — Create a CF API Token
-
-1. Go to **https://dash.cloudflare.com/profile/api-tokens**
-2. Click **Create Token** → use a custom token
-3. Grant these permissions:
-   - **Zone → DNS → Edit** (scope: `clicktoacquire.com`)
-   - **Account → Cloudflare Tunnel → Edit**
-4. Copy the token
-
-### Step 2 — Export the token and run the setup script
+### Step 1 — Authenticate to Cloudflare (one-time, ~30 seconds)
 
 ```bash
-export CF_API_TOKEN=<paste token here>
+cloudflared tunnel login
+```
+
+This opens your browser. Log in to Cloudflare and click **Authorize**. It saves `~/.cloudflared/cert.pem` — no token needed anywhere else.
+
+### Step 2 — Create tunnel + route DNS + start launchd agent
+
+```bash
 ./infra/cloudflare-tunnel/setup-tunnel.sh
 ```
 
-This script:
-- Creates the `cta-dashboard` tunnel in Cloudflare
-- Routes `dashboard.clicktoacquire.com` DNS to the tunnel
-- Prints next steps
+This script (idempotent — safe to re-run):
+- Creates the `cta-dashboard` tunnel → writes `~/.cloudflared/cta-dashboard.json`
+- Routes `dashboard.clicktoacquire.com` CNAME → tunnel
+- Loads the launchd agent (auto-restarts on reboot)
 
-The tunnel credentials JSON is written to `~/.cloudflared/cta-dashboard.json` (gitignored, never committed).
-
-### Step 3 — Load the launchd agent (auto-starts on login)
-
-```bash
-launchctl load ~/Library/LaunchAgents/com.cortextos.dashboard-tunnel.plist
-```
-
-Verify it started:
-
-```bash
-launchctl list | grep dashboard-tunnel
-tail -f ~/.cloudflared/tunnel.log
-```
-
-### Step 4 — Visit the dashboard
+### Step 3 — Wait 30–60s for DNS, then visit
 
 ```
 https://dashboard.clicktoacquire.com
+```
+
+Monitor tunnel health:
+
+```bash
+tail -f ~/.cloudflared/tunnel.log
 ```
 
 ---
@@ -110,11 +99,13 @@ launchctl unload ~/Library/LaunchAgents/com.cortextos.dashboard.plist
 launchctl load  ~/Library/LaunchAgents/com.cortextos.dashboard.plist
 ```
 
-### Morning checklist (when CF token is ready)
+### Morning checklist (first-time setup)
 
-1. `launchctl load ~/Library/LaunchAgents/com.cortextos.dashboard.plist` (if not already loaded)
-2. `export CF_API_TOKEN=<token>`
-3. `./infra/cloudflare-tunnel/setup-tunnel.sh`
-4. `launchctl load ~/Library/LaunchAgents/com.cortextos.dashboard-tunnel.plist`
-5. `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/login` → should be 200
-6. Visit `https://dashboard.clicktoacquire.com`
+1. `cloudflared tunnel login` ← browser OAuth, one-time
+2. `./infra/cloudflare-tunnel/setup-tunnel.sh` ← creates tunnel + DNS + loads agent
+3. `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/login` → should be 200
+4. Visit `https://dashboard.clicktoacquire.com`
+
+### After a reboot
+
+Both launchd agents (`com.cortextos.dashboard` and `com.cortextos.dashboard-tunnel`) have `RunAtLoad=true` and `KeepAlive=true` — they restart automatically. No manual steps needed after first-time setup.
