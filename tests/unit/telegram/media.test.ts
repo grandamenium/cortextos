@@ -127,7 +127,10 @@ describe('processMediaMessage', () => {
 
     expect(result).not.toBeNull();
     expect(result!.type).toBe('document');
-    expect(result!.file_name).toBe('report.pdf');
+    // PR4 c15 (Codex round-2 P1.F): non-photo media filenames are
+    // prefixed with `msg<message_id>_` so duplicate filenames from
+    // distinct messages don't collapse onto the same local path.
+    expect(result!.file_name).toBe('msg1_report.pdf');
     expect(result!.text).toBe('my report');
     expect(existsSync(result!.file_path!)).toBe(true);
   });
@@ -140,7 +143,10 @@ describe('processMediaMessage', () => {
     const result = await processMediaMessage(msg, api, downloadDir);
 
     expect(result).not.toBeNull();
-    expect(result!.file_name).toBe('passwd');
+    // PR4 c15: same prefix rule + the existing sanitizeFilename
+    // strips path traversal components, so '../../../etc/passwd'
+    // becomes 'passwd' and the prefix lands ahead of it.
+    expect(result!.file_name).toBe('msg1_passwd');
   });
 
   it('processes audio messages with filename', async () => {
@@ -153,7 +159,8 @@ describe('processMediaMessage', () => {
 
     expect(result).not.toBeNull();
     expect(result!.type).toBe('audio');
-    expect(result!.file_name).toBe('song.mp3');
+    // PR4 c15 (Codex round-2 P1.F): msg<message_id>_ prefix.
+    expect(result!.file_name).toBe('msg1_song.mp3');
     expect(result!.duration).toBe(120);
     expect(existsSync(result!.file_path!)).toBe(true);
   });
@@ -166,7 +173,8 @@ describe('processMediaMessage', () => {
     const result = await processMediaMessage(msg, api, downloadDir);
 
     expect(result).not.toBeNull();
-    expect(result!.file_name).toMatch(/^audio_\d+\.ogg$/);
+    // PR4 c15: msg<id>_audio_<date>.ogg
+    expect(result!.file_name).toMatch(/^msg1_audio_\d+\.ogg$/);
   });
 
   it('processes voice messages', async () => {
@@ -205,7 +213,7 @@ describe('processMediaMessage', () => {
 
     expect(result).not.toBeNull();
     expect(result!.type).toBe('video');
-    expect(result!.file_name).toBe('clip.mp4');
+    expect(result!.file_name).toBe('msg1_clip.mp4');
     expect(result!.duration).toBe(30);
     expect(result!.text).toBe('watch this');
   });
@@ -218,7 +226,7 @@ describe('processMediaMessage', () => {
     const result = await processMediaMessage(msg, api, downloadDir);
 
     expect(result).not.toBeNull();
-    expect(result!.file_name).toMatch(/^video_\d+\.mp4$/);
+    expect(result!.file_name).toMatch(/^msg1_video_\d+\.mp4$/);
   });
 
   it('processes video_note messages', async () => {
