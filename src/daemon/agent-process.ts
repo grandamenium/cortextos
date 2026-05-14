@@ -11,6 +11,13 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import {
+  readHeartbeatStatus,
+  readLastInboxMessageAge,
+  readCrashBudget,
+  readLastRestart,
+  readLastSpawnFailureAge,
+} from '../utils/agent-status.js';
 
 type LogFn = (msg: string) => void;
 
@@ -314,9 +321,19 @@ export class AgentProcess {
   }
 
   /**
-   * Get current agent status.
+   * Get current agent status. Reads a small set of on-disk files lazily —
+   * cheap enough to call at every IPC `status` request, not in a tight loop.
+   * Each helper handles its own missing-file / corrupt-JSON case so a
+   * partial filesystem never causes a throw here.
    */
   getStatus(): AgentStatus {
+    const ctxRoot = this.env.ctxRoot;
+    const hb = readHeartbeatStatus(ctxRoot, this.name);
+    const inboxAge = readLastInboxMessageAge(ctxRoot, this.name);
+    const budget = readCrashBudget(ctxRoot, this.name, this.maxCrashesPerDay, this.crashCount);
+    const lastRestart = readLastRestart(ctxRoot, this.name);
+    const lastSpawnFail = readLastSpawnFailureAge(ctxRoot, this.name);
+
     return {
       name: this.name,
       status: this.status,
@@ -327,6 +344,15 @@ export class AgentProcess {
       sessionStart: this.sessionStart?.toISOString(),
       crashCount: this.crashCount,
       model: this.config.model,
+      lastHeartbeatAgeSeconds: hb.lastHeartbeatAgeSeconds,
+      lastHeartbeatTask: hb.lastHeartbeatTask,
+      lastInboxMessageAgeSeconds: inboxAge,
+      crashCountToday: budget.crashCountToday,
+      maxCrashesPerDay: budget.maxCrashesPerDay,
+      crashesRemaining: budget.crashesRemaining,
+      lastRestartReason: lastRestart.lastRestartReason,
+      lastRestartKind: lastRestart.lastRestartKind,
+      lastSpawnFailureAgeSeconds: lastSpawnFail,
     };
   }
 
