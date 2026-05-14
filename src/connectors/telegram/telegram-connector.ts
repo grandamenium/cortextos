@@ -56,10 +56,18 @@ export class TelegramConnector implements MessageConnector {
    *
    * Allowed callers (enforced by CI grep guard in
    * `tests/lint-no-stray-raw-api.test.ts`):
-   *   - `src/daemon/agent-manager.ts` (to populate FastChecker's
-   *     `telegramApi`/`chatId` fields for the activity-channel callback
-   *     edit/answer paths that PR1 keeps Telegram-direct)
-   *   - `tests/connectors/telegram-connector.test.ts`
+   *   - `src/daemon/agent-process.ts` inside `setConnector(c)` — the
+   *     `instanceof TelegramConnector` branch reads this to populate the
+   *     legacy `telegramApi`/`telegramChatId` fields so the
+   *     CodexAppServerPTY session-refresh path (agent-process.ts:126-128)
+   *     and FastChecker callback edit/answer paths (PR1 Telegram-direct
+   *     exceptions) keep working.
+   *   - `src/daemon/agent-manager.ts` reads this once at construction so
+   *     the shared TelegramAPI instance feeds the legacy `telegramApi`
+   *     variable (Codex M2.cr — avoids constructing TelegramAPI twice
+   *     against the same bot token).
+   *   - The connector class's own unit + integration tests under
+   *     `tests/unit/connectors/` and `tests/integration/`.
    *
    * Do not add new callers. PR2 introduces the proper interactive-
    * message lifecycle abstraction and removes this method.
