@@ -1416,18 +1416,26 @@ def cmd_status(args):
 
 
 def cmd_list(args):
+    import json as _json
     config = load_config()
     collection_name = args.collection or config.get("default_collection", "default")
+    as_json = getattr(args, "json", False)
 
     try:
         collection = get_chroma_collection(collection_name)
     except Exception:
-        print("No data found.")
+        if as_json:
+            print(_json.dumps({"collection": collection_name, "files": []}))
+        else:
+            print("No data found.")
         return
 
     all_data = collection.get(include=["metadatas"])
     if not all_data["ids"]:
-        print("No documents in collection.")
+        if as_json:
+            print(_json.dumps({"collection": collection_name, "files": []}))
+        else:
+            print("No documents in collection.")
         return
 
     # Group by source
@@ -1438,6 +1446,15 @@ def cmd_list(args):
             by_source[src] = {"type": meta.get("type", "unknown"), "chunks": 0,
                               "filename": meta.get("filename", "")}
         by_source[src]["chunks"] += 1
+
+    if as_json:
+        files = [
+            {"source": src, "type": info["type"], "chunks": info["chunks"],
+             "filename": info["filename"]}
+            for src, info in sorted(by_source.items())
+        ]
+        print(_json.dumps({"collection": collection_name, "files": files}))
+        return
 
     print(f"Collection: {collection_name} ({len(by_source)} files, {len(all_data['ids'])} chunks)")
     print(f"{'Source':<60} {'Type':<15} {'Chunks':<8}")
@@ -1538,6 +1555,7 @@ def main():
     # list
     p_list = sub.add_parser("list", help="List ingested documents")
     p_list.add_argument("--collection", "-c", help="Collection name")
+    p_list.add_argument("--json", action="store_true", help="Emit JSON instead of a text table")
 
     # collections
     sub.add_parser("collections", help="List all collections")

@@ -8,7 +8,11 @@ import React from 'react';
  * Extracted from kb-view.tsx for reuse across settings, experiments, etc.
  */
 export function renderMarkdown(text: string): React.ReactNode[] {
-  const lines = text.split('\n');
+  // Strip HTML comments before line-splitting. Org-authored files (knowledge.md,
+  // brand-voice.md) carry template stubs like `<!-- What does this org do? -->`
+  // that should not render as literal text in the UI.
+  const stripped = text.replace(/<!--[\s\S]*?-->/g, '');
+  const lines = stripped.split('\n');
   const nodes: React.ReactNode[] = [];
   let i = 0;
   let keyCounter = 0;
