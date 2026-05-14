@@ -424,12 +424,16 @@ export class AgentManager {
       // (Codex Q5 lock — connector.ts:48-55) preserves
       // `<ctxRoot>/state/<name>/.telegram-offset` byte-for-byte across the
       // wire migration. Handlers consume NormalizedMessage /
-      // CallbackPayload / NormalizedReactionPayload; raw provider payload
-      // is read from `.raw` where Telegram-specific fields (media kinds,
-      // reply_to_message) still need to be inspected. The activity-
-      // channel poller (`maybeStartActivityChannelPoller` below) uses
-      // the same connector lifecycle through a SECOND TelegramConnector
-      // instance with `pollerNamespace: 'activity'`.
+      // CallbackPayload / NormalizedReactionPayload. PR4 commit 1 lifted
+      // media handling onto the connector (`m.media`); PR4 commit 2
+      // normalized `chat_id` and `reply_to.text` onto `NormalizedMessage`
+      // so the formatting hot path no longer casts back to TelegramMessage.
+      // The only remaining `m.raw as TelegramMessage` cast lives at the
+      // `recordInboundTelegram` JSONL-logger call, which is a telegram-
+      // namespace helper that legitimately consumes the provider shape.
+      // The activity-channel poller (`maybeStartActivityChannelPoller`
+      // below) uses the same connector lifecycle through a SECOND
+      // TelegramConnector instance with `pollerNamespace: 'activity'`.
       const onMessage = (m: NormalizedMessage) => {
         // ALLOWED_USER gate: NormalizedMessage.from.id is the stringified
         // provider user id, so comparison is string-equality with the
@@ -442,17 +446,18 @@ export class AgentManager {
           }
         }
 
-        // PR4: media processing now happens inside TelegramConnector's
-        // polling pipeline, so `m.media` is pre-populated when this
-        // handler fires for a media message. The remaining `m.raw`
-        // cast is only for `msg.chat?.id` (provider chat id, used as
-        // effectiveChatId fallback) and `msg.reply_to_message` (full
-        // reply-message body for reply-context rendering). A future
-        // PR will normalize those too.
-        const msg = m.raw as TelegramMessage;
+        // PR4 commit 1: media processing happens inside TelegramConnector's
+        // polling pipeline, so `m.media` is pre-populated when this handler
+        // fires for a media message. PR4 commit 2: `m.chat_id` carries the
+        // inbound message's own chat id (formerly read off `m.raw.chat.id`)
+        // and `m.reply_to.text` carries the rendered reply context (formerly
+        // built in this file by `buildReplyContext`; now produced by
+        // `buildTelegramReplyContext` at normalization time — see
+        // src/connectors/telegram/telegram-connector.ts). The only
+        // remaining `m.raw as TelegramMessage` cast in this handler is
+        // for the telegram-namespace JSONL logger below.
         const from = stripControlChars(m.from.name || m.from.username || 'Unknown');
-        const msgChatId = msg.chat?.id;
-        const effectiveChatId = msgChatId ?? chatId ?? '';
+        const effectiveChatId = m.chat_id ?? chatId ?? '';
         const stateDir = join(this.ctxRoot, 'state', name);
 
         // Persist the inbound message to JSONL AND emit a
@@ -462,7 +467,7 @@ export class AgentManager {
         // inbound messages on a window where Eros replied to multiple
         // agents — the JSONL had the data but it never reached the
         // event log.
-        recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
+        recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, m.raw as TelegramMessage, log);
 
         // PR4: media-formatted-message path uses `m.media` directly.
         if (m.media) {
@@ -504,8 +509,10 @@ export class AgentManager {
         // msg.caption fallback per TelegramConnector.toNormalizedMessage).
         const text = stripControlChars(m.text);
         const lastSent = FastChecker.readLastSent(stateDir, effectiveChatId);
-        // Build reply context from the replied-to message.
-        const replyToText = buildReplyContext(msg.reply_to_message);
+        // Reply context populated by TelegramConnector at normalization
+        // time (PR4 commit 2) — see `buildTelegramReplyContext` in
+        // src/connectors/telegram/telegram-connector.ts.
+        const replyToText = m.reply_to?.text;
 
         const recentHistory = buildRecentHistory(this.ctxRoot, name, effectiveChatId, 6) ?? undefined;
         const formatted = FastChecker.formatTelegramTextMessage(
@@ -1096,27 +1103,3 @@ export class AgentManager {
   }
 }
 
-/**
- * Derive a human-readable reply context string from a Telegram replied-to message.
- *
- * Priority: text > caption > media type label.
- * This is exported for unit testing; call sites use it via the message handler.
- *
- * Before this fix (BUG: reply context lost for media messages): only `.text` was
- * checked, so replies to videos/photos/voice arrived as bare text with no
- * indication of what was being replied to (e.g. "This one" with zero context).
- */
-export function buildReplyContext(
-  replyMsg: TelegramMessage | undefined,
-): string | undefined {
-  if (!replyMsg) return undefined;
-  if (replyMsg.text) return stripControlChars(replyMsg.text);
-  if (replyMsg.caption) return stripControlChars(replyMsg.caption);
-  if (replyMsg.video) return '[video]';
-  if (replyMsg.video_note) return '[video note]';
-  if (replyMsg.photo) return '[photo]';
-  if (replyMsg.voice) return '[voice message]';
-  if (replyMsg.audio) return '[audio]';
-  if (replyMsg.document) return `[document: ${replyMsg.document.file_name ?? 'file'}]`;
-  return undefined;
-}

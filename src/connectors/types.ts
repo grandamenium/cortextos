@@ -86,13 +86,24 @@ export interface NormalizedMessage {
   from: { id: string; username?: string; name?: string };
   /** Text body. For media messages, this carries the caption. */
   text: string;
+  /** Inbound message's own chat id (stringified). Daemon falls back to the
+   *  agent's bound chatId when absent — matches today's
+   *  `msg.chat?.id ?? chatId ?? ''` resolution. Populated by the connector
+   *  during normalization so the daemon's onMessage hot path no longer
+   *  needs to cast `m.raw` back to a provider shape. */
+  chat_id?: string;
   /** Pre-processed media attachment. Present iff the inbound message
    *  carried media AND the connector was configured with a downloadDir.
    *  When absent (text-only message, or media-without-downloadDir), the
    *  daemon dispatches the text path. */
   media?: NormalizedMedia;
-  /** Reply chain — connector-specific id of the message being replied to. */
-  reply_to?: { id: string };
+  /** Reply chain. `id` is the connector-specific id of the message being
+   *  replied to. `text` is a human-readable rendering of the replied-to
+   *  message — for text/caption it's the body; for media it's a label like
+   *  `[photo]` / `[voice message]`. Connectors populate `text` so the
+   *  daemon doesn't have to read provider-specific media flags off `raw`
+   *  to render reply context. */
+  reply_to?: { id: string; text?: string };
   /** Original provider payload. Debug only; NEVER serialized to bus events. */
   raw: unknown;
 }

@@ -21,6 +21,36 @@ import type {
   TelegramCallbackQuery,
   TelegramMessageReaction,
 } from '../../types/index.js';
+import { stripControlChars } from '../../utils/validate.js';
+
+/**
+ * Derive a human-readable reply-context string from a Telegram replied-to
+ * message. Priority: text > caption > media-type label.
+ *
+ * Moved out of `src/daemon/agent-manager.ts` in PR4 commit 2 of the
+ * pluggable-connectors stack — the daemon should not be inspecting
+ * Telegram-specific fields (`replyMsg.video`, `replyMsg.voice`, etc.) to
+ * render reply context. The connector now populates
+ * `NormalizedMessage.reply_to.text` from this helper at normalization
+ * time, so the daemon's onMessage path is provider-agnostic.
+ *
+ * Exported so the connector's unit tests can pin the per-media-kind
+ * label rendering directly without spinning up a full connector.
+ */
+export function buildTelegramReplyContext(
+  replyMsg: TelegramMessage | undefined,
+): string | undefined {
+  if (!replyMsg) return undefined;
+  if (replyMsg.text) return stripControlChars(replyMsg.text);
+  if (replyMsg.caption) return stripControlChars(replyMsg.caption);
+  if (replyMsg.video) return '[video]';
+  if (replyMsg.video_note) return '[video note]';
+  if (replyMsg.photo) return '[photo]';
+  if (replyMsg.voice) return '[voice message]';
+  if (replyMsg.audio) return '[audio]';
+  if (replyMsg.document) return `[document: ${replyMsg.document.file_name ?? 'file'}]`;
+  return undefined;
+}
 
 /**
  * `MessageConnector` implementation that wraps the existing
@@ -307,6 +337,17 @@ export class TelegramConnector implements MessageConnector {
   // ---------------------------------------------------------------------
 
   private toNormalizedMessage(msg: TelegramMessage): NormalizedMessage {
+    // PR4 commit 2: `chat_id` + `reply_to.text` are populated here so the
+    // daemon's onMessage hot path no longer reads provider-specific fields
+    // off `m.raw`. `reply_to` is set iff the inbound message has a
+    // `reply_to_message`; `text` may still be undefined when the replied-
+    // to message had no rendering hint (e.g. reply to an unknown sticker).
+    const replyTo = msg.reply_to_message
+      ? {
+          id: String(msg.reply_to_message.message_id),
+          text: buildTelegramReplyContext(msg.reply_to_message),
+        }
+      : undefined;
     return {
       id: String(msg.message_id),
       ts: (msg.date ?? Math.floor(Date.now() / 1000)) * 1000,
@@ -316,6 +357,8 @@ export class TelegramConnector implements MessageConnector {
         name: msg.from?.first_name,
       },
       text: msg.text ?? msg.caption ?? '',
+      chat_id: msg.chat?.id !== undefined ? String(msg.chat.id) : undefined,
+      reply_to: replyTo,
       raw: msg,
     };
   }

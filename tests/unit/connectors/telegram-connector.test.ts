@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TelegramConnector } from '../../../src/connectors/index.js';
+import { buildTelegramReplyContext } from '../../../src/connectors/telegram/telegram-connector.js';
 
 type MockResponseFactory = (url: string, init: any) => { status?: number; body: any };
 
@@ -410,6 +411,214 @@ describe('TelegramConnector', () => {
       expect(received[0].text).toBe('caption-only');
 
       fs.rmSync(stateDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('message normalization (PR4 commit 2): chat_id + reply_to.text', () => {
+    it('populates chat_id from msg.chat.id (stringified) on emitted NormalizedMessage', async () => {
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-chatid-'));
+
+      const update = {
+        update_id: 1,
+        message: {
+          message_id: 200,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          text: 'hi',
+        },
+      };
+
+      let calls = 0;
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          calls++;
+          return { body: { ok: true, result: calls === 1 ? [update] : [] } };
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+
+      const received: any[] = [];
+      vi.useRealTimers();
+      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await new Promise((r) => setTimeout(r, 200));
+      await c.stopPolling();
+
+      expect(received).toHaveLength(1);
+      // `chat_id` must be a STRING (matching the `String(msg.chat.id)` contract)
+      // so the daemon's downstream callers don't see a numeric value here.
+      expect(received[0].chat_id).toBe('12345');
+      expect(typeof received[0].chat_id).toBe('string');
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    });
+
+    it('populates reply_to with id + rendered text when the inbound message has reply_to_message', async () => {
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-replyto-'));
+
+      const update = {
+        update_id: 1,
+        message: {
+          message_id: 201,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          text: 'replying',
+          reply_to_message: {
+            message_id: 99,
+            chat: { id: 12345, type: 'private' },
+            voice: { file_id: 'v1', duration: 5 },
+          },
+        },
+      };
+
+      let calls = 0;
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          calls++;
+          return { body: { ok: true, result: calls === 1 ? [update] : [] } };
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+
+      const received: any[] = [];
+      vi.useRealTimers();
+      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await new Promise((r) => setTimeout(r, 200));
+      await c.stopPolling();
+
+      expect(received).toHaveLength(1);
+      expect(received[0].reply_to).toEqual({ id: '99', text: '[voice message]' });
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    });
+
+    it('leaves reply_to undefined when the inbound message has no reply_to_message', async () => {
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-noreplyto-'));
+
+      const update = {
+        update_id: 1,
+        message: {
+          message_id: 202,
+          date: 1700000000,
+          chat: { id: 12345, type: 'private' },
+          from: { id: 67890, first_name: 'Alice', is_bot: false },
+          text: 'no reply here',
+        },
+      };
+
+      let calls = 0;
+      installFetchMock((url) => {
+        if (url.endsWith('/getUpdates')) {
+          calls++;
+          return { body: { ok: true, result: calls === 1 ? [update] : [] } };
+        }
+        return { body: { ok: true, result: {} } };
+      });
+
+      const c = new TelegramConnector(stateDir, {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+
+      const received: any[] = [];
+      vi.useRealTimers();
+      await c.startPolling({ onMessage: (m) => { received.push(m); } }, { stateDir });
+      await new Promise((r) => setTimeout(r, 200));
+      await c.stopPolling();
+
+      expect(received).toHaveLength(1);
+      expect(received[0].reply_to).toBeUndefined();
+
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('buildTelegramReplyContext (PR4 commit 2 — moved from agent-manager)', () => {
+    // Pinned per-kind label rendering. Moved from
+    // tests/unit/daemon/agent-manager.test.ts because the helper now lives
+    // in the telegram connector module — the daemon no longer inspects
+    // Telegram-specific media fields to render reply context.
+    it('returns undefined when no reply message', () => {
+      expect(buildTelegramReplyContext(undefined)).toBeUndefined();
+    });
+
+    it('returns text content for plain text replies', () => {
+      const msg = { message_id: 1, chat: { id: 1 }, text: 'Hello world' } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('Hello world');
+    });
+
+    it('returns caption for media messages with captions', () => {
+      const msg = { message_id: 2, chat: { id: 1 }, photo: [{ file_id: 'x', width: 100, height: 100, file_size: 1 }], caption: 'Check this out' } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('Check this out');
+    });
+
+    it('returns [video] for video messages without caption', () => {
+      const msg = { message_id: 3, chat: { id: 1 }, video: { file_id: 'v1', width: 1920, height: 1080, duration: 30 } } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('[video]');
+    });
+
+    it('returns [photo] for photo messages without caption', () => {
+      const msg = { message_id: 4, chat: { id: 1 }, photo: [{ file_id: 'p1', width: 100, height: 100, file_size: 1 }] } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('[photo]');
+    });
+
+    it('returns [voice message] for voice messages', () => {
+      const msg = { message_id: 5, chat: { id: 1 }, voice: { file_id: 'vc1', duration: 5 } } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('[voice message]');
+    });
+
+    it('returns [video note] for video note messages', () => {
+      const msg = { message_id: 6, chat: { id: 1 }, video_note: { file_id: 'vn1', length: 240, duration: 10 } } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('[video note]');
+    });
+
+    it('returns [audio] for audio messages', () => {
+      const msg = { message_id: 7, chat: { id: 1 }, audio: { file_id: 'a1', duration: 120 } } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('[audio]');
+    });
+
+    it('returns document name for document messages', () => {
+      const msg = { message_id: 8, chat: { id: 1 }, document: { file_id: 'd1', file_name: 'report.pdf' } } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('[document: report.pdf]');
+    });
+
+    it('returns [document: file] when document has no file_name', () => {
+      const msg = { message_id: 9, chat: { id: 1 }, document: { file_id: 'd2' } } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('[document: file]');
+    });
+
+    it('prefers text over caption when both present', () => {
+      const msg = { message_id: 10, chat: { id: 1 }, text: 'Text content', caption: 'Caption content' } as any;
+      expect(buildTelegramReplyContext(msg)).toBe('Text content');
+    });
+
+    it('strips control characters from text', () => {
+      const msg = { message_id: 11, chat: { id: 1 }, text: 'Hello\x00world' } as any;
+      const result = buildTelegramReplyContext(msg);
+      expect(result).not.toContain('\x00');
     });
   });
 

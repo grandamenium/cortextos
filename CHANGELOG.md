@@ -53,9 +53,77 @@ CHANGELOG out-of-scope item naming this work.
 - Removing the legacy `telegramApi`/`chatId` constructor options on
   FastChecker (currently kept for one-release backwards-compat).
 - Implementing Matrix / RocketChat connectors.
-- Normalizing `msg.reply_to_message` into a first-class shape (the
-  daemon's onMessage text path still reads it off `m.raw` for reply-
-  context rendering).
+
+## [unreleased] — Pluggable Communications Connectors (PR4 commit 2 — chat_id + reply_to.text normalization)
+
+Drops the two remaining `m.raw as TelegramMessage` casts in the daemon's
+onMessage formatting hot path by lifting their inputs onto
+`NormalizedMessage`. After this commit the only place the daemon casts
+back to the Telegram shape is the `recordInboundTelegram` JSONL-logger
+call — a telegram-namespace helper that legitimately consumes the
+provider payload. The CHANGELOG out-of-scope item naming
+`reply_to_message` normalization (PR4 commit 1) is removed because this
+commit lands it.
+
+### Added
+- **`NormalizedMessage.chat_id?: string`** — inbound message's own chat
+  id, stringified at the connector. Daemon now resolves
+  `effectiveChatId = m.chat_id ?? chatId ?? ''` instead of
+  `msg.chat?.id ?? chatId ?? ''` via a `m.raw` cast. Stringification
+  matches the existing `String(reaction.chat.id)` convention used on
+  `NormalizedReactionPayload.chat_id` (PR1).
+- **`NormalizedMessage.reply_to.text?: string`** — human-readable
+  rendering of the replied-to message (text/caption when present,
+  otherwise a media-kind label like `[photo]` / `[voice message]` /
+  `[document: <filename>]`). The `reply_to` field gains the optional
+  `text` alongside the existing `id`.
+- **`buildTelegramReplyContext`** at
+  `src/connectors/telegram/telegram-connector.ts` — exported helper that
+  renders a `TelegramMessage` into the reply-context string. Moved from
+  `src/daemon/agent-manager.ts` (where it was `buildReplyContext`,
+  exported for tests) and renamed for greppability — the daemon no
+  longer inspects Telegram-specific media fields (`replyMsg.video`,
+  `replyMsg.voice`, ...) to render reply context.
+
+### Changed
+- **`TelegramConnector.toNormalizedMessage`** populates `chat_id` from
+  `String(msg.chat.id)` and, when `msg.reply_to_message` is present,
+  emits `reply_to: { id: String(msg.reply_to_message.message_id), text:
+  buildTelegramReplyContext(...) }`. Existing fields (`id`, `ts`,
+  `from`, `text`, `raw`) are unchanged byte-for-byte.
+- **`AgentManager.startAgent` onMessage handler** drops the
+  `const msg = m.raw as TelegramMessage` declaration. The two former
+  uses of `msg` in the formatting path (`msg.chat?.id` and
+  `msg.reply_to_message`) become `m.chat_id` and `m.reply_to?.text`
+  respectively. The `recordInboundTelegram(... msg ...)` call keeps the
+  cast inline as `m.raw as TelegramMessage` so the cast is localized
+  to the one call that legitimately needs the provider shape (a
+  telegram-namespace JSONL logger).
+- **Comment block at the top of the onMessage handler** updated to
+  reflect that the only remaining cast in this handler is the
+  recordInboundTelegram one.
+
+### Tests
+- 3 new tests in `tests/unit/connectors/telegram-connector.test.ts`
+  ("message normalization (PR4 commit 2)") exercise the full
+  `startPolling → onMessage` pipeline with fetch-mocked `getUpdates`
+  and assert that emitted `NormalizedMessage` carries `chat_id` (as a
+  string), `reply_to` (with the id + rendered text), and that
+  `reply_to` stays undefined when the inbound has no
+  `reply_to_message`.
+- 12 `buildTelegramReplyContext` tests moved from
+  `tests/unit/daemon/agent-manager.test.ts` into the connector test
+  file (renamed import) — they exercise per-media-kind label rendering
+  and were previously named `buildReplyContext`. Behavior is unchanged.
+
+### Out of scope (deferred to PR4+)
+- Removing the legacy `telegramApi`/`chatId` constructor options on
+  FastChecker (currently kept for one-release backwards-compat).
+- Implementing Matrix / RocketChat connectors.
+- Lifting `recordInboundTelegram` out of the daemon (would eliminate
+  the last `m.raw as TelegramMessage` cast in `startAgent`, but the
+  JSONL logger touches `paths`, `ctxRoot`, and `resolvedOrg` from the
+  daemon's closure — a separate refactor).
 
 ## [unreleased] — Pluggable Communications Connectors (PR3 — interactive lifecycle)
 
