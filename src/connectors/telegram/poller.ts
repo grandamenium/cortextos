@@ -4,9 +4,22 @@ import type { TelegramUpdate, TelegramMessage, TelegramCallbackQuery, TelegramMe
 import { TelegramAPI } from './api.js';
 import { ensureDir } from '../../utils/atomic.js';
 
-export type MessageHandler = (msg: TelegramMessage) => void;
-export type CallbackHandler = (query: TelegramCallbackQuery) => void;
-export type ReactionHandler = (reaction: TelegramMessageReaction) => void;
+/**
+ * Poller handlers may be synchronous OR async. The poller awaits each
+ * handler return value before advancing the offset, so an async handler
+ * can hold offset advancement until its full work settles (e.g. the
+ * media-enrichment pipeline in TelegramConnector that downloads files
+ * before emitting the normalized message). A handler that throws OR a
+ * rejected promise marks the update as failed — the offset stays put
+ * and Telegram redelivers the update on the next getUpdates call.
+ *
+ * Sync handlers are still supported (return value is `void`); awaiting
+ * a non-promise is a no-op so existing sync callers keep their old
+ * semantics byte-for-byte.
+ */
+export type MessageHandler = (msg: TelegramMessage) => void | Promise<void>;
+export type CallbackHandler = (query: TelegramCallbackQuery) => void | Promise<void>;
+export type ReactionHandler = (reaction: TelegramMessageReaction) => void | Promise<void>;
 
 /**
  * Telegram polling loop. Replaces the Telegram portion of fast-checker.sh.
@@ -115,7 +128,7 @@ export class TelegramPoller {
       if (update.message) {
         for (const handler of this.messageHandlers) {
           try {
-            handler(update.message);
+            await handler(update.message);
           } catch (err) {
             console.error('[telegram-poller] Message handler error:', err);
             handlerFailed = true;
@@ -127,7 +140,7 @@ export class TelegramPoller {
       if (!handlerFailed && update.callback_query) {
         for (const handler of this.callbackHandlers) {
           try {
-            handler(update.callback_query);
+            await handler(update.callback_query);
           } catch (err) {
             console.error('[telegram-poller] Callback handler error:', err);
             handlerFailed = true;
@@ -139,7 +152,7 @@ export class TelegramPoller {
       if (!handlerFailed && update.message_reaction) {
         for (const handler of this.reactionHandlers) {
           try {
-            handler(update.message_reaction);
+            await handler(update.message_reaction);
           } catch (err) {
             console.error('[telegram-poller] Reaction handler error:', err);
             handlerFailed = true;

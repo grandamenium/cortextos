@@ -81,6 +81,17 @@ export class TelegramConnector implements MessageConnector {
   private readonly pollerNamespace?: string;
   private readonly downloadDir?: string;
   private poller: TelegramPoller | null = null;
+  /**
+   * Monotonic generation counter incremented on every `stopPolling()`.
+   * Async work kicked off inside the poller handler (today: the media-
+   * enrichment pipeline) snapshots this at entry and re-checks after
+   * each await. A mismatch means stopPolling fired during the await —
+   * the in-flight delivery is suppressed so a stopped/restarted agent
+   * does not receive stale media. Without this guard the daemon would
+   * inject media originated against the previous PTY lifecycle into
+   * the next one.
+   */
+  private pollGeneration: number = 0;
 
   /**
    * `opts.pollerNamespace`: passed through to TelegramPoller as the
@@ -235,40 +246,63 @@ export class TelegramConnector implements MessageConnector {
     // to connector.startPolling). When omitted, fall back to agentDir — same
     // PR1 behavior for tests that construct TelegramConnector standalone.
     const stateDir = opts?.stateDir ?? this.agentDir;
+    // PR4 c4 (Codex P2.2): idempotent re-start. Stop any prior poller
+    // (and bump the generation guard) before constructing a new one, so a
+    // double-startPolling can't leak two concurrent loops sharing handlers
+    // and racing on offset state.
+    if (this.poller) {
+      await this.stopPolling();
+    }
     // 4th arg is offsetFileSuffix — distinguishes the offset file across
     // multiple connector instances sharing a stateDir. Undefined keeps
     // the default `.telegram-offset` filename (byte-identical to PR2).
     this.poller = new TelegramPoller(this.api, stateDir, 1000, this.pollerNamespace);
 
-    this.poller.onMessage((tgMsg: TelegramMessage) => {
-      // PR4: media enrichment pipeline. When the inbound message
-      // carries any media flag AND the connector was constructed with
-      // a `downloadDir`, we kick off media download + transcription
-      // fire-and-forget exactly as the pre-PR4 daemon's
-      // `processMediaMessage(...).then(...)` pattern did. The
-      // poller's offset advance happens synchronously after this
-      // handler returns; the user's onMessage fires AFTER the media
-      // pipeline settles (or immediately for text). Order matches the
-      // pre-migration behavior byte-for-byte — see
-      // `agent-manager.ts:466-509` (pre-PR4) for the old call site.
+    const generationAtStart = this.pollGeneration;
+    this.poller.onMessage(async (tgMsg: TelegramMessage) => {
+      // PR4 c4 (Codex P0): media enrichment now AWAITS processMediaMessage
+      // before the poller advances its offset. The previous .then() pattern
+      // let the poller ACK the update with Telegram (advance offset, persist
+      // to disk) BEFORE the agent ever saw the media-formatted message —
+      // a crash or stopPolling between offset-advance and the .then firing
+      // dropped the message permanently because Telegram does not redeliver
+      // acked updates. Now the offset only moves after the full pipeline
+      // (download + transcription + handler emit) settles.
+      //
+      // The poller supports awaitable handlers (poller.ts:7 MessageHandler
+      // signature) and applies the same offset-after-handler semantics it
+      // already used for sync handlers — a thrown handler / rejected promise
+      // leaves the offset untouched and the update is redelivered.
+      //
+      // Generation guard: if stopPolling() fires between the await and the
+      // emit, suppress delivery so a stopped/restarted agent never sees
+      // stale media injected into the next PTY lifecycle. The guard sits
+      // AFTER the await so an in-flight download completes and is
+      // dropped cleanly rather than racing the poller's stop signal.
       const baseMessage = this.toNormalizedMessage(tgMsg);
       const hasMedia = !!(tgMsg.photo || tgMsg.document || tgMsg.voice || tgMsg.audio || tgMsg.video || tgMsg.video_note);
       if (hasMedia && this.downloadDir) {
         const downloadDir = this.downloadDir;
-        processMediaMessage(tgMsg, this.api, downloadDir).then((processed) => {
-          if (processed) {
-            handlers.onMessage({ ...baseMessage, media: this.toNormalizedMedia(processed) });
-          } else {
-            // Media flag set but processMediaMessage returned null
-            // (Telegram getFile failed, file_path missing, etc.). Fall
-            // back to text-only so the agent still sees the caption.
-            handlers.onMessage(baseMessage);
-          }
-        }).catch((err) => {
+        let processed = null;
+        try {
+          processed = await processMediaMessage(tgMsg, this.api, downloadDir);
+        } catch (err) {
           console.error('[telegram-connector] media processing error:', err);
+        }
+        if (this.pollGeneration !== generationAtStart) {
+          // stopPolling() fired during the await — suppress emit.
+          return;
+        }
+        if (processed) {
+          handlers.onMessage({ ...baseMessage, media: this.toNormalizedMedia(processed) });
+        } else {
+          // Media flag set but processMediaMessage returned null
+          // (Telegram getFile failed, file_path missing, etc.). Fall
+          // back to text-only so the agent still sees the caption.
           handlers.onMessage(baseMessage);
-        });
+        }
       } else {
+        if (this.pollGeneration !== generationAtStart) return;
         handlers.onMessage(baseMessage);
       }
     });
@@ -294,6 +328,11 @@ export class TelegramConnector implements MessageConnector {
   }
 
   async stopPolling(): Promise<void> {
+    // Bump generation BEFORE clearing the poller — any in-flight async
+    // media-pipeline handler that finishes after this call will see the
+    // mismatched generation and suppress its `handlers.onMessage` emit.
+    // See the generation guard in the poller.onMessage closure above.
+    this.pollGeneration += 1;
     if (this.poller) {
       this.poller.stop();
       this.poller = null;
