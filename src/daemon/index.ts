@@ -5,6 +5,7 @@ import { spawnSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
+import { ensureSpawnHelperExecutable } from '../utils/node-pty-perms.js';
 
 // Each fast-checker registers a process-level SIGUSR1 handler (see
 // fast-checker.ts:102). With >10 active agents the default Node listener cap
@@ -244,6 +245,33 @@ class Daemon {
     if (!frameworkRoot) {
       console.error('[daemon] CTX_FRAMEWORK_ROOT not set');
       process.exit(1);
+    }
+
+    // Issue #07 follow-up: ensure node-pty's spawn-helper is executable
+    // BEFORE we start spawning agents. Every macOS `npm install` / `pnpm
+    // install` we've observed drops the exec bit on the prebuilds, which
+    // makes pty.spawn() throw `posix_spawnp failed.` — exactly the failure
+    // mode the phase-1+2 self-heal was built to detect. Self-healing the
+    // CAUSE here means the storm detector becomes a backstop, not the
+    // primary recovery surface.
+    try {
+      const result = ensureSpawnHelperExecutable(frameworkRoot);
+      if (result.skipped) {
+        // Windows — different exec model, nothing to do.
+      } else if (result.fixed.length > 0) {
+        console.log(`[daemon] Fixed exec bits on ${result.fixed.length} spawn-helper binary(s): ${result.fixed.join(', ')}`);
+      } else if (result.errors.length > 0) {
+        // Non-fatal: doctor + storm detector still cover this. We log loudly
+        // so an operator scanning logs can see something is off, but we
+        // keep starting — a missing prebuild for one arch isn't catastrophic
+        // (node-pty falls back to its build/Release native module).
+        console.error(`[daemon] spawn-helper perms check: ${result.errors.length} error(s):`,
+          result.errors.map(e => `${e.path}: ${e.reason}`).join('; '));
+      }
+    } catch (e) {
+      // Hardened against any unexpected throw — never block daemon startup
+      // on a permissions check. Worst case: doctor + storm detector kick in.
+      console.error('[daemon] spawn-helper perms check failed (non-fatal):', (e as Error).message);
     }
 
     // Write PID file

@@ -118,3 +118,30 @@ After fix lands:
 2. **Layer 2 unit test**: spawn-failure-tracker emits CRITICAL after 2 distinct agents fail in 5min; respects 30min cooldown; ignores intra-agent repeats.
 3. **Integration test**: simulate `posix_spawnp failed` from a mocked PTY → daemon exits(1) within 1s of second-agent failure.
 4. **Manual repro**: in a test instance, `pnpm install` while daemon runs → trigger one agent restart → confirm new behavior (loud retry, halt, Telegram operator alert, daemon respawn).
+
+## Production verification (2026-05-14 23:00 +08)
+
+The fix paid for itself within hours of merging.
+
+After PR #37 merged at 22:53 +08, the operator ran `rm -rf node_modules && npm install` (cleaning up the same `pnpm install` that staled the daemon's binding in the morning). `npm install` on macOS dropped the exec bit on `node-pty/prebuilds/darwin-arm64/spawn-helper` (a separate-but-related macOS packaging quirk — the prebuild lands at 0o644 instead of 0o755).
+
+When `pm2 restart cortextos-daemon` fired, the new daemon immediately tried to spawn all 7 enabled agents against a node-pty that couldn't exec spawn-helper:
+
+```
+[analyst]   Failed to start: posix_spawnp failed.
+[analyst]   Spawn-fail recovery: retry in 20s (crash #3) err=posix_spawnp failed.
+[boss]      Failed to start: posix_spawnp failed.
+[boss]      Spawn-fail recovery: retry in 20s (crash #3) err=posix_spawnp failed.
+[daemon]    🚨 CRITICAL: cortextos daemon spawn-failure storm
+            2 agents failed to spawn in 5 min: analyst, boss
+            Latest err: posix_spawnp failed.
+            Daemon will exit for PM2 respawn to reload native bindings.
+[daemon]    Spawn-failure storm alert sent to operator chat
+[daemon]    Exiting for PM2 respawn — spawn-failure storm detected
+```
+
+Total elapsed from first failure to operator-chat Telegram alert: ~30 seconds. (Pre-fix shape on May 14 morning: 9h of silence.)
+
+The storm detector then couldn't fix the underlying problem (a `process.exit(1)` for PM2 respawn doesn't fix file permissions), so the operator diagnosed via `ls -l` on the spawn-helper, ran `chmod +x`, and the next daemon restart came up clean. **Mean-time-to-detect: ~30 seconds. Mean-time-to-fix: ~3 minutes.** That ratio is the whole point of the work.
+
+The remaining gap — that the daemon couldn't self-heal the permissions problem — is closed by the follow-up commit (`fix(daemon): auto-chmod spawn-helper at startup`). The daemon now runs `ensureSpawnHelperExecutable(frameworkRoot)` before `AgentManager.discoverAndStart()`, and `package.json:postinstall` does the same on every `npm install`. The storm detector remains as the backstop for any future spawn-failure mode we haven't predicted.
