@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync, unlinkSync, appendFileSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import type { Task, Priority, TaskStatus, BusPaths, StaleTaskReport, ArchiveReport } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { acquireLock, releaseLock } from '../utils/lock.js';
@@ -155,8 +155,9 @@ function addSymmetricEdge(
 ): void {
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) return; // Peer task missing — surfaced at resolution time.
+  const actualTaskDir = dirname(filePath);
   try {
-    withTaskLock(paths.taskDir, taskId, () => {
+    withTaskLock(actualTaskDir, taskId, () => {
       const task = JSON.parse(readFileSync(filePath, 'utf-8')) as Task;
       const list = task[field] ?? [];
       if (!list.includes(peerId)) {
@@ -278,6 +279,12 @@ export function findTaskFile(paths: BusPaths, taskId: string): string | null {
   const sameOrg = join(paths.taskDir, `${taskId}.json`);
   if (existsSync(sameOrg)) return sameOrg;
 
+  // Global tasks live directly under CTX_ROOT/tasks. Orgo node-lease tasks
+  // are intentionally global, while specialist agents usually run with an
+  // org-scoped taskDir.
+  const globalTask = join(paths.ctxRoot, 'tasks', `${taskId}.json`);
+  if (existsSync(globalTask)) return globalTask;
+
   // Fallback: cross-org scan.
   const orgsRoot = join(paths.ctxRoot, 'orgs');
   const matches: Array<{ path: string; org: string }> = [];
@@ -323,13 +330,14 @@ export function updateTask(
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
     throw new Error(
-      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+      `Task ${taskId} not found under ${paths.ctxRoot}/tasks/ and not found in any org under ${paths.ctxRoot}/orgs/`,
     );
   }
+  const actualTaskDir = dirname(filePath);
   let prevStatus: TaskStatus | undefined;
   let assignee: string | undefined;
   try {
-    withTaskLock(paths.taskDir, taskId, () => {
+    withTaskLock(actualTaskDir, taskId, () => {
       const content = readFileSync(filePath, 'utf-8');
       const task: Task = JSON.parse(content);
       prevStatus = task.status;
@@ -345,7 +353,7 @@ export function updateTask(
   } catch (err) {
     throw new Error(`Task ${taskId} update failed: ${err}`);
   }
-  appendTaskAudit(paths, taskId, { event: 'update', agent: assignee || 'unknown', from: prevStatus, to: status });
+  appendTaskAudit(paths, taskId, { event: 'update', agent: assignee || 'unknown', from: prevStatus, to: status }, actualTaskDir);
 }
 
 /**
@@ -376,9 +384,10 @@ function appendTaskAudit(
   paths: BusPaths,
   taskId: string,
   entry: Omit<TaskAuditEntry, 'ts'>,
+  taskDirOverride?: string,
 ): void {
   try {
-    const auditDir = join(paths.taskDir, 'audit');
+    const auditDir = join(taskDirOverride ?? paths.taskDir, 'audit');
     ensureDir(auditDir);
     const line: TaskAuditEntry = {
       ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
@@ -400,7 +409,9 @@ export function readTaskAudit(
   paths: BusPaths,
   taskId: string,
 ): TaskAuditEntry[] {
-  const path = join(paths.taskDir, 'audit', `${taskId}.jsonl`);
+  const filePath = findTaskFile(paths, taskId);
+  const taskDir = filePath ? dirname(filePath) : paths.taskDir;
+  const path = join(taskDir, 'audit', `${taskId}.jsonl`);
   if (!existsSync(path)) return [];
   const entries: TaskAuditEntry[] = [];
   for (const line of readFileSync(path, 'utf-8').split('\n')) {
@@ -437,9 +448,10 @@ export function claimTask(
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
     throw new Error(
-      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+      `Task ${taskId} not found under ${paths.ctxRoot}/tasks/ and not found in any org under ${paths.ctxRoot}/orgs/`,
     );
   }
+  const actualTaskDir = dirname(filePath);
 
   let task: Task;
   try {
@@ -448,7 +460,7 @@ export function claimTask(
     throw new Error(`Task ${taskId} claim failed (unreadable): ${err}`);
   }
 
-  const claimsDir = join(paths.taskDir, '.claims');
+  const claimsDir = join(actualTaskDir, '.claims');
   ensureDir(claimsDir);
   const claimPath = join(claimsDir, `${taskId}.claim`);
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -490,7 +502,7 @@ export function claimTask(
   // Lock held — safe to mutate the task JSON under the r/m/w lock.
   const prevStatus = task.status;
   try {
-    withTaskLock(paths.taskDir, taskId, () => {
+    withTaskLock(actualTaskDir, taskId, () => {
       task.status = 'in_progress';
       task.assigned_to = agent;
       task.updated_at = now;
@@ -502,7 +514,7 @@ export function claimTask(
     try { unlinkSync(claimPath); } catch { /* best-effort */ }
     throw new Error(`Task ${taskId} claim commit failed: ${err}`);
   }
-  appendTaskAudit(paths, taskId, { event: 'claim', agent, from: prevStatus, to: 'in_progress' });
+  appendTaskAudit(paths, taskId, { event: 'claim', agent, from: prevStatus, to: 'in_progress' }, actualTaskDir);
   // Mirror to Supabase (fire-and-forget). Uses upsert (POST + Prefer:merge-duplicates)
   // so this safely inserts the row if the createTask mirror previously failed.
   if (!process.env.VITEST && process.env.NODE_ENV !== 'test') {
@@ -531,14 +543,15 @@ export function completeTask(
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
     throw new Error(
-      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+      `Task ${taskId} not found under ${paths.ctxRoot}/tasks/ and not found in any org under ${paths.ctxRoot}/orgs/`,
     );
   }
+  const actualTaskDir = dirname(filePath);
   let prevStatus: TaskStatus | undefined;
   let assignee: string | undefined;
   let taskOrg: string = '';
   try {
-    withTaskLock(paths.taskDir, taskId, () => {
+    withTaskLock(actualTaskDir, taskId, () => {
       const content = readFileSync(filePath, 'utf-8');
       const task: Task = JSON.parse(content);
       prevStatus = task.status;
@@ -559,7 +572,7 @@ export function completeTask(
   } catch (err) {
     throw new Error(`Task ${taskId} complete failed: ${err}`);
   }
-  appendTaskAudit(paths, taskId, { event: 'complete', agent: assignee || 'unknown', from: prevStatus, to: 'completed', note: result });
+  appendTaskAudit(paths, taskId, { event: 'complete', agent: assignee || 'unknown', from: prevStatus, to: 'completed', note: result }, actualTaskDir);
 
   // Activity-feed event. Best-effort — the task is already persisted.
   if (assignee) {
