@@ -51,12 +51,6 @@
       "prompt": "Kanban hygiene sweep: (1) cortextos bus list-tasks --agent orchestrator status filters; (2) mcp__rgos__cortex_list_tasks for tasks created_by orchestrator and tasks assigned_to orchestrator — compare to current dispatches in today's memory file. (3) For any RGOS task stuck in approved/in_progress that's actually done, complete it via mcp__rgos__cortex_complete_task. (4) For any in-flight work without an RGOS task, create one. (5) update-heartbeat. Silent unless something requires action."
     },
     {
-      "name": "pr-stuck-watcher",
-      "type": "recurring",
-      "interval": "2h",
-      "prompt": "Run PR stuck watcher: cd /home/cortextos/cortextos && cortextos bus pr-stuck-watcher --notify-agent orchestrator. Review the report and only escalate if the command reports PRs over the 24h alert threshold."
-    },
-    {
       "name": "goal-progress-probe",
       "type": "recurring",
       "interval": "6h",

@@ -133,6 +133,12 @@
       "type": "recurring",
       "interval": "30m",
       "prompt": "Run bus inbox/heartbeat health watch: cd /home/cortextos/cortextos && cortextos bus heartbeat-health-watch --threshold-minutes 120 --notify-agent orchestrator. Alert orchestrator if any enabled+running agent has been silent for more than 2h; do not message Greg directly."
+    },
+    {
+      "name": "pr-stuck-watcher",
+      "type": "recurring",
+      "interval": "1h",
+      "prompt": "Run PR stuck watcher: cd /home/cortextos/cortextos && cortextos bus pr-stuck-watcher --stuck-hours 2 --alert-hours 2 --auto-merge --create-tasks --notify-agent orchestrator. It watches the 5 RevOps repos, auto-merges eligible green PRs under blanket policy, and creates RGOS tasks for stuck PRs that cannot auto-merge."
     }
   ],
   "ctx_autoreset_threshold": 45,

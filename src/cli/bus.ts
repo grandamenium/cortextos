@@ -919,9 +919,11 @@ busCommand
   .option('--stuck-hours <hours>', 'Report open PRs older than this many hours', '2')
   .option('--alert-hours <hours>', 'Notify orchestrator when PRs exceed this many hours', '24')
   .option('--notify-agent <agent>', 'Agent to notify when alert threshold is exceeded', 'orchestrator')
+  .option('--auto-merge', 'Auto-merge eligible stuck PRs under RevOps blanket policy')
+  .option('--create-tasks', 'Create local/RGOS tasks for stuck PRs that are not auto-merged')
   .option('--dry-run', 'Do not send alert messages')
   .option('--format <fmt>', 'Output format: json or text', 'text')
-  .action((opts: { repos?: string; stuckHours?: string; alertHours?: string; notifyAgent?: string; dryRun?: boolean; format?: string }) => {
+  .action((opts: { repos?: string; stuckHours?: string; alertHours?: string; notifyAgent?: string; autoMerge?: boolean; createTasks?: boolean; dryRun?: boolean; format?: string }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const projectRoot = env.projectRoot || env.frameworkRoot || process.cwd();
@@ -932,6 +934,38 @@ busCommand
       alertHours: parseNonNegativeNumber(opts.alertHours, 24),
       outputDir,
     });
+    const actions: Array<{ pr: string; action: string; ok: boolean; detail?: string }> = [];
+
+    for (const pr of result.stuckPrs) {
+      const prRef = `${pr.repo}#${pr.number}`;
+      if (!opts.dryRun && opts.autoMerge && pr.autoMergeEligible) {
+        try {
+          execFileSync('gh', ['pr', 'merge', String(pr.number), '--repo', pr.repo, '--squash', '--delete-branch'], { encoding: 'utf-8', stdio: 'pipe', timeout: 120_000 });
+          logEvent(paths, env.agentName, env.org, 'action', 'pr_stuck_watcher_auto_merged', 'info', { repo: pr.repo, number: pr.number, url: pr.url });
+          actions.push({ pr: prRef, action: 'auto_merge', ok: true });
+        } catch (err) {
+          actions.push({ pr: prRef, action: 'auto_merge', ok: false, detail: err instanceof Error ? err.message : String(err) });
+        }
+        continue;
+      }
+
+      if (!opts.dryRun && opts.createTasks) {
+        const title = `PR stuck: ${prRef} ${pr.title}`;
+        const existing = listTasks(paths).some(task => task.title === title && !['completed', 'cancelled'].includes(task.status));
+        if (!existing) {
+          const taskId = createTask(paths, env.agentName, env.org, title, {
+            description: `PR ${pr.url} has been idle for ${pr.updatedHoursAgo.toFixed(1)}h. CI: ${pr.ciState}. Merge: ${pr.mergeState}. Last review: ${pr.lastReview}.`,
+            assignee: pr.author === 'app/github-actions' ? 'orchestrator' : env.agentName,
+            priority: 'normal',
+            project: 'maintenance',
+            meta: { source: 'pr-stuck-watcher', repo: pr.repo, pr_number: pr.number, url: pr.url },
+          });
+          actions.push({ pr: prRef, action: 'create_task', ok: true, detail: taskId });
+        } else {
+          actions.push({ pr: prRef, action: 'create_task', ok: true, detail: 'deduped_existing_task' });
+        }
+      }
+    }
 
     if (!opts.dryRun && result.alertPrs.length > 0 && opts.notifyAgent) {
       const targetPaths = resolvePaths(opts.notifyAgent, env.instanceId, env.org);
@@ -946,13 +980,14 @@ busCommand
     }
 
     if (opts.format === 'json') {
-      console.log(JSON.stringify(result, null, 2));
+      console.log(JSON.stringify({ ...result, actions }, null, 2));
       return;
     }
 
     console.log(`Checked ${result.checkedRepos.length}/${result.watchedRepos.length} repos.`);
     console.log(`Open PRs >${result.stuckThresholdHours}h: ${result.stuckPrs.length}`);
     console.log(`Open PRs >${result.alertThresholdHours}h: ${result.alertPrs.length}`);
+    if (actions.length > 0) console.log(`Actions: ${actions.length}`);
     if (result.reportPath) console.log(`Report: ${result.reportPath}`);
     if (result.failedRepos.length > 0) {
       console.log(`Repo errors: ${result.failedRepos.length}`);

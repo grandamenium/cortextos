@@ -4,10 +4,6 @@ import { join } from 'path';
 import type { BusPaths } from '../types/index.js';
 import { logEvent } from './event.js';
 
-interface GhRepo {
-  nameWithOwner: string;
-}
-
 interface GhReview {
   author?: { login?: string };
   state?: string;
@@ -50,7 +46,9 @@ export interface PrStuckItem {
   ageHours: number;
   updatedHoursAgo: number;
   ciState: string;
+  ciPassing: boolean;
   mergeState: string;
+  autoMergeEligible: boolean;
   reviewDecision: string;
   lastReview: string;
   author: string;
@@ -88,24 +86,13 @@ function unique(values: string[]): string[] {
 function discoverRepos(explicitRepos?: string[]): string[] {
   if (explicitRepos && explicitRepos.length > 0) return unique(explicitRepos);
 
-  const repos = ['grandamenium/cortextos'];
-  try {
-    const forkRepos = parseGhJson<GhRepo[]>([
-      'repo',
-      'list',
-      'RevOps-Global-GIT',
-      '--limit',
-      '200',
-      '--json',
-      'nameWithOwner',
-    ]);
-    for (const repo of forkRepos) {
-      if (repo.nameWithOwner) repos.push(repo.nameWithOwner);
-    }
-  } catch {
-    // Keep the canonical upstream even if the org repo list is unavailable.
-  }
-  return unique(repos);
+  return [
+    'RevOps-Global-GIT/cortextos',
+    'RevOps-Global-GIT/rgos',
+    'RevOps-Global-GIT/team-brain',
+    'RevOps-Global-GIT/ob1-app',
+    'RevOps-Global-GIT/ob1-parents',
+  ];
 }
 
 function ageHours(iso: string, nowMs: number): number {
@@ -114,8 +101,8 @@ function ageHours(iso: string, nowMs: number): number {
   return Math.max(0, (nowMs - ts) / 3_600_000);
 }
 
-function summarizeChecks(checks: GhStatusCheck[] | undefined): string {
-  if (!checks || checks.length === 0) return 'no checks';
+function summarizeChecks(checks: GhStatusCheck[] | undefined): { summary: string; passing: boolean } {
+  if (!checks || checks.length === 0) return { summary: 'no checks', passing: false };
 
   let passing = 0;
   let failing = 0;
@@ -136,7 +123,8 @@ function summarizeChecks(checks: GhStatusCheck[] | undefined): string {
     failing ? `${failing} failing` : '',
     skipped ? `${skipped} skipped` : '',
   ].filter(Boolean);
-  return parts.length ? parts.join(', ') : 'unknown';
+  const summary = parts.length ? parts.join(', ') : 'unknown';
+  return { summary, passing: passing > 0 && failing === 0 && pending === 0 };
 }
 
 function lastReview(reviews: GhReview[] | undefined): string {
@@ -244,16 +232,21 @@ export function runPrStuckWatcher(
 
     for (const pr of prs) {
       const prAge = ageHours(pr.createdAt, now);
-      if (prAge <= stuckThresholdHours) continue;
+      const updatedHoursAgo = ageHours(pr.updatedAt, now);
+      if (updatedHoursAgo <= stuckThresholdHours) continue;
+      const checks = summarizeChecks(pr.statusCheckRollup);
+      const mergeState = pr.mergeStateStatus || 'unknown';
       stuckPrs.push({
         repo,
         number: pr.number,
         title: pr.title,
         url: pr.url,
         ageHours: prAge,
-        updatedHoursAgo: ageHours(pr.updatedAt, now),
-        ciState: summarizeChecks(pr.statusCheckRollup),
-        mergeState: pr.mergeStateStatus || 'unknown',
+        updatedHoursAgo,
+        ciState: checks.summary,
+        ciPassing: checks.passing,
+        mergeState,
+        autoMergeEligible: checks.passing && mergeState === 'CLEAN',
         reviewDecision: pr.reviewDecision || 'none',
         lastReview: lastReview(pr.reviews),
         author: pr.author?.login || 'unknown',
@@ -262,7 +255,7 @@ export function runPrStuckWatcher(
   }
 
   stuckPrs.sort((a, b) => b.ageHours - a.ageHours);
-  const alertPrs = stuckPrs.filter(pr => pr.ageHours > alertThresholdHours);
+  const alertPrs = stuckPrs.filter(pr => pr.updatedHoursAgo > alertThresholdHours);
   const result: PrStuckWatcherResult = {
     generatedAt,
     watchedRepos,
