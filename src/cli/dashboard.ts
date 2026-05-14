@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, openSync
 import { join } from 'path';
 import { homedir, platform } from 'os';
 import { randomBytes } from 'crypto';
+import { findFreePort } from '../utils/port-probe.js';
 
 const IS_WINDOWS = platform() === 'win32';
 
@@ -30,8 +31,9 @@ export const dashboardCommand = new Command('dashboard')
   .option('--instance <id>', 'Instance ID', 'default')
   .option('--build', 'Build for production first (recommended for Cloudflare Tunnel / remote access)')
   .option('--install', 'Install dashboard dependencies first')
+  .option('--no-port-probe', 'Skip the pre-bind port-probe and use --port unconditionally')
   .description('Start the cortextOS dashboard (Next.js)')
-  .action(async (options: { port: string; instance: string; build?: boolean; install?: boolean }) => {
+  .action(async (options: { port: string; instance: string; build?: boolean; install?: boolean; portProbe: boolean }) => {
     const { execSync, spawn } = require('child_process');
 
     // Find dashboard directory
@@ -39,6 +41,33 @@ export const dashboardCommand = new Command('dashboard')
     if (!dashboardDir) {
       console.error('Dashboard not found. Expected at ./dashboard or in node_modules.');
       process.exit(1);
+    }
+
+    // ─── Pre-bind port probe (Issue #07 follow-up #3) ─────────────────────────
+    // PM2-managed dashboards thrash on EADDRINUSE because they respawn into the
+    // same conflict forever. Probe with lsof; fall through 3010 → 3020 → 3030.
+    // commander's `--no-port-probe` maps to options.portProbe === false.
+    if (options.portProbe !== false) {
+      const requested = Number(options.port);
+      if (Number.isFinite(requested) && requested > 0) {
+        const fallbacks = [3010, 3020, 3030].filter((p) => p !== requested);
+        try {
+          const { port: chosen, collisions } = findFreePort(requested, fallbacks);
+          if (chosen !== requested) {
+            const first = collisions[0];
+            console.log(`port ${requested} in use by PID ${first.holderPid}, trying ${chosen}`);
+            // port_collision_recovered (telemetry vocab; see
+            // community/skills/comms-discipline/event-actions.md)
+            console.log(`event=port_collision_recovered port=${requested} fallback_port=${chosen} holder_pid=${first.holderPid}`);
+            options.port = String(chosen);
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`ERROR: ${message}`);
+          console.error('Hint: pass --port <free-port> or stop the conflicting process. Use --no-port-probe to bypass this check.');
+          process.exit(1);
+        }
+      }
     }
 
     // ─── Load / generate dashboard credentials ────────────────────────────────

@@ -30,6 +30,16 @@ Read with `cortextos bus read-agent-events <agent> --event telegram_dedup_skippe
 |---|---|---|---|
 | `telegram_dedup_skipped` | `scripts/comms/send-telegram-guarded.sh` | when wrapper drops a duplicate Telegram (same text + same chat + within 30 min) | `chat_id`, `text_preview`, `last_sent_at`, `reason: "dup_text_30m" \| "session_refresh" \| "user_restart"` |
 
+## Fleet-resilience watchdog events
+
+Detection-side events emitted by daemon watchdogs and user-foreground CLIs (e.g. `cortextos dashboard`) when a latent fault is caught. See `docs_sb/plans/01-fleet-resilience-followups.md` for the full set; phases land incrementally. Currently shipped:
+
+| Action | Emitted by | When | Required meta keys |
+|---|---|---|---|
+| `port_collision_recovered` | `cortextos dashboard` (CLI) | preferred port is occupied and the pre-bind probe falls through to a free fallback | `port`, `fallback_port`, `holder_pid` |
+
+CLI emissions today are surfaced as a single console line (`event=port_collision_recovered port=... fallback_port=... holder_pid=...`) rather than a JSONL event, because the dashboard CLI runs in the operator's shell rather than under an agent identity. When the dashboard is supervised by the daemon (future), the same emission becomes a structured `logEvent` call under a system pseudo-agent.
+
 ## State-delta semantics
 
 `state_delta` is a self-attested boolean. Set `true` when at least one of:
