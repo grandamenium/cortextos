@@ -22,6 +22,8 @@ describe('MessageConnector conformance', () => {
       'inlineButtons', 'media', 'voiceTranscription', 'formattedText',
       'typingIndicator', 'reactions', 'outboundReactions',
       'interactiveCallbacks', 'messageEdits',
+      // PR4 c20: deferred-capability flags from spec §12 summary.
+      'threads', 'richBlocks', 'presence',
     ] as const) {
       expect(typeof c.capabilities[flag]).toBe('boolean');
     }
@@ -41,6 +43,8 @@ describe('MessageConnector conformance', () => {
       'inlineButtons', 'media', 'voiceTranscription', 'formattedText',
       'typingIndicator', 'reactions', 'outboundReactions',
       'interactiveCallbacks', 'messageEdits',
+      // PR4 c20: deferred-capability flags from spec §12 summary.
+      'threads', 'richBlocks', 'presence',
     ] as const) {
       expect(typeof c.capabilities[flag]).toBe('boolean');
       // NullConnector has every boolean capability false

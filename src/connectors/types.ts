@@ -83,6 +83,59 @@ export interface ConnectorCapabilities {
   interactiveCallbacks: boolean;
   /** Connector can edit a previously-sent message in its bound chat (Telegram editMessageText, Slack chat.update, RocketChat updateMessage). */
   messageEdits: boolean;
+  /**
+   * Provider has first-class threads — a parent message acts as a
+   * root with child replies grouped under it, distinct from inline
+   * `reply_to`. Discord native thread channels, Mattermost `root_id`,
+   * RocketChat `tmid`, Slack `thread_ts`, Matrix `m.thread` relation.
+   * Telegram groups have "topics" (forum supergroups) but those are
+   * chat-level not message-level; Telegram bots advertise `false`.
+   *
+   * When `true`:
+   *   - `NormalizedMessage.thread_id` is populated when the inbound
+   *     message belongs to a thread (the thread root's id).
+   *   - `SendOptions.thread_id` posts the outbound message INTO the
+   *     named thread.
+   *
+   * Added in PR4 c20 of the pluggable-connectors stack. The
+   * NormalizedMessage + SendOptions extensions are additive — agents
+   * that don't care about threads (and connectors that don't support
+   * them) can ignore the field.
+   */
+  threads: boolean;
+  /**
+   * Provider supports structured rich content (embeds, cards, blocks)
+   * beyond inline-keyboard buttons. Discord embeds, Slack blocks,
+   * Mattermost attachments, Matrix HTML `formatted_body`. Telegram
+   * has no first-class block schema (HTML inside sendMessage covers
+   * basic formatting but not the card-style UX).
+   *
+   * When `true`:
+   *   - `SendOptions.blocks` carries the provider-native payload
+   *     (deliberately typed `unknown` — see the field's comment).
+   *
+   * Added in PR4 c20. A cross-provider block schema is out of scope
+   * until at least three connectors with native block support land
+   * and a useful intersection falls out of the union; until then
+   * each connector documents its own expected shape.
+   */
+  richBlocks: boolean;
+  /**
+   * Provider exposes online/offline/typing presence updates as a
+   * separate event stream from chat messages. Discord gateway
+   * `PRESENCE_UPDATE` + `TYPING_START`, Matrix `m.presence` +
+   * `m.typing` ephemeral events. Telegram has no presence concept
+   * for bots.
+   *
+   * When `true`:
+   *   - `PollingHandlers.onPresence` is invoked for each presence
+   *     update.
+   *
+   * Added in PR4 c20. The handler is optional — connectors that
+   * support presence emit; daemon code can ignore or surface to
+   * agents per its own policy.
+   */
+  presence: boolean;
 }
 
 export type ValidateResult =
@@ -148,6 +201,14 @@ export interface NormalizedMessage {
    *  daemon doesn't have to read provider-specific media flags off `raw`
    *  to render reply context. */
   reply_to?: { id: string; text?: string };
+  /** Thread root id (stringified). Present iff the inbound message
+   *  belongs to a thread AND the connector advertises
+   *  `capabilities.threads === true`. The value is the connector-
+   *  specific id of the thread's root message: Discord native thread
+   *  channel id, Mattermost `root_id`, RocketChat `tmid`, Slack
+   *  `thread_ts`, Matrix `m.thread` event_id. Telegram bots leave
+   *  this undefined. Added in PR4 c20. */
+  thread_id?: string;
   /** Original provider payload. Debug only; NEVER serialized to bus events. */
   raw: unknown;
 }
@@ -237,6 +298,21 @@ export interface SendOptions {
    *  truncate or refuse — capability flag `inlineButtons` is the
    *  precondition for using this. */
   buttons?: Array<Array<ConnectorAction>>;
+  /** Post the outbound message INTO the named thread. The value is the
+   *  connector-specific id of the thread's root message (matches the
+   *  shape of `NormalizedMessage.thread_id` on the corresponding inbound
+   *  message). Gated by `capabilities.threads === true`; connectors that
+   *  don't support threads ignore this field. Added in PR4 c20. */
+  thread_id?: string;
+  /** Provider-native rich-content payload (Discord embeds, Slack blocks,
+   *  Mattermost attachments, Matrix HTML, etc.). Deliberately untyped
+   *  (`unknown`) until at least three connectors with native block
+   *  support land and a useful cross-provider intersection emerges.
+   *  Gated by `capabilities.richBlocks === true`; connectors that
+   *  don't support blocks ignore this field. Each connector documents
+   *  its expected shape in its own README until the shared schema
+   *  materializes. Added in PR4 c20. */
+  blocks?: unknown;
   /** Skip Markdown→provider conversion entirely. Caller is sending pre-formatted text. */
   raw?: boolean;
 }
@@ -280,19 +356,50 @@ export interface CallbackPayload {
   raw: unknown;
 }
 
+/**
+ * Presence update payload. PR4 c20 added support for connectors that
+ * surface online/offline/typing events as a separate event stream
+ * (Discord gateway `PRESENCE_UPDATE` + `TYPING_START`, Matrix
+ * `m.presence` + `m.typing` ephemerals).
+ *
+ * `kind` is intentionally narrow:
+ *   - `'online'` — user came online (or, for `'typing'`-only providers
+ *     that don't expose offline, this is the only signal).
+ *   - `'offline'` — user went offline / disconnected.
+ *   - `'typing'` — user is currently composing a message. Auto-clears
+ *     on the provider's side after ~10s; the connector does not need
+ *     to emit a "stopped typing" event explicitly.
+ *
+ * Telegram bots don't expose presence and advertise
+ * `capabilities.presence === false`; no Telegram presence updates fire.
+ */
+export interface NormalizedPresenceUpdate {
+  id: string;
+  ts: number;
+  from: { id: string; username?: string; name?: string };
+  /** Chat / room id (stringified) when the presence is scoped to a
+   *  conversation (typing). Absent for global presence (online/offline). */
+  chat_id?: string;
+  kind: 'online' | 'offline' | 'typing';
+  raw: unknown;
+}
+
 export interface PollingHandlers {
   /**
-   * SYNC handler. Offset/ACK advance happens after this returns; thrown
-   * handler aborts the batch (matches existing `TelegramPoller` behavior
-   * at `src/connectors/telegram/poller.ts`). Any async work (media
-   * download, transcription) initiated from inside must be fire-and-
-   * forget exactly as today.
+   * SYNC handler (the default) OR async (Promise-returning) — see PR4
+   * c4 + c14 for the awaitable-handler semantics. Offset/ACK advance
+   * happens after this returns / resolves; thrown handler OR rejected
+   * promise leaves the offset un-advanced and aborts the batch.
    */
   onMessage: (m: NormalizedMessage) => void;
   /** SYNC — same semantics as onMessage. */
   onCallback?: (c: CallbackPayload) => void;
   /** SYNC — same semantics as onMessage. */
   onReaction?: (r: NormalizedReactionPayload) => void;
+  /** SYNC. Fires for presence updates (online / offline / typing).
+   *  Only invoked when `capabilities.presence === true`. Daemon may
+   *  ignore or surface to agents per its own policy. Added in PR4 c20. */
+  onPresence?: (p: NormalizedPresenceUpdate) => void;
 }
 
 /**

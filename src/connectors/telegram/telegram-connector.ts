@@ -110,6 +110,15 @@ export class TelegramConnector implements MessageConnector {
     outboundReactions: true,
     interactiveCallbacks: true,
     messageEdits: true,
+    // PR4 c20: Telegram has no first-class threads (forum supergroup
+    // topics are chat-level, not message-level), no first-class block
+    // schema (HTML/Markdown inside sendMessage covers basic
+    // formatting but not card-style UX), and no presence event stream
+    // for bots. False on all three; future connectors (Discord,
+    // Mattermost, RocketChat, Matrix) advertise true.
+    threads: false,
+    richBlocks: false,
+    presence: false,
   };
 
   private readonly api: TelegramAPI;

@@ -125,24 +125,25 @@ Today's set, defined in `src/connectors/types.ts`:
 | `reactions` | Connector emits reaction-add / change / remove updates via `PollingHandlers.onReaction`. **Inbound only.** Outbound reactions (agent reacts to a message) are tracked under `outboundReactions` — see §12. |
 | `interactiveCallbacks` | Connector can acknowledge an inline-button callback. When `true`, `acknowledgeCallback()` is present. |
 | `messageEdits` | Connector can edit a previously-sent message. When `true`, `editMessage()` is present. |
+| `outboundReactions` | Agent can send a reaction emoji on a user message. Enables emoji-ack UX (§11). When `true`, `sendReaction()` is present. PR4 c10. |
+| `threads` | Provider has first-class threads — parent message + child replies in a tree, distinct from inline `reply_to`. When `true`, `NormalizedMessage.thread_id` populates on inbound and `SendOptions.thread_id` routes outbound into a thread. PR4 c20. |
+| `richBlocks` | Provider supports structured rich content (Discord embeds, Slack blocks, Mattermost attachments, Matrix HTML). When `true`, `SendOptions.blocks` accepts the provider-native payload (deliberately `unknown` — see field's docstring). PR4 c20. |
+| `presence` | Provider exposes online/offline/typing presence updates as a separate event stream. When `true`, `PollingHandlers.onPresence?` is invoked with `NormalizedPresenceUpdate` events. PR4 c20. |
 
-### Future flags (proposed; see §12 for which providers force which)
+### Future flags (still proposed; see §12 for which providers force which)
 
 | Flag | Purpose | Forced by |
 |---|---|---|
-| `outboundReactions` | ✅ **LANDED PR4 c10.** Agent can send a reaction emoji on a user message. Enables emoji-ack UX (§11). | All five — Telegram (Bot API 7+), Discord, Mattermost, RocketChat, Matrix |
-| `threads` | Provider has first-class threads (parent message + child replies in a thread tree, distinct from inline reply_to). | Discord, Mattermost, RocketChat, Slack, Matrix |
-| `richBlocks` | Provider supports structured rich content (embeds, cards, blocks) beyond inline-keyboard buttons. | Discord embeds, Slack blocks, Mattermost attachments. Matrix HTML `formatted_body` covers a subset; Widgets cover the rest. |
-| `presence` | Provider exposes online/offline/typing presence updates beyond the message stream. | Discord, Matrix |
 | `fileSizeLimitBytes` | Numeric (not boolean): max bytes for `sendMedia`. Callers can chunk or refuse. | All five — Telegram 50MB, Discord 25MB (Nitro 500MB), Mattermost configurable, RocketChat configurable, Matrix homeserver-configured (Synapse default 50MB). |
 
-`outboundReactions` shipped in PR4 c10. The `webhookInbound` row
-previously listed here was retired by PR4 c11 — `inbound` is a
-tri-state (`'poll' | 'push' | 'none'`) that already covers webhook
-delivery as the `'push'` variant. The remaining flags are not in
-`ConnectorCapabilities` today; the next PR after Discord lands will
-likely add at least `threads` because the Discord/
-Mattermost/RocketChat work in §12 needs the latter.
+`outboundReactions` shipped in PR4 c10. `threads` + `richBlocks` +
+`presence` shipped in PR4 c20 — the deferred-capability batch that
+prepares the interface for Discord / Mattermost / RocketChat / Matrix.
+The `webhookInbound` row previously listed here was retired by PR4 c11
+— `inbound` is a tri-state (`'poll' | 'push' | 'none'`) that already
+covers webhook delivery as the `'push'` variant. The only remaining
+proposed flag is `fileSizeLimitBytes`; the rest of the interface is
+complete for the four follow-up connectors.
 
 ---
 
@@ -747,9 +748,9 @@ worth getting the simpler poll-style connector right first.
 
 ### Summary: minimum viable interface extension
 
-To support all three providers as first-class. PR4 c4..c15
-landed most of this surface; remaining work is called out
-explicitly so contributors know what's done vs TODO.
+To support all four follow-up providers (Discord, Mattermost,
+RocketChat, Matrix) as first-class. PR4 c4..c20 landed the entire
+surface needed to start the implementation work.
 
 1. ✅ **DONE (PR4 c11)** — `startInbound` / `stopInbound` method
    names + `inbound: 'poll' | 'push' | 'none'` tri-state
@@ -767,21 +768,28 @@ explicitly so contributors know what's done vs TODO.
    discriminated union (`'callback'` with actionId / `'url'` with
    url). TelegramConnector translates both variants to the
    appropriate Telegram inline_keyboard shape.
-5. ⏳ **TODO** — `threads` flag + `thread_id` field on
-   `NormalizedMessage` and on `SendOptions`. Discord, Mattermost,
-   RocketChat, Slack all have first-class threads with different
-   shapes (Discord first-class thread channels vs Mattermost
-   `root_id` vs RocketChat `tmid`).
-6. ⏳ **TODO** — `richBlocks` capability + a `SendOptions.blocks`
-   payload typed as `unknown` until at least three of the four
-   target providers are implemented and a shared schema falls out
-   of the union.
-7. ⏳ **TODO (optional)** — `presence` capability +
-   `PollingHandlers.onPresence`.
+5. ✅ **DONE (PR4 c20)** — `threads` capability flag +
+   `NormalizedMessage.thread_id` + `SendOptions.thread_id` for
+   the inbound + outbound thread plumbing. Discord native thread
+   channels, Mattermost `root_id`, RocketChat `tmid`, Slack
+   `thread_ts`, Matrix `m.thread` relation all map to the same
+   `thread_id: string` shape. Telegram advertises `false`.
+6. ✅ **DONE (PR4 c20)** — `richBlocks` capability flag +
+   `SendOptions.blocks: unknown` for Discord embeds / Slack
+   blocks / Mattermost attachments / Matrix HTML formatted_body.
+   Deliberately untyped until a cross-provider intersection
+   emerges; each connector documents its own expected shape.
+7. ✅ **DONE (PR4 c20)** — `presence` capability flag +
+   `NormalizedPresenceUpdate` + `PollingHandlers.onPresence?`.
+   Discord gateway PRESENCE_UPDATE + TYPING_START, Matrix
+   m.presence + m.typing. Telegram advertises `false`.
 
-The MVP for landing Discord / Mattermost / RocketChat is the four
-DONE items; threads + richBlocks + presence can be additive
-follow-ups that don't break the existing interface.
+**Status: interface is COMPLETE for all four follow-up
+connectors.** None of the items above require further interface
+work before a Discord / Mattermost / RocketChat / Matrix
+implementation begins. The provider-specific connector code is
+purely south-of-line per §1's architecture diagram. Spec §13
+checklist walks through what each implementation PR touches.
 
 ---
 

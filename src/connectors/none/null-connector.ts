@@ -31,6 +31,13 @@ export class NullConnector implements MessageConnector {
     outboundReactions: false,
     interactiveCallbacks: false,
     messageEdits: false,
+    // PR4 c20: deferred-capability flags from the spec's §12 summary
+    // landed as part of preparing the interface for Discord /
+    // Mattermost / RocketChat / Matrix. NullConnector advertises
+    // false on all of them.
+    threads: false,
+    richBlocks: false,
+    presence: false,
   };
 
   async validateCredentials(): Promise<ValidateResult> {
