@@ -14,6 +14,7 @@ import { runPrStuckWatcher } from '../bus/pr-stuck-watcher.js';
 import { runDocDriftChecker } from '../bus/doc-drift-checker.js';
 import { runGoalProgressProbe } from '../bus/goal-progress-probe.js';
 import { runHeartbeatHealthWatch } from '../bus/heartbeat-health-watch.js';
+import { runCustomerSurfaceQa } from '../bus/customer-surface-qa.js';
 import { runCodebaseScan } from '../bus/codebase-scan.js';
 import { runSecurityAudit } from '../bus/security-audit.js';
 import { selfRestart, hardRestart, autoCommit, autoCompactAgent, checkGoalStaleness, postActivity } from '../bus/system.js';
@@ -1120,6 +1121,36 @@ busCommand
     console.log(`Agents checked: ${report.agents.length}`);
     console.log(`Stale running agents: ${report.staleRunningAgents.length}`);
     if (restartAttempts.length > 0) console.log(`Restart attempts: ${restartAttempts.length}`);
+    if (report.reportPath) console.log(`Report: ${report.reportPath}`);
+  });
+
+busCommand
+  .command('customer-surface-qa')
+  .description('Run customer-surface Playwright QA and create tasks for failures')
+  .option('--pages <pages>', 'Comma-separated hub pages to check. Defaults to core customer surfaces')
+  .option('--user <email>', 'Hub user email for QA session setup', 'greg@revopsglobal.com')
+  .option('--no-create-tasks', 'Write report without creating tasks for failing pages')
+  .option('--format <fmt>', 'Output format: json or text', 'text')
+  .action((opts: { pages?: string; user?: string; createTasks?: boolean; format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const projectRoot = env.projectRoot || env.frameworkRoot || process.cwd();
+    const outputDir = join(projectRoot, 'orgs', env.org, 'agents', env.agentName, 'output');
+    const report = runCustomerSurfaceQa(paths, env.agentName, env.org, projectRoot, {
+      pages: opts.pages ? opts.pages.split(',').map(page => page.trim()).filter(Boolean) : undefined,
+      user: opts.user,
+      outputDir,
+      createTasks: opts.createTasks,
+    });
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(`Pages checked: ${report.pages.length}`);
+    console.log(`Pages with failures: ${report.failures.length}`);
+    console.log(`Tasks created: ${report.taskIds.length}`);
     if (report.reportPath) console.log(`Report: ${report.reportPath}`);
   });
 

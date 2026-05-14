@@ -139,6 +139,12 @@
       "type": "recurring",
       "interval": "1h",
       "prompt": "Run PR stuck watcher: cd /home/cortextos/cortextos && cortextos bus pr-stuck-watcher --stuck-hours 2 --alert-hours 2 --auto-merge --create-tasks --notify-agent orchestrator. It watches the 5 RevOps repos, auto-merges eligible green PRs under blanket policy, and creates RGOS tasks for stuck PRs that cannot auto-merge."
+    },
+    {
+      "name": "customer-surface-deep-qa",
+      "type": "recurring",
+      "interval": "6h",
+      "prompt": "Run customer-surface deep QA: cd /home/cortextos/cortextos && cortextos bus customer-surface-qa --user greg@revopsglobal.com. This runs the Playwright harness against core customer surfaces, writes a report, and creates a task for each failing page. If tasks are created or the command errors, notify orchestrator with the report path; otherwise stay silent."
     }
   ],
   "ctx_autoreset_threshold": 45,
