@@ -38,12 +38,6 @@
       "type": "recurring",
       "interval": "24h",
       "prompt": "Run the codebase improvement scanner: execute `cortextos bus codebase-scan` in /home/cortextos/cortextos. This scans src/ for TODO/FIXME/HACK/XXX markers and files >500 lines, writes a report to dev/output/YYYY-MM-DD-codebase-scan.md, and creates RGOS tasks for the top 3 actionable items. Update heartbeat to reflect this work."
-    },
-    {
-      "name": "doc-drift-checker",
-      "type": "recurring",
-      "cron": "13 9 * * *",
-      "prompt": "Run the doc drift checker: cd /home/cortextos/cortextos && cortextos bus doc-drift-checker --threshold-lines 5. Review the report in dev/output and work any task it creates in normal priority order. Update heartbeat when finished."
     }
   ],
   "ctx_autoreset_threshold": 85,
