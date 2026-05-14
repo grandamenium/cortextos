@@ -5,6 +5,7 @@ import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { writeTaskReflection, writePostmortem } from '../bus/reflection.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -311,6 +312,56 @@ busCommand
 
     completeTask(paths, id, effectiveResult);
     console.log(`Completed ${id}`);
+  });
+
+busCommand
+  .command('task-reflect')
+  .description('Append a 3-line task reflection (WORKED / FAILED / CHANGE) to today\'s daily memory. Idempotent per (agent, date, task-id). Hermes protocol #1.')
+  .argument('<task-id>', 'Task ID this reflection is about')
+  .requiredOption('--worked <text>', 'What worked in this task')
+  .requiredOption('--failed <text>', 'What failed or fell short')
+  .requiredOption('--change <text>', 'What to do differently next time')
+  .action((taskId: string, opts: { worked: string; failed: string; change: string }) => {
+    const env = resolveEnv();
+    if (!env.agentDir) {
+      console.error('task-reflect requires CTX_AGENT_DIR (or CTX_PROJECT_ROOT + CTX_ORG) so it can locate the daily memory file.');
+      process.exit(1);
+    }
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const result = writeTaskReflection(paths, env.agentName, env.org, env.agentDir, {
+      taskId,
+      worked: opts.worked,
+      failed: opts.failed,
+      change: opts.change,
+    });
+    if (result.alreadyExists) {
+      console.error(`Reflection for task ${taskId} already exists in ${result.memoryPath} — refusing to write a duplicate.`);
+      process.exit(2);
+    }
+    console.log(`Reflection appended: ${result.memoryPath}`);
+  });
+
+busCommand
+  .command('postmortem')
+  .description('Append a structured postmortem (MISTAKE / ROOT CAUSE / PREVENTION) to today\'s daily memory after a guardrail trigger or task failure. Hermes protocol #4.')
+  .requiredOption('--mistake <text>', 'What went wrong')
+  .requiredOption('--root-cause <text>', 'Why it went wrong')
+  .requiredOption('--prevention <text>', 'How to prevent it next time')
+  .option('--related-event <id>', 'Optional related event id (e.g. a guardrail_triggered event)')
+  .action((opts: { mistake: string; rootCause: string; prevention: string; relatedEvent?: string }) => {
+    const env = resolveEnv();
+    if (!env.agentDir) {
+      console.error('postmortem requires CTX_AGENT_DIR (or CTX_PROJECT_ROOT + CTX_ORG) so it can locate the daily memory file.');
+      process.exit(1);
+    }
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const result = writePostmortem(paths, env.agentName, env.org, env.agentDir, {
+      mistake: opts.mistake,
+      rootCause: opts.rootCause,
+      prevention: opts.prevention,
+      relatedEventId: opts.relatedEvent,
+    });
+    console.log(`Postmortem appended: ${result.memoryPath}`);
   });
 
 busCommand
@@ -2395,6 +2446,11 @@ busCommand
   .command('hook-idle-flag')
   .description('Stop hook: writes last_idle.flag timestamp so fast-checker knows agent finished its turn')
   .action(() => runHook('hook-idle-flag'));
+
+busCommand
+  .command('hook-episodic-post-tool')
+  .description('PostToolUse hook: appends a structured episodic entry to memory/episodic/learnings.jsonl. Reads tool_name + tool_input + tool_response from stdin JSON. Non-blocking, exits 0 always.')
+  .action(() => runHook('hook-episodic-post-tool'));
 
 // --- OAuth token rotation commands ---
 
