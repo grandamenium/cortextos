@@ -48,9 +48,11 @@ export class FastChecker {
   // Guard: prevent concurrent polls (SIGUSR1 can interrupt between inject and ack)
   private isPolling: boolean = false;
 
-  // Queue depth metrics (M-D3c: visibility into potential overflow during long tool calls)
+  // Queue depth metrics & cap (M-D3c: prevent message loss during long tool calls)
   private maxQueueDepth: number = 0;
   private queueOverflowWarningThreshold: number = 20;
+  private maxQueueSize: number = 100;  // Hard cap to prevent unbounded growth
+  private overflowCount: number = 0;   // Track how many messages have been dropped due to overflow
 
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -172,20 +174,30 @@ export class FastChecker {
   /**
    * Get current queue metrics (M-D3c visibility).
    */
-  getQueueMetrics(): { current: number; max: number; threshold: number } {
+  getQueueMetrics(): { current: number; max: number; threshold: number; cap: number; overflows: number } {
     return {
       current: this.telegramMessages.length,
       max: this.maxQueueDepth,
       threshold: this.queueOverflowWarningThreshold,
+      cap: this.maxQueueSize,
+      overflows: this.overflowCount,
     };
   }
 
   /**
    * Queue a formatted Telegram message for injection.
    * Called by the daemon's Telegram handler.
-   * Tracks queue depth for M-D3c visibility (queue overflow during long tool calls).
+   * M-D3c: Implements hard cap (100 messages) to prevent unbounded queue growth during long tool calls.
+   * When limit exceeded, drops oldest message with warning to prevent memory issues.
    */
   queueTelegramMessage(formatted: string): void {
+    // Enforce hard cap: drop oldest message if queue is full
+    if (this.telegramMessages.length >= this.maxQueueSize) {
+      const dropped = this.telegramMessages.shift();
+      this.overflowCount++;
+      this.log(`⚠ Queue overflow: dropped oldest message (overflow #${this.overflowCount}). Max ${this.maxQueueSize} reached.`);
+    }
+
     this.telegramMessages.push({ formatted, ackIds: [] });
 
     // Track queue depth metrics
@@ -193,9 +205,9 @@ export class FastChecker {
       this.maxQueueDepth = this.telegramMessages.length;
     }
 
-    // Warn if queue exceeds threshold (potential overflow during long operations)
+    // Warn if queue exceeds threshold (early warning before cap)
     if (this.telegramMessages.length > this.queueOverflowWarningThreshold) {
-      this.log(`⚠ Queue depth high: ${this.telegramMessages.length} messages pending (max: ${this.maxQueueDepth})`);
+      this.log(`⚠ Queue depth high: ${this.telegramMessages.length}/${this.maxQueueSize} messages (max: ${this.maxQueueDepth})`);
     }
   }
 
