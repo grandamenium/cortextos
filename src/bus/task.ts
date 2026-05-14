@@ -491,8 +491,14 @@ export function completeTask(
       // findTaskFile, but the caller's `paths.analyticsDir` is scoped to
       // the caller's org. Rewrite the analytics path to the task's actual
       // org so dashboards/metrics see the completion under the right tree.
-      const eventPaths: BusPaths = taskOrg
-        ? { ...paths, analyticsDir: join(paths.ctxRoot, 'orgs', taskOrg, 'analytics') }
+      // Only rewrite analyticsDir when the resolved task path is in the
+      // nested cross-org layout: <ctxRoot>/orgs/<org>/tasks/<taskId>.json.
+      // Flat/single-org test harnesses use <ctxRoot>/tasks + <ctxRoot>/analytics
+      // and should keep the caller-provided analyticsDir unchanged.
+      const pathOrgMatch = filePath.match(/[\\/]orgs[\\/](?<org>[^\\/]+)[\\/]tasks[\\/]/);
+      const fileOrg = pathOrgMatch?.groups?.org || '';
+      const eventPaths: BusPaths = fileOrg
+        ? { ...paths, analyticsDir: join(paths.ctxRoot, 'orgs', fileOrg, 'analytics') }
         : paths;
       logEvent(eventPaths, assignee, taskOrg, 'task', 'task_completed', 'info', {
         task_id: taskId,
