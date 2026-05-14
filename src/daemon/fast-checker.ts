@@ -540,19 +540,21 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * editMessage call doesn't need an explicit chat-id argument.
    */
   async handleActivityCallback(
-    query: TelegramCallbackQuery,
+    callback: import('../connectors/index.js').CallbackPayload,
     activityConnector: import('../connectors/index.js').MessageConnector,
   ): Promise<void> {
-    const data = stripControlChars(query.data || '');
-    const callbackQueryId = query.id;
+    const data = stripControlChars(callback.data || '');
+    const callbackQueryId = callback.id;
 
     // SECURITY: callbacks must come from the whitelisted user. Identical
     // check to handleCallback — approval clicks are as sensitive as
-    // permission clicks and the same gate applies.
+    // permission clicks and the same gate applies. PR4 c7 (Codex P1.A):
+    // gate uses CallbackPayload.from.id (stringified provider id) directly
+    // — same string-equality rule the message gate uses.
     if (this.allowedUserId !== undefined) {
-      const fromUserId = query.from?.id;
-      if (fromUserId !== this.allowedUserId) {
-        this.log(`SECURITY: activity-channel callback from unauthorized user ${fromUserId} - rejecting`);
+      const fromUserId = callback.from?.id;
+      if (!fromUserId || fromUserId !== String(this.allowedUserId)) {
+        this.log(`SECURITY: activity-channel callback from unauthorized user ${fromUserId || '<unknown>'} - rejecting`);
         if (activityConnector.capabilities.interactiveCallbacks && activityConnector.acknowledgeCallback) {
           try { await activityConnector.acknowledgeCallback(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
         }
@@ -569,7 +571,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return;
     }
 
-    await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, activityConnector);
+    await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], callback, activityConnector);
   }
 
   /**
@@ -590,22 +592,25 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   private async routeApprovalCallback(
     decision: 'allow' | 'deny',
     approvalId: string,
-    query: TelegramCallbackQuery,
+    callback: import('../connectors/index.js').CallbackPayload,
     connector: import('../connectors/index.js').MessageConnector | undefined,
   ): Promise<void> {
-    const messageId = query.message?.message_id;
-    const callbackQueryId = query.id;
+    const messageId = callback.message_id;
+    const callbackQueryId = callback.id;
     const status = decision === 'allow' ? 'approved' : 'rejected';
 
     // Build a friendly audit-trail suffix: "by Alice (@alice)" or just
-    // "by Alice" if no username. Falls back to the Telegram user id if
-    // both are missing (shouldn't happen in practice but guards edge).
-    const firstName = query.from?.first_name;
-    const username = query.from?.username;
+    // "by Alice" if no username. Falls back to the connector user id if
+    // both are missing. PR4 c7 (Codex P1.A) reads these off the typed
+    // CallbackPayload.from.{name,username,id} so the formatter is
+    // provider-agnostic (Telegram first_name + username, Discord
+    // global_name + username, Mattermost first_name + username, etc.).
+    const firstName = callback.from?.name;
+    const username = callback.from?.username;
     const auditWho = firstName && username
       ? `${firstName} (@${username})`
-      : firstName ?? (username ? `@${username}` : `user ${query.from?.id ?? 'unknown'}`);
-    const auditNote = `via Telegram activity channel by ${auditWho}`;
+      : firstName ?? (username ? `@${username}` : `user ${callback.from?.id || 'unknown'}`);
+    const auditNote = `via activity channel by ${auditWho}`;
 
     try {
       updateApproval(this.paths, approvalId, status, auditNote);
@@ -620,29 +625,37 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     if (connector?.capabilities.interactiveCallbacks && connector.acknowledgeCallback) {
       try { await connector.acknowledgeCallback(callbackQueryId, decision === 'allow' ? 'Approved' : 'Denied'); } catch { /* ignore */ }
     }
-    if (messageId !== undefined && connector?.capabilities.messageEdits && connector.editMessage) {
+    if (messageId && connector?.capabilities.messageEdits && connector.editMessage) {
       const label = decision === 'allow' ? `✅ Approved by ${auditWho}` : `❌ Denied by ${auditWho}`;
-      try { await connector.editMessage(String(messageId), label); } catch { /* ignore */ }
+      try { await connector.editMessage(messageId, label); } catch { /* ignore */ }
     }
     this.log(`Approval callback: ${decision} for ${approvalId} by ${auditWho}`);
   }
 
   /**
-   * Handle a Telegram inline button callback query.
-   * Routes to permission, restart, or AskUserQuestion handlers.
+   * Handle an inline button callback. Routes to permission, restart, or
+   * AskUserQuestion handlers. Provider-agnostic — consumes a typed
+   * `CallbackPayload` instead of the raw provider query (PR4 c7).
    */
-  async handleCallback(query: TelegramCallbackQuery): Promise<void> {
-    const data = stripControlChars(query.data || '');
-    const chatId = query.message?.chat?.id;
-    const messageId = query.message?.message_id;
-    const callbackQueryId = query.id;
+  async handleCallback(callback: import('../connectors/index.js').CallbackPayload): Promise<void> {
+    const data = stripControlChars(callback.data || '');
+    // PR4 c7 (Codex P1.A): chat_id and message_id arrive as strings on the
+    // typed payload. The connector path consumes them as strings; the
+    // legacy non-connector edit path (editCallbackMessage's
+    // telegramApi.editMessageText branch) needs numerics, so we convert
+    // ONCE here and pass through the existing internal helper signature.
+    const chatId = callback.chat_id ? Number(callback.chat_id) : undefined;
+    const messageId = callback.message_id ? Number(callback.message_id) : undefined;
+    const callbackQueryId = callback.id;
 
     // SECURITY: callbacks must come from the whitelisted user. Without this,
-    // anyone who sees a button (forwarded message, group, etc.) could click it.
+    // anyone who sees a button (forwarded message, group, etc.) could click
+    // it. String-equality against the stringified provider id (matches the
+    // message gate at agent-manager.ts onMessage).
     if (this.allowedUserId !== undefined) {
-      const fromUserId = query.from?.id;
-      if (fromUserId !== this.allowedUserId) {
-        this.log(`SECURITY: callback from unauthorized user ${fromUserId} - rejecting`);
+      const fromUserId = callback.from?.id;
+      if (!fromUserId || fromUserId !== String(this.allowedUserId)) {
+        this.log(`SECURITY: callback from unauthorized user ${fromUserId || '<unknown>'} - rejecting`);
         return;
       }
     }
@@ -659,7 +672,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       // rather than the activity channel. The activity-channel path
       // calls routeApprovalCallback through handleActivityCallback with
       // the activity connector instead.
-      await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, this.connector);
+      await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], callback, this.connector);
       return;
     }
 

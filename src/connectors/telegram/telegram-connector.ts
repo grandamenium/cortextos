@@ -426,10 +426,15 @@ export class TelegramConnector implements MessageConnector {
   private toCallbackPayload(query: TelegramCallbackQuery): CallbackPayload {
     return {
       id: query.id,
-      from: { id: query.from?.id !== undefined ? String(query.from.id) : '' },
+      from: {
+        id: query.from?.id !== undefined ? String(query.from.id) : '',
+        username: query.from?.username,
+        name: query.from?.first_name,
+      },
       data: query.data ?? '',
       message_id: query.message?.message_id !== undefined ? String(query.message.message_id) : '',
-      raw: query,  // PR2 H1.v2 — FastChecker.handleCallback casts this back to TelegramCallbackQuery
+      chat_id: query.message?.chat?.id !== undefined ? String(query.message.chat.id) : undefined,
+      raw: query,  // @deprecated PR4+ — kept for the legacy non-connector edit path
     };
   }
 

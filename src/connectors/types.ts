@@ -154,20 +154,34 @@ export interface SendResult {
 }
 
 export interface CallbackPayload {
+  /** Connector-specific callback query id, stringified. */
   id: string;
-  from: { id: string };
+  /** User who clicked the button. PR4 c7 (Codex P1.A) added `username`
+   *  and `name` so FastChecker's audit-trail formatter
+   *  ("Approved by Alice (@alice)") can consume the typed shape instead
+   *  of reading provider-specific fields off `raw`. */
+  from: { id: string; username?: string; name?: string };
+  /** Opaque action id the agent passed when constructing the button.
+   *  Same as `ConnectorAction.actionId` on outbound — connectors round-trip
+   *  it byte-for-byte (Telegram callback_data, Discord custom_id,
+   *  Mattermost integration id, RocketChat triggerId payload). */
   data: string;
-  /** id of the message the user clicked the button on. */
+  /** id of the message the user clicked the button on, stringified. */
   message_id: string;
+  /** Chat id of the message the user clicked on (stringified). Connectors
+   *  populate this when the provider exposes one. Used by the legacy
+   *  non-connector edit path; the connector path uses the connector's
+   *  bound chat instead. Added in PR4 c7 so callers don't need to cast
+   *  `raw` back to the provider shape just to read this. */
+  chat_id?: string;
   /**
    * Original provider payload (e.g. the full `TelegramCallbackQuery`).
-   * Required transitionally so FastChecker's callback-edit + answer-query
-   * paths (`fast-checker.ts:511-519, 592-595`) can cast back to the
-   * Telegram shape — PR2 keeps those paths Telegram-direct and PR3+
-   * will design the proper interactive-message lifecycle abstraction.
-   * Producers MUST populate; future connectors without a native shape
+   * @internal @deprecated PR4+ — kept transitionally as an escape hatch
+   * for fields not yet on the generic type. New callers MUST use the
+   * typed fields above; PR4 c7 migrated FastChecker's callback paths
+   * off `raw`. Producers MUST populate so transitional callers keep
+   * working; future connectors without a native single-payload shape
    * may pass `null`.
-   * @internal @deprecated PR3+
    */
   raw: unknown;
 }

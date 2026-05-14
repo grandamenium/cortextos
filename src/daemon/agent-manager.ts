@@ -534,13 +534,12 @@ export class AgentManager {
 
       const onCallback = (c: CallbackPayload) => {
         // Route to fast-checker for hook response handling (perm_*, askopt,
-        // etc.). handleCallback writes hook-response files and edits the
-        // inline-button message via the active connector. The
-        // TelegramCallbackQuery shape is read off `c.raw` per PR2's
-        // `CallbackPayload.raw: unknown` transitional contract — PR4+
-        // designs the proper connector-agnostic callback abstraction.
-        const query = c.raw as TelegramCallbackQuery;
-        checker.handleCallback(query).catch(err => {
+        // etc.). PR4 c7 (Codex P1.A): handleCallback now consumes the typed
+        // `CallbackPayload` directly. The previous `c.raw as
+        // TelegramCallbackQuery` cast is gone — the daemon path is
+        // provider-agnostic and Discord / Mattermost / RocketChat
+        // connectors don't have to fabricate a Telegram-shaped raw.
+        checker.handleCallback(c).catch(err => {
           log(`Callback handling error: ${err}`);
         });
       };
@@ -672,8 +671,8 @@ export class AgentManager {
       // PR3 final-stage migration: handleActivityCallback now accepts a
       // MessageConnector instead of a TelegramAPI; the connector knows
       // its own chatId so the callback's chat-routing is implicit.
-      const query = c.raw as TelegramCallbackQuery;
-      entry.checker.handleActivityCallback(query, activityConnector).catch((err) => {
+      // PR4 c7 (Codex P1.A): consumes typed CallbackPayload, no raw cast.
+      entry.checker.handleActivityCallback(c, activityConnector).catch((err) => {
         log(`Activity-channel callback error: ${err}`);
       });
     };

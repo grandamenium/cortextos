@@ -27,16 +27,35 @@ function createMockTelegramApi() {
   } as any;
 }
 
-function createCallbackQuery(data: string, overrides: Partial<TelegramCallbackQuery> = {}): TelegramCallbackQuery {
+/**
+ * Build a generic CallbackPayload. PR4 c7 (Codex P1.A) migrated
+ * handleCallback / handleActivityCallback off the Telegram-specific
+ * TelegramCallbackQuery shape. The helper preserves the old
+ * convenience signature (data + overrides) but the overrides shape now
+ * mirrors CallbackPayload directly. `raw` is left undefined — call sites
+ * exercising the new typed paths don't need it.
+ */
+function createCallbackQuery(
+  data: string,
+  overrides: {
+    id?: string;
+    from?: { id: number | string; first_name?: string; username?: string };
+    message?: { message_id: number | string; chat?: { id: number | string } };
+  } = {},
+): import('../../../src/connectors/index.js').CallbackPayload {
+  const from = overrides.from ?? { id: 1, first_name: 'Test' };
+  const message = overrides.message ?? { message_id: 42, chat: { id: 999 } };
   return {
-    id: 'cb-123',
-    from: { id: 1, first_name: 'Test' },
-    message: {
-      message_id: 42,
-      chat: { id: 999, type: 'private' },
+    id: overrides.id ?? 'cb-123',
+    from: {
+      id: String(from.id),
+      username: from.username,
+      name: from.first_name,
     },
     data,
-    ...overrides,
+    message_id: String(message.message_id),
+    chat_id: message.chat?.id !== undefined ? String(message.chat.id) : undefined,
+    raw: undefined,
   };
 }
 
