@@ -944,15 +944,45 @@ busCommand
     console.log(JSON.stringify(result, null, 2));
   });
 
+/**
+ * Read `connector` from an agent's config.json without taking a daemon
+ * dependency. Returns undefined when no config or no field. Used by
+ * `bus send` / `bus send-telegram` to gate dispatch by connector kind.
+ */
+function readConnectorKindFromAgent(agentDir: string | undefined): string | undefined {
+  if (!agentDir) return undefined;
+  const { readFileSync, existsSync } = require('fs');
+  const { join } = require('path');
+  const configPath = join(agentDir, 'config.json');
+  if (!existsSync(configPath)) return undefined;
+  try {
+    return JSON.parse(readFileSync(configPath, 'utf-8')).connector;
+  } catch {
+    return undefined;
+  }
+}
+
 busCommand
   .command('send-telegram')
-  .description('Send a message to a Telegram chat')
+  .description('[telegram-only] Send a message to a Telegram chat. For connector-agnostic messaging, use `bus send`.')
   .argument('<chat-id>', 'Telegram chat ID')
   .argument('<message>', 'Message text (supports Telegram Markdown unless --plain-text is set)')
   .option('--image <path>', 'Send a photo with caption')
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
   .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
+    // PR2: hard-error for non-Telegram connectors. The command is Telegram-
+    // specific; routing it through a non-Telegram connector would surprise
+    // operators. Use `bus send <agent> <message>` for connector-agnostic
+    // messaging.
+    const probeEnv = resolveEnv();
+    const explicitKind = readConnectorKindFromAgent(probeEnv.agentDir);
+    if (explicitKind && explicitKind !== 'telegram') {
+      console.error(
+        `Error: agent '${probeEnv.agentName}' connector is '${explicitKind}', not 'telegram' — use 'bus send' for connector-agnostic messaging.`,
+      );
+      process.exit(1);
+    }
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
     // Telegram renders them as visible text. Normalize before send + log.
@@ -1015,6 +1045,72 @@ busCommand
         } catch { /* non-fatal */ }
       }
 
+      console.log('Message sent');
+    } catch (err: any) {
+      console.error(`Failed to send: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * `bus send <agent> <message>` — connector-agnostic outbound CLI added
+ * in PR2 of the pluggable communications connectors stack. Reads the
+ * agent's `config.connector` (PR1's field) and dispatches through the
+ * resolved connector. Unlike `send-telegram`, this command takes NO
+ * chat-id argument — the connector is already bound to its recipient
+ * (Telegram CHAT_ID, future Matrix room_id, RocketChat channel).
+ *
+ * Semantics under `connector: 'none'`: silent drop + stderr warn,
+ * exit 0. Operators get an audible signal but the command doesn't fail
+ * (matches the parent plan's "no-comms agents are first-class" goal).
+ */
+busCommand
+  .command('send')
+  .description('Send a message via the agent\'s active connector (connector-agnostic; use send-telegram for Telegram-specific operations)')
+  .argument('<agent>', 'Agent name')
+  .argument('<message>', 'Message text')
+  .option('--image <path>', 'Send a photo with caption')
+  .option('--file <path>', 'Send a document/file with caption')
+  .option('--plain-text', 'Skip Markdown parsing — useful for content with unescaped formatting chars', false)
+  .action(async (agentName: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
+    // Same '\n'/'\t' normalization as send-telegram (the Codex-agent
+    // shell-quoting quirk applies regardless of which command is used).
+    message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+
+    const env = resolveEnv({ agentName });
+    const kind = readConnectorKindFromAgent(env.agentDir);
+
+    if (kind === 'none') {
+      process.stderr.write(
+        `warning: agent '${agentName}' has connector 'none' — message dropped (no outbound channel configured).\n`,
+      );
+      process.exit(0);
+    }
+
+    // Build the connector. For 'telegram' (explicit or inferred via legacy
+    // gate from .env), construct via getConnector which unpacks env keys.
+    // Future kinds reach getConnector's factory dispatch.
+    const { getConnector } = require('../connectors/index.js');
+    const resolvedKind = kind ?? 'telegram'; // PR1's default inference
+
+    let connector;
+    try {
+      connector = getConnector(resolvedKind, env.agentDir || '', process.env);
+    } catch (err: any) {
+      console.error(`Error: ${err.message || err}`);
+      process.exit(1);
+    }
+
+    try {
+      if (opts.image) {
+        await connector.sendMedia({ localPath: opts.image, caption: message, kind: 'photo' });
+      } else if (opts.file) {
+        await connector.sendMedia({ localPath: opts.file, caption: message, kind: 'document' });
+      } else {
+        await connector.sendMessage(message, {
+          parseMode: opts.plainText ? 'plain' : 'markdown',
+        });
+      }
       console.log('Message sent');
     } catch (err: any) {
       console.error(`Failed to send: ${err.message || err}`);

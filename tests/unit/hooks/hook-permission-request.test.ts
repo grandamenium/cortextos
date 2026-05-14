@@ -58,11 +58,17 @@ describe('hook-permission-request', () => {
   let agentDir: string;
 
   beforeAll(() => {
-    // Ensure build is fresh so dist/hooks/hook-permission-request.js exists
-    try {
-      execSync('npm run build', { cwd: join(__dirname, '..', '..', '..'), stdio: 'pipe' });
-    } catch (err) {
-      throw new Error(`Failed to build before running hook tests: ${err}`);
+    // dist/hooks/hook-permission-request.js must exist for these tests.
+    // We build only if missing — parallel test files would race on
+    // concurrent npm-run-build invocations otherwise (the build cleans
+    // dist/, then writes; a parallel test reading dist mid-write fails).
+    const fs = require('fs');
+    if (!fs.existsSync(HOOK_PATH)) {
+      try {
+        execSync('npm run build', { cwd: join(__dirname, '..', '..', '..'), stdio: 'pipe' });
+      } catch (err) {
+        throw new Error(`Failed to build before running hook tests: ${err}`);
+      }
     }
   });
 
