@@ -45,6 +45,9 @@ export class FastChecker {
   // SIGUSR1 wake: resolve to immediately wake from sleep
   private wakeResolve: (() => void) | null = null;
 
+  // Guard: prevent concurrent polls (SIGUSR1 can interrupt between inject and ack)
+  private isPolling: boolean = false;
+
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
@@ -120,7 +123,15 @@ export class FastChecker {
       try {
         // Check for urgent signal file
         this.checkUrgentSignal();
-        await this.pollCycle();
+        // Guard: prevent concurrent polls from SIGUSR1 interrupting inject→ack
+        if (!this.isPolling) {
+          this.isPolling = true;
+          try {
+            await this.pollCycle();
+          } finally {
+            this.isPolling = false;
+          }
+        }
       } catch (err) {
         this.log(`Poll error: ${err}`);
       }
