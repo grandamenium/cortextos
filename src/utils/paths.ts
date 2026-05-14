@@ -57,5 +57,11 @@ export function getIpcPath(instanceId: string = 'default'): string {
   if (process.platform === 'win32') {
     return `\\\\.\\pipe\\cortextos-${instanceId}`;
   }
-  return join(homedir(), '.cortextos', instanceId, 'daemon.sock');
+  // Respect CTX_ROOT so processes spawned in a sandboxed test environment
+  // (CTX_ROOT=/tmp/XXX) connect to the sandbox socket, not the production
+  // daemon. Without this, integration tests that set CTX_ROOT but not
+  // CTX_INSTANCE_ID silently hit the live daemon (observed: race-agent
+  // IPC storm 2026-05-14T17:14Z from concurrent-cron-mutations test).
+  const ctxRoot = process.env.CTX_ROOT ?? join(homedir(), '.cortextos', instanceId);
+  return join(ctxRoot, 'daemon.sock');
 }
