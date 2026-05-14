@@ -6,6 +6,7 @@ import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
+import { logEvent } from '../bus/event.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
@@ -54,6 +55,10 @@ export class FastChecker {
   private maxQueueSize: number = 100;  // Hard cap to prevent unbounded growth
   private overflowCount: number = 0;   // Track how many messages have been dropped due to overflow
 
+  // Agent context for event logging
+  private agentName: string = '';
+  private org: string = '';
+
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
@@ -72,11 +77,13 @@ export class FastChecker {
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number; org?: string } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
     this.frameworkRoot = frameworkRoot;
+    this.agentName = agent.name;
+    this.org = options.org || '';
     this.pollInterval = options.pollInterval || 1000;
     this.log = options.log || ((msg) => console.log(`[fast-checker/${agent.name}] ${msg}`));
     this.telegramApi = options.telegramApi;
@@ -196,6 +203,21 @@ export class FastChecker {
       const dropped = this.telegramMessages.shift();
       this.overflowCount++;
       this.log(`⚠ Queue overflow: dropped oldest message (overflow #${this.overflowCount}). Max ${this.maxQueueSize} reached.`);
+
+      // Log event for observability (non-fatal if logging fails)
+      try {
+        logEvent(
+          this.paths,
+          this.agentName,
+          this.org,
+          'system',
+          'telegram_queue_overflow_drop',
+          'warning',
+          { reason: 'queue_cap_exceeded', overflow_count: this.overflowCount, queue_size: this.maxQueueSize },
+        );
+      } catch (err) {
+        this.log(`Failed to log overflow event: ${err}`);
+      }
     }
 
     this.telegramMessages.push({ formatted, ackIds: [] });
