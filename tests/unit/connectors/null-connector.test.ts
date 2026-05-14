@@ -34,4 +34,13 @@ describe('NullConnector', () => {
     const c = new NullConnector();
     await c.stopPolling(); // must not throw
   });
+
+  it('declares interactiveCallbacks=false and messageEdits=false (PR3)', () => {
+    const c = new NullConnector();
+    expect(c.capabilities.interactiveCallbacks).toBe(false);
+    expect(c.capabilities.messageEdits).toBe(false);
+    // Methods are omitted entirely — callers must gate via capabilities
+    expect(c.acknowledgeCallback).toBeUndefined();
+    expect(c.editMessage).toBeUndefined();
+  });
 });

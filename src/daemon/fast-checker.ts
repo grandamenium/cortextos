@@ -219,9 +219,13 @@ export class FastChecker {
       }
     }
 
-    // Typing indicator: send while Claude is actively working
-    if (this.chatId && this.telegramApi && this.isAgentActive()) {
-      await this.sendTyping(this.telegramApi, this.chatId);
+    // Typing indicator: send while Claude is actively working.
+    // PR3: prefer connector.setTypingIndicator when the active connector
+    // advertises typingIndicator capability; fall back to legacy
+    // telegramApi.sendChatAction so agents not yet migrated to a
+    // connector keep working.
+    if (this.isAgentActive()) {
+      await this.sendTyping();
     }
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
@@ -430,16 +434,76 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
   /**
    * Send typing indicator, rate-limited to once every 4 seconds.
+   *
+   * PR3 of pluggable-connectors: routes through the active connector's
+   * `setTypingIndicator` capability when wired (covers no-Telegram
+   * agents transparently — NullConnector's `typingIndicator: false`
+   * skips the send entirely). Falls back to legacy
+   * `telegramApi.sendChatAction(this.chatId, 'typing')` for agents
+   * still on the direct path.
    */
-  private async sendTyping(api: TelegramAPI, chatId: string): Promise<void> {
+  private async sendTyping(): Promise<void> {
     const now = Date.now();
-    if (now - this.typingLastSent >= 4000) {
-      try {
-        await api.sendChatAction(chatId, 'typing');
-      } catch {
-        // Ignore typing indicator failures (matches bash: || true)
+    if (now - this.typingLastSent < 4000) return;
+    try {
+      if (this.connector?.capabilities.typingIndicator && this.connector.setTypingIndicator) {
+        await this.connector.setTypingIndicator(true);
+      } else if (this.telegramApi && this.chatId) {
+        await this.telegramApi.sendChatAction(this.chatId, 'typing');
+      } else {
+        return;
       }
-      this.typingLastSent = now;
+    } catch {
+      // Ignore typing indicator failures (matches bash: || true)
+    }
+    this.typingLastSent = now;
+  }
+
+  /**
+   * PR3 of pluggable-connectors: acknowledge an inline-button callback
+   * through the active connector when wired, falling back to legacy
+   * `telegramApi.answerCallbackQuery`. Errors are swallowed — failing
+   * the toast must never abort the surrounding interactive flow.
+   */
+  private async ackCallback(callbackQueryId: string, toast: string): Promise<void> {
+    if (this.connector?.capabilities.interactiveCallbacks && this.connector.acknowledgeCallback) {
+      try { await this.connector.acknowledgeCallback(callbackQueryId, toast); } catch { /* ignore */ }
+    } else if (this.telegramApi) {
+      try { await this.telegramApi.answerCallbackQuery(callbackQueryId, toast); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * PR3 of pluggable-connectors: edit a previously-sent message through
+   * the active connector when wired, falling back to legacy
+   * `telegramApi.editMessageText`. `chatId`+`messageId` come from the
+   * incoming callback query — for the agent's own-bot path these
+   * always match the connector's bound chat, so the connector
+   * variant ignores chatId. Errors are swallowed.
+   */
+  private async editCallbackMessage(
+    chatId: number | undefined,
+    messageId: number | undefined,
+    text: string,
+    buttons?: Array<Array<{ text: string; callback_data: string }>>,
+  ): Promise<void> {
+    if (messageId === undefined) return;
+    if (this.connector?.capabilities.messageEdits && this.connector.editMessage) {
+      try {
+        if (buttons) {
+          await this.connector.editMessage(String(messageId), text, { buttons });
+        } else {
+          await this.connector.editMessage(String(messageId), text);
+        }
+      } catch { /* ignore */ }
+    } else if (this.telegramApi && chatId !== undefined) {
+      try {
+        if (buttons) {
+          await this.telegramApi.editMessageText(chatId, messageId, text, { inline_keyboard: buttons });
+        } else {
+          await this.telegramApi.editMessageText(chatId, messageId, text);
+        }
+      } catch { /* ignore */ }
     }
   }
 
@@ -588,13 +652,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const responseFile = join(this.paths.stateDir, `hook-response-${hexId}.json`);
       writeFileSync(responseFile, JSON.stringify({ decision: hookDecision }) + '\n', 'utf-8');
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
-        if (chatId && messageId) {
-          const labelMap: Record<string, string> = { allow: 'Approved', deny: 'Denied', continue: 'Continue in Chat' };
-          try { await this.telegramApi.editMessageText(chatId, messageId, labelMap[decision] || decision); } catch { /* ignore */ }
-        }
-      }
+      await this.ackCallback(callbackQueryId, 'Got it');
+      const labelMap: Record<string, string> = { allow: 'Approved', deny: 'Denied', continue: 'Continue in Chat' };
+      await this.editCallbackMessage(chatId, messageId, labelMap[decision] || decision);
       this.log(`Permission callback: ${decision} for ${hexId}`);
       return;
     }
@@ -606,13 +666,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const responseFile = join(this.paths.stateDir, `restart-response-${hexId}.json`);
       writeFileSync(responseFile, JSON.stringify({ decision }) + '\n', 'utf-8');
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
-        if (chatId && messageId) {
-          const label = decision === 'allow' ? 'Restart Approved' : 'Restart Denied';
-          try { await this.telegramApi.editMessageText(chatId, messageId, label); } catch { /* ignore */ }
-        }
-      }
+      await this.ackCallback(callbackQueryId, 'Got it');
+      const label = decision === 'allow' ? 'Restart Approved' : 'Restart Denied';
+      await this.editCallbackMessage(chatId, messageId, label);
       this.log(`Restart callback: ${decision} for ${hexId}`);
       return;
     }
@@ -623,12 +679,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const qIdx = parseInt(askoptMatch[1], 10);
       const oIdx = parseInt(askoptMatch[2], 10);
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
-        if (chatId && messageId) {
-          try { await this.telegramApi.editMessageText(chatId, messageId, 'Answered'); } catch { /* ignore */ }
-        }
-      }
+      await this.ackCallback(callbackQueryId, 'Got it');
+      await this.editCallbackMessage(chatId, messageId, 'Answered');
 
       // Navigate TUI: Down * oIdx, then Enter
       for (let k = 0; k < oIdx; k++) {
@@ -669,9 +721,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const qIdx = parseInt(toggleMatch[1], 10);
       const oIdx = parseInt(toggleMatch[2], 10);
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Toggled'); } catch { /* ignore */ }
-      }
+      await this.ackCallback(callbackQueryId, 'Toggled');
 
       const askStatePath = join(this.paths.stateDir, 'ask-state.json');
       if (existsSync(askStatePath)) {
@@ -688,7 +738,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
           writeFileSync(askStatePath, JSON.stringify(state) + '\n', 'utf-8');
 
           // Update Telegram message with current selections
-          if (this.telegramApi && chatId && messageId) {
+          if (messageId) {
             const chosen = [...state.multi_select_chosen].sort((a: number, b: number) => a - b);
             const chosenDisplay = chosen.map((i: number) => i + 1).join(', ');
             const question = state.questions?.[qIdx];
@@ -705,9 +755,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
               ? `Selected: ${chosenDisplay}\nTap more options or Submit`
               : 'Tap options to toggle, then tap Submit';
 
-            try {
-              await this.telegramApi.editMessageText(chatId, messageId, text, { inline_keyboard: keyboard });
-            } catch { /* ignore */ }
+            await this.editCallbackMessage(chatId, messageId, text, keyboard);
           }
         } catch { /* ignore parse errors */ }
       }
@@ -720,12 +768,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     if (submitMatch) {
       const qIdx = parseInt(submitMatch[1], 10);
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Submitted'); } catch { /* ignore */ }
-        if (chatId && messageId) {
-          try { await this.telegramApi.editMessageText(chatId, messageId, 'Submitted'); } catch { /* ignore */ }
-        }
-      }
+      await this.ackCallback(callbackQueryId, 'Submitted');
+      await this.editCallbackMessage(chatId, messageId, 'Submitted');
 
       const askStatePath = join(this.paths.stateDir, 'ask-state.json');
       if (existsSync(askStatePath)) {

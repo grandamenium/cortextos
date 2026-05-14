@@ -63,4 +63,49 @@ export interface MessageConnector {
    */
   setTypingIndicator?(on: boolean): Promise<void>;
   registerCommands?(commands: Array<{ name: string; description: string }>): Promise<void>;
+
+  /**
+   * Acknowledge a callback query the connector emitted via
+   * `PollingHandlers.onCallback`. `text` is a short toast/banner shown
+   * on the user's client (Telegram: callback notification; Slack:
+   * ephemeral response; RocketChat: action ack). When the connector
+   * has no native concept of acknowledgement, the method is omitted
+   * and the `interactiveCallbacks` capability is `false`.
+   *
+   * Errors are non-fatal. Callers wrap in try/catch — failures here
+   * must not abort the surrounding interactive flow (the user already
+   * clicked the button; missing the ack only loses the toast).
+   *
+   * Added in PR3 of the pluggable-connectors stack (interactive-
+   * message lifecycle abstraction).
+   */
+  acknowledgeCallback?(callbackId: string, text?: string): Promise<void>;
+
+  /**
+   * Edit a previously-sent message in the connector's bound chat.
+   * Used by FastChecker to update inline-button messages after a
+   * user click ("Approved", "Got it", "Submitted", etc.) so the
+   * audit-trail message reflects the resolved state.
+   *
+   * `messageId` is the connector-specific id of the message being
+   * edited (Telegram message_id, Slack ts, RocketChat _id). The
+   * chat is implicit — the connector knows its bound chat from
+   * construction. Cross-chat editing (e.g. activity-channel
+   * approval messages) is out of scope; that path stays direct
+   * pending activity-channel pluggability.
+   *
+   * `opts.buttons`: optional inline-keyboard replacement. Omitting
+   * preserves the existing keyboard on Telegram per the API contract.
+   *
+   * Errors are non-fatal. Callers wrap in try/catch — failures here
+   * must not abort the surrounding interactive flow.
+   *
+   * Added in PR3 of the pluggable-connectors stack (interactive-
+   * message lifecycle abstraction).
+   */
+  editMessage?(
+    messageId: string,
+    text: string,
+    opts?: { buttons?: Array<Array<{ text: string; callback_data: string }>> },
+  ): Promise<void>;
 }

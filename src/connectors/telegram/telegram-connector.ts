@@ -36,6 +36,8 @@ export class TelegramConnector implements MessageConnector {
     longPolling: true,
     typingIndicator: true,
     reactions: true,
+    interactiveCallbacks: true,
+    messageEdits: true,
   };
 
   private readonly api: TelegramAPI;
@@ -219,6 +221,23 @@ export class TelegramConnector implements MessageConnector {
     // Map generic shape to Telegram BotCommand shape.
     const tgCommands = commands.map((c) => ({ command: c.name, description: c.description }));
     await this.api.setMyCommands(tgCommands);
+  }
+
+  async acknowledgeCallback(callbackId: string, text?: string): Promise<void> {
+    await this.api.answerCallbackQuery(callbackId, text);
+  }
+
+  async editMessage(
+    messageId: string,
+    text: string,
+    opts?: { buttons?: Array<Array<{ text: string; callback_data: string }>> },
+  ): Promise<void> {
+    // Telegram message_ids are numeric; the connector accepts strings for
+    // cross-connector consistency (Slack ts is "1690000000.000001",
+    // RocketChat _id is opaque) but the wire format here is number.
+    const numericId = Number(messageId);
+    const replyMarkup = opts?.buttons ? { inline_keyboard: opts.buttons } : undefined;
+    await this.api.editMessageText(this.chatId, numericId, text, replyMarkup);
   }
 
   // ---------------------------------------------------------------------

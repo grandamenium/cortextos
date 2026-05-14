@@ -21,6 +21,7 @@ describe('MessageConnector conformance', () => {
     for (const flag of [
       'inlineButtons', 'media', 'voiceTranscription', 'formattedText',
       'longPolling', 'typingIndicator', 'reactions',
+      'interactiveCallbacks', 'messageEdits',
     ] as const) {
       expect(typeof c.capabilities[flag]).toBe('boolean');
     }
@@ -33,6 +34,7 @@ describe('MessageConnector conformance', () => {
     for (const flag of [
       'inlineButtons', 'media', 'voiceTranscription', 'formattedText',
       'longPolling', 'typingIndicator', 'reactions',
+      'interactiveCallbacks', 'messageEdits',
     ] as const) {
       expect(typeof c.capabilities[flag]).toBe('boolean');
       // NullConnector has every capability false

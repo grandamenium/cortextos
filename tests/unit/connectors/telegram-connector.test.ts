@@ -202,6 +202,95 @@ describe('TelegramConnector', () => {
     });
   });
 
+  describe('acknowledgeCallback (PR3)', () => {
+    it('routes through TelegramAPI.answerCallbackQuery with the toast text', async () => {
+      const calls: Array<{ url: string; body: any }> = [];
+      installFetchMock((url, init) => {
+        calls.push({ url, body: JSON.parse(init.body) });
+        return { body: { ok: true, result: true } };
+      });
+
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      await c.acknowledgeCallback!('cb_id_123', 'Got it');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toContain('/answerCallbackQuery');
+      expect(calls[0].body.callback_query_id).toBe('cb_id_123');
+      expect(calls[0].body.text).toBe('Got it');
+    });
+
+    it('uses TelegramAPI default "OK" toast when caller passes no text', async () => {
+      // TelegramAPI.answerCallbackQuery defaults missing text → 'OK' so the
+      // user still sees the spinner stop. The connector passes through.
+      const calls: Array<{ body: any }> = [];
+      installFetchMock((_url, init) => {
+        calls.push({ body: JSON.parse(init.body) });
+        return { body: { ok: true, result: true } };
+      });
+
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      await c.acknowledgeCallback!('cb_id_456');
+      expect(calls[0].body.text).toBe('OK');
+    });
+  });
+
+  describe('editMessage (PR3)', () => {
+    it('routes through TelegramAPI.editMessageText with the connector’s bound chatId', async () => {
+      const calls: Array<{ url: string; body: any }> = [];
+      installFetchMock((url, init) => {
+        calls.push({ url, body: JSON.parse(init.body) });
+        return { body: { ok: true, result: { message_id: 999 } } };
+      });
+
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      await c.editMessage!('999', 'Approved');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toContain('/editMessageText');
+      // chat_id MUST be the connector's bound chat, NOT a value passed by caller
+      expect(String(calls[0].body.chat_id)).toBe('12345');
+      expect(calls[0].body.message_id).toBe(999);
+      expect(calls[0].body.text).toBe('Approved');
+    });
+
+    it('opts.buttons becomes reply_markup.inline_keyboard', async () => {
+      const calls: Array<{ body: any }> = [];
+      installFetchMock((_url, init) => {
+        calls.push({ body: JSON.parse(init.body) });
+        return { body: { ok: true, result: { message_id: 1 } } };
+      });
+
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      const keyboard = [[{ text: 'Submit', callback_data: 'submit' }]];
+      await c.editMessage!('42', 'Pick one', { buttons: keyboard });
+      expect(calls[0].body.reply_markup).toEqual({ inline_keyboard: keyboard });
+    });
+
+    it('declares interactiveCallbacks and messageEdits capabilities', () => {
+      const c = new TelegramConnector('/tmp/agent', {
+        BOT_TOKEN: '123:abc',
+        CHAT_ID: '12345',
+        ALLOWED_USER: '67890',
+      });
+      expect(c.capabilities.interactiveCallbacks).toBe(true);
+      expect(c.capabilities.messageEdits).toBe(true);
+    });
+  });
+
   describe('startPolling', () => {
     it('resolves promptly (does NOT await the forever-running poller)', async () => {
       // Stub fetch so the internal poller's getUpdates doesn't actually hit the network

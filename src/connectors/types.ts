@@ -35,6 +35,10 @@ export interface ConnectorCapabilities {
   typingIndicator: boolean;
   /** Connector emits reaction-add/change/remove updates. */
   reactions: boolean;
+  /** Connector can acknowledge an inline-button callback (Telegram answerCallbackQuery, Slack ack response, RocketChat triggerId reply). */
+  interactiveCallbacks: boolean;
+  /** Connector can edit a previously-sent message in its bound chat (Telegram editMessageText, Slack chat.update, RocketChat updateMessage). */
+  messageEdits: boolean;
 }
 
 export type ValidateResult =

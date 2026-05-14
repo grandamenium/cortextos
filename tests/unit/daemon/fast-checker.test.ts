@@ -856,4 +856,144 @@ describe('FastChecker', () => {
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
+
+  /**
+   * PR3 of pluggable-connectors: handleCallback's per-decision ack +
+   * edit paths now route through the active connector's
+   * `acknowledgeCallback` / `editMessage` methods when the connector
+   * advertises the matching capability. Legacy `telegramApi` is the
+   * fallback for agents not yet wired to a connector.
+   *
+   * These tests pin both branches at the FastChecker integration
+   * layer (the unit tests for the connector methods themselves live
+   * in `tests/unit/connectors/telegram-connector.test.ts`).
+   */
+  describe('handleCallback connector routing (PR3)', () => {
+    function makeMockConnector(opts: { interactiveCallbacks?: boolean; messageEdits?: boolean } = {}) {
+      return {
+        kind: 'telegram' as const,
+        capabilities: {
+          inlineButtons: true,
+          media: true,
+          voiceTranscription: false,
+          formattedText: true,
+          longPolling: true,
+          typingIndicator: true,
+          reactions: true,
+          interactiveCallbacks: opts.interactiveCallbacks ?? true,
+          messageEdits: opts.messageEdits ?? true,
+        },
+        validateCredentials: vi.fn(),
+        sendMessage: vi.fn().mockResolvedValue({ id: '1', ts: 0 }),
+        sendMedia: vi.fn(),
+        startPolling: vi.fn(),
+        stopPolling: vi.fn(),
+        acknowledgeCallback: vi.fn().mockResolvedValue(undefined),
+        editMessage: vi.fn().mockResolvedValue(undefined),
+        setTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      } as any;
+    }
+
+    it('routes ack + edit through connector when both capabilities are present', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const connector = makeMockConnector();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        connector,
+      });
+
+      const query = createCallbackQuery('perm_allow_abc123');
+      await checker.handleCallback(query);
+
+      // Connector path: called
+      expect(connector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Got it');
+      expect(connector.editMessage).toHaveBeenCalledWith('42', 'Approved');
+
+      // Legacy direct path: NOT called (response file proves the rest of the
+      // handler ran — only the comms surface routed through the connector)
+      expect(api.answerCallbackQuery).not.toHaveBeenCalled();
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      const responseFile = join(paths.stateDir, 'hook-response-abc123.json');
+      expect(existsSync(responseFile)).toBe(true);
+    });
+
+    it('falls back to legacy telegramApi when connector lacks interactiveCallbacks', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const connector = makeMockConnector({ interactiveCallbacks: false });
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        connector,
+      });
+
+      const query = createCallbackQuery('perm_allow_cdb789');
+      await checker.handleCallback(query);
+
+      // Ack: capability missing → fallback to legacy api
+      expect(connector.acknowledgeCallback).not.toHaveBeenCalled();
+      expect(api.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Got it');
+      // Edit: capability still present → connector wins
+      expect(connector.editMessage).toHaveBeenCalledWith('42', 'Approved');
+    });
+
+    it('asksubmit routes both ack + edit through connector with the toast "Submitted"', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const connector = makeMockConnector();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        connector,
+      });
+
+      const query = createCallbackQuery('asksubmit_0');
+      await checker.handleCallback(query);
+
+      expect(connector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Submitted');
+      expect(connector.editMessage).toHaveBeenCalledWith('42', 'Submitted');
+    });
+
+    it('asktoggle routes the keyboard rebuild through connector.editMessage with buttons', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const connector = makeMockConnector();
+      // Seed ask-state so the toggle has options to render
+      const askStatePath = join(paths.stateDir, 'ask-state.json');
+      writeFileSync(
+        askStatePath,
+        JSON.stringify({
+          total_questions: 1,
+          current_question: 0,
+          questions: [{ options: ['A', 'B', 'C'] }],
+          multi_select_chosen: [],
+        }) + '\n',
+        'utf-8',
+      );
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        connector,
+      });
+
+      const query = createCallbackQuery('asktoggle_0_1');
+      await checker.handleCallback(query);
+
+      // Ack uses "Toggled"
+      expect(connector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Toggled');
+      // Edit receives the rebuilt keyboard with toggle + submit rows
+      expect(connector.editMessage).toHaveBeenCalled();
+      const editArgs = connector.editMessage.mock.calls[0];
+      expect(editArgs[0]).toBe('42');
+      expect(editArgs[2]).toBeDefined();
+      expect(editArgs[2].buttons).toBeDefined();
+      const keyboard = editArgs[2].buttons as Array<Array<{ text: string; callback_data: string }>>;
+      // 3 option rows + 1 submit row
+      expect(keyboard).toHaveLength(4);
+      expect(keyboard[3][0].callback_data).toBe('asksubmit_0');
+    });
+  });
 });

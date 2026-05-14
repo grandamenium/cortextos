@@ -1,5 +1,67 @@
 # CHANGELOG
 
+## [unreleased] — Pluggable Communications Connectors (PR3 — interactive lifecycle)
+
+Lands the interactive-message lifecycle abstraction PR2's CHANGELOG
+named as out-of-scope. FastChecker's per-callback ack + edit + typing
+paths now route through `MessageConnector` methods instead of
+`telegramApi` direct calls. Brings the count of remaining Telegram-
+direct call sites in `src/daemon/fast-checker.ts` down from 17
+to 5 (all in the dual-path `routeApprovalCallback` /
+`handleActivityCallback`, blocked on activity-channel pluggability).
+
+### Added
+- **`MessageConnector.acknowledgeCallback?(callbackId, text?)`** — optional
+  interface method that acknowledges a callback query the connector
+  emitted via `PollingHandlers.onCallback`. Telegram maps to
+  `answerCallbackQuery` (which defaults missing text to `'OK'`); future
+  connectors (Slack ephemeral response, RocketChat triggerId reply)
+  follow the same generic shape. Gated by the new
+  `capabilities.interactiveCallbacks` flag.
+- **`MessageConnector.editMessage?(messageId, text, opts?)`** — optional
+  interface method that edits a previously-sent message in the
+  connector's **bound chat**. `opts.buttons` becomes the new inline
+  keyboard (preserves existing on Telegram per the API contract when
+  omitted). Cross-chat editing is out of scope; that path remains
+  Telegram-direct in `routeApprovalCallback` pending activity-channel
+  pluggability. Gated by the new `capabilities.messageEdits` flag.
+- **`ConnectorCapabilities.interactiveCallbacks`** + **`messageEdits`** —
+  two new boolean capability flags. `TelegramConnector` sets both to
+  `true`; `NullConnector` sets both to `false` (and omits the methods
+  entirely — callers must gate via the flag before invoking).
+- **`FastChecker.ackCallback` + `FastChecker.editCallbackMessage`
+  helpers** — private dispatch helpers that route through the active
+  connector when wired and capability-advertised, falling back to the
+  legacy `telegramApi`/`chatId` fields. Pattern mirrors PR2's
+  `if (this.connector) ... else if (this.telegramApi) ...` precedent
+  at `fast-checker.ts:850-853` and `:1042-1045`.
+
+### Migrated (FastChecker — 12 call sites)
+- `sendTyping(api, chatId)` → `sendTyping()` reading `this.connector`
+  and `this.telegramApi` internally; routes through
+  `connector.setTypingIndicator(true)` when the connector advertises
+  `typingIndicator`. NullConnector's `typingIndicator: false` skips
+  the send entirely, eliminating the wasted poll on no-Telegram agents.
+- Permission callback (`perm_*`) — ack + edit migrated.
+- Restart callback (`restart_*`) — ack + edit migrated.
+- AskUserQuestion single-select (`askopt_*`) — ack + edit migrated.
+- AskUserQuestion multi-select toggle (`asktoggle_*`) — ack +
+  keyboard-rebuild edit (with `buttons`) migrated.
+- AskUserQuestion multi-select submit (`asksubmit_*`) — ack + edit
+  migrated.
+
+### Out of scope (deferred to PR4+)
+- `routeApprovalCallback` (3 sites at `fast-checker.ts:537/543/546`) —
+  shared between `handleCallback` (agent's own bot) and
+  `handleActivityCallback` (activity-channel bot). Migrating requires
+  the activity channel to also expose a `MessageConnector`, which is
+  the still-named "Activity channel pluggability" deferred item.
+- `handleActivityCallback` (2 sites at `fast-checker.ts:484/492`) —
+  activity-channel direct path. Same blocker.
+- Daemon-poller wire migration through `connector.startPolling()` —
+  still on the PR2 deferred list; remains pending.
+- Implementing Matrix / RocketChat connectors.
+
 ## [unreleased] — Pluggable Communications Connectors (PR1 + PR2)
 
 Extracts Telegram from being a hardcoded dependency into a pluggable

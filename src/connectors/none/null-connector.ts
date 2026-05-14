@@ -28,6 +28,8 @@ export class NullConnector implements MessageConnector {
     longPolling: false,
     typingIndicator: false,
     reactions: false,
+    interactiveCallbacks: false,
+    messageEdits: false,
   };
 
   async validateCredentials(): Promise<ValidateResult> {
