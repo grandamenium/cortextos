@@ -11,7 +11,7 @@ The `MessageConnector` interface is the abstraction between a cortextOS
 agent's daemon-side machinery (the FastChecker, the AgentProcess, the
 bus's approval poster, the CLI `bus send` command) and any user-facing
 messaging transport (Telegram today; Discord, Mattermost, RocketChat,
-Slack, Matrix in follow-up PRs).
+Matrix, Slack in follow-up PRs).
 
 Before this layer the daemon talked to `TelegramAPI` and `TelegramPoller`
 directly. That worked when Telegram was the only transport, but every
@@ -130,11 +130,11 @@ Today's set, defined in `src/connectors/types.ts`:
 
 | Flag | Purpose | Forced by |
 |---|---|---|
-| `outboundReactions` | ✅ **LANDED PR4 c10.** Agent can send a reaction emoji on a user message. Enables emoji-ack UX (§11). | All four — Telegram (Bot API 7+), Discord, Mattermost, RocketChat |
-| `threads` | Provider has first-class threads (parent message + child replies in a thread tree, distinct from inline reply_to). | Discord, Mattermost, RocketChat, Slack |
-| `richBlocks` | Provider supports structured rich content (embeds, cards, blocks) beyond inline-keyboard buttons. | Discord embeds, Slack blocks, Mattermost attachments |
+| `outboundReactions` | ✅ **LANDED PR4 c10.** Agent can send a reaction emoji on a user message. Enables emoji-ack UX (§11). | All five — Telegram (Bot API 7+), Discord, Mattermost, RocketChat, Matrix |
+| `threads` | Provider has first-class threads (parent message + child replies in a thread tree, distinct from inline reply_to). | Discord, Mattermost, RocketChat, Slack, Matrix |
+| `richBlocks` | Provider supports structured rich content (embeds, cards, blocks) beyond inline-keyboard buttons. | Discord embeds, Slack blocks, Mattermost attachments. Matrix HTML `formatted_body` covers a subset; Widgets cover the rest. |
 | `presence` | Provider exposes online/offline/typing presence updates beyond the message stream. | Discord, Matrix |
-| `fileSizeLimitBytes` | Numeric (not boolean): max bytes for `sendMedia`. Callers can chunk or refuse. | All four — Telegram 50MB, Discord 25MB (Nitro 500MB), Mattermost configurable, RocketChat configurable |
+| `fileSizeLimitBytes` | Numeric (not boolean): max bytes for `sendMedia`. Callers can chunk or refuse. | All five — Telegram 50MB, Discord 25MB (Nitro 500MB), Mattermost configurable, RocketChat configurable, Matrix homeserver-configured (Synapse default 50MB). |
 
 `outboundReactions` shipped in PR4 c10. The `webhookInbound` row
 previously listed here was retired by PR4 c11 — `inbound` is a
@@ -609,10 +609,10 @@ Other connectors have no such restriction.
 
 ---
 
-## 12. Capability gap analysis: Discord, Mattermost, RocketChat
+## 12. Capability gap analysis: Discord, Mattermost, RocketChat, Matrix
 
-Auditing the current 9 capability flags + 6 proposed (§3) against each
-target provider.
+Auditing the current capability flags + the proposed extensions (§3)
+against each target provider.
 
 ### Discord
 
@@ -686,6 +686,64 @@ real-time inbound path is the Meteor DDP WebSocket protocol. A
 RocketChat connector that polls REST is workable but lossy; the proper
 path is a DDP client. Recommended to defer until after Discord+
 Mattermost validate the gateway/WS pattern.
+
+### Matrix
+
+Federated protocol (Matrix.org Foundation, [Client-Server API spec]
+(https://spec.matrix.org/v1.11/client-server-api/)). The bot connects
+to a single homeserver (matrix.org, a self-hosted Synapse/Dendrite/
+Conduit instance, etc.) and joins rooms; all messaging happens against
+that homeserver, which federates the events out to participants on
+other homeservers transparently.
+
+| Flag | Supported? | Notes |
+|---|---|---|
+| `inlineButtons` | partial — no native | Matrix has no first-class inline-button concept. Possible via Matrix Widgets (an embedded HTML iframe with its own action protocol) or `m.notice` text with `mx-reply` quoting, but neither matches the Telegram/Discord button UX. A Matrix connector might decline this capability for v1. |
+| `media` | yes | Upload via `POST /_matrix/media/v3/upload` → mxc:// URI → reference in `m.image` / `m.file` / `m.video` / `m.audio` event content. Max size is homeserver-configured (Synapse default 50 MB). |
+| `voiceTranscription` | no (homeserver does not transcribe) | Same situation as Telegram — connector can integrate Whisper locally if voice messages (`m.audio` with `msc3245.voice` extension) arrive. |
+| `formattedText` | yes | `formatted_body` with `format: org.matrix.custom.html` alongside the plain `body`. The HTML subset is well-defined in the spec. |
+| `inbound` | `'poll'` | The standard `/sync` endpoint is a long-poll with `timeout=30000` and an opaque `since` token. Push variant (sliding sync, MSC3575) is opt-in per server and not universally supported. |
+| `typingIndicator` | yes | `PUT /_matrix/client/v3/rooms/{roomId}/typing/{userId}` with a timeout body. |
+| `reactions` (inbound) | yes | `m.reaction` event with `rel_type: 'm.annotation'` and `key` carrying the unicode emoji (or `mxc://` shortcode for custom). |
+| `outboundReactions` | yes | Send an `m.reaction` event with the same shape — exactly the same wire format as inbound. |
+| `interactiveCallbacks` | no — no native button → no callback | Same reason as `inlineButtons`. If Widgets are used the callback shape is widget-specific (postMessage to the widget iframe), not a clean fit for `acknowledgeCallback`. |
+| `messageEdits` | yes | `m.replace` relation: send a new event with `m.relates_to: { rel_type: 'm.replace', event_id: <original> }` and a `m.new_content` field carrying the replacement. Clients render the latest replacement. |
+| `threads` (proposed) | yes | `m.thread` relation: events with `m.relates_to: { rel_type: 'm.thread', event_id: <thread root> }`. Native, well-supported. |
+| `richBlocks` (proposed) | partial | No first-class block schema like Discord embeds. The HTML in `formatted_body` is the closest equivalent — covers links, code blocks, tables, lists. For card-style UX (image + title + actions), Matrix Widgets again. |
+| `presence` (proposed) | yes | `m.presence` events surfaced via `/sync`. Also `m.typing` ephemeral events. |
+
+**Matrix-specific concerns:**
+
+* **Federation.** Events the bot sees in a room may originate on any
+  homeserver, not just the one the bot is logged into. Identifiers
+  (user MXIDs `@alice:matrix.org`, room IDs `!opaque:server.tld`, event
+  IDs `$opaque`) include a `:homeserver` suffix and must be preserved
+  byte-for-byte. The connector's `NormalizedMessage.from.id` should be
+  the full MXID, not the localpart.
+* **E2E encryption.** Optional but increasingly the default. Bots that
+  don't implement Olm/Megolm see `m.room.encrypted` events with no
+  decryptable body — effectively "this room is invisible to this bot".
+  A first-pass Matrix connector should DECLINE to join encrypted rooms
+  and require operators to deploy the bot only in unencrypted rooms.
+  Adding decryption support (matrix-rust-sdk / matrix-bot-sdk-js with
+  Olm) is a follow-up PR.
+* **Access token vs OIDC.** Long-lived access tokens (`POST /login`
+  with `type: m.login.password`) are simplest. Matrix 2.0 transitions
+  to OIDC; both work today.
+* **Sliding sync (MSC3575)** would let a Matrix connector advertise
+  `inbound: 'push'`, but server support is uneven. A `'poll'`
+  connector hitting `/sync` with a 30s timeout is the right v1.
+* **Multi-room.** Unlike Telegram (one bot ↔ one chat per agent),
+  Matrix bots typically participate in many rooms simultaneously. The
+  connector's `chatId` becomes "primary room" but the connector should
+  emit events from any joined room — see §8's multi-connector pattern
+  for a parallel concern.
+
+Recommended landing order: after Mattermost validates the long-poll
+pattern. Matrix's `/sync` is more complex than Mattermost's
+`GET /api/v4/users/me/channels/{id}/posts` (the `since` token is opaque
+and the response is paginated against multiple event streams), so it's
+worth getting the simpler poll-style connector right first.
 
 ### Summary: minimum viable interface extension
 
