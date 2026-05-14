@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join, relative } from 'path';
-import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
+import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
@@ -10,7 +10,12 @@ import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { TelegramConnector, NullConnector, getConnector } from '../connectors/index.js';
-import type { MessageConnector } from '../connectors/index.js';
+import type {
+  MessageConnector,
+  NormalizedMessage,
+  NormalizedReactionPayload,
+  CallbackPayload,
+} from '../connectors/index.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
@@ -86,7 +91,7 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
+  private agents: Map<string, { process: AgentProcess; checker: FastChecker; connector?: MessageConnector; activityPoller?: TelegramPoller }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
@@ -407,22 +412,39 @@ export class AgentManager {
     const pollingEnabled = config.inbound_polling !== undefined
       ? config.inbound_polling !== false
       : config.telegram_polling !== false;
-    if (telegramApi && chatId && pollingEnabled) {
+    if (connector?.capabilities.longPolling && pollingEnabled) {
       const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir);
 
-      poller.onMessage((msg) => {
-        // ALLOWED_USER gate: if configured, ignore messages from other users.
-        // Use numeric comparison to avoid string coercion issues.
+      // PR3 of pluggable-connectors: route inbound polling through the
+      // connector's `startPolling` lifecycle instead of constructing a
+      // TelegramPoller directly. The connector's stateDir contract
+      // (Codex Q5 lock — connector.ts:48-55) preserves
+      // `<ctxRoot>/state/<name>/.telegram-offset` byte-for-byte across the
+      // wire migration. Handlers consume NormalizedMessage /
+      // CallbackPayload / NormalizedReactionPayload; raw provider payload
+      // is read from `.raw` where Telegram-specific fields (media kinds,
+      // reply_to_message) still need to be inspected. The activity-
+      // channel poller below remains direct TelegramPoller construction
+      // pending activity-channel pluggability (CHANGELOG out-of-scope).
+      const onMessage = (m: NormalizedMessage) => {
+        // ALLOWED_USER gate: NormalizedMessage.from.id is the stringified
+        // provider user id, so comparison is string-equality with the
+        // raw `.env` value (no parseInt indirection). Empty string is
+        // treated as "no sender" — gate denies.
         if (allowedUserId) {
-          const allowedId = parseInt(allowedUserId, 10);
-          if (msg.from?.id !== allowedId) {
+          if (!m.from.id || m.from.id !== allowedUserId) {
             log(`Ignoring message from unauthorized user (allowed_user gate)`);
             return;
           }
         }
 
-        const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
+        // PR3 transitional escape hatch: media detection + media download
+        // still rely on the Telegram tagged-union shape. The connector's
+        // NormalizedMessage exposes `text` (msg.text || msg.caption) but
+        // not the media-kind flags, so we read those off `m.raw` until
+        // a future PR introduces `m.media` as a first-class shape.
+        const msg = m.raw as TelegramMessage;
+        const from = stripControlChars(m.from.name || m.from.username || 'Unknown');
         const msgChatId = msg.chat?.id;
         const effectiveChatId = msgChatId ?? chatId ?? '';
         const stateDir = join(this.ctxRoot, 'state', name);
@@ -510,52 +532,60 @@ export class AgentManager {
           return;
         }
         checker.queueTelegramMessage(formatted);
-      });
+      };
 
-      poller.onCallback((query) => {
-        // Route to fast-checker for hook response handling (perm_allow/deny, askopt, etc.)
-        // handleCallback writes hook-response files and edits Telegram messages
+      const onCallback = (c: CallbackPayload) => {
+        // Route to fast-checker for hook response handling (perm_*, askopt,
+        // etc.). handleCallback writes hook-response files and edits the
+        // inline-button message via the active connector. The
+        // TelegramCallbackQuery shape is read off `c.raw` per PR2's
+        // `CallbackPayload.raw: unknown` transitional contract — PR4+
+        // designs the proper connector-agnostic callback abstraction.
+        const query = c.raw as TelegramCallbackQuery;
         checker.handleCallback(query).catch(err => {
           log(`Callback handling error: ${err}`);
         });
-      });
+      };
 
-      poller.onReaction((reaction) => {
-        // ALLOWED_USER gate: same rule as message handler. If configured,
-        // ignore reactions from other users.
+      const onReaction = (r: NormalizedReactionPayload) => {
+        // ALLOWED_USER gate: NormalizedReactionPayload.from.id is the
+        // stringified provider user id. Same string-equality rule as
+        // onMessage above.
         if (allowedUserId) {
-          const allowedId = parseInt(allowedUserId, 10);
-          if (reaction.user?.id !== allowedId) {
+          if (!r.from.id || r.from.id !== allowedUserId) {
             log('Ignoring reaction from unauthorized user (allowed_user gate)');
             return;
           }
         }
 
-        const from = stripControlChars(reaction.user?.first_name || reaction.user?.username || 'Unknown');
-        const reactionChatId = reaction.chat?.id ?? chatId ?? '';
+        const from = stripControlChars(r.from.name || r.from.username || 'Unknown');
+        const reactionChatId = r.chat_id ?? chatId ?? '';
         const formatted = FastChecker.formatTelegramReaction(
           from,
           reactionChatId,
-          reaction.message_id,
-          reaction.old_reaction ?? [],
-          reaction.new_reaction ?? [],
+          r.message_id,
+          r.old_reaction,
+          r.new_reaction,
         );
         if (checker.isDuplicate(formatted)) {
           log('Duplicate Telegram reaction suppressed');
           return;
         }
         checker.queueTelegramMessage(formatted);
+      };
+
+      // Fire-and-forget per the connector's contract (resolves AFTER the
+      // loop is scheduled, NOT after it completes). Matches the prior
+      // `poller.start().catch(...)` pattern byte-for-byte.
+      connector.startPolling({ onMessage, onCallback, onReaction }, { stateDir }).catch(err => {
+        log(`Connector poller error: ${err}`);
       });
 
-      poller.start().catch(err => {
-        log(`Telegram poller error: ${err}`);
-      });
-
-      // Store poller reference so stopAgent() can clean it up
+      // Store connector reference so stopAgent() can call stopPolling().
       const entry = this.agents.get(name);
-      if (entry) entry.poller = poller;
+      if (entry) entry.connector = connector;
 
-      log('Telegram poller started');
+      log(`Inbound poller started via ${connector.kind} connector`);
 
       // Orchestrator-only: start a second poller for the org's activity
       // channel bot so Telegram inline-button callbacks (currently just
@@ -667,7 +697,14 @@ export class AgentManager {
       return;
     }
 
-    if (entry.poller) entry.poller.stop();
+    // PR3: primary poller is owned by the connector now — stopPolling is
+    // a no-op when the connector never started polling (e.g. NullConnector
+    // or pollingEnabled=false), so calling unconditionally is safe.
+    if (entry.connector) {
+      await entry.connector.stopPolling().catch((err) => {
+        console.log(`[agent-manager] connector.stopPolling error for ${name}: ${err}`);
+      });
+    }
     if (entry.activityPoller) entry.activityPoller.stop();
     entry.checker.stop();
     await entry.process.stop();

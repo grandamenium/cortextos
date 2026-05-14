@@ -50,6 +50,32 @@ to 5 (all in the dual-path `routeApprovalCallback` /
 - AskUserQuestion multi-select submit (`asksubmit_*`) — ack + edit
   migrated.
 
+### Migrated (PR3 commit 2 — daemon poller through connector.startPolling)
+- **`AgentManager.startAgent` primary poller now routes through
+  `connector.startPolling(handlers, { stateDir })`** instead of
+  constructing `TelegramPoller` directly. Handlers consume the
+  generic `NormalizedMessage` / `CallbackPayload` /
+  `NormalizedReactionPayload` shapes; the Telegram tagged-union shape
+  is read off `.raw` where media detection + `reply_to_message` access
+  still require it (PR4+ generalizes those). The connector's stateDir
+  contract preserves `<ctxRoot>/state/<name>/.telegram-offset`
+  byte-for-byte across the migration.
+- **`AgentManager.stopAgent` calls `connector.stopPolling()`**
+  unconditionally — NullConnector's no-op stop is safe when polling
+  was never enabled.
+- **`AgentManager.agents` map field renamed `poller` → `connector`**.
+  The activity-channel `activityPoller` field is unchanged.
+- **Polling-enablement gate** now reads
+  `connector?.capabilities.longPolling && pollingEnabled` instead of
+  `telegramApi && chatId && pollingEnabled`. NullConnector's
+  `longPolling: false` cleanly suppresses the inbound loop on
+  no-Telegram agents (replaces the implicit
+  `if (telegramApi && chatId)` skip).
+- **ALLOWED_USER gate** in onMessage + onReaction now compares the
+  stringified `from.id` from the normalized payload directly against
+  the env-var value (no `parseInt` indirection); reasoning in the
+  migrated comments.
+
 ### Out of scope (deferred to PR4+)
 - `routeApprovalCallback` (3 sites at `fast-checker.ts:537/543/546`) —
   shared between `handleCallback` (agent's own bot) and
@@ -58,9 +84,12 @@ to 5 (all in the dual-path `routeApprovalCallback` /
   the still-named "Activity channel pluggability" deferred item.
 - `handleActivityCallback` (2 sites at `fast-checker.ts:484/492`) —
   activity-channel direct path. Same blocker.
-- Daemon-poller wire migration through `connector.startPolling()` —
-  still on the PR2 deferred list; remains pending.
+- Activity-channel `new TelegramPoller(...)` (1 site at
+  `agent-manager.ts:661`) — same blocker; would naturally migrate
+  alongside the activity-channel connector PR.
 - Implementing Matrix / RocketChat connectors.
+- First-class `NormalizedMessage.media` payload (replacing the
+  `m.raw` cast in onMessage's media branch).
 
 ## [unreleased] — Pluggable Communications Connectors (PR1 + PR2)
 
