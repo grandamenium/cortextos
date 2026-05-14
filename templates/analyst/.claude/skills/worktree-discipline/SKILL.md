@@ -34,6 +34,26 @@ git worktree remove ~/cortextos-worktrees/$CTX_AGENT_NAME/<branch-name>
 
 The canonical tree is read-only for you — `git fetch`, `git pull origin main`, `git log`, `git status` against main are fine; everything else (checkout, edit, commit, push) goes through your worktree.
 
+## Fresh-worktree gotcha: install + build before tests
+
+A fresh worktree has neither `node_modules/` nor a `dist/` build, and `cortextos` is **not** an npm workspace — so a root `npm install` does NOT install the `dashboard/` package's deps. Skipping either step makes `npm run prepush` fail with confusing "pre-existing test failures" that don't reproduce on `main`.
+
+Always run all three before testing or `prepush`:
+
+```bash
+cd ~/cortextos-worktrees/$CTX_AGENT_NAME/<branch>
+npm install                    # root deps
+(cd dashboard && npm install)  # dashboard deps — separate package, easy to forget
+npm run build                  # produces dist/cli.js used by integration tests
+```
+
+Failure signatures, if any step is skipped:
+
+- **Missing `dashboard/node_modules/`** — 11 test files fail with `ERR_MODULE_NOT_FOUND` on `next/server` or `better-sqlite3`: `tests/integration/phase4-dashboard-backtest.test.ts`, `tests/integration/phase4-performance.test.ts`, `tests/integration/phase5-user-journeys.test.ts`, `tests/integration/phase5-e2e-simulation.test.ts`, plus the 7 `dashboard/src/**/__tests__/*` files.
+- **Missing `dist/cli.js`** — 3 test files fail with `CLI entry missing ... run npm run build first`: `tests/integration/context-update-cli.test.ts`, `tests/integration/hook-context-status-migration.test.ts`, `tests/unit/hooks/hook-worktree-warn.test.ts`.
+
+Do not reach for `--no-verify` — run the missing install/build instead.
+
 ## Recovery
 
 - Worktree dir already exists from a prior PR: `git worktree list` to inspect, `git worktree remove --force <path>` if stale.
