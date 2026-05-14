@@ -14,16 +14,17 @@
 // If you change that helper, mirror the change here.
 
 import { existsSync, readdirSync, statSync, chmodSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 if (process.platform === 'win32') {
   // Different exec model — nothing to do.
   process.exit(0);
 }
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..'); // scripts/ → repo root
+// npm postinstall invokes this with cwd at the package root (where the
+// node_modules being installed lives) — that's the canonical place to
+// look. Same convention as `cortextos doctor` (src/cli/doctor.ts).
+const rootDir = process.cwd();
 
 const prebuildsDir = join(rootDir, 'node_modules', 'node-pty', 'prebuilds');
 const buildRelease = join(rootDir, 'node_modules', 'node-pty', 'build', 'Release');

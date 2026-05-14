@@ -9,7 +9,11 @@ import { ensureSpawnHelperExecutable } from '../../../src/utils/node-pty-perms';
 // daemon now self-heals at startup via this helper; this test pins the
 // exact behavior the daemon relies on.
 
-function mkFakeNodePty(rootDir: string, archDirs: string[]): string[] {
+function mkFakeNodePty(
+  rootDir: string,
+  archDirs: string[],
+  opts: { includeBuildRelease?: boolean } = {},
+): string[] {
   const created: string[] = [];
   const ptyRoot = join(rootDir, 'node_modules', 'node-pty');
   for (const arch of archDirs) {
@@ -19,9 +23,16 @@ function mkFakeNodePty(rootDir: string, archDirs: string[]): string[] {
     writeFileSync(helper, '#!/bin/sh\necho stub\n', 'utf-8');
     created.push(helper);
   }
-  // build/Release/spawn-helper — second location the helper checks.
+  // build/Release/spawn-helper — second candidate location. Optional
+  // because most tests only care about prebuilds; the dedicated
+  // build-release test opts in.
   const releaseDir = join(ptyRoot, 'build', 'Release');
   mkdirSync(releaseDir, { recursive: true });
+  if (opts.includeBuildRelease) {
+    const releaseHelper = join(releaseDir, 'spawn-helper');
+    writeFileSync(releaseHelper, '#!/bin/sh\necho stub\n', 'utf-8');
+    created.push(releaseHelper);
+  }
   return created;
 }
 
@@ -80,15 +91,59 @@ describe('ensureSpawnHelperExecutable', () => {
     expect(result.errors).toEqual([]);
   });
 
-  it('returns skipped:true on Windows', () => {
-    if (process.platform !== 'win32') {
-      // Can't directly test this branch without monkey-patching process.platform;
-      // assert the shape that callers depend on.
-      const result = ensureSpawnHelperExecutable(rootDir);
-      expect(result.skipped).toBe(false);
-      return;
-    }
+  it('fixes spawn-helper in build/Release alongside prebuilds', () => {
+    if (process.platform === 'win32') return;
+    const helpers = mkFakeNodePty(rootDir, ['darwin-arm64'], { includeBuildRelease: true });
+    for (const h of helpers) chmodSync(h, 0o644);
+
+    const result = ensureSpawnHelperExecutable(rootDir);
+
+    // Both prebuilds/darwin-arm64/spawn-helper AND build/Release/spawn-helper
+    // must be in `fixed`. Regression guard for the second candidate location.
+    expect(result.fixed.sort()).toEqual(helpers.sort());
+    expect(result.fixed.some(p => p.endsWith('build/Release/spawn-helper'))).toBe(true);
+  });
+
+  it.runIf(process.platform !== 'win32')('returns skipped:false on Unix (shape contract)', () => {
+    // On Unix the helper does real work. Just pin the shape callers depend on.
+    const result = ensureSpawnHelperExecutable(rootDir);
+    expect(result.skipped).toBe(false);
+  });
+
+  it.runIf(process.platform === 'win32')('returns skipped:true on Windows (early return)', () => {
     const result = ensureSpawnHelperExecutable(rootDir);
     expect(result.skipped).toBe(true);
+    expect(result.fixed).toEqual([]);
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'TS helper and standalone postinstall script agree on the same fixture',
+    async () => {
+      // Mirror-impl parity check. The standalone .mjs in scripts/ is hand-mirrored
+      // from src/utils/node-pty-perms.ts — this test catches drift mechanically
+      // rather than relying on the "if you change one, change the other" comment.
+      const helpers = mkFakeNodePty(rootDir, ['darwin-arm64', 'linux-x64'], { includeBuildRelease: true });
+
+      // Snapshot of "broken state" both implementations should resolve identically.
+      for (const h of helpers) chmodSync(h, 0o644);
+      const tsResult = ensureSpawnHelperExecutable(rootDir);
+      const tsFixedAfter = helpers.map(h => statSync(h).mode & 0o111);
+
+      // Reset to broken and let the standalone script handle it.
+      for (const h of helpers) chmodSync(h, 0o644);
+      const { execFileSync } = await import('child_process');
+      const scriptPath = join(__dirname, '..', '..', '..', 'scripts', 'ensure-node-pty-perms.mjs');
+      execFileSync(process.execPath, [scriptPath], {
+        cwd: rootDir,
+        env: { ...process.env },
+      });
+      const mjsFixedAfter = helpers.map(h => statSync(h).mode & 0o111);
+
+      // Both implementations must leave the fixture with identical final modes.
+      expect(mjsFixedAfter).toEqual(tsFixedAfter);
+      // And both should have actually set exec bits on every helper.
+      expect(tsResult.fixed.sort()).toEqual(helpers.sort());
+      for (const mode of mjsFixedAfter) expect(mode).not.toBe(0);
+    },
+  );
 });
