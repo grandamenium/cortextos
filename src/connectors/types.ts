@@ -119,6 +119,17 @@ export interface CallbackPayload {
   data: string;
   /** id of the message the user clicked the button on. */
   message_id: string;
+  /**
+   * Original provider payload (e.g. the full `TelegramCallbackQuery`).
+   * Required transitionally so FastChecker's callback-edit + answer-query
+   * paths (`fast-checker.ts:511-519, 592-595`) can cast back to the
+   * Telegram shape — PR2 keeps those paths Telegram-direct and PR3+
+   * will design the proper interactive-message lifecycle abstraction.
+   * Producers MUST populate; future connectors without a native shape
+   * may pass `null`.
+   * @internal @deprecated PR3+
+   */
+  raw: unknown;
 }
 
 export interface PollingHandlers {

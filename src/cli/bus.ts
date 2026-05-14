@@ -2377,24 +2377,51 @@ busCommand
   .description('StatusLine hook: writes context window % to state/context_status.json')
   .action(() => runHook('hook-context-status'));
 
+// PR2 of the pluggable-connectors stack renamed these hooks. New
+// canonical subcommands point at the new hook files; old subcommand
+// names are kept as @deprecated aliases that spawn the old (shim)
+// files. Each shim re-imports and calls the new hook's main().
+//
+// Old aliases will be removed in the release after this stack lands.
+
+busCommand
+  .command('hook-ask-user')
+  .description('PreToolUse hook: forward AskUserQuestion to the active connector')
+  .action(() => runHook('hook-ask-user'));
+
 busCommand
   .command('hook-ask-telegram')
-  .description('PreToolUse hook: forward AskUserQuestion to Telegram (cross-platform)')
+  .description('[deprecated, renamed to hook-ask-user] forward AskUserQuestion to Telegram')
   .action(() => runHook('hook-ask-telegram'));
 
 busCommand
+  .command('hook-permission-request')
+  .description('PermissionRequest hook: send approve/deny request via the active connector (tool-class-aware)')
+  .action(() => runHook('hook-permission-request'));
+
+busCommand
   .command('hook-permission-telegram')
-  .description('PermissionRequest hook: send approve/deny request to Telegram (cross-platform)')
+  .description('[deprecated, renamed to hook-permission-request] send approve/deny request to Telegram')
   .action(() => runHook('hook-permission-telegram'));
 
 busCommand
+  .command('hook-planmode-approval')
+  .description('ExitPlanMode hook: send plan for review via the active connector')
+  .action(() => runHook('hook-planmode-approval'));
+
+busCommand
   .command('hook-planmode-telegram')
-  .description('ExitPlanMode hook: send plan for review to Telegram (cross-platform)')
+  .description('[deprecated, renamed to hook-planmode-approval] send plan for review to Telegram')
   .action(() => runHook('hook-planmode-telegram'));
 
 busCommand
+  .command('hook-compact-outbound')
+  .description('PreCompact hook: notify user via the active connector when context compaction starts (#18)')
+  .action(() => runHook('hook-compact-outbound'));
+
+busCommand
   .command('hook-compact-telegram')
-  .description('PreCompact hook: notify user via Telegram when context compaction starts (#18)')
+  .description('[deprecated, renamed to hook-compact-outbound] notify user via Telegram when context compaction starts')
   .action(() => runHook('hook-compact-telegram'));
 
 busCommand

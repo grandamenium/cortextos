@@ -244,6 +244,7 @@ export class TelegramConnector implements MessageConnector {
       from: { id: query.from?.id !== undefined ? String(query.from.id) : '' },
       data: query.data ?? '',
       message_id: query.message?.message_id !== undefined ? String(query.message.message_id) : '',
+      raw: query,  // PR2 H1.v2 — FastChecker.handleCallback casts this back to TelegramCallbackQuery
     };
   }
 

@@ -89,6 +89,25 @@ export function loadEnv(): {
 }
 
 /**
+ * Read the agent's config.json (if present). Returns null when no config
+ * file exists or it can't be parsed — callers handle the "no config"
+ * case with sane defaults. PR2 of the pluggable-connectors stack added
+ * this helper so hooks can read `require_remote_approval` and other
+ * connector-aware fields without taking a dependency on the daemon.
+ */
+export function readAgentConfig(): { require_remote_approval?: boolean; connector?: 'telegram' | 'none' } | null {
+  const agentDir = process.env.CTX_AGENT_DIR;
+  if (!agentDir) return null;
+  const configPath = join(agentDir, 'config.json');
+  if (!existsSync(configPath)) return null;
+  try {
+    return JSON.parse(readFileSync(configPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Write a PermissionRequest decision to stdout and exit.
  */
 export function outputDecision(behavior: 'allow' | 'deny', message?: string): void {

@@ -198,6 +198,24 @@ export interface AgentConfig {
    */
   connector?: 'telegram' | 'none';
   /**
+   * @security Opt-in strict-mode for the permission hook. When `true`,
+   * tool calls that require permission are DENIED if no remote-approval
+   * channel is configured (the pre-PR2 hook-permission-telegram behavior).
+   * When `false` (default), the hook is tool-class-aware: safe read-only
+   * tools (Read/Glob/Grep/LS/NotebookRead) auto-allow; write/exec/network
+   * tools fall through to Claude Code's built-in terminal permission
+   * prompt by exiting 0 with no JSON output.
+   *
+   * Pre-PR2 agents with valid Telegram creds keep `connector` inferred to
+   * `'telegram'` and so retain today's deny-on-API-failure path via creds.
+   * Agents with `connector: 'none'` (or invalid Telegram creds inferred to
+   * `'none'`) start allow-by-default for read-only tools. Operators who
+   * want the old blanket-deny set this field to `true`.
+   *
+   * Added in pluggable-connectors PR2 (`work/feat-connector-hooks-cli/PLAN.md`).
+   */
+  require_remote_approval?: boolean;
+  /**
    * Whether this agent runs a Telegram poller. Defaults to true when absent
    * (preserves existing behaviour). Set to false on specialist agents that
    * should not own a Telegram bot — only the designated orchestrator agent
