@@ -11,6 +11,7 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { logEvent } from '../bus/event.js';
 
 type LogFn = (msg: string) => void;
 
@@ -58,6 +59,8 @@ export class AgentProcess {
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
   private telegramChatId: string | null = null;
+  // Cached paths for event logging (computed once at init to avoid repeated lookups)
+  private paths: ReturnType<typeof resolvePaths>;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -68,6 +71,7 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
+    this.paths = resolvePaths(env.ctxRoot, env.org, env.agentName);
   }
 
   /**
@@ -292,6 +296,21 @@ export class AgentProcess {
 
     if (this.dedup.isDuplicate(content)) {
       this.log('Dedup: skipping duplicate message');
+      // M-D3b: Log KPI event for duplicate drop so it appears in analytics
+      try {
+        logEvent(
+          this.paths,
+          this.env.agentName,
+          this.env.org,
+          'message',
+          'message_dropped_duplicate',
+          'warning',
+          { reason: 'duplicate_detected', contentLength: content.length },
+        );
+      } catch (err) {
+        // Non-fatal: event logging failure should not block message dedup
+        this.log(`Failed to log duplicate drop event: ${err}`);
+      }
       return false;
     }
 
