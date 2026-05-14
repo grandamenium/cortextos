@@ -13,12 +13,29 @@
  * codebase follows for bus messages.
  */
 
-// Provider-specific tagged-union shape needed by the existing
-// `FastChecker.formatTelegramReaction` formatter. Imported (not re-defined)
-// so reaction payloads stay byte-identical with current daemon behavior.
-import type { TelegramReactionType } from '../types/index.js';
-
 export type ConnectorKind = 'telegram' | 'none';
+
+/**
+ * Connector-agnostic reaction shape. PR4 c8 (Codex P1.F) lifted this
+ * out of the Telegram-specific `TelegramReactionType` tagged union so
+ * Discord, Mattermost, RocketChat, and Slack connectors can populate
+ * `NormalizedReactionPayload.{old,new}_reaction` natively.
+ *
+ * `kind`:
+ *   - `'unicode'` — `value` is the emoji character itself (Telegram
+ *     emoji reactions, Discord unicode reactions, Mattermost emoji
+ *     reactions referenced by their unicode codepoint, RocketChat
+ *     emoji reactions, Slack `:thumbsup:` shortcodes resolved to
+ *     unicode).
+ *   - `'custom'` — `value` is the provider's opaque custom-emoji id
+ *     (Telegram `custom_emoji_id`, Discord custom-emoji id,
+ *     Mattermost emoji_name, RocketChat shortcode). Renderers that
+ *     can't resolve the id fall back to a `[custom]` label.
+ */
+export interface ConnectorReaction {
+  kind: 'unicode' | 'custom';
+  value: string;
+}
 
 export interface ConnectorCapabilities {
   /** Connector supports inline-button rendering (Telegram inline_keyboard, Slack blocks, RocketChat attachment actions). */
@@ -112,14 +129,13 @@ export interface NormalizedMessage {
  * Reaction update payload — fires when a user adds, changes, or removes
  * an emoji reaction on a message the bot can see.
  *
- * PR1-pragma: this normalized payload carries the full Telegram tagged
- * union for reactions because `FastChecker.formatTelegramReaction` (the
- * existing formatter we route through) consumes that exact shape and
- * preserves custom-emoji info via the `{type:'custom_emoji',custom_emoji_id}`
- * variant. Matrix/RocketChat connectors will either translate their
- * native reaction shape to this Telegram shape OR a follow-up PR will
- * generalize the type (e.g. introducing `ConnectorReaction`). Out of
- * scope for this PR.
+ * PR4 c8 (Codex P1.F) generalized the `{old,new}_reaction` arrays from
+ * the Telegram-specific `TelegramReactionType` tagged union to the
+ * connector-agnostic `ConnectorReaction` shape and stringified
+ * `message_id` for cross-connector consistency. The Telegram connector
+ * translates Telegram's tagged union to `ConnectorReaction` at
+ * normalization time; future Discord / Mattermost / RocketChat
+ * connectors populate `ConnectorReaction` directly.
  */
 export interface NormalizedReactionPayload {
   /** Synthesized update id (Telegram has no native one): `${message_id}-${date}`. */
@@ -130,12 +146,12 @@ export interface NormalizedReactionPayload {
    *  chatId when absent — matches today's
    *  `reaction.chat?.id ?? chatId ?? ''` resolution. */
   chat_id?: string;
-  /** Number, not stringified — matches `formatTelegramReaction(messageId: number)`. */
-  message_id: number;
+  /** Stringified message id (provider-format-agnostic). */
+  message_id: string;
   /** Empty array means "no prior reaction". */
-  old_reaction: TelegramReactionType[];
+  old_reaction: ConnectorReaction[];
   /** Empty array means "user removed their reaction". */
-  new_reaction: TelegramReactionType[];
+  new_reaction: ConnectorReaction[];
   raw: unknown;
 }
 

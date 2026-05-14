@@ -8,6 +8,7 @@ import type {
   TelegramConnectorEnv,
   NormalizedMessage,
   NormalizedReactionPayload,
+  ConnectorReaction,
   CallbackPayload,
 } from '../types.js';
 import { TelegramAPI } from './api.js';
@@ -448,12 +449,24 @@ export class TelegramConnector implements MessageConnector {
         name: reaction.user?.first_name,
       },
       chat_id: reaction.chat?.id !== undefined ? String(reaction.chat.id) : undefined,
-      message_id: reaction.message_id,
-      old_reaction: reaction.old_reaction ?? [],
-      new_reaction: reaction.new_reaction ?? [],
+      // PR4 c8 (Codex P1.F): stringify message_id + translate the
+      // Telegram tagged-union reaction shape to the connector-agnostic
+      // `ConnectorReaction { kind: 'unicode' | 'custom', value: string }`.
+      message_id: String(reaction.message_id),
+      old_reaction: (reaction.old_reaction ?? []).map(this.toConnectorReaction),
+      new_reaction: (reaction.new_reaction ?? []).map(this.toConnectorReaction),
       raw: reaction,
     };
   }
+
+  /** Translate a single Telegram reaction-type variant to the
+   *  connector-agnostic `ConnectorReaction` shape. Arrow form so the
+   *  `.map(this.toConnectorReaction)` call site keeps `this` un-bound. */
+  private toConnectorReaction = (r: { type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }): ConnectorReaction => {
+    return r.type === 'emoji'
+      ? { kind: 'unicode', value: r.emoji }
+      : { kind: 'custom', value: r.custom_emoji_id };
+  };
 
   /**
    * Translate `processMediaMessage`'s `ProcessedMedia` shape into the

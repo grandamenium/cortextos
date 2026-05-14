@@ -557,7 +557,9 @@ export class AgentManager {
 
         const from = stripControlChars(r.from.name || r.from.username || 'Unknown');
         const reactionChatId = r.chat_id ?? chatId ?? '';
-        const formatted = FastChecker.formatTelegramReaction(
+        // PR4 c8: r.message_id is now string; r.old/new_reaction are
+        // ConnectorReaction[] (generalized from TelegramReactionType).
+        const formatted = FastChecker.formatReaction(
           from,
           reactionChatId,
           r.message_id,

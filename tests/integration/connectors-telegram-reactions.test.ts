@@ -4,10 +4,12 @@
  * custom_emoji) flow through `startPolling.onReaction` with the expected
  * NormalizedReactionPayload shape.
  *
- * This is the load-bearing test for the v0.5 H1.v4 fix: the payload
- * carries TelegramReactionType[] arrays (preserving custom-emoji info),
- * plus chat_id and numeric message_id, exactly matching what
- * FastChecker.formatTelegramReaction expects.
+ * PR4 c8 (Codex P1.F) generalized the payload's reaction arrays from
+ * `TelegramReactionType[]` to `ConnectorReaction[]`, and `message_id`
+ * from number to string. This test pins both the wire-shape translation
+ * (Telegram `{type:'emoji',emoji}` → `{kind:'unicode',value}`,
+ * Telegram `{type:'custom_emoji',custom_emoji_id}` →
+ * `{kind:'custom',value}`) and the stringified message_id.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { mkdirSync, rmSync } from 'fs';
@@ -62,7 +64,7 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
     }
   }
 
-  it('case (a) — add: old_reaction empty, new_reaction has one emoji', async () => {
+  it('case (a) — add: old_reaction empty, new_reaction has one unicode emoji', async () => {
     server.queueReaction({
       newReaction: [{ type: 'emoji', emoji: '👍' }],
     });
@@ -72,10 +74,11 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
     expect(received).toHaveLength(1);
     const r = received[0];
     expect(r.old_reaction).toEqual([]);
-    expect(r.new_reaction).toEqual([{ type: 'emoji', emoji: '👍' }]);
+    expect(r.new_reaction).toEqual([{ kind: 'unicode', value: '👍' }]);
     expect(r.from.id).toBe('67890');
     expect(r.chat_id).toBe('12345');
-    expect(typeof r.message_id).toBe('number');
+    // PR4 c8: stringified message_id
+    expect(typeof r.message_id).toBe('string');
   });
 
   it('case (b) — change: both arrays non-empty and different', async () => {
@@ -86,8 +89,8 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
     await waitForReactions(1);
     await connector.stopPolling();
 
-    expect(received[0].old_reaction).toEqual([{ type: 'emoji', emoji: '👍' }]);
-    expect(received[0].new_reaction).toEqual([{ type: 'emoji', emoji: '❤️' }]);
+    expect(received[0].old_reaction).toEqual([{ kind: 'unicode', value: '👍' }]);
+    expect(received[0].new_reaction).toEqual([{ kind: 'unicode', value: '❤️' }]);
   });
 
   it('case (c) — removal: old_reaction non-empty, new_reaction empty', async () => {
@@ -98,13 +101,13 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
     await waitForReactions(1);
     await connector.stopPolling();
 
-    expect(received[0].old_reaction).toEqual([{ type: 'emoji', emoji: '👍' }]);
+    expect(received[0].old_reaction).toEqual([{ kind: 'unicode', value: '👍' }]);
     expect(received[0].new_reaction).toEqual([]);
     // The "removal" signal is detectable: old non-empty, new empty.
     expect(received[0].old_reaction.length > 0 && received[0].new_reaction.length === 0).toBe(true);
   });
 
-  it('case (d) — custom_emoji: tagged union variant preserved', async () => {
+  it('case (d) — custom emoji: Telegram custom_emoji_id translates to ConnectorReaction kind=custom', async () => {
     server.queueReaction({
       newReaction: [{ type: 'custom_emoji', custom_emoji_id: 'premium-thumbs-up-id-12345' }],
     });
@@ -112,10 +115,8 @@ describe('TelegramConnector reactions (integration with mock server)', () => {
     await connector.stopPolling();
 
     const r = received[0].new_reaction[0];
-    expect(r.type).toBe('custom_emoji');
-    if (r.type === 'custom_emoji') {
-      expect(r.custom_emoji_id).toBe('premium-thumbs-up-id-12345');
-    }
+    expect(r.kind).toBe('custom');
+    expect(r.value).toBe('premium-thumbs-up-id-12345');
   });
 
   it('synthesizes a stable id from message_id + date', async () => {

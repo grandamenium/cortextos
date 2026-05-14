@@ -692,52 +692,55 @@ describe('FastChecker', () => {
     });
   });
 
-  describe('formatTelegramReaction', () => {
+  describe('formatReaction', () => {
+    // PR4 c8 (Codex P1.F): renamed from formatTelegramReaction, takes
+    // ConnectorReaction[] instead of Telegram tagged union, and string
+    // message_id instead of numeric.
     it('formats a newly-added emoji reaction with user, chat, and message ids', () => {
-      const result = FastChecker.formatTelegramReaction(
+      const result = FastChecker.formatReaction(
         'Alice',
         '123456789',
-        42,
+        '42',
         [],
-        [{ type: 'emoji', emoji: '👍' }],
+        [{ kind: 'unicode', value: '👍' }],
       );
       expect(result).toContain('=== REACTION from [USER: Alice] (chat_id:123456789) on message 42: 👍 ===');
     });
 
     it('renders multiple concurrent emojis joined by spaces', () => {
-      const result = FastChecker.formatTelegramReaction(
+      const result = FastChecker.formatReaction(
         'Alice',
         '1',
-        7,
+        '7',
         [],
         [
-          { type: 'emoji', emoji: '👍' },
-          { type: 'emoji', emoji: '🔥' },
+          { kind: 'unicode', value: '👍' },
+          { kind: 'unicode', value: '🔥' },
         ],
       );
       expect(result).toContain('on message 7: 👍 🔥 ===');
     });
 
     it('marks a cleared reaction as "removed <old>" when new_reaction is empty', () => {
-      const result = FastChecker.formatTelegramReaction(
+      const result = FastChecker.formatReaction(
         'Alice',
         '1',
-        9,
-        [{ type: 'emoji', emoji: '❤️' }],
+        '9',
+        [{ kind: 'unicode', value: '❤️' }],
         [],
       );
       expect(result).toContain('on message 9: removed ❤️ ===');
     });
 
-    it('renders custom_emoji as [custom_emoji] placeholder', () => {
-      const result = FastChecker.formatTelegramReaction(
+    it('renders custom-emoji reactions as [custom] placeholder', () => {
+      const result = FastChecker.formatReaction(
         'Alice',
         '1',
-        11,
+        '11',
         [],
-        [{ type: 'custom_emoji', custom_emoji_id: '5123456789012345678' }],
+        [{ kind: 'custom', value: '5123456789012345678' }],
       );
-      expect(result).toContain('on message 11: [custom_emoji] ===');
+      expect(result).toContain('on message 11: [custom] ===');
     });
   });
 

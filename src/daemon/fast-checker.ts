@@ -297,20 +297,26 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    *
    * `newReaction` is the current reaction state (an empty list means the
    * user REMOVED their reaction). `oldReaction` lets the formatter
-   * distinguish "added X" from "removed Y". Custom emoji (type=custom_emoji)
-   * render as [custom_emoji] since we don't resolve the custom_emoji_id.
+   * distinguish "added X" from "removed Y". Custom emoji (kind=custom)
+   * render as [custom] since we don't resolve the provider id.
+   *
+   * PR4 c8 (Codex P1.F) renamed `formatTelegramReaction` → `formatReaction`
+   * and generalized the reaction-array element shape from the
+   * Telegram-specific tagged union to the connector-agnostic
+   * `ConnectorReaction { kind: 'unicode' | 'custom'; value: string }`.
+   * `messageId` is now string (provider-agnostic).
    */
-  static formatTelegramReaction(
+  static formatReaction(
     from: string,
     chatId: string | number,
-    messageId: number,
-    oldReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
-    newReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
+    messageId: string,
+    oldReaction: import('../connectors/index.js').ConnectorReaction[],
+    newReaction: import('../connectors/index.js').ConnectorReaction[],
   ): string {
-    const render = (list: typeof newReaction): string =>
+    const render = (list: import('../connectors/index.js').ConnectorReaction[]): string =>
       list.length === 0
         ? '(none)'
-        : list.map((r) => (r.type === 'emoji' ? r.emoji : '[custom_emoji]')).join(' ');
+        : list.map((r) => (r.kind === 'unicode' ? r.value : '[custom]')).join(' ');
 
     const removed = newReaction.length === 0 && oldReaction.length > 0;
     const label = removed ? `removed ${render(oldReaction)}` : render(newReaction);
