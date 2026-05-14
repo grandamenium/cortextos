@@ -90,11 +90,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortextos bus hook-compact-telegram",
-            "timeout": 10
-          },
-          {
-            "type": "command",
             "command": "cortextos bus hook-extract-facts",
             "timeout": 15
           }

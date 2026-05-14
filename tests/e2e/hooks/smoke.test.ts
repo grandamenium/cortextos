@@ -296,38 +296,6 @@ describe('hook-context-status smoke', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 4: hook-compact-telegram
-// ---------------------------------------------------------------------------
-
-describe('hook-compact-telegram smoke', () => {
-  it('exits 0 silently when BOT_TOKEN / CHAT_ID are absent', () => {
-    // Base runHook env has no BOT_TOKEN or CHAT_ID — hook should no-op immediately.
-    const result = runHook(
-      'hook-compact-telegram',
-      {},
-      // Explicitly strip creds in case CI inherits them from process.env
-      { BOT_TOKEN: '', CHAT_ID: '' },
-    );
-
-    expect(result.exitCode).toBe(0);
-    // No JSON output expected — hook returns before writing anything
-    expect(result.output).toBeNull();
-  });
-
-  it('exits 0 even with fake credentials (network fail caught internally)', () => {
-    // Pass syntactically valid-looking but useless creds.
-    // fetch will throw or return non-2xx — hook catches all errors and still exits 0.
-    const result = runHook(
-      'hook-compact-telegram',
-      {},
-      { BOT_TOKEN: 'fake_bot_token_for_test', CHAT_ID: '000000000' },
-    );
-
-    expect(result.exitCode).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Test 5: hook-idle-flag
 // ---------------------------------------------------------------------------
 

@@ -3278,11 +3278,6 @@ busCommand
   .action(() => runHook('hook-planmode-telegram'));
 
 busCommand
-  .command('hook-compact-telegram')
-  .description('PreCompact hook: notify user via Telegram when context compaction starts (#18)')
-  .action(() => runHook('hook-compact-telegram'));
-
-busCommand
   .command('hook-idle-flag')
   .description('Stop hook: writes last_idle.flag timestamp so fast-checker knows agent finished its turn')
   .action(() => runHook('hook-idle-flag'));

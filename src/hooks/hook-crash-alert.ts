@@ -300,9 +300,10 @@ async function main(): Promise<void> {
   let message = '';
   switch (endType) {
     case 'planned-restart':
-      message = reason?.startsWith('CONTEXT-FORCE-RESTART')
-        ? `🔄 ${agentName} restarting with memory`
-        : `🔄 ${agentName} restarted (planned): ${reason || 'no reason given'}`;
+      // CONTEXT-FORCE-RESTART is a planned context-window reset — always silent
+      // (same behaviour as ctx-autoreset). Only surface other planned restarts.
+      if (reason?.startsWith('CONTEXT-FORCE-RESTART')) return;
+      message = `🔄 ${agentName} restarted (planned): ${reason || 'no reason given'}`;
       break;
     case 'session-refresh':
       message = `♻️ ${agentName} session refresh (context exhaustion). Restarting with fresh session.`;
