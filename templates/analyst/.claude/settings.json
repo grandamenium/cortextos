@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortextos bus hook-planmode-telegram",
+            "command": "cortextos bus hook-planmode-approval",
             "timeout": 1860
           }
         ]
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortextos bus hook-permission-telegram",
+            "command": "cortextos bus hook-permission-request",
             "timeout": 1860
           }
         ]
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortextos bus hook-ask-telegram",
+            "command": "cortextos bus hook-ask-user",
             "timeout": 10
           }
         ]
@@ -59,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cortextos bus hook-compact-telegram",
+            "command": "cortextos bus hook-compact-outbound",
             "timeout": 10
           }
         ]

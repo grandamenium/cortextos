@@ -1,5 +1,107 @@
 # CHANGELOG
 
+## [unreleased] — Pluggable Communications Connectors (PR1 + PR2)
+
+Extracts Telegram from being a hardcoded dependency into a pluggable
+`MessageConnector` interface. PR1 ships the seam; PR2 generalizes hooks
++ CLI + bus/approval + daemon-level paths so no-Telegram agents become
+first-class. Sets up Matrix + RocketChat as the named next-two-real
+connectors (separate future PRs).
+
+### Changed (BREAKING — security-relevant)
+- **`hook-permission-telegram` renamed `hook-permission-request` and now
+  uses tool-class-aware decisions when no remote-approval channel is
+  configured:** safe read-only tools (Read/Glob/Grep/LS/NotebookRead)
+  auto-allow; write/exec/network tools (Bash/Edit/Write/WebFetch/WebSearch)
+  fall through to Claude Code's built-in terminal permission prompt by
+  exiting 0 with no JSON output. Previous behavior (deny ALL on missing
+  creds) is available via `config.json` `require_remote_approval: true`.
+  This makes agents with `connector: 'none'` actually functional —
+  they can execute tool calls instead of being blocked at the
+  permission layer.
+
+  **Security posture shift for current Telegram users with misconfigured
+  creds:** Pre-PR2, an agent with a typo in `BOT_TOKEN` had Telegram API
+  calls fail at `hook-permission-telegram`, which exited non-zero and
+  Claude Code denied the tool. Post-PR2, the same agent has its
+  connector inferred as `'none'` by the legacy resolver, `require_remote_approval`
+  defaults to `false`, and read-only tools auto-allow. Operators who want
+  strict-deny set `require_remote_approval: true`.
+
+- **`hook-ask-telegram` → `hook-ask-user`**, **`hook-planmode-telegram` →
+  `hook-planmode-approval`**, **`hook-compact-telegram` →
+  `hook-compact-outbound`** — renamed for connector-agnostic naming.
+  Old CLI subcommand names (`cortextos bus hook-*-telegram`) preserved
+  as `[deprecated]` aliases for one release. JS file shims at old paths.
+  Template `.claude/settings.json` files updated to new names.
+
+- **`cortextos bus send-telegram` hard-errors with exit 1 for non-Telegram
+  connectors.** Helpful message tells operators to use `bus send` for
+  connector-agnostic messaging. For `connector: 'telegram'` or absent,
+  existing behavior preserved.
+
+### Added
+- **`MessageConnector` interface** at `src/connectors/` — pluggable
+  abstraction for user-facing messaging transports. Two implementations:
+  `TelegramConnector` (wraps existing `TelegramAPI`+`TelegramPoller`),
+  `NullConnector` (no-op). Factory `getConnector(kind, agentDir, env)`
+  with `CONNECTOR_ALLOWLIST = ['telegram', 'none']`.
+- **`AgentConfig.connector?: 'telegram' | 'none'`** — explicit connector
+  kind. When absent, the daemon's legacy-compat resolver infers from
+  `.env` (validated BOT_TOKEN + CHAT_ID + numeric ALLOWED_USER → telegram;
+  else none).
+- **`AgentConfig.inbound_polling?: boolean`** — connector-agnostic
+  successor to `telegram_polling`. Both honored; `inbound_polling` wins
+  when both set.
+- **`AgentConfig.require_remote_approval?: boolean`** — `@security` opt-in
+  for strict permission-hook mode.
+- **`cortextos bus send <agent> <message>`** — connector-agnostic
+  outbound CLI. Silent drop + stderr warn under `connector: 'none'`.
+  Supports `--image`, `--file`, `--plain-text`.
+- **`cortextos add-agent --connector <kind>`** flag (default: telegram).
+  `--connector none` skips `.env` stub and writes `connector: 'none'` to
+  config.json.
+- **`cortextos setup --connector <kind>`** non-interactive flag, plus
+  interactive "Connector choice" step in the wizard. None flow still
+  creates+enables the orchestrator (skips only Telegram-cred prompts).
+- **`getOperatorConnector()` helper** at `src/connectors/index.ts` for
+  daemon-level operator notifications.
+- **`MessageConnector.startPolling(handlers, opts?: { stateDir? })`** —
+  optional stateDir for the connector's poller state file (preserves
+  Telegram's historical `.telegram-offset` path through the wire migration).
+- **`CallbackPayload.raw: unknown`** — transitional field for FastChecker's
+  callback-edit + answer-query paths. PR3+ removes.
+
+### Migrated
+- `src/bus/approval.ts:pingAgentChatId` → `pingAgentViaConnector` uses
+  `getConnector(...)` instead of `new TelegramAPI(botToken)`. Honors
+  `config.connector === 'none'` for silent skip.
+- `src/daemon/index.ts:sendCrashLoopAlertBestEffort` — opt-out gate
+  via `CTX_OPERATOR_CONNECTOR=none`. Send remains synchronous via
+  `spawnSync('curl', ...)` because the daemon's uncaughtException
+  handler is a sync hot path.
+- FastChecker's 2 outbound `sendMessage` call sites route through
+  `this.connector.sendMessage(...)` when wired; legacy field fallback
+  during transition.
+
+### Deprecated (one release cycle)
+- `hook-*-telegram.ts` filenames (JS shims at old paths).
+- `cortextos bus hook-*-telegram` CLI subcommand names (aliased).
+- `AgentConfig.telegram_polling` (aliased to `inbound_polling`).
+- `TelegramConnector.rawTelegramApi()` — `@internal @deprecated PR3+`
+  escape hatch with CI grep guard limiting callers.
+- `src/telegram/*` deep imports (each old path is a 1-line re-export
+  from `src/connectors/telegram/*`).
+
+### Out of scope (deferred)
+- Implementing Matrix / RocketChat connectors — separate future PRs.
+- Webhook/websocket inbound transport — v1 is polling-only.
+- Activity channel pluggability.
+- Daemon-poller wire migration through `connector.startPolling()` —
+  PR3+ when the interactive-message lifecycle abstraction lands.
+- 4 of 6 FastChecker Telegram-direct call sites (`sendChatAction`,
+  `answerCallbackQuery`, `editMessageText`, activity-channel handler).
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.
