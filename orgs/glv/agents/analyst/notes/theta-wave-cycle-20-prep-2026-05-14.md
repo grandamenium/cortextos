@@ -77,6 +77,22 @@ Create dev cycle target: `collect_metrics_roster_completeness`
 
 ## Pre-Theta-Wave-Cycle-20 TODO
 
-- [ ] Confirm content liveness (still STALE 37h+, may need direct boss check via #internal-content Slack before cycle-20 fire)
-- [ ] Verify cycle-19 approval adjudication outcome (cycle-20 framing depends on KEEP vs DISCARD)
-- [ ] Check if Aiden picked upstream-sync window (if yes, cycle-20 may be deferred or scoped around it)
+- [x] Confirm content liveness — RESOLVED 2026-05-14 17:11Z via boss msg phrs4. Content alive-not-replying-via-bus (Vector C cloud-session-liveness instance — bus-ping → Slack-reply broken-roundtrip BY DESIGN). Mark alive, no restart.
+- [x] Verify cycle-19 approval adjudication — RESOLVED 2026-05-14 16:23Z. Aiden greenlit 9/10 KEEP via approval_1778739003_8d2g4. Cycle-20 framing = continuation w/ WRITE-ROUNDTRIP-GAP umbrella in measurement window.
+- [ ] Check if Aiden picked upstream-sync window (if yes, cycle-20 may be deferred or scoped around it) — still pending Aiden
+
+## Cycle-19 Measurement Window — Day-1 Observations (2026-05-14 → 2026-05-21)
+
+### Vector C cloud-session-liveness — FIRST WILD-CAUGHT INSTANCE
+- 2026-05-14 17:09Z: Content liveness ping (msg 1778749724494-analyst-2aaed sent 09:08Z) went unanswered via bus inbox 8h later
+- 2026-05-14 16:23Z: Content posted to #internal-reyco Slack with explicit ACK relay of the ping
+- Classification: Vector C VALIDATION not VIOLATION (umbrella predicted broken roundtrip for cloud-session agents; this is expected ground-state, not a bug)
+- Recurrence count for cycle-20 Phase 3 evaluation: Vector C = 1 (validation-class, not violation-class)
+
+### Detector H (CANDIDATE, not yet specced)
+- Bus-ping → Slack-reply cross-channel roundtrip detector
+- Sweep cloud-session agent owning channel for ACK or reply post within 4h of bus ping
+- Surface: cross-channel-acks.jsonl
+- Acceptance: cloud-session agents reachable across channel boundaries even when local-bus stale
+- Risks: Slack ACK parsing fragile, false-negatives likely on indirect responses
+- Status: candidate for cycle-20 dispatch consideration alongside Detector E + B + G
