@@ -12,6 +12,7 @@ import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
+import { logEvent } from '../bus/event.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
@@ -339,7 +340,16 @@ export class AgentManager {
         // inbound messages on a window where Eros replied to multiple
         // agents — the JSONL had the data but it never reached the
         // event log.
-        recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
+        try {
+          recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
+        } catch (err) {
+          log(`recordInboundTelegram FAILED for msg_id=${msg.message_id}: ${err}`);
+          logEvent(paths, name, resolvedOrg, 'error', 'inbound_persistence_failed', 'error', {
+            message_id: msg.message_id,
+            error: String(err),
+          });
+          throw err;
+        }
 
         // Check for media messages (photo, document, voice, audio, video, video_note)
         const isMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
