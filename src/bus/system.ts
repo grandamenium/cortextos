@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync, appendFileSync, writeFileSync } fro
 import { join, extname } from 'path';
 import { readdirSync } from 'fs';
 import { ensureDir } from '../utils/atomic.js';
+import { logEvent } from './event.js';
 import { TelegramAPI } from '../telegram/api.js';
 import type { BusPaths } from '../types/index.js';
 
@@ -80,12 +81,22 @@ export function selfRestart(paths: BusPaths, agentName: string, reason?: string)
  * on fast back-to-back unrelated dispatches. Context-overflow restarts
  * (FastChecker Tier-2/3) MUST NOT pass freshStart=true — those are not
  * dispatch-driven and shouldn't consume the cooldown window.
+ *
+ * Measurement-gap-fix Gap 1 (2026-05-15): when `freshStart=true` AND
+ * `org` is provided, emit a structured `action/fresh_restart_executed`
+ * JSONL event with `meta.dispatch_msg_id` set to `dispatchMsgId` (or
+ * null when the operator/agent called bus hard-restart by hand). The
+ * event closes the analyst's dispatch→hardRestart→fresh-session
+ * correlation gap. Context-overflow restarts emit no event because
+ * they don't pass freshStart=true.
  */
 export function hardRestart(
   paths: BusPaths,
   agentName: string,
   reason?: string,
   freshStart?: boolean,
+  org?: string,
+  dispatchMsgId?: string,
 ): void {
   const resolvedReason = reason || 'no reason specified';
 
@@ -112,6 +123,31 @@ export function hardRestart(
       timestamp + '\n',
       'utf-8',
     );
+
+    // measurement-gap-fix Gap 1: emit the JSONL event. Need a non-empty
+    // org because logEvent writes under {analyticsDir}/events/{agent}/
+    // and the analyst keys events by (agent, org). `resolveEnv()` returns
+    // `org = ''` when CTX_ORG is unset, so check truthiness (not just
+    // `!== undefined`) to also reject the empty-string case. Callers
+    // without a usable org (legacy tests, fast-checker context-overflow
+    // path) get the restart but no event — documented backwards-compat.
+    if (org) {
+      try {
+        logEvent(paths, agentName, org, 'action', 'fresh_restart_executed', 'info', {
+          agent: agentName,
+          reason: resolvedReason,
+          dispatch_msg_id: dispatchMsgId ?? null,
+        });
+      } catch (err) {
+        // Best-effort telemetry — a failing event write must not block
+        // the restart itself. Surface to stderr so the failure is at
+        // least observable to whoever is reading daemon logs.
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `[hardRestart] fresh_restart_executed event write failed for ${agentName}: ${msg}\n`,
+        );
+      }
+    }
   }
 }
 

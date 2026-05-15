@@ -687,11 +687,18 @@ busCommand
   .option('--reason <why>', 'Reason for restart')
   .option('--handoff-doc <path>', 'Path to handoff document to inject into next session boot prompt')
   .option('--fresh-start', 'Mark this as a dispatch-driven fresh-start (writes .last-fresh-restart-at; consumed by check-fresh-restart-cooldown to throttle thrash on rapid task transitions). DO NOT pass for context-overflow restarts (BL-004 Phase 3).')
-  .action(async (opts: { reason?: string; handoffDoc?: string; freshStart?: boolean }) => {
+  .option('--dispatch-msg-id <id>', 'Bus message id of the dispatch that triggered this fresh-restart — written to the fresh_restart_executed event meta for analyst dispatch→restart correlation (measurement-gap-fix 2026-05-15). Only meaningful with --fresh-start; ignored otherwise.')
+  .action(async (opts: { reason?: string; handoffDoc?: string; freshStart?: boolean; dispatchMsgId?: string }) => {
     const { writeFileSync: fsWrite, existsSync: fsExists, mkdirSync: fsMkdir } = require('fs');
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    hardRestart(paths, env.agentName, opts.reason, opts.freshStart);
+    if (opts.dispatchMsgId && !opts.freshStart) {
+      process.stderr.write(
+        '[hard-restart] --dispatch-msg-id ignored because --fresh-start was not passed; ' +
+        'no fresh_restart_executed event will be emitted (context-overflow restart path).\n',
+      );
+    }
+    hardRestart(paths, env.agentName, opts.reason, opts.freshStart, env.org, opts.dispatchMsgId);
     if (opts.handoffDoc && fsExists(opts.handoffDoc)) {
       fsMkdir(paths.stateDir, { recursive: true });
       fsWrite(join(paths.stateDir, '.handoff-doc-path'), opts.handoffDoc + '\n', 'utf-8');

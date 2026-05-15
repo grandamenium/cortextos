@@ -112,6 +112,75 @@ describe('Bus System', () => {
       const logContent = readFileSync(join(paths.logDir, 'restarts.log'), 'utf-8');
       expect(logContent).toContain('HARD-RESTART (fresh-start): fresh-start for unrelated');
     });
+
+    // measurement-gap-fix Gap 1 (2026-05-15) — fresh_restart_executed event
+    function readTodaysEvents(paths: BusPaths, agent: string): any[] {
+      const today = new Date().toISOString().split('T')[0];
+      const eventFile = join(paths.analyticsDir, 'events', agent, `${today}.jsonl`);
+      if (!existsSync(eventFile)) return [];
+      return readFileSync(eventFile, 'utf-8')
+        .trim()
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line));
+    }
+
+    it('emits fresh_restart_executed event when freshStart=true and org provided', () => {
+      const paths = makePaths(testDir);
+      hardRestart(paths, 'test-agent', 'fresh-start for task-X', true, 'sb-personal', 'msg-abc-123');
+      const events = readTodaysEvents(paths, 'test-agent');
+      const match = events.find((e) => e.event === 'fresh_restart_executed');
+      expect(match).toBeDefined();
+      expect(match.category).toBe('action');
+      expect(match.severity).toBe('info');
+      expect(match.org).toBe('sb-personal');
+      expect(match.metadata.agent).toBe('test-agent');
+      expect(match.metadata.reason).toBe('fresh-start for task-X');
+      expect(match.metadata.dispatch_msg_id).toBe('msg-abc-123');
+    });
+
+    it('emits event with dispatch_msg_id=null when freshStart=true but no msg-id passed', () => {
+      const paths = makePaths(testDir);
+      hardRestart(paths, 'test-agent', 'operator manual fresh-restart', true, 'sb-personal');
+      const events = readTodaysEvents(paths, 'test-agent');
+      const match = events.find((e) => e.event === 'fresh_restart_executed');
+      expect(match).toBeDefined();
+      expect(match.metadata.dispatch_msg_id).toBeNull();
+    });
+
+    it('does NOT emit event when freshStart is omitted (context-overflow restart path)', () => {
+      const paths = makePaths(testDir);
+      hardRestart(paths, 'test-agent', 'CONTEXT-FORCE-RESTART: tier-2', undefined, 'sb-personal');
+      const events = readTodaysEvents(paths, 'test-agent');
+      expect(events.find((e) => e.event === 'fresh_restart_executed')).toBeUndefined();
+    });
+
+    it('does NOT emit event when freshStart=false', () => {
+      const paths = makePaths(testDir);
+      hardRestart(paths, 'test-agent', 'planned restart', false, 'sb-personal', 'msg-should-be-ignored');
+      const events = readTodaysEvents(paths, 'test-agent');
+      expect(events.find((e) => e.event === 'fresh_restart_executed')).toBeUndefined();
+    });
+
+    it('falls through silently when freshStart=true but org omitted (backwards-compat)', () => {
+      const paths = makePaths(testDir);
+      hardRestart(paths, 'test-agent', 'legacy caller', true);
+      // Still writes the cooldown marker — restart path itself works.
+      expect(existsSync(join(paths.stateDir, '.last-fresh-restart-at'))).toBe(true);
+      // But no event because we can't key it without org.
+      const events = readTodaysEvents(paths, 'test-agent');
+      expect(events.find((e) => e.event === 'fresh_restart_executed')).toBeUndefined();
+    });
+
+    it('falls through silently when org=\'\' (resolveEnv default when CTX_ORG unset)', () => {
+      // resolveEnv returns org='' (not undefined) when CTX_ORG is unset, so
+      // a `!== undefined` guard would let it through and write a malformed
+      // event. Verify the truthy guard catches it.
+      const paths = makePaths(testDir);
+      hardRestart(paths, 'test-agent', 'fresh-start, empty org', true, '', 'msg-X');
+      const events = readTodaysEvents(paths, 'test-agent');
+      expect(events.find((e) => e.event === 'fresh_restart_executed')).toBeUndefined();
+    });
   });
 
   // BL-2026-05-08-004 Phase 3 — fresh-restart cooldown reader

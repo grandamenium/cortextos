@@ -60,7 +60,7 @@ If decision is "hard-restart with `--fresh-start`":
 
 ```bash
 git add -A && git commit -m "wip: pre-fresh-restart safety commit" || true
-cortextos bus hard-restart --fresh-start --reason "fresh-start for <new-task-summary>"
+cortextos bus hard-restart --fresh-start --dispatch-msg-id "<inbox-msg-id>" --reason "fresh-start for <new-task-summary>"
 ```
 
 If decision is "log skip and process in current session":
