@@ -296,6 +296,114 @@ describe('HeartbeatStalenessWatcher — fleet-resilience cleanup A (daemon JSONL
     expect(typeof rows[1].metadata.was_stale_for_seconds).toBe('number');
   });
 
+  it('idle-suppress: empty current_task past threshold → no alert, idle_suppressed event, lastAlertAt unchanged', () => {
+    const w = makeJsonlWatcher();
+    writeHeartbeat(11 * 60_000, ''); // 11 min stale, but agent is idle
+    w.tick();
+
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+    expect(w.isStale).toBe(false); // staleSince untouched on suppression
+
+    const rows = readDaemonEvents();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].event).toBe('heartbeat_idle_suppressed');
+    expect(rows[0].metadata).toMatchObject({ agent: AGENT });
+    expect(typeof rows[0].metadata.age_seconds).toBe('number');
+    expect(typeof rows[0].metadata.threshold_seconds).toBe('number');
+  });
+
+  it('idle→active transition: suppressed while idle, then alert fires when task is assigned and still stale', () => {
+    const w = makeJsonlWatcher();
+    writeHeartbeat(11 * 60_000, ''); // idle + stale
+    w.tick();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+
+    // Task now assigned; heartbeat still stale (cron hasn't fired yet).
+    writeHeartbeat(11 * 60_000, 'working on Y');
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
+
+    const rows = readDaemonEvents();
+    // First tick wrote idle_suppressed; second wrote stale_detected.
+    expect(rows.map((r) => r.event)).toEqual([
+      'heartbeat_idle_suppressed',
+      'heartbeat_stale_detected',
+    ]);
+  });
+
+  it('idle-suppress is local to the suppression path: a non-empty task agent still alerts at threshold (regression lock)', () => {
+    const w = makeJsonlWatcher();
+    writeHeartbeat(11 * 60_000, 'compiling shaders');
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
+    expect(w.isStale).toBe(true);
+  });
+
+  it('idle-suppress round-trip: stale→recovered→idle→active→stale resets lastAlertAt correctly across the cycle', () => {
+    const w = makeJsonlWatcher();
+
+    // Phase 1: agent with task goes stale → alert fires.
+    writeHeartbeat(11 * 60_000, 'phase-1-work');
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+
+    // Phase 2: heartbeat refreshes → recovered. lastAlertAt resets to null.
+    advance(2 * 60_000);
+    writeHeartbeat(0, 'phase-1-work');
+    w.tick();
+    expect(w.isStale).toBe(false);
+
+    // Phase 3: agent goes idle (no task) + heartbeat goes stale again.
+    // Long advance to ensure realertMs has elapsed since the phase-1 alert.
+    advance(45 * 60_000);
+    writeHeartbeat(11 * 60_000, '');
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1); // still just the phase-1 alert
+
+    // Phase 4: a task arrives while heartbeat is still stale. lastAlertAt was
+    // reset by recovered() in phase 2, so this fires immediately (not gated
+    // by leftover state from phase 1).
+    writeHeartbeat(11 * 60_000, 'phase-4-work');
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+
+    const events = readDaemonEvents().map((r) => r.event);
+    expect(events).toEqual([
+      'heartbeat_stale_detected',
+      'heartbeat_recovered',
+      'heartbeat_idle_suppressed',
+      'heartbeat_stale_detected',
+    ]);
+  });
+
+  it('whitespace-only current_task is treated as idle (no alert, idle_suppressed emitted)', () => {
+    const w = makeJsonlWatcher();
+    writeHeartbeat(11 * 60_000, '   ');
+    w.tick();
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+    const rows = readDaemonEvents();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].event).toBe('heartbeat_idle_suppressed');
+  });
+
+  it('idle-suppress does not block recovery: agent with task goes stale, then heartbeat refreshes → recovered fires', () => {
+    const w = makeJsonlWatcher();
+    writeHeartbeat(11 * 60_000, 'busy');
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
+
+    advance(2 * 60_000);
+    writeHeartbeat(0, 'busy');
+    w.tick();
+    expect(w.isStale).toBe(false);
+
+    const rows = readDaemonEvents();
+    expect(rows.map((r) => r.event)).toEqual([
+      'heartbeat_stale_detected',
+      'heartbeat_recovered',
+    ]);
+  });
+
   it('without instanceId+org, falls back to stderr-only (no JSONL row written)', () => {
     const w = new HeartbeatStalenessWatcher({
       agentName: AGENT,

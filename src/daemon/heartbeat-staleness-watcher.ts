@@ -12,6 +12,14 @@ import { logDaemonEvent } from './daemon-event-logger.js';
 // so as long as the agent is doing *anything* observable the file ticks.
 // When it goes silent past `thresholdMs` the watcher escalates.
 //
+// Idle-suppression: a "stale" agent with `current_task === ''` is on standby
+// by design — not hung. Standby agents only tick when their (typically 4h)
+// heartbeat cron fires, so any tighter threshold treats them as stale 99% of
+// the time. The watcher therefore alerts only when current_task is non-empty
+// (i.e. the agent is supposed to be active and observable). Suppressions emit
+// a `heartbeat_idle_suppressed` daemon event so analyst can still see the
+// quiet agents in metrics, but do not page the operator.
+//
 // Each agent owns one watcher (constructed by AgentManager.startAgent and
 // stopped in AgentManager.stopAgent). Per-agent ownership keeps lifecycle
 // piggybacked on existing teardown paths rather than threading a fleet-wide
@@ -128,9 +136,30 @@ export class HeartbeatStalenessWatcher {
 
     const thresholdSeconds = Math.floor(this.thresholdMs / 1000);
     if (ageSeconds * 1000 > this.thresholdMs) {
+      // Idle-suppression: standby agents legitimately go quiet between cron
+      // ticks. Alert only when current_task is non-empty (agent is supposed
+      // to be working). Do not advance staleSince/lastAlertAt — the next tick
+      // that finds a task assigned should treat this as a fresh transition.
+      if (!hb.lastHeartbeatTask?.trim()) {
+        this.emitIdleSuppressed(ageSeconds, thresholdSeconds);
+        return;
+      }
       this.flagStale(nowMs, ageSeconds, hb.lastHeartbeatTask, thresholdSeconds);
     } else if (this.staleSince !== null) {
       this.emitRecovered(nowMs);
+    }
+  }
+
+  private emitIdleSuppressed(ageSeconds: number, thresholdSeconds: number): void {
+    this.logger(
+      `[heartbeat-watcher] idle-suppressed agent="${this.agentName}" age_seconds=${ageSeconds}`,
+    );
+    if (this.instanceId && this.org !== undefined) {
+      logDaemonEvent(
+        this.ctxRoot, this.instanceId, this.org,
+        'action', 'heartbeat_idle_suppressed', 'info',
+        { agent: this.agentName, age_seconds: ageSeconds, threshold_seconds: thresholdSeconds },
+      );
     }
   }
 
