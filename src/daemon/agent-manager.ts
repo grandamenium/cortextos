@@ -10,7 +10,7 @@ import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
-import { resolveEnv } from '../utils/env.js';
+import { parseEnvFile, resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
@@ -135,6 +135,22 @@ export class AgentManager {
     return this.org;
   }
 
+  private isTelegramPollingEnabled(
+    config: AgentConfig | undefined,
+    agentEnv: Record<string, string>,
+  ): boolean {
+    const envValue = agentEnv.TELEGRAM_POLLING_ENABLED ?? agentEnv.TELEGRAM_LONG_POLLING;
+    if (envValue !== undefined) {
+      return /^(1|true|yes|on)$/i.test(envValue.trim());
+    }
+
+    if (typeof config?.telegram_polling === 'boolean') {
+      return config.telegram_polling;
+    }
+
+    return true;
+  }
+
   /**
    * Start a specific agent.
    *
@@ -205,15 +221,13 @@ export class AgentManager {
     let chatId: string | undefined;
     let allowedUserId: string | undefined;
     let botToken: string | undefined;
+    let agentEnv: Record<string, string> = {};
 
     if (existsSync(agentEnvFile)) {
-      const envContent = readFileSync(agentEnvFile, 'utf-8');
-      const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
-      const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
-      const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
-      botToken = botTokenMatch?.[1]?.trim();
-      chatId = chatIdMatch?.[1]?.trim();
-      allowedUserId = allowedUserMatch?.[1]?.trim() || undefined;
+      agentEnv = parseEnvFile(agentEnvFile);
+      botToken = agentEnv.BOT_TOKEN?.trim();
+      chatId = agentEnv.CHAT_ID?.trim();
+      allowedUserId = agentEnv.ALLOWED_USER?.trim() || undefined;
 
       // Validate BOT_TOKEN format: must be numeric_id:alphanumeric_secret
       if (botToken && !/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
@@ -310,10 +324,10 @@ export class AgentManager {
       }).catch(() => { /* non-fatal */ });
     }
 
-    // Start Telegram poller if credentials are available
-    if (telegramApi && chatId) {
+    // Start Telegram poller if credentials are available and enabled.
+    if (telegramApi && chatId && this.isTelegramPollingEnabled(config, agentEnv)) {
       const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir);
+      const poller = new TelegramPoller(telegramApi, stateDir, 1000, undefined, name);
 
       poller.onMessage((msg) => {
         // ALLOWED_USER gate: if configured, ignore messages from other users.
@@ -472,7 +486,7 @@ export class AgentManager {
       const entry = this.agents.get(name);
       if (entry) entry.poller = poller;
 
-      log('Telegram poller started');
+      log(`Telegram poller started (${name})`);
 
       // Orchestrator-only: start a second poller for the org's activity
       // channel bot so Telegram inline-button callbacks (currently just
@@ -483,6 +497,8 @@ export class AgentManager {
       // singleton or Telegram webhook if the coupling ever causes real
       // operator pain. Non-orchestrator agents skip this entirely.
       await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+    } else if (telegramApi && chatId) {
+      log('Telegram poller disabled by config/env; outbound notifications remain enabled');
     }
   }
 
@@ -545,7 +561,7 @@ export class AgentManager {
     // offsetFileSuffix keeps the activity poller's offset file distinct
     // from the primary bot's .telegram-offset — without this they would
     // clobber each other in the same stateDir.
-    const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity');
+    const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity', `${name}:activity`);
 
     activityPoller.onCallback((query) => {
       const entry = this.agents.get(name);

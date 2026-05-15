@@ -232,6 +232,52 @@ describe('AgentManager.discoverAndStart - BUG-043 fix (multi-org support)', () =
   });
 });
 
+describe('AgentManager Telegram poller preference', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-poller-pref-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('defaults to polling enabled for existing agents', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    expect((am as any).isTelegramPollingEnabled({}, {})).toBe(true);
+  });
+
+  it('honors config-level polling disablement', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    expect((am as any).isTelegramPollingEnabled({ telegram_polling: false }, {})).toBe(false);
+  });
+
+  it('lets env override config-level polling disablement', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    expect((am as any).isTelegramPollingEnabled(
+      { telegram_polling: false },
+      { TELEGRAM_POLLING_ENABLED: 'true' },
+    )).toBe(true);
+  });
+
+  it('accepts TELEGRAM_LONG_POLLING=false as an env kill switch', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+
+    expect((am as any).isTelegramPollingEnabled(
+      {},
+      { TELEGRAM_LONG_POLLING: 'false' },
+    )).toBe(false);
+  });
+});
+
 describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', () => {
   let testDir: string;
   let ctxRoot: string;
