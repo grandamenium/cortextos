@@ -16,6 +16,7 @@ function buildAllowedOrigins(): string[] {
     ['NEXTAUTH_URL', process.env.NEXTAUTH_URL],
     ['DASHBOARD_URL', process.env.DASHBOARD_URL],
     ['MOBILE_APP_ORIGIN', process.env.MOBILE_APP_ORIGIN],
+    ['HUB_ORIGIN', process.env.HUB_ORIGIN],
   ];
 
   const validated: string[] = [];
