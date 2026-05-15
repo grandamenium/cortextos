@@ -8,7 +8,7 @@ vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { readMaxCrashesPerDay, notifyAgents } from '../../../src/hooks/hook-crash-alert';
+import { readMaxCrashesPerDay, notifyAgents, classifySessionEndFallthrough, NON_CRASH_REASONS } from '../../../src/hooks/hook-crash-alert';
 
 describe('readMaxCrashesPerDay', () => {
   let tmp: string;
@@ -143,5 +143,53 @@ describe('notifyAgents', () => {
     })).not.toThrow();
     // Second recipient still attempted
     expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('classifySessionEndFallthrough', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'crashalert-fallthrough-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('returns crash when reason is empty and no cookie exists', () => {
+    expect(classifySessionEndFallthrough({ sessionEndReason: '', stateDir: tmp })).toBe('crash');
+  });
+
+  it('returns crash when reason is "other" (not in NON_CRASH_REASONS)', () => {
+    expect(classifySessionEndFallthrough({ sessionEndReason: 'other', stateDir: tmp })).toBe('crash');
+  });
+
+  it.each([...NON_CRASH_REASONS])('reclassifies "%s" as a session-event-{reason} type', (reason) => {
+    expect(classifySessionEndFallthrough({ sessionEndReason: reason, stateDir: tmp }))
+      .toBe(`session-event-${reason}`);
+  });
+
+  it('returns planned-restart-aftershock when cookie is fresh', () => {
+    writeFileSync(join(tmp, '.recent-planned-restart-at'), String(Date.now()), 'utf-8');
+    expect(classifySessionEndFallthrough({ sessionEndReason: '', stateDir: tmp }))
+      .toBe('planned-restart-aftershock');
+  });
+
+  it('returns crash when cookie is older than 60s', () => {
+    const staleTs = Date.now() - 61_000;
+    writeFileSync(join(tmp, '.recent-planned-restart-at'), String(staleTs), 'utf-8');
+    expect(classifySessionEndFallthrough({ sessionEndReason: '', stateDir: tmp })).toBe('crash');
+  });
+
+  it('non-crash reason takes priority over fresh cookie', () => {
+    writeFileSync(join(tmp, '.recent-planned-restart-at'), String(Date.now()), 'utf-8');
+    expect(classifySessionEndFallthrough({ sessionEndReason: 'clear', stateDir: tmp }))
+      .toBe('session-event-clear');
+  });
+
+  it('returns crash when cookie file contains non-numeric content', () => {
+    writeFileSync(join(tmp, '.recent-planned-restart-at'), 'not-a-number', 'utf-8');
+    expect(classifySessionEndFallthrough({ sessionEndReason: '', stateDir: tmp })).toBe('crash');
   });
 });

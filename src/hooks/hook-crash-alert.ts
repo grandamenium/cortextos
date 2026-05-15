@@ -13,6 +13,12 @@
  *   - Deduplicates identical alerts for the same agent within 10 minutes so a
  *     broken watchdog loop results in at most one notification, not a buzz
  *     storm.
+ *   - Reads SessionEnd reason from stdin (Claude Code hook payload). Non-crash
+ *     reasons (clear, logout, prompt_input_submit, compact) are reclassified as
+ *     session-event-{reason} and suppressed — no Telegram, no crash count.
+ *   - Writes a .recent-planned-restart-at cookie when a planned end type is
+ *     detected. A second SessionEnd that fires within 60s with no marker is
+ *     reclassified as planned-restart-aftershock and suppressed.
  */
 import { existsSync, readFileSync, writeFileSync, appendFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
 import { join } from 'path';
@@ -22,6 +28,11 @@ import { execFile } from 'child_process';
 const DEDUP_WINDOW_MS = 10 * 60 * 1000;         // 10 minutes
 const QUIET_HOUR_START_LA = 22;                 // 22:00 America/Los_Angeles
 const QUIET_HOUR_END_LA = 7;                    // 07:00 America/Los_Angeles
+const AFTERSHOCK_WINDOW_MS = 60_000;            // 60 seconds
+
+// SessionEnd reasons from Claude Code that indicate a clean/intentional exit,
+// not a crash. These are reclassified to session-event-{reason} and suppressed.
+export const NON_CRASH_REASONS = new Set(['clear', 'logout', 'prompt_input_submit', 'compact']);
 
 // End types that are routine and should be suppressed during quiet hours.
 // "crash" is deliberately NOT in this list — a genuine unexpected crash at
@@ -34,6 +45,7 @@ const QUIET_SUPPRESSED_TYPES = new Set([
   'user-disable',
   'user-stop',
   'rate-limited',
+  'planned-restart-aftershock',
 ]);
 
 function isQuietHoursLA(now: Date): boolean {
@@ -148,6 +160,61 @@ function shouldSuppressDedup(stateDir: string, endType: string): boolean {
   return false;
 }
 
+/**
+ * Read the SessionEnd reason from the Claude Code hook payload on stdin.
+ * Returns empty string if stdin is unavailable or the payload is non-JSON.
+ */
+function readSessionEndReason(): string {
+  try {
+    const raw = readFileSync(0, 'utf-8').trim();
+    if (!raw) return '';
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return typeof parsed.reason === 'string' ? parsed.reason : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Write a cookie recording the timestamp of the most recent planned end type
+ * so that a second SessionEnd within 60s can be recognised as an aftershock.
+ */
+function writePlannedRestartCookie(stateDir: string): void {
+  try {
+    writeFileSync(join(stateDir, '.recent-planned-restart-at'), String(Date.now()), 'utf-8');
+  } catch { /* ignore */ }
+}
+
+/**
+ * Apply the two false-positive suppression rules when no marker was found and
+ * rate-limit detection did not match. Returns the final endType string.
+ *
+ * Rule 1 — non-crash SessionEnd reason: clear/logout/prompt_input_submit/compact
+ *   → reclassify as session-event-{reason}, suppress Telegram + crash count
+ *
+ * Rule 2 — planned-restart aftershock: a second SessionEnd within 60s of a
+ *   planned restart (cookie present and fresh)
+ *   → reclassify as planned-restart-aftershock, suppress Telegram + crash count
+ *
+ * Exported for unit testing.
+ */
+export function classifySessionEndFallthrough(opts: {
+  sessionEndReason: string;
+  stateDir: string;
+}): string {
+  if (NON_CRASH_REASONS.has(opts.sessionEndReason)) {
+    return `session-event-${opts.sessionEndReason}`;
+  }
+  const cookiePath = join(opts.stateDir, '.recent-planned-restart-at');
+  try {
+    const ts = parseInt(readFileSync(cookiePath, 'utf-8').trim(), 10);
+    if (!isNaN(ts) && Date.now() - ts < AFTERSHOCK_WINDOW_MS) {
+      return 'planned-restart-aftershock';
+    }
+  } catch { /* no cookie — genuine crash */ }
+  return 'crash';
+}
+
 async function main(): Promise<void> {
   const agentName = process.env.CTX_AGENT_NAME;
   const instanceId = process.env.CTX_INSTANCE_ID || 'default';
@@ -159,6 +226,10 @@ async function main(): Promise<void> {
 
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });
+
+  // Read SessionEnd reason from Claude Code hook stdin payload before anything
+  // else so we have it available for fallthrough classification below.
+  const sessionEndReason = readSessionEndReason();
 
   // Determine end type from state markers (written by other parts of the system
   // before the Claude Code session exits).
@@ -190,6 +261,12 @@ async function main(): Promise<void> {
     }
   }
 
+  // When a planned end type is detected, stamp a cookie so a second SessionEnd
+  // that fires shortly after (the "aftershock") can be suppressed.
+  if (endType !== 'crash' && endType !== 'daemon-crashed') {
+    writePlannedRestartCookie(stateDir);
+  }
+
   // If no marker matched but the stdout tail shows a rate-limit signature,
   // reclassify as rate-limited. Prevents the 30-minute 🚨 CRASH buzz storm
   // when the weekly limit is exhausted.
@@ -199,6 +276,12 @@ async function main(): Promise<void> {
       endType = 'rate-limited';
       reason = 'anthropic rate limit detected in stdout.log';
     }
+  }
+
+  // Apply false-positive suppression for non-crash SessionEnd reasons and
+  // planned-restart aftershocks.
+  if (endType === 'crash') {
+    endType = classifySessionEndFallthrough({ sessionEndReason, stateDir });
   }
 
   // Track crash count (real crashes only).
@@ -235,8 +318,9 @@ async function main(): Promise<void> {
   } catch { /* ignore */ }
 
   // Always log to crashes.log — we want visibility even when alerts are muted.
+  // Include sessionend_reason for diagnostic visibility on suppressed events.
   const timestamp = new Date().toISOString();
-  const logLine = `${timestamp} type=${endType} reason=${reason || 'none'} last_task=${lastTask}\n`;
+  const logLine = `${timestamp} type=${endType} reason=${reason || 'none'} last_task=${lastTask} sessionend_reason=${sessionEndReason || 'none'}\n`;
   try {
     appendFileSync(join(logDir, 'crashes.log'), logLine);
   } catch { /* ignore */ }
@@ -297,6 +381,15 @@ async function main(): Promise<void> {
       message = `🚨 CRASH: ${agentName} died unexpectedly.`;
       if (crashCount > 0) message += ` Crashes today: ${crashCount}.`;
       if (lastTask) message += `\nLast status: ${lastTask}`;
+      break;
+    // Suppressed types — logged to crashes.log but no Telegram alert.
+    // planned-restart-aftershock: second SessionEnd fired within 60s of a
+    //   planned restart (Claude Code emits SessionEnd twice on some exit paths).
+    // session-event-*: clean Claude Code exits (clear/logout/compact/etc.) that
+    //   are not crashes — most commonly auto-compact after a heavy session.
+    case 'planned-restart-aftershock':
+    default:
+      // message stays '' — if (message) guard below prevents any send
       break;
   }
 
