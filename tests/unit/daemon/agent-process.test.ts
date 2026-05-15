@@ -262,6 +262,106 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
   });
 });
 
+// Theta-wave 2026-05-15: crash-notification idle-gating. exit_code=0 with a
+// fresh heartbeat is a clean idle exit, not a crash. The gate suppresses the
+// crash-budget bump, the CRASH row, and the Telegram alert that follows them,
+// while preserving the audit trail via an IDLE-EXIT line and an auto-restart.
+describe('AgentProcess - idle-exit gate (theta-wave 2026-05-15)', () => {
+  // Stub readHeartbeatStatus's fs read so each test can dictate heartbeat age.
+  // The helper reads `${ctxRoot}/state/${name}/heartbeat.json` and computes
+  // age from `last_heartbeat`. Wiring an ISO timestamp `now - ageMs` here
+  // gives the gate exactly the heartbeat age the test wants.
+  function mockHeartbeatAgeMs(ageMs: number): void {
+    const ts = new Date(Date.now() - ageMs).toISOString();
+    const heartbeatJson = JSON.stringify({ last_heartbeat: ts, current_task: '' });
+    fsMocks.existsSync.mockImplementation((p: any) =>
+      String(p).endsWith('/state/alice/heartbeat.json'),
+    );
+    fsMocks.readFileSync.mockImplementation((p: any) => {
+      if (String(p).endsWith('/state/alice/heartbeat.json')) return heartbeatJson;
+      return '';
+    });
+  }
+
+  it('exitCode=0 + fresh heartbeat → idle path (no CRASH, no crash-bump, no Telegram trigger)', async () => {
+    mockHeartbeatAgeMs(5 * 60_000); // 5 min — well inside the 30-min gate.
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    const statusEvents: string[] = [];
+    ap.onStatusChanged((s) => statusEvents.push(s.status));
+    await ap.start();
+
+    capturedOnExit!(0, 0);
+
+    // Status transitions to 'stopped' (not 'crashed') — the Telegram
+    // subscriber in agent-manager.onStatusChanged only fires on 'crashed'
+    // and 'halted', so a 'stopped' transition naturally skips the alert.
+    expect(ap.getStatus().status).toBe('stopped');
+    expect(statusEvents).toContain('stopped');
+    expect(statusEvents).not.toContain('crashed');
+    // Crash budget untouched — this exit is NOT charged to the daily cap.
+    expect(ap.getStatus().crashCount ?? 0).toBe(0);
+    // Audit row IS written so operators can still see every PTY exit, but
+    // with kind=IDLE-EXIT so log scanners can distinguish from real crashes.
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    const [logPath, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logPath)).toContain('/logs/alice/restarts.log');
+    expect(String(logLine)).toMatch(/\] IDLE-EXIT: exit_code=0 hb_age_s=\d+ backoff_s=5\b/);
+  });
+
+  it('exitCode=0 + stale heartbeat → crash path (gate fails open — real CRASH)', async () => {
+    // 45 min ≥ 30-min gate window. This is the genuine-crash-with-zero-exit
+    // shape: the agent stopped heartbeating before the exit, so the gate
+    // refuses to swallow the alert.
+    mockHeartbeatAgeMs(45 * 60_000);
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(1);
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    expect(String(fsMocks.appendFileSync.mock.calls[0][1])).toMatch(/\] CRASH: exit_code=0/);
+  });
+
+  it('exitCode≠0 + fresh heartbeat → crash path (gate keyed on BOTH conditions)', async () => {
+    // Heartbeat freshness alone must NOT swallow a non-zero exit — that's a
+    // genuine crash the operator needs to see, regardless of heartbeat state.
+    mockHeartbeatAgeMs(2 * 60_000);
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(1);
+    expect(String(fsMocks.appendFileSync.mock.calls[0][1])).toMatch(/\] CRASH: exit_code=1/);
+  });
+
+  it('stopRequested=true + exit=0 → existing short-circuit still wins (gate never runs)', async () => {
+    // Planned shutdown (HARD-RESTART / stop()): the stopRequested guard fires
+    // before the idle-exit gate. No IDLE-EXIT row, no CRASH row, no restart.
+    mockHeartbeatAgeMs(5 * 60_000); // would otherwise trigger the idle gate
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const stopPromise = ap.stop();
+    await new Promise(r => setTimeout(r, 50));
+    capturedOnExit!(0, 0);
+    await stopPromise;
+
+    expect(ap.getStatus().status).toBe('stopped');
+    // The IDLE-EXIT branch must NOT have written to restarts.log — only
+    // the stopRequested short-circuit fired.
+    const writtenKinds = fsMocks.appendFileSync.mock.calls
+      .map(([, line]) => String(line))
+      .filter(line => /\] (CRASH|IDLE-EXIT): /.test(line));
+    expect(writtenKinds).toEqual([]);
+  }, 10000);
+});
+
 describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
   it('fires sessionRefresh when config on disk still matches original short duration', async () => {
     const refreshSpy = vi.fn().mockResolvedValue(undefined);

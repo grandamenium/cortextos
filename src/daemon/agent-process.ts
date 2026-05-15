@@ -28,6 +28,18 @@ type LogFn = (msg: string) => void;
  * Replaces agent-wrapper.sh for one agent.
  */
 export class AgentProcess {
+  // Idle-exit gate window: how fresh the heartbeat must be for an exit_code=0
+  // PTY exit to be classified as a clean idle exit instead of a crash. 30 min
+  // covers the longest healthy heartbeat cycle in the fleet (4h heartbeat cron
+  // refreshes well within the window for the 5-second exit-handling slice we
+  // care about; standby agents refresh on bus ops within their session).
+  // Exposed as a static so tests can swap it via a getter override.
+  private static readonly IDLE_EXIT_HEARTBEAT_GATE_MS = 30 * 60_000;
+  // Backoff before re-spawning after an idle exit. Kept short (matches the
+  // first crash-recovery slot) — the agent is healthy, not broken; we just
+  // need to be back online before the next cron tick.
+  private static readonly IDLE_RESTART_BACKOFF_MS = 5_000;
+
   readonly name: string;
   private env: CtxEnv;
   private config: AgentConfig;
@@ -535,6 +547,35 @@ export class AgentProcess {
       return;
     }
 
+    // Idle-exit gate (theta-wave 2026-05-15): some PTY exits are exit_code=0
+    // because the agent's session-refresh / idle-timeout cron retired the
+    // process cleanly between handleExit firing and the daemon's stopAgent()
+    // path setting stopRequested. Without this gate every such exit walked
+    // the crash branch — bumped .crash_count_today, wrote a CRASH row, and
+    // fired a Telegram alert about a self-healed event. Saurav saw 5 such
+    // alerts during the 2026-05-15T01:09:33Z fleet-wide idle window.
+    //
+    // Heartbeat freshness is the load-bearing safety net for a misclassification:
+    //   - clean idle exit  → heartbeat refreshed minutes ago → gate fires
+    //   - real silent crash → heartbeat went stale long before the exit → gate misses, real CRASH path runs
+    // The gate intentionally requires BOTH exitCode=0 AND a fresh heartbeat;
+    // either alone is insufficient.
+    if (exitCode === 0 && this.isWithinIdleExitWindow()) {
+      this.appendCrashToRestartsLog(exitCode, AgentProcess.IDLE_RESTART_BACKOFF_MS, 'IDLE-EXIT');
+      this.status = 'stopped';
+      this.notifyStatusChange();
+      // Brief restart so the agent is back online before the next cron tick.
+      // status='stopped' (not 'crashed') means the Telegram subscriber in
+      // agent-manager.onStatusChanged skips this transition entirely — no
+      // operator alert, no crash-budget bump, no recovery ping.
+      setTimeout(() => {
+        if (this.status === 'stopped' && !this.stopping && !this.stopRequested) {
+          this.start().catch(err => this.log(`Idle-exit restart failed: ${err}`));
+        }
+      }, AgentProcess.IDLE_RESTART_BACKOFF_MS);
+      return;
+    }
+
     // Check crash limit
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];
@@ -800,7 +841,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'SPAWN-FAIL' | 'SPAWN-FAIL-HALTED',
+    kind: 'CRASH' | 'HALTED' | 'SPAWN-FAIL' | 'SPAWN-FAIL-HALTED' | 'IDLE-EXIT',
     errSignature?: string,
   ): void {
     try {
@@ -814,6 +855,11 @@ export class AgentProcess {
         details = `crash_count=${this.crashCount} backoff_s=${backoffMs / 1000} err=${errSignature ?? 'unknown'}`;
       } else if (kind === 'SPAWN-FAIL-HALTED') {
         details = `crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay} err=${errSignature ?? 'unknown'}`;
+      } else if (kind === 'IDLE-EXIT') {
+        // crash_count intentionally omitted — IDLE-EXIT does not bump the
+        // budget. hb_age_s is the load-bearing field for forensic analysis.
+        const hbAgeS = Math.floor(this.heartbeatAgeMs() / 1000);
+        details = `exit_code=${exitCode} hb_age_s=${hbAgeS} backoff_s=${backoffMs / 1000}`;
       } else {
         details = `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       }
@@ -822,6 +868,30 @@ export class AgentProcess {
     } catch {
       /* swallow — never break crash recovery on a logging failure */
     }
+  }
+
+  /**
+   * Read the agent's last heartbeat from disk and return its age in ms.
+   * Returns Number.MAX_SAFE_INTEGER if the heartbeat file is missing or
+   * unreadable — that classifies as "stale" for the idle-exit gate, which
+   * conservatively routes ambiguous cases through the original crash path.
+   */
+  private heartbeatAgeMs(): number {
+    const status = readHeartbeatStatus(this.env.ctxRoot, this.name);
+    if (status.lastHeartbeatAgeSeconds === undefined) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    return status.lastHeartbeatAgeSeconds * 1000;
+  }
+
+  /**
+   * Predicate for the idle-exit gate. `true` when the heartbeat was refreshed
+   * recently enough that we trust the exit was a clean idle/refresh exit
+   * rather than a silent crash. Pulled into its own method so tests can
+   * deterministically toggle the gate state.
+   */
+  private isWithinIdleExitWindow(): boolean {
+    return this.heartbeatAgeMs() < AgentProcess.IDLE_EXIT_HEARTBEAT_GATE_MS;
   }
 
   /**

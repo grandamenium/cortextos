@@ -885,7 +885,8 @@ export interface AgentStatus {
     | 'SPAWN-FAIL'
     | 'SPAWN-FAIL-HALTED'
     | 'SELF-RESTART'
-    | 'HARD-RESTART';
+    | 'HARD-RESTART'
+    | 'IDLE-EXIT';
   /** Age in seconds of the most recent spawn-failure event for this agent.
    * `null` means definitively no spawn-failure on record; `undefined` means
    * the history file couldn't be read. */

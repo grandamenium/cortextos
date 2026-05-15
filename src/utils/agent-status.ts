@@ -20,15 +20,21 @@ interface SpawnFailureHistoryReadOnly {
 
 // Restart-log kinds written by the daemon and the bus system module.
 // Keep in lock-step with the writers at:
-//   src/daemon/agent-process.ts:722 (CRASH / HALTED / SPAWN-FAIL / SPAWN-FAIL-HALTED)
+//   src/daemon/agent-process.ts:722 (CRASH / HALTED / SPAWN-FAIL / SPAWN-FAIL-HALTED / IDLE-EXIT)
 //   src/bus/system.ts:69, 103       (SELF-RESTART / HARD-RESTART)
+//
+// IDLE-EXIT is the audit row for a crash-gated idle exit (exit_code=0 inside
+// the heartbeat-fresh window). It is NOT a crash — the gate suppresses the
+// alert path and the crash-budget bump — but operators still need a durable
+// trace of every PTY exit, so the row lands in restarts.log alongside CRASH.
 export type RestartKind =
   | 'CRASH'
   | 'HALTED'
   | 'SPAWN-FAIL'
   | 'SPAWN-FAIL-HALTED'
   | 'SELF-RESTART'
-  | 'HARD-RESTART';
+  | 'HARD-RESTART'
+  | 'IDLE-EXIT';
 
 const RESTART_KINDS: ReadonlySet<RestartKind> = new Set([
   'CRASH',
@@ -37,6 +43,7 @@ const RESTART_KINDS: ReadonlySet<RestartKind> = new Set([
   'SPAWN-FAIL-HALTED',
   'SELF-RESTART',
   'HARD-RESTART',
+  'IDLE-EXIT',
 ]);
 
 export interface HeartbeatStatusFields {
