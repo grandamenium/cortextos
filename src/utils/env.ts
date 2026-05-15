@@ -1,7 +1,7 @@
 import { readFileSync, existsSync, writeFileSync } from 'fs';
 import { join, basename } from 'path';
-import { homedir } from 'os';
-import type { CtxEnv } from '../types/index.js';
+import { homedir, platform } from 'os';
+import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { ensureDir } from './atomic.js';
 import { validateAgentName, validateOrgName } from './validate.js';
 
@@ -162,6 +162,99 @@ export function parseEnvFile(filePath: string): Record<string, string> {
     // Ignore read errors
   }
   return result;
+}
+
+/**
+ * Build the complete environment for a spawned agent runtime.
+ *
+ * This is shared by the long-lived PTY path and one-shot fresh-session cron
+ * spawns so both receive the same CTX_* values, org secrets, agent .env, and
+ * timezone/orchestrator conveniences.
+ */
+export function buildAgentRuntimeEnv(env: CtxEnv, config: AgentConfig): NodeJS.ProcessEnv {
+  const ptyEnv: NodeJS.ProcessEnv = {
+    ...getBaseRuntimeEnv(),
+    CTX_INSTANCE_ID: env.instanceId,
+    CTX_ROOT: env.ctxRoot,
+    CTX_FRAMEWORK_ROOT: env.frameworkRoot,
+    CTX_AGENT_NAME: env.agentName,
+    CTX_ORG: env.org,
+    CTX_AGENT_DIR: env.agentDir,
+    CTX_PROJECT_ROOT: env.projectRoot,
+    // Backward compat
+    CRM_AGENT_NAME: env.agentName,
+    CRM_TEMPLATE_ROOT: env.frameworkRoot,
+  };
+
+  // Source org-level shared secrets first. Agent .env overrides below.
+  if (env.org && env.projectRoot) {
+    Object.assign(ptyEnv, parseEnvFile(join(env.projectRoot, 'orgs', env.org, 'secrets.env')));
+  }
+
+  // Source agent-specific secrets.
+  if (env.agentDir) {
+    Object.assign(ptyEnv, parseEnvFile(join(env.agentDir, '.env')));
+  }
+
+  if (ptyEnv['CHAT_ID']) {
+    ptyEnv['CTX_TELEGRAM_CHAT_ID'] = ptyEnv['CHAT_ID'];
+  }
+
+  const configTimezone = config.timezone;
+  if (configTimezone) {
+    ptyEnv['CTX_TIMEZONE'] = configTimezone;
+    ptyEnv['TZ'] = configTimezone;
+  } else if (process.env.TZ) {
+    ptyEnv['CTX_TIMEZONE'] = process.env.TZ;
+  }
+
+  if (env.projectRoot && env.org) {
+    try {
+      const contextPath = join(env.projectRoot, 'orgs', env.org, 'context.json');
+      if (existsSync(contextPath)) {
+        const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
+        if (ctx.orchestrator) {
+          ptyEnv['CTX_ORCHESTRATOR_AGENT'] = ctx.orchestrator;
+        }
+      }
+    } catch { /* leave unset if context.json is missing or malformed */ }
+  }
+
+  return ptyEnv;
+}
+
+function getBaseRuntimeEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  const keepVars = [
+    'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
+    'TMPDIR', 'TEMP', 'TMP', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY',
+    'NODE_PATH', 'COMSPEC', 'USERPROFILE',
+    // Claude Code env passthroughs.
+    // IS_SANDBOX=1 lets --dangerously-skip-permissions run under root on
+    // VPS/container installs. CLAUDE_CODE_DISABLE_1M_CONTEXT controls the
+    // Sonnet/Haiku 1M context opt-out documented in the .env template.
+    'IS_SANDBOX', 'CLAUDE_CODE_DISABLE_1M_CONTEXT',
+    // Windows path-expansion essentials. Stripping these causes phantom
+    // %SystemDrive% directories from inherited Search Indexer processes
+    // and Unity batchmode UPM IPC crashes (path.join(undefined,...)).
+    'SystemDrive', 'SystemRoot', 'windir',
+    'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ALLUSERSPROFILE',
+    'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432',
+    'HOMEDRIVE', 'HOMEPATH', 'PUBLIC',
+  ];
+  for (const key of keepVars) {
+    if (process.env[key]) {
+      env[key] = process.env[key];
+    }
+  }
+
+  if (platform() === 'win32') {
+    if (!env['LANG']) env['LANG'] = 'en_US.UTF-8';
+    if (!env['LC_ALL']) env['LC_ALL'] = 'en_US.UTF-8';
+    if (!process.env['PYTHONIOENCODING']) env['PYTHONIOENCODING'] = 'utf-8';
+  }
+
+  return env;
 }
 
 /**

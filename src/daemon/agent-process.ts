@@ -8,7 +8,7 @@ import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir } from '../utils/atomic.js';
-import { writeCortextosEnv } from '../utils/env.js';
+import { buildAgentRuntimeEnv, writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
 
@@ -372,6 +372,13 @@ export class AgentProcess {
    */
   getConfig(): AgentConfig {
     return this.config;
+  }
+
+  /**
+   * Build the exact runtime env used by spawned Claude sessions.
+   */
+  buildRuntimeEnv(): NodeJS.ProcessEnv {
+    return buildAgentRuntimeEnv(this.env, this.config);
   }
 
   // --- Private methods ---

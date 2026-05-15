@@ -396,6 +396,25 @@ export interface CronDefinition {
    * @default false (manual fire is allowed by default — opt-out model)
    */
   manualFireDisabled?: boolean;
+
+  /**
+   * When true, the daemon spawns a fresh `claude --print --no-session-persistence`
+   * child process for this cron instead of injecting into the agent's live PTY.
+   * Default false — PTY inject is preserved unless explicitly opted in.
+   */
+  fresh_session?: boolean;
+
+  /**
+   * Relative path from CTX_AGENT_DIR to a skill or context file injected as
+   * system context via `--append-system-prompt` for fresh-session cron runs.
+   */
+  skill_file?: string;
+
+  /**
+   * Timeout in milliseconds for one fresh-session cron run before SIGTERM,
+   * followed by SIGKILL after a short grace period.
+   */
+  fresh_session_timeout_ms?: number;
 }
 
 // ---------------------------------------------------------------------------
