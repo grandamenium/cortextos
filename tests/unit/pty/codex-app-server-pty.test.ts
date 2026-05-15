@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { platform } from 'os';
 
 const fsMocks = {
   existsSync: vi.fn().mockReturnValue(false),
@@ -66,6 +67,8 @@ vi.mock('../../../src/bus/event.js', () => ({
 
 const { CodexAppServerPTY } = await import('../../../src/pty/codex-app-server-pty.js');
 
+const slashPath = (value: string) => value.replace(/\\/g, '/');
+
 const mockEnv = {
   instanceId: 'test',
   ctxRoot: '/tmp/ctx',
@@ -94,6 +97,12 @@ beforeEach(() => {
 describe('CodexAppServerPTY socket path policy', () => {
   it('uses codex.sock in the agent state dir by default', () => {
     const pty = new CodexAppServerPTY(mockEnv, {});
+    if (platform() === 'win32') {
+      expect((pty as unknown as { _socketPath: string })._socketPath).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
+      expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toBe((pty as unknown as { _socketPath: string })._socketPath);
+      expect(slashPath((pty as unknown as { _socketCwd: string })._socketCwd)).toBe('/tmp/ctx/state/codex-app-agent');
+      return;
+    }
     expect((pty as unknown as { _socketPath: string })._socketPath).toBe('/tmp/ctx/state/codex-app-agent/codex.sock');
     expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toBe('unix://./codex.sock');
   });
@@ -104,6 +113,11 @@ describe('CodexAppServerPTY socket path policy', () => {
       ctxRoot: `/tmp/${'x'.repeat(120)}`,
     };
     const pty = new CodexAppServerPTY(longEnv, {});
+    if (platform() === 'win32') {
+      expect((pty as unknown as { _socketPath: string })._socketPath).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
+      expect(fsMocks.writeFileSync).not.toHaveBeenCalled();
+      return;
+    }
     const socketPath = (pty as unknown as { _socketPath: string })._socketPath;
     expect(socketPath).toMatch(/\/cas-[a-f0-9]{8}\.sock$/);
     expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toMatch(/^unix:\/\/\.\/cas-[a-f0-9]{8}\.sock$/);
@@ -113,6 +127,52 @@ describe('CodexAppServerPTY socket path policy', () => {
       expect.stringContaining('"fallback": true'),
       'utf-8',
     );
+  });
+});
+
+describe('CodexAppServerPTY environment', () => {
+  it('preserves Windows npm shim and Node runtime environment variables', () => {
+    const previous = {
+      APPDATA: process.env.APPDATA,
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      USERPROFILE: process.env.USERPROFILE,
+      COMSPEC: process.env.COMSPEC,
+      SystemRoot: process.env.SystemRoot,
+      windir: process.env.windir,
+      TEMP: process.env.TEMP,
+      TMP: process.env.TMP,
+    };
+
+    process.env.APPDATA = 'C:\\Users\\tester\\AppData\\Roaming';
+    process.env.LOCALAPPDATA = 'C:\\Users\\tester\\AppData\\Local';
+    process.env.USERPROFILE = 'C:\\Users\\tester';
+    process.env.COMSPEC = 'C:\\Windows\\System32\\cmd.exe';
+    process.env.SystemRoot = 'C:\\Windows';
+    process.env.windir = 'C:\\Windows';
+    process.env.TEMP = 'C:\\Users\\tester\\AppData\\Local\\Temp';
+    process.env.TMP = 'C:\\Users\\tester\\AppData\\Local\\Temp';
+
+    try {
+      const pty = new CodexAppServerPTY(mockEnv, {});
+      const env = (pty as unknown as { buildEnv(): Record<string, string> }).buildEnv();
+
+      expect(env.APPDATA).toBe('C:\\Users\\tester\\AppData\\Roaming');
+      expect(env.LOCALAPPDATA).toBe('C:\\Users\\tester\\AppData\\Local');
+      expect(env.USERPROFILE).toBe('C:\\Users\\tester');
+      expect(env.COMSPEC).toBe('C:\\Windows\\System32\\cmd.exe');
+      expect(env.SystemRoot).toBe('C:\\Windows');
+      expect(env.windir).toBe('C:\\Windows');
+      expect(env.TEMP).toBe('C:\\Users\\tester\\AppData\\Local\\Temp');
+      expect(env.TMP).toBe('C:\\Users\\tester\\AppData\\Local\\Temp');
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
   });
 });
 
@@ -909,7 +969,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
 
     expect(atomicWriteSyncMock).toHaveBeenCalledTimes(1);
     const [path] = atomicWriteSyncMock.mock.calls[0];
-    expect(path).toBe('/tmp/ctx/state/codex-app-agent/context_status.json');
+    expect(slashPath(path)).toBe('/tmp/ctx/state/codex-app-agent/context_status.json');
     const payload = lastWrittenPayload()!;
     expect(payload.used_percentage).toBeCloseTo(35, 5);
     expect(payload.context_window_size).toBe(200000);
@@ -1052,7 +1112,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
 
     expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
     const [path, line] = fsMocks.appendFileSync.mock.calls[0] as [string, string];
-    expect(path).toBe('/tmp/ctx/logs/codex-app-agent/codex-tokens.jsonl');
+    expect(slashPath(path)).toBe('/tmp/ctx/logs/codex-app-agent/codex-tokens.jsonl');
     expect(line.endsWith('\n')).toBe(true);
 
     const entry = lastAppendedEntry()!;

@@ -1,7 +1,8 @@
 import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
+import { join, delimiter, isAbsolute } from 'path';
+import { homedir, platform } from 'os';
 import { randomBytes } from 'crypto';
+import { Socket, createConnection } from 'net';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -39,6 +40,13 @@ interface SocketPointer {
   fallback: boolean;
   reason?: string;
   updatedAt: string;
+}
+
+type AppServerTransport = 'unix' | 'ws';
+
+interface CodexCommand {
+  file: string;
+  argsPrefix: string[];
 }
 
 interface ThreadResponse {
@@ -115,6 +123,7 @@ export class CodexAppServerPTY {
   private _socketPath: string;
   private _socketListenArg: string;
   private _socketCwd: string;
+  private _socketTransport: AppServerTransport;
   private _threadStatePath: string;
   private _socketPointerPath: string;
   private _threadId: string | null = null;
@@ -133,6 +142,7 @@ export class CodexAppServerPTY {
     this._socketPath = socket.path;
     this._socketListenArg = socket.listenArg;
     this._socketCwd = socket.cwd;
+    this._socketTransport = socket.transport;
     this._outputBuffer = new OutputBuffer(1000, logPath, BOOTSTRAP_PATTERN);
   }
 
@@ -386,6 +396,48 @@ export class CodexAppServerPTY {
     return { type: 'set', objective };
   }
 
+  private resolveCodexCommand(): CodexCommand {
+    const explicit = process.env.CODEX_BINARY;
+    if (explicit && existsSync(explicit)) return { file: explicit, argsPrefix: [] };
+
+    const isWin = platform() === 'win32';
+    if (isWin) {
+      const codexJs = this.resolveWindowsCodexJs();
+      if (codexJs) return { file: process.execPath, argsPrefix: [codexJs] };
+    }
+
+    const candidates = isWin ? ['codex.cmd', 'codex.exe', 'codex.bat', 'codex'] : ['codex'];
+
+    const pathDirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
+    for (const dir of pathDirs) {
+      for (const name of candidates) {
+        const full = join(dir, name);
+        if (existsSync(full)) return { file: full, argsPrefix: [] };
+      }
+    }
+
+    if (isWin) {
+      const fallback = join(homedir(), 'AppData', 'Roaming', 'npm', 'codex.cmd');
+      if (existsSync(fallback)) return { file: fallback, argsPrefix: [] };
+    }
+
+    return { file: 'codex', argsPrefix: [] };
+  }
+
+  private resolveWindowsCodexJs(): string | null {
+    const explicit = process.env.CODEX_JS;
+    if (explicit && existsSync(explicit)) return explicit;
+
+    const pathDirs = (process.env.PATH || '').split(delimiter).filter(Boolean);
+    for (const dir of pathDirs) {
+      const candidate = join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      if (existsSync(candidate)) return candidate;
+    }
+
+    const fallback = join(homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    return existsSync(fallback) ? fallback : null;
+  }
+
   private async startAppServerWithRetry(): Promise<void> {
     const delays = [1000, 4000, 16000];
     let lastErr: unknown;
@@ -416,7 +468,12 @@ export class CodexAppServerPTY {
       }
 
       const spawnFn = this._spawnFn!;
-      const pty = spawnFn('codex', [
+      const codexCommand = this.resolveCodexCommand();
+      if (!isAbsolute(codexCommand.file)) {
+        this._outputBuffer.push(`[codex-app-server] WARNING: codex binary not resolved to absolute path, spawn may fail. Got: ${codexCommand.file}\n`);
+      }
+      const pty = spawnFn(codexCommand.file, [
+        ...codexCommand.argsPrefix,
         'app-server',
         '--enable', 'goals',
         '--listen', this._socketListenArg,
@@ -450,10 +507,11 @@ export class CodexAppServerPTY {
   private async waitForSocket(timeoutMs = 10000): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      if (existsSync(this._socketPath)) return;
+      if (this._socketTransport === 'unix' && existsSync(this._socketPath)) return;
+      if (this._socketTransport === 'ws' && await this.canConnectWebSocket()) return;
       await sleep(100);
     }
-    throw new Error(`Timed out waiting for app-server socket: ${this._socketPath}`);
+    throw new Error(`Timed out waiting for app-server listener: ${this._socketPath}`);
   }
 
   private async connectRpc(): Promise<void> {
@@ -870,10 +928,16 @@ export class CodexAppServerPTY {
     }
   }
 
-  private resolveSocketPath(): { path: string; listenArg: string; cwd: string } {
+  private resolveSocketPath(): { path: string; listenArg: string; cwd: string; transport: AppServerTransport } {
+    if (platform() === 'win32') {
+      const port = 47000 + (randomBytes(2).readUInt16BE(0) % 10000);
+      const endpoint = `ws://127.0.0.1:${port}`;
+      return { path: endpoint, listenArg: endpoint, cwd: this._stateDir, transport: 'ws' };
+    }
+
     const defaultPath = join(this._stateDir, SOCKET_BASENAME);
     if (Buffer.byteLength(defaultPath) < SOCKET_PATH_WARN_BYTES) {
-      return { path: defaultPath, listenArg: `unix://./${SOCKET_BASENAME}`, cwd: this._stateDir };
+      return { path: defaultPath, listenArg: `unix://./${SOCKET_BASENAME}`, cwd: this._stateDir, transport: 'unix' };
     }
 
     const fallbackBasename = `cas-${randomBytes(4).toString('hex')}.sock`;
@@ -890,15 +954,37 @@ export class CodexAppServerPTY {
     } catch {
       // Non-fatal; spawn will still use fallback path.
     }
-    return { path: fallback, listenArg: `unix://./${fallbackBasename}`, cwd: '/tmp' };
+    return { path: fallback, listenArg: `unix://./${fallbackBasename}`, cwd: '/tmp', transport: 'unix' };
   }
 
   private removeSocket(): void {
+    if (this._socketTransport !== 'unix') return;
     try {
       if (existsSync(this._socketPath)) unlinkSync(this._socketPath);
     } catch {
       // Ignore stale socket cleanup failures.
     }
+  }
+
+  private canConnectWebSocket(): Promise<boolean> {
+    return new Promise((resolve) => {
+      const url = new URL(this._socketPath);
+      const socket: Socket = createConnection({
+        host: url.hostname,
+        port: Number(url.port),
+      });
+      let settled = false;
+      const finish = (ready: boolean) => {
+        if (settled) return;
+        settled = true;
+        socket.removeAllListeners();
+        socket.destroy();
+        resolve(ready);
+      };
+      socket.once('connect', () => finish(true));
+      socket.once('error', () => finish(false));
+      socket.setTimeout(100, () => finish(false));
+    });
   }
 
   private cleanupSpawnAttempt(): void {
@@ -933,7 +1019,15 @@ export class CodexAppServerPTY {
   private buildEnv(): Record<string, string> {
     const env: Record<string, string> = {};
 
-    const keepVars = ['PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL', 'TMPDIR'];
+    const keepVars = [
+      'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
+      'TMPDIR', 'TEMP', 'TMP',
+      'NODE_PATH', 'COMSPEC', 'USERPROFILE',
+      'SystemDrive', 'SystemRoot', 'windir',
+      'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ALLUSERSPROFILE',
+      'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432',
+      'HOMEDRIVE', 'HOMEPATH', 'PUBLIC',
+    ];
     for (const key of keepVars) {
       if (process.env[key]) env[key] = process.env[key]!;
     }
@@ -955,6 +1049,10 @@ export class CodexAppServerPTY {
     if (this._config.timezone) {
       env['CTX_TIMEZONE'] = this._config.timezone;
       env['TZ'] = this._config.timezone;
+    }
+    if (platform() === 'win32') {
+      if (!env['LANG']) env['LANG'] = 'en_US.UTF-8';
+      if (!env['LC_ALL']) env['LC_ALL'] = 'en_US.UTF-8';
     }
 
     return env;
