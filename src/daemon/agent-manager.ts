@@ -13,7 +13,7 @@ import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
-import { isFreshSessionProtectedAgent, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
+import { isFreshSessionProtectedCron, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
 import { logEvent } from '../bus/event.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
@@ -788,14 +788,14 @@ export class AgentManager {
     const prompt = cron.prompt ?? `[cron] ${cron.name} fired`;
     const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
 
-    if (isFreshSessionProtectedAgent(agentName) && cron.fresh_session) {
+    if (isFreshSessionProtectedCron(agentName, cron.name) && cron.fresh_session) {
       console.log(
-        `[daemon] GUARDRAIL: fresh_session overridden for protected agent "${agentName}" cron "${cron.name}"`
+        `[daemon] GUARDRAIL: fresh_session overridden for protected cron "${agentName}/${cron.name}"`
       );
       this.emitGuardrailEvent(agentName, cron.name);
     }
 
-    const useFresh = cron.fresh_session === true && !isFreshSessionProtectedAgent(agentName);
+    const useFresh = cron.fresh_session === true && !isFreshSessionProtectedCron(agentName, cron.name);
     if (useFresh) {
       await this.fireCronFreshSession(agentName, cron, injection);
       return;

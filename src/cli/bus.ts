@@ -21,7 +21,7 @@ import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/kn
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
-import { isFreshSessionProtectedAgent, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
+import { isFreshSessionProtectedCron, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -1863,6 +1863,7 @@ function readAgentRuntime(agentName: string, frameworkRoot: string): string | un
 
 function validateFreshSessionCliOptions(
   agent: string,
+  cronName: string,
   frameworkRoot: string,
   opts: { freshSession?: boolean; skillFile?: string; freshSessionTimeout?: string },
 ): { freshSession?: boolean; skillFile?: string; freshSessionTimeoutMs?: number } {
@@ -1887,8 +1888,8 @@ function validateFreshSessionCliOptions(
   }
 
   if (opts.freshSession === true) {
-    if (isFreshSessionProtectedAgent(agent)) {
-      console.error(`Error: --fresh-session is not allowed for protected agent '${agent}'.`);
+    if (isFreshSessionProtectedCron(agent, cronName)) {
+      console.error(`Error: --fresh-session is not allowed for protected cron '${agent}/${cronName}'.`);
       process.exit(1);
     }
     const runtime = readAgentRuntime(agent, frameworkRoot);
@@ -1956,7 +1957,7 @@ busCommand
     // Validate schedule
     let schedule: string;
     try { schedule = validateSchedule(interval); } catch (err) { console.error(String(err)); process.exit(1); }
-    const fresh = validateFreshSessionCliOptions(agent, env.frameworkRoot, opts);
+    const fresh = validateFreshSessionCliOptions(agent, name, env.frameworkRoot, opts);
 
     const prompt = promptWords.join(' ');
     const cron: CronDefinition = {
@@ -2130,7 +2131,7 @@ busCommand
     }
 
     const env = resolveEnv();
-    const fresh = validateFreshSessionCliOptions(agent, env.frameworkRoot, opts);
+    const fresh = validateFreshSessionCliOptions(agent, name, env.frameworkRoot, opts);
     const patch: Partial<CronDefinition> = {};
 
     if (rawSchedule !== undefined) {

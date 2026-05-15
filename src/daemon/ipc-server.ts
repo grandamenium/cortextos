@@ -9,7 +9,7 @@ import type { ExecutionLogStatusFilter } from '../bus/crons.js';
 import { nextFireFromCron } from './cron-scheduler.js';
 import { parseDurationMs } from '../bus/cron-state.js';
 import { computeHealth, aggregateFleetHealth } from '../utils/cron-health.js';
-import { isFreshSessionProtectedAgent, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
+import { isFreshSessionProtectedCron, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
 
 const WORKER_NAME_REGEX = /^[a-z0-9_-]+$/;
 
@@ -357,6 +357,7 @@ function getAgentRuntime(agent: string): AgentConfig['runtime'] | undefined {
 
 function validateFreshSessionFields(
   agent: string,
+  cronName: string,
   fields: Partial<CronDefinition>,
 ): MutationResult {
   if (fields.fresh_session !== undefined && typeof fields.fresh_session !== 'boolean') {
@@ -376,8 +377,8 @@ function validateFreshSessionFields(
     }
   }
   if (fields.fresh_session === true) {
-    if (isFreshSessionProtectedAgent(agent)) {
-      return { ok: false, error: `fresh_session is not allowed for protected agent '${agent}'.`, field: 'fresh_session' };
+    if (isFreshSessionProtectedCron(agent, cronName)) {
+      return { ok: false, error: `fresh_session is not allowed for protected cron '${agent}/${cronName}'.`, field: 'fresh_session' };
     }
     const runtime = getAgentRuntime(agent);
     if (!isFreshSessionSupportedRuntime(runtime)) {
@@ -448,7 +449,7 @@ export function handleAddCron(
     return { ok: false, error: 'Prompt is required and must be non-empty.', field: 'prompt' };
   }
 
-  const freshValidation = validateFreshSessionFields(agent, definition);
+  const freshValidation = validateFreshSessionFields(agent, name, definition);
   if (!freshValidation.ok) return freshValidation;
 
   const fullDef: CronDefinition = {
@@ -514,7 +515,7 @@ export function handleUpdateCron(
     return { ok: false, error: 'Prompt must be non-empty.', field: 'prompt' };
   }
 
-  const freshValidation = validateFreshSessionFields(agent, patch);
+  const freshValidation = validateFreshSessionFields(agent, name, patch);
   if (!freshValidation.ok) return freshValidation;
 
   if (patch.skill_file !== undefined) {

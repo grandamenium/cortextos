@@ -86,15 +86,57 @@ describe('cron fresh-session dispatch', () => {
     expect(manager.fireCronFreshSession).toHaveBeenCalledOnce();
   });
 
-  it('dispatchCron overrides fresh_session for top-g and injects', async () => {
+  it('dispatchCron protects top-g/morning-review and injects', async () => {
     const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
     const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
     const proc = attachAgent(manager, 'top-g');
     manager.emitGuardrailEvent = vi.fn();
 
-    await manager.dispatchCron('top-g', makeCron({ fresh_session: true }), '2026-05-15T00:00:00Z');
+    await manager.dispatchCron(
+      'top-g',
+      makeCron({ name: 'morning-review', fresh_session: true }),
+      '2026-05-15T00:00:00Z',
+    );
 
-    expect(manager.emitGuardrailEvent).toHaveBeenCalledWith('top-g', 'heartbeat');
+    expect(manager.emitGuardrailEvent).toHaveBeenCalledWith('top-g', 'morning-review');
+    expect(proc.injectMessage).toHaveBeenCalledOnce();
+  });
+
+  it('dispatchCron allows top-g/heartbeat fresh session', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'top-g');
+    manager.fireCronFreshSession = vi.fn().mockResolvedValue(undefined);
+
+    await manager.dispatchCron('top-g', makeCron({ name: 'heartbeat', fresh_session: true }), '2026-05-15T00:00:00Z');
+
+    expect(manager.fireCronFreshSession).toHaveBeenCalledOnce();
+  });
+
+  it('dispatchCron allows top-g/check-approvals fresh session', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'top-g');
+    manager.fireCronFreshSession = vi.fn().mockResolvedValue(undefined);
+
+    await manager.dispatchCron(
+      'top-g',
+      makeCron({ name: 'check-approvals', fresh_session: true }),
+      '2026-05-15T00:00:00Z',
+    );
+
+    expect(manager.fireCronFreshSession).toHaveBeenCalledOnce();
+  });
+
+  it('dispatchCron protects all smart-g crons through wildcard and injects', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    const proc = attachAgent(manager, 'smart-g');
+    manager.emitGuardrailEvent = vi.fn();
+
+    await manager.dispatchCron('smart-g', makeCron({ name: 'heartbeat', fresh_session: true }), '2026-05-15T00:00:00Z');
+
+    expect(manager.emitGuardrailEvent).toHaveBeenCalledWith('smart-g', 'heartbeat');
     expect(proc.injectMessage).toHaveBeenCalledOnce();
   });
 
@@ -321,11 +363,15 @@ describe('runtime env builder and fresh-session guards', () => {
     });
   });
 
-  it('guard helpers protect top-g and smart-g only', async () => {
-    const { isFreshSessionProtectedAgent } = await import('../../../src/utils/fresh-session-guards.js');
-    expect(isFreshSessionProtectedAgent('top-g')).toBe(true);
-    expect(isFreshSessionProtectedAgent('smart-g')).toBe(true);
-    expect(isFreshSessionProtectedAgent('ops-g')).toBe(false);
+  it('guard helpers protect specific cron patterns', async () => {
+    const { isFreshSessionProtectedCron } = await import('../../../src/utils/fresh-session-guards.js');
+    expect(isFreshSessionProtectedCron('top-g', 'morning-review')).toBe(true);
+    expect(isFreshSessionProtectedCron('top-g', 'evening-review')).toBe(true);
+    expect(isFreshSessionProtectedCron('top-g', 'weekly-review')).toBe(true);
+    expect(isFreshSessionProtectedCron('top-g', 'heartbeat')).toBe(false);
+    expect(isFreshSessionProtectedCron('top-g', 'check-approvals')).toBe(false);
+    expect(isFreshSessionProtectedCron('smart-g', 'heartbeat')).toBe(true);
+    expect(isFreshSessionProtectedCron('ops-g', 'heartbeat')).toBe(false);
   });
 
   it('guard helpers support only undefined and claude-code runtimes', async () => {
@@ -409,7 +455,19 @@ describe('IPC fresh-session mutation and manual fire validation', () => {
     });
   });
 
-  it('handleAddCron rejects protected agents', async () => {
+  it('handleAddCron rejects protected top-g/morning-review', async () => {
+    const { handleAddCron } = await import('../../../src/daemon/ipc-server.js');
+    const result = handleAddCron('top-g', {
+      name: 'morning-review',
+      prompt: 'x',
+      schedule: '4h',
+      fresh_session: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/protected/);
+  });
+
+  it('handleAddCron allows top-g/heartbeat', async () => {
     const { handleAddCron } = await import('../../../src/daemon/ipc-server.js');
     const result = handleAddCron('top-g', {
       name: 'heartbeat',
@@ -417,8 +475,7 @@ describe('IPC fresh-session mutation and manual fire validation', () => {
       schedule: '4h',
       fresh_session: true,
     });
-    expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/protected/);
+    expect(result.ok).toBe(true);
   });
 
   it('handleAddCron rejects unsupported codex-app-server runtime', async () => {
