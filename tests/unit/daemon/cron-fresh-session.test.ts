@@ -45,6 +45,15 @@ function makeChild() {
   return child;
 }
 
+function appendSystemPromptValue(args: unknown[]): string | undefined {
+  const idx = args.indexOf('--append-system-prompt');
+  return idx === -1 ? undefined : String(args[idx + 1]);
+}
+
+function appendSystemPromptFlagCount(args: unknown[]): number {
+  return args.filter(arg => arg === '--append-system-prompt').length;
+}
+
 function attachAgent(manager: any, agentName: string, config: AgentConfig = {}, extra: Record<string, unknown> = {}) {
   const process = {
     getConfig: vi.fn(() => config),
@@ -326,7 +335,121 @@ describe('cron fresh-session dispatch', () => {
     child.emit('close', 0, null);
     await promise;
 
-    expect(spawnMock.mock.calls[0][1]).toEqual(expect.arrayContaining(['--append-system-prompt', 'heartbeat instructions']));
+    const args = spawnMock.mock.calls[0][1];
+    expect(appendSystemPromptFlagCount(args)).toBe(1);
+    expect(appendSystemPromptValue(args)).toBe('heartbeat instructions');
+  });
+
+  it('fireCronFreshSession passes protocol_file content via --append-system-prompt', async () => {
+    const agentDir = join(tmpRoot, 'agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'HEARTBEAT.md'), 'heartbeat protocol');
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { agentDir, ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession(
+      'ops-g',
+      makeCron({ fresh_session: true, protocol_file: 'HEARTBEAT.md' }),
+      'prompt',
+      FIRED_AT,
+    );
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = spawnMock.mock.calls[0][1];
+    expect(appendSystemPromptFlagCount(args)).toBe(1);
+    expect(appendSystemPromptValue(args)).toBe('heartbeat protocol');
+  });
+
+  it('fireCronFreshSession combines skill_file and protocol_file in deterministic order', async () => {
+    const agentDir = join(tmpRoot, 'agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'SKILL.md'), 'skill instructions');
+    writeFileSync(join(agentDir, 'HEARTBEAT.md'), 'heartbeat protocol');
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { agentDir, ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession(
+      'ops-g',
+      makeCron({ fresh_session: true, skill_file: 'SKILL.md', protocol_file: 'HEARTBEAT.md' }),
+      'prompt',
+      FIRED_AT,
+    );
+    child.emit('close', 0, null);
+    await promise;
+
+    const args = spawnMock.mock.calls[0][1];
+    expect(appendSystemPromptFlagCount(args)).toBe(1);
+    expect(appendSystemPromptValue(args)).toBe('skill instructions\n\n---\n\nheartbeat protocol');
+  });
+
+  it('fireCronFreshSession ignores absolute protocol_file', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession(
+      'ops-g',
+      makeCron({ fresh_session: true, protocol_file: '/tmp/secret.md' }),
+      'prompt',
+      FIRED_AT,
+    );
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(spawnMock.mock.calls[0][1]).not.toContain('--append-system-prompt');
+  });
+
+  it('fireCronFreshSession keeps readable protocol_file when skill_file is unreadable', async () => {
+    const agentDir = join(tmpRoot, 'agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'HEARTBEAT.md'), 'heartbeat protocol');
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { agentDir, ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession(
+      'ops-g',
+      makeCron({ fresh_session: true, skill_file: 'missing.md', protocol_file: 'HEARTBEAT.md' }),
+      'prompt',
+      FIRED_AT,
+    );
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(appendSystemPromptValue(spawnMock.mock.calls[0][1])).toBe('heartbeat protocol');
+  });
+
+  it('fireCronFreshSession ignores unreadable protocol_file without suppressing skill_file', async () => {
+    const agentDir = join(tmpRoot, 'agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'SKILL.md'), 'skill instructions');
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { agentDir, ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession(
+      'ops-g',
+      makeCron({ fresh_session: true, skill_file: 'SKILL.md', protocol_file: 'missing.md' }),
+      'prompt',
+      FIRED_AT,
+    );
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(appendSystemPromptValue(spawnMock.mock.calls[0][1])).toBe('skill instructions');
   });
 
   it('fireCronFreshSession ignores unreadable skill_file', async () => {
@@ -386,8 +509,49 @@ describe('cron fresh-session dispatch', () => {
     expect(proc.buildRuntimeEnv).toHaveBeenCalledOnce();
     expect(spawnMock.mock.calls[0][2]).toMatchObject({
       cwd: '/work',
-      env: { CTX_ROOT: tmpRoot, CUSTOM: 'yes', CTX_CRON_FIRED_AT: FIRED_AT },
+      env: {
+        CTX_ROOT: tmpRoot,
+        CUSTOM: 'yes',
+        CTX_CRON_FIRED_AT: FIRED_AT,
+        CTX_FRESH_SESSION_CRON: 'ops-g/heartbeat',
+      },
     });
+  });
+
+  it('fireCronFreshSession persists last_fire_attempted_at before spawn', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const { readCrons, writeCrons } = await import('../../../src/bus/crons.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    writeCrons('ops-g', [makeCron({ fresh_session: true })]);
+    const child = makeChild();
+    spawnMock.mockImplementation(() => {
+      expect(readCrons('ops-g')[0].last_fire_attempted_at).toBe(FIRED_AT);
+      return child;
+    });
+
+    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT);
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(readCrons('ops-g')[0].last_fire_attempted_at).toBe(FIRED_AT);
+  });
+
+  it('fireCronFreshSession persists last_fire_attempted_at before spawn error', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const { readCrons, writeCrons } = await import('../../../src/bus/crons.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    writeCrons('ops-g', [makeCron({ fresh_session: true })]);
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT);
+    expect(readCrons('ops-g')[0].last_fire_attempted_at).toBe(FIRED_AT);
+    child.emit('error', new Error('spawn failed'));
+
+    await expect(promise).rejects.toThrow(/spawn failed/);
+    expect(readCrons('ops-g')[0].last_fire_attempted_at).toBe(FIRED_AT);
   });
 
   it('fireCronFreshSession caps captured stdout and labels stdout/stderr log writes', async () => {

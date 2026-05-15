@@ -864,18 +864,20 @@ export class AgentManager {
       workingDir = config.working_directory || agentDir;
       runtimeEnv = agentProcess.buildRuntimeEnv();
       runtimeEnv['CTX_CRON_FIRED_AT'] = firedAt;
+      runtimeEnv['CTX_FRESH_SESSION_CRON'] = `${agentName}/${cron.name}`;
       claudeCmd = platform() !== 'win32' ? 'claude' : 'claude.exe';
       timeoutMs = cron.fresh_session_timeout_ms ?? 300_000;
 
       args = ['--print', '--dangerously-skip-permissions', '--no-session-persistence'];
       if (config.model) args.push('--model', config.model);
 
+      const systemPromptParts: string[] = [];
       if (cron.skill_file) {
         if (isAbsolute(cron.skill_file)) {
           console.log(`[daemon] WARNING: absolute skill_file rejected for "${cron.name}" — ignoring`);
         } else {
           try {
-            args.push('--append-system-prompt', readFileSync(join(agentDir, cron.skill_file), 'utf-8'));
+            systemPromptParts.push(readFileSync(join(agentDir, cron.skill_file), 'utf-8'));
           } catch (err) {
             console.log(
               `[daemon] WARNING: skill_file "${cron.skill_file}" unreadable for "${cron.name}" — ` +
@@ -883,6 +885,25 @@ export class AgentManager {
             );
           }
         }
+      }
+
+      if (cron.protocol_file) {
+        if (isAbsolute(cron.protocol_file)) {
+          console.log(`[daemon] WARNING: absolute protocol_file rejected for "${cron.name}" — ignoring`);
+        } else {
+          try {
+            systemPromptParts.push(readFileSync(join(agentDir, cron.protocol_file), 'utf-8'));
+          } catch (err) {
+            console.log(
+              `[daemon] WARNING: protocol_file "${cron.protocol_file}" unreadable for "${cron.name}" — ` +
+              `proceeding without: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
+      }
+
+      if (systemPromptParts.length > 0) {
+        args.push('--append-system-prompt', systemPromptParts.join('\n\n---\n\n'));
       }
 
       args.push(promptText);
@@ -904,6 +925,16 @@ export class AgentManager {
     const logDir = join(ctxRoot, 'logs', agentName);
     try { mkdirSync(logDir, { recursive: true }); } catch { /* non-fatal */ }
     const cronLogPath = join(logDir, 'cron-fresh.log');
+
+    try {
+      updateCron(agentName, cron.name, { last_fire_attempted_at: firedAt });
+    } catch (err) {
+      console.log(
+        `[daemon] WARNING: failed to persist last_fire_attempted_at for "${cron.name}" — ` +
+        `${err instanceof Error ? err.message : String(err)}. ` +
+        `Continuing dispatch; crash mid-fire could double-fire on restart.`
+      );
+    }
 
     return new Promise<void>((resolve, reject) => {
       let killTimer: ReturnType<typeof setTimeout> | undefined;

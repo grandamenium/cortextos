@@ -371,6 +371,14 @@ function validateFreshSessionFields(
       return { ok: false, error: 'skill_file must be a relative path.', field: 'skill_file' };
     }
   }
+  if (fields.protocol_file !== undefined) {
+    if (typeof fields.protocol_file !== 'string' || !fields.protocol_file.trim()) {
+      return { ok: false, error: 'protocol_file must be a non-empty string.', field: 'protocol_file' };
+    }
+    if (isAbsolute(fields.protocol_file)) {
+      return { ok: false, error: 'protocol_file must be a relative path.', field: 'protocol_file' };
+    }
+  }
   if (fields.fresh_session_timeout_ms !== undefined) {
     if (!Number.isInteger(fields.fresh_session_timeout_ms) || fields.fresh_session_timeout_ms <= 0) {
       return { ok: false, error: 'fresh_session_timeout_ms must be a positive integer.', field: 'fresh_session_timeout_ms' };
@@ -465,6 +473,7 @@ export function handleAddCron(
       : {}),
     ...(definition.fresh_session !== undefined ? { fresh_session: definition.fresh_session } : {}),
     ...(definition.skill_file !== undefined ? { skill_file: definition.skill_file.trim() } : {}),
+    ...(definition.protocol_file !== undefined ? { protocol_file: definition.protocol_file.trim() } : {}),
     ...(definition.fresh_session_timeout_ms !== undefined
       ? { fresh_session_timeout_ms: definition.fresh_session_timeout_ms }
       : {}),
@@ -520,6 +529,9 @@ export function handleUpdateCron(
 
   if (patch.skill_file !== undefined) {
     patch = { ...patch, skill_file: patch.skill_file.trim() };
+  }
+  if (patch.protocol_file !== undefined) {
+    patch = { ...patch, protocol_file: patch.protocol_file.trim() };
   }
 
   const found = updateCron(agent, name, patch);

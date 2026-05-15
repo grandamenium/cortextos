@@ -411,6 +411,12 @@ export interface CronDefinition {
   skill_file?: string;
 
   /**
+   * Relative path from CTX_AGENT_DIR to an operational protocol/checklist file
+   * injected alongside `skill_file` for fresh-session cron runs.
+   */
+  protocol_file?: string;
+
+  /**
    * Timeout in milliseconds for one fresh-session cron run before SIGTERM,
    * followed by SIGKILL after a short grace period.
    */

@@ -200,6 +200,42 @@ describe('bus add-cron', () => {
     expect(JSON.parse(raw).crons[0]).toMatchObject({ fresh_session: true });
   });
 
+  it('success: stores protocol_file for fresh-session cron', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await busCommand.parseAsync([
+      'node', 'bus', 'add-cron', TEST_AGENT, 'heartbeat', '4h',
+      'Run heartbeat.',
+      '--fresh-session',
+      '--protocol-file', 'HEARTBEAT.md',
+    ]);
+
+    expect(errSpy).not.toHaveBeenCalled();
+    const crons = readCronsFile();
+    expect(crons[0]).toMatchObject({
+      fresh_session: true,
+      protocol_file: 'HEARTBEAT.md',
+    });
+  });
+
+  it('error: rejects absolute protocol_file', async () => {
+    const exitSpy = mockExit();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(
+      busCommand.parseAsync([
+        'node', 'bus', 'add-cron', TEST_AGENT, 'heartbeat', '4h',
+        'Run heartbeat.',
+        '--protocol-file', '/tmp/HEARTBEAT.md',
+      ])
+    ).rejects.toThrow('__PROCESS_EXIT_1__');
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('--protocol-file must be a relative path');
+  });
+
   it('error: rejects fresh-session for top-g morning-review', async () => {
     const exitSpy = mockExit();
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -436,6 +472,33 @@ describe('bus update-cron', () => {
 
     const crons = readCronsFile();
     expect(crons[0].description).toBe('New description.');
+  });
+
+  it('updates protocol_file (--protocol-file)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await busCommand.parseAsync([
+      'node', 'bus', 'update-cron', TEST_AGENT, 'heartbeat', '--protocol-file', 'HEARTBEAT.md',
+    ]);
+
+    const crons = readCronsFile();
+    expect(crons[0].protocol_file).toBe('HEARTBEAT.md');
+  });
+
+  it('error: rejects empty protocol_file on update', async () => {
+    const exitSpy = mockExit();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(
+      busCommand.parseAsync([
+        'node', 'bus', 'update-cron', TEST_AGENT, 'heartbeat', '--protocol-file', '   ',
+      ])
+    ).rejects.toThrow('__PROCESS_EXIT_1__');
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('--protocol-file must be a non-empty relative path');
   });
 
   it('error: no options provided → exits 1', async () => {

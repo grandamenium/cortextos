@@ -1865,8 +1865,8 @@ function validateFreshSessionCliOptions(
   agent: string,
   cronName: string,
   frameworkRoot: string,
-  opts: { freshSession?: boolean; skillFile?: string; freshSessionTimeout?: string },
-): { freshSession?: boolean; skillFile?: string; freshSessionTimeoutMs?: number } {
+  opts: { freshSession?: boolean; skillFile?: string; protocolFile?: string; freshSessionTimeout?: string },
+): { freshSession?: boolean; skillFile?: string; protocolFile?: string; freshSessionTimeoutMs?: number } {
   if (opts.skillFile !== undefined) {
     if (!opts.skillFile.trim()) {
       console.error('Error: --skill-file must be a non-empty relative path.');
@@ -1874,6 +1874,17 @@ function validateFreshSessionCliOptions(
     }
     if (isAbsolute(opts.skillFile)) {
       console.error('Error: --skill-file must be a relative path.');
+      process.exit(1);
+    }
+  }
+
+  if (opts.protocolFile !== undefined) {
+    if (!opts.protocolFile.trim()) {
+      console.error('Error: --protocol-file must be a non-empty relative path.');
+      process.exit(1);
+    }
+    if (isAbsolute(opts.protocolFile)) {
+      console.error('Error: --protocol-file must be a relative path.');
       process.exit(1);
     }
   }
@@ -1902,6 +1913,7 @@ function validateFreshSessionCliOptions(
   return {
     freshSession: opts.freshSession,
     skillFile: opts.skillFile?.trim(),
+    protocolFile: opts.protocolFile?.trim(),
     freshSessionTimeoutMs,
   };
 }
@@ -1935,13 +1947,14 @@ busCommand
   .option('--desc <description>', 'Human-readable description (optional)')
   .option('--fresh-session', 'Run this cron in a fresh claude --print session')
   .option('--skill-file <path>', 'Relative path to skill/context file for fresh-session system prompt')
+  .option('--protocol-file <path>', 'Relative path to protocol/checklist file appended to system prompt for fresh-session runs')
   .option('--fresh-session-timeout <ms>', 'Fresh-session timeout in milliseconds')
   .action(async (
     agent: string,
     name: string,
     interval: string,
     promptWords: string[],
-    opts: { desc?: string; freshSession?: boolean; skillFile?: string; freshSessionTimeout?: string },
+    opts: { desc?: string; freshSession?: boolean; skillFile?: string; protocolFile?: string; freshSessionTimeout?: string },
   ) => {
     // Validate agent name format
     try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
@@ -1969,6 +1982,7 @@ busCommand
       ...(opts.desc ? { description: opts.desc } : {}),
       ...(fresh.freshSession !== undefined ? { fresh_session: fresh.freshSession } : {}),
       ...(fresh.skillFile !== undefined ? { skill_file: fresh.skillFile } : {}),
+      ...(fresh.protocolFile !== undefined ? { protocol_file: fresh.protocolFile } : {}),
       ...(fresh.freshSessionTimeoutMs !== undefined ? { fresh_session_timeout_ms: fresh.freshSessionTimeoutMs } : {}),
     };
 
@@ -2099,6 +2113,7 @@ busCommand
   .option('--fresh-session', 'Enable fresh-session cron dispatch')
   .option('--no-fresh-session', 'Disable fresh-session cron dispatch')
   .option('--skill-file <path>', 'Relative path to skill/context file for fresh-session system prompt')
+  .option('--protocol-file <path>', 'Relative path to protocol/checklist file appended to system prompt for fresh-session runs')
   .option('--fresh-session-timeout <ms>', 'Fresh-session timeout in milliseconds')
   .action(async (
     agent: string,
@@ -2111,6 +2126,7 @@ busCommand
       desc?: string;
       freshSession?: boolean;
       skillFile?: string;
+      protocolFile?: string;
       freshSessionTimeout?: string;
     },
   ) => {
@@ -2124,6 +2140,7 @@ busCommand
       opts.desc === undefined &&
       opts.freshSession === undefined &&
       opts.skillFile === undefined &&
+      opts.protocolFile === undefined &&
       opts.freshSessionTimeout === undefined
     ) {
       console.error('Error: at least one update option is required.');
@@ -2155,6 +2172,9 @@ busCommand
     }
     if (fresh.skillFile !== undefined) {
       patch.skill_file = fresh.skillFile;
+    }
+    if (fresh.protocolFile !== undefined) {
+      patch.protocol_file = fresh.protocolFile;
     }
     if (fresh.freshSessionTimeoutMs !== undefined) {
       patch.fresh_session_timeout_ms = fresh.freshSessionTimeoutMs;
