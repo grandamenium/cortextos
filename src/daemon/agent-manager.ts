@@ -559,7 +559,7 @@ export class AgentManager {
     activityPoller.onMessage((msg) => {
       const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
       const text = stripControlChars(msg.text || msg.caption || '');
-      log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
+      log(`[activity-channel inbound] msg_id=${msg.message_id} from ${from}: ${text.slice(0, 120)}`);
     });
 
     activityPoller.start().catch((err) => {
