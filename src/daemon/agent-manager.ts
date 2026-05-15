@@ -315,7 +315,12 @@ export class AgentManager {
     // running its own poller (only the designated orchestrator agent should poll).
     if (telegramApi && chatId && config.telegram_polling !== false) {
       const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir);
+      const poller = new TelegramPoller(telegramApi, stateDir, 1000, undefined, {
+        paths,
+        agentName: name,
+        org: resolvedOrg,
+        log,
+      });
 
       poller.onMessage((msg) => {
         // ALLOWED_USER gate: if configured, ignore messages from other users.
@@ -540,10 +545,16 @@ export class AgentManager {
 
     const activityApi = new TelegramAPI(activityBotToken);
     const stateDir = join(this.ctxRoot, 'state', name);
+    const activityPaths = resolvePaths('activity-channel', this.instanceId, org);
     // offsetFileSuffix keeps the activity poller's offset file distinct
     // from the primary bot's .telegram-offset — without this they would
     // clobber each other in the same stateDir.
-    const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity');
+    const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity', {
+      paths: activityPaths,
+      agentName: 'activity-channel',
+      org,
+      log,
+    });
 
     activityPoller.onCallback((query) => {
       const entry = this.agents.get(name);
