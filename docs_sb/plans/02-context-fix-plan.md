@@ -125,6 +125,15 @@ Unblocks quantitative verification of Tier 1.3 / 1.4 / 5.1 claims.
 
 **Verification:** pick one recent shipped BL, run `analyze.py feature <branch>`; output should be 4-6× the main-dir-only `summary`.
 
+**Observed (2026-05-15, PRs #58 and #64, post substring-grep fix):**
+- PR #58 (`fix/watchdog-idle-suppress`, mostly engineer-side):
+  - Default (tag OR time-window): TOTAL ~$1,624 across 20 sessions; vs engineer-cwd session $52 ≈ **31× upper bound**.
+  - `--strict` (branch-tag only): TOTAL $0 — JSONLs for this PR's sessions don't carry the branch tag (worktree gitBranch likely showed `main`). Signal: strict mode reveals when tag-tracking is missing.
+- PR #64 (`feat/payload-cap-drift`, multi-agent):
+  - Default: TOTAL ~$949 across 11 sessions; vs main-cwd contributing sessions $276 ≈ **3.4× upper bound**.
+  - `--strict`: TOTAL $276 across 2 branch-tagged sessions — defensible lower bound; matches the contributing-cwd spend.
+- The ±2h time-window catches concurrent activity in unrelated cwds (e.g. jarvis sessions matched via overlap, not branch-tag). `branch-tag` matches are the precise signal; `time-window` matches are an upper bound. Use `--strict` for the lower bound, or post-filter JSON by `match == "branch-tag"`.
+
 ### Tier 4 — Compaction boundary signal (heartbeat-time, Issue 01 item 1 / Issue 06 item 1)
 
 Layered on top of Tier 1.1 (statusline = per-turn) — this is heartbeat-time = per-cycle.
