@@ -1,12 +1,20 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import type { TelegramUpdate, TelegramMessage, TelegramCallbackQuery, TelegramMessageReaction } from '../types/index.js';
+import type { BusPaths, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, TelegramMessageReaction } from '../types/index.js';
 import { TelegramAPI } from './api.js';
 import { ensureDir } from '../utils/atomic.js';
+import { logEvent } from '../bus/event.js';
 
 export type MessageHandler = (msg: TelegramMessage) => void;
 export type CallbackHandler = (query: TelegramCallbackQuery) => void;
 export type ReactionHandler = (reaction: TelegramMessageReaction) => void;
+
+export interface TelegramPollerObservability {
+  paths?: BusPaths;
+  agentName?: string;
+  org?: string;
+  log?: (m: string) => void;
+}
 
 /**
  * Telegram polling loop. Replaces the Telegram portion of fast-checker.sh.
@@ -22,6 +30,7 @@ export class TelegramPoller {
   private callbackHandlers: CallbackHandler[] = [];
   private reactionHandlers: ReactionHandler[] = [];
   private pollInterval: number;
+  private observability?: TelegramPollerObservability;
 
   /**
    * @param api Telegram API client scoped to a single bot token.
@@ -37,10 +46,17 @@ export class TelegramPoller {
    *   write to `.telegram-offset` and lose track of which bot each
    *   offset belonged to.
    */
-  constructor(api: TelegramAPI, stateDir: string, pollInterval: number = 1000, offsetFileSuffix?: string) {
+  constructor(
+    api: TelegramAPI,
+    stateDir: string,
+    pollInterval: number = 1000,
+    offsetFileSuffix?: string,
+    observability?: TelegramPollerObservability,
+  ) {
     this.api = api;
     this.stateDir = stateDir;
     this.pollInterval = pollInterval;
+    this.observability = observability;
     this.offsetFileName = offsetFileSuffix
       ? `.telegram-offset-${offsetFileSuffix}`
       : '.telegram-offset';
