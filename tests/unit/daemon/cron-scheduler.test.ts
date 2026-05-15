@@ -483,6 +483,53 @@ describe('CronScheduler', () => {
     expect(afterReload!.nextFireAt).toBe(beforeReload!.nextFireAt);
   });
 
+  it('reload with same schedule during slow fire: cron is not frozen and fires again', async () => {
+    let resolveFire: (() => void) | undefined;
+    const slowFire = vi.fn().mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveFire = resolve; }),
+    );
+    const raceScheduler = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: slowFire,
+      logger: (msg) => logs.push(msg),
+    });
+    const twoMinAgo = new Date(Date.now() - 2 * 60_000).toISOString();
+    mockReadCrons.mockReturnValue([
+      makeCron({ name: 'heartbeat', schedule: '1m', last_fired_at: twoMinAgo, fire_count: 1 }),
+    ]);
+
+    raceScheduler.start();
+
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect(slowFire).toHaveBeenCalledTimes(1);
+
+    const entryDuringFire = (raceScheduler as any).scheduled.get('heartbeat');
+    expect(entryDuringFire).toBeDefined();
+    expect(entryDuringFire.firing).toBe(true);
+
+    mockReadCrons.mockReturnValue([
+      makeCron({ name: 'heartbeat', schedule: '1m', last_fired_at: twoMinAgo, fire_count: 1 }),
+    ]);
+    raceScheduler.reload();
+
+    const entryAfterReload = (raceScheduler as any).scheduled.get('heartbeat');
+    expect(entryAfterReload).toBe(entryDuringFire);
+    expect(entryAfterReload.firing).toBe(true);
+
+    resolveFire!();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const entryAfterFire = (raceScheduler as any).scheduled.get('heartbeat');
+    expect(entryAfterFire).toBe(entryDuringFire);
+    expect(entryAfterFire.firing).toBe(false);
+    expect(entryAfterFire.nextFireAt).toBeGreaterThan(Date.now());
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(slowFire).toHaveBeenCalledTimes(2);
+
+    raceScheduler.stop();
+  });
+
   it('reload() recomputes nextFireAt for a modified schedule', async () => {
     mockReadCrons.mockReturnValue([makeCron({ name: 'changing', schedule: '6h' })]);
     scheduler.start();

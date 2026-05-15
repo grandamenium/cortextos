@@ -368,24 +368,32 @@ export class CronScheduler {
       const key = changeKeyFor(def);
       const existing = this.scheduled.get(def.name);
 
-      if (isReload && existing !== undefined && existing.changeKey === key) {
-        // Definition unchanged — preserve nextFireAt
-        nextScheduled.set(def.name, { ...existing, definition: def });
-        continue;
-      }
-
       // RELOAD-WHILE-FIRING GUARD: if the cron is mid-fire, preserve the
-      // existing entry as-is until the fire completes.  A fresh ScheduledCron
-      // built from stale crons.json (last_fired_at not yet persisted) would
-      // catch-up-fire on the next tick and double-fire the same logical event.
-      // The next reload (manual or after fire completes) will pick up the
-      // new schedule cleanly.
+      // exact object reference tick() is holding until the fire completes.
+      // This guard must come before the unchanged-schedule branch: spreading
+      // a firing entry copies `firing: true` into an orphaned object that tick()
+      // can no longer clear, freezing the cron permanently.
       if (isReload && existing !== undefined && existing.firing === true) {
         this.logger(
           `[cron-scheduler] reload deferred for "${def.name}" — fire in progress; ` +
           `new schedule will apply on next reload after fire completes`
         );
         nextScheduled.set(def.name, existing);
+        continue;
+      }
+
+      if (isReload && existing !== undefined && existing.changeKey === key) {
+        // Definition unchanged — preserve nextFireAt. A spread copy is only
+        // safe when not firing; the guard above should have caught that case.
+        if (existing.firing === true) {
+          this.logger(
+            `[cron-scheduler] BUG: reached spread-copy path while "${def.name}" is firing — ` +
+            `preserving original reference to avoid freeze. Guard ordering may have regressed.`
+          );
+          nextScheduled.set(def.name, existing);
+        } else {
+          nextScheduled.set(def.name, { ...existing, definition: def });
+        }
         continue;
       }
 
@@ -454,6 +462,8 @@ export class CronScheduler {
 
     // Update the last-good snapshot whenever we get a non-empty result.
     if (nextScheduled.size > 0) {
+      // Shallow-copy the map only: ScheduledCron objects are intentionally
+      // shared with `scheduled` so a firing entry's reference is not orphaned.
       this.lastGoodSchedule = new Map(nextScheduled);
     }
   }
