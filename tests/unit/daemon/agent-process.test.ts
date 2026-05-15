@@ -262,6 +262,139 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
   });
 });
 
+// Theta-wave 2026-05-15: crash-notification idle-gating. exit_code=0 with a
+// fresh heartbeat is a clean idle exit, not a crash. The gate suppresses the
+// crash-budget bump, the CRASH row, and the Telegram alert that follows them,
+// while preserving the audit trail via an IDLE-EXIT line and an auto-restart.
+describe('AgentProcess - idle-exit gate (theta-wave 2026-05-15)', () => {
+  // Stub readHeartbeatStatus's fs read so each test can dictate heartbeat age.
+  // The helper reads `${ctxRoot}/state/${name}/heartbeat.json` and computes
+  // age from `last_heartbeat`. Wiring an ISO timestamp `now - ageMs` here
+  // gives the gate exactly the heartbeat age the test wants.
+  function mockHeartbeatAgeMs(ageMs: number): void {
+    const ts = new Date(Date.now() - ageMs).toISOString();
+    const heartbeatJson = JSON.stringify({ last_heartbeat: ts, current_task: '' });
+    fsMocks.existsSync.mockImplementation((p: any) =>
+      String(p).endsWith('/state/alice/heartbeat.json'),
+    );
+    fsMocks.readFileSync.mockImplementation((p: any) => {
+      if (String(p).endsWith('/state/alice/heartbeat.json')) return heartbeatJson;
+      return '';
+    });
+  }
+
+  it('exitCode=0 + fresh heartbeat → idle path (no CRASH, no crash-bump, no Telegram trigger)', async () => {
+    mockHeartbeatAgeMs(5 * 60_000); // 5 min — well inside the 30-min gate.
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    const statusEvents: string[] = [];
+    ap.onStatusChanged((s) => statusEvents.push(s.status));
+    await ap.start();
+
+    capturedOnExit!(0, 0);
+
+    // Status transitions to 'stopped' (not 'crashed') — the Telegram
+    // subscriber in agent-manager.onStatusChanged only fires on 'crashed'
+    // and 'halted', so a 'stopped' transition naturally skips the alert.
+    expect(ap.getStatus().status).toBe('stopped');
+    expect(statusEvents).toContain('stopped');
+    expect(statusEvents).not.toContain('crashed');
+    // Crash budget untouched — this exit is NOT charged to the daily cap.
+    expect(ap.getStatus().crashCount ?? 0).toBe(0);
+    // Audit row IS written so operators can still see every PTY exit, but
+    // with kind=IDLE-EXIT so log scanners can distinguish from real crashes.
+    // Matching by-content (not by call count) keeps the test resilient if a
+    // future change adds a sibling write inside the IDLE-EXIT branch.
+    const idleRows = fsMocks.appendFileSync.mock.calls
+      .filter(([p]) => String(p).endsWith('/logs/alice/restarts.log'))
+      .map(([, line]) => String(line))
+      .filter(line => /\] IDLE-EXIT: exit_code=0 hb_age_s=\d+ backoff_s=5\b/.test(line));
+    expect(idleRows).toHaveLength(1);
+    // And NO CRASH row was written (the gate's whole point).
+    const crashRows = fsMocks.appendFileSync.mock.calls
+      .map(([, line]) => String(line))
+      .filter(line => /\] CRASH: /.test(line));
+    expect(crashRows).toEqual([]);
+  });
+
+  it('exitCode=0 + stale heartbeat → crash path (gate fails open — real CRASH)', async () => {
+    // 45 min ≥ 30-min gate window. This is the genuine-crash-with-zero-exit
+    // shape: the agent stopped heartbeating before the exit, so the gate
+    // refuses to swallow the alert.
+    mockHeartbeatAgeMs(45 * 60_000);
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(1);
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    expect(String(fsMocks.appendFileSync.mock.calls[0][1])).toMatch(/\] CRASH: exit_code=0/);
+  });
+
+  it('exitCode≠0 + fresh heartbeat → crash path (gate keyed on BOTH conditions)', async () => {
+    // Heartbeat freshness alone must NOT swallow a non-zero exit — that's a
+    // genuine crash the operator needs to see, regardless of heartbeat state.
+    mockHeartbeatAgeMs(2 * 60_000);
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(1);
+    expect(String(fsMocks.appendFileSync.mock.calls[0][1])).toMatch(/\] CRASH: exit_code=1/);
+  });
+
+  it('stopRequested=true + exit=0 → existing short-circuit still wins (gate never runs)', async () => {
+    // Planned shutdown (HARD-RESTART / stop()): the stopRequested guard fires
+    // before the idle-exit gate. No IDLE-EXIT row, no CRASH row, no restart.
+    mockHeartbeatAgeMs(5 * 60_000); // would otherwise trigger the idle gate
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const stopPromise = ap.stop();
+    await new Promise(r => setTimeout(r, 50));
+    capturedOnExit!(0, 0);
+    await stopPromise;
+
+    expect(ap.getStatus().status).toBe('stopped');
+    // The IDLE-EXIT branch must NOT have written to restarts.log — only
+    // the stopRequested short-circuit fired.
+    const writtenKinds = fsMocks.appendFileSync.mock.calls
+      .map(([, line]) => String(line))
+      .filter(line => /\] (CRASH|IDLE-EXIT): /.test(line));
+    expect(writtenKinds).toEqual([]);
+  }, 10000);
+
+  it('exit=0 + missing heartbeat file → CRASH path (gate fails open)', async () => {
+    // Load-bearing safety net: heartbeatAgeMs() returns MAX_SAFE_INTEGER when
+    // heartbeat.json is missing. Without this, an agent that crashed on its
+    // first cycle (before ever writing a heartbeat) would be silently swallowed
+    // by the gate. This test pins the fail-open contract that the JSDoc
+    // documents — if someone later "fixes" the missing-file case to return 0
+    // (looks fresh), real crashes get masked.
+    fsMocks.existsSync.mockReturnValue(false); // no heartbeat.json on disk
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(1);
+    const idleRows = fsMocks.appendFileSync.mock.calls
+      .map(([, line]) => String(line))
+      .filter(line => /\] IDLE-EXIT: /.test(line));
+    expect(idleRows).toEqual([]);
+    const crashRows = fsMocks.appendFileSync.mock.calls
+      .map(([, line]) => String(line))
+      .filter(line => /\] CRASH: exit_code=0/.test(line));
+    expect(crashRows).toHaveLength(1);
+  });
+});
+
 describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
   it('fires sessionRefresh when config on disk still matches original short duration', async () => {
     const refreshSpy = vi.fn().mockResolvedValue(undefined);

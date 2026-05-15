@@ -6,6 +6,7 @@
   "startup_delay": 0,
   "max_session_seconds": 28800,
   "max_crashes_per_day": 10,
+  "heartbeat_stale_threshold_minutes": 60,
   "working_directory": "",
   "timezone": "",
   "day_mode_start": "",
