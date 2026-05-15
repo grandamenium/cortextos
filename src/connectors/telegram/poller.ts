@@ -35,6 +35,18 @@ export class TelegramPoller {
   private callbackHandlers: CallbackHandler[] = [];
   private reactionHandlers: ReactionHandler[] = [];
   private pollInterval: number;
+  /**
+   * Monotonic generation id. Bumped on every stop() so any in-flight
+   * pollOnce() can detect that it was started under a prior generation
+   * and skip handler dispatch. Without this, callback and reaction
+   * handlers (which lack the connector-layer GenerationMismatchError
+   * guard that the message path has) could fire after stop() returns —
+   * a use-after-stop bug.
+   */
+  private generation: number = 0;
+  /** Promise of the currently in-flight start() — awaited by stop() so
+   *  callers see "really stopped" semantics on stop() return. */
+  private runPromise: Promise<void> | null = null;
 
   /**
    * @param api Telegram API client scoped to a single bot token.
@@ -89,22 +101,36 @@ export class TelegramPoller {
    */
   async start(): Promise<void> {
     this.running = true;
-    while (this.running) {
-      try {
-        await this.pollOnce();
-      } catch (err) {
-        // Log error but continue polling
-        console.error('[telegram-poller] Poll error:', err);
+    const myGen = this.generation;
+    const loop = (async () => {
+      while (this.running && this.generation === myGen) {
+        try {
+          await this.pollOnce(myGen);
+        } catch (err) {
+          console.error('[telegram-poller] Poll error:', err);
+        }
+        if (!this.running || this.generation !== myGen) break;
+        await sleep(this.pollInterval);
       }
-      await sleep(this.pollInterval);
+    })();
+    this.runPromise = loop;
+    try { await loop; } finally {
+      if (this.runPromise === loop) this.runPromise = null;
     }
   }
 
   /**
-   * Stop the polling loop.
+   * Stop the polling loop. Awaits the in-flight start() so callers see
+   * "really stopped" on return — no callback/reaction handlers fire
+   * after this resolves.
    */
-  stop(): void {
+  async stop(): Promise<void> {
     this.running = false;
+    this.generation++;
+    const inflight = this.runPromise;
+    if (inflight) {
+      try { await inflight; } catch { /* errors already logged in start() */ }
+    }
   }
 
   /**
@@ -117,16 +143,29 @@ export class TelegramPoller {
    * to preserve ordering. The offset is persisted after each successful
    * update so a crash mid-batch does not drop confirmed state.
    */
-  async pollOnce(): Promise<void> {
+  async pollOnce(callerGen?: number): Promise<void> {
+    // callerGen is the generation captured at start(); when stop() bumps
+    // generation mid-flight, every subsequent handler dispatch is skipped
+    // and the offset is left un-advanced (Telegram will redeliver).
+    // Existing callers (tests) that invoke pollOnce() directly pass no
+    // generation and get the legacy single-shot behavior — `stopped()`
+    // is a no-op for them because there's no in-flight start() to fence.
+    const fromStart = callerGen !== undefined;
+    const myGen = callerGen ?? this.generation;
+    const stopped = (): boolean => fromStart && (!this.running || this.generation !== myGen);
+
     const result = await this.api.getUpdates(this.offset, 1);
+    if (stopped()) return;
     if (!result?.result?.length) return;
 
     for (const update of result.result as TelegramUpdate[]) {
+      if (stopped()) return;
       const nextOffset = update.update_id + 1;
       let handlerFailed = false;
 
       if (update.message) {
         for (const handler of this.messageHandlers) {
+          if (stopped()) return;
           try {
             await handler(update.message);
           } catch (err) {
@@ -148,6 +187,7 @@ export class TelegramPoller {
 
       if (!handlerFailed && update.callback_query) {
         for (const handler of this.callbackHandlers) {
+          if (stopped()) return;
           try {
             await handler(update.callback_query);
           } catch (err) {
@@ -160,6 +200,7 @@ export class TelegramPoller {
 
       if (!handlerFailed && update.message_reaction) {
         for (const handler of this.reactionHandlers) {
+          if (stopped()) return;
           try {
             await handler(update.message_reaction);
           } catch (err) {

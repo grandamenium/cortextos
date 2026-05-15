@@ -72,6 +72,15 @@ function runCli(cwd: string, args: string[], label: string): boolean {
 }
 
 function writeAgentEnv(agentDir: string, botToken: string, chatId: string): void {
+  // Defensive sanity check: reject newline/CR in the values. Today both
+  // come from API-validated input so they can't contain newlines, but
+  // template-literal interpolation would silently corrupt the .env if
+  // they ever did — a malformed .env then breaks every agent.
+  if (/[\r\n]/.test(botToken) || /[\r\n]/.test(chatId)) {
+    throw new Error(
+      `writeAgentEnv: BOT_TOKEN or CHAT_ID contains a newline — refusing to write malformed .env`,
+    );
+  }
   const envPath = join(agentDir, '.env');
   const content = `BOT_TOKEN=${botToken}\nCHAT_ID=${chatId}\n`;
   writeFileSync(envPath, content, 'utf-8');

@@ -7,7 +7,7 @@ import { randomString } from '../utils/random.js';
 import { validateApprovalCategory } from '../utils/validate.js';
 import { sendMessage } from './message.js';
 import { postActivity } from './system.js';
-import { getConnector } from '../connectors/index.js';
+import { getConnector, isConnectorKind } from '../connectors/index.js';
 import type { ConnectorKind } from '../connectors/index.js';
 
 /**
@@ -144,7 +144,21 @@ function pingAgentViaConnector(
   let connectorKind: ConnectorKind | undefined;
   if (existsSync(configPath)) {
     try {
-      connectorKind = JSON.parse(readFileSync(configPath, 'utf-8')).connector;
+      const raw = JSON.parse(readFileSync(configPath, 'utf-8')).connector;
+      // Runtime-validate against CONNECTOR_ALLOWLIST. A typo or future-kind
+      // value that doesn't yet match the allowlist falls through to the
+      // legacy inference path (treat as if unset) — the approval ping is
+      // best-effort and must never fail loudly on bad agent config.
+      if (raw === undefined) {
+        // leave undefined → infer below
+      } else if (isConnectorKind(raw)) {
+        connectorKind = raw;
+      } else {
+        console.warn(
+          `[approval] ${agentDir}/config.json has unknown connector "${raw}"; ` +
+          `falling back to legacy inference. Add the kind to CONNECTOR_ALLOWLIST or fix the config.`,
+        );
+      }
     } catch { /* leave undefined → infer below */ }
   }
 

@@ -4,6 +4,8 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
+import { CONNECTOR_ALLOWLIST, isConnectorKind } from '../connectors/index.js';
+import { parseEnvFile } from '../utils/env.js';
 
 /**
  * BUG-035 fix: discover the cortextOS framework root without depending on
@@ -27,23 +29,6 @@ export function discoverProjectRoot(): string {
     return canonical;
   }
   return process.cwd();
-}
-
-function parseEnvFile(path: string): Record<string, string> {
-  const vars: Record<string, string> = {};
-  try {
-    const lines = readFileSync(path, 'utf-8').split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx < 0) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      const val = trimmed.slice(eqIdx + 1).trim();
-      vars[key] = val;
-    }
-  } catch { /* unreadable */ }
-  return vars;
 }
 
 function getEnabledAgentsPath(instanceId: string): string {
@@ -178,7 +163,23 @@ export const enableAgentCommand = new Command('enable')
       if (existsSync(configPath)) {
         try {
           const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
-          connectorKind = cfg.connector;
+          const raw = cfg.connector;
+          // Runtime-validate. A typo ("telegrm") or future-kind value
+          // that doesn't match CONNECTOR_ALLOWLIST is a hard error here
+          // — unlike the approval ping, `enable` is a deliberate
+          // operator action and silently inferring the wrong path makes
+          // the agent appear up but mis-configured.
+          if (raw === undefined) {
+            // leave connectorKind undefined → legacy inference path
+          } else if (isConnectorKind(raw)) {
+            connectorKind = raw;
+          } else {
+            console.error(
+              `Error: agent "${agent}" config.json has unknown connector "${raw}". ` +
+              `Allowed: ${CONNECTOR_ALLOWLIST.join(', ')}. Edit ${configPath} and re-run enable.`,
+            );
+            process.exit(1);
+          }
         } catch { /* leave undefined → legacy inference path */ }
       }
     }

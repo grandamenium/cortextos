@@ -495,7 +495,9 @@ export class TelegramConnector implements MessageConnector {
     // See the generation guard in the poller.onMessage closure above.
     this.pollGeneration += 1;
     if (this.poller) {
-      this.poller.stop();
+      // Await the poller's own generation-aware stop so handlers can't
+      // fire after stopInbound() resolves (use-after-stop guard).
+      await this.poller.stop();
       this.poller = null;
     }
     // PR4 c18: clear media retry counters. A fresh startInbound starts
@@ -557,6 +559,38 @@ export class TelegramConnector implements MessageConnector {
     const numericId = Number(messageId);
     if (!Number.isSafeInteger(numericId) || numericId <= 0) {
       throw new Error(`sendReaction: invalid Telegram message_id ${JSON.stringify(messageId)}`);
+    }
+    if (!opts?.remove) {
+      // Shape-validate the emoji before the wire call. Catches the
+      // obvious-broken cases (empty string, control chars, long
+      // pseudo-strings) locally rather than getting a cryptic 400 from
+      // Telegram. We deliberately do NOT enforce Telegram's exact
+      // documented allowlist — it changes upstream, and a strict mirror
+      // would lock the project's portable vocabulary (✅ ❌ 🛠 ⏸)
+      // ahead of any Telegram expansion. Telegram still rejects values
+      // outside its set with a 400 from setMessageReaction; this guard
+      // is defense-in-depth on the local side.
+      if (typeof emoji !== 'string' || emoji.length === 0) {
+        throw new Error(`sendReaction: emoji must be a non-empty string (got ${JSON.stringify(emoji)})`);
+      }
+      // Reject control characters (incl. newlines, tabs, NULs) — never
+      // valid in an emoji reaction. Use charCodeAt rather than a
+      // regex-literal range so the source file stays free of raw
+      // control bytes.
+      for (let i = 0; i < emoji.length; i++) {
+        const c = emoji.charCodeAt(i);
+        if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) {
+          throw new Error('sendReaction: emoji contains control characters');
+        }
+      }
+      // Cap by codepoint count rather than .length so ZWJ sequences
+      // (👨‍💻 = 5 codepoints, 7 UTF-16 code units) pass while clearly
+      // pasted-in text strings fail. 16 codepoints is generous —
+      // Telegram's longest legitimate reactions are ~5 codepoints.
+      const codepoints = [...emoji].length;
+      if (codepoints > 16) {
+        throw new Error(`sendReaction: emoji too long (${codepoints} codepoints, max 16)`);
+      }
     }
     const reaction = opts?.remove ? [] : [{ type: 'emoji' as const, emoji }];
     await this.api.setMessageReaction(this.chatId, numericId, reaction, opts?.isBig ?? false);

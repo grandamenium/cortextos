@@ -1,5 +1,118 @@
 # CHANGELOG
 
+## [unreleased] — Pluggable Communications Connectors (audit pass)
+
+Pre-release security + correctness sweep over the pluggable-connectors
+stack. Two independent reviews (Claude Opus 4.7 + GPT-5.4 Codex) ran
+the diff against upstream/main and the fixes below address every
+finding. No interface changes — purely internal hardening.
+
+### Security
+- **`src/hooks/hook-planmode-approval.ts`** — `tool_input.plan_file`
+  is now confined to `~/.claude/plans/` via `realpathSync`-based
+  resolution (`confinePlanPath()`). Closes an arbitrary-file-read
+  exfil channel where a prompt-injected agent could substitute a
+  host path (e.g. `/etc/passwd`) into `ExitPlanMode`'s input and
+  ship the first 3600 chars of its contents to the operator chat.
+- **`src/hooks/hook-planmode-approval.ts`** — now honors
+  `config.connector === 'none'` as a hard short-circuit, matching
+  `hook-permission-request.ts`. Previously gated only on
+  `BOT_TOKEN`/`CHAT_ID` env, so a `connector: 'none'` agent with
+  inherited Telegram creds would still post plans to Telegram.
+- **`src/connectors/telegram/api.ts:downloadFile`** — replaced
+  `response.arrayBuffer()` with a streaming `response.body.getReader()`
+  loop that byte-counts per chunk and `cancel()`s the reader the
+  instant the cap is exceeded. Closes a memory-exhaustion vector
+  when the origin omits or misreports `Content-Length` (the prior
+  Content-Length precheck was bypassable on a headerless response).
+- **`src/daemon/index.ts`** crash-loop alerter — replaced
+  `spawnSync('curl', [..., URL_WITH_TOKEN, ...])` with
+  `spawnSync(process.execPath, ['-e', childScript], { input: ... })`.
+  The BOT_TOKEN now flows over the child process's stdin instead of
+  appearing in argv, removing the "token visible to `ps` /
+  `/proc/$pid/cmdline`" surface during the alert window.
+
+### Correctness
+- **`src/connectors/telegram/poller.ts`** — added a monotonic
+  `generation` counter and `runPromise` tracking. `stop()` is now
+  async, bumps the generation, and awaits the in-flight `start()`
+  loop before returning. A `stopped()` guard runs before every
+  handler dispatch (message + callback + reaction), so no handler
+  can fire after `stop()` resolves. Pre-fix, callback and reaction
+  paths had no generation guard at all — only the message path did.
+- **`src/connectors/telegram/telegram-connector.ts:stopInbound`** —
+  now `await`s `poller.stop()`, matching the new async contract.
+- **`src/connectors/telegram/media.ts:enforceQuota`** — throws
+  when a single file's bytes alone exceed the total cache quota
+  instead of silently returning (the pre-fix "defense-in-depth log
+  line" comment was actually a silent pass-through that broke the
+  quota's invariant whenever `perFileBytes > totalQuotaBytes` got
+  mis-configured).
+- **`src/connectors/telegram/telegram-connector.ts:sendReaction`** —
+  shape-validates the emoji before the wire call: rejects non-string
+  / empty input, control characters (charCodeAt over 0x00-0x1F and
+  0x7F-0x9F), and any value longer than 16 codepoints (well above
+  the longest legitimate ZWJ-sequence reaction). Deliberately does
+  NOT enforce Telegram's exact allowlist — that drifts upstream and
+  a strict mirror would lock the project's portable vocabulary
+  (✅ ❌ 🛠 ⏸) ahead of any Telegram expansion.
+- **`src/connectors/index.ts`** — added `isConnectorKind()` type
+  guard, `CONNECTOR_ENV_KEYS` registry, and `getAllConnectorCredKeys()`
+  aggregator. `getOperatorConnector()` now warns (instead of
+  silently dropping) when `CTX_OPERATOR_BOT_TOKEN` is set but
+  malformed.
+- **`src/daemon/agent-manager.ts:loadAgentConfig`** — runtime-validates
+  `config.connector` against `CONNECTOR_ALLOWLIST` and drops the
+  field on a mismatch so the legacy-inference path stays the default
+  for unrecognized values. Without this, a typo like `"telegrm"`
+  would reach `getConnector()` inside `startAgent()` and throw —
+  killing the entire startup loop.
+- **`src/daemon/agent-manager.ts:discoverAndStart`** — wraps the
+  per-agent `await this.startAgent(...)` in a try/catch so one
+  broken agent (corrupt config, malformed .env, unknown connector
+  kind) only kills its own startup, not every other agent's.
+- **`src/bus/approval.ts:pingAgentViaConnector`**,
+  **`src/cli/enable-agent.ts`**, **`src/cli/bus.ts:readConnectorKindFromAgent`** —
+  all three sites now runtime-validate `config.connector` against
+  the allowlist via `isConnectorKind()`. Approval ping silently
+  ignores invalid (best-effort contract preserved); `enable`
+  hard-errors with a clear message; `bus` warns and falls back.
+- **`src/cli/bus.ts`** — both `bus send` and `bus react` now
+  source the "clear caller-inherited creds from base env" key
+  list from `getAllConnectorCredKeys()` instead of a hardcoded
+  `['BOT_TOKEN', 'CHAT_ID', 'ALLOWED_USER']`. Adding a future
+  connector (Matrix, RocketChat) becomes a one-line registry
+  change instead of a hunt across CLI sites.
+
+### Quality / hygiene
+- **`src/cli/setup.ts:writeAgentEnv`** — refuses to write if
+  BOT_TOKEN or CHAT_ID contain newline / CR (defensive — today's
+  API-validated values can't, but a malformed `.env` from
+  interpolation would break every subsequent enable).
+- **`src/cli/enable-agent.ts`** — switched from a local
+  `parseEnvFile` (no quote/comment handling) to the shared
+  `src/utils/env.ts` parser. Inconsistency between this and
+  `src/hooks/index.ts` was a latent footgun where a quoted
+  `BOT_TOKEN="abc"` would validate at setup but fail at runtime.
+- **`src/cli/bus.ts:readConnectorKindFromAgent`** — surfaces JSON
+  parse errors via `console.warn` instead of silently dropping
+  (corrupt config no longer silently downgrades to legacy
+  inference).
+- **Agent template** (`templates/agent/CLAUDE.md`,
+  `templates/agent/TOOLS.md`) — promoted `bus send $CTX_AGENT_NAME`
+  as the preferred reply command (connector-agnostic), with
+  `bus send-telegram <chat_id>` re-documented as a Telegram-only
+  escape hatch. Per the project's agent-awareness rule, ships
+  the new connector-agnostic vocabulary into the prompts that
+  spawn new agents.
+
+### Tests
+- All 837 tests across `tests/unit/{connectors,hooks,bus,cli,telegram,daemon}`
+  + the two integration smokes + `tests/lint-no-stray-raw-api.test.ts`
+  pass on the audited diff. Typecheck clean.
+
+---
+
 ## [unreleased] — Pluggable Communications Connectors (PR4 commit 1 — first-class media)
 
 Lifts media handling out of the daemon's onMessage handler into the

@@ -8,7 +8,7 @@ import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
-import { TelegramConnector, NullConnector, getConnector } from '../connectors/index.js';
+import { TelegramConnector, NullConnector, getConnector, isConnectorKind, CONNECTOR_ALLOWLIST } from '../connectors/index.js';
 import type {
   MessageConnector,
   NormalizedMessage,
@@ -135,7 +135,21 @@ export class AgentManager {
       }
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead
       // of falling back to `this.org` (the daemon's startup org).
-      await this.startAgent(name, dir, config, org);
+      //
+      // Per-agent isolation (audit fix): wrap in try/catch so one agent
+      // with a broken config (corrupt config.json, unknown connector kind
+      // that slipped past loadAgentConfig's validator, malformed .env that
+      // crashes the legacy resolver, etc.) does NOT take down every OTHER
+      // agent's startup. Failures here used to abort the for-loop because
+      // `await this.startAgent(...)` propagated synchronously.
+      try {
+        await this.startAgent(name, dir, config, org);
+      } catch (err) {
+        console.error(
+          `[agent-manager] Failed to start agent "${name}" — skipping and continuing. ` +
+          `Cause: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
@@ -575,17 +589,16 @@ export class AgentManager {
         // agent's PTY injection.
         const autoEyesEnabled = config.auto_eyes_ack !== false;
         if (autoEyesEnabled && connector?.capabilities.outboundReactions && connector.sendReaction && m.id) {
-          // Verification log so operators can confirm auto-eyes is
-          // firing without inspecting the Telegram client. Removed
-          // once the feature stabilizes; for now it confirms the path.
-          log(`auto-eyes-ack: 👀 → message ${m.id}`);
+          // Fire-and-forget. Log only on FAILURE — the verbose verification
+          // logs from c25 (kickoff + OK + skipped) were useful during smoke
+          // but produce 2-3 log lines per inbound user message in steady
+          // state. Errors stay loud because they signal real config or
+          // network issues (rate limit, missing capability, Telegram chat
+          // disallowing the emoji). To re-enable success/skipped tracing,
+          // gate via your own `log(...)` wrapper or a CTX_DEBUG_AUTO_EYES
+          // env var in a follow-up.
           connector.sendReaction(m.id, '👀')
-            .then(() => log(`auto-eyes-ack OK for message ${m.id}`))
             .catch((err) => log(`auto-eyes-ack failed for message ${m.id}: ${err instanceof Error ? err.message : String(err)}`));
-        } else if (autoEyesEnabled) {
-          // Why didn't it fire? One-line diagnostic — fires once per
-          // inbound message so the log can stay terse.
-          log(`auto-eyes-ack skipped: outboundReactions=${connector?.capabilities.outboundReactions} sendReaction=${!!connector?.sendReaction} m.id=${m.id || '<empty>'}`);
         }
       };
 
@@ -1144,13 +1157,30 @@ export class AgentManager {
   }
 
   /**
-   * Load agent config from config.json.
+   * Load agent config from config.json. Runtime-validates `connector`
+   * against `CONNECTOR_ALLOWLIST` — a typo or future-kind value would
+   * otherwise reach `getConnector()` inside `startAgent()` and throw
+   * "Unknown connector", taking the whole `discoverAndStart()` loop
+   * down with it (per-agent isolation is handled at the call site, but
+   * we ALSO sanitize the value here so the legacy-inference path stays
+   * the default when the field is unrecognized).
    */
   private loadAgentConfig(agentDir: string): AgentConfig {
     const configPath = join(agentDir, 'config.json');
     try {
       if (existsSync(configPath)) {
-        return JSON.parse(readFileSync(configPath, 'utf-8'));
+        const parsed = JSON.parse(readFileSync(configPath, 'utf-8'));
+        if (parsed && typeof parsed === 'object' && 'connector' in parsed) {
+          const c = parsed.connector;
+          if (c !== undefined && !isConnectorKind(c)) {
+            console.warn(
+              `[agent-manager] ${configPath}: unknown connector "${String(c)}" — ` +
+              `falling back to legacy inference. Allowed: ${CONNECTOR_ALLOWLIST.join(', ')}.`,
+            );
+            delete parsed.connector;
+          }
+        }
+        return parsed;
       }
     } catch {
       // Ignore parse errors

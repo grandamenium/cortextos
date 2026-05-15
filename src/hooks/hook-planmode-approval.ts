@@ -16,15 +16,48 @@ import {
   readStdin,
   parseHookInput,
   loadEnv,
+  readAgentConfig,
   outputDecision,
   generateId,
   waitForResponseFile,
   buildPlanKeyboard,
   cleanupResponseFile,
 } from './index';
-import { join } from 'path';
-import { mkdirSync, readFileSync, existsSync, readdirSync, statSync } from 'fs';
+import { join, resolve, sep } from 'path';
+import { mkdirSync, readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
 import { homedir } from 'os';
+
+/**
+ * Resolve the realpath of `~/.claude/plans/` once at load. Used to confine
+ * `tool_input.plan_file` reads so a prompt-injected agent can't substitute
+ * an arbitrary host path (e.g. `/etc/passwd`) and exfiltrate its first 3600
+ * chars to the operator's chat. If the directory doesn't exist yet we fall
+ * back to the unresolved path — `confinePlanPath` then accepts only paths
+ * that resolve under that prefix, so an attacker still can't escape.
+ */
+const PLANS_DIR = (() => {
+  const raw = join(homedir(), '.claude', 'plans');
+  try { return realpathSync(raw); } catch { return resolve(raw); }
+})();
+
+/**
+ * Return the realpath of `candidate` iff it resolves to a file under
+ * `PLANS_DIR`. Returns null otherwise (path traversal, missing file,
+ * symlink pointing outside, or unreadable). Callers fall back to
+ * `findMostRecentPlan()` when this rejects.
+ */
+function confinePlanPath(candidate: string): string | null {
+  if (!candidate) return null;
+  let real: string;
+  try {
+    real = realpathSync(candidate);
+  } catch {
+    return null;
+  }
+  const prefix = PLANS_DIR.endsWith(sep) ? PLANS_DIR : PLANS_DIR + sep;
+  if (real !== PLANS_DIR && !real.startsWith(prefix)) return null;
+  return real;
+}
 
 function findMostRecentPlan(): string | null {
   const plansDir = join(homedir(), '.claude', 'plans');
@@ -61,16 +94,26 @@ export async function main(): Promise<void> {
   const { tool_input } = parseHookInput(input);
 
   const env = loadEnv();
+  const config = readAgentConfig();
 
-  if (!env.botToken || !env.chatId) {
-    // No remote channel → auto-allow so agents aren't blocked.
+  // Mirrors hook-permission-request.ts:79 — `connector: 'none'` is the
+  // operator's explicit no-remote-channel opt-out. Without this gate, a
+  // 'none' agent with inherited BOT_TOKEN/CHAT_ID in its env would still
+  // ship plans to Telegram, defeating the opt-out.
+  if (config?.connector === 'none' || !env.botToken || !env.chatId) {
     outputDecision('allow');
     return;
   }
 
-  let planPath = tool_input.plan_file || '';
+  // Confine plan_file to ~/.claude/plans/ — prevents a prompt-injected
+  // agent from substituting an arbitrary host path (e.g. /etc/passwd) and
+  // exfiltrating its contents to the operator's chat. If the supplied
+  // path resolves outside the allowed root, silently fall back to the
+  // most-recent plan (the daemon's normal path).
+  const rawPlanPath = tool_input.plan_file || '';
+  let planPath = rawPlanPath ? confinePlanPath(rawPlanPath) : null;
   if (!planPath) {
-    planPath = findMostRecentPlan() || '';
+    planPath = findMostRecentPlan();
   }
 
   let planContent = '';

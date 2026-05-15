@@ -953,13 +953,26 @@ function readConnectorKindFromAgent(agentDir: string | undefined): string | unde
   if (!agentDir) return undefined;
   const { readFileSync, existsSync } = require('fs');
   const { join } = require('path');
+  const { isConnectorKind, CONNECTOR_ALLOWLIST } = require('../connectors/index.js') as typeof import('../connectors/index.js');
   const configPath = join(agentDir, 'config.json');
   if (!existsSync(configPath)) return undefined;
+  let raw: unknown;
   try {
-    return JSON.parse(readFileSync(configPath, 'utf-8')).connector;
-  } catch {
+    raw = JSON.parse(readFileSync(configPath, 'utf-8')).connector;
+  } catch (err) {
+    // Surface a parse failure so a corrupted config.json doesn't silently
+    // downgrade to the legacy telegram inference path. Best-effort log,
+    // then fall through to undefined (legacy behavior).
+    console.warn(`[bus] could not parse ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
+  if (raw === undefined) return undefined;
+  if (isConnectorKind(raw)) return raw;
+  console.warn(
+    `[bus] ${configPath} has unknown connector "${String(raw)}"; ignoring. ` +
+    `Allowed: ${CONNECTOR_ALLOWLIST.join(', ')}.`,
+  );
+  return undefined;
 }
 
 busCommand
@@ -1121,11 +1134,12 @@ busCommand
       ? parseEnvFile(agentEnvPath)
       : {};
     const baseEnv: NodeJS.ProcessEnv = { ...process.env };
-    // Currently only Telegram has named env keys in CONNECTOR_ALLOWLIST.
-    // Future kinds (Matrix MATRIX_ACCESS_TOKEN, RocketChat
-    // ROCKETCHAT_AUTH_TOKEN, etc.) extend this list when they land.
-    const connectorCredKeys = ['BOT_TOKEN', 'CHAT_ID', 'ALLOWED_USER'];
-    for (const k of connectorCredKeys) {
+    // Source the cred-key set from the connector registry so adding
+    // a new connector (Matrix, RocketChat, …) automatically extends
+    // this sanitization. Audit-found foot-gun: pre-fix this list was
+    // hardcoded in two CLI sites and would have rotted independently.
+    const { getAllConnectorCredKeys } = require('../connectors/index.js');
+    for (const k of getAllConnectorCredKeys()) {
       if (!(k in agentEnv)) delete baseEnv[k];
     }
     const mergedEnv: NodeJS.ProcessEnv = { ...baseEnv, ...agentEnv };
@@ -1207,8 +1221,10 @@ busCommand
       ? parseEnvFile(agentEnvPath)
       : {};
     const baseEnv: NodeJS.ProcessEnv = { ...process.env };
-    const connectorCredKeys = ['BOT_TOKEN', 'CHAT_ID', 'ALLOWED_USER'];
-    for (const k of connectorCredKeys) {
+    // Same registry-sourced sanitization as `bus send` — see commentary
+    // above for the rationale.
+    const { getAllConnectorCredKeys } = require('../connectors/index.js');
+    for (const k of getAllConnectorCredKeys()) {
       if (!(k in agentEnv)) delete baseEnv[k];
     }
     const mergedEnv: NodeJS.ProcessEnv = { ...baseEnv, ...agentEnv };

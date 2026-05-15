@@ -592,19 +592,21 @@ export class TelegramAPI {
   /**
    * Download a file from Telegram servers.
    *
-   * `opts.maxBytes` enforces a hard ceiling at TWO points: the
-   * `Content-Length` header BEFORE the body is read (cheapest reject)
-   * AND the materialized buffer after read (defensive — covers servers
-   * that misreport Content-Length). When the cap is hit, the response
-   * stream is cancelled and an error is thrown so the caller can fall
-   * back to text-only delivery. Added in PR4 c5 (Codex P0.2 —
-   * UNBOUNDED_MEDIA_DOWNLOAD_DOS).
+   * `opts.maxBytes` enforces a hard ceiling at THREE points:
+   *   1. `Content-Length` header pre-read (cheapest reject, declared size).
+   *   2. Per-chunk while streaming the body (covers servers that omit or
+   *      misreport Content-Length — without this, a malicious or buggy
+   *      origin could push an unbounded body until the 30s timeout fires).
+   *   3. Final buffer size (defense in depth).
    *
-   * Note: this still calls `arrayBuffer()` so the whole file lands in
-   * memory before the cap re-check. A future PR replaces this with a
-   * streaming pipeline (fetch ReadableStream → write stream with byte
-   * counting). For now the Content-Length precheck eliminates the
-   * worst case (server-declared 1 GB file) without that refactor.
+   * Memory profile: streaming via `response.body.getReader()` means the
+   * accumulated `chunks` array is bounded by `maxBytes + lastChunkSize`
+   * (we stop reading and `cancel()` as soon as the running byte count
+   * exceeds the cap). `Buffer.concat()` then materializes the final
+   * buffer — peak resident is roughly `2 × accumulated` for the concat
+   * duration, then drops to `1 × accumulated`. Either way the worst
+   * case is bounded — pre-audit `arrayBuffer()` had no upper bound
+   * when the origin omitted Content-Length.
    */
   async downloadFile(filePath: string, opts?: { maxBytes?: number }): Promise<Buffer> {
     const url = `${this.fileBaseUrl}/bot${this.getToken()}/${filePath}`;
@@ -612,24 +614,48 @@ export class TelegramAPI {
     if (!response.ok) {
       throw new Error(`Failed to download file: ${response.status}`);
     }
-    if (opts?.maxBytes !== undefined) {
+    const cap = opts?.maxBytes;
+    if (cap !== undefined) {
       const contentLength = response.headers.get('content-length');
       if (contentLength) {
         const declared = parseInt(contentLength, 10);
-        if (Number.isFinite(declared) && declared > opts.maxBytes) {
-          // Drop the body without reading. Best-effort — older Node
-          // builds may not support cancel(); the await on the
-          // arrayBuffer() below is skipped either way.
+        if (Number.isFinite(declared) && declared > cap) {
           await response.body?.cancel?.().catch(() => {});
-          throw new Error(`File exceeds max bytes (declared ${declared} > cap ${opts.maxBytes})`);
+          throw new Error(`File exceeds max bytes (declared ${declared} > cap ${cap})`);
         }
       }
     }
-    const arrayBuffer = await response.arrayBuffer();
-    if (opts?.maxBytes !== undefined && arrayBuffer.byteLength > opts.maxBytes) {
-      throw new Error(`File exceeds max bytes (actual ${arrayBuffer.byteLength} > cap ${opts.maxBytes})`);
+    const reader = response.body?.getReader();
+    if (!reader) {
+      // No body stream — fall back to arrayBuffer() with a post-check.
+      // Practically unreachable on modern Node; kept as a defensive
+      // branch so the function still works if a test fakes the response.
+      const buf = await response.arrayBuffer();
+      if (cap !== undefined && buf.byteLength > cap) {
+        throw new Error(`File exceeds max bytes (actual ${buf.byteLength} > cap ${cap})`);
+      }
+      return Buffer.from(buf);
     }
-    return Buffer.from(arrayBuffer);
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        received += value.byteLength;
+        if (cap !== undefined && received > cap) {
+          await reader.cancel().catch(() => {});
+          throw new Error(`File exceeds max bytes (streamed ${received} > cap ${cap})`);
+        }
+        chunks.push(value);
+      }
+    } catch (err) {
+      // Ensure the reader is cancelled on any error path before rethrow.
+      await reader.cancel().catch(() => {});
+      throw err;
+    }
+    return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)), received);
   }
 
   /**

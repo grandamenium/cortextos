@@ -59,9 +59,15 @@ function dirSizeBytes(dir: string): number {
  */
 function enforceQuota(dir: string, incomingBytes: number, totalQuotaBytes: number): void {
   if (incomingBytes >= totalQuotaBytes) {
-    // Single file already exceeds total quota — the perFile cap should
-    // have caught this; this branch is the defense-in-depth log line.
-    return;
+    // Single file alone exceeds the total cache quota — perFile cap
+    // should have caught this upstream, but if it didn't (misconfig
+    // where perFile > totalQuota), THROW instead of silently allowing
+    // the write. Falling through here would persist a file that the
+    // very next call must evict, blowing the quota's guarantee.
+    throw new Error(
+      `[telegram-media] single file (${incomingBytes} bytes) >= total quota (${totalQuotaBytes} bytes); ` +
+      `refusing write. Check perFileBytes vs totalQuotaBytes configuration.`,
+    );
   }
   let used = dirSizeBytes(dir);
   if (used + incomingBytes <= totalQuotaBytes) return;
