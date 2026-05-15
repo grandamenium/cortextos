@@ -39,7 +39,7 @@ vi.mock('../../../src/bus/reminders.js', () => ({
 }));
 
 vi.mock('../../../src/utils/paths.js', () => ({
-  resolvePaths: vi.fn().mockReturnValue({}),
+  resolvePaths: vi.fn().mockReturnValue({ stateDir: '/tmp/test-ctx/state/alice' }),
 }));
 
 const fsMocks = {
@@ -247,6 +247,23 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     const stopOrder = stopSpy.mock.invocationCallOrder[0];
     const startOrder = startSpy.mock.invocationCallOrder[0];
     expect(stopOrder).toBeLessThan(startOrder);
+  });
+
+  it('sessionRefresh() writes .session-refresh marker before stop (false-crash FP fix)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap, 'stop').mockResolvedValue();
+    vi.spyOn(ap, 'start').mockResolvedValue();
+    fsMocks.writeFileSync.mockReset();
+
+    await ap.sessionRefresh();
+
+    const sessionRefreshWrites = fsMocks.writeFileSync.mock.calls.filter(
+      (call) => String(call[0]).endsWith('.session-refresh'),
+    );
+    expect(sessionRefreshWrites).toHaveLength(1);
+    expect(String(sessionRefreshWrites[0][0])).toBe('/tmp/test-ctx/state/alice/.session-refresh');
   });
 });
 
