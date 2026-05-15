@@ -223,13 +223,13 @@ graph LR
 
   TPI <--> TG
 
-  style I fill:#cce,stroke:#339,stroke-width:2px
-  style FAC fill:#cce,stroke:#339,stroke-width:2px
-  style TC fill:#9c9,stroke:#363
-  style DC fill:#fc9,stroke:#963,stroke-dasharray: 5 5
-  style MC fill:#fc9,stroke:#963,stroke-dasharray: 5 5
-  style RC fill:#fc9,stroke:#963,stroke-dasharray: 5 5
-  style XC fill:#fc9,stroke:#963,stroke-dasharray: 5 5
+  style I fill:#cce,stroke:#339,stroke-width:2px,color:#000
+  style FAC fill:#cce,stroke:#339,stroke-width:2px,color:#000
+  style TC fill:#9c9,stroke:#363,color:#000
+  style DC fill:#fc9,stroke:#963,stroke-dasharray: 5 5,color:#000
+  style MC fill:#fc9,stroke:#963,stroke-dasharray: 5 5,color:#000
+  style RC fill:#fc9,stroke:#963,stroke-dasharray: 5 5,color:#000
+  style XC fill:#fc9,stroke:#963,stroke-dasharray: 5 5,color:#000
 ```
 
 **Legend:**
@@ -269,8 +269,8 @@ flowchart TB
     Out -. "agent's reply triggers<br/>provider event" .-> In
     In -. "inbound message<br/>prompts agent reply" .-> Out
 
-    classDef agnostic fill:#cce,stroke:#339
-    classDef provider fill:#9c9,stroke:#363
+    classDef agnostic fill:#cce,stroke:#339,color:#000
+    classDef provider fill:#9c9,stroke:#363,color:#000
     class i2,i3,i4,o1,o2,o3 agnostic
     class i1,o4 provider
 ```
