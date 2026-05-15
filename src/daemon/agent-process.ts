@@ -8,7 +8,7 @@ import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir } from '../utils/atomic.js';
-import { writeCortextosEnv } from '../utils/env.js';
+import { buildAgentRuntimeEnv, writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
 
@@ -372,6 +372,30 @@ export class AgentProcess {
    */
   getConfig(): AgentConfig {
     return this.config;
+  }
+
+  /**
+   * Runtime identifier for the sidecar compactor's Claude-only gate.
+   * Absent/empty runtime = legacy Claude Code agent → normalize to 'claude-code'
+   * so the SIGSTOP snapshot gate doesn't silently skip them.
+   */
+  getRuntime(): string {
+    return this.config?.runtime?.trim() || 'claude-code';
+  }
+
+  /**
+   * PID of the PTY child process, or null when no PTY is alive.
+   * Used by `pauseForJsonlSnapshot` for SIGSTOP/SIGCONT.
+   */
+  getChildPid(): number | null {
+    return (this.pty as { getPid?: () => number | null } | null)?.getPid?.() ?? null;
+  }
+
+  /**
+   * Build the exact runtime env used by spawned Claude sessions.
+   */
+  buildRuntimeEnv(): NodeJS.ProcessEnv {
+    return buildAgentRuntimeEnv(this.env, this.config);
   }
 
   // --- Private methods ---

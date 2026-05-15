@@ -100,6 +100,7 @@ beforeEach(() => {
   // agentExistsInFramework() can find TEST_AGENT.
   frameworkRoot = mkdtempSync(join(tmpdir(), 'bus-crons-fw-'));
   mkdirSync(join(frameworkRoot, 'orgs', 'lifeos', 'agents', TEST_AGENT), { recursive: true });
+  mkdirSync(join(frameworkRoot, 'orgs', 'lifeos', 'agents', 'top-g'), { recursive: true });
 
   process.env.CTX_ROOT = tmpRoot;
   process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
@@ -180,6 +181,76 @@ describe('bus add-cron', () => {
     const crons = readCronsFile();
     expect(crons).toHaveLength(1);
     expect(crons[0].schedule).toBe('0 13 * * *');
+  });
+
+  it('success: allows fresh-session for top-g heartbeat', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await busCommand.parseAsync([
+      'node', 'bus', 'add-cron', 'top-g', 'heartbeat', '4h',
+      'Run heartbeat.',
+      '--fresh-session',
+    ]);
+
+    expect(errSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith("Added cron 'heartbeat' for top-g");
+
+    const raw = readFileSync(join(tmpRoot, '.cortextOS', 'state', 'agents', 'top-g', 'crons.json'), 'utf-8');
+    expect(JSON.parse(raw).crons[0]).toMatchObject({ fresh_session: true });
+  });
+
+  it('success: stores protocol_file for fresh-session cron', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await busCommand.parseAsync([
+      'node', 'bus', 'add-cron', TEST_AGENT, 'heartbeat', '4h',
+      'Run heartbeat.',
+      '--fresh-session',
+      '--protocol-file', 'HEARTBEAT.md',
+    ]);
+
+    expect(errSpy).not.toHaveBeenCalled();
+    const crons = readCronsFile();
+    expect(crons[0]).toMatchObject({
+      fresh_session: true,
+      protocol_file: 'HEARTBEAT.md',
+    });
+  });
+
+  it('error: rejects absolute protocol_file', async () => {
+    const exitSpy = mockExit();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(
+      busCommand.parseAsync([
+        'node', 'bus', 'add-cron', TEST_AGENT, 'heartbeat', '4h',
+        'Run heartbeat.',
+        '--protocol-file', '/tmp/HEARTBEAT.md',
+      ])
+    ).rejects.toThrow('__PROCESS_EXIT_1__');
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('--protocol-file must be a relative path');
+  });
+
+  it('error: rejects fresh-session for top-g morning-review', async () => {
+    const exitSpy = mockExit();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(
+      busCommand.parseAsync([
+        'node', 'bus', 'add-cron', 'top-g', 'morning-review', '4h',
+        'Run morning review.',
+        '--fresh-session',
+      ])
+    ).rejects.toThrow('__PROCESS_EXIT_1__');
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('protected cron');
   });
 
   it('error: duplicate cron name → exits 1 with message', async () => {
@@ -401,6 +472,33 @@ describe('bus update-cron', () => {
 
     const crons = readCronsFile();
     expect(crons[0].description).toBe('New description.');
+  });
+
+  it('updates protocol_file (--protocol-file)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await busCommand.parseAsync([
+      'node', 'bus', 'update-cron', TEST_AGENT, 'heartbeat', '--protocol-file', 'HEARTBEAT.md',
+    ]);
+
+    const crons = readCronsFile();
+    expect(crons[0].protocol_file).toBe('HEARTBEAT.md');
+  });
+
+  it('error: rejects empty protocol_file on update', async () => {
+    const exitSpy = mockExit();
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await expect(
+      busCommand.parseAsync([
+        'node', 'bus', 'update-cron', TEST_AGENT, 'heartbeat', '--protocol-file', '   ',
+      ])
+    ).rejects.toThrow('__PROCESS_EXIT_1__');
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(errSpy.mock.calls.flat().join(' ')).toContain('--protocol-file must be a non-empty relative path');
   });
 
   it('error: no options provided → exits 1', async () => {

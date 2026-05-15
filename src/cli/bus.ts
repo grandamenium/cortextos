@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync, readdirSync } from 'fs';
+import { isAbsolute, join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
@@ -21,6 +21,7 @@ import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/kn
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
+import { isFreshSessionProtectedCron, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -655,6 +656,29 @@ busCommand
     } else {
       console.log('Hard restart planned (daemon not running — will take effect on next start)');
     }
+  });
+
+busCommand
+  .command('compact-now')
+  .description('Trigger an immediate Tier 1.5 sidecar compaction for this agent (writes .compact-now marker picked up by the fast-checker)')
+  .option('--agent <name>', 'Target agent (defaults to $CTX_AGENT_NAME)')
+  .action(async (opts: { agent?: string }) => {
+    const { writeFileSync: fsWrite, mkdirSync: fsMkdir } = require('fs');
+    const { join: pjoin } = require('path');
+    const { randomUUID } = require('crypto');
+    const env = resolveEnv();
+    const targetAgent = opts.agent ?? env.agentName;
+    if (!targetAgent) {
+      console.error('ERROR: No agent specified and CTX_AGENT_NAME not set');
+      process.exit(1);
+    }
+    const paths = resolvePaths(targetAgent, env.instanceId, env.org);
+    fsMkdir(paths.stateDir, { recursive: true });
+    const requestId = randomUUID();
+    const markerPath = pjoin(paths.stateDir, `.compact-now-${requestId}`);
+    fsWrite(markerPath, new Date().toISOString(), 'utf-8');
+    console.log(`Compaction requested (id=${requestId}). Fast-checker will pick up within one poll cycle.`);
+    console.log(`Marker: ${markerPath}`);
   });
 
 busCommand
@@ -1836,16 +1860,85 @@ function validateSchedule(raw: string): string {
  */
 function agentExistsInFramework(agentName: string, frameworkRoot: string): boolean {
   if (!frameworkRoot) return true; // can't check — allow
-  const { existsSync: fsExists, readdirSync: fsReaddir } = require('fs');
-  const { join: pjoin } = require('path');
-  const orgsDir = pjoin(frameworkRoot, 'orgs');
-  if (!fsExists(orgsDir)) return true; // no orgs dir — allow
+  const orgsDir = join(frameworkRoot, 'orgs');
+  if (!existsSync(orgsDir)) return true; // no orgs dir — allow
   try {
-    for (const org of fsReaddir(orgsDir)) {
-      if (fsExists(pjoin(orgsDir, org, 'agents', agentName))) return true;
+    for (const org of readdirSync(orgsDir)) {
+      if (existsSync(join(orgsDir, org, 'agents', agentName))) return true;
     }
   } catch { /* ignore */ }
   return false;
+}
+
+function readAgentRuntime(agentName: string, frameworkRoot: string): string | undefined {
+  if (!frameworkRoot) return undefined;
+  const orgsDir = join(frameworkRoot, 'orgs');
+  if (!existsSync(orgsDir)) return undefined;
+  try {
+    for (const org of readdirSync(orgsDir)) {
+      const configPath = join(orgsDir, org, 'agents', agentName, 'config.json');
+      if (!existsSync(configPath)) continue;
+      return JSON.parse(readFileSync(configPath, 'utf-8')).runtime;
+    }
+  } catch { /* ignore malformed/missing config in CLI validation */ }
+  return undefined;
+}
+
+function validateFreshSessionCliOptions(
+  agent: string,
+  cronName: string,
+  frameworkRoot: string,
+  opts: { freshSession?: boolean; skillFile?: string; protocolFile?: string; freshSessionTimeout?: string },
+): { freshSession?: boolean; skillFile?: string; protocolFile?: string; freshSessionTimeoutMs?: number } {
+  if (opts.skillFile !== undefined) {
+    if (!opts.skillFile.trim()) {
+      console.error('Error: --skill-file must be a non-empty relative path.');
+      process.exit(1);
+    }
+    if (isAbsolute(opts.skillFile)) {
+      console.error('Error: --skill-file must be a relative path.');
+      process.exit(1);
+    }
+  }
+
+  if (opts.protocolFile !== undefined) {
+    if (!opts.protocolFile.trim()) {
+      console.error('Error: --protocol-file must be a non-empty relative path.');
+      process.exit(1);
+    }
+    if (isAbsolute(opts.protocolFile)) {
+      console.error('Error: --protocol-file must be a relative path.');
+      process.exit(1);
+    }
+  }
+
+  let freshSessionTimeoutMs: number | undefined;
+  if (opts.freshSessionTimeout !== undefined) {
+    freshSessionTimeoutMs = Number(opts.freshSessionTimeout);
+    if (!Number.isInteger(freshSessionTimeoutMs) || freshSessionTimeoutMs <= 0) {
+      console.error(`Error: --fresh-session-timeout must be a positive integer, got '${opts.freshSessionTimeout}'.`);
+      process.exit(1);
+    }
+  }
+
+  if (opts.freshSession === true) {
+    if (isFreshSessionProtectedCron(agent, cronName)) {
+      console.error(`Error: --fresh-session is not allowed for protected cron '${agent}/${cronName}'.`);
+      process.exit(1);
+    }
+    const runtime = readAgentRuntime(agent, frameworkRoot);
+    if (!isFreshSessionSupportedRuntime(runtime)) {
+      console.error(`Error: --fresh-session is not supported for runtime '${runtime}'.`);
+      process.exit(1);
+    }
+  }
+
+  return {
+    freshSession: opts.freshSession,
+    skillFile: opts.skillFile?.trim(),
+    protocolFile: opts.protocolFile?.trim(),
+    freshSessionTimeoutMs,
+  };
 }
 
 /**
@@ -1875,7 +1968,17 @@ busCommand
   .argument('<interval>', 'Schedule: interval ("6h", "30m", "1d") or 5-field cron expr ("0 8 * * *")')
   .argument('<prompt...>', 'Prompt text injected when the cron fires (all remaining words joined)')
   .option('--desc <description>', 'Human-readable description (optional)')
-  .action(async (agent: string, name: string, interval: string, promptWords: string[], opts: { desc?: string }) => {
+  .option('--fresh-session', 'Run this cron in a fresh claude --print session')
+  .option('--skill-file <path>', 'Relative path to skill/context file for fresh-session system prompt')
+  .option('--protocol-file <path>', 'Relative path to protocol/checklist file appended to system prompt for fresh-session runs')
+  .option('--fresh-session-timeout <ms>', 'Fresh-session timeout in milliseconds')
+  .action(async (
+    agent: string,
+    name: string,
+    interval: string,
+    promptWords: string[],
+    opts: { desc?: string; freshSession?: boolean; skillFile?: string; protocolFile?: string; freshSessionTimeout?: string },
+  ) => {
     // Validate agent name format
     try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
 
@@ -1890,6 +1993,7 @@ busCommand
     // Validate schedule
     let schedule: string;
     try { schedule = validateSchedule(interval); } catch (err) { console.error(String(err)); process.exit(1); }
+    const fresh = validateFreshSessionCliOptions(agent, name, env.frameworkRoot, opts);
 
     const prompt = promptWords.join(' ');
     const cron: CronDefinition = {
@@ -1899,6 +2003,10 @@ busCommand
       enabled: true,
       created_at: new Date().toISOString(),
       ...(opts.desc ? { description: opts.desc } : {}),
+      ...(fresh.freshSession !== undefined ? { fresh_session: fresh.freshSession } : {}),
+      ...(fresh.skillFile !== undefined ? { skill_file: fresh.skillFile } : {}),
+      ...(fresh.protocolFile !== undefined ? { protocol_file: fresh.protocolFile } : {}),
+      ...(fresh.freshSessionTimeoutMs !== undefined ? { fresh_session_timeout_ms: fresh.freshSessionTimeoutMs } : {}),
     };
 
     try {
@@ -2025,15 +2133,45 @@ busCommand
   .option('--prompt <p>', 'New prompt text')
   .option('--enabled <bool>', 'Enable (true) or disable (false) the cron')
   .option('--desc <d>', 'New description')
-  .action(async (agent: string, name: string, opts: { interval?: string; cronExpr?: string; prompt?: string; enabled?: string; desc?: string }) => {
+  .option('--fresh-session', 'Enable fresh-session cron dispatch')
+  .option('--no-fresh-session', 'Disable fresh-session cron dispatch')
+  .option('--skill-file <path>', 'Relative path to skill/context file for fresh-session system prompt')
+  .option('--protocol-file <path>', 'Relative path to protocol/checklist file appended to system prompt for fresh-session runs')
+  .option('--fresh-session-timeout <ms>', 'Fresh-session timeout in milliseconds')
+  .action(async (
+    agent: string,
+    name: string,
+    opts: {
+      interval?: string;
+      cronExpr?: string;
+      prompt?: string;
+      enabled?: string;
+      desc?: string;
+      freshSession?: boolean;
+      skillFile?: string;
+      protocolFile?: string;
+      freshSessionTimeout?: string;
+    },
+  ) => {
     try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
 
     const rawSchedule = opts.interval ?? opts.cronExpr;
-    if (!rawSchedule && opts.prompt === undefined && opts.enabled === undefined && opts.desc === undefined) {
-      console.error('Error: at least one of --interval, --cron-expr, --prompt, --enabled, or --desc is required.');
+    if (
+      !rawSchedule &&
+      opts.prompt === undefined &&
+      opts.enabled === undefined &&
+      opts.desc === undefined &&
+      opts.freshSession === undefined &&
+      opts.skillFile === undefined &&
+      opts.protocolFile === undefined &&
+      opts.freshSessionTimeout === undefined
+    ) {
+      console.error('Error: at least one update option is required.');
       process.exit(1);
     }
 
+    const env = resolveEnv();
+    const fresh = validateFreshSessionCliOptions(agent, name, env.frameworkRoot, opts);
     const patch: Partial<CronDefinition> = {};
 
     if (rawSchedule !== undefined) {
@@ -2052,6 +2190,18 @@ busCommand
     if (opts.desc !== undefined) {
       patch.description = opts.desc;
     }
+    if (fresh.freshSession !== undefined) {
+      patch.fresh_session = fresh.freshSession;
+    }
+    if (fresh.skillFile !== undefined) {
+      patch.skill_file = fresh.skillFile;
+    }
+    if (fresh.protocolFile !== undefined) {
+      patch.protocol_file = fresh.protocolFile;
+    }
+    if (fresh.freshSessionTimeoutMs !== undefined) {
+      patch.fresh_session_timeout_ms = fresh.freshSessionTimeoutMs;
+    }
 
     const ok = updateCronDef(agent, name, patch);
     if (!ok) {
@@ -2059,7 +2209,6 @@ busCommand
       process.exit(1);
     }
 
-    const env = resolveEnv();
     await signalCronReload(agent, env.instanceId);
     console.log(`Updated cron '${name}' for ${agent}`);
   });

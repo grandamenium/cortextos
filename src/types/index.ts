@@ -195,6 +195,64 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+
+  /**
+   * Tier 1.5 sidecar context compaction (Pattern 1).
+   * MUST be explicitly true to activate — absence/false = disabled.
+   * Has no effect when runtime !== 'claude-code'.
+   */
+  ctx_compact_enabled?: boolean;
+
+  /**
+   * Context window % at which Tier 1.5 sidecar compaction fires.
+   * Must be < ctx_warning_threshold. Default 60.
+   */
+  ctx_compact_threshold?: number;
+
+  /**
+   * Which sidecar variant to use for compaction.
+   */
+  ctx_compact_variant?: 'sonnet' | 'haiku' | 'openai' | 'deterministic';
+
+  /**
+   * Token budget for recent turns preserved verbatim in the ledger.
+   * Not a turn count — the parser fills up to this many tokens from the
+   * end of the conversation. Default 8000.
+   */
+  ctx_compact_last_n_turns_tokens?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Pattern 1: Compaction Ledger (Tier 1.5 sidecar)
+// ---------------------------------------------------------------------------
+
+/**
+ * Structured ledger produced by a sidecar compactor at Tier 1.5
+ * (~60% context). Written to memory/handoffs/compaction-{ts}.md and
+ * surfaced to the new session via the existing .handoff-doc-path
+ * marker.
+ */
+export interface CompactionLedger {
+  schema_version: '1';
+  compacted_at: string;
+  session_id: string;
+  context_pct_at_compact: number;
+  variant: 'sonnet' | 'haiku' | 'openai' | 'deterministic';
+  resolved: string[];
+  pending: string[];
+  key_facts: {
+    current_state: string;
+    active_files?: string[];
+    blockers?: string[];
+    next_action: string;
+    coordination?: {
+      active_tasks?: Array<{ agent: string; task_id: string; status: string }>;
+      pending_approvals?: Array<{ id: string; category: string; blocking: string }>;
+      in_flight_deps?: string[];
+    };
+  };
+  recent_turns_summary: string;
+  redaction_count: number;
 }
 
 export interface CronEntry {
@@ -396,6 +454,31 @@ export interface CronDefinition {
    * @default false (manual fire is allowed by default — opt-out model)
    */
   manualFireDisabled?: boolean;
+
+  /**
+   * When true, the daemon spawns a fresh `claude --print --no-session-persistence`
+   * child process for this cron instead of injecting into the agent's live PTY.
+   * Default false — PTY inject is preserved unless explicitly opted in.
+   */
+  fresh_session?: boolean;
+
+  /**
+   * Relative path from CTX_AGENT_DIR to a skill or context file injected as
+   * system context via `--append-system-prompt` for fresh-session cron runs.
+   */
+  skill_file?: string;
+
+  /**
+   * Relative path from CTX_AGENT_DIR to an operational protocol/checklist file
+   * injected alongside `skill_file` for fresh-session cron runs.
+   */
+  protocol_file?: string;
+
+  /**
+   * Timeout in milliseconds for one fresh-session cron run before SIGTERM,
+   * followed by SIGKILL after a short grace period.
+   */
+  fresh_session_timeout_ms?: number;
 }
 
 // ---------------------------------------------------------------------------

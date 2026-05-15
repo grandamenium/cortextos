@@ -1,7 +1,7 @@
 import { createServer, Server, Socket } from 'net';
-import { existsSync, unlinkSync, chmodSync, readFileSync } from 'fs';
-import { join, resolve as pathResolve } from 'path';
-import type { IPCRequest, IPCResponse, CronSummaryRow, CronDefinition } from '../types/index.js';
+import { existsSync, unlinkSync, chmodSync, readFileSync, readdirSync } from 'fs';
+import { isAbsolute, join, resolve as pathResolve } from 'path';
+import type { AgentConfig, IPCRequest, IPCResponse, CronSummaryRow, CronDefinition } from '../types/index.js';
 import { AgentManager } from './agent-manager.js';
 import { getIpcPath } from '../utils/paths.js';
 import { readCrons, getExecutionLog, getExecutionLogPage, addCron, updateCron, removeCron, getCronByName } from '../bus/crons.js';
@@ -9,6 +9,7 @@ import type { ExecutionLogStatusFilter } from '../bus/crons.js';
 import { nextFireFromCron } from './cron-scheduler.js';
 import { parseDurationMs } from '../bus/cron-state.js';
 import { computeHealth, aggregateFleetHealth } from '../utils/cron-health.js';
+import { isFreshSessionProtectedCron, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
 
 const WORKER_NAME_REGEX = /^[a-z0-9_-]+$/;
 
@@ -55,6 +56,9 @@ export interface FireCronResult {
   error?: string;
 }
 
+type LegacyInjectFn = (agent: string, text: string) => boolean;
+type CronDispatchFn = (agent: string, cron: CronDefinition, firedAt: string) => Promise<void> | void;
+
 /**
  * fire-cron handler — validates manualFireDisabled + cooldown, then injects
  * the cron's prompt into the agent's PTY.
@@ -67,9 +71,9 @@ export interface FireCronResult {
 export function handleFireCron(
   agent: string | undefined,
   cronName: string | undefined,
-  injectFn: (agent: string, text: string) => boolean,
+  dispatchOrInjectFn: LegacyInjectFn | CronDispatchFn,
   nowMs = Date.now(),
-): FireCronResult {
+): FireCronResult | Promise<FireCronResult> {
   if (!agent || !agent.trim()) {
     return { ok: false, error: 'Agent name is required.' };
   }
@@ -95,18 +99,27 @@ export function handleFireCron(
     return { ok: false, error: `Cooldown active — wait ${waitSec}s before firing again.` };
   }
 
-  // Inject into PTY
-  const injection = `[CRON: ${cronName}] ${cron.prompt}`;
-  const injected = injectFn(agent, injection);
-  if (!injected) {
-    return { ok: false, error: `Agent '${agent}' not found or not running.` };
+  // Backward-compatible legacy path for unit tests and older callers.
+  if (dispatchOrInjectFn.length === 2) {
+    const injection = `[CRON: ${cronName}] ${cron.prompt}`;
+    const injected = (dispatchOrInjectFn as LegacyInjectFn)(agent, injection);
+    if (!injected) {
+      return { ok: false, error: `Agent '${agent}' not found or not running.` };
+    }
+    _manualFireLastFired.set(`${agent}::${cronName}`, nowMs);
+    return { ok: true, firedAt: nowMs };
   }
 
-  // Record fire time for cooldown tracking
-  const firedAt = nowMs;
-  _manualFireLastFired.set(`${agent}::${cronName}`, firedAt);
-
-  return { ok: true, firedAt };
+  const firedAtIso = new Date(nowMs).toISOString();
+  return Promise.resolve((dispatchOrInjectFn as CronDispatchFn)(agent, cron, firedAtIso))
+    .then(() => {
+      _manualFireLastFired.set(`${agent}::${cronName}`, nowMs);
+      return { ok: true, firedAt: nowMs };
+    })
+    .catch((err) => ({
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    }));
 }
 
 // ---------------------------------------------------------------------------
@@ -303,21 +316,84 @@ export function isValidSchedule(schedule: string): boolean {
 /**
  * Read the list of enabled agent names from enabled-agents.json.
  */
-function getEnabledAgents(): string[] {
+function getEnabledAgentEntries(): Record<string, { enabled?: boolean; org?: string }> {
   const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
   const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
-  if (!existsSync(enabledFile)) return [];
+  if (!existsSync(enabledFile)) return {};
   try {
-    const data = JSON.parse(readFileSync(enabledFile, 'utf-8')) as Record<
-      string,
-      { enabled?: boolean }
-    >;
-    return Object.entries(data)
+    return JSON.parse(readFileSync(enabledFile, 'utf-8')) as Record<string, { enabled?: boolean; org?: string }>;
+  } catch {
+    return {};
+  }
+}
+
+function getEnabledAgents(): string[] {
+  const data = getEnabledAgentEntries();
+  return Object.entries(data)
       .filter(([, v]) => v.enabled !== false)
       .map(([k]) => k);
-  } catch {
-    return [];
+}
+
+function getAgentRuntime(agent: string): AgentConfig['runtime'] | undefined {
+  const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT ?? process.env.CTX_PROJECT_ROOT ?? process.cwd();
+  const entry = getEnabledAgentEntries()[agent];
+  const candidateOrgs = entry?.org ? [entry.org] : [];
+  const orgsDir = join(frameworkRoot, 'orgs');
+  if (candidateOrgs.length === 0 && existsSync(orgsDir)) {
+    try {
+      candidateOrgs.push(...readdirSync(orgsDir));
+    } catch { /* ignore */ }
   }
+
+  for (const org of candidateOrgs) {
+    try {
+      const configPath = join(frameworkRoot, 'orgs', org, 'agents', agent, 'config.json');
+      if (!existsSync(configPath)) continue;
+      return (JSON.parse(readFileSync(configPath, 'utf-8')) as AgentConfig).runtime;
+    } catch { /* ignore malformed configs here; other layers validate config */ }
+  }
+  return undefined;
+}
+
+function validateFreshSessionFields(
+  agent: string,
+  cronName: string,
+  fields: Partial<CronDefinition>,
+): MutationResult {
+  if (fields.fresh_session !== undefined && typeof fields.fresh_session !== 'boolean') {
+    return { ok: false, error: 'fresh_session must be boolean.', field: 'fresh_session' };
+  }
+  if (fields.skill_file !== undefined) {
+    if (typeof fields.skill_file !== 'string' || !fields.skill_file.trim()) {
+      return { ok: false, error: 'skill_file must be a non-empty string.', field: 'skill_file' };
+    }
+    if (isAbsolute(fields.skill_file)) {
+      return { ok: false, error: 'skill_file must be a relative path.', field: 'skill_file' };
+    }
+  }
+  if (fields.protocol_file !== undefined) {
+    if (typeof fields.protocol_file !== 'string' || !fields.protocol_file.trim()) {
+      return { ok: false, error: 'protocol_file must be a non-empty string.', field: 'protocol_file' };
+    }
+    if (isAbsolute(fields.protocol_file)) {
+      return { ok: false, error: 'protocol_file must be a relative path.', field: 'protocol_file' };
+    }
+  }
+  if (fields.fresh_session_timeout_ms !== undefined) {
+    if (!Number.isInteger(fields.fresh_session_timeout_ms) || fields.fresh_session_timeout_ms <= 0) {
+      return { ok: false, error: 'fresh_session_timeout_ms must be a positive integer.', field: 'fresh_session_timeout_ms' };
+    }
+  }
+  if (fields.fresh_session === true) {
+    if (isFreshSessionProtectedCron(agent, cronName)) {
+      return { ok: false, error: `fresh_session is not allowed for protected cron '${agent}/${cronName}'.`, field: 'fresh_session' };
+    }
+    const runtime = getAgentRuntime(agent);
+    if (!isFreshSessionSupportedRuntime(runtime)) {
+      return { ok: false, error: `fresh_session is not supported for runtime '${runtime}'.`, field: 'fresh_session' };
+    }
+  }
+  return { ok: true };
 }
 
 /**
@@ -381,6 +457,9 @@ export function handleAddCron(
     return { ok: false, error: 'Prompt is required and must be non-empty.', field: 'prompt' };
   }
 
+  const freshValidation = validateFreshSessionFields(agent, name, definition);
+  if (!freshValidation.ok) return freshValidation;
+
   const fullDef: CronDefinition = {
     name,
     prompt: prompt.trim(),
@@ -391,6 +470,12 @@ export function handleAddCron(
     ...(definition.metadata ? { metadata: definition.metadata } : {}),
     ...(definition.manualFireDisabled !== undefined
       ? { manualFireDisabled: !!definition.manualFireDisabled }
+      : {}),
+    ...(definition.fresh_session !== undefined ? { fresh_session: definition.fresh_session } : {}),
+    ...(definition.skill_file !== undefined ? { skill_file: definition.skill_file.trim() } : {}),
+    ...(definition.protocol_file !== undefined ? { protocol_file: definition.protocol_file.trim() } : {}),
+    ...(definition.fresh_session_timeout_ms !== undefined
+      ? { fresh_session_timeout_ms: definition.fresh_session_timeout_ms }
       : {}),
   };
 
@@ -437,6 +522,16 @@ export function handleUpdateCron(
   // Validate prompt if provided
   if (patch.prompt !== undefined && !patch.prompt.trim()) {
     return { ok: false, error: 'Prompt must be non-empty.', field: 'prompt' };
+  }
+
+  const freshValidation = validateFreshSessionFields(agent, name, patch);
+  if (!freshValidation.ok) return freshValidation;
+
+  if (patch.skill_file !== undefined) {
+    patch = { ...patch, skill_file: patch.skill_file.trim() };
+  }
+  if (patch.protocol_file !== undefined) {
+    patch = { ...patch, protocol_file: patch.protocol_file.trim() };
   }
 
   const found = updateCron(agent, name, patch);
@@ -506,7 +601,7 @@ export class IPCServer {
           try {
             const request: IPCRequest = JSON.parse(data);
             data = '';
-            this.handleRequest(request, socket);
+            void this.handleRequest(request, socket);
           } catch {
             // Incomplete JSON, wait for more data
           }
@@ -567,7 +662,7 @@ export class IPCServer {
   /**
    * Handle an incoming IPC request.
    */
-  private handleRequest(request: IPCRequest, socket: Socket): void {
+  private async handleRequest(request: IPCRequest, socket: Socket): Promise<void> {
     // BUG-015: log every incoming IPC request with its source so we can
     // trace which CLI command triggered which daemon action. The source
     // field is populated by CLI clients (cortextos enable / disable / stop
@@ -724,10 +819,10 @@ export class IPCServer {
         case 'fire-cron': {
           const agentToFire = request.agent;
           const fireCronName = request.data?.name as string | undefined;
-          const fireCronResult = handleFireCron(
+          const fireCronResult = await handleFireCron(
             agentToFire,
             fireCronName,
-            (a, text) => this.agentManager.injectAgent(a, text),
+            (a, cron, firedAt) => this.agentManager.dispatchCron(a, cron, firedAt),
           );
           if (fireCronResult.ok) {
             // Invalidate fleet health cache so next poll reflects the new fire

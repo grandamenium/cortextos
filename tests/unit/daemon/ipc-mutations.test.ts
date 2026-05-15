@@ -193,6 +193,21 @@ describe('handleAddCron — happy path', () => {
     });
     expect(result.ok).toBe(true);
   });
+
+  it('trims and stores protocol_file', async () => {
+    writeEnabledAgents({ boris: { enabled: true } });
+    const { handleAddCron } = await import('../../../src/daemon/ipc-server.js');
+    const result = handleAddCron('boris', {
+      name: 'heartbeat',
+      prompt: 'x',
+      schedule: '1h',
+      protocol_file: ' HEARTBEAT.md ',
+    });
+    expect(result.ok).toBe(true);
+
+    const { readCrons } = await import('../../../src/bus/crons.js');
+    expect(readCrons('boris')[0].protocol_file).toBe('HEARTBEAT.md');
+  });
 });
 
 describe('handleAddCron — validation failures', () => {
@@ -271,6 +286,20 @@ describe('handleAddCron — validation failures', () => {
     expect(result.field).toBe('prompt');
   });
 
+  it('rejects empty protocol_file', async () => {
+    const { handleAddCron } = await import('../../../src/daemon/ipc-server.js');
+    const result = handleAddCron('boris', { name: 'test', prompt: 'x', schedule: '1h', protocol_file: '   ' });
+    expect(result.ok).toBe(false);
+    expect(result.field).toBe('protocol_file');
+  });
+
+  it('rejects absolute protocol_file', async () => {
+    const { handleAddCron } = await import('../../../src/daemon/ipc-server.js');
+    const result = handleAddCron('boris', { name: 'test', prompt: 'x', schedule: '1h', protocol_file: '/tmp/HEARTBEAT.md' });
+    expect(result.ok).toBe(false);
+    expect(result.field).toBe('protocol_file');
+  });
+
   it('returns error and field:name on duplicate cron', async () => {
     writeEnabledAgents({ boris: { enabled: true } });
     const { handleAddCron } = await import('../../../src/daemon/ipc-server.js');
@@ -320,6 +349,16 @@ describe('handleUpdateCron — happy path', () => {
     const result = handleUpdateCron('boris', 'heartbeat', { schedule: '0 9 * * *' });
     expect(result.ok).toBe(true);
   });
+
+  it('trims and updates protocol_file', async () => {
+    writeCronsJson('boris', [makeCron()]);
+    const { handleUpdateCron } = await import('../../../src/daemon/ipc-server.js');
+    const result = handleUpdateCron('boris', 'heartbeat', { protocol_file: ' HEARTBEAT.md ' });
+    expect(result.ok).toBe(true);
+
+    const { getCronByName } = await import('../../../src/bus/crons.js');
+    expect(getCronByName('boris', 'heartbeat')?.protocol_file).toBe('HEARTBEAT.md');
+  });
 });
 
 describe('handleUpdateCron — validation failures', () => {
@@ -358,6 +397,22 @@ describe('handleUpdateCron — validation failures', () => {
     const result = handleUpdateCron('boris', 'heartbeat', { prompt: '   ' });
     expect(result.ok).toBe(false);
     expect(result.field).toBe('prompt');
+  });
+
+  it('rejects empty protocol_file in patch', async () => {
+    writeCronsJson('boris', [makeCron()]);
+    const { handleUpdateCron } = await import('../../../src/daemon/ipc-server.js');
+    const result = handleUpdateCron('boris', 'heartbeat', { protocol_file: '   ' });
+    expect(result.ok).toBe(false);
+    expect(result.field).toBe('protocol_file');
+  });
+
+  it('rejects absolute protocol_file in patch', async () => {
+    writeCronsJson('boris', [makeCron()]);
+    const { handleUpdateCron } = await import('../../../src/daemon/ipc-server.js');
+    const result = handleUpdateCron('boris', 'heartbeat', { protocol_file: '/tmp/HEARTBEAT.md' });
+    expect(result.ok).toBe(false);
+    expect(result.field).toBe('protocol_file');
   });
 
   it('returns error when cron not found', async () => {

@@ -445,7 +445,7 @@ cortextos bus check-upstream [--apply]
 
 ## Crons
 
-Daemon-managed scheduled tasks. Persisted in `${CTX_ROOT}/state/<agent>/crons.json`,
+Daemon-managed scheduled tasks. Persisted in `${CTX_ROOT}/.cortextOS/state/agents/<agent>/crons.json`,
 dispatched on the daemon's 30-second tick, and survive every kind of restart. Editing
 `config.json.crons[]` mid-session does NOT hot-reload — these commands do, and they
 update `crons.json` directly. For full protocol, examples, and the one-shot pattern see

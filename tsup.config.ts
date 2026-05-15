@@ -12,6 +12,8 @@ export default defineConfig({
     'hooks/hook-extract-facts': 'src/hooks/hook-extract-facts.ts',
     'hooks/hook-idle-flag': 'src/hooks/hook-idle-flag.ts',
     'hooks/hook-context-status': 'src/hooks/hook-context-status.ts',
+    // Pattern 1: variant-specific compactor loaded at runtime via dynamic import
+    'utils/sidecar-compactor-haiku': 'src/utils/sidecar-compactor-haiku.ts',
   },
   format: ['cjs'],
   target: 'node20',

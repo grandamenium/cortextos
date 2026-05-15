@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { homedir, tmpdir } from 'os';
 
 const execFileMock = vi.fn();
 vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { readMaxCrashesPerDay, notifyAgents } from '../../../src/hooks/hook-crash-alert';
+import { main, readMaxCrashesPerDay, notifyAgents } from '../../../src/hooks/hook-crash-alert';
 
 describe('readMaxCrashesPerDay', () => {
   let tmp: string;
@@ -143,5 +143,76 @@ describe('notifyAgents', () => {
     })).not.toThrow();
     // Second recipient still attempted
     expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('main fresh-session suppression', () => {
+  const originalEnv = { ...process.env };
+  let instanceId: string;
+  let ctxRoot: string;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    instanceId = `hook-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    ctxRoot = join(homedir(), '.cortextos', instanceId);
+    fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('fetch', fetchMock);
+    execFileMock.mockReset();
+    process.env = {
+      ...originalEnv,
+      CTX_INSTANCE_ID: instanceId,
+      CTX_AGENT_NAME: 'dev-g',
+      CTX_FRESH_SESSION_CRON: 'dev-g/heartbeat',
+    };
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.unstubAllGlobals();
+    rmSync(ctxRoot, { recursive: true, force: true });
+  });
+
+  it('returns before crashes.log, crash counter, Telegram, and agent notifications', async () => {
+    await main();
+
+    expect(existsSync(join(ctxRoot, 'logs', 'dev-g', 'crashes.log'))).toBe(false);
+    expect(existsSync(join(ctxRoot, 'state', 'dev-g', '.crash_count_today'))).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it('suppresses side effects even when Telegram credentials are present', async () => {
+    process.env.BOT_TOKEN = 'token';
+    process.env.CHAT_ID = 'chat';
+
+    await main();
+
+    expect(existsSync(join(ctxRoot, 'logs', 'dev-g', 'crashes.log'))).toBe(false);
+    expect(existsSync(join(ctxRoot, 'state', 'dev-g', '.crash_count_today'))).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it('does not consume marker files before returning', async () => {
+    const stateDir = join(ctxRoot, 'state', 'dev-g');
+    mkdirSync(stateDir, { recursive: true });
+    const markerPath = join(stateDir, '.restart-planned');
+    writeFileSync(markerPath, 'planned restart', 'utf-8');
+
+    await main();
+
+    expect(existsSync(markerPath)).toBe(true);
+  });
+
+  it('normal crash still writes crashes.log when fresh-session marker is absent', async () => {
+    delete process.env.CTX_FRESH_SESSION_CRON;
+    delete process.env.BOT_TOKEN;
+    delete process.env.CHAT_ID;
+
+    await main();
+
+    const crashesLog = join(ctxRoot, 'logs', 'dev-g', 'crashes.log');
+    expect(readFileSync(crashesLog, 'utf-8')).toContain('type=crash');
+    expect(readFileSync(join(ctxRoot, 'state', 'dev-g', '.crash_count_today'), 'utf-8')).toContain(':1');
   });
 });

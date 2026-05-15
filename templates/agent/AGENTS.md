@@ -30,7 +30,7 @@ Complete the following in order. Do not skip steps.
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
+6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
 7. Recall recent session facts (cross-session memory from past compactions):
    ```bash
    cortextos bus recall-facts --days 3
@@ -409,7 +409,7 @@ Always include `msg_id` as reply_to — this auto-ACKs the original. Un-ACK'd me
 
 ## Crons
 
-Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
+Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
 
 **View scheduled crons:**
 ```bash
@@ -426,23 +426,9 @@ For full CRUD protocol, see `.claude/skills/cron-management/SKILL.md`.
 
 ---
 
-## External Persistent Crons
+## /loop vs Persistent Crons
 
-### The Model
-
-Persistent crons live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon owns this file — it reads it on every agent start, schedules each entry, and fires them by injecting prompts directly into your PTY session. Retry logic: 1s, 4s, 16s on injection failure. Execution is logged to `${CTX_ROOT}/state/${CTX_AGENT_NAME}/cron-execution.log`.
-
-Key properties:
-
-- **Survives daemon restarts.** State is on disk, not in memory.
-- **Survives agent restarts.** The daemon re-reads `crons.json` and re-schedules on every agent boot.
-- **Not session-local.** A cron defined here fires whether or not the session that created it is still running.
-
-### /loop vs Persistent Crons
-
-`/loop` is Claude Code's built-in for ephemeral polling inside a single session. Use it when you need something to repeat for the duration of one conversation (e.g., "check build status every 2 minutes until it passes"). It dies when the session ends.
-
-For ANY work that should survive restarts — heartbeats, daily reports, monitoring, experiment loops — use `cortextos bus add-cron`. That is the only way to guarantee the work runs forever.
+`/loop` is session-local — dies on restart. For ANY work that must survive restarts (heartbeats, daily reports, monitoring, experiment loops), use `cortextos bus add-cron`.
 
 | Need | Use |
 |------|-----|
@@ -450,52 +436,7 @@ For ANY work that should survive restarts — heartbeats, daily reports, monitor
 | Persist across restarts | `cortextos bus add-cron` |
 | One-time future fire | `cortextos bus add-cron --schedule <ISO>` |
 
-### Migration from config.json
-
-Automatic. On agent boot, the daemon migrates `config.json` crons to `crons.json` once. A marker file `${CTX_ROOT}/state/${CTX_AGENT_NAME}/.crons-migrated` prevents re-runs. The source `config.json` is left untouched — non-destructive.
-
-You do not need to do anything. If you want to verify: check that `.crons-migrated` exists and `crons.json` is populated.
-
-### Examples
-
-**1. Heartbeat every 6 hours:**
-```bash
-cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h Read HEARTBEAT.md and follow its instructions.
-```
-
-**2. Daily report at 9am on weekdays (cron expression):**
-```bash
-cortextos bus add-cron $CTX_AGENT_NAME daily-report "0 9 * * 1-5" Read .claude/skills/morning-review/SKILL.md and run the daily report.
-```
-
-**3. PR monitor every 4 hours, offset to avoid stampede:**
-```bash
-cortextos bus add-cron $CTX_AGENT_NAME pr-monitor "15 */4 * * *" Read .claude/skills/pr-monitor/SKILL.md and scan for new PRs.
-```
-
-**4. Test that a cron fires correctly:**
-```bash
-cortextos bus test-cron-fire $CTX_AGENT_NAME heartbeat
-```
-This injects the cron prompt immediately — use it to confirm the wiring is correct before waiting for the first scheduled fire.
-
-### How to Verify
-
-```bash
-# List all scheduled crons for this agent (shows next_fire_at for each)
-cortextos bus list-crons $CTX_AGENT_NAME
-
-# View execution history
-cortextos bus get-cron-log $CTX_AGENT_NAME
-
-# Confirm migration ran
-ls "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.crons-migrated"
-
-# Inspect crons.json directly
-cat "${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json"
-```
-
-For full CRUD (update, pause, resume, delete), see `.claude/skills/cron-management/SKILL.md`.
+For full model (retry logic, execution log, migration, examples, troubleshooting), see `.claude/skills/cron-management/SKILL.md`.
 
 ---
 
