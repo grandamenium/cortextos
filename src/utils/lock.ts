@@ -1,5 +1,11 @@
-import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync, renameSync } from 'fs';
+import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync, renameSync, statSync } from 'fs';
 import { join } from 'path';
+
+// Max age for a lock with an empty/corrupt PID file before it is treated as
+// stale and stolen. A legitimate mid-acquire window (mkdir → writeFileSync)
+// completes in <1ms; 30 seconds is a safe upper bound that avoids stealing
+// live locks while ensuring a crash-orphaned empty-PID lock is recovered.
+const EMPTY_PID_STALE_MS = 30_000;
 
 /**
  * Acquire a mutex lock using mkdir (atomic on all filesystems).
@@ -41,10 +47,31 @@ export function acquireLock(dir: string): boolean {
 
     const storedPid = parseInt(storedPidRaw, 10);
     if (isNaN(storedPid) || storedPidRaw === '') {
-      // Corrupt PID file.  Don't steal — let caller retry; if it persists
-      // the holder is broken and a future stale-detection pass (process.kill
-      // check below, after the PID is written cleanly) will recover.
-      return false;
+      // Empty or corrupt PID file. The holder crashed between mkdir and
+      // writeFileSync. If the lock directory is old enough (> EMPTY_PID_STALE_MS)
+      // it cannot be a live mid-acquire window — steal it. If it is very
+      // recent, refuse so we don't race a concurrent live acquirer.
+      try {
+        const lockStat = statSync(lockDir);
+        const ageMs = Date.now() - lockStat.mtimeMs;
+        if (ageMs < EMPTY_PID_STALE_MS) {
+          return false; // Still within the legitimate mid-acquire window
+        }
+        // Old enough to be stale — fall through to the steal logic below.
+      } catch {
+        return false; // Can't stat the lock dir — let caller retry
+      }
+      // Steal the stale empty-PID lock atomically.
+      const tmpStealDir = join(dir, `.lock.d.steal-${process.pid}-${Date.now()}`);
+      try {
+        renameSync(lockDir, tmpStealDir);
+        rmSync(tmpStealDir, { recursive: true, force: true });
+        mkdirSync(lockDir);
+        writeFileSync(pidFile, String(process.pid));
+        return true;
+      } catch {
+        return false;
+      }
     }
 
     // Check if process is still alive
