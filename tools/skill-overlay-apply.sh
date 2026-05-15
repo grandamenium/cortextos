@@ -122,9 +122,12 @@ revert_file() {
   local skill="$3"
   # Try git tracked version first
   if git -C "$LIVE_REPO_ROOT" ls-files --error-unmatch "$skill_md" &>/dev/null; then
-    git -C "$LIVE_REPO_ROOT" checkout HEAD -- "$skill_md" 2>/dev/null \
-      && echo "[REVERT] $agent/$skill: restored from git" \
-      || echo "  [WARN] $agent/$skill: git tracked but checkout failed"
+    if git -C "$LIVE_REPO_ROOT" checkout HEAD -- "$skill_md" 2>/dev/null; then
+      echo "[REVERT] $agent/$skill: restored from git"
+    else
+      echo "[ERROR] $agent/$skill: git-tracked but checkout failed — manual recovery needed" >&2
+      inc_errors
+    fi
   else
     # Fall back to most-recent .bak
     local latest_bak
@@ -133,7 +136,8 @@ revert_file() {
       cp "$latest_bak" "$skill_md"
       echo "[REVERT] $agent/$skill: restored from backup $latest_bak"
     else
-      echo "  [WARN] $agent/$skill: not git-tracked and no backup found — cannot revert"
+      echo "[ERROR] $agent/$skill: not git-tracked and no .bak found — cannot revert, manual recovery needed" >&2
+      inc_errors
     fi
   fi
 }
