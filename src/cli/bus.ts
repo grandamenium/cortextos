@@ -1155,6 +1155,93 @@ busCommand
     }
   });
 
+/**
+ * `bus react <message_id> <emoji>` — agent-facing CLI for sending an
+ * outbound reaction. Added in PR4 c24 to wire the connector layer's
+ * `sendReaction` capability (PR4 c10) to the agent surface.
+ *
+ * UX rationale (spec §11): for short acknowledgements ("seen", "done",
+ * "working on it") an emoji reaction is preferred over a text reply
+ * because it's silent and doesn't clutter the conversation. The
+ * portable 7-emoji vocabulary the agent template recommends:
+ *   👀 seen / ✅ done / ❌ failed / 👍 ack / 🛠 working / ⏸ paused /
+ *   🤔 ambiguous
+ *
+ * Like `bus send`: resolves the agent's connector via getConnector +
+ * merged env, gates on `capabilities.outboundReactions`, calls
+ * `connector.sendReaction(messageId, emoji, opts)`. `messageId` is the
+ * connector-specific id round-tripped from the inbound NormalizedMessage
+ * (the `message_id:<id>` field in the agent's TELEGRAM prompt header
+ * since c24).
+ */
+busCommand
+  .command('react')
+  .description('React to a message with an emoji (preferred over text for short acks). Uses the agent\'s active connector.')
+  .argument('<message-id>', 'Connector-specific message id (from the inbound TELEGRAM prompt header)')
+  .argument('<emoji>', 'Unicode emoji character (e.g. 👍 ✅ 👀 ❌). Spec §11 portable vocabulary.')
+  .option('--remove', 'Remove the bot\'s reaction on this message instead of adding one', false)
+  .option('--big', 'Telegram-only: show the reaction with the big animation (private chats)', false)
+  .action(async (messageId: string, emoji: string, opts: { remove?: boolean; big?: boolean }) => {
+    const env = resolveEnv();
+    const kind = readConnectorKindFromAgent(env.agentDir);
+
+    if (kind === 'none') {
+      process.stderr.write(
+        `warning: agent '${env.agentName}' has connector 'none' — reaction dropped (no outbound channel configured).\n`,
+      );
+      process.exit(0);
+    }
+
+    const { getConnector } = require('../connectors/index.js');
+    const { parseEnvFile } = require('../utils/env.js');
+    const path = require('path');
+    const fs = require('fs');
+    const resolvedKind = kind ?? 'telegram';
+
+    // Same merged-env pattern as `bus send` — agent's .env wins over
+    // process.env for connector creds, with caller-inherited creds
+    // cleared when the agent has none of its own. See `bus send`
+    // commentary for the security rationale.
+    const agentEnvPath = env.agentDir ? path.join(env.agentDir, '.env') : '';
+    const agentEnv: Record<string, string> = agentEnvPath && fs.existsSync(agentEnvPath)
+      ? parseEnvFile(agentEnvPath)
+      : {};
+    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    const connectorCredKeys = ['BOT_TOKEN', 'CHAT_ID', 'ALLOWED_USER'];
+    for (const k of connectorCredKeys) {
+      if (!(k in agentEnv)) delete baseEnv[k];
+    }
+    const mergedEnv: NodeJS.ProcessEnv = { ...baseEnv, ...agentEnv };
+
+    let connector;
+    try {
+      connector = getConnector(resolvedKind, env.agentDir || '', mergedEnv);
+    } catch (err: any) {
+      console.error(`Error: ${err.message || err}`);
+      process.exit(1);
+    }
+
+    if (!connector.capabilities.outboundReactions || !connector.sendReaction) {
+      console.error(
+        `Error: connector '${connector.kind}' does not support outbound reactions ` +
+        `(capabilities.outboundReactions=${connector.capabilities.outboundReactions}). ` +
+        `Use 'bus send' to send a text reply instead.`,
+      );
+      process.exit(1);
+    }
+
+    try {
+      await connector.sendReaction(messageId, emoji, {
+        remove: opts.remove === true,
+        isBig: opts.big === true,
+      });
+      console.log(opts.remove ? `Reaction removed from message ${messageId}` : `Reacted ${emoji} on message ${messageId}`);
+    } catch (err: any) {
+      console.error(`Failed to react: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
 busCommand
   .command('create-approval')
   .description('Request human approval for a high-stakes action')

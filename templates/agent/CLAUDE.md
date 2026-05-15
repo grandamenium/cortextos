@@ -86,12 +86,30 @@ TARGET: >= 3 events per active session.
 Messages arrive in real time via the fast-checker daemon:
 
 ```
-=== TELEGRAM from <name> (chat_id:<id>) ===
+=== TELEGRAM from <name> (chat_id:<id>, message_id:<msg_id>) ===
 <text>
 Reply using: cortextos bus send-telegram <chat_id> "<reply>"
+React using: cortextos bus react <message_id> <emoji>  (preferred for short acks)
 ```
 
 Photos include a `local_file:` path. Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
+
+**Reactions vs replies — prefer reactions for short acks.** For binary acknowledgements ("seen", "done", "working on it") send a reaction with `cortextos bus react <message_id> <emoji>` INSTEAD of a text reply. Reactions are silent, non-cluttering, and don't push older context off the user's screen.
+
+**👀 is auto-placed by the daemon on every inbound user message BEFORE you see the message.** This gives the user instant "agent saw this" feedback within milliseconds, before your first reasoning step. Your job is to SWAP the 👀 to a terminal state when done:
+
+| Emoji | When to swap to |
+|---|---|
+| ✅ | done, success |
+| ❌ | failed, refused, or denied |
+| 👍 | acknowledged, no action needed (replaces 👀 for messages that didn't need work) |
+| 🛠 | working on a long task (swap to ✅ or ❌ when it actually finishes) |
+| ⏸ | paused, awaiting input |
+| 🤔 | ambiguous request, more info needed |
+
+Telegram's contract is set-to-list — any `bus react <id> <new-emoji>` REPLACES the previous reaction. So `cortextos bus react 21 ✅` automatically clears the daemon's 👀 on message 21. If you'd otherwise send a one-word text reply like "ok" / "thanks" / "got it" → use a reaction instead.
+
+To disable the auto-eyes (and own all reaction state yourself), set `auto_eyes_ack: false` in the agent's `config.json`.
 
 **Telegram formatting:** Uses Telegram's regular Markdown (not MarkdownV2). Do NOT escape characters like `!`, `.`, `(`, `)`, `-` with backslashes. Just write plain natural text. Only `_`, `*`, `` ` ``, and `[` have special meaning.
 
@@ -161,6 +179,7 @@ Sessions auto-restart with `--continue` every ~71 hours. On context exhaustion, 
 | Action | Command |
 |--------|---------|
 | Send Telegram | `cortextos bus send-telegram <chat_id> "<msg>"` |
+| React on a Telegram message | `cortextos bus react <message_id> <emoji>` (prefer over text for short acks — see Telegram Messages section) |
 | Send to agent | `cortextos bus send-message <agent> <priority> '<msg>' [reply_to]` |
 | Check inbox | `cortextos bus check-inbox` |
 | ACK message | `cortextos bus ack-inbox <msg_id>` |

@@ -240,6 +240,23 @@ export interface AgentConfig {
    * connectors this field is IGNORED, not an error.
    */
   telegram_polling?: boolean;
+  /**
+   * Auto-react 👀 on every inbound user message to give the user
+   * instant "agent saw this" feedback, BEFORE the agent's first
+   * reasoning step. The agent's job is then to swap the eyes to a
+   * terminal state when done: ✅ success, ❌ failure, 🛠 long-running,
+   * 🤔 needs clarification. Telegram's setMessageReaction is
+   * set-to-list, so any later `bus react` call from the agent
+   * replaces the daemon's eyes automatically.
+   *
+   * Default: true. Set to `false` to disable (the daemon emits no
+   * meta-reaction; the agent owns all reaction-state from the start).
+   * Gated by `connector.capabilities.outboundReactions === true` —
+   * no-op on connectors without outbound reactions.
+   *
+   * Added in PR4 c25 of the pluggable-connectors stack.
+   */
+  auto_eyes_ack?: boolean;
 }
 
 export interface CronEntry {

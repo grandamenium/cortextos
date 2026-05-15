@@ -259,6 +259,7 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
     replyToText?: string,
     lastSentText?: string,
     recentHistory?: string,
+    messageId?: string,
   ): string {
     let replyCx = '';
     if (replyToText) {
@@ -282,10 +283,17 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
     const body = isSlashCommand
       ? text.trim()
       : `\`\`\`\n${text}\n\`\`\``;
-    return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}) ===
+    // PR4 c24: include inbound `message_id` so the agent can target it
+    // with `cortextos bus react <message_id> <emoji>` for emoji-ack UX
+    // (spec §11). Omitted when undefined (legacy callers that don't
+    // pass it stay byte-identical to pre-c24 output).
+    const reactHint = messageId
+      ? `React using: cortextos bus react ${messageId} <emoji>  (preferred for short acks — silent + non-cluttering, vs a whole reply)\n`
+      : '';
+    return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}${messageId ? `, message_id:${messageId}` : ''}) ===
 ${replyCx}${historyCx}${body}
 ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
-
+${reactHint}
 `;
   }
 

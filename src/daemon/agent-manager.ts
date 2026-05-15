@@ -543,6 +543,9 @@ export class AgentManager {
         const replyToText = m.reply_to?.text;
 
         const recentHistory = buildRecentHistory(this.ctxRoot, name, effectiveChatId, 6) ?? undefined;
+        // PR4 c24: pass NormalizedMessage.id so the formatter can include
+        // `message_id:<id>` in the agent prompt + the "React using:"
+        // helper. Without this the agent has no target for `bus react`.
         const formatted = FastChecker.formatTelegramTextMessage(
           from,
           effectiveChatId,
@@ -551,6 +554,7 @@ export class AgentManager {
           replyToText,
           lastSent ?? undefined,
           recentHistory,
+          m.id,
         );
 
         if (checker.isDuplicate(formatted)) {
@@ -558,6 +562,31 @@ export class AgentManager {
           return;
         }
         checker.queueTelegramMessage(formatted);
+
+        // PR4 c25: auto-react 👀 to give the user instant "agent saw
+        // this" feedback BEFORE the agent's first reasoning step. The
+        // agent's job is to SWAP the eyes to ✅/❌/🛠/🤔 when done —
+        // Telegram's setMessageReaction is set-to-list, so any later
+        // `bus react` from the agent replaces this. Gated by:
+        //   - connector advertises outboundReactions capability
+        //   - config.auto_eyes_ack !== false (default true)
+        // Fire-and-forget: any failure (rate limit, emoji not in the
+        // chat's allowed set, network blip) must not delay or block the
+        // agent's PTY injection.
+        const autoEyesEnabled = config.auto_eyes_ack !== false;
+        if (autoEyesEnabled && connector?.capabilities.outboundReactions && connector.sendReaction && m.id) {
+          // Verification log so operators can confirm auto-eyes is
+          // firing without inspecting the Telegram client. Removed
+          // once the feature stabilizes; for now it confirms the path.
+          log(`auto-eyes-ack: 👀 → message ${m.id}`);
+          connector.sendReaction(m.id, '👀')
+            .then(() => log(`auto-eyes-ack OK for message ${m.id}`))
+            .catch((err) => log(`auto-eyes-ack failed for message ${m.id}: ${err instanceof Error ? err.message : String(err)}`));
+        } else if (autoEyesEnabled) {
+          // Why didn't it fire? One-line diagnostic — fires once per
+          // inbound message so the log can stay terse.
+          log(`auto-eyes-ack skipped: outboundReactions=${connector?.capabilities.outboundReactions} sendReaction=${!!connector?.sendReaction} m.id=${m.id || '<empty>'}`);
+        }
       };
 
       const onCallback = (c: CallbackPayload) => {

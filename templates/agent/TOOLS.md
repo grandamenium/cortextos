@@ -48,6 +48,7 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `send-telegram <chat_id> "<msg>"` | Message the user |
 | `send-telegram <chat_id> "<caption>" --image <path>` | Send a photo |
 | `send-telegram <chat_id> "<caption>" --file <path>` | Send any file (PDF, txt, etc.) |
+| `react <message_id> <emoji>` | React with an emoji — **prefer this over a text reply for short acks** (👀 seen / ✅ done / ❌ failed / 👍 ack / 🛠 working / ⏸ paused / 🤔 ambiguous). `react <id> <emoji> --remove` clears the bot's reaction. Re-calling with a new emoji REPLACES the previous one (Telegram set-to-list contract). |
 | `edit-message <chat_id> <msg_id> "<text>"` | Edit an existing message |
 | `answer-callback <query_id> [toast]` | Dismiss button loading state |
 | `post-activity "<msg>"` | Post to org activity channel |
