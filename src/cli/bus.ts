@@ -1003,8 +1003,10 @@ busCommand
     }
 
     if (!botToken) {
-      console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
-      process.exit(1);
+      // Headless agents (codex-g, code-g) have no BOT_TOKEN by design — treat as
+      // a graceful no-op so their logs stay clean.
+      console.warn('send-telegram: BOT_TOKEN not configured — skipping (headless agent or missing .env).');
+      process.exit(0);
     }
 
     const api = new TelegramAPI(botToken);
@@ -1282,8 +1284,8 @@ busCommand
     }
     if (!botToken) botToken = process.env.BOT_TOKEN || '';
     if (!botToken) {
-      console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
-      process.exit(1);
+      console.warn('edit-message: BOT_TOKEN not configured — skipping (headless agent or missing .env).');
+      process.exit(0);
     }
 
     const api = new TelegramAPI(botToken);
@@ -1321,8 +1323,8 @@ busCommand
     }
     if (!botToken) botToken = process.env.BOT_TOKEN || '';
     if (!botToken) {
-      console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
-      process.exit(1);
+      console.warn('answer-callback: BOT_TOKEN not configured — skipping (headless agent or missing .env).');
+      process.exit(0);
     }
 
     const api = new TelegramAPI(botToken);
