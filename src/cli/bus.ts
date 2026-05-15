@@ -971,17 +971,22 @@ busCommand
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
   .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
-    // PR2: hard-error for non-Telegram connectors. The command is Telegram-
-    // specific; routing it through a non-Telegram connector would surprise
-    // operators. Use `bus send <agent> <message>` for connector-agnostic
-    // messaging.
+    // PR4 c22 (regression audit restoration): on main, `bus send-telegram`
+    // always attempted a Telegram send when BOT_TOKEN was available,
+    // regardless of agent config. Pre-c22 HEAD hard-errored when the agent
+    // had `connector: 'none'` or another non-telegram kind — a regression
+    // for hook scripts and operator workflows that explicitly use
+    // `bus send-telegram` as a direct Telegram channel while routing
+    // inbound through a different connector. Restored: log a warn so the
+    // surprise doesn't bite silently, but proceed with the send.
+    // Connector-aware operators should use `bus send <agent> <message>`
+    // for the connector-agnostic path.
     const probeEnv = resolveEnv();
     const explicitKind = readConnectorKindFromAgent(probeEnv.agentDir);
     if (explicitKind && explicitKind !== 'telegram') {
       console.error(
-        `Error: agent '${probeEnv.agentName}' connector is '${explicitKind}', not 'telegram' — use 'bus send' for connector-agnostic messaging.`,
+        `Warning: agent '${probeEnv.agentName}' connector is '${explicitKind}', not 'telegram' — proceeding with direct Telegram send. Use 'bus send' for connector-agnostic messaging.`,
       );
-      process.exit(1);
     }
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and

@@ -77,16 +77,29 @@ describe('bus send (PR2)', () => {
     });
   });
 
-  describe('bus send-telegram (PR2 hard-error alias)', () => {
-    it('connector: "none" → hard-error exit 1 with helpful message', () => {
+  describe('bus send-telegram (PR4 c22 warn-and-proceed alias)', () => {
+    it('connector: "none" → warn + proceed to BOT_TOKEN check (regression audit restoration)', () => {
+      // PR4 c22 restored main's pre-refactor behavior: `bus send-telegram`
+      // is an explicit Telegram CLI alias. The pre-c22 hard-error when
+      // `config.connector !== 'telegram'` broke hook scripts and operator
+      // workflows that intentionally used `send-telegram` as a direct
+      // Telegram channel while routing inbound through a different
+      // connector. Now it warns but proceeds; the downstream BOT_TOKEN
+      // check is the real gate. In this test BOT_TOKEN is not set, so
+      // the command fails at the BOT_TOKEN check (same outcome as main).
       writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ connector: 'none' }));
       const result = runCli(['bus', 'send-telegram', '12345', 'hello'], {
         CTX_AGENT_DIR: agentDir,
         CTX_AGENT_NAME: 'test-agent',
+        BOT_TOKEN: '', // no token → falls through to the BOT_TOKEN hard-exit
       });
       expect(result.status).toBe(1);
+      // Connector-kind mismatch produces a Warning line on stderr,
+      // not the hard-error message anymore.
+      expect(result.stderr).toContain('Warning');
       expect(result.stderr).toContain('not \'telegram\'');
-      expect(result.stderr).toContain('bus send');
+      // The actual exit reason is BOT_TOKEN missing — same as main.
+      expect(result.stderr).toContain('BOT_TOKEN');
     });
 
     it('config.connector absent → falls through to legacy resolver behavior (BOT_TOKEN check)', () => {

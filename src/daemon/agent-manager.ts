@@ -285,9 +285,16 @@ export class AgentManager {
     // dispatch (Codex M1.crv refinement) so future connector kinds reach the
     // factory without revisiting this site.
     if (config.connector === 'none') {
-      // Explicit no-comms agent. Skip the legacy Telegram gate entirely
-      // (including its WARNING/SECURITY log lines — none of them apply when
-      // the operator has opted out of Telegram by config).
+      // Explicit no-comms agent. Use NullConnector for the connector
+      // dispatch, but STILL run the legacy Telegram-env validation pass
+      // so operators see the informational WARNING/SECURITY log lines
+      // about malformed BOT_TOKEN, non-numeric ALLOWED_USER, etc.
+      // PR4 c22 (regression audit restoration): pre-c22 HEAD silently
+      // skipped this entire log path when `connector: 'none'`, hiding
+      // misconfiguration that main always surfaced. The validation is
+      // strictly informational here — its return value is discarded
+      // and the NullConnector dispatch is unchanged.
+      resolveLegacyTelegramEnablement(agentEnvFile, log);
       connector = new NullConnector();
     } else if (config.connector && config.connector !== 'telegram') {
       // Future connector kinds (Matrix, RocketChat, etc.). Dormant today —
