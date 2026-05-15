@@ -82,6 +82,14 @@ export function formatValidateError(result: Extract<ValidateCredentialsResult, {
 
 export class TelegramAPI {
   private baseUrl: string;
+  /**
+   * File-download base URL. Defaults to Telegram's CDN. PR4 c23 made this
+   * a separate field (instead of inlining the hostname inside
+   * `downloadFile`) so integration tests with a MockTelegramServer can
+   * override it to point at the mock and exercise the real HTTP path
+   * end-to-end. Production callers never touch it.
+   */
+  private fileBaseUrl: string = 'https://api.telegram.org/file';
   private lastSendTime: Map<string, number> = new Map();
   // Chat IDs already warned for the self_chat trap. Keeps the runtime
   // diagnostic emitted at most once per chat_id per process lifetime.
@@ -599,7 +607,7 @@ export class TelegramAPI {
    * worst case (server-declared 1 GB file) without that refactor.
    */
   async downloadFile(filePath: string, opts?: { maxBytes?: number }): Promise<Buffer> {
-    const url = `https://api.telegram.org/file/bot${this.getToken()}/${filePath}`;
+    const url = `${this.fileBaseUrl}/bot${this.getToken()}/${filePath}`;
     const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
     if (!response.ok) {
       throw new Error(`Failed to download file: ${response.status}`);
