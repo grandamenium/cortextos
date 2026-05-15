@@ -13,8 +13,14 @@
 #                    Use when running from a worktree where skill dirs are absent.
 #
 # Idempotent: running twice produces no additional changes.
+# Partial-failure tolerant: per-skill errors are logged but do not abort the
+#   run. Re-running after a partial failure will pick up where it left off
+#   because every write checks current state before acting.
+# Backup-first: creates a timestamped .bak before every mutation. If the backup
+#   write fails, the mutation is skipped with an error (backup-first-abort).
 
-set -euo pipefail
+set -uo pipefail
+# Note: NOT using -e so per-skill errors are handled locally, not script-abort.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -38,12 +44,15 @@ done
 
 LIVE_ORGS_DIR="$LIVE_REPO_ROOT/orgs"
 
-# Track changes via temp file (while-read runs in subshell, counters don't survive)
+# Track changes and errors via temp files (while-read runs in subshell)
 CHANGES_FILE="$(mktemp)"
+ERRORS_FILE="$(mktemp)"
 echo 0 > "$CHANGES_FILE"
-trap 'rm -f "$CHANGES_FILE"' EXIT
+echo 0 > "$ERRORS_FILE"
+trap 'rm -f "$CHANGES_FILE" "$ERRORS_FILE"' EXIT
 
 inc_changes() { echo $(( $(cat "$CHANGES_FILE") + 1 )) > "$CHANGES_FILE"; }
+inc_errors()  { echo $(( $(cat "$ERRORS_FILE")  + 1 )) > "$ERRORS_FILE";  }
 
 # ── Frontmatter helpers (pure Python — handles missing frontmatter correctly) ──
 
@@ -94,10 +103,17 @@ frontmatter_update_false() {
 
 BACKUP_SUFFIX=".bak.$(date +%Y%m%dT%H%M%S)"
 
+# backup_file: creates a backup BEFORE mutation. Returns 1 (aborts caller) if
+# backup write fails — never mutate without a backup in place.
 backup_file() {
   local src="$1"
   local bak="${src}${BACKUP_SUFFIX}"
-  cp "$src" "$bak"
+  if ! cp "$src" "$bak" 2>/dev/null; then
+    echo "[ERROR] backup failed for $src — skipping mutation" >&2
+    inc_errors
+    return 1
+  fi
+  return 0
 }
 
 revert_file() {
@@ -176,16 +192,18 @@ print('\n'.join(data.get('auto_invoke', [])))
       current="$(grep "^disable-model-invocation:" "$skill_md" | head -1)"
       echo "[FIX]  $agent_name/$skill: setting disable-model-invocation: true (was: $current)"
       if ! $DRY_RUN; then
-        backup_file "$skill_md"
-        sed -i "s/^disable-model-invocation:.*/disable-model-invocation: true/" "$skill_md"
-        inc_changes
+        if backup_file "$skill_md"; then
+          sed -i "s/^disable-model-invocation:.*/disable-model-invocation: true/" "$skill_md"
+          inc_changes
+        fi
       fi
     else
       echo "[ADD]  $agent_name/$skill: adding disable-model-invocation: true"
       if ! $DRY_RUN; then
-        backup_file "$skill_md"
-        frontmatter_set_true "$skill_md"
-        inc_changes
+        if backup_file "$skill_md"; then
+          frontmatter_set_true "$skill_md"
+          inc_changes
+        fi
       fi
     fi
   done <<< "$manual_only"
@@ -201,9 +219,10 @@ print('\n'.join(data.get('auto_invoke', [])))
     if grep -q "^disable-model-invocation: true" "$skill_md" 2>/dev/null; then
       echo "[FIX]  $agent_name/$skill: removing disable-model-invocation: true (auto_invoke)"
       if ! $DRY_RUN; then
-        backup_file "$skill_md"
-        frontmatter_remove "$skill_md"
-        inc_changes
+        if backup_file "$skill_md"; then
+          frontmatter_remove "$skill_md"
+          inc_changes
+        fi
       fi
     else
       echo "[OK]   $agent_name/$skill: no disable-model-invocation (correct for auto_invoke)"
@@ -213,10 +232,16 @@ print('\n'.join(data.get('auto_invoke', [])))
 done
 
 FINAL_CHANGES=$(cat "$CHANGES_FILE")
+FINAL_ERRORS=$(cat "$ERRORS_FILE")
 if $DRY_RUN; then
   echo ""
   echo "[DRY-RUN] No files written. Remove --dry-run to apply."
 else
   echo ""
-  echo "Done. ${FINAL_CHANGES} file(s) modified."
+  if (( FINAL_ERRORS > 0 )); then
+    echo "Done. ${FINAL_CHANGES} file(s) modified, ${FINAL_ERRORS} error(s) — re-run to retry skipped files."
+    exit 1
+  else
+    echo "Done. ${FINAL_CHANGES} file(s) modified."
+  fi
 fi
