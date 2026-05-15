@@ -1,20 +1,37 @@
 import type { NextConfig } from "next";
 
-// Next.js 15.2+ blocks non-localhost origins from /_next/* dev-internal
-// resources by default. When the dashboard is accessed over Tailscale, a LAN
-// IP, or a reverse proxy, the browser receives the SSR HTML but the client
-// bundle cannot finish hydrating because dev-resource requests are rejected —
-// useEffect never fires, the CSRF token is never fetched, and the login form
-// is stuck.
-//
-// Set DASHBOARD_ALLOWED_DEV_ORIGINS to a comma-separated list of hostnames or
-// IPs to whitelist (e.g. "100.64.95.40,mybox.local,dashboard.example.com").
-// Localhost is always allowed. Only reads in development; production builds
-// ignore the setting.
 const allowedDevOrigins = (process.env.DASHBOARD_ALLOWED_DEV_ORIGINS ?? '')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+// CSP: strict-ish — allows Next.js inline hydration scripts + Cloudflare Turnstile.
+// 'unsafe-inline' on script-src is required for Next.js App Router until nonce support
+// is fully wired; acceptable for a single-admin internal tool.
+const ContentSecurityPolicy = `
+  default-src 'self';
+  script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com;
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data: blob: https:;
+  font-src 'self' data:;
+  connect-src 'self' https://challenges.cloudflare.com;
+  frame-src https://challenges.cloudflare.com;
+  frame-ancestors 'none';
+  base-uri 'self';
+  form-action 'self';
+  upgrade-insecure-requests;
+`.replace(/\s{2,}/g, ' ').trim();
+
+const securityHeaders = [
+  { key: 'Content-Security-Policy', value: ContentSecurityPolicy },
+  { key: 'X-Frame-Options', value: 'DENY' },
+  { key: 'X-Content-Type-Options', value: 'nosniff' },
+  { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
+  // HSTS: 2-year max-age, includeSubDomains, preload — set here for non-CF-proxied paths;
+  // Cloudflare also injects HSTS at the edge for proxied requests.
+  { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
+];
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ['better-sqlite3'],
@@ -22,10 +39,10 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        // Prevent aggressive caching of API routes and pages through the tunnel
         source: '/((?!_next/static).*)',
         headers: [
           { key: 'Cache-Control', value: 'no-store, must-revalidate' },
+          ...securityHeaders,
         ],
       },
     ];

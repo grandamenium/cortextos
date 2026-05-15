@@ -1,0 +1,21 @@
+import { chromium } from 'playwright';
+const HOST = 'further-successful-commit-ellen.trycloudflare.com';
+const IP = '104.16.231.132';
+const b = await chromium.launch({ headless: true, args: [`--host-resolver-rules=MAP ${HOST} ${IP}`] });
+const ctx = await b.newContext({ ignoreHTTPSErrors: true });
+const p = await ctx.newPage();
+await p.goto(`https://${HOST}/login`, { waitUntil: 'networkidle', timeout: 30000 });
+await p.waitForTimeout(2500);
+const cookies = await ctx.cookies();
+const csrfCookie = cookies.find(c => c.name.includes('csrf'));
+console.log('csrf_cookie_name:', csrfCookie.name);
+console.log('csrf_cookie_value_full:', csrfCookie.value);
+console.log('csrf_cookie_len:', csrfCookie.value.length);
+const csrfFromJs = await p.evaluate(async () => {
+  const r = await fetch('/api/auth/csrf', { credentials: 'same-origin' });
+  const d = await r.json();
+  return d.csrfToken;
+});
+console.log('csrf_token_from_api:', csrfFromJs);
+console.log('csrf_token_from_api_len:', csrfFromJs.length);
+await b.close();

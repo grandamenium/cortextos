@@ -5,40 +5,35 @@ import NextAuth from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { db } from './db';
-import { checkRateLimit, resetRateLimit } from './rate-limit';
+import { checkRateLimit, resetRateLimit, recordFailedLogin } from './rate-limit';
+import { verifyTurnstile } from './turnstile';
 import type { User } from './types';
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
-  // Force simple cookie names without __Secure- / __Host- prefixes.
-  // NextAuth v5 auto-enables these for HTTPS (including Cloudflare tunnels via
-  // X-Forwarded-Proto), but tunnel proxies may not forward Secure-prefixed
-  // cookies reliably. The middleware checks for authjs.session-token, so this
-  // must stay consistent.
+  // Let auth.js infer cookie names from AUTH_URL — on HTTPS it will automatically
+  // use __Secure- prefixed names (__Secure-authjs.csrf-token etc.), which is
+  // required for CSRF validation to pass in a browser. Hardcoding unprefixed names
+  // breaks the CSRF lookup when auth.js is serving HTTPS via Cloudflare tunnel.
+  // Middleware checks both authjs.session-token AND __Secure-authjs.session-token.
   cookies: {
     sessionToken: {
-      name: 'authjs.session-token',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/' },
     },
     csrfToken: {
-      name: 'authjs.csrf-token',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/' },
     },
     callbackUrl: {
-      name: 'authjs.callback-url',
-      options: { sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { sameSite: 'lax', path: '/' },
     },
     pkceCodeVerifier: {
-      name: 'authjs.pkce.code_verifier',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/' },
     },
     state: {
-      name: 'authjs.state',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/' },
     },
     nonce: {
-      name: 'authjs.nonce',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/' },
     },
   },
   providers: [
@@ -47,6 +42,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       credentials: {
         username: { label: 'Username', type: 'text' },
         password: { label: 'Password', type: 'password' },
+        totp_code: { label: 'Authenticator Code', type: 'text' },
+        turnstileToken: { label: 'Turnstile', type: 'text' },
       },
       async authorize(credentials, request) {
         // Security (H8): Rate limit auth attempts to prevent brute force.
@@ -66,19 +63,52 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         if (!credentials?.username || !credentials?.password) return null;
 
+        // Turnstile verification (bypassed when TURNSTILE_SECRET_KEY not set)
+        const turnstileOk = await verifyTurnstile(credentials.turnstileToken as string | undefined);
+        if (!turnstileOk) {
+          throw new Error('CAPTCHA verification failed. Please try again.');
+        }
+
         // Seed admin user on first auth attempt if no users exist
         await seedAdminUser();
 
         const user = db
           .prepare('SELECT * FROM users WHERE username = ?')
           .get(credentials.username as string) as User | undefined;
-        if (!user) return null;
+        if (!user) {
+          recordFailedLogin(ip, credentials.username as string);
+          return null;
+        }
 
         const valid = await bcrypt.compare(
           credentials.password as string,
           user.password_hash
         );
-        if (!valid) return null;
+        if (!valid) {
+          recordFailedLogin(ip, credentials.username as string);
+          return null;
+        }
+
+        // TOTP verification (only when enabled)
+        if (user.totp_enabled) {
+          const code = ((credentials as Record<string, unknown>).totp_code as string | undefined)?.trim();
+          if (!code) return null;
+
+          const { verifyTotp } = await import('./totp');
+          const totpValid = user.totp_secret
+            ? verifyTotp(code, user.totp_secret)
+            : false;
+
+          if (!totpValid) {
+            // Check one-time recovery codes
+            const { checkAndConsumeRecoveryCode } = await import('./totp');
+            const recovered = checkAndConsumeRecoveryCode(user.id, code);
+            if (!recovered) {
+              recordFailedLogin(ip, credentials.username as string);
+              return null;
+            }
+          }
+        }
 
         // Auth successful — reset rate limit counter
         resetRateLimit(ip);

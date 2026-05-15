@@ -303,16 +303,23 @@ export async function getWastedSpend(
 ): Promise<{ wasted_amount: number; pct_of_total: number; top_offenders: Array<{ campaign: string; wasted: number }> }> {
   const bq = getBQ();
   const query = `
+    WITH by_campaign AS (
+      SELECT
+        COALESCE(campaign_id, 'unknown') AS campaign,
+        ROUND(SUM(spend), 2) AS wasted,
+        SUM(conversions) AS conversions
+      FROM \`${PROJECT}.${DATASET}.daily_metrics\`
+      WHERE client_id = @clientId
+        AND metric_date BETWEEN @start AND @end
+      GROUP BY campaign_id
+    )
     SELECT
-      COALESCE(campaign_id, 'unknown') AS campaign,
-      ROUND(SUM(spend), 2) AS wasted,
-      SUM(conversions) AS conversions,
-      ROUND(SUM(SUM(spend)) OVER (), 2) AS total_spend
-    FROM \`${PROJECT}.${DATASET}.daily_metrics\`
-    WHERE client_id = @clientId
-      AND metric_date BETWEEN @start AND @end
-    GROUP BY campaign_id
-    HAVING SUM(conversions) = 0 AND SUM(spend) > 0
+      campaign,
+      wasted,
+      conversions,
+      (SELECT ROUND(SUM(wasted), 2) FROM by_campaign) AS total_spend
+    FROM by_campaign
+    WHERE conversions = 0 AND wasted > 0
     ORDER BY wasted DESC
     LIMIT 20
   `;
