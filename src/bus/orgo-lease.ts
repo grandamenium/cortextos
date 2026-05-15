@@ -29,6 +29,12 @@ interface FleetNodeRow {
   updated_at: string | null;
 }
 
+interface TaskRow {
+  id: string;
+  result: string | null;
+  result_links: unknown;
+}
+
 export interface OrgoLease {
   lease_id: string;
   holder: string;
@@ -201,6 +207,51 @@ async function patchNode(config: SupabaseConfig, nodeKey: string, patch: Record<
   return rows[0];
 }
 
+async function resolveTaskId(config: SupabaseConfig, taskId: string | null): Promise<string | null> {
+  if (!taskId) return null;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)) return taskId;
+  if (!/^[0-9a-f]{8,}$/i.test(taskId)) return null;
+
+  const rows = await rest<Array<{ id: string }>>(
+    config,
+    'orch_tasks?select=id&order=created_at.desc&limit=1000',
+    { method: 'GET' },
+  );
+  return rows.find((row) => row.id.startsWith(taskId))?.id ?? null;
+}
+
+async function completeLeaseTask(config: SupabaseConfig, taskId: string | null, lease: OrgoLease, releasedAt: string): Promise<void> {
+  const resolvedTaskId = await resolveTaskId(config, taskId);
+  if (!resolvedTaskId) return;
+
+  const existing = await rest<TaskRow[]>(
+    config,
+    `orch_tasks?id=eq.${resolvedTaskId}&select=id,result,result_links`,
+    { method: 'GET' },
+  );
+  const current = existing[0];
+  const result = lease.result || `Orgo lease ${lease.lease_id} released.`;
+  const resultLinks = Array.isArray(current?.result_links) ? [...current.result_links] : [];
+  if (lease.expected_artifact && !resultLinks.includes(lease.expected_artifact)) {
+    resultLinks.push(lease.expected_artifact);
+  }
+
+  await rest<unknown>(
+    config,
+    `orch_tasks?id=eq.${resolvedTaskId}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: 'completed',
+        result,
+        result_links: resultLinks,
+        completed_at: releasedAt,
+        updated_at: releasedAt,
+      }),
+    },
+  );
+}
+
 export async function claimOrgoLease(opts: LeaseClaimOptions): Promise<{ node: FleetNodeRow; lease: OrgoLease }> {
   const config = loadSupabaseConfig();
   const [node] = await readNodes(config, { node: opts.node });
@@ -286,6 +337,8 @@ export async function releaseOrgoLease(opts: LeaseReleaseOptions): Promise<{ nod
     notes: [node.notes, `released_lease=${lease.lease_id}; result=${opts.result || 'none'}`].filter(Boolean).join(' | '),
     updated_at: releasedAt,
   });
+
+  await completeLeaseTask(config, node.current_task_id, releasedLease, releasedAt);
 
   return { node: updated, released: releasedLease };
 }
