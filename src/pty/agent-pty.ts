@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
+import { buildAgentRuntimeEnv } from '../utils/env.js';
 
 // node-pty types
 interface IPty {
@@ -19,7 +20,7 @@ interface IPtySpawnOptions {
   cols?: number;
   rows?: number;
   cwd?: string;
-  env?: Record<string, string>;
+  env?: NodeJS.ProcessEnv;
 }
 
 type SpawnFn = (file: string, args: string[], options: IPtySpawnOptions) => IPty;
@@ -62,79 +63,7 @@ export class AgentPTY {
 
     const cwd = this.config.working_directory || this.env.agentDir || process.cwd();
 
-    // Build environment variables for the PTY process
-    const ptyEnv: Record<string, string> = {
-      ...this.getBaseEnv(),
-      CTX_INSTANCE_ID: this.env.instanceId,
-      CTX_ROOT: this.env.ctxRoot,
-      CTX_FRAMEWORK_ROOT: this.env.frameworkRoot,
-      CTX_AGENT_NAME: this.env.agentName,
-      CTX_ORG: this.env.org,
-      CTX_AGENT_DIR: this.env.agentDir,
-      CTX_PROJECT_ROOT: this.env.projectRoot,
-      // Backward compat
-      CRM_AGENT_NAME: this.env.agentName,
-      CRM_TEMPLATE_ROOT: this.env.frameworkRoot,
-    };
-
-    // Source org-level shared secrets (orgs/{org}/secrets.env).
-    // These are shared across all agents in the org: OPENAI_KEY, APIFY_TOKEN, GEMINI_API_KEY, etc.
-    // Agent .env is loaded after and overrides org values — agent-specific keys win.
-    if (this.env.org && this.env.projectRoot) {
-      const orgEnvFile = join(this.env.projectRoot, 'orgs', this.env.org, 'secrets.env');
-      if (existsSync(orgEnvFile)) {
-        const content = readFileSync(orgEnvFile, 'utf-8');
-        for (const line of content.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          const eqIdx = trimmed.indexOf('=');
-          if (eqIdx > 0) {
-            ptyEnv[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
-          }
-        }
-      }
-    }
-
-    // Source agent .env file (overrides org secrets.env for same key names).
-    // Contains agent-specific secrets: BOT_TOKEN, CHAT_ID, CLAUDE_CODE_OAUTH_TOKEN.
-    const agentEnvFile = join(this.env.agentDir, '.env');
-    if (existsSync(agentEnvFile)) {
-      const content = readFileSync(agentEnvFile, 'utf-8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx > 0) {
-          ptyEnv[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim();
-        }
-      }
-    }
-
-    // Add convenience CTX_* aliases used throughout agent templates.
-    // CTX_TELEGRAM_CHAT_ID: alias for CHAT_ID from the agent's .env
-    if (ptyEnv['CHAT_ID']) {
-      ptyEnv['CTX_TELEGRAM_CHAT_ID'] = ptyEnv['CHAT_ID'];
-    }
-    // CTX_TIMEZONE: from config.json timezone field, falls back to system TZ
-    const configTimezone = this.config.timezone;
-    if (configTimezone) {
-      ptyEnv['CTX_TIMEZONE'] = configTimezone;
-      ptyEnv['TZ'] = configTimezone; // also set TZ so date/time system calls use correct zone
-    } else if (process.env.TZ) {
-      ptyEnv['CTX_TIMEZONE'] = process.env.TZ;
-    }
-    // CTX_ORCHESTRATOR_AGENT: read from org context.json so agents can route to orchestrator
-    if (this.env.projectRoot && this.env.org) {
-      try {
-        const contextPath = join(this.env.projectRoot, 'orgs', this.env.org, 'context.json');
-        if (existsSync(contextPath)) {
-          const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
-          if (ctx.orchestrator) {
-            ptyEnv['CTX_ORCHESTRATOR_AGENT'] = ctx.orchestrator;
-          }
-        }
-      } catch { /* leave unset if context.json is missing or malformed */ }
-    }
+    const ptyEnv = buildAgentRuntimeEnv(this.env, this.config);
 
     // Spawn the agent binary directly (no shell wrapper) — cross-platform, no shell escaping needed.
     // env is passed natively via node-pty options; no bash export commands required.
@@ -314,37 +243,4 @@ export class AgentPTY {
     return this.outputBuffer;
   }
 
-  /**
-   * Get a clean base environment (excluding potentially harmful vars).
-   */
-  private getBaseEnv(): Record<string, string> {
-    const env: Record<string, string> = {};
-    // Copy essential env vars
-    const keepVars = [
-      'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
-      'TMPDIR', 'TEMP', 'TMP', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY',
-      'NODE_PATH', 'COMSPEC', 'USERPROFILE',
-      // Windows path-expansion essentials. Stripping these causes phantom
-      // %SystemDrive% directories from inherited Search Indexer processes
-      // and Unity batchmode UPM IPC crashes (path.join(undefined,...)).
-      'SystemDrive', 'SystemRoot', 'windir',
-      'APPDATA', 'LOCALAPPDATA', 'ProgramData', 'ALLUSERSPROFILE',
-      'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432',
-      'HOMEDRIVE', 'HOMEPATH', 'PUBLIC',
-    ];
-    for (const key of keepVars) {
-      if (process.env[key]) {
-        env[key] = process.env[key]!;
-      }
-    }
-
-    // Windows: ensure UTF-8 locale so emoji and Unicode pass through the PTY
-    if (platform() === 'win32') {
-      if (!env['LANG']) env['LANG'] = 'en_US.UTF-8';
-      if (!env['LC_ALL']) env['LC_ALL'] = 'en_US.UTF-8';
-      if (!process.env['PYTHONIOENCODING']) env['PYTHONIOENCODING'] = 'utf-8';
-    }
-
-    return env;
-  }
 }

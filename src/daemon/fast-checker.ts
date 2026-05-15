@@ -1,15 +1,26 @@
-import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, renameSync } from 'fs';
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
-import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
+import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery, CompactionLedger } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars } from '../utils/validate.js';
+import { findActiveJsonl, parseJsonlTurns, pauseForJsonlSnapshot } from '../utils/agent-session.js';
+import {
+  waitForSafePoint,
+  splitTurnsByTokenBudget,
+  flattenTurns,
+  validateAndPatchSummary,
+  redactLedgerSummary,
+  writeLedgerAndMarker,
+  sessionIdFromJsonlPath,
+  type SidecarCompactor,
+} from '../utils/sidecar-compactor.js';
 
 type LogFn = (msg: string) => void;
 
@@ -58,6 +69,11 @@ export class FastChecker {
   private ctxCircuitBrokenAt: number | null = null; // when circuit tripped (null = healthy)
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
+  // Tier 1.5: sidecar compaction state
+  private ctxCompactFiredSessionId: string | null = null;
+  private ctxCompactInProgress: boolean = false;
+  private ctxCompactStartedAt: number = 0;
+  private ctxCompactRunId: number = 0; // incremented on each new run; late completions check before writing
 
   constructor(
     agent: AgentProcess,
@@ -208,6 +224,10 @@ export class FastChecker {
     if (this.chatId && this.telegramApi && this.isAgentActive()) {
       await this.sendTyping(this.telegramApi, this.chatId);
     }
+
+    // Manual compaction trigger first — claim before auto-Tier-1.5 so a manual request
+    // arriving in the same cycle doesn't fire again after auto-restart clears state.
+    await this.checkCompactNowMarker();
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
     await this.checkContextStatus();
@@ -874,7 +894,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * Re-reads from disk only when the file has changed so dashboard updates take effect
    * within one poll cycle without a daemon restart.
    */
-  private getCtxThresholds(): { warn: number; handoff: number } {
+  private getCtxThresholds(): { warn: number; handoff: number; compact: number } {
     try {
       const configPath = join(this.agent.getAgentDir(), 'config.json');
       const mtime = statSync(configPath).mtimeMs;
@@ -883,6 +903,10 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         const config = this.agent.getConfig();
         config.ctx_warning_threshold = cfg.ctx_warning_threshold;
         config.ctx_handoff_threshold = cfg.ctx_handoff_threshold;
+        config.ctx_compact_threshold = cfg.ctx_compact_threshold;
+        config.ctx_compact_enabled = cfg.ctx_compact_enabled;
+        config.ctx_compact_variant = cfg.ctx_compact_variant;
+        config.ctx_compact_last_n_turns_tokens = cfg.ctx_compact_last_n_turns_tokens;
         this.ctxConfigMtime = mtime;
       }
     } catch { /* keep stale values */ }
@@ -890,7 +914,67 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     return {
       warn: config.ctx_warning_threshold ?? 70,
       handoff: config.ctx_handoff_threshold ?? 80,
+      compact: config.ctx_compact_threshold ?? 60,
     };
+  }
+
+  /**
+   * Consume (claim) ALL pending .compact-now-* markers without triggering compaction.
+   * Called at the start of runSidecarCompaction so stale markers don't re-fire in the
+   * fresh session after a compaction-triggered restart.
+   */
+  private consumeCompactNowMarkers(): void {
+    const stateDir = this.paths.stateDir;
+    if (!existsSync(stateDir)) return;
+    try {
+      for (const f of readdirSync(stateDir)) {
+        if (f.startsWith('.compact-now-') && !f.endsWith('.claimed')) {
+          try { renameSync(join(stateDir, f), join(stateDir, f + '.claimed')); } catch { /* already gone */ }
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  /**
+   * Check for .compact-now-{id} markers dropped by `cortextos bus compact-now`.
+   * Atomically claims the marker by renaming it to .claimed, then triggers
+   * Tier 1.5 compaction immediately (bypasses the threshold check).
+   */
+  private async checkCompactNowMarker(): Promise<void> {
+    if (this.ctxCompactInProgress) return;
+    if (this.agent.getConfig().ctx_compact_enabled !== true) return;
+    const stateDir = this.paths.stateDir;
+    if (!existsSync(stateDir)) return;
+    let entries: string[];
+    try {
+      entries = readdirSync(stateDir);
+    } catch {
+      return;
+    }
+    const marker = entries.find(f => f.startsWith('.compact-now-') && !f.endsWith('.claimed'));
+    if (!marker) return;
+    // Atomic claim via rename
+    const src = join(stateDir, marker);
+    const dst = join(stateDir, marker + '.claimed');
+    try {
+      renameSync(src, dst);
+    } catch {
+      return; // already claimed by another poll cycle
+    }
+    this.log(`[compactor] Manual compact-now request claimed: ${marker}`);
+    this.ctxCompactInProgress = true;
+    this.ctxCompactStartedAt = Date.now();
+    this.ctxCompactFiredSessionId = this.ctxLastSessionId;
+    // Use current context_status.json pct if available, else 0 (manual trigger)
+    let manualPct = 0;
+    try {
+      const data = JSON.parse(readFileSync(join(stateDir, 'context_status.json'), 'utf-8'));
+      if (typeof data.used_percentage === 'number') manualPct = data.used_percentage;
+    } catch { /* use 0 */ }
+    this.runSidecarCompaction(manualPct).catch(err => {
+      this.log(`[compactor] Manual compact-now failed: ${err}`);
+      this.ctxCompactInProgress = false;
+    });
   }
 
   /**
@@ -936,6 +1020,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
           this.ctxHandoffFiredAt = 0;
           this.ctxHandoffDeadlineAt = 0;
           this.ctxWarningFiredAt = 0;
+          this.ctxCompactFiredSessionId = null;
+          this.ctxCompactInProgress = false;
           this.log(`New session detected (${incomingSessionId.slice(0, 8)}…) — per-session ctx state reset`);
         }
         this.ctxLastSessionId = incomingSessionId;
@@ -950,7 +1036,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return;
     }
 
-    const { warn, handoff } = this.getCtxThresholds();
+    const { warn, handoff, compact } = this.getCtxThresholds();
 
     // No threshold configured — observe-only mode (log but don't act)
     if (this.agent.getConfig().ctx_handoff_threshold === undefined) return;
@@ -975,8 +1061,31 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       this.log(`Context warning fired at ${pctRound}%`);
     }
 
-    // Tier 2: handoff (fires once per session lifecycle)
-    if (effectivePct >= handoff && this.ctxHandoffFiredAt === 0) {
+    // Tier 1.5: sidecar compaction — fires once per session at ctx_compact_threshold (default 60%)
+    // Only runs when ctx_compact_enabled=true; falls through to Tier 2 if compaction fails or is
+    // already in progress longer than 60s (prevents blocking Tier 2 indefinitely).
+    const compactEnabled = this.agent.getConfig().ctx_compact_enabled === true;
+    const compactAlreadyFired = this.ctxCompactFiredSessionId !== null &&
+      this.ctxCompactFiredSessionId === this.ctxLastSessionId;
+    const compactStuck = this.ctxCompactInProgress && (now - this.ctxCompactStartedAt > 60_000);
+    if (compactEnabled && !compactAlreadyFired && !this.ctxCompactInProgress && effectivePct >= compact) {
+      this.ctxCompactFiredSessionId = this.ctxLastSessionId;
+      this.ctxCompactInProgress = true;
+      this.ctxCompactStartedAt = now;
+      this.runSidecarCompaction(effectivePct).catch(err => {
+        this.log(`[compactor] Tier 1.5 error: ${err}`);
+        this.ctxCompactInProgress = false;
+      });
+    }
+    if (compactStuck) {
+      this.log('[compactor] Tier 1.5 stuck > 60s — invalidating run, clearing flag, allowing Tier 2');
+      this.ctxCompactRunId++; // invalidate: any late-completing run will see runId mismatch
+      this.ctxCompactInProgress = false;
+    }
+
+    // Tier 2: handoff (fires once per session lifecycle) — skip if compaction is in progress
+    const blockTier2 = this.ctxCompactInProgress && (now - this.ctxCompactStartedAt < 60_000);
+    if (!blockTier2 && effectivePct >= handoff && this.ctxHandoffFiredAt === 0) {
       this.ctxHandoffFiredAt = now;
       this.ctxHandoffDeadlineAt = now + 5 * 60_000; // 5min grace for agent to cooperate
       // Reset context_status.json so the new session doesn't re-trigger immediately
@@ -996,6 +1105,124 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         writeFileSync(join(this.paths.stateDir, '.force-fresh'), '');
       } catch { /* non-fatal */ }
     }
+  }
+
+  /**
+   * Tier 1.5: run sidecar compaction. Dynamically imports the configured
+   * variant, waits for a safe point, snapshots the JSONL, summarizes,
+   * writes the ledger, then force-restarts. Clears ctxCompactInProgress on
+   * any exit path so Tier 2 can take over if anything goes wrong.
+   */
+  private async runSidecarCompaction(effectivePct: number): Promise<void> {
+    const agentDir = this.agent.getAgentDir();
+    const agentName = this.agent.name;
+    const config = this.agent.getConfig();
+    const variant = config.ctx_compact_variant ?? 'sonnet';
+    const tokenBudget = config.ctx_compact_last_n_turns_tokens ?? 8000;
+    const log = (msg: string) => this.log(msg);
+
+    // Consume all pending .compact-now-* markers before starting — prevents stale
+    // markers from refiring in the fresh session after this compaction restarts.
+    this.consumeCompactNowMarkers();
+
+    // Capture run ID so late completions after the 60s stuck timeout are discarded.
+    const runId = ++this.ctxCompactRunId;
+
+    this.log(`[compactor] Tier 1.5 starting (variant=${variant}, pct=${Math.round(effectivePct)}%, runId=${runId})`);
+
+    let createCompactor: () => SidecarCompactor;
+    try {
+      // Use require() with an absolute path — esbuild does not trace template-literal
+      // require() calls, so the module is loaded at runtime from dist/utils/ where
+      // each variant's tsup entry is compiled. dynamic import() with a template
+      // literal causes a build error when the glob matches no src/ files.
+      const modPath = join(__dirname, 'utils', `sidecar-compactor-${variant}.js`);
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = (require as NodeRequire)(modPath) as { createCompactor?: () => SidecarCompactor };
+      if (typeof mod.createCompactor !== 'function') {
+        this.log(`[compactor] variant '${variant}' module missing createCompactor()`);
+        this.ctxCompactInProgress = false;
+        return;
+      }
+      createCompactor = mod.createCompactor;
+    } catch (err) {
+      this.log(`[compactor] Failed to load variant '${variant}': ${err}`);
+      this.ctxCompactInProgress = false;
+      return;
+    }
+
+    const safePoint = await waitForSafePoint(agentDir, 30_000, log);
+    if (!safePoint) {
+      this.log('[compactor] No safe point within 30s — aborting Tier 1.5');
+      this.ctxCompactInProgress = false;
+      return;
+    }
+
+    const snapshotPath = await pauseForJsonlSnapshot(this.agent, log);
+    if (!snapshotPath) {
+      this.log('[compactor] JSONL snapshot failed — aborting Tier 1.5');
+      this.ctxCompactInProgress = false;
+      return;
+    }
+
+    const turns = parseJsonlTurns(snapshotPath);
+    if (turns.length === 0) {
+      this.log('[compactor] No parseable turns in snapshot — aborting Tier 1.5');
+      this.ctxCompactInProgress = false;
+      return;
+    }
+
+    const { middle, recent } = splitTurnsByTokenBudget(turns, tokenBudget);
+    const ctx = {
+      agentName,
+      middleTurnsText: flattenTurns(middle),
+      recentTurnsText: flattenTurns(recent),
+      contextPct: Math.round(effectivePct),
+      now: new Date().toISOString(),
+    };
+
+    const compactor = createCompactor();
+    const rawSummary = await compactor.summarize(ctx);
+    if (!rawSummary) {
+      this.log('[compactor] summarize() returned null — aborting Tier 1.5');
+      this.ctxCompactInProgress = false;
+      return;
+    }
+
+    const redacted = redactLedgerSummary(rawSummary);
+    const validated = validateAndPatchSummary(redacted, recent.length > 0, log);
+    if (!validated) {
+      this.log('[compactor] Ledger validation failed — aborting Tier 1.5');
+      this.ctxCompactInProgress = false;
+      return;
+    }
+
+    // Late-completion guard: if the 60s stuck timeout fired and incremented ctxCompactRunId,
+    // our runId no longer matches. Discard rather than writing a ledger + restarting
+    // concurrently with whatever Tier 2 may have already triggered.
+    if (runId !== this.ctxCompactRunId) {
+      this.log(`[compactor] Run ${runId} superseded by timeout — discarding late completion`);
+      return;
+    }
+
+    const jsonlPath = findActiveJsonl(agentDir);
+    const sessionId = jsonlPath ? (sessionIdFromJsonlPath(jsonlPath) ?? 'unknown') : 'unknown';
+    const ledger: CompactionLedger = {
+      schema_version: '1',
+      compacted_at: ctx.now,
+      session_id: sessionId,
+      context_pct_at_compact: ctx.contextPct,
+      variant: variant as CompactionLedger['variant'],
+      ...validated,
+      recent_turns_summary: ctx.recentTurnsText.slice(0, 8000),
+    };
+
+    const docPath = writeLedgerAndMarker(agentDir, this.paths, agentName, ledger);
+    this.log(`[compactor] Tier 1.5 ledger written → ${docPath} (runId=${runId})`);
+
+    // forceContextRestart clears ctxCompactInProgress indirectly via the session-reset path
+    this.ctxCompactInProgress = false;
+    this.forceContextRestart(`sidecar compaction complete (${variant}, ${ctx.contextPct}%)`);
   }
 
   /**
@@ -1046,6 +1273,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     this.ctxHandoffFiredAt = 0;
     this.ctxHandoffDeadlineAt = 0;
     this.ctxWarningFiredAt = 0;
+    this.ctxCompactInProgress = false;
 
     // Write .force-fresh + .restart-planned (hardRestart from src/bus/system.ts)
     hardRestart(this.paths, this.agent.name, `CONTEXT-FORCE-RESTART: ${reason}`);

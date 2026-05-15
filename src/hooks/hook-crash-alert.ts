@@ -148,10 +148,11 @@ function shouldSuppressDedup(stateDir: string, endType: string): boolean {
   return false;
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const agentName = process.env.CTX_AGENT_NAME;
   const instanceId = process.env.CTX_INSTANCE_ID || 'default';
   if (!agentName) return;
+  if (process.env.CTX_FRESH_SESSION_CRON) return;
 
   const ctxRoot = join(homedir(), '.cortextos', instanceId);
   const stateDir = join(ctxRoot, 'state', agentName);
@@ -331,4 +332,6 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(() => process.exit(0));
+if (!process.env.VITEST) {
+  main().catch(() => process.exit(0));
+}
