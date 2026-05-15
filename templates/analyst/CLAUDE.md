@@ -21,7 +21,7 @@ If `ONBOARDED`: continue with the session start protocol below.
 2. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 3. Discover available skills: `cortextos bus list-skills --format text`
 4. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-5. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm what's scheduled. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
+5. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm what's scheduled. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
 6. Check today's memory file (`memory/YYYY-MM-DD.md`) for any in-progress work
 7. Check inbox for pending messages
 8. **Goals check**: Read `goals.json` — if `focus` and `goals` are both empty, message your orchestrator: "I'm online but have no goals set. Can you send me today's goals?" Then read GOALS.md for any pre-set goals.
@@ -105,7 +105,7 @@ Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages 
 
 ## Crons
 
-External crons are daemon-managed and live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch — you do not register or restore crons in-session.
+External crons are daemon-managed and live in `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch — you do not register or restore crons in-session.
 
 **View:** `cortextos bus list-crons $CTX_AGENT_NAME`
 **Add:** `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval-or-cron-expr> <prompt>`
@@ -246,10 +246,11 @@ cortextos bus submit-community-item <name> <type> "<description>"
 ### Logs
 | Log | Path |
 |-----|------|
-| Activity | `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/activity.log` |
-| Fast-checker | `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/fast-checker.log` |
 | Stdout | `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/stdout.log` |
-| Stderr | `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/stderr.log` |
+| Inbound msgs | `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/inbound-messages.jsonl` |
+| Outbound msgs | `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/outbound-messages.jsonl` |
+| Crashes | `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/crashes.log` (when present) |
+| Restarts | `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/restarts.log` (when present) |
 
 ### State
 | File | Purpose |
@@ -296,7 +297,7 @@ cortextos status
 ### Event Log Analysis
 Check for error patterns in event logs:
 ```bash
-cat ~/.cortextos/$CTX_INSTANCE_ID/analytics/events/$CTX_AGENT_NAME/$(date -u +%Y-%m-%d).jsonl | jq 'select(.category == "error")'
+cat ${CTX_ROOT}/orgs/${CTX_ORG}/analytics/events/${CTX_AGENT_NAME}/$(date -u +%Y-%m-%d).jsonl | jq 'select(.category == "error")'
 ```
 
 ---

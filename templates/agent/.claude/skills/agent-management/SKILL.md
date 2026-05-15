@@ -280,7 +280,7 @@ fi
 
 ## 6. Managing Crons
 
-Crons are daemon-managed and persisted to `${CTX_ROOT}/state/<agent>/crons.json`. The daemon dispatches them automatically — no agent-side restoration needed. Use the bus commands; do NOT edit `config.json` or use `/loop` / `CronCreate`.
+Crons are daemon-managed and persisted to `${CTX_ROOT}/.cortextOS/state/agents/<agent>/crons.json`. The daemon dispatches them automatically — no agent-side restoration needed. Use the bus commands; do NOT edit `config.json` or use `/loop` / `CronCreate`.
 
 ### Adding a Cron
 ```bash
@@ -370,7 +370,7 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 ### Agent Not Responding to Telegram
 1. Check .env exists and has BOT_TOKEN + CHAT_ID + ALLOWED_USER
 2. Check fast-checker is running: `ps aux | grep fast-checker | grep $AGENT`
-3. Check fast-checker log: `tail -10 $HOME/.cortextos/default/logs/$AGENT/fast-checker.log`
+3. Check agent output: `tail -50 $HOME/.cortextos/default/logs/$AGENT/stdout.log` and `tail -20 $HOME/.cortextos/default/logs/$AGENT/crashes.log`
 4. Check agent status: `cortextos status`
 
 ### Messages Going to Wrong Person
@@ -381,7 +381,7 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 
 ### Agent Keeps Crashing
 1. Check crash count: `cat $HOME/.cortextos/default/state/$AGENT/.crash_count_today`
-2. Check stderr: `tail -20 $HOME/.cortextos/default/logs/$AGENT/stderr.log`
+2. Check crashes/restarts: `tail -20 $HOME/.cortextos/default/logs/$AGENT/crashes.log` and `tail -20 $HOME/.cortextos/default/logs/$AGENT/stdout.log`
 3. Common causes: rate limit, auth expired, context exhaustion
 4. Fix: reset crash count, fix root cause, `cortextos enable <agent> --restart`
 
