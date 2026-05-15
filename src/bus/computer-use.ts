@@ -246,7 +246,7 @@ export async function computerUse(
   //   StrictHostKeyChecking=accept-new — TOFU semantics (accepts new host keys,
   //     rejects changed ones); safer than =no which silently accepts MITM keys.
   //   ServerAliveInterval/CountMax — detect dead connections after ~60s instead
-  //     of hanging silently for the full (timeoutSec+30) wall-clock window.
+  //     of hanging silently for the full timeoutSec wall-clock window.
   const sshArgs = [
     '-n',  // do not read from stdin — prevents codex exec from blocking on piped stdin
     '-o', 'StrictHostKeyChecking=accept-new',
@@ -259,7 +259,7 @@ export async function computerUse(
 
   try {
     const output = execFileSync('ssh', sshArgs, {
-      timeout: (timeoutSec + 30) * 1000, // extra 30s for SSH overhead
+      timeout: timeoutSec * 1000, // honour caller's --timeout exactly
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -270,7 +270,28 @@ export async function computerUse(
       durationMs: Date.now() - start,
     };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const errObj = err as NodeJS.ErrnoException;
+    const msg = errObj instanceof Error ? errObj.message : String(err);
+
+    // Node execFileSync fires ETIMEDOUT when the caller-specified timeout expires.
+    // This is a clean timeout, not an SSH connection error — return immediately
+    // with a descriptive message so callers can distinguish timeout from failure.
+    if (errObj.code === 'ETIMEDOUT' || msg.includes('ETIMEDOUT')) {
+      // Best-effort: kill orphaned codex-dispatch.sh + codex exec on the remote host.
+      // Non-fatal — if SSH is unavailable the orphans will die when the Mac session ends.
+      try {
+        execFileSync('ssh', [
+          '-n', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new', sshHost,
+          'pkill -f "codex-dispatch.sh" 2>/dev/null; pkill -f "codex exec --dangerously" 2>/dev/null; true',
+        ], { timeout: 8_000, encoding: 'utf-8' });
+      } catch { /* non-fatal */ }
+
+      return {
+        ok: false,
+        error: `computer-use timed out after ${timeoutSec}s — remote codex exec may still be running on ${sshHost}`,
+        durationMs: Date.now() - start,
+      };
+    }
 
     // Only attempt fallback on connection-level SSH failures
     if (!isSshConnectionError(msg)) {
