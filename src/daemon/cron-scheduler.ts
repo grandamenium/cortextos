@@ -175,24 +175,28 @@ async function fireWithRetry(
   onFire: (c: CronDefinition) => Promise<void> | void,
   logger: (msg: string) => void,
 ): Promise<boolean> {
-  const maxAttempts = RETRY_DELAYS_MS.length + 1; // 4 attempts total
+  // Fresh sessions own execution log writes and represent one long subprocess.
+  // Retrying them from the scheduler would block the tick loop for too long.
+  const maxAttempts = cron.fresh_session ? 1 : RETRY_DELAYS_MS.length + 1;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const start = Date.now();
     try {
       await Promise.resolve(onFire(cron));
-      appendExecutionLog(agentName, {
-        ts: new Date().toISOString(),
-        cron: cron.name,
-        status: 'fired',
-        attempt: attempt + 1,
-        duration_ms: Date.now() - start,
-        error: null,
-      });
+      if (!cron.fresh_session) {
+        appendExecutionLog(agentName, {
+          ts: new Date().toISOString(),
+          cron: cron.name,
+          status: 'fired',
+          attempt: attempt + 1,
+          duration_ms: Date.now() - start,
+          error: null,
+        });
+      }
       return true;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const duration_ms = Date.now() - start;
-      if (attempt < RETRY_DELAYS_MS.length) {
+      if (!cron.fresh_session && attempt < RETRY_DELAYS_MS.length) {
         const delay = RETRY_DELAYS_MS[attempt];
         logger(
           `[cron-scheduler] onFire failed for "${cron.name}" ` +
@@ -210,16 +214,18 @@ async function fireWithRetry(
       } else {
         logger(
           `[cron-scheduler] onFire failed for "${cron.name}" ` +
-          `after all 4 attempts — giving up. Last error: ${errMsg}`
+          `after all ${maxAttempts} attempt${maxAttempts === 1 ? '' : 's'} — giving up. Last error: ${errMsg}`
         );
-        appendExecutionLog(agentName, {
-          ts: new Date().toISOString(),
-          cron: cron.name,
-          status: 'failed',
-          attempt: attempt + 1,
-          duration_ms,
-          error: errMsg,
-        });
+        if (!cron.fresh_session) {
+          appendExecutionLog(agentName, {
+            ts: new Date().toISOString(),
+            cron: cron.name,
+            status: 'failed',
+            attempt: attempt + 1,
+            duration_ms,
+            error: errMsg,
+          });
+        }
       }
     }
   }
@@ -496,20 +502,22 @@ export class CronScheduler {
         // crash the tick loop — we log and keep the in-memory schedule intact.
         const nowIso = new Date(now).toISOString();
         const newFireCount = (cron.fire_count ?? 0) + 1;
-        try {
-          updateCron(this.agentName, name, {
-            last_fired_at: nowIso,
-            fire_count: newFireCount,
-          });
-        } catch (err) {
-          this.logger(
-            `[cron-scheduler] WARNING: failed to persist fire state for "${name}" — ` +
-            `${err instanceof Error ? err.message : String(err)}. ` +
-            `In-memory schedule retained; state will be lost if daemon restarts.`
-          );
+        if (!cron.fresh_session) {
+          try {
+            updateCron(this.agentName, name, {
+              last_fired_at: nowIso,
+              fire_count: newFireCount,
+            });
+          } catch (err) {
+            this.logger(
+              `[cron-scheduler] WARNING: failed to persist fire state for "${name}" — ` +
+              `${err instanceof Error ? err.message : String(err)}. ` +
+              `In-memory schedule retained; state will be lost if daemon restarts.`
+            );
+          }
         }
 
-        // Advance in-memory nextFireAt
+        // Advance in-memory nextFireAt for both PTY and fresh-session crons.
         const next = computeNextFireAt(cron, now);
         if (!isNaN(next)) {
           sc.nextFireAt = next;

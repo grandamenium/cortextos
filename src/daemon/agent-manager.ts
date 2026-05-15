@@ -2,7 +2,15 @@ import { spawn } from 'child_process';
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync } from 'fs';
 import { join, relative, isAbsolute } from 'path';
 import { platform } from 'os';
-import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
+import type {
+  AgentConfig,
+  AgentStatus,
+  CtxEnv,
+  BusPaths,
+  WorkerStatus,
+  TelegramMessage,
+  CronExecutionLogEntry,
+} from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
@@ -15,6 +23,8 @@ import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { isFreshSessionProtectedCron, isFreshSessionSupportedRuntime } from '../utils/fresh-session-guards.js';
 import { logEvent } from '../bus/event.js';
+import { updateCron } from '../bus/crons.js';
+import { appendExecutionLog } from './cron-execution-log.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
@@ -797,7 +807,7 @@ export class AgentManager {
 
     const useFresh = cron.fresh_session === true && !isFreshSessionProtectedCron(agentName, cron.name);
     if (useFresh) {
-      await this.fireCronFreshSession(agentName, cron, injection);
+      await this.fireCronFreshSession(agentName, cron, injection, firedAt);
       return;
     }
 
@@ -811,45 +821,78 @@ export class AgentManager {
     agentName: string,
     cron: CronDefinition,
     promptText: string,
+    firedAt: string,
   ): Promise<void> {
-    const entry = this.agents.get(agentName);
-    if (!entry) throw new Error(`Agent "${agentName}" not found`);
+    const startTime = Date.now();
+    let executionLogWritten = false;
+    const writeExecLog = (status: 'fired' | 'failed', errorMsg: string | null): void => {
+      if (executionLogWritten) return;
+      executionLogWritten = true;
+      const entry: CronExecutionLogEntry = {
+        ts: new Date().toISOString(),
+        cron: cron.name,
+        status,
+        attempt: 1,
+        duration_ms: Date.now() - startTime,
+        error: errorMsg,
+      };
+      try { appendExecutionLog(agentName, entry); } catch { /* non-fatal */ }
+    };
 
-    const agentProcess = entry.process;
-    const config = agentProcess.getConfig();
-    const runtime = config.runtime;
-
-    if (!isFreshSessionSupportedRuntime(runtime)) {
-      this.emitFreshSessionUnsupportedEvent(agentName, cron.name, runtime ?? 'unknown');
-      throw new Error(`fresh_session not supported for runtime "${runtime}" (${agentName}/${cron.name})`);
-    }
-
-    const agentDir = agentProcess.getAgentDir();
-    const workingDir = config.working_directory || agentDir;
-    const runtimeEnv = agentProcess.buildRuntimeEnv();
-    const claudeCmd = platform() !== 'win32' ? 'claude' : 'claude.exe';
-    const timeoutMs = cron.fresh_session_timeout_ms ?? 300_000;
+    let agentDir: string;
+    let workingDir: string;
+    let runtimeEnv: NodeJS.ProcessEnv;
+    let claudeCmd: string;
+    let timeoutMs: number;
+    let args: string[];
     const KILL_GRACE_MS = 5_000;
 
-    const args: string[] = ['--print', '--dangerously-skip-permissions', '--no-session-persistence'];
-    if (config.model) args.push('--model', config.model);
+    try {
+      const entry = this.agents.get(agentName);
+      if (!entry) throw new Error(`Agent "${agentName}" not found`);
 
-    if (cron.skill_file) {
-      if (isAbsolute(cron.skill_file)) {
-        console.log(`[daemon] WARNING: absolute skill_file rejected for "${cron.name}" — ignoring`);
-      } else {
-        try {
-          args.push('--append-system-prompt', readFileSync(join(agentDir, cron.skill_file), 'utf-8'));
-        } catch (err) {
-          console.log(
-            `[daemon] WARNING: skill_file "${cron.skill_file}" unreadable for "${cron.name}" — ` +
-            `proceeding without: ${err instanceof Error ? err.message : String(err)}`
-          );
+      const agentProcess = entry.process;
+      const config = agentProcess.getConfig();
+      const runtime = config.runtime;
+
+      if (!isFreshSessionSupportedRuntime(runtime)) {
+        this.emitFreshSessionUnsupportedEvent(agentName, cron.name, runtime ?? 'unknown');
+        throw new Error(`fresh_session not supported for runtime "${runtime}" (${agentName}/${cron.name})`);
+      }
+
+      agentDir = agentProcess.getAgentDir();
+      workingDir = config.working_directory || agentDir;
+      runtimeEnv = agentProcess.buildRuntimeEnv();
+      runtimeEnv['CTX_CRON_FIRED_AT'] = firedAt;
+      claudeCmd = platform() !== 'win32' ? 'claude' : 'claude.exe';
+      timeoutMs = cron.fresh_session_timeout_ms ?? 300_000;
+
+      args = ['--print', '--dangerously-skip-permissions', '--no-session-persistence'];
+      if (config.model) args.push('--model', config.model);
+
+      if (cron.skill_file) {
+        if (isAbsolute(cron.skill_file)) {
+          console.log(`[daemon] WARNING: absolute skill_file rejected for "${cron.name}" — ignoring`);
+        } else {
+          try {
+            args.push('--append-system-prompt', readFileSync(join(agentDir, cron.skill_file), 'utf-8'));
+          } catch (err) {
+            console.log(
+              `[daemon] WARNING: skill_file "${cron.skill_file}" unreadable for "${cron.name}" — ` +
+              `proceeding without: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
         }
       }
-    }
 
-    args.push(promptText);
+      args.push(promptText);
+    } catch (preSpawnErr) {
+      writeExecLog(
+        'failed',
+        `pre_spawn: ${preSpawnErr instanceof Error ? preSpawnErr.message : String(preSpawnErr)}`
+      );
+      throw preSpawnErr;
+    }
 
     const OUTPUT_CAP_BYTES = 256 * 1024;
     let stdoutBuf = Buffer.alloc(0);
@@ -892,7 +935,10 @@ export class AgentManager {
         try { appendFileSync(cronLogPath, `[stderr] ${chunk}`); } catch { /* non-fatal */ }
       });
 
-      child.once('error', (err) => settle(new Error(`spawn failed for "${cron.name}": ${err.message}`)));
+      child.once('error', (err) => {
+        writeExecLog('failed', `spawn_error: ${err.message}`);
+        settle(new Error(`spawn failed for "${cron.name}": ${err.message}`));
+      });
 
       child.once('close', (code, signal) => {
         const stderrSnip = stderrBuf.slice(0, 500).toString();
@@ -901,6 +947,31 @@ export class AgentManager {
           `signal=${signal} stdout=${stdoutBuf.length}B`
         );
         if (stderrSnip.trim()) console.log(`[daemon] Fresh cron stderr: ${stderrSnip}`);
+
+        const exitOk = !timedOut && code === 0;
+        const shouldPersistFire = exitOk && !settled;
+        const errorMsg = timedOut
+          ? `timed_out_${timeoutMs}ms`
+          : code !== 0
+          ? (stderrBuf.slice(0, 200).toString().trim() || `exit_code_${code ?? 'null'}`)
+          : null;
+
+        writeExecLog(exitOk ? 'fired' : 'failed', errorMsg);
+
+        if (shouldPersistFire) {
+          const newFireCount = (cron.fire_count ?? 0) + 1;
+          try {
+            updateCron(agentName, cron.name, {
+              last_fired_at: firedAt,
+              fire_count: newFireCount,
+            });
+          } catch (err) {
+            console.log(
+              `[daemon] WARNING: failed to persist fire state for "${cron.name}" — ` +
+              `${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
 
         if (timedOut) {
           settle(new Error(`Fresh cron "${cron.name}" timed out (${timeoutMs}ms), exited code=${code} signal=${signal}`));

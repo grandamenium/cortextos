@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentConfig, CronDefinition, CtxEnv } from '../../../src/types/index';
 
 const spawnMock = vi.fn();
+const appendExecutionLogMock = vi.fn();
 
 vi.mock('child_process', async () => {
   const actual = await vi.importActual<typeof import('child_process')>('child_process');
@@ -14,6 +15,12 @@ vi.mock('child_process', async () => {
     spawn: spawnMock,
   };
 });
+
+vi.mock('../../../src/daemon/cron-execution-log.js', () => ({
+  appendExecutionLog: (...args: unknown[]) => appendExecutionLogMock(...args),
+}));
+
+const FIRED_AT = '2026-05-15T00:00:00.000Z';
 
 function makeCron(overrides: Partial<CronDefinition> = {}): CronDefinition {
   return {
@@ -51,14 +58,18 @@ function attachAgent(manager: any, agentName: string, config: AgentConfig = {}, 
 
 describe('cron fresh-session dispatch', () => {
   let tmpRoot: string;
+  const originalCtxRoot = process.env.CTX_ROOT;
 
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'cron-fresh-'));
+    process.env.CTX_ROOT = tmpRoot;
     spawnMock.mockReset();
+    appendExecutionLogMock.mockReset();
     vi.useRealTimers();
   });
 
   afterEach(() => {
+    if (originalCtxRoot !== undefined) process.env.CTX_ROOT = originalCtxRoot; else delete process.env.CTX_ROOT;
     rmSync(tmpRoot, { recursive: true, force: true });
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -81,9 +92,14 @@ describe('cron fresh-session dispatch', () => {
     attachAgent(manager, 'ops-g');
     manager.fireCronFreshSession = vi.fn().mockResolvedValue(undefined);
 
-    await manager.dispatchCron('ops-g', makeCron({ fresh_session: true }), '2026-05-15T00:00:00Z');
+    await manager.dispatchCron('ops-g', makeCron({ fresh_session: true }), FIRED_AT);
 
-    expect(manager.fireCronFreshSession).toHaveBeenCalledOnce();
+    expect(manager.fireCronFreshSession).toHaveBeenCalledWith(
+      'ops-g',
+      expect.objectContaining({ fresh_session: true }),
+      expect.stringContaining(`[CRON FIRED ${FIRED_AT}]`),
+      FIRED_AT,
+    );
   });
 
   it('dispatchCron protects top-g/morning-review and injects', async () => {
@@ -95,7 +111,7 @@ describe('cron fresh-session dispatch', () => {
     await manager.dispatchCron(
       'top-g',
       makeCron({ name: 'morning-review', fresh_session: true }),
-      '2026-05-15T00:00:00Z',
+      FIRED_AT,
     );
 
     expect(manager.emitGuardrailEvent).toHaveBeenCalledWith('top-g', 'morning-review');
@@ -108,7 +124,7 @@ describe('cron fresh-session dispatch', () => {
     attachAgent(manager, 'top-g');
     manager.fireCronFreshSession = vi.fn().mockResolvedValue(undefined);
 
-    await manager.dispatchCron('top-g', makeCron({ name: 'heartbeat', fresh_session: true }), '2026-05-15T00:00:00Z');
+    await manager.dispatchCron('top-g', makeCron({ name: 'heartbeat', fresh_session: true }), FIRED_AT);
 
     expect(manager.fireCronFreshSession).toHaveBeenCalledOnce();
   });
@@ -122,7 +138,7 @@ describe('cron fresh-session dispatch', () => {
     await manager.dispatchCron(
       'top-g',
       makeCron({ name: 'check-approvals', fresh_session: true }),
-      '2026-05-15T00:00:00Z',
+      FIRED_AT,
     );
 
     expect(manager.fireCronFreshSession).toHaveBeenCalledOnce();
@@ -134,7 +150,7 @@ describe('cron fresh-session dispatch', () => {
     const proc = attachAgent(manager, 'smart-g');
     manager.emitGuardrailEvent = vi.fn();
 
-    await manager.dispatchCron('smart-g', makeCron({ name: 'heartbeat', fresh_session: true }), '2026-05-15T00:00:00Z');
+    await manager.dispatchCron('smart-g', makeCron({ name: 'heartbeat', fresh_session: true }), FIRED_AT);
 
     expect(manager.emitGuardrailEvent).toHaveBeenCalledWith('smart-g', 'heartbeat');
     expect(proc.injectMessage).toHaveBeenCalledOnce();
@@ -147,9 +163,16 @@ describe('cron fresh-session dispatch', () => {
     manager.emitFreshSessionUnsupportedEvent = vi.fn();
 
     await expect(
-      manager.fireCronFreshSession('codex-g', makeCron({ fresh_session: true }), 'prompt'),
+      manager.fireCronFreshSession('codex-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT),
     ).rejects.toThrow(/not supported/);
     expect(manager.emitFreshSessionUnsupportedEvent).toHaveBeenCalledWith('codex-g', 'heartbeat', 'codex-app-server');
+    expect(appendExecutionLogMock).toHaveBeenCalledWith(
+      'codex-g',
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.stringContaining('pre_spawn:'),
+      }),
+    );
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -160,11 +183,35 @@ describe('cron fresh-session dispatch', () => {
     const child = makeChild();
     spawnMock.mockReturnValue(child);
 
-    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt');
+    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT);
     child.emit('close', 0, null);
 
     await expect(promise).resolves.toBeUndefined();
     expect(spawnMock).toHaveBeenCalledWith('claude', expect.arrayContaining(['--print', '--no-session-persistence']), expect.any(Object));
+  });
+
+  it('fireCronFreshSession writes execution log on child close code 0', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT);
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(appendExecutionLogMock).toHaveBeenCalledTimes(1);
+    expect(appendExecutionLogMock).toHaveBeenCalledWith(
+      'ops-g',
+      expect.objectContaining({
+        cron: 'heartbeat',
+        status: 'fired',
+        attempt: 1,
+        duration_ms: expect.any(Number),
+        error: null,
+      }),
+    );
   });
 
   it('fireCronFreshSession rejects on non-zero child close', async () => {
@@ -174,11 +221,18 @@ describe('cron fresh-session dispatch', () => {
     const child = makeChild();
     spawnMock.mockReturnValue(child);
 
-    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt');
-    child.stderr.emit('data', Buffer.from('bad'));
-    child.emit('close', 2, null);
+    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT);
+    child.emit('close', 1, null);
 
-    await expect(promise).rejects.toThrow(/exited code=2/);
+    await expect(promise).rejects.toThrow(/exited code=1/);
+    expect(appendExecutionLogMock).toHaveBeenCalledTimes(1);
+    expect(appendExecutionLogMock).toHaveBeenCalledWith(
+      'ops-g',
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.stringContaining('exit_code_1'),
+      }),
+    );
   });
 
   it('fireCronFreshSession rejects timeout even when child exits code 0 after SIGTERM', async () => {
@@ -193,12 +247,43 @@ describe('cron fresh-session dispatch', () => {
       'ops-g',
       makeCron({ fresh_session: true, fresh_session_timeout_ms: 100 }),
       'prompt',
+      FIRED_AT,
     );
     vi.advanceTimersByTime(100);
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     child.emit('close', 0, 'SIGTERM');
 
     await expect(promise).rejects.toThrow(/timed out/);
+    expect(appendExecutionLogMock).toHaveBeenCalledTimes(1);
+    expect(appendExecutionLogMock).toHaveBeenCalledWith(
+      'ops-g',
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.stringContaining('timed_out'),
+      }),
+    );
+  });
+
+  it('fireCronFreshSession writes execution log once on spawn error', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT);
+    child.emit('error', new Error('spawn failed'));
+    child.emit('close', 0, null);
+
+    await expect(promise).rejects.toThrow(/spawn failed/);
+    expect(appendExecutionLogMock).toHaveBeenCalledTimes(1);
+    expect(appendExecutionLogMock).toHaveBeenCalledWith(
+      'ops-g',
+      expect.objectContaining({
+        status: 'failed',
+        error: expect.stringContaining('spawn_error'),
+      }),
+    );
   });
 
   it('fireCronFreshSession sends SIGKILL after timeout grace', async () => {
@@ -213,6 +298,7 @@ describe('cron fresh-session dispatch', () => {
       'ops-g',
       makeCron({ fresh_session: true, fresh_session_timeout_ms: 100 }),
       'prompt',
+      FIRED_AT,
     );
     vi.advanceTimersByTime(5_100);
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
@@ -235,6 +321,7 @@ describe('cron fresh-session dispatch', () => {
       'ops-g',
       makeCron({ fresh_session: true, skill_file: 'HEARTBEAT.md' }),
       'prompt',
+      FIRED_AT,
     );
     child.emit('close', 0, null);
     await promise;
@@ -253,6 +340,7 @@ describe('cron fresh-session dispatch', () => {
       'ops-g',
       makeCron({ fresh_session: true, skill_file: 'missing.md' }),
       'prompt',
+      FIRED_AT,
     );
     child.emit('close', 0, null);
     await promise;
@@ -271,6 +359,7 @@ describe('cron fresh-session dispatch', () => {
       'ops-g',
       makeCron({ fresh_session: true, skill_file: '/tmp/secret.md' }),
       'prompt',
+      FIRED_AT,
     );
     child.emit('close', 0, null);
     await promise;
@@ -290,12 +379,15 @@ describe('cron fresh-session dispatch', () => {
     const child = makeChild();
     spawnMock.mockReturnValue(child);
 
-    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt');
+    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT);
     child.emit('close', 0, null);
     await promise;
 
     expect(proc.buildRuntimeEnv).toHaveBeenCalledOnce();
-    expect(spawnMock.mock.calls[0][2]).toMatchObject({ cwd: '/work', env: { CTX_ROOT: tmpRoot, CUSTOM: 'yes' } });
+    expect(spawnMock.mock.calls[0][2]).toMatchObject({
+      cwd: '/work',
+      env: { CTX_ROOT: tmpRoot, CUSTOM: 'yes', CTX_CRON_FIRED_AT: FIRED_AT },
+    });
   });
 
   it('fireCronFreshSession caps captured stdout and labels stdout/stderr log writes', async () => {
@@ -305,13 +397,59 @@ describe('cron fresh-session dispatch', () => {
     const child = makeChild();
     spawnMock.mockReturnValue(child);
 
-    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt');
+    const promise = manager.fireCronFreshSession('ops-g', makeCron({ fresh_session: true }), 'prompt', FIRED_AT);
     child.stdout.emit('data', Buffer.alloc(300 * 1024, 'a'));
     child.stderr.emit('data', Buffer.from('warn'));
     child.emit('close', 0, null);
     await promise;
 
     expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
+  it('fireCronFreshSession persists crons.json fire state on exit 0', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const { readCrons, writeCrons } = await import('../../../src/bus/crons.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    writeCrons('ops-g', [makeCron({ fresh_session: true, fire_count: 2 })]);
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession(
+      'ops-g',
+      makeCron({ fresh_session: true, fire_count: 2 }),
+      'prompt',
+      FIRED_AT,
+    );
+    child.emit('close', 0, null);
+    await promise;
+
+    expect(readCrons('ops-g')[0]).toMatchObject({
+      last_fired_at: FIRED_AT,
+      fire_count: 3,
+    });
+  });
+
+  it('fireCronFreshSession does not persist crons.json fire state on non-zero exit', async () => {
+    const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+    const { readCrons, writeCrons } = await import('../../../src/bus/crons.js');
+    const manager: any = new AgentManager('test', tmpRoot, tmpRoot, 'acme');
+    attachAgent(manager, 'ops-g', {}, { ctxRoot: tmpRoot, runtimeEnv: { CTX_ROOT: tmpRoot } });
+    writeCrons('ops-g', [makeCron({ fresh_session: true, fire_count: 2 })]);
+    const child = makeChild();
+    spawnMock.mockReturnValue(child);
+
+    const promise = manager.fireCronFreshSession(
+      'ops-g',
+      makeCron({ fresh_session: true, fire_count: 2 }),
+      'prompt',
+      FIRED_AT,
+    );
+    child.emit('close', 1, null);
+    await expect(promise).rejects.toThrow(/exited code=1/);
+
+    expect(readCrons('ops-g')[0]).not.toHaveProperty('last_fired_at');
+    expect(readCrons('ops-g')[0].fire_count).toBe(2);
   });
 });
 
@@ -360,6 +498,31 @@ describe('runtime env builder and fresh-session guards', () => {
       SHARED_KEY: 'shared',
       OVERRIDE: 'agent',
       IS_SANDBOX: '1',
+    });
+  });
+
+  it('buildAgentRuntimeEnv propagates TZ when config.timezone is absent', async () => {
+    const projectRoot = join(tmpRoot, 'fw');
+    const agentDir = join(projectRoot, 'orgs', 'acme', 'agents', 'ops-g');
+    mkdirSync(agentDir, { recursive: true });
+    process.env.TZ = 'Asia/Bangkok';
+
+    const { buildAgentRuntimeEnv } = await import('../../../src/utils/env.js');
+    const env: CtxEnv = {
+      instanceId: 'test',
+      ctxRoot: tmpRoot,
+      frameworkRoot: projectRoot,
+      projectRoot,
+      org: 'acme',
+      agentName: 'ops-g',
+      agentDir,
+    };
+
+    const runtimeEnv = buildAgentRuntimeEnv(env, {});
+
+    expect(runtimeEnv).toMatchObject({
+      CTX_TIMEZONE: 'Asia/Bangkok',
+      TZ: 'Asia/Bangkok',
     });
   });
 

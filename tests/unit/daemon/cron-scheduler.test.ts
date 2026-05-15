@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockReadCrons  = vi.fn();
 const mockUpdateCron = vi.fn();
+const mockAppendExecutionLog = vi.fn();
 // readCronsWithStatus is what cron-scheduler actually calls (post-iter-9).
 // By default it mirrors mockReadCrons with corrupt:false so existing tests
 // keep working.  Tests that need to assert the corruption path can override
@@ -26,6 +27,10 @@ vi.mock('../../../src/bus/crons.js', () => ({
   readCrons:  (...args: unknown[]) => mockReadCrons(...args),
   readCronsWithStatus: (...args: unknown[]) => mockReadCronsWithStatus(...args),
   updateCron: (...args: unknown[]) => mockUpdateCron(...args),
+}));
+
+vi.mock('../../../src/daemon/cron-execution-log.js', () => ({
+  appendExecutionLog: (...args: unknown[]) => mockAppendExecutionLog(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -186,6 +191,7 @@ describe('CronScheduler', () => {
     fired  = [];
     mockReadCrons.mockReset();
     mockUpdateCron.mockReset();
+    mockAppendExecutionLog.mockReset();
     mockReadCronsWithStatus.mockReset();
     // Default: readCronsWithStatus reflects whatever readCrons returns
     // and reports the file as healthy (corrupt: false).
@@ -266,6 +272,51 @@ describe('CronScheduler', () => {
     );
   });
 
+  it('fresh_session success advances nextFireAt and does not refire on the next tick', async () => {
+    mockReadCrons.mockReturnValue([makeCron({ schedule: '1m', fresh_session: true })]);
+    scheduler.start();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(fired).toHaveLength(1);
+    const scheduled = (scheduler as any).scheduled.get('test-cron');
+    expect(scheduled.nextFireAt).toBeGreaterThan(Date.now());
+
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(fired).toHaveLength(1);
+  });
+
+  it('fresh_session success skips scheduler last_fired_at/fire_count disk update', async () => {
+    mockReadCrons.mockReturnValue([makeCron({ schedule: '1m', fresh_session: true })]);
+    scheduler.start();
+
+    await vi.advanceTimersByTimeAsync(60_000 + TICK);
+
+    expect(mockUpdateCron).toHaveBeenCalledWith(
+      'test-agent',
+      'test-cron',
+      expect.objectContaining({ last_fire_attempted_at: expect.any(String) })
+    );
+    expect(mockUpdateCron.mock.calls.some((call) => 'last_fired_at' in (call[2] as object))).toBe(false);
+  });
+
+  it('PTY fires still write execution log through scheduler', async () => {
+    mockReadCrons.mockReturnValue([makeCron({ schedule: '1m' })]);
+    scheduler.start();
+
+    await vi.advanceTimersByTimeAsync(60_000 + TICK);
+
+    expect(mockAppendExecutionLog).toHaveBeenCalledWith(
+      'test-agent',
+      expect.objectContaining({
+        cron: 'test-cron',
+        status: 'fired',
+        error: null,
+      })
+    );
+  });
+
   // -------------------------------------------------------------------------
   // onFire failure + retry
   // -------------------------------------------------------------------------
@@ -318,6 +369,33 @@ describe('CronScheduler', () => {
       'test-cron',
       expect.objectContaining({ last_fired_at: expect.any(String) })
     );
+
+    retryScheduler.stop();
+  });
+
+  it('fresh_session fires are not retried by the scheduler', async () => {
+    const failingFire = vi.fn().mockRejectedValue(new Error('fresh failed'));
+    const oneDayAgo = new Date(Date.now() - 25 * 3_600_000).toISOString();
+    mockReadCrons.mockReturnValue([
+      makeCron({
+        schedule: '24h',
+        fresh_session: true,
+        last_fired_at: oneDayAgo,
+      }),
+    ]);
+
+    const retryScheduler = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: failingFire,
+      logger: (msg) => logs.push(msg),
+    });
+
+    retryScheduler.start();
+    await vi.advanceTimersByTimeAsync(TICK + 1_000);
+
+    expect(failingFire).toHaveBeenCalledTimes(1);
+    expect(mockAppendExecutionLog).not.toHaveBeenCalled();
+    expect(logs.some(l => l.includes('after all 1 attempt'))).toBe(true);
 
     retryScheduler.stop();
   });

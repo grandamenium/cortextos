@@ -206,6 +206,7 @@ export function buildAgentRuntimeEnv(env: CtxEnv, config: AgentConfig): NodeJS.P
     ptyEnv['TZ'] = configTimezone;
   } else if (process.env.TZ) {
     ptyEnv['CTX_TIMEZONE'] = process.env.TZ;
+    ptyEnv['TZ'] = process.env.TZ;
   }
 
   if (env.projectRoot && env.org) {
