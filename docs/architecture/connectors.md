@@ -1034,7 +1034,33 @@ failing on the broader union.
 
 ---
 
-## 17. References
+## 17. Real-bot smoke results (2026-05-15)
+
+The 42-commit PR4 stack was verified end-to-end against a real Telegram bot (`@cortextOS_Test_Harness_bot`) running against a fresh daemon scaffolded from the connector branch. Every load-bearing user-visible Telegram surface was exercised with real HTTP round-trips through Telegram's Bot API — not mocks. Eleven scenarios verified; one (PermissionRequest hook) is N/A by design because cortextOS agents launch with `--dangerously-skip-permissions`.
+
+| # | Scenario | Status | Evidence |
+|---|---|---|---|
+| 1 | **Inbound text → agent reply** | ✅ | Six messages from user reached agent's PTY via `NormalizedMessage.text`; agent replied via `connector.sendMessage`. Allowed-user gate preserved (`****7058` chat redaction in startup log). |
+| 2 | **Outbound `sendMessage`** | ✅ | Agent's text replies (Claude Code → bus → connector.sendMessage → TelegramAPI.sendMessage → Telegram) delivered with HTML parse mode matching main behavior. |
+| 3 | **Inbound reaction** | ✅ | User reacted 🔥 on a bot message — surfaced to agent as `NormalizedReactionPayload { kind: 'unicode', value: '🔥' }` with stringified `message_id`. Telegram `allowed_updates: ['message','message_reaction']` wiring confirmed. |
+| 4 | **Outbound `sendReaction` via `bus react`** | ✅ | Agent invoked `cortextos bus react 21 🎉` → connector.sendReaction → TelegramAPI.setMessageReaction (Bot API 7.0+) → reaction visible on user's message. PR4 c24. |
+| 5 | **Daemon auto-👀 + agent swap** | ✅ | Daemon emits `👀` reaction on every inbound user message within ~1s of receipt (before agent's first reasoning step); agent's subsequent `bus react <id> <terminal-emoji>` REPLACES the eyes per Telegram's set-to-list contract. PR4 c24, gated by `AgentConfig.auto_eyes_ack`. |
+| 6 | **message_id in agent prompt** | ✅ | `formatTelegramTextMessage` now emits `(chat_id:<id>, message_id:<id>)` in the prompt header + a `React using:` hint line so the agent has a target for `bus react`. PR4 c24. |
+| 7 | **PermissionRequest hook** | ⚠️ N/A by design | Standard cortextOS agents launch Claude Code with `--dangerously-skip-permissions` (`src/pty/agent-pty.ts:231`) so PermissionRequest never fires. The connector-side machinery is verified by tests; the production path is `bus create-approval` or `ExitPlanMode`. |
+| 8 | **AskUserQuestion → inline buttons → callback round-trip** | ✅ | Agent invoked `AskUserQuestion("Joke or fun fact?", options=["Joke","Fun fact"])` → `bus hook-ask-user` → Telegram message with inline_keyboard → user tapped → `daemon onCallback` → `fast-checker.handleCallback("askopt_0_0")` → response file → Claude Code's AskUserQuestion tool received `option 0`. Confirms `CallbackPayload` (PR4 c7) + `ConnectorAction` (PR4 c9+c15) round-trip end-to-end through real HTTP. |
+| 9 | **Crash + recovery notifications** | ✅ | `kill -9` on the agent process → daemon's `onStatusChanged('crashed')` callback fired → `connector.sendMessage("Agent smoke-agent crashed (crash #1) — auto-restarting", { parseMode: 'plain' })` (PR4 c12). Auto-restart fired; recovery message landed verbatim. Text content byte-identical to main. |
+| 10 | **Photo inbound + agent `Read()`** | ✅ | 22KB JPEG (282×282, JFIF baseline) downloaded to absolute path under `agentDir/telegram-images/`, c13 absolute-path enforcement verified. `formatTelegramPhotoMessage` delivered to agent with `caption:` + `local_file:`. Agent's `Read()` of the file succeeded and the agent described the image content correctly. |
+| 11 | **Voice inbound + whisper transcription** | ✅ | 7KB Ogg/Opus voice note → c15 collision-prefix filename `msg47_voice_<date>.ogg` (verified) → ffmpeg converted to wav next to ogg → whisper-cpp (snap, model at non-hidden path per `CTX_WHISPER_MODEL` override) → transcript `"My name is Jeff."` injected into agent's `formatTelegramVoiceMessage` prompt → agent's reply demonstrated transcript comprehension. Voice transcription is best-effort: connector advertises the capability but degrades silently when whisper-cli is missing or fails. |
+
+**Mock-server coverage:** scenarios 1-11 are also covered by `tests/integration/connectors-telegram-smoke.test.ts` (PR4 c23) which drives the same surface through `MockTelegramServer` over real HTTP. The mock test runs in ~400ms and is the regression gate; the real-bot smoke is the deployment confidence gate.
+
+**Whisper / snap quirk:** snap-installed `whisper-cpp` (Ubuntu/Debian) cannot read paths under `~/.cortextos/models/` because snap's `home` interface excludes hidden directories by default. The deployment workaround is to move the model file to a non-hidden path (`~/cortextos-models/ggml-tiny.en.bin`) and set `CTX_WHISPER_MODEL` to that path. Alternative: install whisper.cpp natively (`make` from source); no confinement issue.
+
+**One follow-up surface not yet exercised:** `ExitPlanMode` hook (Plan Mode approval inline buttons). The hook is wired and the connector layer is verified by mock tests; just hasn't been triggered against a real bot because no real plan was authored during the smoke. Low risk — same code path as the AskUserQuestion buttons (scenario 8) with a different `callback_data` prefix.
+
+---
+
+## 18. References
 
 * Interface: `src/connectors/connector.ts`
 * Types: `src/connectors/types.ts`
