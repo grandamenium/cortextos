@@ -7,7 +7,7 @@ import { validateAgentName } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
-import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
+import { updateHeartbeat, readAllHeartbeats, setHeartbeatCurrentTask } from '../bus/heartbeat.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity, getFreshRestartCooldown, DEFAULT_FRESH_RESTART_COOLDOWN_SECONDS } from '../bus/system.js';
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
@@ -203,6 +203,17 @@ busCommand
 
     updateTask(paths, id, status as TaskStatus);
     console.log(`Updated ${id} -> ${status}`);
+
+    // Path B watchdog: keep heartbeat.current_task in sync with task lifecycle
+    // so the task-stuck watcher reads a populated field. in_progress → set;
+    // terminal states (completed, cancelled, blocked) → clear. The watcher's
+    // staleness detection ignores empty current_task, so clearing on
+    // terminal states prevents post-completion alerts.
+    if (status === 'in_progress') {
+      setHeartbeatCurrentTask(paths, env.agentName, id);
+    } else if (status === 'completed' || status === 'cancelled' || status === 'blocked') {
+      setHeartbeatCurrentTask(paths, env.agentName, '');
+    }
   });
 
 busCommand
@@ -286,6 +297,8 @@ busCommand
       const task = claimTask(paths, id, agent);
       console.log(`Claimed ${id} -> in_progress (assigned to ${agent})`);
       console.log(`  Title: ${task.title}`);
+      // Path B watchdog wiring (see update-task block above for rationale).
+      setHeartbeatCurrentTask(paths, agent, id);
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
@@ -314,6 +327,8 @@ busCommand
 
     completeTask(paths, id, effectiveResult);
     console.log(`Completed ${id}`);
+    // Path B watchdog wiring: clear current_task so the watcher stops alerting.
+    setHeartbeatCurrentTask(paths, env.agentName, '');
   });
 
 busCommand

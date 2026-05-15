@@ -421,3 +421,233 @@ describe('HeartbeatStalenessWatcher — fleet-resilience cleanup A (daemon JSONL
     expect(readDaemonEvents()).toHaveLength(0);
   });
 });
+
+describe('HeartbeatStalenessWatcher — Path B task-stuck signal', () => {
+  function writeHeartbeatWithTaskStart(opts: {
+    task: string;
+    lastHeartbeatAgeMs: number;
+    taskStartedAgeMs: number | null;
+  }): void {
+    const dir = join(ctxRoot, 'state', AGENT);
+    mkdirSync(dir, { recursive: true });
+    const lastHb = new Date(clock.ms - opts.lastHeartbeatAgeMs).toISOString();
+    const taskStartedAt = opts.taskStartedAgeMs === null
+      ? null
+      : new Date(clock.ms - opts.taskStartedAgeMs).toISOString();
+    writeFileSync(join(dir, 'heartbeat.json'), JSON.stringify({
+      agent: AGENT,
+      org: 'acme',
+      status: 'healthy',
+      current_task: opts.task,
+      mode: 'day',
+      last_heartbeat: lastHb,
+      loop_interval: '5m',
+      task_started_at: taskStartedAt,
+    }));
+  }
+
+  function makeTaskStuckWatcher(opts?: {
+    taskStuckThresholdMs?: number;
+    taskStuckRealertMs?: number;
+    instanceId?: string;
+    org?: string;
+  }): HeartbeatStalenessWatcher {
+    return new HeartbeatStalenessWatcher({
+      agentName: AGENT,
+      ctxRoot,
+      frameworkRoot,
+      // High staleness threshold so the existing leg doesn't fire and confuse
+      // the task-stuck assertions. Tests target the Path B leg in isolation.
+      thresholdMs: 4 * 60 * 60_000,
+      realertMs: 30 * 60_000,
+      taskStuckThresholdMs: opts?.taskStuckThresholdMs ?? 30 * 60_000,
+      taskStuckRealertMs: opts?.taskStuckRealertMs ?? 30 * 60_000,
+      logger: () => {},
+      now: () => clock.ms,
+      instanceId: opts?.instanceId,
+      org: opts?.org,
+    });
+  }
+
+  function readDaemonEvents(): Array<{ event: string; metadata: Record<string, unknown> }> {
+    const today = new Date(clock.ms).toISOString().slice(0, 10);
+    const file = join(ctxRoot, 'orgs', 'acme', 'analytics', 'events', '_daemon', `${today}.jsonl`);
+    if (!existsSync(file)) return [];
+    return readFileSync(file, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  }
+
+  it('does not fire when task age is below threshold', () => {
+    const w = makeTaskStuckWatcher();
+    writeHeartbeatWithTaskStart({ task: 'task-A', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 5 * 60_000 });
+    w.tick();
+    expect(w.isTaskStuck).toBe(false);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('fires when task age exceeds the threshold', () => {
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 30 * 60_000 });
+    // Task started 45 min ago — over the 30-min threshold.
+    writeHeartbeatWithTaskStart({ task: 'long-running', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    expect(w.isTaskStuck).toBe(true);
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+    const callArgs = spawnSyncMock.mock.calls[0][1] as string[];
+    const body = callArgs.find((a) => a.includes('task stuck'));
+    expect(body).toBeDefined();
+    expect(body).toContain('long-running');
+  });
+
+  it('alert is independent of last_heartbeat refreshes (side-channel-immune)', () => {
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 30 * 60_000 });
+    // Simulate the 2026-05-15 hang shape: task started 45 min ago, but
+    // last_heartbeat was refreshed seconds ago by a side-channel send-telegram.
+    writeHeartbeatWithTaskStart({ task: 'wedged', lastHeartbeatAgeMs: 5_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    // Existing staleness leg suppressed (fresh last_heartbeat); Path B fires.
+    expect(w.isStale).toBe(false);
+    expect(w.isTaskStuck).toBe(true);
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire when current_task is empty (no work in progress)', () => {
+    const w = makeTaskStuckWatcher();
+    // Empty task → no task_started_at by Phase 1 contract; watcher must skip.
+    writeHeartbeatWithTaskStart({ task: '', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: null });
+    w.tick();
+    expect(w.isTaskStuck).toBe(false);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('does not fire when taskStuckThresholdMs is 0 (disabled)', () => {
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 0 });
+    writeHeartbeatWithTaskStart({ task: 'task-A', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 10 * 60 * 60_000 });
+    w.tick();
+    expect(w.isTaskStuck).toBe(false);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('respects re-alert cadence — second fire requires elapsed time', () => {
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 30 * 60_000, taskStuckRealertMs: 30 * 60_000 });
+    writeHeartbeatWithTaskStart({ task: 'wedged', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+
+    // Tick again 10 min later — task still stuck, within re-alert window, no re-fire.
+    advance(10 * 60_000);
+    writeHeartbeatWithTaskStart({ task: 'wedged', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 55 * 60_000 });
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+
+    // 30 min after the first alert — re-alert fires.
+    advance(21 * 60_000);
+    writeHeartbeatWithTaskStart({ task: 'wedged', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 76 * 60_000 });
+    w.tick();
+    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('recovers when current_task transitions to a different value', () => {
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 30 * 60_000 });
+    writeHeartbeatWithTaskStart({ task: 'wedged', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    expect(w.isTaskStuck).toBe(true);
+
+    // Operator nudges; agent advances to a new task with a fresh stamp.
+    advance(5_000);
+    writeHeartbeatWithTaskStart({ task: 'next-task', lastHeartbeatAgeMs: 0, taskStartedAgeMs: 0 });
+    w.tick();
+    expect(w.isTaskStuck).toBe(false);
+  });
+
+  it('recovers when current_task clears to empty', () => {
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 30 * 60_000 });
+    writeHeartbeatWithTaskStart({ task: 'wedged', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    expect(w.isTaskStuck).toBe(true);
+    advance(1_000);
+    writeHeartbeatWithTaskStart({ task: '', lastHeartbeatAgeMs: 0, taskStartedAgeMs: null });
+    w.tick();
+    expect(w.isTaskStuck).toBe(false);
+  });
+
+  it('skips silently when task_started_at field is missing (legacy heartbeat)', () => {
+    // Synthesize a legacy heartbeat that has current_task but no task_started_at.
+    const dir = join(ctxRoot, 'state', AGENT);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'heartbeat.json'), JSON.stringify({
+      agent: AGENT,
+      org: 'acme',
+      status: 'healthy',
+      current_task: 'task-A',
+      mode: 'day',
+      last_heartbeat: new Date(clock.ms - 60_000).toISOString(),
+      loop_interval: '5m',
+    }));
+    const w = makeTaskStuckWatcher();
+    w.tick();
+    expect(w.isTaskStuck).toBe(false);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('emits task_stuck_detected daemon JSONL event when instance+org provided', () => {
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 30 * 60_000, instanceId: 'test-instance', org: 'acme' });
+    writeHeartbeatWithTaskStart({ task: 'wedged', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    const detected = readDaemonEvents().find((r) => r.event === 'task_stuck_detected');
+    expect(detected).toBeDefined();
+    expect(detected!.metadata.agent).toBe(AGENT);
+    expect(detected!.metadata.task).toBe('wedged');
+    expect(detected!.metadata.threshold_seconds).toBe(30 * 60);
+  });
+
+  it('handles back-to-back transitions where the new task is also immediately over-threshold', () => {
+    // Defensive test: agent transitions from one stuck task to another whose
+    // task_started_at is ALSO over-threshold (e.g. fast back-to-back wedges).
+    // Recovery emits for the old task, then flagTaskStuck fires for the new
+    // task in the SAME tick. Both Telegram alerts go out.
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 30 * 60_000, instanceId: 'test-instance', org: 'acme' });
+    writeHeartbeatWithTaskStart({ task: 'wedged-A', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    expect(w.isTaskStuck).toBe(true);
+    expect(spawnSyncMock).toHaveBeenCalledTimes(1);
+
+    // New task, also already 45 min old at observation time.
+    advance(1_000);
+    writeHeartbeatWithTaskStart({ task: 'wedged-B', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    expect(w.isTaskStuck).toBe(true);
+    const events = readDaemonEvents().map((r) => r.event);
+    expect(events).toContain('task_stuck_recovered'); // for wedged-A
+    expect(events.filter((e) => e === 'task_stuck_detected')).toHaveLength(2); // A + B
+    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips silently when task_started_at is a corrupt non-ISO string', () => {
+    const dir = join(ctxRoot, 'state', AGENT);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'heartbeat.json'), JSON.stringify({
+      agent: AGENT,
+      org: 'acme',
+      status: 'healthy',
+      current_task: 'task-A',
+      mode: 'day',
+      last_heartbeat: new Date(clock.ms - 60_000).toISOString(),
+      loop_interval: '5m',
+      task_started_at: 'not-a-date',
+    }));
+    const w = makeTaskStuckWatcher();
+    w.tick();
+    expect(w.isTaskStuck).toBe(false);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('emits task_stuck_recovered when task transitions after a stuck alert', () => {
+    const w = makeTaskStuckWatcher({ taskStuckThresholdMs: 30 * 60_000, instanceId: 'test-instance', org: 'acme' });
+    writeHeartbeatWithTaskStart({ task: 'wedged', lastHeartbeatAgeMs: 60_000, taskStartedAgeMs: 45 * 60_000 });
+    w.tick();
+    advance(5_000);
+    writeHeartbeatWithTaskStart({ task: 'next-task', lastHeartbeatAgeMs: 0, taskStartedAgeMs: 0 });
+    w.tick();
+    const events = readDaemonEvents().map((r) => r.event);
+    expect(events).toContain('task_stuck_recovered');
+  });
+});

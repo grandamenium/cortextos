@@ -3,6 +3,7 @@
   "enabled": true,
   "runtime": "hermes",
   "heartbeat_stale_threshold_minutes": 60,
+  "task_stuck_threshold_minutes": 60,
   "timezone": "America/New_York",
   "day_mode_start": "08:00",
   "day_mode_end": "00:00",

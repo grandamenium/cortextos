@@ -24,6 +24,7 @@ export type OperatorAlertKind =
   | 'spawn_storm'
   | 'cron_dispatch_storm'
   | 'heartbeat_stale'
+  | 'task_stuck'
   | 'doctor_delta'
   | 'port_collision';
 

@@ -49,6 +49,13 @@ const RESTART_KINDS: ReadonlySet<RestartKind> = new Set([
 export interface HeartbeatStatusFields {
   lastHeartbeatAgeSeconds?: number;
   lastHeartbeatTask?: string;
+  /**
+   * Path B watchdog: raw ISO 8601 stamp from heartbeat.json. Surfaced so the
+   * task-stuck watcher leg can compute task-duration independent of
+   * last_heartbeat refreshes. Undefined for legacy heartbeats and for
+   * heartbeats whose current_task is empty.
+   */
+  taskStartedAt?: string;
 }
 
 export function readHeartbeatStatus(
@@ -69,6 +76,7 @@ export function readHeartbeatStatus(
     return {
       lastHeartbeatAgeSeconds: age,
       lastHeartbeatTask: hb.current_task || undefined,
+      taskStartedAt: hb.task_started_at ?? undefined,
     };
   } catch {
     return {};

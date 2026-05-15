@@ -383,6 +383,11 @@ export class AgentManager {
     // 30-min re-alerts about a knowingly-down agent are noise.
     const hbThresholdMin = config.heartbeat_stale_threshold_minutes ?? 10;
     const hbRealertMin = config.heartbeat_stale_realert_minutes ?? 30;
+    // Path B: task-stuck watchdog leg defaults to 30 min for active classes,
+    // matching the spec. Set to 0 in agent config to disable while keeping
+    // the existing staleness alert. Watcher constructor accepts 0 as disabled.
+    const taskStuckThresholdMin = config.task_stuck_threshold_minutes ?? 30;
+    const taskStuckRealertMin = config.task_stuck_realert_minutes ?? hbRealertMin;
     let heartbeatWatcher: HeartbeatStalenessWatcher | undefined;
     if (hbThresholdMin > 0) {
       heartbeatWatcher = new HeartbeatStalenessWatcher({
@@ -391,6 +396,8 @@ export class AgentManager {
         frameworkRoot: this.frameworkRoot,
         thresholdMs: hbThresholdMin * 60_000,
         realertMs: hbRealertMin * 60_000,
+        taskStuckThresholdMs: taskStuckThresholdMin * 60_000,
+        taskStuckRealertMs: taskStuckRealertMin * 60_000,
         logger: (msg) => log(msg),
         // Fleet-resilience cleanup A: forward instance + org so the watcher
         // can ALSO emit stale/recovered events as queryable JSONL under the
