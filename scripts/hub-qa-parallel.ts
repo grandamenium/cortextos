@@ -45,7 +45,6 @@ const ALL_PAGES = [
   '/tasks',
   '/companies',
   '/projects',
-  '/pipeline',
   '/reports',
   '/app/orchestrator',
   '/app/fleet/activity',

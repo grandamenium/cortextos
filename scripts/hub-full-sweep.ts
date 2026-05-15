@@ -103,7 +103,7 @@ async function shot(page: Page, label: string) {
  * Waits for networkidle (React Query requests complete) with a hard cap,
  * then gates on the app shell mounting before returning.
  *
- * Cap raised to 15s (was 8s): pages like /pipeline fire 10+ Supabase queries;
+ * Cap raised to 15s (was 8s): heavy pages fire 10+ Supabase queries;
  * during a Supabase latency spike the 8s cap could fire while the auth shell
  * (main > div) was still loading, producing false-positive HIGH findings.
  * After networkidle/cap, waitForSelector('main') ensures the React app shell
@@ -389,7 +389,6 @@ async function main() {
     // Root-level routes (confirmed no /app/ prefix from previous QA reports)
     ['/time', 'time', undefined],
     ['/my-day', 'my-day', undefined],
-    ['/pipeline', 'pipeline', interactTabs],
     ['/projects', 'projects-list', interactTable],
     ['/reports', 'reports', interactFilter],
     ['/social-content', 'social-content', interactTabs],

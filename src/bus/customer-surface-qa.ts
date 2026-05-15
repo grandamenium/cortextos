@@ -30,7 +30,7 @@ export interface CustomerSurfaceQaReport {
   reportPath?: string;
 }
 
-const DEFAULT_PAGES = ['/', '/tasks', '/companies', '/pipeline', '/app/fleet/agents'];
+const DEFAULT_PAGES = ['/', '/tasks', '/companies', '/app/fleet/agents'];
 
 function parseSummary(output: string): { passed: number; failed: number; deferred: number } {
   const match = output.match(/Summary:\s+(\d+)\s+passed,\s+(\d+)\s+failed,\s+(\d+)\s+deferred/i);
