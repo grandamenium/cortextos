@@ -4,7 +4,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import type { InboxMessage, Priority, BusPaths } from '../types/index.js';
 import { PRIORITY_MAP } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
-import { acquireLock, releaseLock } from '../utils/lock.js';
+import { acquireLock, releaseLock, withFileLockSync } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
 
@@ -92,18 +92,18 @@ export function sendMessage(
  * Reads inbox directory, moves messages to inflight, returns sorted array.
  * Recovers stale inflight messages (>5 minutes old).
  * Identical to bash check-inbox.sh behavior.
+ *
+ * Uses withFileLockSync for robust lock acquisition with exponential backoff.
+ * This ensures messages are not silently dropped due to stale lock contention.
  */
 export function checkInbox(paths: BusPaths): InboxMessage[] {
   const { inbox, inflight } = paths;
   ensureDir(inbox);
   ensureDir(inflight);
 
-  // Acquire lock
-  if (!acquireLock(inbox)) {
-    return [];
-  }
-
-  try {
+  // Use withFileLockSync to acquire lock with retry + exponential backoff.
+  // Timeout: 3s (long enough for watchdog to clear stale locks, short enough to not hang check-inbox calls).
+  return withFileLockSync(inbox, () => {
     // Recover stale inflight messages (>5 min old)
     recoverStaleInflight(inflight, inbox, 300);
 
@@ -158,9 +158,7 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
     }
 
     return messages;
-  } finally {
-    releaseLock(inbox);
-  }
+  }, { timeoutMs: 3000 });
 }
 
 /**
