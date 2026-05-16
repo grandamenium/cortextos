@@ -368,3 +368,66 @@ export function getCostIntelligence(org: string): CostIntelligence | null {
     perAgent: perAgent.sort((a, b) => b.totalTokens - a.totalTokens),
   };
 }
+
+// ---------------------------------------------------------------------------
+// UVD (Unique Value Deliveries) Metrics
+// ---------------------------------------------------------------------------
+
+export interface UvdDayData {
+  date: string;
+  uvd_count: number;
+  uvd_per_day: number;
+  excluded_housekeeping: number;
+  excluded_no_result: number;
+  excluded_human_created: number;
+  excluded_outside_window: number;
+  tasks_evaluated: number;
+  window_days: number;
+}
+
+export interface UvdMetrics {
+  latest: UvdDayData | null;
+  history: Array<{ date: string; uvd_per_day: number }>;
+}
+
+function getMetricsDir(org: string): string {
+  return path.join(CTX_ROOT, 'orgs', org, 'metrics');
+}
+
+export function getUvdMetrics(org: string = 'revops-global', days: number = 14): UvdMetrics {
+  const metricsDir = getMetricsDir(org);
+  if (!fs.existsSync(metricsDir)) return { latest: null, history: [] };
+
+  const now = new Date();
+  const history: Array<{ date: string; uvd_per_day: number }> = [];
+  let latest: UvdDayData | null = null;
+
+  for (let d = days - 1; d >= 0; d--) {
+    const date = new Date(now);
+    date.setUTCDate(date.getUTCDate() - d);
+    const dateStr = date.toISOString().split('T')[0];
+    const file = path.join(metricsDir, `uvd-${dateStr}.json`);
+
+    if (!fs.existsSync(file)) continue;
+
+    try {
+      const raw = fs.readFileSync(file, 'utf-8');
+      const data = JSON.parse(raw) as UvdDayData;
+      history.push({ date: dateStr, uvd_per_day: data.uvd_per_day ?? 0 });
+      if (d === 0 || latest === null) {
+        latest = { ...data, date: dateStr };
+      }
+    } catch { /* skip malformed files */ }
+  }
+
+  // Ensure latest is the most recent file found
+  if (!latest && history.length > 0) {
+    const lastEntry = history[history.length - 1];
+    const file = path.join(metricsDir, `uvd-${lastEntry.date}.json`);
+    try {
+      latest = { ...JSON.parse(fs.readFileSync(file, 'utf-8')), date: lastEntry.date };
+    } catch { /* ignore */ }
+  }
+
+  return { latest, history };
+}
