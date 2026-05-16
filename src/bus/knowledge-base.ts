@@ -1,7 +1,7 @@
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync } from 'fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, tmpdir } from 'os';
 import type { BusPaths } from '../types/index.js';
 import { normalizeOrgName } from '../utils/org.js';
 
@@ -103,13 +103,27 @@ function queryKnowledgeBaseViaGbrain(
   };
 }
 
+/**
+ * Normalize a filename into a gbrain-compatible slug.
+ * gbrain rejects content puts on slugs that aren't lowercase-kebab-case
+ * (returns a misleading "Page not found" error). Lowercase + map any
+ * non-alphanumeric run to a single hyphen + trim hyphens. Example:
+ * "MEMORY.md" → "memory"; "My Doc 2.md" → "my-doc-2".
+ */
+function normalizeSlugForGbrain(filePath: string): string {
+  return (filePath.split('/').pop() ?? filePath)
+    .replace(/\.md$/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function ingestKnowledgeBaseViaGbrain(
   paths: string[],
   options: { org: string; agent?: string },
 ): void {
   for (const filePath of paths) {
-    // Derive slug from filename without extension
-    const slug = (filePath.split('/').pop() ?? filePath).replace(/\.md$/i, '');
+    const slug = normalizeSlugForGbrain(filePath);
     let content: string;
     try {
       content = readFileSync(filePath, 'utf-8');
@@ -117,18 +131,33 @@ function ingestKnowledgeBaseViaGbrain(
       console.warn(`[kb:gbrain] skipping ${filePath}: cannot read`);
       continue;
     }
+
+    // gbrain (Bun-based) reads page body from stdin. Passing content via the
+    // execFileSync `input:` option fails with "ENXIO: no such device or
+    // address, open '/dev/stdin'" because Bun's stdin reader can't open the
+    // piped fd via /dev/stdin under Node's child_process. Workaround: stage
+    // the content in a temp file and pass the file's fd as stdin (stdio[0]),
+    // which gbrain sees as a real file descriptor it can read normally.
+    const tmpPath = join(tmpdir(), `cortextos-kb-${process.pid}-${Date.now()}-${slug}.md`);
+    let fd: number | null = null;
     try {
+      writeFileSync(tmpPath, content);
+      fd = openSync(tmpPath, 'r');
       execFileSync(GBRAIN_CLI, ['put', slug], {
-        input: content,
+        stdio: [fd, 'pipe', 'ignore'],
         encoding: 'utf-8',
         timeout: 60_000,
-        stdio: ['pipe', 'pipe', 'ignore'],
       });
       console.log(`  gbrain put → ${slug}`);
     } catch (err) {
       console.warn(
         `[kb:gbrain] put failed for ${slug}: ${err instanceof Error ? err.message : String(err)}`
       );
+    } finally {
+      if (fd !== null) {
+        try { closeSync(fd); } catch { /* fd may have been closed by spawn */ }
+      }
+      try { unlinkSync(tmpPath); } catch { /* temp file may not exist if writeFileSync threw */ }
     }
   }
 }
