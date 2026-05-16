@@ -512,6 +512,7 @@ export class CodexAppServerPTY {
     const started = await this.request<ThreadResponse>('thread/start', {
       cwd: this._cwd,
       ...THREAD_PERMISSION_OVERRIDES,
+      ...(this._config.model ? { model: this._config.model } : {}),
       config: { features: { goals: true } },
       sessionStartSource: 'startup',
       experimentalRawEvents: false,
@@ -555,7 +556,13 @@ export class CodexAppServerPTY {
   private async startTurn(input: unknown[]): Promise<void> {
     if (!this._threadId) throw new Error('No Codex app-server thread is active');
     const completion = this.createTurnCompletion();
-    await this.request('turn/start', { threadId: this._threadId, input, ...TURN_PERMISSION_OVERRIDES });
+    await this.request('turn/start', {
+      threadId: this._threadId,
+      input,
+      ...TURN_PERMISSION_OVERRIDES,
+      ...(this._config.model ? { model: this._config.model } : {}),
+      ...(this._config.reasoning_effort ? { effort: this._config.reasoning_effort } : {}),
+    });
     await completion;
   }
 

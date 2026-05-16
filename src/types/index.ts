@@ -158,6 +158,12 @@ export interface AgentConfig {
   max_session_seconds?: number;
   max_crashes_per_day?: number;
   model?: string;
+  /**
+   * Per-turn reasoning effort for codex-app-server runtime. Wire as the
+   * Codex TurnStartParams `effort` field. Absent = inherit Codex defaults
+   * from ~/.codex/config.toml. Only applied when runtime=codex-app-server.
+   */
+  reasoning_effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   working_directory?: string;
   enabled?: boolean;
   crons?: CronEntry[];
