@@ -1,0 +1,38 @@
+{
+  "_comment": "Phase 2 v1 — block-list / approval-list / default-allow. Substring match on tool_input.command, case-sensitive. First-match wins. Schema-style validation comes in v2.",
+  "tier_rules": [
+    {
+      "tier": "never",
+      "patterns": [
+        "rm -rf",
+        "rm -r /",
+        "git reset --hard",
+        "git push --force",
+        "git push --no-verify",
+        ":(){ :|:& };:",
+        "DROP TABLE",
+        "TRUNCATE TABLE"
+      ]
+    },
+    {
+      "tier": "approval",
+      "patterns": [
+        "git push origin main",
+        "git push origin master",
+        "npm publish",
+        "pnpm publish",
+        "cargo publish",
+        "docker push"
+      ]
+    },
+    {
+      "tier": "always",
+      "default": true
+    }
+  ],
+  "blocked_targets": [
+    "${CTX_AGENT_DIR}/protocols/permissions.md",
+    "${CTX_AGENT_DIR}/protocols/tool_schemas/",
+    "${CTX_AGENT_DIR}/.onboarded"
+  ]
+}

@@ -1388,14 +1388,25 @@ busCommand
       } catch { /* skip corrupt */ }
     }
 
-    // Also scan org agent directories
+    // Also scan org agent directories. A directory only counts as an agent if
+    // it has IDENTITY.md or config.json — without this filter, scratch dirs
+    // that live alongside real agents (e.g. `graphify-out`) get reported as
+    // enabled agents.
     const orgsDir = join(frameworkRoot, 'orgs');
     if (existsSync(orgsDir)) {
       for (const org of readdirSync(orgsDir)) {
         const agentsDir = join(orgsDir, org, 'agents');
         if (!existsSync(agentsDir)) continue;
         for (const name of readdirSync(agentsDir)) {
-          if (!agentMap[name]) agentMap[name] = { org, enabled: true };
+          if (agentMap[name]) continue;
+          const agentDir = join(agentsDir, name);
+          if (
+            !existsSync(join(agentDir, 'IDENTITY.md')) &&
+            !existsSync(join(agentDir, 'config.json'))
+          ) {
+            continue;
+          }
+          agentMap[name] = { org, enabled: true };
         }
       }
     }

@@ -82,6 +82,17 @@ export function listAgents(ctxRoot: string, org?: string): AgentInfo[] {
         if (!/^[a-z0-9_-]+$/.test(agentName)) continue;
         if (seen.has(agentName)) continue;
 
+        // A directory only counts as an agent if it has IDENTITY.md or
+        // config.json. Without this filter, scratch dirs that live next to real
+        // agents (e.g. `graphify-out`) get reported as enabled agents.
+        const agentPath = join(agentsDir, agentName);
+        if (
+          !existsSync(join(agentPath, 'IDENTITY.md')) &&
+          !existsSync(join(agentPath, 'config.json'))
+        ) {
+          continue;
+        }
+
         seen.add(agentName);
 
         // Determine enabled state: explicit from enabled-agents.json if present,
