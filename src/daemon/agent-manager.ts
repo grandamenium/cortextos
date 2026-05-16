@@ -568,6 +568,29 @@ export class AgentManager {
       return;
     }
 
+    // Defensive: refuse to start activity-poller if its bot token collides
+    // with any agent's primary BOT_TOKEN. Two pollers on the same bot inside
+    // a single daemon race getUpdates and silently drop ~50% of inbound
+    // messages. Operators must use a dedicated bot for the activity channel.
+    try {
+      const agentsDir = join(orgDir, 'agents');
+      if (existsSync(agentsDir)) {
+        for (const entry of readdirSync(agentsDir)) {
+          const otherEnvPath = join(agentsDir, entry, '.env');
+          if (!existsSync(otherEnvPath)) continue;
+          const otherEnv = readFileSync(otherEnvPath, 'utf-8');
+          const match = otherEnv.match(/^BOT_TOKEN=(.+)$/m);
+          const otherToken = match?.[1]?.trim();
+          if (otherToken && otherToken === activityBotToken) {
+            log(`SECURITY: activity-channel ACTIVITY_BOT_TOKEN collides with agent '${entry}' BOT_TOKEN. Refusing to start activity poller — two pollers on the same bot will race getUpdates and drop messages. Use a dedicated bot for the activity channel.`);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      log(`Activity-channel token collision check failed: ${err}`);
+    }
+
     const activityApi = new TelegramAPI(activityBotToken);
     const stateDir = join(this.ctxRoot, 'state', name);
     const activityPaths = resolvePaths('activity-channel', this.instanceId, org);
