@@ -6,7 +6,7 @@ triggers: ["remind me", "every day", "every hour", "every week", "schedule", "re
 
 # Cron Management
 
-Crons are **daemon-managed**. They are stored in `${CTX_ROOT}/.cortextOS/state/agents/$CTX_AGENT_NAME/crons.json`
+Crons are **daemon-managed**. They are stored in `${CTX_ROOT}/state/$CTX_AGENT_NAME/crons.json`
 and dispatched by the cortextOS daemon. Crons survive agent restarts, context compactions,
 and daemon restarts automatically. You do NOT need to recreate them on session start.
 
