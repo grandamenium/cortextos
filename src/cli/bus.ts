@@ -373,7 +373,11 @@ busCommand
     const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
 
     console.log(`\n  Tasks (${tasks.length})\n`);
-    const header = '  Status  Pri  ID                        Assignee         Title';
+    // ID column is 28 chars (current format max: task_<13>_<8> = 27 + 1 headroom);
+    // never substring the id — display must preserve identifier precision so
+    // copy-paste from the table cannot produce a non-existent ID. Same principle
+    // applied to assignee — pad-to-min-width, never truncate.
+    const header = '  Status  Pri  ID                          Assignee         Title';
     const separator = '  ' + '-'.repeat(header.length - 2);
     console.log(header);
     console.log(separator);
@@ -381,8 +385,8 @@ busCommand
     for (const t of tasks) {
       const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
       const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
-      const id = t.id.substring(0, 26).padEnd(26);
-      const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
+      const id = t.id.padEnd(28);
+      const assignee = (t.assigned_to || '-').padEnd(17);
       const title = t.title.substring(0, 50);
       console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
     }
