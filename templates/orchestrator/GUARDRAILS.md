@@ -56,5 +56,6 @@ Fleet-wide addition: cortextos-improver 2026-05-16 (ITER-03)
 |---|---|
 | git push to feature branch | MUST run: `tsc --noEmit`, `vitest run`, `lint-runner --pr` — BEFORE push. Block push if any fail. |
 | Failed local-check | Fix locally. Do NOT push to debug-in-CI. |
+| git push --no-verify | BLOCKED. If truly unavoidable (production emergency only): (1) add entry to mistakes.md with date, reason, and what broke, (2) fix the underlying hook failure within 24h, (3) log task for cortextos-improver review. No exceptions without mistakes.md entry. |
 
 > cortextos-improver scans agent stdout for bare `git push` not preceded by tsc/vitest. Violations → improvement task filed automatically.
