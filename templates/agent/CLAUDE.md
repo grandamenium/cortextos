@@ -19,7 +19,7 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 See AGENTS.md for the full 13-step session start checklist. Key steps:
 
-1. **Send boot message first**: `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"`
+1. **Send boot message first** (skip if `$CTX_TELEGRAM_CHAT_ID` empty — no-Telegram agents): `[ -n "$CTX_TELEGRAM_CHAT_ID" ] && cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"`
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
 3. Read org knowledge base: `../../knowledge.md`
 4. Discover available skills: `cortextos bus list-skills --format text`

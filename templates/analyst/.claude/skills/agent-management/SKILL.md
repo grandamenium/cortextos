@@ -91,7 +91,7 @@ fi
 grep -q "Day Mode ([0-9]" "$AGENT_DIR/SOUL.md" || { echo "❌ FAIL: SOUL.md Day Mode hours not set"; exit 1; }
 
 # Check 3: SOUL.md Autonomy Rules is agent-specific (not generic stock).
-SOUL_AUTONOMY_LINES=$(awk '/## Autonomy Rules/,/^## /' "$AGENT_DIR/SOUL.md" | wc -l)
+SOUL_AUTONOMY_LINES=$(awk '/^## Autonomy Rules/{found=1; next} found && /^## /{exit} found' "$AGENT_DIR/SOUL.md" | wc -l)
 [ "$SOUL_AUTONOMY_LINES" -ge 10 ] || { echo "❌ FAIL: SOUL.md Autonomy Rules looks generic ($SOUL_AUTONOMY_LINES lines). Author specifics."; exit 1; }
 
 # Check 4: GUARDRAILS.md has agent-specific red flags.
@@ -103,15 +103,27 @@ GOALS_COUNT=$(jq '.goals | length' "$AGENT_DIR/goals.json" 2>/dev/null || echo 0
 [ "$GOALS_COUNT" -ge 3 ] || { echo "❌ FAIL: goals.json has only $GOALS_COUNT goals"; exit 1; }
 grep -qiE "on boot|priority [0-9]|start with|begin with|first action" "$AGENT_DIR/goals.json" || echo "⚠ WARN: no explicit ON BOOT action in goals.json"
 
-# Check 6: USER.md describes Telegram register if Telegram-enabled.
-if grep -q "^BOT_TOKEN=." "$AGENT_DIR/.env" 2>/dev/null; then
-  grep -q -i "Telegram" "$AGENT_DIR/USER.md" || { echo "❌ FAIL: Telegram-enabled but USER.md doesn't describe Telegram register"; exit 1; }
+# Check 6: USER.md Communication Style describes the agent's channels.
+# Telegram-enabled signal is config.json's telegram_polling field (NOT just
+# BOT_TOKEN presence — template scaffold ships with empty BOT_TOKEN= even for
+# no-Telegram agents).
+TELEGRAM_POLLING=$(jq -r '.telegram_polling // false' "$AGENT_DIR/config.json" 2>/dev/null || echo "false")
+if [ "$TELEGRAM_POLLING" = "true" ]; then
+  grep -q -i "Telegram" "$AGENT_DIR/USER.md" || { echo "❌ FAIL: telegram_polling=true but USER.md does not describe Telegram register"; exit 1; }
 fi
 
-# Check 7: .env populated correctly.
-grep -q "^BOT_TOKEN=$" "$AGENT_DIR/.env" 2>/dev/null && { echo "❌ FAIL: BOT_TOKEN empty"; exit 1; }
-if grep -q "^BOT_TOKEN=." "$AGENT_DIR/.env" 2>/dev/null && grep -q "^CHAT_ID=$" "$AGENT_DIR/.env" 2>/dev/null; then
-  echo "❌ FAIL: BOT_TOKEN set but CHAT_ID empty"; exit 1
+# Check 7: If telegram_polling=true, .env must have BOT_TOKEN AND CHAT_ID
+# populated. If telegram_polling=false (or missing), empty BOT_TOKEN/CHAT_ID
+# in .env is fine — common for no-Telegram specialist agents.
+if [ "$TELEGRAM_POLLING" = "true" ]; then
+  if ! grep -qE "^BOT_TOKEN=.+" "$AGENT_DIR/.env" 2>/dev/null; then
+    echo "❌ FAIL: telegram_polling=true but BOT_TOKEN is empty/missing in .env"
+    exit 1
+  fi
+  if ! grep -qE "^CHAT_ID=.+" "$AGENT_DIR/.env" 2>/dev/null; then
+    echo "❌ FAIL: telegram_polling=true but CHAT_ID is empty/missing in .env — Telegram will fail to validate"
+    exit 1
+  fi
 fi
 
 # Check 8: config.json agent_name correct.

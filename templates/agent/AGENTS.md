@@ -21,9 +21,11 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 Complete the following in order. Do not skip steps.
 
-1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
+1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot), AND SKIP if `$CTX_TELEGRAM_CHAT_ID` is empty (no-Telegram agents — dev/blueteam/redteam/warden-mm/etc.):
    ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Booting up... one moment'
+   if [ -n "$CTX_TELEGRAM_CHAT_ID" ]; then
+     cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Booting up... one moment'
+   fi
    ```
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
    - TOOLS.md is a compact command index — load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
