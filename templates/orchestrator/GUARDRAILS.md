@@ -46,3 +46,15 @@ If you catch yourself almost skipping something important that isn't in the tabl
 | Trigger | Red Flag Thought | Required Action |
 |---------|-----------------|-----------------|
 | [situation] | "[what you almost told yourself]" | [what you must do instead] |
+
+
+## Pre-Push Protocol
+
+Fleet-wide addition: cortextos-improver 2026-05-16 (ITER-03)
+
+| Trigger | Required Action |
+|---|---|
+| git push to feature branch | MUST run: `tsc --noEmit`, `vitest run`, `lint-runner --pr` — BEFORE push. Block push if any fail. |
+| Failed local-check | Fix locally. Do NOT push to debug-in-CI. |
+
+> cortextos-improver scans agent stdout for bare `git push` not preceded by tsc/vitest. Violations → improvement task filed automatically.
