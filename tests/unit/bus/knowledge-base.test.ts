@@ -254,4 +254,42 @@ describe('gbrain fast-path', () => {
     expect(putCalls[0][1][1]).toBe('my-doc');
     expect(putCalls[1][1][1]).toBe('other');
   });
+
+  it('ingest normalizes slugs to lowercase-kebab-case (gbrain rejects others on content puts)', () => {
+    mockConfiguredKbWithGbrain();
+    fsMocks.readFileSync.mockReturnValue('# content');
+    execFileSyncMock.mockReturnValue('');
+
+    ingestKnowledgeBase(
+      ['/agents/vid-g/MEMORY.md', '/path/to/My Doc 2.md', '/x/UPPER_FILE.md'],
+      baseOptions,
+    );
+
+    const putCalls = execFileSyncMock.mock.calls.filter(
+      (call) => Array.isArray(call[1]) && call[1][0] === 'put',
+    );
+    expect(putCalls).toHaveLength(3);
+    expect(putCalls[0][1][1]).toBe('memory');
+    expect(putCalls[1][1][1]).toBe('my-doc-2');
+    expect(putCalls[2][1][1]).toBe('upper-file');
+  });
+
+  it('ingest passes a file descriptor as stdin (gbrain on Bun cannot read Node-piped /dev/stdin)', () => {
+    mockConfiguredKbWithGbrain();
+    fsMocks.readFileSync.mockReturnValue('# content');
+    execFileSyncMock.mockReturnValue('');
+
+    ingestKnowledgeBase(['/docs/some.md'], baseOptions);
+
+    const putCall = execFileSyncMock.mock.calls.find(
+      (call) => Array.isArray(call[1]) && call[1][0] === 'put',
+    );
+    // stdio[0] must be a numeric fd, NOT the string 'pipe' — which would
+    // cause execFileSync to use the `input:` pipe and trigger ENXIO under Bun.
+    const opts = putCall?.[2] as Record<string, unknown> | undefined;
+    const stdio = opts?.stdio as unknown[] | undefined;
+    expect(Array.isArray(stdio)).toBe(true);
+    expect(typeof stdio?.[0]).toBe('number');
+    expect(stdio?.[0]).toBeGreaterThan(0);
+  });
 });
