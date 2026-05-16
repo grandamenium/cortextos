@@ -121,6 +121,13 @@ export class CodexAppServerPTY {
   private _telegramApi: TelegramAPI | null = null;
   private _chatId: string | null = null;
   private _typingLastSent = 0;
+  // Streaming hook (spec: Item 1 of .planning/larry-ux-parity-spec.md).
+  // When set, every agentMessage delta is forwarded here as a user-facing
+  // prose token. Tool-use / plan deltas land on different events and are
+  // intentionally not piped — only `item/agentMessage/delta` calls this.
+  private _onAssistantTextDelta: ((delta: string) => void) | null = null;
+  private _onAssistantTurnStart: (() => void) | null = null;
+  private _onAssistantTurnEnd: (() => void) | null = null;
 
   constructor(env: CtxEnv, config: AgentConfig, logPath?: string) {
     this._env = env;
@@ -220,6 +227,24 @@ export class CodexAppServerPTY {
   setTelegramHandle(api: TelegramAPI, chatId: string): void {
     this._telegramApi = api;
     this._chatId = chatId;
+  }
+
+  /**
+   * Register streaming hooks. `onTextDelta` is fired once per assistant
+   * prose token (the `delta` field of `item/agentMessage/delta`). The
+   * optional turn-start/turn-end callbacks bracket each Codex turn so the
+   * consumer can open/close a Telegram message per turn. Pass null to
+   * unwire. Safe to call before or after spawn().
+   * Spec: Item 1 of .planning/larry-ux-parity-spec.md.
+   */
+  setAssistantStreamHooks(hooks: {
+    onTextDelta?: ((delta: string) => void) | null;
+    onTurnStart?: (() => void) | null;
+    onTurnEnd?: (() => void) | null;
+  }): void {
+    this._onAssistantTextDelta = hooks.onTextDelta ?? null;
+    this._onAssistantTurnStart = hooks.onTurnStart ?? null;
+    this._onAssistantTurnEnd = hooks.onTurnEnd ?? null;
   }
 
   private async handleInput(content: string): Promise<void> {
@@ -418,7 +443,6 @@ export class CodexAppServerPTY {
       const spawnFn = this._spawnFn!;
       const pty = spawnFn('codex', [
         'app-server',
-        '--enable', 'goals',
         '--listen', this._socketListenArg,
       ], {
         name: 'xterm-256color',
@@ -449,6 +473,25 @@ export class CodexAppServerPTY {
 
   private async waitForSocket(timeoutMs = 10000): Promise<void> {
     const start = Date.now();
+    // TCP address (host:port) — probe by attempting a connection
+    const colonIdx = this._socketPath.lastIndexOf(':');
+    const isTcp = colonIdx > 0 && !this._socketPath.startsWith('/') && !this._socketPath.startsWith('.');
+    if (isTcp) {
+      const host = this._socketPath.slice(0, colonIdx);
+      const port = parseInt(this._socketPath.slice(colonIdx + 1), 10);
+      while (Date.now() - start < timeoutMs) {
+        const ready = await new Promise<boolean>((resolve) => {
+          const { createConnection } = require('net') as typeof import('net');
+          const probe = createConnection(port, host);
+          probe.once('connect', () => { probe.destroy(); resolve(true); });
+          probe.once('error', () => resolve(false));
+        });
+        if (ready) return;
+        await sleep(100);
+      }
+      throw new Error(`Timed out waiting for app-server TCP port: ${this._socketPath}`);
+    }
+    // Unix socket — check file existence
     while (Date.now() - start < timeoutMs) {
       if (existsSync(this._socketPath)) return;
       await sleep(100);
@@ -658,15 +701,21 @@ export class CodexAppServerPTY {
       case 'turn/started':
         this.maybeFireTyping();
         this._outputBuffer.push('[codex-app-server] turn started\n');
+        try { this._onAssistantTurnStart?.(); } catch { /* hook errors must not break the RPC pump */ }
         break;
       case 'turn/completed':
         this.writeIdleFlag();
         this._outputBuffer.push('[codex-app-server] turn completed\n');
+        try { this._onAssistantTurnEnd?.(); } catch { /* hook errors must not break the RPC pump */ }
         this.resolveTurnCompletion();
         break;
       case 'item/agentMessage/delta':
         if (typeof params.delta === 'string') {
           this._outputBuffer.push(params.delta);
+          // Streaming hook: forward user-facing prose deltas only.
+          // Tool-use / plan deltas land on different methods (turn/plan/updated,
+          // item/plan/delta) so they are already excluded here.
+          try { this._onAssistantTextDelta?.(params.delta); } catch { /* hook errors must not break the RPC pump */ }
         }
         this.maybeFireTyping();
         break;
@@ -871,29 +920,20 @@ export class CodexAppServerPTY {
   }
 
   private resolveSocketPath(): { path: string; listenArg: string; cwd: string } {
-    const defaultPath = join(this._stateDir, SOCKET_BASENAME);
-    if (Buffer.byteLength(defaultPath) < SOCKET_PATH_WARN_BYTES) {
-      return { path: defaultPath, listenArg: `unix://./${SOCKET_BASENAME}`, cwd: this._stateDir };
+    // codex 0.118.0 does not support unix:// transport — use ws://127.0.0.1:<port> instead.
+    // Derive a stable port from the state directory path to avoid agent collisions.
+    let hash = 0;
+    for (let i = 0; i < this._stateDir.length; i++) {
+      hash = ((hash << 5) - hash + this._stateDir.charCodeAt(i)) | 0;
     }
-
-    const fallbackBasename = `cas-${randomBytes(4).toString('hex')}.sock`;
-    const fallback = join('/tmp', fallbackBasename);
-    const pointer: SocketPointer = {
-      socketPath: fallback,
-      fallback: true,
-      reason: 'state socket path exceeded 100 bytes',
-      updatedAt: new Date().toISOString(),
-    };
-    try {
-      ensureDir(this._stateDir);
-      writeFileSync(this._socketPointerPath, `${JSON.stringify(pointer, null, 2)}\n`, 'utf-8');
-    } catch {
-      // Non-fatal; spawn will still use fallback path.
-    }
-    return { path: fallback, listenArg: `unix://./${fallbackBasename}`, cwd: '/tmp' };
+    const port = 35000 + (Math.abs(hash) % 1000);
+    const address = `127.0.0.1:${port}`;
+    return { path: address, listenArg: `ws://127.0.0.1:${port}`, cwd: this._stateDir };
   }
 
   private removeSocket(): void {
+    // No-op for TCP addresses — only remove Unix socket files.
+    if (this._socketPath.includes(':')) return;
     try {
       if (existsSync(this._socketPath)) unlinkSync(this._socketPath);
     } catch {

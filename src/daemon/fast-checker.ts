@@ -56,6 +56,9 @@ export class FastChecker {
   private ctxLastSessionId: string | null = null; // detects new session → clears stale deadline
   private ctxCircuitRestarts: number[] = []; // timestamps of recent context-triggered restarts
   private ctxCircuitBrokenAt: number | null = null; // when circuit tripped (null = healthy)
+  // Mission-aware deferral state (Item 3, larry-ux-parity-spec)
+  private ctxDeferLastLoggedAt: number = 0;  // dedup: re-check cadence for restart_deferred events
+  private ctxEmergencyAlertedAt: number = 0; // dedup: only one Telegram alert per emergency burst
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
 
@@ -894,6 +897,51 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
+   * Mission-aware handoff deferral (Item 3, larry-ux-parity-spec).
+   *
+   * Checks `${CTX_AGENT_DIR}/state/current-mission.txt`. If the mission file
+   * exists, has been touched in the last 2h, and context is still under the
+   * 90% absolute cap, the threshold-triggered handoff is deferred — the agent
+   * is in the middle of a planned multi-step task and should finish it.
+   *
+   * The 2h mtime window catches stale mission files (agent forgot to remove
+   * it on completion); the 90% cap prevents indefinite deferral and runaway
+   * context exhaustion.
+   *
+   * Returns the first line of the mission file as `mission` so callers can
+   * surface a human-readable summary in log events and Telegram alerts.
+   */
+  private shouldDeferHandoff(agentDir: string, ctxPct: number): { defer: boolean; reason: string; mission?: string } {
+    const missionPath = join(agentDir, 'state', 'current-mission.txt');
+    if (!existsSync(missionPath)) {
+      return { defer: false, reason: 'no_mission_file' };
+    }
+    // Hard cap: 90% absolute context — defer never wins over imminent overflow.
+    if (ctxPct >= 90) {
+      let mission: string | undefined;
+      try {
+        mission = readFileSync(missionPath, 'utf-8').split('\n')[0]?.trim() || undefined;
+      } catch { /* non-fatal */ }
+      return { defer: false, reason: 'ctx_over_90', mission };
+    }
+    let mtimeMs: number;
+    let firstLine: string;
+    try {
+      mtimeMs = statSync(missionPath).mtimeMs;
+      firstLine = readFileSync(missionPath, 'utf-8').split('\n')[0]?.trim() || '';
+    } catch {
+      // Mission file exists but unreadable — treat as missing and proceed with handoff.
+      return { defer: false, reason: 'mission_unreadable' };
+    }
+    const ageMs = Date.now() - mtimeMs;
+    const twoHoursMs = 2 * 60 * 60_000;
+    if (ageMs >= twoHoursMs) {
+      return { defer: false, reason: 'mission_stale', mission: firstLine || undefined };
+    }
+    return { defer: true, reason: 'mission_active', mission: firstLine || undefined };
+  }
+
+  /**
    * Context monitor — called on every poll cycle.
    * Reads context_status.json written by the statusLine bridge hook and takes
    * action when thresholds are crossed.
@@ -977,6 +1025,44 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
     // Tier 2: handoff (fires once per session lifecycle)
     if (effectivePct >= handoff && this.ctxHandoffFiredAt === 0) {
+      // Item 3 (larry-ux-parity-spec): defer when a mission is in-progress.
+      // Skip the handoff trigger entirely while state/current-mission.txt is fresh
+      // (mtime < 2h) and ctx is under the 90% absolute cap. Logs a restart_deferred
+      // event every 5min so the dashboard can show the deferral. Once the mission
+      // file is removed (mission complete) or ages out / ctx crosses 90%, the next
+      // poll cycle falls through to the normal handoff path below.
+      const defer = this.shouldDeferHandoff(this.agent.getAgentDir(), effectivePct);
+      if (defer.defer) {
+        if (now - this.ctxDeferLastLoggedAt >= 5 * 60_000) {
+          this.ctxDeferLastLoggedAt = now;
+          const meta = {
+            agent: this.agent.name,
+            ctx_pct: Math.round(effectivePct),
+            mission: defer.mission ?? '',
+            reason: defer.reason,
+          };
+          execFile(
+            'cortextos',
+            ['bus', 'log-event', 'action', 'restart_deferred', 'info', '--meta', JSON.stringify(meta)],
+            (err) => { if (err) this.log(`restart_deferred log-event failed: ${err.message}`); },
+          );
+          this.log(`Handoff deferred at ${Math.round(effectivePct)}% — mission active: "${defer.mission ?? '(no summary)'}"`);
+        }
+        return; // re-check on next poll cycle (1s) — defer until mission clears or ctx ≥ 90%
+      }
+
+      // Emergency mid-mission restart: ctx ≥ 90% AND a mission file is still present.
+      // Surface a one-shot Telegram alert so Josh knows the in-flight work is being cut short.
+      if (effectivePct >= 90 && defer.mission && this.telegramApi && this.chatId
+          && now - this.ctxEmergencyAlertedAt > 10 * 60_000) {
+        this.ctxEmergencyAlertedAt = now;
+        const summary = defer.mission.slice(0, 500);
+        this.telegramApi.sendMessage(
+          this.chatId,
+          `${this.agent.name} restarting mid-mission at ${Math.round(effectivePct)}% — mission was: ${summary}`,
+        ).catch((err) => this.log(`Emergency-restart Telegram alert failed: ${err}`));
+      }
+
       this.ctxHandoffFiredAt = now;
       this.ctxHandoffDeadlineAt = now + 5 * 60_000; // 5min grace for agent to cooperate
       // Reset context_status.json so the new session doesn't re-trigger immediately

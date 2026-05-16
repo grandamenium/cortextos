@@ -7,6 +7,7 @@
 import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { logEvent } from '../bus/event.js';
+import { appendToBuffer } from '../daemon/conversation-buffer.js';
 import type { BusPaths, TelegramMessage } from '../types/index.js';
 
 /**
@@ -103,6 +104,20 @@ export function recordInboundTelegram(
     text,
     timestamp: new Date().toISOString(),
   });
+
+  // Mirror the verbatim text into the rolling conversation buffer so a
+  // post-restart session sees Josh's last N turns in literal form (not
+  // just whatever the handoff doc summarized). Spec: Item 2 of
+  // .planning/larry-ux-parity-spec.md.
+  if (text) {
+    appendToBuffer(ctxRoot, agentName, {
+      ts: new Date().toISOString(),
+      sender: (fromName || 'user').toLowerCase(),
+      via: 'telegram',
+      content: text,
+      chat_id: msg.chat?.id != null ? String(msg.chat.id) : undefined,
+    });
+  }
 
   const hasMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
   try {

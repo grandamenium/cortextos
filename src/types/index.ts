@@ -118,6 +118,7 @@ export type ApprovalCategory =
   | 'financial'
   | 'deployment'
   | 'data-deletion'
+  | 'scope-validation'
   | 'other';
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
@@ -551,6 +552,26 @@ export interface TelegramVideo {
 export interface TelegramVideoNote {
   file_id: string;
   duration: number;
+}
+
+// Conversation Buffer Types
+//
+// Rolling buffer of Josh↔agent exchanges, persisted across agent restarts.
+// Written by `src/daemon/conversation-buffer.ts` (see Item 2 of
+// `.planning/larry-ux-parity-spec.md`). Path:
+//   ${ctxRoot}/state/${agentName}/conversation-buffer.jsonl
+
+export interface ConversationBufferEntry {
+  /** ISO 8601 UTC timestamp of the exchange. */
+  ts: string;
+  /** Who originated the message. "josh" for user-side, agent name for assistant-side. */
+  sender: string;
+  /** Transport channel. "telegram" for now; future: "dashboard", "voice", etc. */
+  via: string;
+  /** Verbatim message body. */
+  content: string;
+  /** Telegram chat id, when available — handy for filtering by chat in multi-chat agents. */
+  chat_id?: string;
 }
 
 // Task Management Report Types

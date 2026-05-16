@@ -7,6 +7,7 @@ import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
+import { TelegramStreamer } from './telegram-streamer.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
@@ -58,6 +59,13 @@ export class AgentProcess {
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
   private telegramChatId: string | null = null;
+  // Streaming-Telegram state (spec: Item 1 of .planning/larry-ux-parity-spec.md).
+  // streamingEnabled latches when setStreamingTelegram() is called; the actual
+  // per-turn TelegramStreamer instance is recreated every Codex turn so each
+  // assistant response lands in its own Telegram message.
+  private streamingEnabled = false;
+  private streamingStarterPlaceholder = '…';
+  private activeStreamer: TelegramStreamer | null = null;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -125,6 +133,9 @@ export class AgentProcess {
     // typing indicators flow through fast-checker.
     if (this.config.runtime === 'codex-app-server' && this.telegramApi && this.telegramChatId) {
       (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
+      // Spec Item 1: re-wire streaming hooks too — PTY is recreated each
+      // start() and the previous instance's hook closures are gone.
+      if (this.streamingEnabled) this.wireStreamingHooks();
     }
 
     // BUG-011 fix: create a fresh exit signal for this run. resolveExit is
@@ -340,7 +351,73 @@ export class AgentProcess {
     this.telegramChatId = chatId;
     if (this.config.runtime === 'codex-app-server' && this.pty) {
       (this.pty as CodexAppServerPTY).setTelegramHandle(api, chatId);
+      if (this.streamingEnabled) this.wireStreamingHooks();
     }
+  }
+
+  /**
+   * Enable per-turn streaming of assistant prose to the configured Telegram
+   * chat. Each Codex turn opens a fresh Telegram message (`sendMessage`)
+   * and then patches it with `editMessageText` as deltas arrive — mirroring
+   * the "watch tokens stream" feel of a terminal Claude Code session.
+   *
+   * Idempotent. Requires `setTelegramHandle()` to have been called first so
+   * the streamer knows where to send. No-op for non-Codex runtimes: the
+   * Claude TUI does not surface deltas in a parseable form and is left
+   * alone (a separate effort if it becomes necessary).
+   *
+   * Spec: Item 1 of .planning/larry-ux-parity-spec.md.
+   */
+  enableStreamingTelegram(initialPlaceholder = '…'): void {
+    this.streamingEnabled = true;
+    this.streamingStarterPlaceholder = initialPlaceholder;
+    if (this.config.runtime === 'codex-app-server' && this.pty) {
+      this.wireStreamingHooks();
+    }
+  }
+
+  private wireStreamingHooks(): void {
+    if (this.config.runtime !== 'codex-app-server' || !this.pty) return;
+    if (!this.telegramApi || !this.telegramChatId) return;
+    const api = this.telegramApi;
+    const chatId = this.telegramChatId;
+    const placeholder = this.streamingStarterPlaceholder;
+    const log = this.log;
+    (this.pty as CodexAppServerPTY).setAssistantStreamHooks({
+      onTurnStart: () => {
+        // Each turn gets a fresh message. Lazy-start: the placeholder is
+        // sent on the first delta, not at turn/started, so empty turns
+        // (e.g. tool-only turns with no prose) never spam the chat.
+        this.activeStreamer = new TelegramStreamer(api, chatId, {
+          finalParseMode: 'HTML',
+          log: (m) => log(`telegram-streamer: ${m}`),
+        });
+        // Capture for the closure below; lazyStart is fired by the first
+        // delta so we don't paint a placeholder on tool-only turns.
+        (this.activeStreamer as unknown as { _placeholder: string })._placeholder = placeholder;
+      },
+      onTextDelta: (delta) => {
+        const streamer = this.activeStreamer;
+        if (!streamer) return;
+        if (!streamer.isStarted()) {
+          // Lazy-start at first delta. Fire-and-forget — append() is a no-op
+          // until start() resolves, but the appended tokens accumulate in
+          // the streamer regardless so nothing is lost.
+          streamer.start(((streamer as unknown as { _placeholder: string })._placeholder) ?? '…').catch((err) => {
+            log(`telegram-streamer: start failed: ${err}`);
+          });
+        }
+        streamer.append(delta);
+      },
+      onTurnEnd: () => {
+        const streamer = this.activeStreamer;
+        this.activeStreamer = null;
+        if (!streamer) return;
+        // Fire-and-forget — finalize() flushes the last pending edit and
+        // marks the streamer closed. Errors are logged inside the streamer.
+        streamer.finalize().catch((err) => log(`telegram-streamer: finalize failed: ${err}`));
+      },
+    });
   }
 
   /**

@@ -516,19 +516,32 @@ export class TelegramAPI {
 
   /**
    * Edit a message's text.
+   *
+   * `opts.parseMode` mirrors sendMessage: 'HTML' converts markdown→HTML
+   * (so formatting survives the edit), null sends raw text. When omitted,
+   * the call defaults to plain text — Telegram does not auto-apply the
+   * parse mode used at sendMessage time, so callers that want formatting
+   * preserved across edits MUST opt in explicitly. Used by TelegramStreamer
+   * to send interim edits as plain text (avoids parse errors on incomplete
+   * markdown mid-stream) and the final edit as HTML.
    */
   async editMessageText(
     chatId: string | number,
     messageId: number,
     text: string,
     replyMarkup?: object,
+    opts?: { parseMode?: 'HTML' | null },
   ): Promise<any> {
-    return this.post('editMessageText', {
+    const parseMode = opts?.parseMode ?? null;
+    const body = parseMode === 'HTML' ? this.markdownToHtml(text, false) : text;
+    const payload: Record<string, unknown> = {
       chat_id: chatId,
       message_id: messageId,
-      text,
+      text: body,
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-    });
+    };
+    if (parseMode === 'HTML') payload.parse_mode = 'HTML';
+    return this.post('editMessageText', payload);
   }
 
   /**

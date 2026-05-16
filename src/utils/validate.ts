@@ -58,7 +58,7 @@ export function validateEventSeverity(severity: string): asserts severity is Eve
 }
 
 const VALID_APPROVAL_CATEGORIES: ApprovalCategory[] = [
-  'external-comms', 'financial', 'deployment', 'data-deletion', 'other',
+  'external-comms', 'financial', 'deployment', 'data-deletion', 'scope-validation', 'other',
 ];
 
 export function validateApprovalCategory(category: string): asserts category is ApprovalCategory {
