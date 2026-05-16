@@ -239,7 +239,7 @@ export function checkEssential(toolName: string, toolInput: unknown): boolean {
     if (typeof cmd === 'string') {
       if (ESSENTIAL_COMMANDS.some(ec => cmd.includes(`bus ${ec}`))) return true;
       // Cron-driven scripts are expected to run repeatedly — exempt them.
-      if (cmd.includes('cortextos-vm-sync-push.js') || cmd.includes('sync-agent-memories.js') || cmd.includes('sync_activity_to_supabase.py')) return true;
+      if (cmd.includes('cortextos-vm-sync-push.js') || cmd.includes('sync-agent-memories.js') || cmd.includes('sync_activity_to_supabase.py') || cmd.includes('inbox-drain-watchdog.js') || cmd.includes('cortextos-mac-task-sync.js')) return true;
     }
   }
 
