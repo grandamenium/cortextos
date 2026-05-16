@@ -9,7 +9,7 @@ import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
-import { resolvePaths } from '../utils/paths.js';
+import { isAgentDirScaffolded, resolvePaths } from '../utils/paths.js';
 import { parseEnvFile, resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
@@ -65,6 +65,19 @@ export class AgentManager {
       const entry = instanceEnabled[name];
       if (entry && entry.enabled === false) {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
+        continue;
+      }
+      // Reject unscaffolded agent dirs. Without AGENTS.md the session-start prompt
+      // tells the agent to read a file that does not exist, so it boots into a
+      // broken state and silently bypasses heartbeat/inbox protocol. Observed
+      // 2026-05-15: 3 dirs (dev, blocked-uat-escalator, monitor-cortexos-fleet-tasks)
+      // had only output/ + .cortextos-env, yet the daemon happily started them.
+      if (!isAgentDirScaffolded(dir)) {
+        console.error(
+          `[agent-manager] Skipping unscaffolded agent: ${name} ` +
+          `(no AGENTS.md in ${dir}) — run \`cortextos add-agent ${name}\` or ` +
+          `copy templates/agent/* into the dir`,
+        );
         continue;
       }
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead

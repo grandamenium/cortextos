@@ -3,6 +3,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { AgentPTY } from './agent-pty.js';
+import { resolveAgentCwd } from '../utils/paths.js';
 
 // Hermes bootstrap signal: the prompt character that appears when Hermes is
 // ready for input. The full prompt is "⚔ ❯ " but we check for "❯" as a
@@ -43,7 +44,11 @@ export class HermesPTY extends AgentPTY {
   constructor(env: CtxEnv, config: AgentConfig, logPath?: string) {
     super(env, config, logPath, HERMES_BOOTSTRAP_PATTERN);
     // Store agentDir here since AgentPTY.env is private
-    this.agentDir = config.working_directory || env.agentDir;
+    this.agentDir = resolveAgentCwd(
+      env.agentDir,
+      config.working_directory,
+      (msg) => console.warn(`[hermes-pty:${env.agentName}] ${msg}`),
+    );
     // Compute state dir for last_idle.flag writes (mirrors hook-idle-flag.ts logic)
     const instanceId = env.instanceId || 'default';
     this.stateDir = join(homedir(), '.cortextos', instanceId, 'state', env.agentName);

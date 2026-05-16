@@ -49,6 +49,8 @@ vi.mock('../../../src/bus/reminders.js', () => ({
 
 vi.mock('../../../src/utils/paths.js', () => ({
   resolvePaths: vi.fn().mockReturnValue({}),
+  resolveAgentCwd: vi.fn((agentDir, override) => (override?.trim() || agentDir || process.cwd())),
+  isAgentDirScaffolded: vi.fn().mockReturnValue(true),
 }));
 
 const fsMocks = {

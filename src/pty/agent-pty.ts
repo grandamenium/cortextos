@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { resolveModel } from '../utils/model-tiers.js';
+import { resolveAgentCwd } from '../utils/paths.js';
 import { OutputBuffer } from './output-buffer.js';
 
 // node-pty types
@@ -61,7 +62,11 @@ export class AgentPTY {
       this.spawnFn = nodePty.spawn;
     }
 
-    const cwd = this.config.working_directory || this.env.agentDir || process.cwd();
+    const cwd = resolveAgentCwd(
+      this.env.agentDir,
+      this.config.working_directory,
+      (msg) => console.warn(`[agent-pty:${this.env.agentName}] ${msg}`),
+    );
 
     // Build environment variables for the PTY process
     const ptyEnv: Record<string, string> = {

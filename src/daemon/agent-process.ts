@@ -11,7 +11,7 @@ import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
-import { resolvePaths } from '../utils/paths.js';
+import { resolveAgentCwd, resolvePaths } from '../utils/paths.js';
 import type { CronScheduler, ManagedAgent } from './cron-scheduler.js';
 import { detectContextCap, archiveCappedSession } from './context-cap-detect.js';
 
@@ -644,7 +644,7 @@ export class AgentProcess implements ManagedAgent {
     }
 
     // Check for existing conversation
-    const launchDir = this.config.working_directory || this.env.agentDir;
+    const launchDir = resolveAgentCwd(this.env.agentDir, this.config.working_directory);
     if (!launchDir) return false;
 
     // Claude projects dir uses the absolute path with all separators replaced by dashes

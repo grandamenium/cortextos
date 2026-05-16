@@ -58,6 +58,11 @@ describe('AgentManager.discoverAndStart - BUG-028 fix', () => {
     mkdirSync(join(ctxRoot, 'config'), { recursive: true });
     mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
     mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob'), { recursive: true });
+    // Stage AGENTS.md so the unscaffolded-dir guard does not skip these
+    // pre-existing test fixtures. The guard's own behavior is covered by a
+    // dedicated describe block below.
+    writeFileSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice', 'AGENTS.md'), '# alice');
+    writeFileSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob', 'AGENTS.md'), '# bob');
   });
 
   afterEach(() => {
@@ -155,6 +160,9 @@ describe('AgentManager.discoverAndStart - BUG-043 fix (multi-org support)', () =
     mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob'), { recursive: true });
     mkdirSync(join(frameworkRoot, 'orgs', 'widgetco', 'agents', 'carol'), { recursive: true });
     mkdirSync(join(frameworkRoot, 'orgs', 'widgetco', 'agents', 'dave'), { recursive: true });
+    for (const [org, name] of [['acme', 'alice'], ['acme', 'bob'], ['widgetco', 'carol'], ['widgetco', 'dave']]) {
+      writeFileSync(join(frameworkRoot, 'orgs', org, 'agents', name, 'AGENTS.md'), `# ${name}`);
+    }
   });
 
   afterEach(() => {
@@ -231,6 +239,63 @@ describe('AgentManager.discoverAndStart - BUG-043 fix (multi-org support)', () =
     }
   });
 });
+
+describe('AgentManager.discoverAndStart - unscaffolded agent dir guard', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-unscaffolded-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    // alice: fully scaffolded — has AGENTS.md
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+    writeFileSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice', 'AGENTS.md'), '# alice');
+    // bob: bare dir — no AGENTS.md (simulates the 2026-05-15 dev/blocked-uat-escalator/monitor incident)
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob'), { recursive: true });
+    errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errSpy.mockRestore();
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('skips an agent dir without AGENTS.md and logs a clear error', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.discoverAndStart();
+
+    // bob is unscaffolded — skipped. alice is fine — started.
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledWith('alice', expect.any(String), expect.any(Object), 'acme');
+    // Error message names the agent + the dir and points at the remediation
+    const errCalls = errSpy.mock.calls.map(args => args.join(' '));
+    expect(errCalls.some(m => /Skipping unscaffolded agent: bob/.test(m))).toBe(true);
+    expect(errCalls.some(m => /no AGENTS\.md/.test(m))).toBe(true);
+    expect(errCalls.some(m => /cortextos add-agent|templates\/agent/.test(m))).toBe(true);
+  });
+
+  it('respects the existing enabled: false skip before the scaffold check', async () => {
+    // If alice is also explicitly disabled, the disabled-skip log fires
+    // (not the unscaffolded-skip log) even though she happens to be scaffolded.
+    writeFileSync(
+      join(ctxRoot, 'config', 'enabled-agents.json'),
+      JSON.stringify({ alice: { enabled: false, org: 'acme' } }),
+    );
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
+
+    await am.discoverAndStart();
+
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+});
+
 
 describe('AgentManager Telegram poller preference', () => {
   let testDir: string;

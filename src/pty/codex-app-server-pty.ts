@@ -7,7 +7,7 @@ import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir, atomicWriteSync } from '../utils/atomic.js';
-import { resolvePaths } from '../utils/paths.js';
+import { resolveAgentCwd, resolvePaths } from '../utils/paths.js';
 import { logEvent } from '../bus/event.js';
 import { WsUnixJsonRpcClient, type JsonRpcResponse, type WebSocketRpcTarget } from '../utils/ws-unix-client.js';
 
@@ -134,7 +134,11 @@ export class CodexAppServerPTY {
   constructor(env: CtxEnv, config: AgentConfig, logPath?: string) {
     this._env = env;
     this._config = config;
-    this._cwd = config.working_directory || env.agentDir || process.cwd();
+    this._cwd = resolveAgentCwd(
+      env.agentDir,
+      config.working_directory,
+      (msg) => console.warn(`[codex-app-server-pty:${env.agentName}] ${msg}`),
+    );
     this._stateDir = join(env.ctxRoot, 'state', env.agentName);
     this._threadStatePath = join(this._stateDir, 'codex-app-server-thread.json');
     this._socketPointerPath = join(this._stateDir, 'codex-app-server-socket.json');

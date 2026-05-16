@@ -1,5 +1,6 @@
 import { homedir } from 'os';
 import { join } from 'path';
+import { existsSync } from 'fs';
 import type { BusPaths } from '../types/index.js';
 import { validateInstanceId } from './validate.js';
 
@@ -46,6 +47,59 @@ export function resolvePaths(
     analyticsDir: join(orgBase, 'analytics'),
     deliverablesDir: join(orgBase, 'deliverables'),
   };
+}
+
+/**
+ * Bootstrap file that marks a directory as a fully scaffolded agent.
+ * An agent without this file will silently misbehave when Claude Code launches
+ * because the session-start prompt instructs the agent to read it first.
+ */
+const AGENT_BOOTSTRAP_FILE = 'AGENTS.md';
+
+/**
+ * Return true when `dir` looks like a scaffolded agent directory.
+ * The check is intentionally narrow: presence of `AGENTS.md`. Other bootstrap
+ * files (HEARTBEAT.md, IDENTITY.md) may be staged piecemeal during onboarding,
+ * but AGENTS.md is what the start-up prompt reads first — without it the agent
+ * cannot bootstrap.
+ */
+export function isAgentDirScaffolded(dir: string | undefined): boolean {
+  if (!dir) return false;
+  return existsSync(join(dir, AGENT_BOOTSTRAP_FILE));
+}
+
+/**
+ * Resolve the cwd for an agent PTY, respecting `config.working_directory` only
+ * when it points at a real scaffolded agent directory.
+ *
+ * Order:
+ *   1. `configWorkingDirectory` if set AND the path contains `AGENTS.md`
+ *   2. `agentDir` if set
+ *   3. `process.cwd()` as ultimate fallback
+ *
+ * If `configWorkingDirectory` is set but invalid (path missing, or missing
+ * AGENTS.md), the optional `warn` callback is invoked and the resolver falls
+ * back to `agentDir`. This prevents a typo in `config.working_directory` from
+ * silently launching Claude Code into an unrelated repo whose AGENTS.md
+ * belongs to a different system — the exact failure mode that broke
+ * director/analyst against /Users/.../work/team-brain on 2026-05-15.
+ */
+export function resolveAgentCwd(
+  agentDir: string | undefined,
+  configWorkingDirectory: string | undefined,
+  warn?: (msg: string) => void,
+): string {
+  const override = configWorkingDirectory?.trim();
+  if (override) {
+    if (isAgentDirScaffolded(override)) {
+      return override;
+    }
+    warn?.(
+      `config.working_directory=${JSON.stringify(override)} is not a scaffolded agent dir ` +
+      `(no ${AGENT_BOOTSTRAP_FILE} found); falling back to agentDir`,
+    );
+  }
+  return agentDir || process.cwd();
 }
 
 /**
