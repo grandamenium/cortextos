@@ -1,74 +1,87 @@
 /**
- * spawn-codex — bus command that runs a scoped Codex session locally.
+ * spawn-codex — run a scoped Codex session locally and persist proof.
  *
- * Usage (CLI):
- *   cortextos bus spawn-codex prompt.md
- *   cortextos bus spawn-codex prompt.md --workdir /path/to/repo --timeout 600
- *   cortextos bus spawn-codex prompt.md --telegram 8567114601 --agent dev
- *
- * How it works:
- *   1. Read the prompt from <prompt-file> (or stdin when `-` is passed)
- *   2. Spawn `codex exec` locally with the prompt piped via stdin
- *   3. Capture stdout as the Codex output
- *   4. Write the result to agents/<agent>/output/<date>-spawn-codex-<slug>.md
- *   5. Optionally send the artifact path to a Telegram chat
- *   6. Emit a `spawn_codex_task` bus event
- *
- * This is the primitive that backs the strip-Claude migration plan: instead of
- * long-running Claude sessions, crons and Telegram dispatchers spawn a fresh
- * Codex session per task via this command.
+ * This is the primitive for replacing long-running agent REPLs with bounded
+ * jobs: a cron or dispatcher writes a prompt file, calls this command, records
+ * the artifact + JSON sidecar, and exits.
  */
 
-import { execFileSync } from 'child_process';
+import { createHash } from 'crypto';
+import { spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { basename, join, resolve } from 'path';
 
 export interface SpawnCodexOptions {
-  /** Working directory for the Codex process (defaults to cwd) */
   workdir?: string;
-  /** Timeout in seconds (default: 300) */
   timeout?: number;
-  /** Agent name — used to determine the output directory */
   agentName?: string;
-  /** Root directory containing the agents/ tree (e.g. /home/cortextos/cortextos/orgs/revops-global) */
   agentsRoot?: string;
-  /** Optional Telegram chat_id to send the artifact path after completion */
   telegramChatId?: string;
-  /** Optional model override — passed as --model (e.g. "o4-mini", "claude-sonnet-4-6") */
   model?: string;
-  /** Optional effort level — passed as --effort (e.g. "high", "medium", "low") */
   effort?: string;
-  /** Optional MCP config file path — passed as --mcp-config */
   mcpConfig?: string;
+  taskId?: string;
+  requester?: string;
+  replyTo?: string;
+  priority?: string;
+}
+
+export interface SpawnCodexRunMetadata {
+  ok: boolean;
+  status: 'success' | 'failed' | 'timed_out';
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  prompt_file: string;
+  prompt_sha256: string;
+  prompt_chars: number;
+  artifact_path: string;
+  sidecar_path: string;
+  workdir: string;
+  agent: string | null;
+  task_id: string | null;
+  requester: string | null;
+  reply_to: string | null;
+  priority: string | null;
+  model: string | null;
+  effort: string | null;
+  mcp_config: string | null;
+  exit_code: number | null;
+  timed_out: boolean;
+  stdout_chars: number;
+  stderr_excerpt: string | null;
 }
 
 export interface SpawnCodexResult {
   ok: boolean;
-  outputPath?: string;
-  output?: string;
-  error?: string;
+  status: SpawnCodexRunMetadata['status'];
+  outputPath: string;
+  sidecarPath: string;
+  output: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
   durationMs: number;
+  metadata: SpawnCodexRunMetadata;
 }
 
-const CODEX_BIN = process.env.CODEX_BIN ?? 'codex';
+function codexBin(): string {
+  return process.env.CODEX_BIN ?? 'codex';
+}
 
-/**
- * Derive a short slug from a file path to use in the output filename.
- * e.g. "/tmp/morning-review-prompt.md" → "morning-review-prompt"
- */
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 function slugFromPath(filePath: string): string {
   return basename(filePath)
     .replace(/\.(md|txt|prompt)$/i, '')
     .replace(/[^a-zA-Z0-9-]/g, '-')
     .replace(/-{2,}/g, '-')
-    .slice(0, 40);
+    .replace(/^-|-$/g, '')
+    .slice(0, 40) || 'prompt';
 }
 
-/**
- * Determine the output directory for a given agent.
- * Tries: agentsRoot/agents/<agentName>/output/
- * Falls back to: <cwd>/output/
- */
 function resolveOutputDir(agentsRoot?: string, agentName?: string): string {
   if (agentsRoot && agentName) {
     const dir = join(agentsRoot, 'agents', agentName, 'output');
@@ -80,115 +93,131 @@ function resolveOutputDir(agentsRoot?: string, agentName?: string): string {
   return dir;
 }
 
-/**
- * Run a scoped Codex session with the given prompt, capture output,
- * write it to the agent's output directory, and return the artifact path.
- */
-export function spawnCodex(
-  promptFileOrDash: string,
-  opts: SpawnCodexOptions = {},
-): SpawnCodexResult {
-  const start = Date.now();
-
-  // --- Read prompt -------------------------------------------------------
-  let prompt: string;
-  try {
-    if (promptFileOrDash === '-') {
-      prompt = readFileSync(process.stdin.fd, 'utf-8');
-    } else {
-      const absPath = resolve(promptFileOrDash);
-      if (!existsSync(absPath)) {
-        return { ok: false, error: `Prompt file not found: ${absPath}`, durationMs: 0 };
-      }
-      prompt = readFileSync(absPath, 'utf-8');
-    }
-  } catch (err) {
-    return { ok: false, error: `Failed to read prompt: ${(err as Error).message}`, durationMs: 0 };
+function readPrompt(promptFileOrDash: string): { prompt: string; promptPath: string } {
+  if (promptFileOrDash === '-') {
+    return { prompt: readFileSync(process.stdin.fd, 'utf-8'), promptPath: '-' };
   }
+
+  const promptPath = resolve(promptFileOrDash);
+  if (!existsSync(promptPath)) {
+    throw new Error(`Prompt file not found: ${promptPath}`);
+  }
+  return { prompt: readFileSync(promptPath, 'utf-8'), promptPath };
+}
+
+export function spawnCodex(promptFileOrDash: string, opts: SpawnCodexOptions = {}): SpawnCodexResult {
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
+  const { prompt, promptPath } = readPrompt(promptFileOrDash);
 
   if (!prompt.trim()) {
-    return { ok: false, error: 'Prompt file is empty', durationMs: 0 };
+    throw new Error('Prompt file is empty');
   }
 
-  // --- Build codex exec args ---------------------------------------------
   const timeoutSecs = opts.timeout ?? 300;
-  const args: string[] = ['exec'];
+  const workdir = opts.workdir ?? process.cwd();
+  const args = ['exec'];
 
   if (opts.model) {
     args.push('--model', opts.model);
   }
-
   if (opts.effort) {
     args.push('--effort', opts.effort);
   }
-
   if (opts.mcpConfig) {
     args.push('--mcp-config', opts.mcpConfig);
   }
 
-  // Allow full disk read access so Codex can read files in the workdir
-  args.push('-c', "sandbox_permissions=[\"disk-full-read-access\"]");
-
-  // Prompt as positional argument (avoids stdin-pipe complexity with timeout)
   args.push(prompt);
 
-  // --- Spawn Codex -------------------------------------------------------
-  let rawOutput: string;
-  try {
-    rawOutput = execFileSync(CODEX_BIN, args, {
-      cwd: opts.workdir ?? process.cwd(),
-      timeout: timeoutSecs * 1000,
-      maxBuffer: 10 * 1024 * 1024, // 10 MB
-      encoding: 'utf-8',
-      // Close stdin so codex does not wait for interactive input
-      input: '',
-      env: { ...process.env },
-    }) as unknown as string;
-  } catch (err: unknown) {
-    const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean };
-    if (e.killed) {
-      return { ok: false, error: `Codex timed out after ${timeoutSecs}s`, durationMs: Date.now() - start };
-    }
-    // If Codex exited non-zero but produced stdout, treat it as a partial result
-    const stdout = e.stdout ?? '';
-    if (!stdout.trim()) {
-      const stderr = (e.stderr ?? '').slice(0, 500);
-      return { ok: false, error: `codex exec failed: ${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`, durationMs: Date.now() - start };
-    }
-    rawOutput = stdout;
-  }
+  const run = spawnSync(codexBin(), args, {
+    cwd: workdir,
+    timeout: timeoutSecs * 1000,
+    input: '',
+    encoding: 'utf-8',
+    maxBuffer: 10 * 1024 * 1024,
+    env: { ...process.env },
+  });
 
-  const durationMs = Date.now() - start;
-  const output = rawOutput.trim();
+  const completedAtMs = Date.now();
+  const durationMs = completedAtMs - startedAtMs;
+  const stdout = (run.stdout ?? '').toString();
+  const stderr = (run.stderr ?? '').toString();
+  const timedOut = Boolean(run.error && (run.error as NodeJS.ErrnoException).code === 'ETIMEDOUT');
+  const exitCode = typeof run.status === 'number' ? run.status : null;
+  const ok = !timedOut && exitCode === 0;
+  const status: SpawnCodexRunMetadata['status'] = timedOut ? 'timed_out' : ok ? 'success' : 'failed';
 
-  // --- Write artifact ----------------------------------------------------
   const date = new Date().toISOString().slice(0, 10);
   const slug = promptFileOrDash === '-' ? 'stdin' : slugFromPath(promptFileOrDash);
-  const filename = `${date}-spawn-codex-${slug}.md`;
+  const suffix = `${date}-spawn-codex-${slug}`;
   const outputDir = resolveOutputDir(opts.agentsRoot, opts.agentName);
-  const outputPath = join(outputDir, filename);
+  const outputPath = join(outputDir, `${suffix}.md`);
+  const sidecarPath = join(outputDir, `${suffix}.json`);
 
-  const header = [
-    `# Codex Output — ${slug}`,
-    `**Spawned:** ${new Date().toISOString()}`,
+  const metadata: SpawnCodexRunMetadata = {
+    ok,
+    status,
+    started_at: startedAt,
+    completed_at: new Date(completedAtMs).toISOString(),
+    duration_ms: durationMs,
+    prompt_file: promptPath,
+    prompt_sha256: sha256(prompt),
+    prompt_chars: prompt.length,
+    artifact_path: outputPath,
+    sidecar_path: sidecarPath,
+    workdir,
+    agent: opts.agentName ?? null,
+    task_id: opts.taskId ?? null,
+    requester: opts.requester ?? null,
+    reply_to: opts.replyTo ?? null,
+    priority: opts.priority ?? null,
+    model: opts.model ?? null,
+    effort: opts.effort ?? null,
+    mcp_config: opts.mcpConfig ?? null,
+    exit_code: exitCode,
+    timed_out: timedOut,
+    stdout_chars: stdout.length,
+    stderr_excerpt: stderr.trim() ? stderr.trim().slice(0, 1000) : null,
+  };
+
+  const artifact = [
+    `# Codex Output - ${slug}`,
+    '',
+    `**Status:** ${status}`,
+    `**Spawned:** ${metadata.started_at}`,
+    `**Completed:** ${metadata.completed_at}`,
     `**Duration:** ${(durationMs / 1000).toFixed(1)}s`,
+    `**Task:** ${opts.taskId ?? 'none'}`,
+    `**Requester:** ${opts.requester ?? 'none'}`,
     `**Model:** ${opts.model ?? 'default'}`,
-    `**Workdir:** ${opts.workdir ?? process.cwd()}`,
+    `**Effort:** ${opts.effort ?? 'default'}`,
+    `**Workdir:** ${workdir}`,
     '',
     '## Prompt',
     '',
-    prompt.length > 2000 ? prompt.slice(0, 2000) + '\n\n_(truncated — see prompt file for full text)_' : prompt,
+    prompt.length > 2000 ? `${prompt.slice(0, 2000)}\n\n_(truncated; see prompt file for full text)_` : prompt,
     '',
     '## Output',
     '',
-    output,
+    stdout.trim() || '(no stdout)',
+    '',
+    ...(stderr.trim() ? ['## Stderr', '', stderr.trim().slice(0, 4000)] : []),
   ].join('\n');
 
-  try {
-    writeFileSync(outputPath, header, 'utf-8');
-  } catch (err) {
-    return { ok: false, error: `Failed to write output file: ${(err as Error).message}`, durationMs };
-  }
+  writeFileSync(outputPath, `${artifact}\n`, 'utf-8');
+  writeFileSync(sidecarPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
 
-  return { ok: true, outputPath, output, durationMs };
+  return {
+    ok,
+    status,
+    outputPath,
+    sidecarPath,
+    output: stdout.trim(),
+    stderr,
+    exitCode,
+    timedOut,
+    durationMs,
+    metadata,
+  };
 }

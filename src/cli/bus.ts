@@ -26,6 +26,7 @@ import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
+import { spawnCodex } from '../bus/spawn-codex.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
@@ -39,7 +40,6 @@ import { generateSkill } from '../bus/generate-skill.js';
 import { syncSkills } from '../bus/sync-skills.js';
 import { runWorkflow } from '../bus/run-workflow.js';
 import { computerUse } from '../bus/computer-use.js';
-import { spawnCodex } from '../bus/spawn-codex.js';
 import { checkOrgoLeaseWatchdog, claimOrgoLease, formatLeaseStatus, listOrgoLeaseStatus, releaseOrgoLease } from '../bus/orgo-lease.js';
 
 import { atomicWriteSync } from '../utils/atomic.js';
@@ -4133,7 +4133,6 @@ busCommand
     }
   });
 
-
 busCommand
   .command('run-workflow')
   .description('Execute a declarative workflow YAML file (sequential multi-agent orchestration)')
@@ -4434,15 +4433,20 @@ busCommand
 // --- spawn-codex ---
 busCommand
   .command('spawn-codex <prompt-file>')
-  .description('Run a scoped Codex session locally, capture output to agents/<agent>/output/, optionally post artifact path to Telegram')
+  .description('Run a scoped Codex session locally, capture output to agents/<agent>/output/, and write a JSON sidecar')
   .option('--workdir <dir>', 'Working directory for the Codex process (default: cwd)')
   .option('--timeout <seconds>', 'Max wait time in seconds (default: 300)', '300')
   .option('--agent <name>', 'Agent name for output path (defaults to CTX_AGENT_NAME)')
   .option('--agents-root <path>', 'Root of the agents/ tree (defaults to CTX_AGENT_DIR/../..)')
+  .option('--task-id <id>', 'Optional task id to record in metadata')
+  .option('--requester <agent>', 'Optional requester to record in metadata')
+  .option('--reply-to <msg_id>', 'Optional message id to record in metadata')
+  .option('--priority <priority>', 'Optional priority to record in metadata')
   .option('--telegram <chat_id>', 'Send artifact path to this Telegram chat after completion')
   .option('--model <model>', 'Model override — passed as --model (e.g. o4-mini, claude-sonnet-4-6)')
   .option('--effort <level>', 'Effort level — passed as --effort (e.g. high, medium, low)')
   .option('--mcp-config <path>', 'MCP config file path — passed as --mcp-config')
+  .option('--json-output', 'Print the run metadata JSON instead of only the artifact path')
   .action(async (
     promptFile: string,
     opts: {
@@ -4450,10 +4454,15 @@ busCommand
       timeout?: string;
       agent?: string;
       agentsRoot?: string;
+      taskId?: string;
+      requester?: string;
+      replyTo?: string;
+      priority?: string;
       telegram?: string;
       model?: string;
       effort?: string;
       mcpConfig?: string;
+      jsonOutput?: boolean;
     },
   ) => {
     const env = resolveEnv();
@@ -4476,26 +4485,21 @@ busCommand
       model: opts.model,
       effort: opts.effort,
       mcpConfig: opts.mcpConfig,
+      taskId: opts.taskId,
+      requester: opts.requester,
+      replyTo: opts.replyTo,
+      priority: opts.priority,
     });
-
-    if (!result.ok) {
-      console.error(`spawn-codex failed: ${result.error}`);
-      process.exit(1);
-    }
 
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    logEvent(paths, env.agentName, env.org, 'action', 'spawn_codex_task', 'info', {
-      prompt_file: promptFile,
-      output_path: result.outputPath,
-      duration_ms: result.durationMs,
-      agent: agentName,
+    logEvent(paths, env.agentName, env.org, 'action', 'spawn_codex_task', result.ok ? 'info' : 'error', {
+      ...result.metadata,
     });
 
-    console.log(result.outputPath);
+    console.log(opts.jsonOutput ? JSON.stringify(result.metadata, null, 2) : result.outputPath);
 
     // Optional Telegram callback — send artifact path so dispatcher can pick it up
     if (opts.telegram) {
-      const { resolve: resolvePath } = await import('path');
       const { execFileSync: exec } = await import('child_process');
       try {
         exec('cortextos', ['bus', 'send-telegram', opts.telegram, `artifact: ${result.outputPath}`], {
@@ -4503,6 +4507,11 @@ busCommand
           timeout: 30_000,
         });
       } catch { /* non-fatal — artifact path already printed to stdout */ }
+    }
+
+    if (!result.ok) {
+      console.error(`spawn-codex failed: ${result.status}; artifact: ${result.outputPath}`);
+      process.exit(1);
     }
   });
 
