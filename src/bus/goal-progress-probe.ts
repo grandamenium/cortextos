@@ -85,6 +85,46 @@ function memoryText(agentDir: string): { text: string; files: string[] } {
   };
 }
 
+/** Returns true if the agent's today memory file has any heading timestamp within the last withinHours. */
+function hasRecentMemoryActivity(agentDir: string, withinHours: number, nowMs: number): boolean {
+  const today = todayUtc(0);
+  const memoryFile = join(agentDir, 'memory', `${today}.md`);
+  if (!existsSync(memoryFile)) return false;
+  const content = readFileSync(memoryFile, 'utf-8');
+  // Match headings like "## Heartbeat Update - 23:32 UTC" or "## Session Start - 22:59 UTC"
+  const timePattern = /##[^\n]+-\s+(\d{2}:\d{2})\s+UTC/g;
+  const cutoffMs = nowMs - withinHours * 3_600_000;
+  let match: RegExpExecArray | null;
+  while ((match = timePattern.exec(content)) !== null) {
+    const entryMs = new Date(`${today}T${match[1]}:00Z`).getTime();
+    if (Number.isFinite(entryMs) && entryMs >= cutoffMs && entryMs <= nowMs) return true;
+  }
+  return false;
+}
+
+function isAgentRunning(ctxRoot: string, agentName: string, staleThresholdHours = 2): boolean {
+  const heartbeatFile = join(ctxRoot, 'state', agentName, 'heartbeat.json');
+  if (!existsSync(heartbeatFile)) return false;
+  try {
+    const hb = JSON.parse(readFileSync(heartbeatFile, 'utf-8')) as { last_heartbeat?: string };
+    if (!hb.last_heartbeat) return false;
+    const ageHours = (Date.now() - Date.parse(hb.last_heartbeat)) / 3_600_000;
+    return ageHours < staleThresholdHours;
+  } catch {
+    return false;
+  }
+}
+
+function readEnabledAgents(ctxRoot: string): Record<string, { enabled?: boolean }> {
+  const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
+  if (!existsSync(enabledFile)) return {};
+  try {
+    return JSON.parse(readFileSync(enabledFile, 'utf-8')) as Record<string, { enabled?: boolean }>;
+  } catch {
+    return {};
+  }
+}
+
 function keywords(input: string): string[] {
   return Array.from(new Set(
     input
@@ -153,9 +193,27 @@ export function runGoalProgressProbe(
   const agentsDir = join(projectRoot, 'orgs', org, 'agents');
   const agents: GoalProbeAgentResult[] = [];
 
+  const enabledAgents = readEnabledAgents(paths.ctxRoot);
+
   if (existsSync(agentsDir)) {
     for (const entry of readdirSync(agentsDir, { withFileTypes: true }).filter(e => e.isDirectory())) {
-      const agentDir = join(agentsDir, entry.name);
+      const name = entry.name;
+
+      // Self-exclude: the calling agent is its own evidence source, skip to avoid false positives.
+      if (name === agentName) continue;
+
+      // Skip disabled agents — they are not expected to make progress.
+      const enabledEntry = enabledAgents[name];
+      if (enabledEntry && enabledEntry.enabled === false) continue;
+
+      // Skip agents whose config.json marks them disabled.
+      const agentConfig = readJson<{ enabled?: boolean }>(join(agentsDir, name, 'config.json'));
+      if (agentConfig && agentConfig.enabled === false) continue;
+
+      // Skip agents not currently running (heartbeat older than 2h).
+      if (!isAgentRunning(paths.ctxRoot, name)) continue;
+
+      const agentDir = join(agentsDir, name);
       const goals = readJson<AgentGoals>(join(agentDir, 'goals.json'));
       if (!goals || !(goals.focus || (goals.goals && goals.goals.length > 0))) continue;
       const terms = goalTerms(goals);
@@ -163,7 +221,7 @@ export function runGoalProgressProbe(
       const matchedTerms = terms.filter(term => memory.text.includes(term));
       const goalsAgeHours = hoursSince(goals.updated_at, nowMs);
       agents.push({
-        agent: entry.name,
+        agent: name,
         goalCount: goals.goals?.length || 0,
         goalsUpdatedAt: goals.updated_at || '',
         goalsAgeHours,
@@ -177,7 +235,13 @@ export function runGoalProgressProbe(
   }
 
   agents.sort((a, b) => a.agent.localeCompare(b.agent));
-  const stalledAgents = agents.filter(agent => agent.staleGoalsFile || !agent.mentioned);
+  // Only flag as stalled if no recent memory activity in the last 4h — avoids false positives
+  // for agents that are working but haven't yet updated their goals keywords.
+  const stalledAgents = agents.filter(
+    agent =>
+      (agent.staleGoalsFile || !agent.mentioned) &&
+      !hasRecentMemoryActivity(join(agentsDir, agent.agent), 4, nowMs),
+  );
   const result: GoalProgressProbeResult = {
     generatedAt,
     agentsChecked: agents.length,
