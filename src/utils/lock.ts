@@ -1,12 +1,20 @@
-import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
+import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
+
+/**
+ * Grace period (ms) after which an empty .lock.d/ (no pid file) is considered stale.
+ * When the lock dir exists but pid file is missing, we assume the holder is mid-acquire
+ * (lines 27-39 race window). However, if the dir is older than this grace period,
+ * treat it as stale and steal it. Env override: CTX_LOCK_GRACE_MS.
+ */
+const LOCK_GRACE_MS = parseInt(process.env['CTX_LOCK_GRACE_MS'] || '30000', 10);
 
 /**
  * Acquire a mutex lock using mkdir (atomic on all filesystems).
  * Matches the bash pattern: mkdir .lock.d with PID tracking.
  *
  * Returns true if lock acquired, false if another process holds it.
- * Automatically recovers stale locks (dead process).
+ * Automatically recovers stale locks (dead process or stale empty dir).
  */
 export function acquireLock(dir: string): boolean {
   const lockDir = join(dir, '.lock.d');
@@ -35,6 +43,27 @@ export function acquireLock(dir: string): boolean {
       storedPidRaw = readFileSync(pidFile, 'utf-8').trim();
     } catch {
       // PID file not yet written.  Holder is between mkdir and writeFileSync.
+      // However, if the lock dir itself is older than the grace period, treat
+      // it as stale (the holder crashed before finishing writeFileSync).
+      try {
+        const lockStat = statSync(lockDir);
+        const lockAgeMs = Date.now() - lockStat.mtimeMs;
+        if (lockAgeMs > LOCK_GRACE_MS) {
+          // Dir is stale — steal it
+          try {
+            rmSync(lockDir, { recursive: true, force: true });
+            mkdirSync(lockDir);
+            writeFileSync(pidFile, String(process.pid));
+            return true;
+          } catch {
+            // Another process beat us to the steal — let caller retry.
+            return false;
+          }
+        }
+      } catch {
+        // statSync failed — let caller retry
+      }
+      // Dir is fresh or stat failed — assume holder is mid-acquire.
       // Refuse the lock — the caller's retry loop will try again.
       return false;
     }
