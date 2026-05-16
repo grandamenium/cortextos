@@ -8,7 +8,130 @@ import { normalizeOrgName } from '../utils/org.js';
 /**
  * Knowledge base integration — calls mmrag.py directly (cross-platform,
  * no bash dependency).  Previously wrapped kb-*.sh bash scripts.
+ *
+ * gbrain fast-path: when /root/.gbrain/config.json exists (gbrain initialized),
+ * queryKnowledgeBase and ingestKnowledgeBase route through gbrain instead of
+ * mmrag.py.  Set GBRAIN_KB_BACKEND=false to force the legacy path.
  */
+
+const GBRAIN_CLI = '/usr/local/bin/gbrain';
+
+/**
+ * True when gbrain is installed, initialized, and not explicitly disabled.
+ * Checks binary + config file existence so cold machines without gbrain
+ * fall back to mmrag transparently.
+ */
+function gbrainAvailable(): boolean {
+  return (
+    existsSync(GBRAIN_CLI) &&
+    existsSync(join(homedir(), '.gbrain', 'config.json')) &&
+    process.env.GBRAIN_KB_BACKEND !== 'false'
+  );
+}
+
+/**
+ * Parse one line of `gbrain query` text output.
+ * Format: "[2.0000] slug -- first 100 chars of chunk_text"
+ */
+function parseGbrainLine(line: string): { slug: string; score: number } | null {
+  const m = line.match(/^\[([0-9.]+)\]\s+(\S+)/);
+  if (!m) return null;
+  return { score: parseFloat(m[1]), slug: m[2] };
+}
+
+/**
+ * Fetch the full page content for a gbrain slug.
+ * Returns null on error (e.g. slug not found).
+ */
+function gbrainGetPage(slug: string): string | null {
+  try {
+    return execFileSync(GBRAIN_CLI, ['get', slug], {
+      encoding: 'utf-8',
+      timeout: 10_000,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+  } catch {
+    return null;
+  }
+}
+
+function queryKnowledgeBaseViaGbrain(
+  question: string,
+  options: {
+    org: string;
+    agent?: string;
+    topK?: number;
+  },
+): KBQueryResponse {
+  const { org, agent, topK = 5 } = options;
+
+  let stdout: string;
+  try {
+    stdout = execFileSync(GBRAIN_CLI, ['query', question, '--limit', String(topK)], {
+      encoding: 'utf-8',
+      timeout: 30_000,
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+  } catch {
+    return { results: [], total: 0, query: question, collection: `gbrain-${org}` };
+  }
+
+  const entries = stdout
+    .split('\n')
+    .map(parseGbrainLine)
+    .filter((e): e is NonNullable<typeof e> => e !== null);
+
+  const results: KBQueryResult[] = [];
+  for (const entry of entries) {
+    const content = gbrainGetPage(entry.slug) ?? '';
+    if (!content) continue;
+    results.push({
+      content,
+      source_file: entry.slug,
+      org,
+      agent_name: agent,
+      score: entry.score,
+      doc_type: 'markdown',
+    });
+  }
+
+  return {
+    results,
+    total: results.length,
+    query: question,
+    collection: `gbrain-${org}`,
+  };
+}
+
+function ingestKnowledgeBaseViaGbrain(
+  paths: string[],
+  options: { org: string; agent?: string },
+): void {
+  for (const filePath of paths) {
+    // Derive slug from filename without extension
+    const slug = (filePath.split('/').pop() ?? filePath).replace(/\.md$/i, '');
+    let content: string;
+    try {
+      content = readFileSync(filePath, 'utf-8');
+    } catch {
+      console.warn(`[kb:gbrain] skipping ${filePath}: cannot read`);
+      continue;
+    }
+    try {
+      execFileSync(GBRAIN_CLI, ['put', slug], {
+        input: content,
+        encoding: 'utf-8',
+        timeout: 60_000,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      console.log(`  gbrain put → ${slug}`);
+    } catch (err) {
+      console.warn(
+        `[kb:gbrain] put failed for ${slug}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+}
 
 /**
  * Resolve the Python interpreter inside the knowledge-base venv,
@@ -129,12 +252,12 @@ export function queryKnowledgeBase(
   },
 ): KBQueryResponse {
   const { agent, scope = 'all', topK = 5, threshold = 0.5, frameworkRoot, instanceId } = options;
-  // Normalize once at the top so every downstream path join, env var, and
-  // ChromaDB collection name uses the canonical filesystem casing. Without
-  // this, `shared-acmecorp` and `shared-AcmeCorp` become two
-  // distinct ChromaDB collections and a case-drifted query silently hits
-  // the wrong one.
   const org = normalizeOrgName(frameworkRoot, options.org);
+
+  // gbrain fast-path — bypasses mmrag when gbrain is initialized.
+  if (gbrainAvailable()) {
+    return queryKnowledgeBaseViaGbrain(question, { org, agent, topK });
+  }
 
   const env = buildKBEnv(frameworkRoot, org, instanceId, agent);
 
@@ -253,8 +376,13 @@ export function ingestKnowledgeBase(
   },
 ): void {
   const { agent, scope = 'shared', force, frameworkRoot, instanceId } = options;
-  // Normalize once (see queryKnowledgeBase for rationale).
   const org = normalizeOrgName(frameworkRoot, options.org);
+
+  // gbrain fast-path
+  if (gbrainAvailable()) {
+    ingestKnowledgeBaseViaGbrain(paths, { org, agent });
+    return;
+  }
 
   const env = buildKBEnv(frameworkRoot, org, instanceId, agent);
 

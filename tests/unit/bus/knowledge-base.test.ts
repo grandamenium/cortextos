@@ -93,20 +93,34 @@ afterEach(() => {
  * Helper: make existsSync return false ONLY for paths that end with
  * knowledge-base/config.json (i.e. the MMRAG_CONFIG file), true for everything
  * else. Simulates a freshly-created agent with no KB configured yet.
+ * Also disables gbrain so tests stay on the legacy mmrag warning path.
  */
 function mockMissingKbConfig(): void {
   fsMocks.existsSync.mockImplementation((p: any) => {
     const path = String(p);
     if (path.endsWith('/knowledge-base/config.json')) return false;
+    if (path.endsWith('.gbrain/config.json')) return false;
     return true;
   });
 }
 
 /**
- * Helper: make existsSync return true for everything, simulating a fully
- * configured KB with config.json present on disk.
+ * Helper: make existsSync return true for everything EXCEPT the gbrain
+ * config file. Existing tests exercise the legacy mmrag path; gbrain
+ * tests use mockConfiguredKbWithGbrain() below.
  */
 function mockConfiguredKb(): void {
+  fsMocks.existsSync.mockImplementation((p: any) => {
+    if (String(p).endsWith('.gbrain/config.json')) return false;
+    return true;
+  });
+}
+
+/**
+ * Helper: make existsSync return true for everything including gbrain.
+ * Use for tests that exercise the gbrain fast-path.
+ */
+function mockConfiguredKbWithGbrain(): void {
   fsMocks.existsSync.mockImplementation(() => true);
 }
 
@@ -194,5 +208,50 @@ describe('kb warn messages — UX invariants', () => {
     const specificOrgWarns = warnLog.filter((m) => m.includes('SpecificOrg'));
     expect(specificOrgWarns.length).toBeGreaterThanOrEqual(2);
     expect(specificOrgWarns.every((m) => /run setup/i.test(m))).toBe(true);
+  });
+});
+
+describe('gbrain fast-path', () => {
+  it('query routes through gbrain when .gbrain/config.json exists', () => {
+    mockConfiguredKbWithGbrain();
+    // First execFileSync call = gbrain query (returns scored text output).
+    // Second call = gbrain get for the matched slug.
+    execFileSyncMock
+      .mockReturnValueOnce('[1.8000] my-page -- first 100 chars of content\n')
+      .mockReturnValueOnce('# My Page\nFull page content here.');
+
+    const result = queryKnowledgeBase(dummyPaths, 'test query', baseOptions);
+
+    expect(result.total).toBe(1);
+    expect(result.results[0].score).toBeCloseTo(1.8);
+    expect(result.results[0].source_file).toBe('my-page');
+    expect(result.results[0].content).toContain('Full page content');
+    expect(result.collection).toMatch(/gbrain/);
+  });
+
+  it('query returns empty results when gbrain execFileSync throws', () => {
+    mockConfiguredKbWithGbrain();
+    execFileSyncMock.mockImplementation(() => { throw new Error('gbrain unavailable'); });
+
+    const result = queryKnowledgeBase(dummyPaths, 'failing query', baseOptions);
+
+    expect(result.results).toHaveLength(0);
+    expect(result.total).toBe(0);
+  });
+
+  it('ingest calls gbrain put for each file', () => {
+    mockConfiguredKbWithGbrain();
+    fsMocks.readFileSync.mockReturnValue('# Page Content\nsome text');
+    execFileSyncMock.mockReturnValue('');
+
+    ingestKnowledgeBase(['/docs/my-doc.md', '/docs/other.md'], baseOptions);
+
+    // Two put calls — one per file. First arg = gbrain binary, second = ['put', slug].
+    const putCalls = execFileSyncMock.mock.calls.filter(
+      (call) => Array.isArray(call[1]) && call[1][0] === 'put',
+    );
+    expect(putCalls).toHaveLength(2);
+    expect(putCalls[0][1][1]).toBe('my-doc');
+    expect(putCalls[1][1][1]).toBe('other');
   });
 });
