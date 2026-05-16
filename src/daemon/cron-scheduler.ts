@@ -400,15 +400,25 @@ export class CronScheduler {
       // New or modified cron — compute fresh nextFireAt.
       // Base: take the most recent of crons.json.last_fired_at,
       // crons.json.last_fire_attempted_at (set pre-onFire to detect crash
-      // mid-fire — iter 11), and cron-state.json.last_fire (either may be
-      // more current depending on which write path recorded the fire).
-      // Fall back to now.
+      // mid-fire — iter 11), cron-state.json.last_fire (either may be
+      // more current depending on which write path recorded the fire),
+      // and crons.json.created_at (floor: prevents schedule drift on
+      // repeated daemon restarts before the first fire — without it,
+      // all-null timestamps fall back to now and push next_fire_at forward
+      // by the full interval on every restart).
+      // Fall back to now only for crons missing created_at (legacy entries).
       const stateFire = stateLastFireByName.get(def.name);
       const candidates: number[] = [];
       if (def.last_fired_at) candidates.push(new Date(def.last_fired_at).getTime());
       if (def.last_fire_attempted_at) candidates.push(new Date(def.last_fire_attempted_at).getTime());
       if (stateFire) candidates.push(new Date(stateFire).getTime());
-      const referenceMs = candidates.length > 0 ? Math.max(...candidates) : now;
+      // created_at is a floor used ONLY when no fire history exists: prevents
+      // schedule drift on repeated daemon restarts before the first fire.
+      // It must NOT enter the max() pool — doing so would suppress catch-up
+      // for crons with old last_fired_at but recent created_at.
+      const referenceMs = candidates.length > 0
+        ? Math.max(...candidates)
+        : (def.created_at ? new Date(def.created_at).getTime() : now);
 
       let nextFireAt = computeNextFireAt(def, referenceMs);
 
@@ -512,19 +522,17 @@ export class CronScheduler {
         // crash the tick loop — we log and keep the in-memory schedule intact.
         const nowIso = new Date(now).toISOString();
         const newFireCount = (cron.fire_count ?? 0) + 1;
-        if (!cron.fresh_session) {
-          try {
-            updateCron(this.agentName, name, {
-              last_fired_at: nowIso,
-              fire_count: newFireCount,
-            });
-          } catch (err) {
-            this.logger(
-              `[cron-scheduler] WARNING: failed to persist fire state for "${name}" — ` +
-              `${err instanceof Error ? err.message : String(err)}. ` +
-              `In-memory schedule retained; state will be lost if daemon restarts.`
-            );
-          }
+        try {
+          updateCron(this.agentName, name, {
+            last_fired_at: nowIso,
+            fire_count: newFireCount,
+          });
+        } catch (err) {
+          this.logger(
+            `[cron-scheduler] WARNING: failed to persist fire state for "${name}" — ` +
+            `${err instanceof Error ? err.message : String(err)}. ` +
+            `In-memory schedule retained; state will be lost if daemon restarts.`
+          );
         }
 
         // Advance in-memory nextFireAt for both PTY and fresh-session crons.
