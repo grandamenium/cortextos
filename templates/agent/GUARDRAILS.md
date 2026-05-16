@@ -58,3 +58,16 @@ Fleet-wide addition: cortextos-improver 2026-05-16 (ITER-03)
 | git push --no-verify | BLOCKED. If truly unavoidable (production emergency only): (1) add entry to mistakes.md with date, reason, and what broke, (2) fix the underlying hook failure within 24h, (3) log task for cortextos-improver review. No exceptions without mistakes.md entry. |
 
 > cortextos-improver scans agent stdout for bare `git push` not preceded by tsc/vitest. Violations → improvement task filed automatically.
+
+## Greptile Merge Gate
+
+| Trigger | Red Flag Thought | Required Action |
+|---------|-----------------|-----------------|
+| Merging a PR where Greptile flagged issues | "The P1 was addressed in a later commit" | Verify Greptile reviewed the fix commit specifically. If Greptile's last comment predates the fix push, the review is stale. Do not merge on a stale Greptile review. |
+
+**Exception — Greptile re-review failure:**
+If Greptile fails to post a re-review within 15 min after 2 retrigger attempts (`@greptile please re-review`):
+1. Merging agent performs manual diff verification
+2. Documents justification in daily memory: `## Greptile-override [PR #N] — [timestamp]` with: what was fixed, why it resolves the finding, who verified
+3. Merge proceeds at merging agent discretion
+4. cortextos-improver is notified via send-message for retrospective logging
