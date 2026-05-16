@@ -27,6 +27,7 @@ function createMockAgent(name = 'test-agent') {
     injectMessage: vi.fn().mockReturnValue(true),
     write: vi.fn(),
     sessionRefresh: vi.fn().mockResolvedValue(undefined),
+    getStatus: vi.fn().mockReturnValue({ status: 'running' }),
   } as any;
 }
 
