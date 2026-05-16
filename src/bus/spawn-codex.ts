@@ -34,8 +34,12 @@ export interface SpawnCodexOptions {
   agentsRoot?: string;
   /** Optional Telegram chat_id to send the artifact path after completion */
   telegramChatId?: string;
-  /** Optional Codex model override (e.g. "o4-mini") */
+  /** Optional model override — passed as --model (e.g. "o4-mini", "claude-sonnet-4-6") */
   model?: string;
+  /** Optional effort level — passed as --effort (e.g. "high", "medium", "low") */
+  effort?: string;
+  /** Optional MCP config file path — passed as --mcp-config */
+  mcpConfig?: string;
 }
 
 export interface SpawnCodexResult {
@@ -111,7 +115,15 @@ export function spawnCodex(
   const args: string[] = ['exec'];
 
   if (opts.model) {
-    args.push('-c', `model="${opts.model}"`);
+    args.push('--model', opts.model);
+  }
+
+  if (opts.effort) {
+    args.push('--effort', opts.effort);
+  }
+
+  if (opts.mcpConfig) {
+    args.push('--mcp-config', opts.mcpConfig);
   }
 
   // Allow full disk read access so Codex can read files in the workdir

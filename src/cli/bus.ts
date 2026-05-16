@@ -4418,7 +4418,9 @@ busCommand
   .option('--agent <name>', 'Agent name for output path (defaults to CTX_AGENT_NAME)')
   .option('--agents-root <path>', 'Root of the agents/ tree (defaults to CTX_AGENT_DIR/../..)')
   .option('--telegram <chat_id>', 'Send artifact path to this Telegram chat after completion')
-  .option('--model <model>', 'Codex model override (e.g. o4-mini)')
+  .option('--model <model>', 'Model override — passed as --model (e.g. o4-mini, claude-sonnet-4-6)')
+  .option('--effort <level>', 'Effort level — passed as --effort (e.g. high, medium, low)')
+  .option('--mcp-config <path>', 'MCP config file path — passed as --mcp-config')
   .action(async (
     promptFile: string,
     opts: {
@@ -4428,6 +4430,8 @@ busCommand
       agentsRoot?: string;
       telegram?: string;
       model?: string;
+      effort?: string;
+      mcpConfig?: string;
     },
   ) => {
     const env = resolveEnv();
@@ -4448,6 +4452,8 @@ busCommand
       agentsRoot,
       telegramChatId: opts.telegram,
       model: opts.model,
+      effort: opts.effort,
+      mcpConfig: opts.mcpConfig,
     });
 
     if (!result.ok) {
