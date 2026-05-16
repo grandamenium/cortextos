@@ -403,6 +403,22 @@ describe('bus update-cron', () => {
     expect(crons[0].description).toBe('New description.');
   });
 
+  it('updates metadata (--metadata)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await busCommand.parseAsync([
+      'node', 'bus', 'update-cron', TEST_AGENT, 'heartbeat',
+      '--metadata', '{"runner":"spawn-codex","prompt_file":"prompts/evening-review.md"}',
+    ]);
+
+    const crons = readCronsFile();
+    expect(crons[0].metadata).toEqual({
+      runner: 'spawn-codex',
+      prompt_file: 'prompts/evening-review.md',
+    });
+  });
+
   it('error: no options provided → exits 1', async () => {
     const exitSpy = mockExit();
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

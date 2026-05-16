@@ -343,8 +343,9 @@ export interface CronEntry {
  *   - Standard 5-field cron expression: `"0 8 * * *"`, `"0 0,6,12,18 * * *"` (every 6h)
  *     Evaluated by the daemon scheduler (Subtask 1.3).
  *
- * The daemon fires the cron by injecting `[CRON: {name}] {prompt}` into
- * the agent's PTY session.
+ * By default the daemon fires the cron by injecting `[CRON: {name}] {prompt}`
+ * into the agent's PTY session. Crons with metadata.runner = "spawn-codex"
+ * run a bounded Codex process instead and write an artifact + JSON sidecar.
  */
 export interface CronDefinition {
   // ------------------------------------------------------------------
@@ -452,7 +453,11 @@ export interface CronDefinition {
 
   /**
    * Arbitrary key-value pairs for agent-specific context.
-   * Not interpreted by the daemon; surfaced in dashboard + execution logs.
+   * Most metadata is only surfaced in dashboard + execution logs.
+   * Daemon-supported keys:
+   * - runner: "pty" | "spawn-codex"
+   * - prompt_file: org-relative prompt path for spawn-codex runner
+   * - workdir, agent, timeout_seconds, task_id, model, effort, mcp_config
    *
    * @example { "priority": "high", "source": "/loop" }
    */

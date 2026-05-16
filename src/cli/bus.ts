@@ -3438,12 +3438,13 @@ busCommand
   .option('--prompt <p>', 'New prompt text')
   .option('--enabled <bool>', 'Enable (true) or disable (false) the cron')
   .option('--desc <d>', 'New description')
-  .action(async (agent: string, name: string, opts: { interval?: string; cronExpr?: string; prompt?: string; enabled?: string; desc?: string }) => {
+  .option('--metadata <json>', 'Replace cron metadata with a JSON object')
+  .action(async (agent: string, name: string, opts: { interval?: string; cronExpr?: string; prompt?: string; enabled?: string; desc?: string; metadata?: string }) => {
     try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
 
     const rawSchedule = opts.interval ?? opts.cronExpr;
-    if (!rawSchedule && opts.prompt === undefined && opts.enabled === undefined && opts.desc === undefined) {
-      console.error('Error: at least one of --interval, --cron-expr, --prompt, --enabled, or --desc is required.');
+    if (!rawSchedule && opts.prompt === undefined && opts.enabled === undefined && opts.desc === undefined && opts.metadata === undefined) {
+      console.error('Error: at least one of --interval, --cron-expr, --prompt, --enabled, --desc, or --metadata is required.');
       process.exit(1);
     }
 
@@ -3464,6 +3465,18 @@ busCommand
     }
     if (opts.desc !== undefined) {
       patch.description = opts.desc;
+    }
+    if (opts.metadata !== undefined) {
+      try {
+        const parsed = JSON.parse(opts.metadata) as unknown;
+        if (parsed === null || Array.isArray(parsed) || typeof parsed !== 'object') {
+          throw new Error('metadata must be a JSON object');
+        }
+        patch.metadata = parsed as Record<string, unknown>;
+      } catch (err) {
+        console.error(`Error: invalid --metadata JSON: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
     }
 
     const ok = updateCronDef(agent, name, patch);

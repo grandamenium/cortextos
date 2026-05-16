@@ -5,6 +5,7 @@ import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
+import { dispatchCronFire } from './cron-fire-dispatch.js';
 import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
@@ -890,17 +891,12 @@ export class AgentManager {
     }
 
     const onFire = async (cron: CronDefinition): Promise<void> => {
-      const prompt = cron.prompt ?? `[cron] ${cron.name} fired`;
-      // Salt with the fire timestamp so MessageDedup (which hashes the last 100
-      // injects) does not reject identical cron prompts on subsequent fires.
-      // Without the salt, every recurring cron after its first fire would be
-      // dedup-rejected and treated as a dispatch failure.
-      const firedAt = new Date().toISOString();
-      const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
-      const injected = this.injectAgent(agentName, injection);
-      if (!injected) {
-        throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
-      }
+      dispatchCronFire(cron, {
+        agentName,
+        frameworkRoot: this.frameworkRoot,
+        org: this.resolveAgentOrg(agentName),
+        injectAgent: (targetAgent, message) => this.injectAgent(targetAgent, message),
+      });
     };
 
     const scheduler = new CronScheduler({
