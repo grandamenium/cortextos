@@ -1599,6 +1599,24 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         // Do not latch ctxHandoffFiredAt — allow Tier 2 to fire once the session is settled.
         return;
       }
+
+      // Cascade guard: if a handoff doc was written within the last 5 minutes, this session
+      // is still stabilising after a handoff cascade. Skip Tier 2 until the window passes so
+      // we don't inject the handoff prompt again into a session that is fresh from a handoff.
+      // Does not latch ctxHandoffFiredAt, so Tier 2 can still fire once the guard expires.
+      try {
+        const handoffsDir = join(this.agent.getAgentDir(), 'memory', 'handoffs');
+        if (existsSync(handoffsDir)) {
+          const fiveMinAgo = now - 5 * 60_000;
+          const recentDoc = readdirSync(handoffsDir)
+            .filter(f => f.startsWith('handoff-') && f.endsWith('.md'))
+            .some(f => statSync(join(handoffsDir, f)).mtimeMs >= fiveMinAgo);
+          if (recentDoc) {
+            this.log(`Cascade guard: recent handoff doc found — skipping Tier 2 at ${Math.round(effectivePct)}% (session age ${Math.round(sessionAge / 1000)}s)`);
+            return;
+          }
+        }
+      } catch { /* non-fatal — proceed to Tier 2 if guard check fails */ }
       this.ctxHandoffFiredAt = now;
       this.ctxHandoffDeadlineAt = now + 5 * 60_000; // 5min grace for agent to cooperate
       // Reset context_status.json so the new session doesn't re-trigger immediately

@@ -757,8 +757,13 @@ export class AgentProcess implements ManagedAgent {
     // HANDOFF UX: the pickup message MUST be the first action after reading the handoff doc —
     // before cron restoration, before heartbeat, before anything else. Placing this instruction
     // immediately after the handoffBlock in the prompt ensures it is not buried.
+    // Dedup guard: if a "back —" message was already sent within the last 30 minutes (i.e., a
+    // rapid cascade restart just happened), skip the send-telegram step to avoid a duplicate.
+    const recentBackSent = isHandoffRestart && this.checkRecentBackMessage();
     const handoffUxOverride = isHandoffRestart
-      ? ' HANDOFF UX: This is a context handoff restart — your memory is intact via the handoff doc. CRITICAL: After reading the handoff document, your VERY FIRST tool call MUST be a Bash call running: cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID \'back — [what you were just working on]\' — replace the brackets with one brief plain-English sentence about your current state. Do this BEFORE restoring crons, BEFORE running heartbeat, BEFORE any other tool call. No cron IDs, no status report, no cold-boot phrasing. Do NOT send "Booting up... one moment" (skip AGENTS.md step 1 entirely).'
+      ? recentBackSent
+        ? ' HANDOFF UX: This is a context handoff restart — your memory is intact via the handoff doc. A "back —" pickup message was already sent within the last 30 minutes — skip the send-telegram step entirely and resume work directly.'
+        : ' HANDOFF UX: This is a context handoff restart — your memory is intact via the handoff doc. CRITICAL: After reading the handoff document, your VERY FIRST tool call MUST be a Bash call running: cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID \'back — [what you were just working on]\' — replace the brackets with one brief plain-English sentence about your current state. Do this BEFORE restoring crons, BEFORE running heartbeat, BEFORE any other tool call. No cron IDs, no status report, no cold-boot phrasing. Do NOT send "Booting up... one moment" (skip AGENTS.md step 1 entirely).'
       : '';
     // SILENT AUTO-RESET UX: Tier 0 context auto-reset fires silently by design.
     // The agent should pick up work without any Telegram noise (no boot message,
@@ -862,6 +867,33 @@ export class AgentProcess implements ManagedAgent {
     } catch {
       return '';
     }
+  }
+
+  /**
+   * Check whether a "back —" Telegram pickup message was sent within the last
+   * 30 minutes. Used to suppress the handoff-boot send-telegram instruction on
+   * rapid cascade restarts where the previous session already sent the message.
+   */
+  private checkRecentBackMessage(): boolean {
+    const outboundPath = join(this.env.ctxRoot, 'logs', this.name, 'outbound-messages.jsonl');
+    if (!existsSync(outboundPath)) return false;
+    try {
+      const thirtyMinAgo = Date.now() - 30 * 60_000;
+      const raw = readFileSync(outboundPath, 'utf-8').trim();
+      if (!raw) return false;
+      const lines = raw.split('\n').filter(Boolean);
+      // Only scan the tail — "back —" messages live at the end
+      for (const line of lines.slice(-30)) {
+        try {
+          const entry = JSON.parse(line);
+          const ts = new Date(entry.timestamp || entry.archived_at || 0).getTime();
+          if (ts >= thirtyMinAgo && (entry.text || '').startsWith('back —')) {
+            return true;
+          }
+        } catch { /* skip malformed lines */ }
+      }
+    } catch { /* non-fatal — if unreadable, allow the message */ }
+    return false;
   }
 
   /**
