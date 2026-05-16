@@ -659,6 +659,29 @@ busCommand
   });
 
 busCommand
+  .command('compact-now')
+  .description('Trigger an immediate Tier 1.5 sidecar compaction for this agent (writes .compact-now marker picked up by the fast-checker)')
+  .option('--agent <name>', 'Target agent (defaults to $CTX_AGENT_NAME)')
+  .action(async (opts: { agent?: string }) => {
+    const { writeFileSync: fsWrite, mkdirSync: fsMkdir } = require('fs');
+    const { join: pjoin } = require('path');
+    const { randomUUID } = require('crypto');
+    const env = resolveEnv();
+    const targetAgent = opts.agent ?? env.agentName;
+    if (!targetAgent) {
+      console.error('ERROR: No agent specified and CTX_AGENT_NAME not set');
+      process.exit(1);
+    }
+    const paths = resolvePaths(targetAgent, env.instanceId, env.org);
+    fsMkdir(paths.stateDir, { recursive: true });
+    const requestId = randomUUID();
+    const markerPath = pjoin(paths.stateDir, `.compact-now-${requestId}`);
+    fsWrite(markerPath, new Date().toISOString(), 'utf-8');
+    console.log(`Compaction requested (id=${requestId}). Fast-checker will pick up within one poll cycle.`);
+    console.log(`Marker: ${markerPath}`);
+  });
+
+busCommand
   .command('auto-commit')
   .description('Stage safe files for commit (never pushes)')
   .option('--dry-run', 'Show what would be staged without modifying git')

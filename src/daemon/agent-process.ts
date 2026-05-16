@@ -375,6 +375,23 @@ export class AgentProcess {
   }
 
   /**
+   * Runtime identifier for the sidecar compactor's Claude-only gate.
+   * Absent/empty runtime = legacy Claude Code agent → normalize to 'claude-code'
+   * so the SIGSTOP snapshot gate doesn't silently skip them.
+   */
+  getRuntime(): string {
+    return this.config?.runtime?.trim() || 'claude-code';
+  }
+
+  /**
+   * PID of the PTY child process, or null when no PTY is alive.
+   * Used by `pauseForJsonlSnapshot` for SIGSTOP/SIGCONT.
+   */
+  getChildPid(): number | null {
+    return (this.pty as { getPid?: () => number | null } | null)?.getPid?.() ?? null;
+  }
+
+  /**
    * Build the exact runtime env used by spawned Claude sessions.
    */
   buildRuntimeEnv(): NodeJS.ProcessEnv {
