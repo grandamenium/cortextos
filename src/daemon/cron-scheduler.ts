@@ -512,19 +512,17 @@ export class CronScheduler {
         // crash the tick loop — we log and keep the in-memory schedule intact.
         const nowIso = new Date(now).toISOString();
         const newFireCount = (cron.fire_count ?? 0) + 1;
-        if (!cron.fresh_session) {
-          try {
-            updateCron(this.agentName, name, {
-              last_fired_at: nowIso,
-              fire_count: newFireCount,
-            });
-          } catch (err) {
-            this.logger(
-              `[cron-scheduler] WARNING: failed to persist fire state for "${name}" — ` +
-              `${err instanceof Error ? err.message : String(err)}. ` +
-              `In-memory schedule retained; state will be lost if daemon restarts.`
-            );
-          }
+        try {
+          updateCron(this.agentName, name, {
+            last_fired_at: nowIso,
+            fire_count: newFireCount,
+          });
+        } catch (err) {
+          this.logger(
+            `[cron-scheduler] WARNING: failed to persist fire state for "${name}" — ` +
+            `${err instanceof Error ? err.message : String(err)}. ` +
+            `In-memory schedule retained; state will be lost if daemon restarts.`
+          );
         }
 
         // Advance in-memory nextFireAt for both PTY and fresh-session crons.

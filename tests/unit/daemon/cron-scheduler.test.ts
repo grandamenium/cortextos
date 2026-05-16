@@ -287,7 +287,7 @@ describe('CronScheduler', () => {
     expect(fired).toHaveLength(1);
   });
 
-  it('fresh_session success skips scheduler last_fired_at/fire_count disk update', async () => {
+  it('fresh_session success persists last_fired_at/fire_count to disk (prevents schedule drift on restart)', async () => {
     mockReadCrons.mockReturnValue([makeCron({ schedule: '1m', fresh_session: true })]);
     scheduler.start();
 
@@ -298,7 +298,8 @@ describe('CronScheduler', () => {
       'test-cron',
       expect.objectContaining({ last_fire_attempted_at: expect.any(String) })
     );
-    expect(mockUpdateCron.mock.calls.some((call) => 'last_fired_at' in (call[2] as object))).toBe(false);
+    // fresh_session crons must persist last_fired_at so daemon restarts don't drift schedule forward
+    expect(mockUpdateCron.mock.calls.some((call) => 'last_fired_at' in (call[2] as object))).toBe(true);
   });
 
   it('PTY fires still write execution log through scheduler', async () => {
