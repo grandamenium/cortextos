@@ -65,7 +65,7 @@ function checkP1(command: string, agent: string): void {
 function checkP2(command: string, agent: string): void {
   // Strip heredoc content — everything from <<'MARKER' or <<MARKER onward.
   // This prevents "git push" in commit message bodies from triggering P2.
-  let skeleton = command.replace(/<<['"]?\w+['"]?[\s\S]*/g, '');
+  let skeleton = command.replace(/<<\s*['"]?\w+['"]?[\s\S]*/g, '');
 
   // Strip double-quoted and single-quoted strings so that "git push" appearing
   // inside --body "..." arguments or other quoted values is ignored.
@@ -123,7 +123,9 @@ async function main(): Promise<void> {
 
   // Strip heredoc content for all checks — prevents commit message bodies
   // containing policy-example text from triggering false-positives.
-  const skeleton = command.replace(/<<['"]?\w+['"]?[\s\S]*/g, '');
+  // Note: bash allows a space between << and the delimiter (e.g. << 'EOF'),
+  // so \s* is required to catch both `<<'EOF'` and `<< 'EOF'` forms.
+  const skeleton = command.replace(/<<\s*['"]?\w+['"]?[\s\S]*/g, '');
 
   checkP1(skeleton, agent);
   checkP2(command, agent); // checkP2 does its own heredoc strip internally
