@@ -266,6 +266,26 @@ describe('CronScheduler', () => {
     );
   });
 
+  it('created_at used as referenceMs floor when no fire history — prevents pre-first-fire schedule drift', () => {
+    // A cron created 2h ago with no last_fired_at / last_fire_attempted_at.
+    // Without created_at in candidates, each daemon restart would set
+    // referenceMs=now and push next_fire_at forward by the full interval.
+    // With created_at, referenceMs=created_at and next_fire_at is stable.
+    const createdAt = new Date(Date.now() - 2 * 60 * 60_000).toISOString(); // 2h ago
+    mockReadCrons.mockReturnValue([
+      makeCron({ schedule: '4h', created_at: createdAt }),
+    ]);
+    scheduler.start();
+
+    // After start, the cron should be scheduled ~2h from now (4h - 2h elapsed).
+    // If created_at was NOT used, nextFireAt would be now+4h (4h from now).
+    const scheduled = (scheduler as any).scheduled.get('test-cron');
+    const twoHoursMs = 2 * 60 * 60_000;
+    // nextFireAt should be closer to now+2h than now+4h
+    expect(scheduled.nextFireAt).toBeLessThan(Date.now() + twoHoursMs + 60_000);
+    expect(scheduled.nextFireAt).toBeGreaterThan(Date.now() + twoHoursMs - 60_000);
+  });
+
   // -------------------------------------------------------------------------
   // onFire failure + retry
   // -------------------------------------------------------------------------
