@@ -79,6 +79,36 @@ function renderReport(report: HeartbeatHealthReport): string {
   return lines.join('\n');
 }
 
+/**
+ * File-based fallback for when the daemon IPC is unresponsive.
+ * Infers which agents are running by reading heartbeat.json files directly.
+ * An agent is considered running if its status is "online" and its last_heartbeat
+ * is within staleMinutes of now.
+ */
+export function inferRunningFromHeartbeats(ctxRoot: string, staleMinutes = 30): Set<string> {
+  const running = new Set<string>();
+  const stateDir = join(ctxRoot, 'state');
+  if (!existsSync(stateDir)) return running;
+  const nowMs = Date.now();
+  for (const entry of readdirSync(stateDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const hbPath = join(stateDir, entry.name, 'heartbeat.json');
+    if (!existsSync(hbPath)) continue;
+    try {
+      const hb = JSON.parse(readFileSync(hbPath, 'utf-8')) as { status?: string; last_heartbeat?: string };
+      if (hb.status === 'online' && hb.last_heartbeat) {
+        const ageMs = nowMs - Date.parse(hb.last_heartbeat);
+        if (Number.isFinite(ageMs) && ageMs < staleMinutes * 60_000) {
+          running.add(entry.name);
+        }
+      }
+    } catch {
+      // Ignore unreadable heartbeat files
+    }
+  }
+  return running;
+}
+
 export function runHeartbeatHealthWatch(
   paths: BusPaths,
   agentName: string,

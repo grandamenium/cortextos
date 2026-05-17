@@ -13,7 +13,7 @@ import { pollWatchdog } from '../bus/watchdog.js';
 import { runPrStuckWatcher } from '../bus/pr-stuck-watcher.js';
 import { runDocDriftChecker } from '../bus/doc-drift-checker.js';
 import { runGoalProgressProbe } from '../bus/goal-progress-probe.js';
-import { runHeartbeatHealthWatch } from '../bus/heartbeat-health-watch.js';
+import { runHeartbeatHealthWatch, inferRunningFromHeartbeats } from '../bus/heartbeat-health-watch.js';
 import { runCustomerSurfaceQa } from '../bus/customer-surface-qa.js';
 import { runCodebaseScan } from '../bus/codebase-scan.js';
 import { computeUvd, writeUvdResult } from '../bus/compute-uvd.js';
@@ -1086,11 +1086,21 @@ busCommand
     const outputDir = join(projectRoot, 'orgs', env.org, 'agents', env.agentName, 'output');
     const ipc = new IPCClient(env.instanceId);
     const runningAgents = new Set<string>();
-    const status = await ipc.send({ type: 'status', source: 'heartbeat-health-watch' });
-    if (status.success && Array.isArray(status.data)) {
-      for (const item of status.data as Array<{ name?: string; status?: string }>) {
-        if (item.name && item.status === 'running') runningAgents.add(item.name);
+    try {
+      const status = await ipc.send({ type: 'status', source: 'heartbeat-health-watch' });
+      if (status.success && Array.isArray(status.data)) {
+        for (const item of status.data as Array<{ name?: string; status?: string }>) {
+          if (item.name && item.status === 'running') runningAgents.add(item.name);
+        }
+      } else {
+        // Daemon responded but returned an error — fall back to heartbeat files
+        for (const name of inferRunningFromHeartbeats(paths.ctxRoot)) runningAgents.add(name);
       }
+    } catch {
+      // IPC timed out or connection failed — daemon event loop may be frozen.
+      // Fall back to inferring running state from heartbeat.json files so the
+      // health-watch report remains useful even when the daemon is unresponsive.
+      for (const name of inferRunningFromHeartbeats(paths.ctxRoot)) runningAgents.add(name);
     }
 
     const threshold = Number(opts.thresholdMinutes ?? 90);
