@@ -1,6 +1,21 @@
 // cortextOS Node.js - Core Type Definitions
 // These types match the bash version's JSON formats exactly for backward compatibility
 
+// Task #66: typed bus contracts. Re-exported from `src/bus/contracts.ts` so
+// consumers can import message shapes from the canonical types module.
+export type {
+  BusContractKind,
+  BusContractMessage,
+  TaskMessage,
+  AckMessage,
+  StatusMessage,
+  QueryMessage,
+  ReplyMessage,
+  BroadcastMessage,
+  ErrorMessage,
+} from '../bus/contracts.js';
+import type { BusContractMessage as _BusContractMessage } from '../bus/contracts.js';
+
 export type Priority = 'urgent' | 'high' | 'normal' | 'low';
 
 export const PRIORITY_MAP: Record<Priority, number> = {
@@ -23,6 +38,14 @@ export interface InboxMessage {
   text: string;
   reply_to: string | null;
   sig?: string; // Security (H10): HMAC-SHA256 signature — optional for backwards compat
+  /**
+   * Task #66: typed contract attached by `checkInbox` when `text` parses as a
+   * valid `BusContractMessage` (after HMAC verification succeeds). Absent for
+   * legacy plain-text messages, malformed JSON, and broken contracts —
+   * consumers MUST treat the field as optional so plain-text traffic stays
+   * functional. See `src/bus/contracts.ts` for the parse rules.
+   */
+  contract?: _BusContractMessage;
 }
 
 // Task Types

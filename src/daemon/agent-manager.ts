@@ -7,6 +7,7 @@ import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
+import { loadAgentsManifest, type AgentsManifest, type AgentManifestEntry } from './agents-yaml.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -74,12 +75,33 @@ export class AgentManager {
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
+  /**
+   * Task #62: per-agent manifest loaded once at startup from
+   * `frameworkRoot/agents.yaml`. Null when the file is absent or unreadable —
+   * callers must treat absent manifest as "no opinion, preserve legacy
+   * behaviour" so this stays purely additive.
+   */
+  private agentsManifest: AgentsManifest | null;
 
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+    this.agentsManifest = loadAgentsManifest(frameworkRoot);
+    if (this.agentsManifest) {
+      const count = Object.keys(this.agentsManifest.agents).length;
+      console.log(`[agent-manager] Loaded agents.yaml manifest (${count} entr${count === 1 ? 'y' : 'ies'})`);
+    }
+  }
+
+  /**
+   * Look up a per-agent manifest entry from agents.yaml. Returns undefined
+   * when the manifest is absent OR when the agent isn't listed — both cases
+   * mean "no opinion, fall back to legacy behaviour".
+   */
+  private getManifestEntry(name: string): AgentManifestEntry | undefined {
+    return this.agentsManifest?.agents[name];
   }
 
   /**
@@ -237,6 +259,17 @@ export class AgentManager {
     // BUG-043 fix: resolve the agent's true org instead of using `this.org`.
     const resolvedOrg = this.resolveAgentOrg(name, org);
 
+    // Task #62: annotated start-log line when the manifest knows about this
+    // agent. Operators can `grep "[agent-manager] Starting agent"` and see
+    // role + host at a glance. Skipped silently when no manifest entry exists
+    // so legacy installs aren't spammed with "(role=undefined, host=undefined)".
+    const manifestEntry = this.getManifestEntry(name);
+    if (manifestEntry) {
+      const role = manifestEntry.role ?? 'unknown';
+      const host = manifestEntry.host ?? 'unknown';
+      console.log(`[agent-manager] Starting agent: ${name} (role=${role}, host=${host})`);
+    }
+
     // Auto-discover agent directory if not provided (e.g. when started via IPC)
     if (!agentDir || !existsSync(agentDir)) {
       const discovered = join(this.frameworkRoot, 'orgs', resolvedOrg, 'agents', name);
@@ -275,7 +308,18 @@ export class AgentManager {
     let allowedUserId: string | undefined;
     let botToken: string | undefined;
 
-    if (existsSync(agentEnvFile)) {
+    // Task #62: authoritative gate from agents.yaml. When the manifest
+    // explicitly says `telegram_enabled: false` (e.g. forge has no bot by
+    // design) we MUST NOT instantiate TelegramAPI, validate ALLOWED_USER,
+    // or spawn a poller — regardless of whether the .env happens to have
+    // a BOT_TOKEN. The leading "Telegram disabled by manifest" log replaces
+    // the per-restart 401/403 retry storm caused by an orphaned token.
+    const telegramDisabledByManifest = manifestEntry?.telegram_enabled === false;
+    if (telegramDisabledByManifest) {
+      log(`Telegram disabled by agents.yaml manifest — skipping poller setup`);
+    }
+
+    if (!telegramDisabledByManifest && existsSync(agentEnvFile)) {
       const envContent = readFileSync(agentEnvFile, 'utf-8');
       const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
       const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
