@@ -2928,16 +2928,41 @@ busCommand
 // (file path, agent name, deploy target, kb slug). holder_id is opaque —
 // typically a session_id so stop hooks can release-by-session.
 //
-// CLI shape (from Sam spec):
+// CLI shape (from Sam spec, BLOCK 1 rework 2026-05-17):
 //   spawn-claim acquire --artifact <key> --project <id> --task-class <name>
-//     --holder <id> [--ttl 90] [--reason <text>]      → JSON {acquired, lease}
+//     --holder <id> [--ttl 1800] [--reason <text>]    → JSON {acquired, lease}
 //   spawn-claim release <lease_id> --holder <id>      → true/false
-//   spawn-claim heartbeat <lease_id> --holder <id> [--ttl 90]
+//   spawn-claim heartbeat <lease_id> --holder <id> [--ttl 1800]
 //                                                     → JSON of refreshed lease
 //   spawn-claim release-session --holder <id>         → count released
 //   spawn-claim list [--project <id|null>] [--artifact <key>] [--task-class <c>]
 //                    [--holder <id>] [--state active|released|all]
 //   spawn-claim expire                                → purged count
+//
+// TTL contract: default 1800s (30 min), hard ceiling 3600s (60 min).
+// Matches direct-spawn rule G1 ("default 30 min, hard ceiling 60 min").
+
+// TTL contract — Direct-spawn rule G1: "default 30 min (1800s), hard ceiling
+// 60 min (3600s)." Exported so the same constants + parser can be unit-tested
+// without subprocess invocation (Sam HOLD BLOCK 1 2026-05-17).
+export const TTL_DEFAULT = 1800;       // 30 min (G1 default)
+export const TTL_HARD_CEILING = 3600;  // 60 min (G1 hard ceiling)
+
+export function parseTtl(raw: string | undefined, flag = '--ttl'): number {
+  const ttl = parseInt(raw ?? String(TTL_DEFAULT), 10);
+  if (!Number.isFinite(ttl) || ttl <= 0) {
+    console.error(`Invalid ${flag} '${raw}', must be a positive integer`);
+    process.exit(1);
+  }
+  if (ttl > TTL_HARD_CEILING) {
+    console.error(
+      `Invalid ${flag} '${raw}', exceeds hard ceiling ${TTL_HARD_CEILING}s ` +
+      `(60 min). Direct-spawn rule G1 caps lease TTL at 60 min.`,
+    );
+    process.exit(1);
+  }
+  return ttl;
+}
 
 const spawnClaimCommand = busCommand
   .command('spawn-claim')
@@ -2950,7 +2975,7 @@ spawnClaimCommand
   .requiredOption('--task-class <name>', 'Coarse classifier for telemetry (e.g. spawn, scrape, refactor)')
   .requiredOption('--holder <id>', 'Opaque caller-chosen id (typically session_id)')
   .option('--project <id>', 'Project scope (omit / "null" = unscoped/fleet-wide)')
-  .option('--ttl <seconds>', 'Lease TTL in seconds (default 90)', '90')
+  .option('--ttl <seconds>', `Lease TTL in seconds (default ${TTL_DEFAULT}, max ${TTL_HARD_CEILING})`, String(TTL_DEFAULT))
   .option('--reason <text>', 'Audit reason (free-form)')
   .action(async (opts: {
     artifact: string;
@@ -2962,11 +2987,7 @@ spawnClaimCommand
   }) => {
     const { acquireSpawnLease, closePgPool } = await import('../bus/spawn-claim.js');
     const projectId = opts.project === 'null' ? null : resolveProjectId(opts.project);
-    const ttl = parseInt(opts.ttl ?? '90', 10);
-    if (!Number.isFinite(ttl) || ttl <= 0) {
-      console.error(`Invalid --ttl '${opts.ttl}', must be a positive integer`);
-      process.exit(1);
-    }
+    const ttl = parseTtl(opts.ttl);
     try {
       const result = await acquireSpawnLease({
         projectId,
@@ -3015,18 +3036,14 @@ spawnClaimCommand
   .description('Slide expires_at forward on a held lease. Prints JSON of refreshed lease (null on loss).')
   .argument('<lease_id>', 'Surrogate id returned by acquire')
   .requiredOption('--holder <id>', 'Holder id')
-  .option('--ttl <seconds>', 'New TTL in seconds (default 90)', '90')
+  .option('--ttl <seconds>', `New TTL in seconds (default ${TTL_DEFAULT}, max ${TTL_HARD_CEILING})`, String(TTL_DEFAULT))
   .action(async (leaseIdRaw: string, opts: { holder: string; ttl?: string }) => {
     const leaseId = parseInt(leaseIdRaw, 10);
     if (!Number.isFinite(leaseId) || leaseId <= 0) {
       console.error(`Invalid lease_id '${leaseIdRaw}', must be a positive integer`);
       process.exit(1);
     }
-    const ttl = parseInt(opts.ttl ?? '90', 10);
-    if (!Number.isFinite(ttl) || ttl <= 0) {
-      console.error(`Invalid --ttl '${opts.ttl}', must be a positive integer`);
-      process.exit(1);
-    }
+    const ttl = parseTtl(opts.ttl);
     const { renewSpawnLease, closePgPool } = await import('../bus/spawn-claim.js');
     try {
       const lease = await renewSpawnLease(leaseId, opts.holder, ttl);

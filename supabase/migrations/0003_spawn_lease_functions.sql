@@ -33,7 +33,7 @@ create or replace function cortextos.acquire_spawn_lease(
   p_artifact_key text,
   p_task_class   text,
   p_holder_id    text,
-  p_ttl_seconds  integer default 90,
+  p_ttl_seconds  integer default 1800,
   p_reason       text default null
 )
 returns cortextos.spawn_leases
@@ -43,9 +43,14 @@ declare
   v_now timestamptz := clock_timestamp();
   v_row cortextos.spawn_leases;
 begin
-  -- Input validation.
+  -- Input validation. Reworked per Sam HOLD verdict 2026-05-17 on PR #474
+  -- BLOCK 1: enforce the G1 hard ceiling (60 min = 3600s) at the function
+  -- layer too. Belt-and-suspenders with the table CHECK constraint.
   if p_ttl_seconds is null or p_ttl_seconds <= 0 then
     raise exception 'ttl_seconds must be positive, got %', p_ttl_seconds;
+  end if;
+  if p_ttl_seconds > 3600 then
+    raise exception 'ttl_seconds exceeds hard ceiling (3600s = 60min), got %', p_ttl_seconds;
   end if;
   if p_artifact_key is null or length(p_artifact_key) = 0 then
     raise exception 'artifact_key must be non-empty';
@@ -130,7 +135,7 @@ $$;
 create or replace function cortextos.renew_spawn_lease(
   p_lease_id    bigint,
   p_holder_id   text,
-  p_ttl_seconds integer default 90
+  p_ttl_seconds integer default 1800
 )
 returns cortextos.spawn_leases
 language plpgsql
@@ -141,6 +146,9 @@ declare
 begin
   if p_ttl_seconds is null or p_ttl_seconds <= 0 then
     raise exception 'ttl_seconds must be positive, got %', p_ttl_seconds;
+  end if;
+  if p_ttl_seconds > 3600 then
+    raise exception 'ttl_seconds exceeds hard ceiling (3600s = 60min), got %', p_ttl_seconds;
   end if;
   if p_holder_id is null or length(p_holder_id) = 0 then
     raise exception 'holder_id must be non-empty';

@@ -169,7 +169,7 @@ export interface AcquireOpts {
 export async function acquireSpawnLease(opts: AcquireOpts): Promise<AcquireResult> {
   const {
     projectId, artifactKey, taskClass, holderId,
-    ttlSeconds = 90, reason = null,
+    ttlSeconds = 1800, reason = null,
   } = opts;
   const pool = getPgPool();
   const { rows } = await pool.query(
@@ -190,7 +190,7 @@ export async function acquireSpawnLease(opts: AcquireOpts): Promise<AcquireResul
 export async function renewSpawnLease(
   leaseId: number,
   holderId: string,
-  ttlSeconds = 90,
+  ttlSeconds = 1800,
 ): Promise<SpawnLease | null> {
   const pool = getPgPool();
   const { rows } = await pool.query(

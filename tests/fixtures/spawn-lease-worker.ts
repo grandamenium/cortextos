@@ -79,7 +79,15 @@ async function main(): Promise<void> {
   // count saturates the upstream pooler and acquires/releases fail with
   // generic connection errors. Capping per-worker keeps the test envelope
   // bounded.
-  const connStr = process.env.SUPABASE_GBRAIN_DATABASE_URL;
+  // Accept both env var names — parent gates on
+  // `SUPABASE_GBRAIN_DATABASE_URL || TEST_DATABASE_URL` (see
+  // daemon-spawn-lease-cross-process.test.ts:22-27). Without the second
+  // fallback here, a worker spawned in a TEST_DATABASE_URL-only environment
+  // would silently take the default getPgPool() path and ignore the test DB
+  // routing the parent set up. Surfaced by Sam HOLD verdict 2026-05-17.
+  const connStr =
+    process.env.SUPABASE_GBRAIN_DATABASE_URL ||
+    process.env.TEST_DATABASE_URL;
   if (connStr) {
     const insecure = process.env.PGSSL_NO_VERIFY === '1';
     // PGSSL_DISABLE=1 — vanilla pg in CI has no TLS at all; relaxed-cert

@@ -45,8 +45,13 @@ create table if not exists cortextos.spawn_leases (
   acquired_at   timestamptz not null default now(),
   expires_at    timestamptz not null,
 
-  -- TTL audit. Defaults to 90s (matches direct-spawn rule heartbeat cadence).
-  ttl_seconds   integer not null default 90 check (ttl_seconds > 0),
+  -- TTL audit. Defaults to 1800s (30min — matches direct-spawn rule G1
+  -- "default 30 min") with a hard ceiling of 3600s (60min — G1 hard ceiling).
+  -- Tightened per Sam HOLD verdict 2026-05-17 on PR #474 BLOCK 1: the original
+  -- 90s default + > 0 check (no upper bound) allowed both heartbeat-renew-
+  -- expiry races (90s < the 10-min renew cadence) AND multi-day adversarial
+  -- holds. New contract enforces the documented G1 range at the table layer.
+  ttl_seconds   integer not null default 1800 check (ttl_seconds > 0 and ttl_seconds <= 3600),
 
   -- Optional human-readable annotation. Not part of matching.
   reason        text,
