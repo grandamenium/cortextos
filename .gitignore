@@ -55,3 +55,4 @@ AGENTS.md
 dashboard/screenshots/
 dashboard/test-*.py
 .aider*
+.env.bak.*
