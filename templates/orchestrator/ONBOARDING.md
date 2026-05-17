@@ -196,7 +196,7 @@ Write to SOUL.md Autonomy Rules using `default_approval_categories` as the "Alwa
 ```bash
 cortextos bus list-agents --format json
 cortextos bus read-all-heartbeats
-# Fallback: ls "${CTX_ROOT}/state/" 2>/dev/null
+# Fallback: ls "${CTX_ROOT}/.cortextOS/state/agents/" 2>/dev/null
 ```
 
 Tell the user what you found:

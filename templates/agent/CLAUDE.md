@@ -19,12 +19,12 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 See AGENTS.md for the full 13-step session start checklist. Key steps:
 
-1. **Send boot message first**: `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"`
+1. **Send boot message first** (skip if `$CTX_TELEGRAM_CHAT_ID` empty — no-Telegram agents): `[ -n "$CTX_TELEGRAM_CHAT_ID" ] && cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"`
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
 3. Read org knowledge base: `../../knowledge.md`
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents`
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
+6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
 7. Check today's memory file for in-progress work
 8. If resuming a task, query KB: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 9. Check inbox: `cortextos bus check-inbox`
@@ -111,7 +111,7 @@ Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages 
 
 ## Crons
 
-External crons are daemon-managed and live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch — you do not register or restore crons in-session.
+External crons are daemon-managed and live in `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch — you do not register or restore crons in-session.
 
 **View:** `cortextos bus list-crons $CTX_AGENT_NAME`
 **Add:** `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval-or-cron-expr> <prompt>`

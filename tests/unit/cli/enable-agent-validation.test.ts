@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { discoverProjectRoot, readEnabledAgents } from '../../../src/cli/enable-agent';
+import { discoverProjectRoot, readEnabledAgents, readTelegramPollingFromConfig } from '../../../src/cli/enable-agent';
 
 describe('BUG-035 + BUG-013: enable-agent validation', () => {
   let tmpHome: string;
@@ -135,6 +135,60 @@ describe('BUG-035 + BUG-013: enable-agent validation', () => {
       const backups = readdirSync(join(tmpHome, '.cortextos', 'default', 'config'))
         .filter(f => f.startsWith('enabled-agents.json.broken-'));
       expect(backups.length).toBe(0);
+    });
+  });
+
+  describe('readTelegramPollingFromConfig (no-Telegram-agent enable gate)', () => {
+    let agentDir: string;
+    let configJsonPath: string;
+
+    beforeEach(() => {
+      agentDir = mkdtempSync(join(tmpdir(), 'cortextos-tp-'));
+      configJsonPath = join(agentDir, 'config.json');
+    });
+
+    afterEach(() => {
+      rmSync(agentDir, { recursive: true, force: true });
+    });
+
+    it('returns true when telegram_polling is explicitly true', () => {
+      writeFileSync(configJsonPath, JSON.stringify({ agent_name: 'a', telegram_polling: true }));
+      expect(readTelegramPollingFromConfig(configJsonPath)).toBe(true);
+    });
+
+    it('returns false when telegram_polling is explicitly false', () => {
+      writeFileSync(configJsonPath, JSON.stringify({ agent_name: 'a', telegram_polling: false }));
+      expect(readTelegramPollingFromConfig(configJsonPath)).toBe(false);
+    });
+
+    it('returns false when telegram_polling field is absent (permissive default)', () => {
+      writeFileSync(configJsonPath, JSON.stringify({ agent_name: 'a' }));
+      expect(readTelegramPollingFromConfig(configJsonPath)).toBe(false);
+    });
+
+    it('returns false when config.json file is missing entirely', () => {
+      expect(readTelegramPollingFromConfig(join(agentDir, 'nonexistent.json'))).toBe(false);
+    });
+
+    it('returns false on unparseable JSON (graceful fallback)', () => {
+      writeFileSync(configJsonPath, '{ this is not valid json');
+      expect(readTelegramPollingFromConfig(configJsonPath)).toBe(false);
+    });
+
+    it('returns false when telegram_polling is a non-boolean truthy value (strict equality)', () => {
+      // Defensive: accept ONLY === true, not 1 / "true" / "yes" / etc.
+      writeFileSync(configJsonPath, JSON.stringify({ telegram_polling: 'true' }));
+      expect(readTelegramPollingFromConfig(configJsonPath)).toBe(false);
+    });
+
+    it('returns false when parsed value is null', () => {
+      writeFileSync(configJsonPath, 'null');
+      expect(readTelegramPollingFromConfig(configJsonPath)).toBe(false);
+    });
+
+    it('returns false when parsed value is an array (wrong shape)', () => {
+      writeFileSync(configJsonPath, '["not", "an", "object"]');
+      expect(readTelegramPollingFromConfig(configJsonPath)).toBe(false);
     });
   });
 });

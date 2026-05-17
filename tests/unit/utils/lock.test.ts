@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { acquireLock, releaseLock } from '../../../src/utils/lock';
@@ -34,6 +34,40 @@ describe('mkdir-based locking', () => {
     expect(acquireLock(testDir)).toBe(true);
     releaseLock(testDir);
     expect(acquireLock(testDir)).toBe(true);
+    releaseLock(testDir);
+  });
+
+  it('recovers stale empty .lock.d/ after grace period', () => {
+    // Create empty .lock.d/ with old mtime (>30s old)
+    const lockDir = join(testDir, '.lock.d');
+    mkdirSync(lockDir);
+    const oldTime = Date.now() - 31000; // 31s ago
+    utimesSync(lockDir, oldTime / 1000, oldTime / 1000);
+
+    // Should steal the stale lock
+    expect(acquireLock(testDir)).toBe(true);
+    releaseLock(testDir);
+  });
+
+  it('does not steal fresh empty .lock.d/ within grace period', () => {
+    // Create empty .lock.d/ with recent mtime (<5s old)
+    const lockDir = join(testDir, '.lock.d');
+    mkdirSync(lockDir);
+    const recentTime = Date.now() - 5000; // 5s ago
+    utimesSync(lockDir, recentTime / 1000, recentTime / 1000);
+
+    // Should refuse the lock (assume mid-acquire)
+    expect(acquireLock(testDir)).toBe(false);
+    releaseLock(testDir);
+  });
+
+  it('still blocks when process holds lock with valid pid', () => {
+    // Acquire lock first
+    expect(acquireLock(testDir)).toBe(true);
+
+    // Try to acquire again (same process)
+    expect(acquireLock(testDir)).toBe(false);
+
     releaseLock(testDir);
   });
 });

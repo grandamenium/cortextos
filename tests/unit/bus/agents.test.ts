@@ -148,8 +148,12 @@ describe('Agent Discovery', () => {
 
       const frameworkRoot = join(testDir, 'framework');
       process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
-      mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
-      mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob'), { recursive: true });
+      const aliceDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+      const bobDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'bob');
+      mkdirSync(aliceDir, { recursive: true });
+      mkdirSync(bobDir, { recursive: true });
+      writeFileSync(join(aliceDir, 'config.json'), '{}');
+      writeFileSync(join(bobDir, 'config.json'), '{}');
 
       const agents = listAgents(ctxRoot);
       expect(agents.map(a => a.name).sort()).toEqual(['alice', 'bob']);
@@ -167,12 +171,35 @@ describe('Agent Discovery', () => {
 
       const frameworkRoot = join(testDir, 'framework');
       process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
-      mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+      const aliceDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+      mkdirSync(aliceDir, { recursive: true });
+      writeFileSync(join(aliceDir, 'config.json'), '{}');
 
       const agents = listAgents(ctxRoot);
       expect(agents.length).toBe(1);
       expect(agents[0].name).toBe('alice');
       expect(agents[0].enabled).toBe(false);
+    });
+
+    // Regression: subdirs that live next to real agents but aren't agents
+    // themselves (no IDENTITY.md, no config.json) must not surface in list-agents.
+    // Triggered by graphify-out in orgs/subbu-ops/agents/ being reported as
+    // enabled=true with 0 agent files. security-vp dispatch 1778783029517.
+    it('ignores agent-dir entries without IDENTITY.md or config.json', () => {
+      const frameworkRoot = join(testDir, 'framework');
+      process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
+
+      const realDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+      mkdirSync(realDir, { recursive: true });
+      writeFileSync(join(realDir, 'IDENTITY.md'), '# Alice\n');
+
+      // Scratch / output dir living alongside real agents — must be skipped.
+      mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'graphify-out'), {
+        recursive: true,
+      });
+
+      const agents = listAgents(ctxRoot);
+      expect(agents.map(a => a.name).sort()).toEqual(['alice']);
     });
   });
 

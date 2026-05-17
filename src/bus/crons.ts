@@ -14,9 +14,9 @@
  * Write always goes through atomicWriteSync (mkdir + tmp rename).
  */
 
-import { existsSync, readFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
-import type { CronDefinition, CronExecutionLogEntry } from '../types/index.js';
+import type { CronDefinition, CronEntry, CronExecutionLogEntry } from '../types/index.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME, cronExecutionLogPathFor } from './crons-schema.js';
 import { atomicWriteSync } from '../utils/atomic.js';
 import { withFileLockSync } from '../utils/lock.js';
@@ -58,6 +58,128 @@ function lockDirFor(agentName: string): string {
   const dir = dirname(cronsFilePath(agentName));
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+// ---------------------------------------------------------------------------
+// Config.json auto-sync helpers (best-effort mirror of runtime → declarative)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the absolute path to an agent's config.json under
+ * CTX_FRAMEWORK_ROOT/orgs/<org>/agents/<agent>/config.json.
+ *
+ * Strategy:
+ *   1. Scan orgs/ dirs under CTX_FRAMEWORK_ROOT looking for the agent dir.
+ *   2. Fall back to reading org from CTX_ROOT/config/enabled-agents.json.
+ *
+ * Returns null when the path cannot be determined.
+ */
+function resolveConfigJsonPath(agentName: string): string | null {
+  const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+  if (frameworkRoot) {
+    const orgsDir = join(frameworkRoot, 'orgs');
+    if (existsSync(orgsDir)) {
+      let orgDirs: string[];
+      try {
+        orgDirs = readdirSync(orgsDir);
+      } catch {
+        orgDirs = [];
+      }
+      for (const org of orgDirs) {
+        const candidate = join(frameworkRoot, 'orgs', org, 'agents', agentName, 'config.json');
+        if (existsSync(candidate)) {
+          return candidate;
+        }
+      }
+      // Not found by directory scan — try enabled-agents.json for org hint.
+      const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+      const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
+      if (existsSync(enabledFile)) {
+        try {
+          const entries = JSON.parse(readFileSync(enabledFile, 'utf-8')) as Record<
+            string,
+            { org?: string }
+          >;
+          const org = entries[agentName]?.org;
+          if (org) {
+            const candidate = join(frameworkRoot, 'orgs', org, 'agents', agentName, 'config.json');
+            return candidate; // Return even if missing — caller handles absent file gracefully.
+          }
+        } catch {
+          // Unparseable enabled-agents.json — fall through to null.
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Transform a runtime CronDefinition into the config.json CronEntry shape.
+ *
+ * Transform rules:
+ *   - schedule → interval (rename)
+ *   - type: metadata.original_type if present, else "recurring"
+ *   - name, prompt: copied verbatim
+ *   - All runtime-only fields dropped (enabled, created_at, metadata, fire_count, etc.)
+ */
+function cronDefToConfigEntry(cron: CronDefinition): CronEntry {
+  const type =
+    typeof cron.metadata?.original_type === 'string'
+      ? (cron.metadata.original_type as CronEntry['type'])
+      : 'recurring';
+  return {
+    name: cron.name,
+    type,
+    interval: cron.schedule,
+    prompt: cron.prompt,
+  };
+}
+
+/**
+ * Best-effort write-back of the runtime crons array to the agent's config.json.
+ *
+ * Never throws. On any failure (missing file, parse error, write error) emits a
+ * warning to stderr and returns so the caller's runtime mutation is unaffected.
+ */
+function syncConfigJson(agentName: string, crons: CronDefinition[]): void {
+  const configPath = resolveConfigJsonPath(agentName);
+  if (configPath === null) {
+    // No CTX_FRAMEWORK_ROOT set or org not discoverable — skip silently.
+    return;
+  }
+
+  if (!existsSync(configPath)) {
+    process.stderr.write(
+      `[crons] WARNING: config.json sync failed for agent "${agentName}" — file not found at ${configPath}\n`
+    );
+    return;
+  }
+
+  let existing: Record<string, unknown>;
+  try {
+    existing = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+  } catch (err) {
+    process.stderr.write(
+      `[crons] WARNING: config.json sync failed for agent "${agentName}" — ` +
+        `parse error: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+    return;
+  }
+
+  const updated: Record<string, unknown> = {
+    ...existing,
+    crons: crons.map(cronDefToConfigEntry),
+  };
+
+  try {
+    atomicWriteSync(configPath, JSON.stringify(updated, null, 2), /* keepBak= */ true);
+  } catch (err) {
+    process.stderr.write(
+      `[crons] WARNING: config.json sync failed for agent "${agentName}" — ` +
+        `write error: ${err instanceof Error ? err.message : String(err)}\n`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +337,9 @@ export function addCron(agentName: string, cron: CronDefinition): void {
     if (collision !== undefined) {
       throw new Error(`cron "${cron.name}" already exists for agent "${agentName}"`);
     }
-    writeCrons(agentName, [...existing, cron]);
+    const updated = [...existing, cron];
+    writeCrons(agentName, updated);
+    syncConfigJson(agentName, updated);
   });
 }
 
@@ -234,6 +358,7 @@ export function removeCron(agentName: string, name: string): boolean {
     }
     const updated = [...existing.slice(0, idx), ...existing.slice(idx + 1)];
     writeCrons(agentName, updated);
+    syncConfigJson(agentName, updated);
     return true;
   });
 }
@@ -262,6 +387,7 @@ export function updateCron(
       i === idx ? { ...c, ...patch, name: c.name } : c
     );
     writeCrons(agentName, updated);
+    syncConfigJson(agentName, updated);
     return true;
   });
 }

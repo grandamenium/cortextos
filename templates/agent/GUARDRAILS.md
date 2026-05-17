@@ -34,7 +34,16 @@ For the complete red flag table (15 patterns), see `.claude/skills/guardrails-re
    ```bash
    cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which one>","context":"<what happened>"}'
    ```
-4. **When you discover a new pattern**: Add a new row to the table in `.claude/skills/guardrails-reference/SKILL.md`. The file improves over time.
+4. **After every guardrail trigger (Hermes protocol #4)**: file a postmortem in the same session so the lesson lands.
+   ```bash
+   cortextos bus postmortem \
+     --mistake "<what you did or almost did>" \
+     --root-cause "<the assumption that turned out wrong>" \
+     --prevention "<concrete check that would have caught it>" \
+     [--related-event <event_id>]
+   ```
+   Full guidance: `.claude/skills/error-postmortem/SKILL.md`.
+5. **When you discover a new pattern**: Add a new row to the table in `.claude/skills/guardrails-reference/SKILL.md`. The file improves over time.
 
 ---
 

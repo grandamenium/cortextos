@@ -346,3 +346,53 @@ describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
     expect(refreshSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('AgentProcess - fix #4: silent-drop visibility', () => {
+  // These tests verify log output from injectMessage's two silent-drop paths.
+  // The execFile call in emitDropEvent is fire-and-forget; we verify the log
+  // text (the human-visible observable) rather than the exec call itself,
+  // since child_process can't be spied on as ESM namespace in this test file.
+
+  it('injectMessage returns false and logs drop with reason when status is not running', () => {
+    const logLines: string[] = [];
+    const ap = new AgentProcess('alice', mockEnv, {}, (msg) => logLines.push(msg));
+    // Status is 'stopped' (never started) — pty is null
+    const result = ap.injectMessage('hello world');
+
+    expect(result).toBe(false);
+    // Must log the drop with category and reason
+    expect(logLines.some(l => l.includes('[drop]') && l.includes('agent_message_dropped'))).toBe(true);
+    expect(logLines.some(l => l.includes('status_not_running') || l.includes('status='))).toBe(true);
+  });
+
+  it('injectMessage returns false and logs drop for duplicate content', async () => {
+    const logLines: string[] = [];
+    const ap = new AgentProcess('alice', mockEnv, {}, (msg) => logLines.push(msg));
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // Override the private dedup instance to simulate a hash collision.
+    (ap as any).dedup = { isDuplicate: () => true };
+
+    const result = ap.injectMessage('duplicate content');
+
+    expect(result).toBe(false);
+    expect(logLines.some(l => l.includes('[drop]') && l.includes('duplicate'))).toBe(true);
+  });
+
+  it('drop counter increments on successive status-not-running drops', () => {
+    const logLines: string[] = [];
+    const ap = new AgentProcess('alice', mockEnv, {}, (msg) => logLines.push(msg));
+    // Not started — every injectMessage hits the status-not-running path
+
+    ap.injectMessage('msg1');
+    ap.injectMessage('msg2');
+    ap.injectMessage('msg3');
+
+    const dropLines = logLines.filter(l => l.includes('[drop]'));
+    expect(dropLines.length).toBe(3);
+    expect(dropLines[0]).toContain('#1');
+    expect(dropLines[1]).toContain('#2');
+    expect(dropLines[2]).toContain('#3');
+  });
+});

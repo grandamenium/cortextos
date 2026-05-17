@@ -21,16 +21,18 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 Complete the following in order. Do not skip steps.
 
-1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
+1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot), AND SKIP if `$CTX_TELEGRAM_CHAT_ID` is empty (no-Telegram agents):
    ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"
+   if [ -n "$CTX_TELEGRAM_CHAT_ID" ]; then
+     cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"
+   fi
    ```
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
    - TOOLS.md is a compact command index — load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
+6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
 7. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
 8. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 9. Check inbox: `cortextos bus check-inbox`
@@ -278,7 +280,7 @@ This is the knowledge you have synthesised over time. Not a log — a living doc
 
 Also update GUARDRAILS.md when you identify a pattern of behaviour that should be explicitly prohibited or corrected — not just for yourself but as a guardrail for future sessions.
 
-Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `memory-{agent}` KB collection so it is semantically searchable.
+Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `agent-{name}` KB collection so it is semantically searchable.
 
 ### Layer 3: Knowledge Base — Associative Memory (RAG/ChromaDB)
 
@@ -288,15 +290,15 @@ The knowledge base is a semantic vector store (ChromaDB, Gemini Embedding 2). Th
 
 | Collection | Scope | What goes in | How managed |
 |---|---|---|---|
-| `memory-{agent}` | Private | MEMORY.md + daily memory files | **Auto** — re-indexed on every heartbeat |
+| `agent-{name}` | Private | MEMORY.md + daily memory files | **Auto** — re-indexed on every heartbeat |
 | `private-{agent}` | Private | Your outputs, research docs, workspace files | **Agent-managed** — ingest when you produce something worth keeping |
 | `shared-{org}` | Org-wide | Research findings, reports, org knowledge | **Agent-managed** — ingest when the whole org benefits |
 
-**memory-{agent} is automatic.** On every heartbeat cycle, re-ingest your memory files so they stay current and searchable:
+**agent-{name} is automatic.** On every heartbeat cycle, re-ingest your memory files so they stay current and searchable:
 ```bash
 # Run on every heartbeat
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection agent-$CTX_AGENT_NAME --force
 ```
 
 **When to query — before starting any task:**
@@ -304,7 +306,7 @@ cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
 - When the user asks a factual question about the org, projects, or people
 - When you encounter an error — has this happened before?
 - When referencing named entities (clients, projects, systems)
-- To recall your own past work: query `memory-{agent}` or `private-{agent}` specifically
+- To recall your own past work: query `agent-{name}` or `private-{agent}` specifically
 
 **When to ingest private-{agent} and shared-{org} — your judgment:**
 - After completing a task with a notable output → `private-{agent}`
@@ -318,7 +320,7 @@ cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
 cortextos bus kb-query "your question" --org $CTX_ORG --agent $CTX_AGENT_NAME
 
 # Query only your memory (past experiences, patterns)
-cortextos bus kb-query "question" --org $CTX_ORG --collection memory-$CTX_AGENT_NAME
+cortextos bus kb-query "question" --org $CTX_ORG --collection agent-$CTX_AGENT_NAME
 
 # Ingest output to your private collection
 cortextos bus kb-ingest /path/to/output --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private
@@ -402,7 +404,7 @@ Always include `msg_id` as reply_to — this auto-ACKs the original. Un-ACK'd me
 
 ## Crons
 
-Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
+Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
 
 **View scheduled crons:**
 ```bash
@@ -423,7 +425,7 @@ For full CRUD protocol, see `.claude/skills/cron-management/SKILL.md`.
 
 ### The Model
 
-Persistent crons live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon owns this file — it reads it on every agent start, schedules each entry, and fires them by injecting prompts directly into your PTY session. Retry logic: 1s, 4s, 16s on injection failure. Execution is logged to `${CTX_ROOT}/state/${CTX_AGENT_NAME}/cron-execution.log`.
+Persistent crons live in `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json`. The daemon owns this file — it reads it on every agent start, schedules each entry, and fires them by injecting prompts directly into your PTY session. Retry logic: 1s, 4s, 16s on injection failure. Execution is logged to `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/cron-execution.log`.
 
 Key properties:
 
@@ -445,7 +447,7 @@ For ANY work that should survive restarts — heartbeats, nightly metrics, ecosy
 
 ### Migration from config.json
 
-Automatic. On agent boot, the daemon migrates `config.json` crons to `crons.json` once. A marker file `${CTX_ROOT}/state/${CTX_AGENT_NAME}/.crons-migrated` prevents re-runs. The source `config.json` is left untouched — non-destructive.
+Automatic. On agent boot, the daemon migrates `config.json` crons to `crons.json` once. A marker file `${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/.crons-migrated` prevents re-runs. The source `config.json` is left untouched — non-destructive.
 
 You do not need to do anything. If you want to verify: check that `.crons-migrated` exists and `crons.json` is populated.
 
@@ -482,10 +484,10 @@ cortextos bus list-crons $CTX_AGENT_NAME
 cortextos bus get-cron-log $CTX_AGENT_NAME
 
 # Confirm migration ran
-ls "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.crons-migrated"
+ls "${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/.crons-migrated"
 
 # Inspect crons.json directly
-cat "${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json"
+cat "${CTX_ROOT}/.cortextOS/state/agents/${CTX_AGENT_NAME}/crons.json"
 ```
 
 For full CRUD (update, pause, resume, delete), see `.claude/skills/cron-management/SKILL.md`.

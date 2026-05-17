@@ -75,7 +75,7 @@ Then continue from Part 2.
 ```bash
 cortextos bus read-all-heartbeats --format text
 # Fallback if no heartbeats yet:
-ls "${CTX_ROOT}/state/" 2>/dev/null
+ls "${CTX_ROOT}/.cortextOS/state/agents/" 2>/dev/null
 ```
 
 List all agents you find and ask:
@@ -590,7 +590,7 @@ If yes, signal the orchestrator:
 ```bash
 ORCH_NAME=$(jq -r '.orchestrator // empty' "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/context.json" 2>/dev/null)
 if [ -z "$ORCH_NAME" ]; then
-  ORCH_NAME=$(ls "${CTX_ROOT}/state/" 2>/dev/null | head -1)
+  ORCH_NAME=$(ls "${CTX_ROOT}/.cortextOS/state/agents/" 2>/dev/null | head -1)
 fi
 if [ -n "$ORCH_NAME" ]; then
   cortextos bus send-message "${ORCH_NAME}" normal "Analyst onboarding complete. User wants to create specialist agents: [list]. Please run specialist creation flow now."

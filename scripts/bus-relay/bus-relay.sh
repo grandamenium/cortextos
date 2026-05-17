@@ -27,49 +27,28 @@ MB_INBOX_REMOTE='$HOME/.cortextos/default/inbox'
 # (the abandoned ~/.cortextos/macbook/ tree on MacBook is orphaned cruft, not used)
 LOG_FILE="$HOME/.cortextos/default/logs/bus-relay.log"
 
-# Agents on each side — AUTO-DISCOVERED from each side's enabled-agents.json
-# (security-vp consolidated dispatch 1778611025719 D2, addressed 2026-05-12T19:00Z).
-# Replaces the prior hardcoded lists which silently dropped new agents at relay
-# scope (same Layer-3 pattern as framework-relay M-sam-6).
+# Agents on each side — HARDCODED host registry per actual deployment.
 #
-# MM_AGENTS = keys of Mac mini's enabled-agents.json (agents Mac-mini-side will
-#             receive bus messages forwarded FROM MacBook)
-# MB_AGENTS = keys of MacBook's enabled-agents.json (agents MacBook-side will
-#             receive bus messages forwarded FROM Mac mini)
+# REVERTED 2026-05-15 by analyst (Hari directive): the auto-discovery from
+# enabled-agents.json (security-vp dispatch 1778611025719 D2, 2026-05-12T19:00Z)
+# was BROKEN. enabled-agents.json on both sides lists ALL known agents (it is
+# a registry, not a "hosted here" marker), so sam (MacBook-hosted) was in both
+# MM_AGENTS and MB_AGENTS. Result: messages addressed to sam ping-ponged every
+# 30 seconds between Mac mini and MacBook (PULL sam pulled sam's inbox AWAY
+# from MacBook, then PUSH sam pushed it back, then PULL again, etc.). Sam had
+# unreliable read access to his own inbox.
 #
-# Includes ALL scaffolded agents (enabled=true AND enabled=false) so bus
-# messages addressed to a not-yet-enabled agent are correctly queued for when
-# it comes online, rather than silently dropped.
+# Correct semantic: MM_AGENTS = agents whose RUNTIME HOME is Mac mini, MB_AGENTS =
+# agents whose RUNTIME HOME is MacBook. PULL direction (MacBook→MacMini) only
+# fires for MM_AGENTS so their messages from MacBook side get pulled HOME.
+# PUSH direction (MacMini→MacBook) only fires for MB_AGENTS so their messages
+# from Mac mini side get pushed HOME. No agent in both lists.
+#
+# When adding a new agent: edit this file AND restart the launchd job (or wait
+# for next 30s cycle). Each agent's host is known at scaffold time.
 
-MM_ENABLED_JSON="$HOME/.cortextos/default/config/enabled-agents.json"
-MB_ENABLED_JSON_REMOTE="/Users/hari/.cortextos/default/config/enabled-agents.json"
-SSH_DISCOVER="ssh -F $HOME/.ssh/config_macbook -o ConnectTimeout=3 -o LogLevel=ERROR macbook-m4"
-
-# Discover Mac mini agents
-MM_AGENTS=()
-if [ -f "$MM_ENABLED_JSON" ]; then
-  while IFS= read -r _line; do
-    [ -n "$_line" ] && MM_AGENTS+=("$_line")
-  done < <(python3 -c "
-import json
-print('\n'.join(json.load(open('$MM_ENABLED_JSON')).keys()))
-" 2>/dev/null)
-fi
-
-# Discover MacBook agents via SSH
-MB_AGENTS=()
-while IFS= read -r _line; do
-  [ -n "$_line" ] && MB_AGENTS+=("$_line")
-done < <($SSH_DISCOVER "python3 -c 'import json; print(\"\\n\".join(json.load(open(\"$MB_ENABLED_JSON_REMOTE\")).keys()))'" 2>/dev/null)
-
-# Sanity fallback: if discovery produced nothing, preserve the prior hardcoded
-# lists so the relay isn't a complete no-op.
-if [ "${#MM_AGENTS[@]}" -eq 0 ]; then
-  MM_AGENTS=(chief analyst dev security-vp redteam blueteam home-net research forge warden-mm)
-fi
-if [ "${#MB_AGENTS[@]}" -eq 0 ]; then
-  MB_AGENTS=(sam warden-mb)
-fi
+MM_AGENTS=(chief analyst dev security-vp redteam blueteam research warden-mm home-net forge research-codex)
+MB_AGENTS=(sam warden-mb research-director pa)
 
 mkdir -p "$(dirname "$LOG_FILE")"
 mkdir -p "$MM_INBOX"
@@ -89,6 +68,7 @@ for agent in "${MM_AGENTS[@]}"; do
   # redelivery on subsequent cycles. Each message ships exactly once.
   out=$(rsync -a --ignore-existing --remove-source-files \
     -e "ssh -F $SSH_CONFIG -o ConnectTimeout=5 -o LogLevel=ERROR" \
+    --exclude=.lock.d \
     --stats \
     "$MACBOOK_HOST:$MB_INBOX_REMOTE/$agent/" \
     "$MM_INBOX/$agent/" 2>&1) || {
@@ -113,6 +93,7 @@ for agent in "${MB_AGENTS[@]}"; do
   # redelivery on subsequent cycles. Each message ships exactly once.
   out=$(rsync -a --ignore-existing --remove-source-files \
     -e "ssh -F $SSH_CONFIG -o ConnectTimeout=5 -o LogLevel=ERROR" \
+    --exclude=.lock.d \
     --stats \
     --rsync-path="mkdir -p $MB_INBOX_REMOTE/$agent && rsync" \
     "$MM_INBOX/$agent/" \

@@ -12,6 +12,10 @@ export default defineConfig({
     'hooks/hook-extract-facts': 'src/hooks/hook-extract-facts.ts',
     'hooks/hook-idle-flag': 'src/hooks/hook-idle-flag.ts',
     'hooks/hook-context-status': 'src/hooks/hook-context-status.ts',
+    // hook-episodic-post-tool entry removed during 2026-05-17 merge — the referenced
+    // src/hooks/hook-episodic-post-tool.ts was never committed to gitea/main or any
+    // feature branch (verified via git ls-tree across all 9 branches). Restore both
+    // this entry AND the .ts file when the episodic hook is implemented.
   },
   format: ['cjs'],
   target: 'node20',

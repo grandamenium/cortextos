@@ -1,0 +1,45 @@
+{
+  "_comment": "Importance scoring for the episodic JSONL hook. Substring match on (tool_name + args), case-insensitive. First match wins. Edit freely — these patterns determine how worth-recalling each tool call is judged. Adopted 2026-05-08 from agentic-stack pattern.",
+  "high_importance_9": [
+    "deploy",
+    "migrate",
+    "schema",
+    "force-push",
+    "production",
+    "rm -rf",
+    "git reset --hard",
+    "DROP TABLE",
+    "send-telegram",
+    "create-approval",
+    "soft-restart",
+    "hard-restart",
+    "kb-collections"
+  ],
+  "medium_importance_6": [
+    "commit",
+    "push",
+    "build",
+    "install",
+    "delete",
+    "kb-ingest",
+    "create-task",
+    "complete-task",
+    "send-message",
+    "log-event",
+    "update-cron",
+    "add-cron",
+    "remove-cron"
+  ],
+  "low_importance_3": [
+    "Read",
+    "Glob",
+    "Grep",
+    "list-skills",
+    "list-tasks",
+    "kb-query",
+    "check-inbox",
+    "list-crons",
+    "list-agents",
+    "read-all-heartbeats"
+  ]
+}

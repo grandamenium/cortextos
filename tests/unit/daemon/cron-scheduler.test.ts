@@ -169,6 +169,50 @@ describe('nextFireFromCron', () => {
   it('returns NaN for invalid expression (wrong field count)', () => {
     expect(nextFireFromCron('* * * *', Date.now())).toBeNaN();
   });
+
+  // M-warden-6 fix: range-step `lo-hi/N` was silently expanding as `lo-hi` (every
+  // value) because parseInt('18/2') returns 18 — `/2` was dropped, fires every
+  // hour from 8-18 instead of every 2 hours. Same for comma-list elements that
+  // themselves contain a range-step.
+  describe('M-warden-6 range-step parser fix', () => {
+    it('range-step `0 8-18/2 * * *` fires at 8, 10, 12, 14, 16, 18 (NOT every hour)', () => {
+      let t = new Date(2026, 4, 13, 7, 59, 0).getTime();
+      const fires: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const next = nextFireFromCron('0 8-18/2 * * *', t);
+        fires.push(new Date(next).getHours());
+        t = next + 60_000;
+      }
+      expect(fires).toEqual([8, 10, 12, 14, 16, 18]);
+    });
+
+    it('minute range-step `15-45/15 * * * *` fires at :15, :30, :45 only', () => {
+      let t = new Date(2026, 4, 13, 8, 0, 0).getTime();
+      const fires: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const next = nextFireFromCron('15-45/15 * * * *', t);
+        fires.push(new Date(next).getMinutes());
+        t = next + 60_000;
+      }
+      expect(fires).toEqual([15, 30, 45]);
+    });
+
+    it('mixed comma-list with range-step `0,15-30/5,45 * * * *` fires at 0,15,20,25,30,45', () => {
+      let t = new Date(2026, 4, 13, 8, 0, 0).getTime() - 60_000;
+      const fires: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const next = nextFireFromCron('0,15-30/5,45 * * * *', t);
+        fires.push(new Date(next).getMinutes());
+        t = next + 60_000;
+      }
+      expect(fires).toEqual([0, 15, 20, 25, 30, 45]);
+    });
+
+    it('rejects bad step values (`*/0`, `*/abc`)', () => {
+      expect(nextFireFromCron('*/0 * * * *', Date.now())).toBeNaN();
+      expect(nextFireFromCron('*/abc * * * *', Date.now())).toBeNaN();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

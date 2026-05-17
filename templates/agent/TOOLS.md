@@ -82,6 +82,19 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `list-skills [--format text\|json]` | Skills available to this agent |
 | `check-goal-staleness [--threshold DAYS]` | Flag agents with stale GOALS.md |
 
+### Claude Code Hooks
+Invoked by Claude Code via `.claude/settings.json` `hooks` config — do not call directly. Reads hook payload from stdin (JSON), exits 0 always (non-blocking).
+| Command | Hook event | What it does |
+|---|---|---|
+| `hook-context-status` | StatusLine | Writes context window % to `state/context_status.json` |
+| `hook-ask-telegram` | PreToolUse (AskUserQuestion) | Forwards question to Telegram (cross-platform) |
+| `hook-permission-telegram` | PermissionRequest | Sends approve/deny request to Telegram |
+| `hook-planmode-telegram` | ExitPlanMode | Sends plan to Telegram for review |
+| `hook-compact-telegram` | PreCompact | Notifies user via Telegram when context compaction starts |
+| `hook-extract-facts` | PreCompact | Mines compaction summary into `memory/facts/YYYY-MM-DD.jsonl` for cross-session recall |
+| `hook-idle-flag` | Stop | Writes `last_idle.flag` timestamp so fast-checker knows agent finished its turn |
+| `hook-episodic-post-tool` | PostToolUse | Appends structured episodic entry (tool, args_hash, importance, pain_score, reflection) to `memory/episodic/learnings.jsonl`. Reads `protocols/hook_patterns.json` for importance scoring. Bumps `state/failure-counters.json` on errors; flags rewrite at 3 failures in 14d. Adopted 2026-05-08 from agentic-stack pattern. |
+
 ### Lifecycle
 | Command | What it does |
 |---|---|
@@ -147,10 +160,51 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 - Quick verify: `agent-browser open https://example.com && agent-browser get title && agent-browser close`
 - Dashboard E2E tests still use Playwright DIRECTLY (different surface) — agent-browser only replaces the agent-facing browser MCP layer that was previously `mcp__plugin_playwright_*`
 
-### Peekaboo (macOS Desktop Automation)
-- `peekaboo image` (screenshot), `peekaboo list` (apps), `peekaboo run <script>`
-- Screen Recording + Accessibility permissions granted
-- `peekaboo learn` for full usage guide
+### Peekaboo (macOS Desktop Automation — FULL Computer-Use Stack)
+
+**Peekaboo v3.1.2 (MIT, github.com/steipete/Peekaboo) is a complete computer-use stack — NOT just a screenshot tool.** Action-first interaction model: reads the macOS AX (accessibility) tree to find elements by name/role, then acts. Synthetic input (coordinate-based) as fallback. Can reliably click "Save" in Xcode without knowing pixel coordinates.
+
+**Required macOS permissions:** Screen Recording + Accessibility. Both granted on HARPAL.
+
+**Capability set (full MCP tool list):**
+
+| Tool | Purpose |
+|---|---|
+| `image` / `capture` / `see` | ScreenCaptureKit screenshot (window / app / display / region) |
+| `click` | Left/right/double-click by element ID, fuzzy text, or coordinates |
+| `type` | Human-WPM cadence text input; `--clear` / `--return` / `--tab` / `--escape` / `--delete` modifiers |
+| `set-value` | Direct AX-API field set — faster than `type` for forms |
+| `perform-action` | Trigger any AX action on an element (press, increment, show menu, etc.) |
+| `press` / `hotkey` | Single-key press and chord combos (`Cmd+S`, `Ctrl+Shift+T`, ...) |
+| `scroll` / `drag` / `swipe` / `move` | Mouse + trackpad gestures |
+| `window` / `app` / `space` | Window position/size/focus, app launch/quit, macOS Spaces switching |
+| `menu` / `menubar` / `dock` / `dialog` | First-class UI element interaction (menu items, dock icons, system dialogs) |
+| `agent` | Natural-language multi-step automation loop with OpenAI / Anthropic / Ollama backend |
+
+**Quick recipes:**
+
+```bash
+# Screenshot the running HUD
+peekaboo image --app "Google Chrome for Testing" -o /tmp/hud.png
+
+# Click "Save" in the focused app without coords
+peekaboo click "Save"
+
+# Type into a focused field then press Return
+peekaboo type "hello world" --return
+
+# Multi-step natural-language flow
+peekaboo agent "open Notes, create a new note titled Daily Log, type today's date"
+```
+
+**See-diff-fix loop** (pattern for UI alignment work; see `community/skills/see-diff-fix/` once shipped):
+1. `peekaboo image --app <App> -o /tmp/current.png`
+2. `auto-image-diff reference.png /tmp/current.png -o /tmp/diff.png` (subimage-aligned, no false layout-shift positives)
+3. Send `(reference, current, diff)` to Claude Vision with structured-JSON prompt
+4. Apply each `code_fix` via Edit/Bash
+5. `peekaboo hotkey "Cmd+R"` to hot-reload → loop until diff empty
+
+`peekaboo learn` prints the in-binary capability guide. Use it when the AX tree is unfamiliar.
 
 ### gogcli (Google Workspace)
 - Binary: `gog` (v0.12.0 at `/opt/homebrew/bin/gog`)

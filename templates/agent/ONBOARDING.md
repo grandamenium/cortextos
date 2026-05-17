@@ -81,7 +81,7 @@ Then continue from step 8.
 8. **Discover your team:**
    ```bash
    cortextos bus read-all-heartbeats
-   # Fallback if no heartbeats yet: ls "${CTX_ROOT}/state/" 2>/dev/null
+   # Fallback if no heartbeats yet: ls "${CTX_ROOT}/.cortextOS/state/agents/" 2>/dev/null
    ```
    List all agents found and ask:
    > "I can see these agents in the system: [list]. Who should I report to? Who's my orchestrator? And are there agents I'll work closely with?"
@@ -243,7 +243,7 @@ After workflows and tools are configured:
       "$CTX_AGENT_DIR/IDENTITY.md" \
       --org $CTX_ORG --scope private \
       --agent $CTX_AGENT_NAME \
-      --collection "memory-$CTX_AGENT_NAME" --force
+      --collection "agent-$CTX_AGENT_NAME" --force
     ```
 
     Ingest any additional files the user specified in their answers.

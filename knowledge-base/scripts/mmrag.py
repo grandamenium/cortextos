@@ -247,7 +247,47 @@ def _retry_generate_content(client, *, model, contents, backoffs=(5, 15, 45)):
     raise last_err if last_err else RuntimeError("retry loop completed without response or error")
 
 
-def embed_content(client, config, content, task_type="RETRIEVAL_DOCUMENT"):
+def _embed_content_ollama(config, content):
+    """
+    Embed text content via local Ollama embedding model.
+
+    Endpoint default: http://127.0.0.1:11434 (local Ollama).
+    Override via env OLLAMA_BASE_URL — Mac mini side sets it to
+    http://100.64.0.2:11434 to reach MacBook's Ollama over Tailnet.
+
+    Model: qwen3-embedding:8b by default. Override via config['ollama_embedding_model'].
+
+    Raises any HTTP / connection error to the caller (so the outer embed_content
+    can fall back to Gemini).
+
+    Only supports text content. Multimodal Parts are NOT supported here —
+    embed_content() routes multimodal calls to Gemini directly.
+    """
+    import json as _json
+    import urllib.error as _ue
+    import urllib.request as _ur
+
+    if not isinstance(content, str):
+        raise TypeError("ollama embedding backend only supports text content; multimodal must use gemini")
+
+    base = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+    model = config.get("ollama_embedding_model", "qwen3-embedding:8b")
+    payload = _json.dumps({"model": model, "prompt": content}).encode("utf-8")
+    req = _ur.Request(
+        f"{base}/api/embeddings",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with _ur.urlopen(req, timeout=int(os.environ.get("OLLAMA_EMBED_TIMEOUT", "60"))) as resp:
+        body = _json.loads(resp.read().decode("utf-8"))
+    embedding = body.get("embedding")
+    if not isinstance(embedding, list) or not embedding:
+        raise RuntimeError(f"ollama embed: empty / malformed response from {base}: {body}")
+    return embedding
+
+
+def _embed_content_gemini(client, config, content, task_type="RETRIEVAL_DOCUMENT"):
     """Embed content using Gemini Embedding 2. Content can be text string or list of Parts."""
     from google.genai import types
     result = client.models.embed_content(
@@ -258,9 +298,58 @@ def embed_content(client, config, content, task_type="RETRIEVAL_DOCUMENT"):
             task_type=task_type,
         ),
     )
+    return result.embeddings[0].values
+
+
+def embed_content(client, config, content, task_type="RETRIEVAL_DOCUMENT"):
+    """
+    Embed content with Ollama as primary backend, Gemini as fallback.
+
+    Backend selection via config['embedding_backend']:
+      - "ollama-primary" (default): try Ollama first; on failure or unsupported
+                                     content (multimodal Parts), fall back to Gemini.
+      - "ollama-only": Ollama only; raise on failure. Won't fall back even on
+                       network errors. Multimodal content raises TypeError.
+      - "gemini-only": legacy behavior, skip Ollama entirely.
+
+    Per chief dispatch 1778588426163 (revised 1778588638887): Hari directive to
+    use local Ollama (qwen3-embedding:8b) as primary KB embedding backend with
+    Gemini as fallback. Saves Gemini free-tier quota; gives sovereign embeddings
+    on-device for most workloads.
+
+    Multimodal content (list of Parts) automatically routes to Gemini regardless
+    of backend setting — Ollama embeddings endpoint is text-only as of qwen3-embedding:8b.
+    """
+    backend = config.get("embedding_backend", "ollama-primary")
+    is_text = isinstance(content, str)
+
+    # Multimodal always goes to Gemini (Ollama embed endpoint is text-only).
+    if not is_text:
+        if backend == "ollama-only":
+            raise TypeError("ollama-only backend cannot embed multimodal Parts; use ollama-primary or gemini-only")
+        embedding = _embed_content_gemini(client, config, content, task_type=task_type)
+        if _tracker:
+            _tracker.track_embedding(content)
+        return embedding
+
+    # Text content: try Ollama first (or only) if configured.
+    if backend in ("ollama-primary", "ollama-only"):
+        try:
+            embedding = _embed_content_ollama(config, content)
+            if _tracker:
+                _tracker.track_embedding(content)
+            return embedding
+        except Exception as exc:
+            if backend == "ollama-only":
+                raise
+            # ollama-primary: log + fall through to Gemini fallback.
+            print(f"    [embed] Ollama backend failed ({type(exc).__name__}: {exc}); falling back to Gemini", file=sys.stderr)
+
+    # Gemini path (either gemini-only, or fallback from ollama-primary).
+    embedding = _embed_content_gemini(client, config, content, task_type=task_type)
     if _tracker:
         _tracker.track_embedding(content)
-    return result.embeddings[0].values
+    return embedding
 
 
 def embed_multimodal(client, config, description_text, media_bytes, mime_type):

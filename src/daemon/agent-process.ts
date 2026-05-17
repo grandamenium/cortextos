@@ -11,7 +11,6 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
-import { logEvent } from '../bus/event.js';
 
 type LogFn = (msg: string) => void;
 
@@ -55,12 +54,12 @@ export class AgentProcess {
   private dedup: MessageDedup;
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // Count of silently-dropped injectMessage calls for observability (fix #4)
+  private droppedMessageCount: number = 0;
   // Issue #330: held here so CodexAppServerPTY can be re-wired across session refresh
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
   private telegramChatId: string | null = null;
-  // Cached paths for event logging (computed once at init to avoid repeated lookups)
-  private paths: ReturnType<typeof resolvePaths>;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -71,7 +70,6 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
-    this.paths = resolvePaths(env.ctxRoot, env.org, env.agentName);
   }
 
   /**
@@ -120,14 +118,14 @@ export class AgentProcess {
     this.log(`Log path: ${logPath}`);
     this.pty = this.config.runtime === 'hermes'
       ? new HermesPTY(this.env, this.config, logPath)
-      : this.config.runtime === 'codex-app-server'
+      : this.config.runtime === 'codex'
         ? new CodexAppServerPTY(this.env, this.config, logPath)
         : new AgentPTY(this.env, this.config, logPath);
 
     // Issue #330: re-wire the Telegram handle on every start() (session refresh
     // creates a fresh CodexAppServerPTY). Only CodexAppServerPTY uses this — Claude / Hermes
     // typing indicators flow through fast-checker.
-    if (this.config.runtime === 'codex-app-server' && this.telegramApi && this.telegramChatId) {
+    if (this.config.runtime === 'codex' && this.telegramApi && this.telegramChatId) {
       (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
     }
 
@@ -211,7 +209,7 @@ export class AgentProcess {
           // so we use Ctrl+D which exits cleanly on the first press.
           pty.write('\x04'); // Ctrl+D
           await sleep(3000);
-        } else if (this.config.runtime === 'codex-app-server') {
+        } else if (this.config.runtime === 'codex') {
           // Codex uses an exec-per-turn model — there is no persistent REPL
           // between turns, so /exit + sleep below are no-ops on CodexAppServerPTY
           // (write() just buffers). The only meaningful stop step is
@@ -288,34 +286,43 @@ export class AgentProcess {
 
   /**
    * Inject a message into the agent's PTY.
+   *
+   * @param wakeFirst When true, prepends an ESC byte 80ms before the paste to
+   *   re-engage the Claude Code readline render loop in post-Stop idle sessions.
+   *   Default false — existing callers are unaffected.
    */
-  injectMessage(content: string): boolean {
+  injectMessage(content: string, wakeFirst = false): boolean {
     if (!this.pty || this.status !== 'running') {
+      this.droppedMessageCount++;
+      this.log(`[drop] agent_message_dropped: status=${this.status} (drop #${this.droppedMessageCount})`);
+      this.emitDropEvent('status_not_running', this.status);
       return false;
     }
 
     if (this.dedup.isDuplicate(content)) {
-      this.log('Dedup: skipping duplicate message');
-      // M-D3b: Log KPI event for duplicate drop so it appears in analytics
-      try {
-        logEvent(
-          this.paths,
-          this.env.agentName,
-          this.env.org,
-          'message',
-          'message_dropped_duplicate',
-          'warning',
-          { reason: 'duplicate_detected', contentLength: content.length },
-        );
-      } catch (err) {
-        // Non-fatal: event logging failure should not block message dedup
-        this.log(`Failed to log duplicate drop event: ${err}`);
-      }
+      this.droppedMessageCount++;
+      this.log(`[drop] agent_message_dropped: duplicate content (drop #${this.droppedMessageCount})`);
+      this.emitDropEvent('duplicate', this.status);
       return false;
     }
 
-    injectMessage((data) => this.pty?.write(data), content);
+    injectMessage((data) => this.pty?.write(data), content, 300, { wakeFirst });
     return true;
+  }
+
+  /**
+   * Emit a kpi:agent_message_dropped event via execFile (non-blocking, fire-and-forget).
+   * Failures are swallowed — visibility must not break message delivery paths.
+   */
+  private emitDropEvent(reason: string, agentStatus: string): void {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { execFile } = require('child_process') as typeof import('child_process');
+    execFile('cortextos', [
+      'bus', 'log-event', 'kpi', 'agent_message_dropped', 'warning',
+      '--meta', JSON.stringify({ reason, agent: this.name, agent_status: agentStatus, drop_count: this.droppedMessageCount }),
+    ], (err) => {
+      if (err) this.log(`[drop] log-event failed: ${err.message}`);
+    });
   }
 
   /**
@@ -357,7 +364,7 @@ export class AgentProcess {
   setTelegramHandle(api: TelegramAPI, chatId: string): void {
     this.telegramApi = api;
     this.telegramChatId = chatId;
-    if (this.config.runtime === 'codex-app-server' && this.pty) {
+    if (this.config.runtime === 'codex' && this.pty) {
       (this.pty as CodexAppServerPTY).setTelegramHandle(api, chatId);
     }
   }
