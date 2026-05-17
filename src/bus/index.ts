@@ -7,6 +7,19 @@ export { logEvent } from './event.js';
 export { updateHeartbeat, readAllHeartbeats } from './heartbeat.js';
 export { createApproval, updateApproval, listPendingApprovals } from './approval.js';
 export {
+  acquireSpawnLease,
+  releaseSpawnLease,
+  heartbeatSpawnLease,
+  listSpawnLeases,
+  expireSpawnLeases,
+  getPgPool,
+  setPgPool,
+  closePgPool,
+  withPgClient,
+  type SpawnLease,
+  type AcquireResult,
+} from './spawn-claim.js';
+export {
   selfRestart,
   autoCommit,
   checkGoalStaleness,
