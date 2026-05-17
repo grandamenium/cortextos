@@ -270,21 +270,25 @@ export class FastChecker {
             ),
           ),
         ]);
-        this.lastPollCycleCompletedAt = Date.now();
       } catch (err) {
         this.log(`Poll error: ${err}`);
-        // Reaching the catch means the loop completed an iteration: it errored,
-        // but it is NOT wedged. Refresh the stall-watchdog timestamp for every
-        // caught error, not just timeouts. A fast-erroring pollCycle (a
-        // transient ENOSPC from inbox lock contention, or Conflict back-off from
-        // a duplicate Telegram poller) is still cycling once per pollInterval
-        // and self-heals when the transient condition clears. Treating it as a
-        // stall is what previously turned a brief transient blip into a multi-hour
-        // outage: 3 false hard-restarts tripped the circuit breaker and wedged
-        // the daemon. The pollCycle timeout in the Promise.race above remains the
-        // guard against a genuinely hung cycle.
-        this.lastPollCycleCompletedAt = Date.now();
       }
+      // One iteration is complete. Reaching this line proves the poll loop is
+      // alive and cycling: pollCycle resolved, hit the 30s race timeout, or
+      // threw (e.g. a Telegram "Conflict" back-off from a duplicate getUpdates
+      // poller). None of those mean the loop is wedged, so the stall watchdog
+      // must treat the cycle as completed and advance its clock here.
+      //
+      // The prior code advanced lastPollCycleCompletedAt only on clean success
+      // or a literal "pollCycle timeout" error. Any other rejection — a
+      // Telegram Conflict in particular — left the clock frozen, so the
+      // watchdog hard-restarted a perfectly live loop after 90s. Each restart
+      // spawned a fresh Telegram poller, deepening the Conflict and re-freezing
+      // the clock: the hours-long restart cascade.
+      //
+      // A genuine synchronous freeze never lets control reach this line, so the
+      // watchdog still detects a truly wedged loop.
+      this.lastPollCycleCompletedAt = Date.now();
       await this.sleepInterruptible(this.pollInterval);
     }
 
@@ -480,7 +484,7 @@ export class FastChecker {
         execFile('gws', ['gmail', 'users', 'messages', 'list',
           '--params', JSON.stringify({ userId: 'me', q: this.gmailWatch!.query }),
           '--format', 'json',
-        ], (err, stdout) => {
+        ], { timeout: this.POLL_CYCLE_TIMEOUT_MS }, (err, stdout) => {
           if (err) { reject(err); return; }
           resolve(stdout);
         });
@@ -509,7 +513,7 @@ export class FastChecker {
           execFile('gws', ['gmail', 'users', 'messages', 'get',
             '--params', JSON.stringify({ userId: 'me', id, format: 'metadata', metadataHeaders: ['Subject', 'From'] }),
             '--format', 'json',
-          ], (err, stdout) => {
+          ], { timeout: this.POLL_CYCLE_TIMEOUT_MS }, (err, stdout) => {
             if (err) { reject(err); return; }
             resolve(stdout);
           });
@@ -563,7 +567,7 @@ export class FastChecker {
       rawJson = await new Promise<string>((resolve, reject) => {
         // Pass high warn thresholds to suppress the script's own Telegram alerts —
         // we handle alerting ourselves on tier transitions only.
-        execFile('cortextos', ['bus', 'check-usage-api', '--json'], (err, stdout) => {
+        execFile('cortextos', ['bus', 'check-usage-api', '--json'], { timeout: this.POLL_CYCLE_TIMEOUT_MS }, (err, stdout) => {
           if (err) { reject(err); return; }
           resolve(stdout);
         });
