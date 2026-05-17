@@ -184,6 +184,7 @@ export async function createApproval(
   context?: string,
   frameworkRoot?: string,
   agentDir?: string,
+  projectId?: string | null,
 ): Promise<string> {
   validateApprovalCategory(category);
 
@@ -192,6 +193,7 @@ export async function createApproval(
   const approvalId = `approval_${epoch}_${rand}`;
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
+  // B1 (Phase 2a): project_id NULL-tolerant; omit key when nullish.
   const approval: Approval = {
     id: approvalId,
     title,
@@ -204,6 +206,7 @@ export async function createApproval(
     updated_at: now,
     resolved_at: null,
     resolved_by: null,
+    ...(projectId ? { project_id: projectId } : {}),
   };
 
   const pendingDir = join(paths.approvalDir, 'pending');

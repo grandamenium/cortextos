@@ -19,6 +19,7 @@ export function createTask(
     assignee?: string;
     priority?: Priority;
     project?: string;
+    projectId?: string | null;
     needsApproval?: boolean;
     dueDate?: string;
     blockedBy?: string[];
@@ -30,6 +31,7 @@ export function createTask(
     assignee = agentName,
     priority = 'normal',
     project = '',
+    projectId = null,
     needsApproval = false,
     dueDate = '',
     blockedBy = [],
@@ -60,6 +62,8 @@ export function createTask(
     for (const downId of blocks) detectCycleOrThrow(paths, downId, [taskId], virtualTask);
   }
 
+  // B1 (Phase 2a): project_id NULL-tolerant. Omit key when nullish; keep
+  // existing `project` (freeform label) field untouched — different axis.
   const task: Task = {
     id: taskId,
     title,
@@ -72,6 +76,7 @@ export function createTask(
     org,
     priority,
     project,
+    ...(projectId ? { project_id: projectId } : {}),
     kpi_key: null,
     created_at: now,
     updated_at: now,

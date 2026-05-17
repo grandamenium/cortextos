@@ -12,13 +12,14 @@ export function updateHeartbeat(
   paths: BusPaths,
   agentName: string,
   status: string,
-  options?: { org?: string; timezone?: string; loopInterval?: string; currentTask?: string; displayName?: string },
+  options?: { org?: string; timezone?: string; loopInterval?: string; currentTask?: string; displayName?: string; projectId?: string | null },
 ): void {
   ensureDir(paths.stateDir);
 
   const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const mode = options?.timezone ? detectDayNightMode(options.timezone) : detectDayNightMode('UTC');
 
+  // B1 (Phase 2a): project_id NULL-tolerant; omit key when nullish.
   const heartbeat: Heartbeat = {
     agent: agentName,
     org: options?.org ?? '',
@@ -28,6 +29,7 @@ export function updateHeartbeat(
     mode,
     last_heartbeat: ts,
     loop_interval: options?.loopInterval ?? '',
+    ...(options?.projectId ? { project_id: options.projectId } : {}),
   };
 
   atomicWriteSync(

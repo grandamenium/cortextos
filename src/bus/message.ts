@@ -55,6 +55,7 @@ export function sendMessage(
   priority: Priority,
   text: string,
   replyTo?: string,
+  projectId?: string | null,
 ): string {
   validateAgentName(from);
   validateAgentName(to);
@@ -68,6 +69,9 @@ export function sendMessage(
 
   // Security (H10): Sign message with HMAC-SHA256.
   const signingKey = loadSigningKey(paths.ctxRoot);
+  // B1 (Phase 2a): project_id is NULL-tolerant. Omit the key entirely when
+  // caller passes nullish — keeps existing JSON shapes clean and avoids
+  // gratuitous diffs in archived inboxes.
   const message: InboxMessage = {
     id: msgId,
     from,
@@ -76,6 +80,7 @@ export function sendMessage(
     timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, '.000Z'),
     text,
     reply_to: replyTo || null,
+    ...(projectId ? { project_id: projectId } : {}),
     ...(signingKey ? { sig: hmacSign(signingKey, signPayload(msgId, from, to, text)) } : {}),
   };
 

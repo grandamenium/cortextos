@@ -23,6 +23,14 @@ export interface InboxMessage {
   text: string;
   reply_to: string | null;
   sig?: string; // Security (H10): HMAC-SHA256 signature — optional for backwards compat
+  /**
+   * Routing-grade project id for multi-project fleet scoping (B1, Phase 2a).
+   * NULL-tolerant: readers MUST accept absent/null. Writers MAY omit when caller
+   * does not pass `--project` and `CTX_PROJECT_ID` is unset. Phase 2g flips writers
+   * to dual-write; Phase 3c flips readers to fail-closed on new writes.
+   * NOT in the HMAC signed payload in Phase 2a (preserves existing signatures).
+   */
+  project_id?: string | null;
 }
 
 // Task Types
@@ -50,6 +58,12 @@ export interface Task {
   org: string;
   priority: Priority;
   project: string;
+  /**
+   * Routing-grade project id for multi-project fleet scoping (B1, Phase 2a).
+   * Distinct from `project` (freeform label, e.g. "1evo-website"); `project_id`
+   * is the routing key (e.g. "1evo"). NULL-tolerant in Phase 2a. See InboxMessage.project_id.
+   */
+  project_id?: string | null;
   kpi_key: string | null;
   created_at: string; // ISO 8601
   updated_at: string; // ISO 8601
@@ -94,6 +108,11 @@ export interface Event {
   event: string;
   severity: EventSeverity;
   metadata: Record<string, unknown>;
+  /**
+   * Routing-grade project id for multi-project fleet scoping (B1, Phase 2a).
+   * NULL-tolerant. See InboxMessage.project_id.
+   */
+  project_id?: string | null;
 }
 
 // Heartbeat Types
@@ -109,6 +128,12 @@ export interface Heartbeat {
   loop_interval: string;
   // Legacy field — sync.ts falls back to this if last_heartbeat absent
   timestamp?: string;
+  /**
+   * Last-active project id (B1, Phase 2a). NULL-tolerant. Single value, not an
+   * array — multi-project presence is inferred from message/task records.
+   * See InboxMessage.project_id.
+   */
+  project_id?: string | null;
 }
 
 // Approval Types
@@ -134,6 +159,11 @@ export interface Approval {
   updated_at: string;
   resolved_at: string | null;
   resolved_by: string | null;
+  /**
+   * Routing-grade project id for multi-project fleet scoping (B1, Phase 2a).
+   * NULL-tolerant. See InboxMessage.project_id.
+   */
+  project_id?: string | null;
 }
 
 // Agent Config Types (config.json)
@@ -449,6 +479,12 @@ export interface CronDefinition {
    * @example { "priority": "high", "source": "/loop" }
    */
   metadata?: Record<string, unknown>;
+
+  /**
+   * Routing-grade project id for multi-project fleet scoping (B1, Phase 2a).
+   * NULL-tolerant per CronDefinition entry. See InboxMessage.project_id.
+   */
+  project_id?: string | null;
 
   /**
    * When true, the Test Fire button in the dashboard is disabled and the

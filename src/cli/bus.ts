@@ -63,6 +63,23 @@ function checkDeliverableRequirement(taskId: string, frameworkRoot: string, org:
   return null;
 }
 
+/**
+ * Resolve the effective project_id for a CLI invocation.
+ *
+ * Precedence: explicit --project flag > CTX_PROJECT_ID env > null.
+ *
+ * B1 (Phase 2a) — NULL-tolerant. Do NOT infer from CTX_ORG: org and project
+ * are different axes (one org can own many projects). Phase 2g will flip
+ * writers to dual-write (this helper returns the same shape; the writers
+ * will be the ones that change behavior).
+ */
+function resolveProjectId(cliFlag?: string): string | null {
+  if (cliFlag && cliFlag.trim()) return cliFlag.trim();
+  const env = process.env.CTX_PROJECT_ID;
+  if (env && env.trim()) return env.trim();
+  return null;
+}
+
 export const busCommand = new Command('bus')
   .description('Bus commands for agent messaging, tasks, and events');
 
@@ -73,9 +90,11 @@ busCommand
   .argument('<text>', 'Message text')
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
-  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string }) => {
+  .option('--project <id>', 'Routing-grade project id (B1, Phase 2a — NULL-tolerant)')
+  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string; project?: string }) => {
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
+    const projectId = resolveProjectId(opts.project);
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
     if (!validPriorities.includes(priority as Priority)) {
       console.error(`Invalid priority '${priority}'. Must be one of: ${validPriorities.join(', ')}`);
@@ -113,9 +132,9 @@ busCommand
       console.error(`Warning: agent '${to}' not found in project. Message will be queued but may never be read.`);
     }
 
-    const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo);
+    const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo, projectId);
     try {
-      logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null }));
+      logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null, project_id: projectId ?? null }), projectId);
     } catch { /* non-fatal */ }
     console.log(msgId);
   });
@@ -148,19 +167,22 @@ busCommand
   .option('--desc <description>', 'Task description')
   .option('--assignee <agent>', 'Assigned agent')
   .option('--priority <p>', 'Priority (urgent, high, normal, low)', 'normal')
-  .option('--project <name>', 'Project name')
+  .option('--project <name>', 'Project name (freeform, e.g. "1evo-website")')
+  .option('--project-id <id>', 'Routing-grade project id (B1, Phase 2a — NULL-tolerant; distinct from --project)')
   .option('--needs-approval', 'Require human approval before execution')
   .option('--blocked-by <ids>', 'Comma-separated task IDs that must complete before this task can progress')
   .option('--blocks <ids>', 'Comma-separated task IDs that this new task will block (symmetric reverse edge)')
-  .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; needsApproval?: boolean; blockedBy?: string; blocks?: string }) => {
+  .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; projectId?: string; needsApproval?: boolean; blockedBy?: string; blocks?: string }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const parseList = (raw?: string) => (raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []);
+    const projectId = resolveProjectId(opts.projectId);
     const taskId = createTask(paths, env.agentName, env.org, title, {
       description: opts.desc,
       assignee: opts.assignee,
       priority: opts.priority as Priority,
       project: opts.project,
+      projectId,
       needsApproval: opts.needsApproval ?? false,
       blockedBy: parseList(opts.blockedBy),
       blocks: parseList(opts.blocks),
@@ -396,7 +418,8 @@ busCommand
   .argument('<event>', 'Event name')
   .argument('<severity>', 'Severity (info, warning, error, critical)')
   .option('--meta <json>', 'Metadata JSON string', '{}')
-  .action((category: string, event: string, severity: string, opts: { meta: string }) => {
+  .option('--project <id>', 'Routing-grade project id (B1, Phase 2a — NULL-tolerant)')
+  .action((category: string, event: string, severity: string, opts: { meta: string; project?: string }) => {
     const validCategories: EventCategory[] = ['action', 'error', 'metric', 'milestone', 'heartbeat', 'message', 'task', 'approval'];
     if (!validCategories.includes(category as EventCategory)) {
       console.error(`Invalid category '${category}'. Must be one of: ${validCategories.join(', ')}`);
@@ -409,7 +432,8 @@ busCommand
     }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    logEvent(paths, env.agentName, env.org, category as EventCategory, event, severity as EventSeverity, opts.meta);
+    const projectId = resolveProjectId(opts.project);
+    logEvent(paths, env.agentName, env.org, category as EventCategory, event, severity as EventSeverity, opts.meta, projectId);
     console.log(`Logged ${category}/${event} (${severity})`);
   });
 
@@ -419,7 +443,8 @@ busCommand
   .option('--task <task>', 'Current task description')
   .option('--timezone <tz>', 'Timezone for day/night mode detection')
   .option('--interval <i>', 'Loop interval from cron config')
-  .action((status: string, opts: { task?: string; timezone?: string; interval?: string }) => {
+  .option('--project <id>', 'Last-active project id (B1, Phase 2a — NULL-tolerant)')
+  .action((status: string, opts: { task?: string; timezone?: string; interval?: string; project?: string }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
 
@@ -459,18 +484,20 @@ busCommand
       }
     }
 
+    const projectId = resolveProjectId(opts.project);
     updateHeartbeat(paths, env.agentName, status, {
       org: env.org,
       timezone: opts.timezone,
       loopInterval: opts.interval,
       currentTask: opts.task,
       displayName,
+      projectId,
     });
     // Auto-emit a heartbeat event so the activity feed surfaces any live agent
     // even if the agent itself forgets to call log-event. This makes the
     // dashboard "agents" list derive from heartbeats, not just explicit events.
     try {
-      logEvent(paths, env.agentName, env.org, 'heartbeat', 'heartbeat', 'info', JSON.stringify({ status, task: opts.task ?? '' }));
+      logEvent(paths, env.agentName, env.org, 'heartbeat', 'heartbeat', 'info', JSON.stringify({ status, task: opts.task ?? '' }), projectId);
     } catch {
       // Non-fatal: heartbeat write already succeeded
     }
@@ -1052,7 +1079,8 @@ busCommand
   .argument('<title>', 'What you are requesting approval for')
   .argument('<category>', 'Category: external-comms, financial, deployment, data-deletion, other')
   .argument('[context]', 'Additional context')
-  .action(async (title: string, category: string, context?: string) => {
+  .option('--project <id>', 'Routing-grade project id (B1, Phase 2a — NULL-tolerant)')
+  .action(async (title: string, category: string, context: string | undefined, opts: { project?: string }) => {
     const validCategories: ApprovalCategory[] = ['external-comms', 'financial', 'deployment', 'data-deletion', 'other'];
     if (!validCategories.includes(category as ApprovalCategory)) {
       console.error(`Invalid category '${category}'. Must be one of: ${validCategories.join(', ')}`);
@@ -1060,13 +1088,14 @@ busCommand
     }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const projectId = resolveProjectId(opts.project);
     // await — createApproval fan-out posts to the activity channel, which
     // must complete before the CLI process exits or the post silently
     // never sends. env.frameworkRoot is passed so the activity-channel
     // orgDir resolves to where activity-channel.env actually lives (the
     // framework repo path, NOT the runtime state path — see
     // src/bus/approval.ts:postApprovalToActivityChannel for the history).
-    const id = await createApproval(paths, env.agentName, env.org, title, category as ApprovalCategory, context || '', env.frameworkRoot, env.agentDir);
+    const id = await createApproval(paths, env.agentName, env.org, title, category as ApprovalCategory, context || '', env.frameworkRoot, env.agentDir, projectId);
     console.log(id);
   });
 
@@ -1101,8 +1130,9 @@ busCommand
   .option('--scope <s>', 'Scope: shared, private, or all', 'all')
   .option('--top-k <n>', 'Number of results', '5')
   .option('--threshold <f>', 'Minimum similarity score (0-1)', '0.5')
+  .option('--project <id>', 'Routing-grade project id (B1, Phase 2a — pass-through; filter wiring is Phase 2c)')
   .option('--json', 'Output raw JSON')
-  .action((question: string, opts: { org?: string; agent?: string; scope?: string; topK?: string; threshold?: string; json?: boolean }) => {
+  .action((question: string, opts: { org?: string; agent?: string; scope?: string; topK?: string; threshold?: string; project?: string; json?: boolean }) => {
     const env = resolveEnv();
     const org = opts.org || env.org;
     if (!org) {
@@ -1121,6 +1151,7 @@ busCommand
         threshold: parseFloat(opts.threshold || '0.5'),
         frameworkRoot: env.frameworkRoot || process.cwd(),
         instanceId: env.instanceId,
+        projectId: resolveProjectId(opts.project),
       },
     );
 
@@ -1151,7 +1182,8 @@ busCommand
   .option('--agent <name>', 'Agent name (for private scope)')
   .option('--scope <s>', 'Scope: shared or private', 'shared')
   .option('--force', 'Re-ingest even if already indexed')
-  .action((paths: string[], opts: { org?: string; agent?: string; scope?: string; force?: boolean }) => {
+  .option('--project <id>', 'Routing-grade project id (B1, Phase 2a — stamps YAML frontmatter; NULL-tolerant)')
+  .action((paths: string[], opts: { org?: string; agent?: string; scope?: string; force?: boolean; project?: string }) => {
     const env = resolveEnv();
     const org = opts.org || env.org;
     if (!org) {
@@ -1168,6 +1200,7 @@ busCommand
       force: opts.force,
       frameworkRoot: env.frameworkRoot || process.cwd(),
       instanceId: env.instanceId,
+      projectId: resolveProjectId(opts.project),
     });
   });
 
@@ -1972,12 +2005,13 @@ busCommand
   .option('--skill-file <path>', 'Relative path to skill/context file for fresh-session system prompt')
   .option('--protocol-file <path>', 'Relative path to protocol/checklist file appended to system prompt for fresh-session runs')
   .option('--fresh-session-timeout <ms>', 'Fresh-session timeout in milliseconds')
+  .option('--project <id>', 'Routing-grade project id (B1, Phase 2a — NULL-tolerant)')
   .action(async (
     agent: string,
     name: string,
     interval: string,
     promptWords: string[],
-    opts: { desc?: string; freshSession?: boolean; skillFile?: string; protocolFile?: string; freshSessionTimeout?: string },
+    opts: { desc?: string; freshSession?: boolean; skillFile?: string; protocolFile?: string; freshSessionTimeout?: string; project?: string },
   ) => {
     // Validate agent name format
     try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
@@ -1996,6 +2030,7 @@ busCommand
     const fresh = validateFreshSessionCliOptions(agent, name, env.frameworkRoot, opts);
 
     const prompt = promptWords.join(' ');
+    const projectId = resolveProjectId(opts.project);
     const cron: CronDefinition = {
       name,
       prompt,
@@ -2007,6 +2042,7 @@ busCommand
       ...(fresh.skillFile !== undefined ? { skill_file: fresh.skillFile } : {}),
       ...(fresh.protocolFile !== undefined ? { protocol_file: fresh.protocolFile } : {}),
       ...(fresh.freshSessionTimeoutMs !== undefined ? { fresh_session_timeout_ms: fresh.freshSessionTimeoutMs } : {}),
+      ...(projectId ? { project_id: projectId } : {}),
     };
 
     try {

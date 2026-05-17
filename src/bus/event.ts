@@ -28,6 +28,7 @@ export function logEvent(
   eventName: string,
   severity: EventSeverity,
   metadata?: Record<string, unknown> | string,
+  projectId?: string | null,
 ): void {
   validateEventCategory(category);
   validateEventSeverity(severity);
@@ -51,6 +52,7 @@ export function logEvent(
   const eventsDir = join(paths.analyticsDir, 'events', agentName);
   ensureDir(eventsDir);
 
+  // B1 (Phase 2a): project_id NULL-tolerant; omit key when nullish.
   const eventLine = JSON.stringify({
     id: eventId,
     agent: agentName,
@@ -60,6 +62,7 @@ export function logEvent(
     event: eventName,
     severity,
     metadata: meta,
+    ...(projectId ? { project_id: projectId } : {}),
   });
 
   appendFileSync(join(eventsDir, `${today}.jsonl`), eventLine + '\n', 'utf-8');

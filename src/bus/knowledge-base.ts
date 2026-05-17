@@ -61,8 +61,12 @@ function queryKnowledgeBaseViaGbrain(
     org: string;
     agent?: string;
     topK?: number;
+    projectId?: string | null;
   },
 ): KBQueryResponse {
+  // B1 (Phase 2a): projectId is accepted for API stability but the underlying
+  // `gbrain query` CLI does not yet expose project-scoped filtering. Pass-through
+  // for now — Phase 2c/B5 will wire project filtering once gbrain grows the flag.
   const { org, agent, topK = 5 } = options;
 
   let stdout: string;
@@ -118,9 +122,35 @@ function normalizeSlugForGbrain(filePath: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+/**
+ * Inject `project_id: <id>` into the YAML frontmatter of a markdown page so
+ * gbrain stores it as page metadata. Three cases:
+ *   1. Page has frontmatter already with NO `project_id` key → insert the line
+ *      before the closing `---`.
+ *   2. Page has frontmatter and an existing `project_id` key → leave unchanged
+ *      (idempotent; matches B7 NULL-tolerant "skip already stamped" semantics).
+ *   3. Page has no frontmatter → prepend a fresh frontmatter block.
+ */
+function stampProjectIdFrontmatter(content: string, projectId: string): string {
+  const fmStart = /^---\s*\n/;
+  if (!fmStart.test(content)) {
+    return `---\nproject_id: ${projectId}\n---\n${content}`;
+  }
+  const closeIdx = content.indexOf('\n---', 4);
+  if (closeIdx === -1) {
+    // Malformed frontmatter (open but no close) — prepend a fresh block to be safe.
+    return `---\nproject_id: ${projectId}\n---\n${content}`;
+  }
+  const fmBlock = content.slice(0, closeIdx);
+  if (/^project_id\s*:/m.test(fmBlock)) {
+    return content; // already stamped, idempotent
+  }
+  return content.slice(0, closeIdx) + `\nproject_id: ${projectId}` + content.slice(closeIdx);
+}
+
 function ingestKnowledgeBaseViaGbrain(
   paths: string[],
-  options: { org: string; agent?: string },
+  options: { org: string; agent?: string; projectId?: string | null },
 ): void {
   for (const filePath of paths) {
     const slug = normalizeSlugForGbrain(filePath);
@@ -130,6 +160,13 @@ function ingestKnowledgeBaseViaGbrain(
     } catch {
       console.warn(`[kb:gbrain] skipping ${filePath}: cannot read`);
       continue;
+    }
+
+    // B1 (Phase 2a): stamp project_id into YAML frontmatter when caller provides it.
+    // gbrain CLI has no --meta flag — frontmatter is the only metadata channel.
+    // NULL-tolerant: when projectId is nullish, content passes through unchanged.
+    if (options.projectId) {
+      content = stampProjectIdFrontmatter(content, options.projectId);
     }
 
     // gbrain (Bun-based) reads page body from stdin. Passing content via the
@@ -278,14 +315,16 @@ export function queryKnowledgeBase(
     threshold?: number;
     frameworkRoot: string;
     instanceId: string;
+    projectId?: string | null;
   },
 ): KBQueryResponse {
-  const { agent, scope = 'all', topK = 5, threshold = 0.5, frameworkRoot, instanceId } = options;
+  const { agent, scope = 'all', topK = 5, threshold = 0.5, frameworkRoot, instanceId, projectId } = options;
   const org = normalizeOrgName(frameworkRoot, options.org);
 
   // gbrain fast-path — bypasses mmrag when gbrain is initialized.
+  // B1 (Phase 2a): projectId passes through; gbrain query filtering is Phase 2c work.
   if (gbrainAvailable()) {
-    return queryKnowledgeBaseViaGbrain(question, { org, agent, topK });
+    return queryKnowledgeBaseViaGbrain(question, { org, agent, topK, projectId });
   }
 
   const env = buildKBEnv(frameworkRoot, org, instanceId, agent);
@@ -402,14 +441,16 @@ export function ingestKnowledgeBase(
     force?: boolean;
     frameworkRoot: string;
     instanceId: string;
+    projectId?: string | null;
   },
 ): void {
-  const { agent, scope = 'shared', force, frameworkRoot, instanceId } = options;
+  const { agent, scope = 'shared', force, frameworkRoot, instanceId, projectId } = options;
   const org = normalizeOrgName(frameworkRoot, options.org);
 
   // gbrain fast-path
+  // B1 (Phase 2a): projectId stamps YAML frontmatter when provided.
   if (gbrainAvailable()) {
-    ingestKnowledgeBaseViaGbrain(paths, { org, agent });
+    ingestKnowledgeBaseViaGbrain(paths, { org, agent, projectId });
     return;
   }
 
