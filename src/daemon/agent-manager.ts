@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, rmSync, copyFileSync, chmodSync, statSync } from 'fs';
 import { join, relative } from 'path';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
@@ -742,6 +742,23 @@ export class AgentManager {
 
     // Parse activity-channel.env for the separate bot token + chat id.
     const activityEnvPath = join(orgDir, 'activity-channel.env');
+
+    // Wipe-protection (Q4): on every daemon startup, back up a non-empty
+    // activity-channel.env next to itself (.bak) and lock it read-only.
+    // The backup survives an accidental truncation; chmod 444 turns a
+    // silent overwrite into an explicit EACCES so the mistake is visible.
+    // Both steps are best-effort — failure must not block poller startup.
+    const activityEnvBackupPath = `${activityEnvPath}.bak`;
+    try {
+      if (existsSync(activityEnvPath) && statSync(activityEnvPath).size > 0) {
+        copyFileSync(activityEnvPath, activityEnvBackupPath);
+        chmodSync(activityEnvPath, 0o444);
+        log('[activity-channel] startup backup written; chmod 444 applied');
+      }
+    } catch (err) {
+      log(`[activity-channel] backup/protect step failed (non-fatal): ${err}`);
+    }
+
     let activityBotToken: string | undefined;
     let activityChatId: string | undefined;
     try {
