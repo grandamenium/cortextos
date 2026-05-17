@@ -92,7 +92,7 @@ cortextos bus task-history <task_id>
 ```
 
 ### check-deps
-Show open dependencies blocking a task — lists `blocked_by` entries that are not yet completed.
+Show open dependencies blocking a task - lists `blocked_by` entries that are not yet completed.
 
 ```bash
 cortextos bus check-deps <task_id>
@@ -212,7 +212,7 @@ cortextos bus update-heartbeat "WORKING ON: Implementing user auth for the dashb
 ## Memory
 
 ### recall-facts
-Recall recent session facts extracted at compaction time (cross-session memory). Read these before today's daily memory file — they capture granular decisions and outcomes that did not survive into MEMORY.md.
+Recall recent session facts extracted at compaction time (cross-session memory). Read these before today's daily memory file - they capture granular decisions and outcomes that did not survive into MEMORY.md.
 
 ```bash
 cortextos bus recall-facts [--days N] [--limit M] [--format json|text]
@@ -447,7 +447,7 @@ cortextos bus check-upstream [--apply]
 
 Daemon-managed scheduled tasks. Persisted in `${CTX_ROOT}/state/<agent>/crons.json`,
 dispatched on the daemon's 30-second tick, and survive every kind of restart. Editing
-`config.json.crons[]` mid-session does NOT hot-reload — these commands do, and they
+`config.json.crons[]` mid-session does NOT hot-reload - these commands do, and they
 update `crons.json` directly. For full protocol, examples, and the one-shot pattern see
 `plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`.
 
@@ -574,12 +574,12 @@ cortextos bus submit-community-item <item-name> <item-type> "<description>" [--d
 | Mark a cron as handled            | `update-cron-fire`        |
 
 
-### agent-browser (Browser Automation — replaces Playwright)
+### agent-browser (Browser Automation - replaces Playwright)
 - **Binary**: `agent-browser` (Rust CLI, npm-installed globally; Chrome auto-downloaded by `agent-browser install`)
-- **Use for**: Scraping websites, browser-based automation, OSINT, form filling, screenshots, login flows — anything previously done via the Playwright MCP server
-- **Skill loaded**: `plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md` — that skill instructs running `agent-browser skills get <name>` to fetch current per-version command syntax from the CLI itself
+- **Use for**: Scraping websites, browser-based automation, OSINT, form filling, screenshots, login flows - anything previously done via the Playwright MCP server
+- **Skill loaded**: `plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md` - that skill instructs running `agent-browser skills get <name>` to fetch current per-version command syntax from the CLI itself
 - **Quick verify**: `agent-browser open https://example.com && agent-browser get title && agent-browser close`
-- **Snapshot-ref pattern**: prefer `agent-browser snapshot` (returns a11y tree with refs e1/e2/...) then `agent-browser click @e1` / `fill @e2 "text"` — more reliable than text-search selectors for AI-driven flows
+- **Snapshot-ref pattern**: prefer `agent-browser snapshot` (returns a11y tree with refs e1/e2/...) then `agent-browser click @e1` / `fill @e2 "text"` - more reliable than text-search selectors for AI-driven flows
 - **NOT to be confused with**: dashboard E2E tests under `dashboard/` which use Playwright DIRECTLY (not via MCP). agent-browser only replaces the agent-facing browser MCP layer that was previously `mcp__plugin_playwright_*`. The dashboard's Playwright dependency stays
 
 

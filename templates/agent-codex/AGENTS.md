@@ -14,7 +14,7 @@ When a message arrives in your session that begins with `=== TELEGRAM from`, the
 Reply using: cortextos bus send-telegram <chat_id> '<your reply>'
 ```
 
-**You MUST execute that exact `cortextos bus send-telegram` command before any other action.** This is non-negotiable. Acknowledge first, then do the work. Replies go through the bus — never through any other channel. The user is watching the dashboard for that outbound entry.
+**You MUST execute that exact `cortextos bus send-telegram` command before any other action.** This is non-negotiable. Acknowledge first, then do the work. Replies go through the bus - never through any other channel. The user is watching the dashboard for that outbound entry.
 
 If you do not call `cortextos bus send-telegram` on every Telegram-shape inject, the bootstrap is broken and the agent has failed. There is no other reply path for codex agents.
 
@@ -37,12 +37,12 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 Complete the following in order. Do not skip steps.
 
-1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
+1. **Send boot message first** - before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
    ```bash
    cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Booting up... one moment'
    ```
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
-   - TOOLS.md is a compact command index — load the relevant skill (e.g. `plugins/cortextos-agent-skills/skills/tasks/SKILL.md`, `plugins/cortextos-agent-skills/skills/comms/SKILL.md`) when you need full docs for a workflow
+   - TOOLS.md is a compact command index - load the relevant skill (e.g. `plugins/cortextos-agent-skills/skills/tasks/SKILL.md`, `plugins/cortextos-agent-skills/skills/comms/SKILL.md`) when you need full docs for a workflow
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
@@ -51,14 +51,14 @@ Complete the following in order. Do not skip steps.
    ```bash
    cortextos bus recall-facts --days 3
    ```
-   Read these before the daily memory file — they capture granular decisions and outcomes from previous sessions that did not make it into MEMORY.md.
+   Read these before the daily memory file - they capture granular decisions and outcomes from previous sessions that did not make it into MEMORY.md.
 8. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
 9. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 10. Check inbox: `cortextos bus check-inbox`
 11. Update heartbeat: `cortextos bus update-heartbeat "online"`
 12. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
 13. Write session start entry to daily memory (see Memory Protocol below)
-14. Send your online status message via `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID '<message>'`. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
+14. Send your online status message via `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID '<message>'`. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back - [what you were working on]"). No cron IDs, no status report.
 
 ---
 
@@ -73,7 +73,7 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
 
    ## Session End - $(date -u +%H:%M:%S UTC)
    - Status: [done/interrupted/context-full]
-   - Current state: [where things stand — specific enough that the next session can resume cold]
+   - Current state: [where things stand - specific enough that the next session can resume cold]
    - Active threads: [anything in progress or mid-task with current state]
    - Key decisions: [significant decisions from this session worth carrying forward]
    - For next session: [what to do first and what context is needed]
@@ -82,11 +82,11 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
    ```
 2. Update heartbeat: `cortextos bus update-heartbeat "restarting"`
 3. Log session end: `cortextos bus log-event action session_end info --meta '{"agent":"'$CTX_AGENT_NAME'","reason":"[why]"}'`
-4. **Hard restart only** — notify user on Telegram:
+4. **Hard restart only** - notify user on Telegram:
    ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Restarting now — will be back in a moment.'
+   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Restarting now - will be back in a moment.'
    ```
-5. **Context exhaustion only** — notify first, then hard-restart:
+5. **Context exhaustion only** - notify first, then hard-restart:
    ```bash
    cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Context window full. Hard-restarting with fresh session. Resuming from memory.'
    cortextos bus hard-restart --reason "context exhaustion"
@@ -98,32 +98,32 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
 
 ## Context Handoff Lifecycle
 
-Codex agents track context window usage from `thread/tokenUsage/updated` events emitted by codex-app-server. The PTY converts each event into a `state/<agent>/context_status.json` file, and the daemon's FastChecker reads that file on every poll to manage the handoff lifecycle. You don't trigger this directly — the daemon does — but you must respond when the lifecycle injects prompts into your input stream.
+Codex agents track context window usage from `thread/tokenUsage/updated` events emitted by codex-app-server. The PTY converts each event into a `state/<agent>/context_status.json` file, and the daemon's FastChecker reads that file on every poll to manage the handoff lifecycle. You don't trigger this directly - the daemon does - but you must respond when the lifecycle injects prompts into your input stream.
 
 **Three thresholds, three behaviours:**
 
 | Tier | When | What you see | What you do |
 |---|---|---|---|
-| Tier 1 — warning | usage ≥ `ctx_warning_threshold` (default 70%) | Injected line: `[CONTEXT] Window at NN%. Handoff triggers at HH%.` | Wrap up the current sub-task; avoid starting large new work. No restart yet. |
-| Tier 2 — handoff | usage ≥ `ctx_handoff_threshold` (default 80%) | Injected line: `[CONTEXT HANDOFF REQUIRED] Context is at NN%. Write a handoff document to memory/handoffs/handoff-<ts>.md ...` followed by an absolute target path | Write the handoff doc to that exact path with the five required sections (`## Current Tasks`, `## Next Actions`, `## Active Crons`, `## Key Context`, `## Files Modified This Session`), then run `cortextos bus hard-restart --reason "context handoff at NN%" --handoff-doc <absolute path>`. Do NOT skip writing the doc. |
-| Tier 3 — force restart | 5 min after Tier 2 fires with no `hard-restart` call | Daemon force-kills the session and brings a fresh one up | Nothing — the daemon already acted. On the next session start, you will resume via the handoff doc the daemon attached. |
+| Tier 1 - warning | usage ≥ `ctx_warning_threshold` (default 70%) | Injected line: `[CONTEXT] Window at NN%. Handoff triggers at HH%.` | Wrap up the current sub-task; avoid starting large new work. No restart yet. |
+| Tier 2 - handoff | usage ≥ `ctx_handoff_threshold` (default 80%) | Injected line: `[CONTEXT HANDOFF REQUIRED] Context is at NN%. Write a handoff document to memory/handoffs/handoff-<ts>.md ...` followed by an absolute target path | Write the handoff doc to that exact path with the five required sections (`## Current Tasks`, `## Next Actions`, `## Active Crons`, `## Key Context`, `## Files Modified This Session`), then run `cortextos bus hard-restart --reason "context handoff at NN%" --handoff-doc <absolute path>`. Do NOT skip writing the doc. |
+| Tier 3 - force restart | 5 min after Tier 2 fires with no `hard-restart` call | Daemon force-kills the session and brings a fresh one up | Nothing - the daemon already acted. On the next session start, you will resume via the handoff doc the daemon attached. |
 
 **On resume after a handoff:**
 
 1. The fresh session's first injected message contains the absolute path to the handoff doc you wrote (or a daemon-attached one for Tier 3).
 2. Read it in full before doing anything else.
-3. Send ONE brief conversational Telegram (e.g. `back — picking up the codex parity build`). No cron list, no status report.
+3. Send ONE brief conversational Telegram (e.g. `back - picking up the codex parity build`). No cron list, no status report.
 4. Resume from `## Next Actions` in the handoff doc.
 
 **Never:**
-- Try to free context by truncating files mid-task — the handoff is the right answer.
-- Run `hard-restart` without `--handoff-doc` when responding to a `[CONTEXT HANDOFF REQUIRED]` injection — the next session needs the doc to resume cold.
-- Set `ctx_handoff_threshold` to `undefined` thinking it disables monitoring; that puts the daemon into observe-only mode, which means no Tier 2/3 actions will fire — you will OOM.
+- Try to free context by truncating files mid-task - the handoff is the right answer.
+- Run `hard-restart` without `--handoff-doc` when responding to a `[CONTEXT HANDOFF REQUIRED]` injection - the next session needs the doc to resume cold.
+- Set `ctx_handoff_threshold` to `undefined` thinking it disables monitoring; that puts the daemon into observe-only mode, which means no Tier 2/3 actions will fire - you will OOM.
 
 **Configuration knobs (config.json):**
-- `ctx_warning_threshold` — default 70.
-- `ctx_handoff_threshold` — default 80.
-- `codex_context_cap` — fallback context window cap (tokens) used when codex-app-server reports `modelContextWindow=null`. Default 256000. Override per-model only if you know the actual cap.
+- `ctx_warning_threshold` - default 70.
+- `ctx_handoff_threshold` - default 80.
+- `codex_context_cap` - fallback context window cap (tokens) used when codex-app-server reports `modelContextWindow=null`. Default 256000. Override per-model only if you know the actual cap.
 
 ---
 
@@ -190,7 +190,7 @@ TARGET: Every significant piece of work (>10 minutes) = at least 1 task created.
 
 Three distinct states when you cannot proceed. Use the right one.
 
-### BLOCKED (dependency — waiting for another agent/task)
+### BLOCKED (dependency - waiting for another agent/task)
 
 When your work depends on another task or agent completing first:
 
@@ -205,7 +205,7 @@ When the blocker completes, you receive an inbox message automatically. Unblock 
 cortextos bus update-task <task_id> in_progress
 ```
 
-### HUMAN TASK (capability — only a human can do this)
+### HUMAN TASK (capability - only a human can do this)
 
 When you CANNOT do something yourself (needs payment, physical access, login, sudo):
 
@@ -213,7 +213,7 @@ When you CANNOT do something yourself (needs payment, physical access, login, su
 cortextos bus create-task "[HUMAN] <what needs to be done>" --desc "<instructions>" --project human-tasks
 cortextos bus update-task <your_task_id> blocked
 cortextos bus log-event task task_blocked info --meta '{"task_id":"<your_task_id>","blocked_by":"<human_task_id>","reason":"human dependency"}'
-cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal "Human task created: [HUMAN] <title> — needed before I can proceed with <your task>"
+cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal "Human task created: [HUMAN] <title> - needed before I can proceed with <your task>"
 ```
 
 When the human task is marked complete, you receive an inbox message. Unblock and resume immediately.
@@ -221,13 +221,13 @@ When the human task is marked complete, you receive an inbox message. Unblock an
 CONSEQUENCE: Leaving work undone without creating a human task = invisible blocker = system failure.
 TARGET: Every human-dependent blocker has a [HUMAN] task within 1 heartbeat of discovery.
 
-### APPROVAL (permission — you can do it, but need sign-off first)
+### APPROVAL (permission - you can do it, but need sign-off first)
 
 Before ANY external action (email, deploy, post, delete data, financial, merge to main):
 
 ```bash
 APPR_ID=$(cortextos bus create-approval "<what you want to do>" "<category>" "<context and draft>")
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Approval needed: <title> — check dashboard'
+cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Approval needed: <title> - check dashboard'
 cortextos bus update-task <task_id> blocked
 cortextos bus log-event task task_blocked info --meta '{"task_id":"<task_id>","blocked_by":"'$APPR_ID'","reason":"awaiting approval"}'
 ```
@@ -249,16 +249,16 @@ TARGET: Every approval has a blocked parent task with blocked_by = approval ID.
 
 You have three memory layers. Daily memory (working memory), MEMORY.md (long-term), and the knowledge base (associative).
 
-### Layer 1: Daily Memory — Working Memory (memory/YYYY-MM-DD.md)
+### Layer 1: Daily Memory - Working Memory (memory/YYYY-MM-DD.md)
 
-This is your session journal. It survives crashes and context compactions. The goal is not to log activity — it is to capture enough context that you (or a fresh session) can resume intelligently without re-reading everything.
+This is your session journal. It survives crashes and context compactions. The goal is not to log activity - it is to capture enough context that you (or a fresh session) can resume intelligently without re-reading everything.
 
-**Write at these checkpoints — not continuously:**
+**Write at these checkpoints - not continuously:**
 - **Session start**: where things stand, what you are resuming and why
-- **Heartbeat cycle**: state snapshot — current focus, active threads, decisions, context notes
+- **Heartbeat cycle**: state snapshot - current focus, active threads, decisions, context notes
 - **Session end**: full context dump so the next session can pick up cold
 
-**Mid-work inline notes — write immediately, don't wait for heartbeat:**
+**Mid-work inline notes - write immediately, don't wait for heartbeat:**
 ```bash
 echo "NOTE $(date -u +%H:%M UTC): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
 ```
@@ -272,17 +272,17 @@ cat >> "memory/$TODAY.md" << MEMEOF
 - Status: online
 - Crons active: <list from `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
-- Current state: <where things stand — what is in progress, pending, or needs attention>
+- Current state: <where things stand - what is in progress, pending, or needs attention>
 - Resuming: <what to do next and why, with enough context to act without re-reading everything>
 
 MEMEOF
 ```
 
-### Layer 2: Long-Term Memory — Consolidated Knowledge (MEMORY.md)
+### Layer 2: Long-Term Memory - Consolidated Knowledge (MEMORY.md)
 
 Knowledge synthesised over time. Patterns that work, user preferences, decisions, corrections you received, negative patterns. Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `memory-{agent}` KB collection.
 
-### Layer 3: Knowledge Base — Associative Memory (RAG/ChromaDB)
+### Layer 3: Knowledge Base - Associative Memory (RAG/ChromaDB)
 
 Semantic vector store. Three collections: `memory-{agent}` (auto-reindexed at heartbeat), `private-{agent}` (your outputs), `shared-{org}` (org-wide).
 
@@ -344,7 +344,7 @@ Reply using: cortextos bus send-telegram <chat_id> '<reply>'
 
 **RULE OF FIRST RESPONSE: Execute the exact `cortextos bus send-telegram <chat_id> '<reply>'` command from the inject before any other action.** This is the primary outbound channel. There is no other reply path. Codex agents do not have a UI; the bus is the only way the user sees your response.
 
-The user is waiting. Acknowledge immediately, then execute. Never leave the user as the last person to have sent a message — always follow up when work is done, when something changes, or when you are waiting on something.
+The user is waiting. Acknowledge immediately, then execute. Never leave the user as the last person to have sent a message - always follow up when work is done, when something changes, or when you are waiting on something.
 
 **Media injections** arrive with the file path already extracted into a structured payload. The codex extractor surfaces:
 
@@ -354,11 +354,11 @@ caption: <caption text>
 local_file: telegram-images/<file>
 ```
 
-Same shape for `[DOCUMENT]` (adds `file_name:`), `[VOICE]`/`[AUDIO]` (adds `duration:` and, when transcription is configured, `transcript:`), `[VIDEO]`/`[VIDEO_NOTE]` (adds `duration:` + `file_name:`). When you receive one of these, **read the `local_file:` path directly via shell** (e.g. `cat`, `file`, `head -c 200`) — don't ask the user to re-send. The path is relative to your working directory.
+Same shape for `[DOCUMENT]` (adds `file_name:`), `[VOICE]`/`[AUDIO]` (adds `duration:` and, when transcription is configured, `transcript:`), `[VIDEO]`/`[VIDEO_NOTE]` (adds `duration:` + `file_name:`). When you receive one of these, **read the `local_file:` path directly via shell** (e.g. `cat`, `file`, `head -c 200`) - don't ask the user to re-send. The path is relative to your working directory.
 
-For voice messages, if a `transcript:` line is present, treat that as the user's text. If not, the audio file is at `local_file:` — escalate to the user that voice transcription isn't currently wired in this build, then offer to handle the request another way.
+For voice messages, if a `transcript:` line is present, treat that as the user's text. If not, the audio file is at `local_file:` - escalate to the user that voice transcription isn't currently wired in this build, then offer to handle the request another way.
 
-**Reply-to threading**: when James replies in-thread to one of your earlier messages, the inject ends with `[in reply to: <up to 200 chars of your prior message>]`. Use this to keep the conversation coherent — refer back to what you said before, don't pretend the message arrived in a vacuum.
+**Reply-to threading**: when James replies in-thread to one of your earlier messages, the inject ends with `[in reply to: <up to 200 chars of your prior message>]`. Use this to keep the conversation coherent - refer back to what you said before, don't pretend the message arrived in a vacuum.
 
 Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
 
@@ -376,15 +376,15 @@ Callbacks include `callback_data:` and `message_id:`. Process all immediately an
 Reply using: cortextos bus send-message <agent> normal '<reply>' <msg_id>
 ```
 
-**REPLY + ACK DISCIPLINE — non-negotiable:**
+**REPLY + ACK DISCIPLINE - non-negotiable:**
 
 1. **Reply** via the exact `Reply using:` command. Pass `<msg_id>` as the trailing `reply_to` argument so the sender's reply_to chain stays threaded.
 2. **Ack** via `cortextos bus ack-inbox <msg_id>` if (and only if) you do NOT reply. Sending a reply with `reply_to` auto-ACKs; calling `ack-inbox` afterward is harmless but redundant.
-3. Un-ACK'd messages redeliver every 5 minutes. An inbox that grows unbounded is the symptom of a missed ack — do not ignore it.
+3. Un-ACK'd messages redeliver every 5 minutes. An inbox that grows unbounded is the symptom of a missed ack - do not ignore it.
 
 **Multi-message inbox burst:** when `cortextos bus check-inbox` returns several entries, handle them oldest-first. Do not skip ahead; do not batch into one combined reply unless they are clearly a single conversation. Each `msg_id` needs either a `reply_to` reply or an explicit `ack-inbox`.
 
-**Reply-to threading:** when an inbound `=== AGENT MESSAGE` includes `[reply_to: <prior_id>]`, that means the sender is replying to one of YOUR earlier outbound messages. Your reply should reference that prior context — don't pretend the message arrived in a vacuum.
+**Reply-to threading:** when an inbound `=== AGENT MESSAGE` includes `[reply_to: <prior_id>]`, that means the sender is replying to one of YOUR earlier outbound messages. Your reply should reference that prior context - don't pretend the message arrived in a vacuum.
 
 **Bus quick-reference for codex agents:**
 
@@ -411,7 +411,7 @@ For full flag/syntax details: read `plugins/cortextos-agent-skills/skills/bus-re
 
 ## Crons
 
-Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
+Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session - no manual restoration needed.
 
 ### Handling a cron fire
 
@@ -421,13 +421,13 @@ When a registered cron fires, you receive an injected message in this exact shap
 [CRON FIRED <iso-timestamp>] <cron-name>: <prompt>
 ```
 
-Treat the inject as if the user just sent you `<prompt>`. Execute it to completion. Then — **mandatory** — record the fire so the daemon's gap-detection can tell you actually handled it:
+Treat the inject as if the user just sent you `<prompt>`. Execute it to completion. Then - **mandatory** - record the fire so the daemon's gap-detection can tell you actually handled it:
 
 ```bash
 cortextos bus update-cron-fire <cron-name> --interval <interval>
 ```
 
-`<interval>` matches the cron's schedule shorthand (`6h`, `30m`, `1d`) or its expected gap if it's a 5-field expression. If you skip this step the daemon will eventually nudge you with a "cron seems stuck" reminder even though you handled it — `update-cron-fire` is the audit trail.
+`<interval>` matches the cron's schedule shorthand (`6h`, `30m`, `1d`) or its expected gap if it's a 5-field expression. If you skip this step the daemon will eventually nudge you with a "cron seems stuck" reminder even though you handled it - `update-cron-fire` is the audit trail.
 
 ### View scheduled crons
 
@@ -435,7 +435,7 @@ cortextos bus update-cron-fire <cron-name> --interval <interval>
 cortextos bus list-crons $CTX_AGENT_NAME
 ```
 
-**Add a recurring cron at runtime:** Use `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval-or-cron-expr> <prompt>`. The daemon hot-reloads automatically; `crons.json` survives every kind of restart. For full CRUD (update, pause, resume, troubleshoot) read `plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`. This is the **only** persistent scheduling path on this runtime — there is no in-session scheduling tool, and editing `config.json.crons[]` mid-session does NOT hot-reload (the daemon only re-reads `config.json` on agent boot).
+**Add a recurring cron at runtime:** Use `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval-or-cron-expr> <prompt>`. The daemon hot-reloads automatically; `crons.json` survives every kind of restart. For full CRUD (update, pause, resume, troubleshoot) read `plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`. This is the **only** persistent scheduling path on this runtime - there is no in-session scheduling tool, and editing `config.json.crons[]` mid-session does NOT hot-reload (the daemon only re-reads `config.json` on agent boot).
 
 **Add a one-shot reminder:** there is no daemon-side `fire_at`. Use a future-dated 5-field cron expression (e.g. `30 15 8 5 *` fires once at 15:30 on May 8) and have your handler remove itself on first fire via `cortextos bus remove-cron $CTX_AGENT_NAME <name>` so it does not fire again next year. See the cron-management skill for the worked example.
 
@@ -491,17 +491,17 @@ cortextos bus list-skills --format text
 
 **Skill paths:** Each skill lives in `plugins/cortextos-agent-skills/skills/<name>/SKILL.md` inside your agent dir. The scaffolder also creates symlinks at `~/.codex/skills/<agent_name>__<skill_name>` so codex's runtime skill discovery sees them; the agent-name prefix prevents collisions when multiple codex agents share the host's `~/.codex/skills/` directory.
 
-When you encounter a scenario — getting blocked, needing approval, spawning an agent, rotating a credential — read the relevant skill file first before improvising.
+When you encounter a scenario - getting blocked, needing approval, spawning an agent, rotating a credential - read the relevant skill file first before improvising.
 
 ---
 
 ## System Management
 
 Key paths:
-- Agent config: `orgs/{org}/agents/{agent}/config.json` — crons, model, session limits, runtime
-- Agent secrets: `orgs/{org}/agents/{agent}/.env` — BOT_TOKEN, CHAT_ID, ALLOWED_USER
-- Org secrets: `orgs/{org}/secrets.env` — shared API keys (GEMINI_API_KEY, OPENAI_API_KEY, etc.)
-- Logs: `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/` — activity, fast-checker, stdout, stderr
+- Agent config: `orgs/{org}/agents/{agent}/config.json` - crons, model, session limits, runtime
+- Agent secrets: `orgs/{org}/agents/{agent}/.env` - BOT_TOKEN, CHAT_ID, ALLOWED_USER
+- Org secrets: `orgs/{org}/secrets.env` - shared API keys (GEMINI_API_KEY, OPENAI_API_KEY, etc.)
+- Logs: `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/` - activity, fast-checker, stdout, stderr
 - Skills (local): `orgs/{org}/agents/{agent}/plugins/cortextos-agent-skills/skills/<name>/SKILL.md`
 - Skills (host link): `~/.codex/skills/<agent_name>__<skill_name>` (symlinks created by scaffolder)
 
