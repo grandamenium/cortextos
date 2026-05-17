@@ -136,6 +136,36 @@ export class AgentPTY {
       } catch { /* leave unset if context.json is missing or malformed */ }
     }
 
+    // macOS keychain → CLAUDE_CODE_OAUTH_TOKEN injection.
+    // The cortextOS env whitelist strips macOS XPC vars that Claude Code's
+    // native keychain reader needs in TUI/PTY mode, so daemon-spawned agents
+    // see "Not logged in" despite a valid keychain entry. Read the token
+    // directly via the `security` CLI and inject it. Only runs on darwin,
+    // only when no other auth is already configured. Requires the daemon's
+    // ancestor terminal to have Full Disk Access (System Settings → Privacy
+    // & Security → Full Disk Access).
+    if (process.platform === 'darwin'
+        && !ptyEnv['ANTHROPIC_API_KEY']
+        && !ptyEnv['CLAUDE_API_KEY']
+        && !ptyEnv['CLAUDE_CODE_OAUTH_TOKEN']) {
+      try {
+        const { execFileSync } = require('child_process');
+        const raw = execFileSync('/usr/bin/security',
+          ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+          { encoding: 'utf-8', timeout: 5000 }).trim();
+        const parsed = JSON.parse(raw);
+        const token = parsed?.claudeAiOauth?.accessToken;
+        if (token) {
+          ptyEnv['CLAUDE_CODE_OAUTH_TOKEN'] = token;
+          console.error(`[agent-pty:${this.env.agentName}] keychain → injected CLAUDE_CODE_OAUTH_TOKEN (len=${token.length})`);
+        } else {
+          console.error(`[agent-pty:${this.env.agentName}] keychain payload had no accessToken`);
+        }
+      } catch (err: any) {
+        console.error(`[agent-pty:${this.env.agentName}] keychain read failed: ${err?.message || err}`);
+      }
+    }
+
     // Spawn the agent binary directly (no shell wrapper) — cross-platform, no shell escaping needed.
     // env is passed natively via node-pty options; no bash export commands required.
     // On Windows, npm global installs create .cmd wrappers, not .exe binaries.

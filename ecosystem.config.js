@@ -32,6 +32,10 @@ module.exports = {
         // then watch the operator chat for "🚨 CRITICAL: daemon crash-looping"
         // after 3 crashes in 15 min.
         CTX_DEBUG_ALLOW_CRASH_TRIGGER: '0',
+        // Multi-machine: refuse to spawn agent dirs that aren't in
+        // enabled-agents.json. Prevents framework-relay-mirrored Mac mini
+        // agent dirs from auto-spawning on MacBook (bug 1778770012799).
+        CTX_REQUIRE_EXPLICIT_ENABLE: '1',
       },
       // max_restarts + restart_delay is the ultimate crash-storm circuit
       // breaker. If the daemon dies 10 times faster than 5s apart, PM2
