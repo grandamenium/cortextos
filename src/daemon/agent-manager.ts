@@ -16,6 +16,7 @@ import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
+import { SpawnLeaseCoordinator } from './spawn-lease-coordinator.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -47,12 +48,37 @@ export class AgentManager {
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
+  /** Δ1 (Phase 2e) — Postgres-backed lease coordinator for agent spawn fencing. */
+  private spawnLeaseCoordinator: SpawnLeaseCoordinator;
 
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+    // Coordinator emits events under the affected agent's name so the per-agent
+    // events feed sees who owns the lease + who got rejected. Disabled
+    // automatically when SUPABASE_GBRAIN_DATABASE_URL is unset.
+    this.spawnLeaseCoordinator = new SpawnLeaseCoordinator(
+      instanceId,
+      (agentName, eventName, severity, meta, projectId) => {
+        try {
+          const paths = resolvePaths(agentName, this.instanceId, this.org);
+          logEvent(paths, agentName, this.org, 'action', eventName, severity, meta, projectId);
+        } catch (err) {
+          console.error(`[agent-manager] Failed to emit ${eventName} for ${agentName}: ${err}`);
+        }
+      },
+    );
+  }
+
+  /**
+   * Test introspection: expose the spawn-lease coordinator so integration
+   * tests can verify holder ids and lease counts without reflecting into
+   * private fields.
+   */
+  getSpawnLeaseCoordinator(): SpawnLeaseCoordinator {
+    return this.spawnLeaseCoordinator;
   }
 
   /**
@@ -196,6 +222,34 @@ export class AgentManager {
       config = this.loadAgentConfig(agentDir);
     }
 
+    // Δ1 (Phase 2e) — Acquire daemon-level spawn lease BEFORE any local
+    // registry mutation or PTY spawn. Two daemons (same host or cross-host)
+    // racing to start the same agent serialize at the Postgres partial unique
+    // index on (project_id, artifact_key='agent:<name>'). The loser logs a
+    // spawn_rejected warn event and returns cleanly without polluting
+    // this.agents — see SpawnLeaseCoordinator + .claude/rules/codex-subagent-
+    // direct-spawn.md G1 (lease BEFORE spawn).
+    //
+    // project_id resolution: config.project_id (per-agent config) wins over
+    // env CTX_PROJECT_ID, which wins over null (B1 NULL-tolerant). Matches
+    // the bus-contract dispatch envelope precedence.
+    const projectId =
+      (config as { project_id?: string }).project_id ??
+      process.env.CTX_PROJECT_ID ??
+      null;
+    const leaseResult = await this.spawnLeaseCoordinator.acquireAgentSpawn(name, projectId);
+    if (!leaseResult.acquired) {
+      // Another daemon already holds this slot. Bail without registering
+      // the agent — discoverAndStart's caller (if any) moves on, and the
+      // other daemon owns this agent's lifecycle. The coordinator already
+      // emitted spawn_rejected with held_by + held_until metadata.
+      console.warn(
+        `[agent-manager] ${name}: spawn lease held by ${leaseResult.lease?.holder_id} ` +
+        `until ${leaseResult.lease?.expires_at}. Skipping start on this daemon.`,
+      );
+      return;
+    }
+
     const env: CtxEnv = {
       instanceId: this.instanceId,
       ctxRoot: this.ctxRoot,
@@ -290,8 +344,17 @@ export class AgentManager {
 
     this.agents.set(name, { process: agentProcess, checker });
 
-    // Start agent
-    await agentProcess.start();
+    // Start agent. If PTY spawn fails, undo: release the spawn lease so a
+    // restart (or a different daemon picking up the slot) can re-acquire
+    // immediately instead of waiting for the 30-min TTL to reap. Without
+    // this, a one-shot startup failure would block restart for half an hour.
+    try {
+      await agentProcess.start();
+    } catch (err) {
+      this.agents.delete(name);
+      await this.spawnLeaseCoordinator.releaseAgentSpawn(name).catch(() => undefined);
+      throw err;
+    }
 
     // Subtask 2.2: Auto-migrate crons from config.json → crons.json before
     // starting the scheduler, so the scheduler always has a populated crons.json
@@ -598,6 +661,14 @@ export class AgentManager {
       scheduler.stop();
       this.cronSchedulers.delete(name);
     }
+
+    // Δ1 (Phase 2e) — Release the daemon-level spawn lease (clears renew
+    // timer + soft-deletes the active row server-side). Uses session-id
+    // mass-release per top-g directive: a future per-agent secondary lease
+    // sharing the same holder gets freed in one call. Failure is logged
+    // by the coordinator and never throws — the lease TTL reaps the row
+    // server-side if release fails.
+    await this.spawnLeaseCoordinator.releaseAgentSpawn(name);
 
     // BUG-031: honor any restart that was queued while we were stopping.
     // After PR #11 (BUG-011 fix) this branch should never fire — see the

@@ -46,7 +46,16 @@ describe.skipIf(!dbUrl)('Δ1 spawn-lease integration', () => {
   });
 
   beforeEach(async () => {
-    await pool.query('truncate cortextos.spawn_leases restart identity');
+    // Scoped delete instead of TRUNCATE. The cross-process test file
+    // (daemon-spawn-lease-cross-process.test.ts) runs in parallel under
+    // vitest's file-parallelism and uses artifact_keys with prefix
+    // `agent:test-cross-` — a blanket TRUNCATE would wipe its row
+    // mid-test, racing the worker's renew. Excluding that one prefix
+    // preserves this suite's existing reset semantic for every other key.
+    await pool.query(
+      `delete from cortextos.spawn_leases
+       where artifact_key not like 'agent:test-cross-%'`,
+    );
   });
 
   describe('acquire', () => {
