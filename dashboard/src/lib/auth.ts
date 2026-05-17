@@ -18,27 +18,27 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   cookies: {
     sessionToken: {
       name: 'authjs.session-token',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: false },
     },
     csrfToken: {
       name: 'authjs.csrf-token',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: false },
     },
     callbackUrl: {
       name: 'authjs.callback-url',
-      options: { sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { sameSite: 'lax', path: '/', secure: false },
     },
     pkceCodeVerifier: {
       name: 'authjs.pkce.code_verifier',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: false },
     },
     state: {
       name: 'authjs.state',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: false },
     },
     nonce: {
       name: 'authjs.nonce',
-      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: process.env.NODE_ENV === 'production' },
+      options: { httpOnly: true, sameSite: 'lax', path: '/', secure: false },
     },
   },
   providers: [
