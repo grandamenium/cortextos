@@ -919,6 +919,32 @@ export class AgentManager {
   }
 
   /**
+   * Write .daemon-stop markers for all currently-managed agents synchronously.
+   *
+   * Call this in the SIGINT/SIGTERM signal handler BEFORE any async work.
+   * PM2 sends the signal to the daemon's entire process group, so PTY children
+   * (Claude Code CLI) receive it at the same instant as the daemon process.
+   * Without markers on disk at that moment, agent-process.ts:handleExit()
+   * sees no .daemon-stop marker and classifies each PTY exit as a crash →
+   * SESSION CONTINUATION flood (30-40 fake restarts/hour).
+   *
+   * stopAll() also writes these markers as belt-and-suspenders for any path
+   * that calls stopAll() directly. This method is the fast synchronous path.
+   */
+  writeAllDaemonStopMarkersSync(): void {
+    const names = [...this.agents.keys()];
+    for (const name of names) {
+      try {
+        const stateDir = join(this.ctxRoot, 'state', name);
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(join(stateDir, '.daemon-stop'), 'daemon shutdown (SIGTERM)');
+      } catch (err) {
+        console.error(`[agent-manager] Failed to write .daemon-stop marker for ${name}: ${err}`);
+      }
+    }
+  }
+
+  /**
    * Stop all agents.
    *
    * BUG-034 partial fix: writes a `.daemon-stop` marker file in each agent's
@@ -929,8 +955,8 @@ export class AgentManager {
    * generates a false crash alarm per agent — trust-destroying.
    *
    * Pattern matches src/cli/bus.ts:1283-1289 and PR #12 (BUG-036). Markers
-   * are written synchronously before the async stop loop starts, so by the
-   * time `pty.kill()` runs, every agent already has its marker on disk.
+   * are written by writeAllDaemonStopMarkersSync() in the signal handler first;
+   * this loop is belt-and-suspenders for any future direct caller.
    */
   async stopAll(): Promise<void> {
     const names = [...this.agents.keys()];

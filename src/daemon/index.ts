@@ -315,6 +315,17 @@ class Daemon {
         return;
       }
       shuttingDown = true;
+      // Write .daemon-stop markers synchronously BEFORE yielding to async work.
+      // PM2 sends SIGINT/SIGTERM to the daemon's entire process group, so PTY
+      // children (Claude Code CLI) receive the signal at the same instant.
+      // agent-process.ts:handleExit() checks for .daemon-stop to distinguish a
+      // clean shutdown from a crash. Without markers on disk right now, all
+      // PTY exits are mis-classified as crashes → SESSION CONTINUATION flood.
+      // stopAll() also writes these markers, but only after the event loop
+      // yields into the async shutdown() call — too late for racing PTY exits.
+      if (this.agentManager) {
+        this.agentManager.writeAllDaemonStopMarkersSync();
+      }
       shutdown().catch((err) => {
         console.error('[daemon] Fatal shutdown error:', err);
         process.exit(1);
