@@ -66,23 +66,34 @@ Mac mini (user: subbu_ai_assistant, host instance: default)
 
 **Grace window expires 2026-05-18T20:20:49Z** — after that, unsigned messages will be dropped to .errors/. By then all running agents have restarted and are signing.
 
-### B2: serena + 4 plugin commit-SHA pinning
-- Pick known-good serena commit SHA from https://github.com/oraios/serena/commits/main
-- Patch `~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/serena/.mcp.json` on BOTH machines
-- Same for: playwright, firebase, context7 (npm @latest → pinned version)
-- Audit remaining 11 plugins for `@latest`/`HEAD` patterns
-- Each plugin .mcp.json is per-machine — must patch both sides
+### ~~B2: serena + 4 plugin commit-SHA pinning~~ ✅ COMPLETE 2026-05-17
 
-### B3: token rotation + redact.ts patch + .env.bak scrub
-- **Hari manual:** rotate Anthropic OAuth token at console.anthropic.com (via `claude` re-login on MacBook)
-- **Hari manual:** rotate Telegram bot 8640425235 via @BotFather
-- **Auto:** patch `src/pty/redact.ts` to catch `sk-ant-oat01-*`, `sk-ant-api03-*`, telegram bot tokens, Bearer headers (currently only JWT)
-- **Auto:** patch `src/telegram/api.ts:597` to strip token from URL in error message
-- **Auto:** scrub `.env.bak.*` on both machines (`rm` after Hari confirms rotation)
-- **Auto:** rotate `~/.cortextos/default/logs/sam/stdout.log` + `outbound-messages.jsonl` (contain old token traces)
-- **Auto:** chmod 0600 on all current `.env` files
-- **Auto:** add `.env.bak.*` to `.gitignore` on both machines (currently only `.env` is ignored)
-- **Auto:** replace plaintext gitea password in `.git/config` with SSH key OR `git-credential` helper
+Pinning targets used:
+- serena: `7c7d5eef56b47d8ab0835dd9227ba4b80b90c50b` (HEAD of oraios/serena main, 2026-05-17)
+- @playwright/mcp: `0.0.75` (latest stable)
+- firebase-tools: `15.18.0` (latest stable)
+- @upstash/context7-mcp: `2.2.5` (latest stable)
+
+**Mac mini**: all 4 plugins pinned via jq edits to `external_plugins/*/.mcp.json`. Sweep confirmed all 15 plugins (asana/context7/discord/fakechat/firebase/github/gitlab/greptile/imessage/laravel-boost/linear/playwright/serena/telegram/terraform) are now cleanly pinned — no `@latest`/HEAD remaining.
+
+**MacBook**: only serena+firebase exist locally as `.mcp.json` (playwright/context7 dirs absent — already disabled at user-settings level). Both pinned.
+
+Plugin marketplace dirs are NOT shared between machines — pinning is per-machine work. Backups at `.mcp.json.bak.pre-b2` on each.
+
+### ~~B3: redact.ts + .env scrub~~ ✅ PARTIAL (manual rotation pending)
+
+**Done autonomously:**
+- `src/pty/redact.ts` extended (commit `62790de` on gitea/main) — now catches: sk-ant-oat01-*, sk-ant-api03-*, sk-or-v1-*, Telegram bot tokens (`\d+:[A-Za-z0-9_-]{30,}`), Bearer headers, Telegram API URLs containing tokens. Order-aware (URL pattern first).
+- Both machines pulled + rebuilt + reloaded with new redact.
+- `.env.bak.*` files deleted on both machines (3 on MacBook + 0 on Mac mini — already clean there).
+- `chmod 0600` on all `orgs/subbu-ops/agents/*/.env` files (both machines).
+- `.env.bak.*` added to `.gitignore` (commit `e01fc4d` on gitea/main).
+
+**Still pending — requires Hari manual:**
+- 🔴 **Rotate Anthropic OAuth token** at console.anthropic.com → re-login via `claude` CLI on MacBook → keychain updates → refresh-claude-token.sh propagates to agent .envs.
+- 🔴 **Rotate Telegram bot 8640425235** via @BotFather → update BOT_TOKEN in sam/.env, warden-mb/.env, chief/.env (Mac mini).
+- 🟡 **Rotate stdout.log + outbound-messages.jsonl** — they still contain old token traces. Recommend `mv` to `.OLD-2026-05-17` (preserve audit trail, allow new clean log to be written). Don't do this until AFTER rotation so log is closed with old token still active.
+- 🟡 **Plaintext gitea password in `.git/config`** — remove `hari:password@` from remote URL, configure `git-credential` helper (osxkeychain) on both machines. Requires interactive password entry once, then helper takes over.
 
 ### Follow-ups in task list (#74, #75)
 - ecosystem.config.js HOME-based paths (committed fix)
