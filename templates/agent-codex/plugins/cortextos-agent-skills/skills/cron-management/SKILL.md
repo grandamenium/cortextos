@@ -1,6 +1,6 @@
 ---
 name: cron-management
-description: "Manage scheduled tasks (crons). Crons are daemon-managed and stored in crons.json — they survive restarts automatically. Use when: verifying crons on session start, creating new recurring tasks, updating or removing crons, troubleshooting scheduled tasks, or using the dashboard test-fire button."
+description: "Manage scheduled tasks (crons). Crons are daemon-managed and stored in crons.json - they survive restarts automatically. Use when: verifying crons on session start, creating new recurring tasks, updating or removing crons, troubleshooting scheduled tasks, or using the dashboard test-fire button."
 ---
 
 # Cron Management
@@ -10,11 +10,11 @@ and dispatched by the cortextOS daemon. Crons survive agent restarts, context co
 and daemon restarts automatically. You do NOT need to recreate them on session start.
 
 **Daemon crons are the only persistent scheduling path on this runtime.** Session-local
-schedulers — anything that lives only inside the agent's process — die on restart and
+schedulers - anything that lives only inside the agent's process - die on restart and
 silently drop their work. Always register recurring or future-dated jobs via the bus
 commands below so the daemon owns dispatch.
 
-Editing `config.json.crons[]` while the agent is running does NOT hot-reload — the daemon
+Editing `config.json.crons[]` while the agent is running does NOT hot-reload - the daemon
 only re-reads `config.json` on agent boot. Mid-session changes go through `bus add-cron` /
 `bus update-cron` / `bus remove-cron`, which trigger an automatic scheduler reload.
 
@@ -29,8 +29,8 @@ shape:
 [CRON FIRED <iso-timestamp>] <cron-name>: <prompt>
 ```
 
-Treat the inject as if the user just sent you `<prompt>`. Run it to completion. Then —
-**mandatory** — close the loop with `update-cron-fire` so the daemon's gap-detection knows
+Treat the inject as if the user just sent you `<prompt>`. Run it to completion. Then -
+**mandatory** - close the loop with `update-cron-fire` so the daemon's gap-detection knows
 you actually handled it (not just that the prompt was injected):
 
 ```bash
@@ -40,7 +40,7 @@ cortextos bus update-cron-fire <cron-name> --interval <interval>
 `<interval>` matches the cron's schedule shorthand (`6h`, `30m`, `1d`) or the expected gap
 between fires for a 5-field expression. If you skip this step the daemon will eventually
 nudge you with a "cron seems stuck" reminder even though you handled it. The audit trail
-lives in `state/<agent>/cron-state.json` — the daemon trusts that file, so write to it on
+lives in `state/<agent>/cron-state.json` - the daemon trusts that file, so write to it on
 every fire.
 
 **One-shot crons** (cron-expression form, see below) are the only exception: a one-shot
@@ -121,7 +121,7 @@ cortextos bus add-cron $CTX_AGENT_NAME may8-report "30 15 8 5 *" \
 ```
 
 When the cron fires, your handler does the work AND removes the cron. If you forget the
-remove step the cron will fire again next year on May 8 — same reason `update-cron-fire`
+remove step the cron will fire again next year on May 8 - same reason `update-cron-fire`
 is mandatory for recurring crons: the loop only closes when you say it does.
 
 If you need a reminder less than 24 hours out and the date math is awkward, use a short
@@ -161,8 +161,8 @@ Each log entry: `ts`, `cron`, `status` (fired/retried/failed), `attempt`, `durat
 ## Troubleshooting
 
 **Cron not firing:**
-1. `cortextos bus list-crons $CTX_AGENT_NAME` — confirm it is registered and not disabled.
-2. `cortextos bus get-cron-log $CTX_AGENT_NAME <name>` — check for `status: failed` entries.
+1. `cortextos bus list-crons $CTX_AGENT_NAME` - confirm it is registered and not disabled.
+2. `cortextos bus get-cron-log $CTX_AGENT_NAME <name>` - check for `status: failed` entries.
 3. Check daemon log: `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/`
 
 **`crons.json` corrupted:**

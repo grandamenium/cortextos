@@ -139,7 +139,7 @@ The orchestrator has 5 built-in crons. Set them all up now.
 
 ### Step 11: Set up core crons
 
-All crons are daemon-managed and survive restarts automatically. Use `cortextos bus add-cron` — do NOT use `/loop` or CronCreate for persistent scheduling.
+All crons are daemon-managed and survive restarts automatically. Use `cortextos bus add-cron` - do NOT use `/loop` or CronCreate for persistent scheduling.
 
 Check for existing crons first:
 ```bash
@@ -154,7 +154,7 @@ cortextos bus add-cron $CTX_AGENT_NAME heartbeat 4h Read HEARTBEAT.md and follow
 cortextos bus add-cron $CTX_AGENT_NAME approval-sweep 2h Check for pending approvals: cortextos bus list-approvals --format json. Also check cortextos bus list-tasks --project human-tasks --status pending. For any pending approval or human task older than 1h, send user a Telegram reminder.
 ```
 
-**Time-anchored crons** — compute hours from context.json, then register:
+**Time-anchored crons** - compute hours from context.json, then register:
 
 ```bash
 # DAY_START and DAY_END were read from context.json in Step 2
@@ -266,13 +266,13 @@ echo "Knowledge Base: $KB_STATUS"
 **END YOUR TURN** if waiting for the user to add the key.
 
 **If KB is enabled**, continue:
-> "Knowledge base is ready. I'll now set up ingestion rules — this determines what I remember and how I share context with other agents.
+> "Knowledge base is ready. I'll now set up ingestion rules - this determines what I remember and how I share context with other agents.
 >
 > A few quick questions:"
 
-(a) Ask: > "Which docs should I keep in the shared org knowledge base? Things all agents should know about — your company docs, style guides, key processes, product context."
+(a) Ask: > "Which docs should I keep in the shared org knowledge base? Things all agents should know about - your company docs, style guides, key processes, product context."
 
-(b) Ask: > "What should only I have access to? (Orchestrator-private context — strategic docs, decision history, financial info)"
+(b) Ask: > "What should only I have access to? (Orchestrator-private context - strategic docs, decision history, financial info)"
 
 (c) Ask: > "Are there any files or directories to never ingest? (Private, sensitive, or too large)"
 

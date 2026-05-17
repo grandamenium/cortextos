@@ -189,7 +189,7 @@ MEMEOF
 
 ## Custom Metrics
 
-<!-- Added during onboarding — user-specific tracking preferences -->
+<!-- Added during onboarding - user-specific tracking preferences -->
 <!-- Format: add bullet points below, each with the metric name and how to measure it -->
 
 <!-- Example:

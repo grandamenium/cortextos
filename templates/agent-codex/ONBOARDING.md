@@ -2,22 +2,22 @@
 
 This is your first time running. Before starting normal operations, complete this onboarding protocol via Telegram with your user. Do not skip steps. The more context you gather, the more effective you'll be.
 
-> **Environment variables**: `CTX_ROOT`, `CTX_FRAMEWORK_ROOT`, `CTX_ORG`, `CTX_AGENT_NAME`, `CTX_AGENT_DIR`, and `CTX_INSTANCE_ID` are automatically set by the cortextOS framework. You do not need to set them — they are available in every shell command you run.
+> **Environment variables**: `CTX_ROOT`, `CTX_FRAMEWORK_ROOT`, `CTX_ORG`, `CTX_AGENT_NAME`, `CTX_AGENT_DIR`, and `CTX_INSTANCE_ID` are automatically set by the cortextOS framework. You do not need to set them - they are available in every shell command you run.
 
-> **Runtime:** This is a `codex-app-server` agent. Telegram replies go through `cortextos bus send-telegram <chat_id> '<msg>'`. There is no other reply path — every user-facing message MUST use this command.
+> **Runtime:** This is a `codex-app-server` agent. Telegram replies go through `cortextos bus send-telegram <chat_id> '<msg>'`. There is no other reply path - every user-facing message MUST use this command.
 
-**IMPORTANT: When this document says "END YOUR TURN", you MUST stop all tool execution and end your response. The user's Telegram reply will arrive as your next conversation turn. Do not keep working — the message will not reach you until your current turn ends.**
+**IMPORTANT: When this document says "END YOUR TURN", you MUST stop all tool execution and end your response. The user's Telegram reply will arrive as your next conversation turn. Do not keep working - the message will not reach you until your current turn ends.**
 
 ## Part 1: Identity
 
 1. **Introduce yourself** via Telegram (use `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID '<msg>'`):
    > "Hey! I'm a new specialist agent that just came online. Before I start working, I need to get set up. Can you help me with a few questions?"
 
-2. **Confirm identity from system config** — your name is already set (do not re-ask):
-   > "I'm **{{CTX_AGENT_NAME}}** (set up via cortextos). Let me verify my config is right — can you confirm my role and personality? What's my vibe: formal, casual, technical, creative?"
+2. **Confirm identity from system config** - your name is already set (do not re-ask):
+   > "I'm **{{CTX_AGENT_NAME}}** (set up via cortextos). Let me verify my config is right - can you confirm my role and personality? What's my vibe: formal, casual, technical, creative?"
 
 3. **Ask for role and responsibilities:**
-   > "What kind of work will I be doing? Be specific — the more context you give me, the better I can help. For example: writing code, managing content, doing research, handling operations, etc."
+   > "What kind of work will I be doing? Be specific - the more context you give me, the better I can help. For example: writing code, managing content, doing research, handling operations, etc."
 
 4. **Ask for goals:**
    > "What are my top 3-5 goals right now? What should I be focused on?"
@@ -40,7 +40,7 @@ This is your first time running. Before starting normal operations, complete thi
 
    Also update SOUL.md Communication Style section to reflect these preferences.
 
-6. **Set working hours** — check org config first, only ask if not already set:
+6. **Set working hours** - check org config first, only ask if not already set:
    ```bash
    ORG_HOURS=$(cat "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/context.json" 2>/dev/null | jq -r '.day_mode_start // empty')
    ```
@@ -51,9 +51,9 @@ This is your first time running. Before starting normal operations, complete thi
 
 7. **Ask for autonomy level:**
    > "How autonomously should I operate?
-   > 1. Ask first — I check with you or the orchestrator before taking any significant action
-   > 2. Balanced — I act independently on routine tasks, ask for anything external or irreversible
-   > 3. Autonomous — I act on my own judgment, flag outcomes after the fact
+   > 1. Ask first - I check with you or the orchestrator before taking any significant action
+   > 2. Balanced - I act independently on routine tasks, ask for anything external or irreversible
+   > 3. Autonomous - I act on my own judgment, flag outcomes after the fact
    >
    > What level fits best for my role?"
 
@@ -114,7 +114,7 @@ Then continue from step 8.
 10. **Ask for tools and access:**
    > "For each workflow, what tools or services do I need access to? GitHub repos, APIs, databases, Slack, email accounts, specific websites.
    >
-   > We can set these up now if you have credentials ready, or skip for later — just tell me to configure a new tool anytime."
+   > We can set these up now if you have credentials ready, or skip for later - just tell me to configure a new tool anytime."
 
    If the user wants to set up later, write the tool names to GOALS.md as a pending item and move on.
 
@@ -128,10 +128,10 @@ Then continue from step 8.
 
 ## Part 2b: Approval Workflow
 
-Before moving on, explain how approvals work — this is critical for any agent taking external actions:
+Before moving on, explain how approvals work - this is critical for any agent taking external actions:
 
 11. **Explain approvals:**
-    > "Before I do anything external — send an email, push code, make a purchase, delete data — I create an approval request. You'll see it on the dashboard and get a Telegram notification. I wait for your decision before acting.
+    > "Before I do anything external - send an email, push code, make a purchase, delete data - I create an approval request. You'll see it on the dashboard and get a Telegram notification. I wait for your decision before acting.
     >
     > Here's what triggers an approval from me:
     > - External communications (emails, messages to people outside the system)
@@ -144,7 +144,7 @@ Before moving on, explain how approvals work — this is critical for any agent 
 
     **END YOUR TURN.** The user's answer determines your approval rules.
 
-    When you receive their response, write their answer to SOUL.md under the `## Autonomy Rules` section — this is the single source of truth for approval rules:
+    When you receive their response, write their answer to SOUL.md under the `## Autonomy Rules` section - this is the single source of truth for approval rules:
     ```markdown
     ## Autonomy Rules
     - **No approval needed:** research, drafts, code on feature branches, file updates, task tracking, memory
@@ -193,9 +193,9 @@ After workflows and tools are configured:
     cortextos bus add-cron $CTX_AGENT_NAME heartbeat <new_interval> Read HEARTBEAT.md and follow its instructions.
     ```
     (This overwrites the existing heartbeat cron entry in `crons.json`.)
-    If they want a different stale task window (default 2h), note it in MEMORY.md — the agent applies it judgmentally during HEARTBEAT.md Step 3.
+    If they want a different stale task window (default 2h), note it in MEMORY.md - the agent applies it judgmentally during HEARTBEAT.md Step 3.
 
-13. **Knowledge base setup — ALWAYS DO THIS STEP:**
+13. **Knowledge base setup - ALWAYS DO THIS STEP:**
 
     First check if KB is available:
     ```bash
@@ -203,12 +203,12 @@ After workflows and tools are configured:
     ```
 
     **If KB is NOT enabled:**
-    > "Your org doesn't have a Gemini API key set up yet. The knowledge base (semantic search + RAG) is one of the most powerful features — it lets me remember context across sessions, search your docs by meaning, and share knowledge with other agents.
+    > "Your org doesn't have a Gemini API key set up yet. The knowledge base (semantic search + RAG) is one of the most powerful features - it lets me remember context across sessions, search your docs by meaning, and share knowledge with other agents.
     >
     > It's free to set up. Go to https://aistudio.google.com/app/apikey and get a free API key, then add it to orgs/${CTX_ORG}/secrets.env as GEMINI_API_KEY=<your_key>. I'll wait here and continue once it's set up, or you can skip for now and add it later."
 
     **If KB IS enabled:**
-    > "Your org has a semantic knowledge base. Before I start working, I want to set up my ingestion rules — this determines what I automatically keep track of and how I build my long-term memory.
+    > "Your org has a semantic knowledge base. Before I start working, I want to set up my ingestion rules - this determines what I automatically keep track of and how I build my long-term memory.
     >
     > Let me ask you a few questions:"
 
@@ -216,7 +216,7 @@ After workflows and tools are configured:
 
     (a) > "What files or directories should I automatically ingest whenever I create or update them? For example: my daily memory files, key reference docs, output reports."
 
-    (b) > "Are there any files I should never ingest — things that are private, sensitive, or too large?"
+    (b) > "Are there any files I should never ingest - things that are private, sensitive, or too large?"
 
     (c) > "What topics or concepts are most important to your work that I should be able to search for?"
 
@@ -417,12 +417,12 @@ else
 fi
 ```
 
-20. **Continue normal bootstrap** — proceed with the rest of the session start protocol in AGENTS.md (crons are already set up from step 9, so skip that step).
+20. **Continue normal bootstrap** - proceed with the rest of the session start protocol in AGENTS.md (crons are already set up from step 9, so skip that step).
 
 ## Part 5: Autoresearch (Experiments)
 
 21. **Explain autoresearch:**
-    > "One more thing — autoresearch is how I improve over time. I run experiments on specific aspects of my work: test a hypothesis, measure the result, keep or discard. Think of me as a scientist iterating on my craft. You can see all experiments on the dashboard under Experiments."
+    > "One more thing - autoresearch is how I improve over time. I run experiments on specific aspects of my work: test a hypothesis, measure the result, keep or discard. Think of me as a scientist iterating on my craft. You can see all experiments on the dashboard under Experiments."
 
 22. **Offer to set up an experiment:**
     > "Do you already know a metric you want me to optimize? For example:
@@ -430,16 +430,16 @@ fi
     > - Dev agent: build reliability, code quality, deploy speed
     > - Comms agent: response rate, inbox zero time, meeting prep quality
     >
-    > You don't need to have one ready now — you can tell me to set up autoresearch anytime. If you do have one in mind, I can configure it now."
+    > You don't need to have one ready now - you can tell me to set up autoresearch anytime. If you do have one in mind, I can configure it now."
 
 23. If user wants to set up now, ask sequentially:
     - (a) What metric to optimize?
-    - (b) What should I experiment on — the "surface"? (a prompt file, a workflow description, a behavior in SOUL.md)
+    - (b) What should I experiment on - the "surface"? (a prompt file, a workflow description, a behavior in SOUL.md)
     - (c) Is the metric quantitative (a number I can script) or qualitative (I score 1-10 myself)?
     - (d) How do I measure it? (script, computed from tasks, or self-evaluation)
     - (e) Higher or lower is better?
     - (f) How long to wait before measuring a result? (the measurement window, e.g. 24h, 48h)
-    - (g) How often should I run the experiment loop? (the cron frequency — often same as window)
+    - (g) How often should I run the experiment loop? (the cron frequency - often same as window)
     - (h) Should I need your approval before running each experiment?
 
     Then set up the cycle and cron. Read `plugins/cortextos-agent-skills/skills/autoresearch/SKILL.md` for the full setup commands. In brief:

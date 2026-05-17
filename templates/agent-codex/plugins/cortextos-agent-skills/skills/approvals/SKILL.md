@@ -1,11 +1,11 @@
 ---
 name: approvals
-description: "You are about to take an action that affects the outside world, cannot be undone, or involves real people — and you have not yet received explicit permission. This includes: sending any email or message to a real person, deploying code to production, posting on social media, making a purchase or financial commitment, deleting files or data, merging a PR to main, or publishing anything publicly. Stop, create an approval, block your task, and notify the user. Do not proceed until you receive the approval decision in your inbox."
+description: "You are about to take an action that affects the outside world, cannot be undone, or involves real people - and you have not yet received explicit permission. This includes: sending any email or message to a real person, deploying code to production, posting on social media, making a purchase or financial commitment, deleting files or data, merging a PR to main, or publishing anything publicly. Stop, create an approval, block your task, and notify the user. Do not proceed until you receive the approval decision in your inbox."
 ---
 
 # Approvals
 
-Before any external, irreversible, or high-stakes action — stop and create an approval. The user decides. You execute only after they approve.
+Before any external, irreversible, or high-stakes action - stop and create an approval. The user decides. You execute only after they approve.
 
 ---
 
@@ -49,7 +49,7 @@ cortextos bus log-event task task_blocked info --meta "{\"task_id\":\"$TASK_ID\"
 
 ```bash
 cortextos bus send-telegram "$CTX_TELEGRAM_CHAT_ID" \
-  "Approval needed: <title> — check dashboard or reply to approve/reject"
+  "Approval needed: <title> - check dashboard or reply to approve/reject"
 ```
 
 ### 4. Wait for inbox notification
@@ -66,7 +66,7 @@ note: <user's note>
 **Approved:**
 ```bash
 # Unblock task
-cortextos bus update-task "$TASK_ID" in_progress "Approval received — executing"
+cortextos bus update-task "$TASK_ID" in_progress "Approval received - executing"
 # Execute the action
 # Complete the task
 cortextos bus complete-task "$TASK_ID" --result "<what was done>"
@@ -74,7 +74,7 @@ cortextos bus complete-task "$TASK_ID" --result "<what was done>"
 
 **Rejected:**
 ```bash
-cortextos bus complete-task "$TASK_ID" --result "Cancelled — approval rejected: <note>"
+cortextos bus complete-task "$TASK_ID" --result "Cancelled - approval rejected: <note>"
 ```
 
 ---
@@ -102,7 +102,7 @@ cortextos bus list-approvals --format json
 
 ## Critical Rules
 
-1. **Create approval BEFORE starting the action** — never take the action first and ask forgiveness
-2. **Always block your task** pointing to the approval ID — so work isn't lost while waiting
-3. **Never assume approval** — if you don't have an inbox confirmation, you don't have approval
-4. **One re-ping max** — after 4h, ping once and wait
+1. **Create approval BEFORE starting the action** - never take the action first and ask forgiveness
+2. **Always block your task** pointing to the approval ID - so work isn't lost while waiting
+3. **Never assume approval** - if you don't have an inbox confirmation, you don't have approval
+4. **One re-ping max** - after 4h, ping once and wait

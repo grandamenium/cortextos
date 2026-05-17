@@ -1,6 +1,6 @@
 ---
 name: autoresearch
-description: "The analyst has assigned you a research cycle, or you have identified a metric you want to improve through systematic experimentation. You will form a hypothesis, make a targeted change, measure the outcome against a baseline, and decide whether to keep or discard the change. You repeat this loop until the metric improves or you exhaust viable hypotheses. This is not ad-hoc research — it is structured scientific iteration with a defined metric, a hypothesis, and a measurable result."
+description: "The analyst has assigned you a research cycle, or you have identified a metric you want to improve through systematic experimentation. You will form a hypothesis, make a targeted change, measure the outcome against a baseline, and decide whether to keep or discard the change. You repeat this loop until the metric improves or you exhaust viable hypotheses. This is not ad-hoc research - it is structured scientific iteration with a defined metric, a hypothesis, and a measurable result."
 triggers: ["experiment", "autoresearch", "hypothesis", "research cycle", "optimize", "improve metric", "run experiment", "test hypothesis", "measure improvement", "scientific loop", "iteration cycle", "theta wave research", "baseline measurement", "keep or discard", "research assignment"]
 ---
 
@@ -60,7 +60,7 @@ cortextos bus create-experiment "<metric_name>" "<your hypothesis>" --surface <p
 If `approval_required` is true in `experiments/config.json`, you must manually create an approval before proceeding:
 ```bash
 APPR_ID=$(cortextos bus create-approval "Run experiment: <hypothesis>" experiments "Cycle: <cycle_name>, Metric: <metric_name>, Surface: <surface>")
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Approval needed to run experiment for <metric_name> — check dashboard"
+cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Approval needed to run experiment for <metric_name> - check dashboard"
 # Block until approved, then continue to Step 5
 ```
 
@@ -103,25 +103,25 @@ You compare baseline vs experiment output side by side and score 1-10.
 ## Setting Up a Cycle (Orchestrator-Specific)
 
 Orchestrator-appropriate metrics to suggest to the user:
-- **briefing_quality** — qualitative score 1-10 on how useful morning/evening briefings are (surface: SOUL.md or a briefing prompt file)
-- **approval_routing_speed** — quantitative: minutes from approval created to user Telegram notification (computed from event log timestamps)
-- **goal_cascade_alignment** — qualitative score 1-10 on how well agents' tasks match the north star (surface: goal-management skill or SOUL.md)
+- **briefing_quality** - qualitative score 1-10 on how useful morning/evening briefings are (surface: SOUL.md or a briefing prompt file)
+- **approval_routing_speed** - quantitative: minutes from approval created to user Telegram notification (computed from event log timestamps)
+- **goal_cascade_alignment** - qualitative score 1-10 on how well agents' tasks match the north star (surface: goal-management skill or SOUL.md)
 
 If the user wants to set up a cycle, collect these 8 things:
-1. **Metric** — which of the above (or their own choice)
-2. **Metric type** — quantitative (scripted/computed) or qualitative (you score 1-10 each cycle)
-3. **Surface** — the file to experiment on
-4. **Direction** — higher or lower is better (usually higher)
-5. **Measurement** — how to get the metric value (for briefing quality: self-score 1-10; for approval routing: compute timestamp delta from event log)
-6. **Window** — how long to wait before measuring (e.g., `72h` for briefing quality — needs a few days of data)
-7. **Loop interval** — how often to run the experiment loop (often same as window)
-8. **Approval** — should each experiment need your approval before running?
+1. **Metric** - which of the above (or their own choice)
+2. **Metric type** - quantitative (scripted/computed) or qualitative (you score 1-10 each cycle)
+3. **Surface** - the file to experiment on
+4. **Direction** - higher or lower is better (usually higher)
+5. **Measurement** - how to get the metric value (for briefing quality: self-score 1-10; for approval routing: compute timestamp delta from event log)
+6. **Window** - how long to wait before measuring (e.g., `72h` for briefing quality - needs a few days of data)
+7. **Loop interval** - how often to run the experiment loop (often same as window)
+8. **Approval** - should each experiment need your approval before running?
 
 Then create the cycle and surface directory:
 ```bash
 mkdir -p "experiments/surfaces/<metric>"
 cat > "experiments/surfaces/<metric>/current.md" << 'EOF'
-# <metric> — Baseline
+# <metric> - Baseline
 
 [Describe the current approach being tested]
 EOF

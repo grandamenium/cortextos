@@ -21,23 +21,23 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 Complete the following in order. Do not skip steps.
 
-1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
+1. **Send boot message first** - before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
    ```bash
    cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"
    ```
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
-   - TOOLS.md is a compact command index — load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
+   - TOOLS.md is a compact command index - load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
+6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling - those are session-only).
 7. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
 8. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 9. Check inbox: `cortextos bus check-inbox`
 10. Update heartbeat: `cortextos bus update-heartbeat "online"`
 11. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
 12. Write session start entry to daily memory (see Memory Protocol below)
-13. Send your online status message. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
+13. Send your online status message. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back - [what you were working on]"). No cron IDs, no status report.
 
 ---
 
@@ -52,7 +52,7 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
 
 ## Session End - $(date -u +%H:%M:%S UTC)
 - Status: [done/interrupted/context-full]
-- Current state: [where things stand — specific enough that the next session can resume cold]
+- Current state: [where things stand - specific enough that the next session can resume cold]
 - Active threads: [anything in progress or mid-task with current state]
 - Key decisions: [significant decisions from this session worth carrying forward]
 - For next session: [what to do first and what context is needed]
@@ -61,11 +61,11 @@ MEMEOF
    ```
 2. Update heartbeat: `cortextos bus update-heartbeat "restarting"`
 3. Log session end: `cortextos bus log-event action session_end info --meta '{"agent":"'$CTX_AGENT_NAME'","reason":"[why]"}'`
-4. **Hard restart only** — notify user on Telegram:
+4. **Hard restart only** - notify user on Telegram:
    ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Restarting now — will be back in a moment."
+   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Restarting now - will be back in a moment."
    ```
-5. **Context exhaustion only** — notify first, then hard-restart:
+5. **Context exhaustion only** - notify first, then hard-restart:
    ```bash
    cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Context window full. Hard-restarting with fresh session. Resuming from memory."
    cortextos bus hard-restart --reason "context exhaustion"
@@ -106,7 +106,7 @@ date +'Current time: %A %B %-d %Y at %-I:%M %p %Z'
 
 If `CTX_TIMEZONE` is empty, check `config.json` or ask the user to set it:
 ```bash
-# User sets timezone — update config.json and tell them to restart
+# User sets timezone - update config.json and tell them to restart
 cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Your timezone is not configured. What timezone are you in? (e.g. America/New_York, Europe/London, Asia/Tokyo)"
 ```
 
@@ -148,7 +148,7 @@ TARGET: Every significant piece of work (>10 minutes) = at least 1 task created.
 
 Three distinct states when you cannot proceed. Use the right one.
 
-### BLOCKED (dependency — waiting for another agent/task)
+### BLOCKED (dependency - waiting for another agent/task)
 
 When your work depends on another task or agent completing first:
 
@@ -165,7 +165,7 @@ When the blocker completes, you will receive an inbox message automatically. Unb
 cortextos bus update-task <task_id> in_progress
 ```
 
-### HUMAN TASK (capability — only a human can do this)
+### HUMAN TASK (capability - only a human can do this)
 
 When you CANNOT do something yourself (needs payment, physical access, login, sudo):
 
@@ -178,7 +178,7 @@ cortextos bus update-task <your_task_id> blocked
 cortextos bus log-event task task_blocked info --meta '{"task_id":"<your_task_id>","blocked_by":"<human_task_id>","reason":"human dependency"}'
 
 # Notify orchestrator so it surfaces in briefing
-cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal "Human task created: [HUMAN] <title> — needed before I can proceed with <your task>"
+cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal "Human task created: [HUMAN] <title> - needed before I can proceed with <your task>"
 ```
 
 When the human task is marked complete, you receive an inbox message. Unblock and resume immediately.
@@ -186,7 +186,7 @@ When the human task is marked complete, you receive an inbox message. Unblock an
 CONSEQUENCE: Leaving work undone without creating a human task = invisible blocker = system failure.
 TARGET: Every human-dependent blocker has a [HUMAN] task within 1 heartbeat of discovery.
 
-### APPROVAL (permission — you can do it, but need sign-off first)
+### APPROVAL (permission - you can do it, but need sign-off first)
 
 Before ANY external action (email, deploy, post, delete data, financial, merge to main):
 
@@ -195,7 +195,7 @@ Before ANY external action (email, deploy, post, delete data, financial, merge t
 APPR_ID=$(cortextos bus create-approval "<what you want to do>" "<category>" "<context and draft>")
 
 # Notify user immediately
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Approval needed: <title> — check dashboard"
+cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Approval needed: <title> - check dashboard"
 
 # Block your task
 cortextos bus update-task <task_id> blocked
@@ -219,22 +219,22 @@ TARGET: Every approval has a blocked parent task with blocked_by = approval ID.
 
 You have three memory layers. Think of them like human memory: working memory for what's happening now, long-term memory for durable knowledge, and an associative knowledge store for the whole organisation.
 
-### Layer 1: Daily Memory — Working Memory (memory/YYYY-MM-DD.md)
+### Layer 1: Daily Memory - Working Memory (memory/YYYY-MM-DD.md)
 
-This is your session journal. It survives crashes and context compactions. The goal is not to log activity — it is to capture enough context that you (or a fresh session) can resume intelligently without re-reading everything.
+This is your session journal. It survives crashes and context compactions. The goal is not to log activity - it is to capture enough context that you (or a fresh session) can resume intelligently without re-reading everything.
 
-**Write at these checkpoints — not continuously:**
+**Write at these checkpoints - not continuously:**
 - **Session start**: where things stand, what you are resuming and why
-- **Heartbeat cycle**: state snapshot — current focus, active threads, decisions, context notes
+- **Heartbeat cycle**: state snapshot - current focus, active threads, decisions, context notes
 - **Session end**: full context dump so the next session can pick up cold
 
 Each entry should answer: **"if my context was wiped right now, what would I need to know to resume intelligently?"**
 
-**Mid-work inline notes — write immediately, don't wait for heartbeat:**
+**Mid-work inline notes - write immediately, don't wait for heartbeat:**
 ```bash
 echo "NOTE $(date -u +%H:%M UTC): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
 ```
-Use this when: you make a significant decision, learn something about the user, hit a non-obvious situation, or encounter anything you would want the next session to know. One line is enough. The heartbeat is for structured summaries — inline notes capture the moment.
+Use this when: you make a significant decision, learn something about the user, hit a non-obvious situation, or encounter anything you would want the next session to know. One line is enough. The heartbeat is for structured summaries - inline notes capture the moment.
 
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
@@ -245,7 +245,7 @@ cat >> "memory/$TODAY.md" << MEMEOF
 - Status: online
 - Crons active: <list from `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
-- Current state: <where things stand — what is in progress, pending, or needs attention>
+- Current state: <where things stand - what is in progress, pending, or needs attention>
 - Resuming: <what to do next and why, with enough context to act without re-reading everything>
 
 MEMEOF
@@ -255,42 +255,42 @@ Entry formats:
 ```
 ## Heartbeat - HH:MM UTC
 - Current focus: <what I am working on and why>
-- Active threads: <anything in progress or being monitored — state of each>
+- Active threads: <anything in progress or being monitored - state of each>
 - Key decisions: <decisions made since last entry with brief rationale>
-- Context notes: <anything non-obvious — user preferences discovered, environment state, blockers>
+- Context notes: <anything non-obvious - user preferences discovered, environment state, blockers>
 - Next: <what I am doing next>
 ```
 
 CONSEQUENCE: Without daily memory, session crashes and compactions lose all context. You start from zero.
-TARGET: Session start, every heartbeat, session end. Each entry must have enough context to reconstruct your mental state cold — not just what happened, but where things stand and why.
+TARGET: Session start, every heartbeat, session end. Each entry must have enough context to reconstruct your mental state cold - not just what happened, but where things stand and why.
 
-### Layer 2: Long-Term Memory — Consolidated Knowledge (MEMORY.md)
+### Layer 2: Long-Term Memory - Consolidated Knowledge (MEMORY.md)
 
-This is the knowledge you have synthesised over time. Not a log — a living document of durable learnings. Update it when you discover something worth keeping across sessions.
+This is the knowledge you have synthesised over time. Not a log - a living document of durable learnings. Update it when you discover something worth keeping across sessions.
 
 **Write entries for:**
 - Patterns that work or consistently fail
 - User preferences and working style discovered over time
 - Important decisions and the reasoning behind them
 - System behaviours worth remembering
-- **Corrections you received** — things you did wrong that needed fixing. Be honest.
-- **Negative patterns** — approaches that backfired, mistakes to avoid repeating
+- **Corrections you received** - things you did wrong that needed fixing. Be honest.
+- **Negative patterns** - approaches that backfired, mistakes to avoid repeating
 
-Also update GUARDRAILS.md when you identify a pattern of behaviour that should be explicitly prohibited or corrected — not just for yourself but as a guardrail for future sessions.
+Also update GUARDRAILS.md when you identify a pattern of behaviour that should be explicitly prohibited or corrected - not just for yourself but as a guardrail for future sessions.
 
 Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `memory-{agent}` KB collection so it is semantically searchable.
 
-### Layer 3: Knowledge Base — Associative Memory (RAG/ChromaDB)
+### Layer 3: Knowledge Base - Associative Memory (RAG/ChromaDB)
 
-The knowledge base is a semantic vector store (ChromaDB, Gemini Embedding 2). Think of it as your associative memory — not held in your head, but instantly searchable by meaning. It works like your own memory system: Gemini describes every non-text file (image, video, audio, PDF, Office doc) and embeds the description together with the content so you can find things by what they mean, not just what they literally say. Queries return the matching content plus full metadata: source path, similarity score, file type, chunk position, page number, timestamps.
+The knowledge base is a semantic vector store (ChromaDB, Gemini Embedding 2). Think of it as your associative memory - not held in your head, but instantly searchable by meaning. It works like your own memory system: Gemini describes every non-text file (image, video, audio, PDF, Office doc) and embeds the description together with the content so you can find things by what they mean, not just what they literally say. Queries return the matching content plus full metadata: source path, similarity score, file type, chunk position, page number, timestamps.
 
-**Three collections — different management models:**
+**Three collections - different management models:**
 
 | Collection | Scope | What goes in | How managed |
 |---|---|---|---|
-| `memory-{agent}` | Private | MEMORY.md + daily memory files | **Auto** — re-indexed on every heartbeat |
-| `private-{agent}` | Private | Your outputs, research docs, workspace files | **Agent-managed** — ingest when you produce something worth keeping |
-| `shared-{org}` | Org-wide | Research findings, reports, org knowledge | **Agent-managed** — ingest when the whole org benefits |
+| `memory-{agent}` | Private | MEMORY.md + daily memory files | **Auto** - re-indexed on every heartbeat |
+| `private-{agent}` | Private | Your outputs, research docs, workspace files | **Agent-managed** - ingest when you produce something worth keeping |
+| `shared-{org}` | Org-wide | Research findings, reports, org knowledge | **Agent-managed** - ingest when the whole org benefits |
 
 **memory-{agent} is automatic.** On every heartbeat cycle, re-ingest your memory files so they stay current and searchable:
 ```bash
@@ -299,14 +299,14 @@ cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
   --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
 ```
 
-**When to query — before starting any task:**
-- Before starting any task — what context exists on this topic?
+**When to query - before starting any task:**
+- Before starting any task - what context exists on this topic?
 - When the user asks a factual question about the org, projects, or people
-- When you encounter an error — has this happened before?
+- When you encounter an error - has this happened before?
 - When referencing named entities (clients, projects, systems)
 - To recall your own past work: query `memory-{agent}` or `private-{agent}` specifically
 
-**When to ingest private-{agent} and shared-{org} — your judgment:**
+**When to ingest private-{agent} and shared-{org} - your judgment:**
 - After completing a task with a notable output → `private-{agent}`
 - After completing research → `shared-{org}` (the whole org benefits)
 - After producing a document, report, or significant file → appropriate scope
@@ -378,7 +378,7 @@ Messages arrive in real time via the fast-checker daemon:
 Reply using: cortextos bus send-telegram <chat_id> "<reply>"
 ```
 
-**CRITICAL: When a Telegram message arrives, you MUST reply BEFORE doing any work.** The user is waiting. Acknowledge immediately, then execute. Never leave the user as the last person to have sent a message — always follow up when work is done, when something changes, or when you are waiting on something. The user should never have to ask "are you still there?"
+**CRITICAL: When a Telegram message arrives, you MUST reply BEFORE doing any work.** The user is waiting. Acknowledge immediately, then execute. Never leave the user as the last person to have sent a message - always follow up when work is done, when something changes, or when you are waiting on something. The user should never have to ask "are you still there?"
 
 Photos include a `local_file:` path. Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
 
@@ -396,20 +396,20 @@ Photos include a `local_file:` path. Callbacks include `callback_data:` and `mes
 Reply using: cortextos bus send-message <agent> normal '<reply>' <msg_id>
 ```
 
-Always include `msg_id` as reply_to — this auto-ACKs the original. Un-ACK'd messages redeliver after 5 min. For no-reply messages: `cortextos bus ack-inbox <msg_id>`
+Always include `msg_id` as reply_to - this auto-ACKs the original. Un-ACK'd messages redeliver after 5 min. For no-reply messages: `cortextos bus ack-inbox <msg_id>`
 
 ---
 
 ## Crons
 
-Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session — no manual restoration needed.
+Crons are **daemon-managed**. The cortextOS daemon reads `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on start and fires each cron by injecting its prompt into your session - no manual restoration needed.
 
 **View scheduled crons:**
 ```bash
 cortextos bus list-crons $CTX_AGENT_NAME
 ```
 
-**Add a recurring cron at runtime:** Use the `cron-management` skill. Do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only and will not survive a restart.
+**Add a recurring cron at runtime:** Use the `cron-management` skill. Do NOT use CronCreate or `/loop` for persistent scheduling - those are session-only and will not survive a restart.
 
 **Add a one-shot reminder:** Use `cortextos bus add-cron $CTX_AGENT_NAME --name <name> --schedule <ISO> --prompt "<text>"` (one-time fire).
 
@@ -423,7 +423,7 @@ For full CRUD protocol, see `.claude/skills/cron-management/SKILL.md`.
 
 ### The Model
 
-Persistent crons live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon owns this file — it reads it on every agent start, schedules each entry, and fires them by injecting prompts directly into your PTY session. Retry logic: 1s, 4s, 16s on injection failure. Execution is logged to `${CTX_ROOT}/state/${CTX_AGENT_NAME}/cron-execution.log`.
+Persistent crons live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon owns this file - it reads it on every agent start, schedules each entry, and fires them by injecting prompts directly into your PTY session. Retry logic: 1s, 4s, 16s on injection failure. Execution is logged to `${CTX_ROOT}/state/${CTX_AGENT_NAME}/cron-execution.log`.
 
 Key properties:
 
@@ -435,7 +435,7 @@ Key properties:
 
 `/loop` is Claude Code's built-in for ephemeral polling inside a single session. Use it when you need something to repeat for the duration of one conversation (e.g., "poll this metric every 5 minutes"). It dies when the session ends.
 
-For ANY work that should survive restarts — heartbeats, nightly metrics, ecosystem checks, experiment loops — use `cortextos bus add-cron`.
+For ANY work that should survive restarts - heartbeats, nightly metrics, ecosystem checks, experiment loops - use `cortextos bus add-cron`.
 
 | Need | Use |
 |------|-----|
@@ -445,7 +445,7 @@ For ANY work that should survive restarts — heartbeats, nightly metrics, ecosy
 
 ### Migration from config.json
 
-Automatic. On agent boot, the daemon migrates `config.json` crons to `crons.json` once. A marker file `${CTX_ROOT}/state/${CTX_AGENT_NAME}/.crons-migrated` prevents re-runs. The source `config.json` is left untouched — non-destructive.
+Automatic. On agent boot, the daemon migrates `config.json` crons to `crons.json` once. A marker file `${CTX_ROOT}/state/${CTX_AGENT_NAME}/.crons-migrated` prevents re-runs. The source `config.json` is left untouched - non-destructive.
 
 You do not need to do anything. If you want to verify: check that `.crons-migrated` exists and `crons.json` is populated.
 
@@ -470,7 +470,7 @@ cortextos bus add-cron $CTX_AGENT_NAME ecosystem-check "30 */4 * * *" Check all 
 ```bash
 cortextos bus test-cron-fire $CTX_AGENT_NAME heartbeat
 ```
-This injects the cron prompt immediately — use it to confirm the wiring is correct before waiting for the first scheduled fire.
+This injects the cron prompt immediately - use it to confirm the wiring is correct before waiting for the first scheduled fire.
 
 ### How to Verify
 
@@ -510,17 +510,17 @@ Your available skills are discovered at session start:
 cortextos bus list-skills --format text
 ```
 
-Each skill is in `.claude/skills/<name>/SKILL.md`. When you encounter a scenario — getting blocked, needing approval, spawning an agent, rotating a credential — check your skills first before improvising.
+Each skill is in `.claude/skills/<name>/SKILL.md`. When you encounter a scenario - getting blocked, needing approval, spawning an agent, rotating a credential - check your skills first before improvising.
 
 ---
 
 ## System Management
 
 Key paths:
-- Agent config: `orgs/{org}/agents/{agent}/config.json` — crons, model, session limits
-- Agent secrets: `orgs/{org}/agents/{agent}/.env` — BOT_TOKEN, CHAT_ID, ALLOWED_USER
-- Org secrets: `orgs/{org}/secrets.env` — shared API keys (GEMINI_API_KEY, OPENAI_API_KEY, etc.)
-- Logs: `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/` — activity, fast-checker, stdout, stderr
+- Agent config: `orgs/{org}/agents/{agent}/config.json` - crons, model, session limits
+- Agent secrets: `orgs/{org}/agents/{agent}/.env` - BOT_TOKEN, CHAT_ID, ALLOWED_USER
+- Org secrets: `orgs/{org}/secrets.env` - shared API keys (GEMINI_API_KEY, OPENAI_API_KEY, etc.)
+- Logs: `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/` - activity, fast-checker, stdout, stderr
 
 For agent lifecycle (spawn, restart, config), see `.claude/skills/agent-management/SKILL.md`.
 For secrets and credentials, see `.claude/skills/env-management/SKILL.md`.

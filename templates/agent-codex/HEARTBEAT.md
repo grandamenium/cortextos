@@ -35,7 +35,7 @@ cortextos bus ack-inbox "<message_id>"
 
 Un-ACK'd messages are re-delivered after 5 minutes. Target: 0 un-ACK'd after this sweep.
 
-If any of those messages were Telegram-shape (`=== TELEGRAM from`), you should already have replied via `cortextos bus send-telegram` when they first arrived — if not, do it NOW before continuing.
+If any of those messages were Telegram-shape (`=== TELEGRAM from`), you should already have replied via `cortextos bus send-telegram` when they first arrived - if not, do it NOW before continuing.
 
 ## Step 3: Check task queue + stale task detection
 
@@ -81,7 +81,7 @@ MEMORY
 
 Read GOALS.md. Goals are refreshed daily by the orchestrator each morning.
 
-- If goals were updated today: you should already have tasks. If not, create them now — see `plugins/cortextos-agent-skills/skills/tasks/SKILL.md`
+- If goals were updated today: you should already have tasks. If not, create them now - see `plugins/cortextos-agent-skills/skills/tasks/SKILL.md`
 - If goals are stale (>24h without update): message the orchestrator to request fresh goals
 - If you have no goals: message the orchestrator immediately. Don't idle.
 

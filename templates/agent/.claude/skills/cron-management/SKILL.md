@@ -1,6 +1,6 @@
 ---
 name: cron-management
-description: "Manage scheduled tasks (crons). Crons are daemon-managed and stored in crons.json — they survive restarts automatically. Use when: verifying crons on session start, creating new recurring tasks, updating or removing crons, troubleshooting scheduled tasks, or using the dashboard test-fire button."
+description: "Manage scheduled tasks (crons). Crons are daemon-managed and stored in crons.json - they survive restarts automatically. Use when: verifying crons on session start, creating new recurring tasks, updating or removing crons, troubleshooting scheduled tasks, or using the dashboard test-fire button."
 triggers: ["remind me", "every day", "every hour", "every week", "schedule", "recurring", "daily", "weekly", "cron", "loop", "check regularly", "monitor", "keep an eye on", "set up a reminder", "repeat every", "run every", "automate", "schedule task", "restore crons", "crons missing", "cron not firing", "session start crons", "persist cron"]
 ---
 
@@ -10,7 +10,7 @@ Crons are **daemon-managed**. They are stored in `${CTX_ROOT}/state/$CTX_AGENT_N
 and dispatched by the cortextOS daemon. Crons survive agent restarts, context compactions,
 and daemon restarts automatically. You do NOT need to recreate them on session start.
 
-**Never use `/loop` or CronCreate for persistent recurring work** — those are session-local
+**Never use `/loop` or CronCreate for persistent recurring work** - those are session-local
 and die on agent restart.
 
 ---
@@ -102,8 +102,8 @@ Each log entry: `ts`, `cron`, `status` (fired/retried/failed), `attempt`, `durat
 ## Troubleshooting
 
 **Cron not firing:**
-1. `cortextos bus list-crons $CTX_AGENT_NAME` — confirm it is registered and not disabled.
-2. `cortextos bus get-cron-log $CTX_AGENT_NAME <name>` — check for `status: failed` entries.
+1. `cortextos bus list-crons $CTX_AGENT_NAME` - confirm it is registered and not disabled.
+2. `cortextos bus get-cron-log $CTX_AGENT_NAME <name>` - check for `status: failed` entries.
 3. Check daemon log: `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/`
 
 **`crons.json` corrupted:**

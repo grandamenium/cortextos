@@ -11,10 +11,10 @@ The orchestrator owns the daily goal lifecycle. Goals flow from the user's daily
 ## Hierarchy
 
 ```
-North Star (org-level, rarely changes — set by user)
-  → Daily Focus (what the user wants done TODAY — set each morning)
+North Star (org-level, rarely changes - set by user)
+  → Daily Focus (what the user wants done TODAY - set each morning)
     → Agent goals.json (orchestrator writes role-specific goals for each agent)
-      → GOALS.md (auto-generated from goals.json — agents read this on boot)
+      → GOALS.md (auto-generated from goals.json - agents read this on boot)
         → Tasks (agents create from their goals)
 ```
 
@@ -74,7 +74,7 @@ For each active agent, based on their role and today's daily focus:
    cortextos bus send-message <agent> normal "New goals for today. Check GOALS.md and create tasks."
    ```
 
-**If an agent's goals.json already has `daily_focus_set_at` matching today: skip — don't overwrite.**
+**If an agent's goals.json already has `daily_focus_set_at` matching today: skip - don't overwrite.**
 
 ### 5. Set your own goals
 

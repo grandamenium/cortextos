@@ -1,6 +1,6 @@
 ---
 name: tool-registration
-description: "A new tool has been added to the system and is not yet documented — agents do not know it exists or how to use it. This includes any new bus script, CLI binary, MCP server, external web tool or API wrapper, or any other capability an agent can invoke. You need to add it to TOOLS.md with its command, purpose, key flags, and usage examples. Or you have discovered that TOOLS.md is out of sync with what is actually available. This keeps the tool reference current so every agent can discover and use new capabilities."
+description: "A new tool has been added to the system and is not yet documented - agents do not know it exists or how to use it. This includes any new bus script, CLI binary, MCP server, external web tool or API wrapper, or any other capability an agent can invoke. You need to add it to TOOLS.md with its command, purpose, key flags, and usage examples. Or you have discovered that TOOLS.md is out of sync with what is actually available. This keeps the tool reference current so every agent can discover and use new capabilities."
 triggers: ["new tool", "register tool", "add tool", "document tool", "tools.md", "missing from tools", "tool not documented", "new script", "new command", "new binary", "new capability", "update tools.md", "add to tools", "tool not in docs", "undocumented tool", "new bus script", "new cli", "tool reference out of date"]
 ---
 
@@ -12,7 +12,7 @@ When a new tool, CLI binary, or bus script becomes available, it must be documen
 
 ## Where TOOLS.md Lives
 
-Each agent has its own TOOLS.md in its workspace directory. All 3 templates ship with a full TOOLS.md — it is the canonical tool reference for that agent.
+Each agent has its own TOOLS.md in its workspace directory. All 3 templates ship with a full TOOLS.md - it is the canonical tool reference for that agent.
 
 ```
 orgs/{org}/agents/{agent}/TOOLS.md

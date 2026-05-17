@@ -1,10 +1,10 @@
 # Tools Quick Reference (codex-app-server)
 
-All cortextOS commands: `cortextos bus <command>`. Full docs in skill files — read the relevant SKILL.md (`plugins/cortextos-agent-skills/skills/<name>/SKILL.md`) when you need details on a workflow.
+All cortextOS commands: `cortextos bus <command>`. Full docs in skill files - read the relevant SKILL.md (`plugins/cortextos-agent-skills/skills/<name>/SKILL.md`) when you need details on a workflow.
 
 ---
 
-## ⚡ Telegram Reply — Primary Outbound Channel
+## ⚡ Telegram Reply - Primary Outbound Channel
 
 When a `=== TELEGRAM from <name> (chat_id:<id>) ===` block appears in your session, the inject ends with:
 
@@ -12,7 +12,7 @@ When a `=== TELEGRAM from <name> (chat_id:<id>) ===` block appears in your sessi
 Reply using: cortextos bus send-telegram <chat_id> '<your reply>'
 ```
 
-**Run that exact command.** This is the only way a codex agent reaches the user. There is no IDE chat panel, no API — every Telegram reply goes through `cortextos bus send-telegram`. Do this BEFORE any other action.
+**Run that exact command.** This is the only way a codex agent reaches the user. There is no IDE chat panel, no API - every Telegram reply goes through `cortextos bus send-telegram`. Do this BEFORE any other action.
 
 ```bash
 # Reply to user
@@ -48,7 +48,7 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 
 ## Command Index
 
-### Tasks — full docs: `plugins/cortextos-agent-skills/skills/tasks/SKILL.md`
+### Tasks - full docs: `plugins/cortextos-agent-skills/skills/tasks/SKILL.md`
 | Command | What it does |
 |---|---|
 | `create-task "<title>" --desc "<desc>"` | Create a task (visible on dashboard) |
@@ -59,7 +59,7 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `check-human-tasks` | Check for stale human-assigned tasks |
 | `archive-tasks [--dry-run] [--all-orgs]` | Archive completed tasks >7d |
 
-### Messages — full docs: `plugins/cortextos-agent-skills/skills/comms/SKILL.md`
+### Messages - full docs: `plugins/cortextos-agent-skills/skills/comms/SKILL.md`
 | Command | What it does |
 |---|---|
 | `send-message <agent> <priority> '<text>' [reply_to]` | Send to another agent |
@@ -67,17 +67,17 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `ack-inbox "<msg_id>"` | ACK a message (un-ACK'd re-deliver after 5 min) |
 | `notify-agent <agent> "<msg>"` | Urgently signal agent's fast-checker |
 
-### Telegram — full docs: `plugins/cortextos-agent-skills/skills/comms/SKILL.md`
+### Telegram - full docs: `plugins/cortextos-agent-skills/skills/comms/SKILL.md`
 | Command | What it does |
 |---|---|
-| `send-telegram <chat_id> "<msg>"` | **Primary user-facing channel — every Telegram reply goes here** |
+| `send-telegram <chat_id> "<msg>"` | **Primary user-facing channel - every Telegram reply goes here** |
 | `send-telegram <chat_id> "<caption>" --image <path>` | Send a photo |
 | `send-telegram <chat_id> "<caption>" --file <path>` | Send any file (PDF, txt, etc.) |
 | `edit-message <chat_id> <msg_id> "<text>"` | Edit an existing message |
 | `answer-callback <query_id> [toast]` | Dismiss button loading state |
 | `post-activity "<msg>"` | Post to org activity channel |
 
-### Events & Heartbeat — full docs: `plugins/cortextos-agent-skills/skills/heartbeat/SKILL.md`
+### Events & Heartbeat - full docs: `plugins/cortextos-agent-skills/skills/heartbeat/SKILL.md`
 | Command | What it does |
 |---|---|
 | `log-event <category> <name> <severity> --meta '<json>'` | Log structured event |
@@ -85,14 +85,14 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `read-all-heartbeats [--format json\|text]` | Aggregate fleet heartbeats |
 | `recall-facts [--days 3]` | Recall session facts extracted at compaction (cross-session memory) |
 
-### Approvals — full docs: `plugins/cortextos-agent-skills/skills/approvals/SKILL.md`
+### Approvals - full docs: `plugins/cortextos-agent-skills/skills/approvals/SKILL.md`
 | Command | What it does |
 |---|---|
 | `create-approval "<title>" <category> "[context]"` | Request human approval |
 | `update-approval <id> <approved\|rejected> "[note]"` | Resolve an approval |
 | `list-approvals [--status S] [--all-orgs]` | List approvals |
 
-### Knowledge Base — full docs: `plugins/cortextos-agent-skills/skills/knowledge-base/SKILL.md`
+### Knowledge Base - full docs: `plugins/cortextos-agent-skills/skills/knowledge-base/SKILL.md`
 | Command | What it does |
 |---|---|
 | `kb-query "<question>" --org $CTX_ORG` | Semantic search |
@@ -119,7 +119,7 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 |---|---|
 | `cortextos goals generate-md --agent <name> --org <org>` | Rebuild GOALS.md from goals.json |
 
-### Crons — full docs: `plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`
+### Crons - full docs: `plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`
 | Command | What it does |
 |---|---|
 | `add-cron <agent> <name> <schedule> <prompt>` | Add a persistent cron (survives restarts) |
@@ -128,9 +128,9 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `test-cron-fire <agent> <name>` | Inject the cron prompt now to verify wiring |
 | `get-cron-log <agent>` | Execution history |
 
-> `add-cron` is the ONLY persistent scheduling path on this runtime. There is no in-session scheduling tool — every recurring or future-dated job goes through the daemon.
+> `add-cron` is the ONLY persistent scheduling path on this runtime. There is no in-session scheduling tool - every recurring or future-dated job goes through the daemon.
 
-### Experiments (Theta Wave) — full docs: `plugins/cortextos-agent-skills/skills/autoresearch/SKILL.md`
+### Experiments (Theta Wave) - full docs: `plugins/cortextos-agent-skills/skills/autoresearch/SKILL.md`
 | Command | What it does |
 |---|---|
 | `create-experiment <metric> "<hypothesis>"` | Propose a new experiment |
@@ -161,14 +161,14 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 
 ### Shell exec (codex-app-server primary tool)
 - The codex runtime exposes a sandboxed shell to you. Every action listed above runs through it: `cortextos bus <cmd>`, `git`, `gh`, `npm`, file edits via standard editors, `jq`, `grep`, `curl`, etc.
-- Reading and writing files: just use shell (`cat`, the appropriate editor, `>` redirection). There is no Read/Edit/Write tool — those are Claude-Code-internal and do not exist here.
+- Reading and writing files: just use shell (`cat`, the appropriate editor, `>` redirection). There is no Read/Edit/Write tool - those are Claude-Code-internal and do not exist here.
 - For file inspection prefer `cat` / `sed -n` / `head` / `tail`; for edits prefer `sed -i` / `awk` / a redirect pipeline.
 
 ### agent-browser (Browser Automation)
-- `agent-browser` is the framework's Chrome/CDP browser automation tool — runtime-agnostic CLI, no MCP setup required. It is the codex equivalent of (and replacement for) the `mcp__playwright__*` tools that Claude-Code-runtime agents formerly used.
+- `agent-browser` is the framework's Chrome/CDP browser automation tool - runtime-agnostic CLI, no MCP setup required. It is the codex equivalent of (and replacement for) the `mcp__playwright__*` tools that Claude-Code-runtime agents formerly used.
 - `agent-browser` CLI (Rust binary, npm-installed globally) drives Chrome via CDP
 - Snapshot-then-ref interaction pattern: `agent-browser snapshot` returns an a11y tree with refs (e1, e2, ...), then `agent-browser click @e1` / `fill @e2 "text"` operate by ref
-- Loaded via `plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md` — that skill says to run `agent-browser skills get <name>` for current command syntax (workflow docs are versioned with the binary, so always fetch fresh)
+- Loaded via `plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md` - that skill says to run `agent-browser skills get <name>` for current command syntax (workflow docs are versioned with the binary, so always fetch fresh)
 - Quick verify: `agent-browser open https://example.com && agent-browser get title && agent-browser close`
 
 ### Peekaboo (macOS Desktop Automation)
@@ -187,4 +187,4 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 
 ## Reminder
 
-Every Telegram message ends with a `Reply using: cortextos bus send-telegram <chat_id> '<reply>'` line. **Run that command.** Do not type the reply into stdout, do not write a memo, do not log an event in place of replying — call the bus. The user reads what comes out of `cortextos bus send-telegram`. Nothing else reaches them.
+Every Telegram message ends with a `Reply using: cortextos bus send-telegram <chat_id> '<reply>'` line. **Run that command.** Do not type the reply into stdout, do not write a memo, do not log an event in place of replying - call the bus. The user reads what comes out of `cortextos bus send-telegram`. Nothing else reaches them.

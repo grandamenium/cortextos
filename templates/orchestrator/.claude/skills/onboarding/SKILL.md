@@ -1,6 +1,6 @@
 ---
 name: onboarding
-description: "You have just booted for the first time — there is no .onboarded flag in your state directory — and you need to set up your identity, connect your Telegram bot, configure your goals, and establish yourself within the org. Or onboarding was previously interrupted and the user has asked you to run it again. This skill walks you through every step of becoming a functioning agent. Do not skip steps. Do not start normal operations until onboarding is complete."
+description: "You have just booted for the first time - there is no .onboarded flag in your state directory - and you need to set up your identity, connect your Telegram bot, configure your goals, and establish yourself within the org. Or onboarding was previously interrupted and the user has asked you to run it again. This skill walks you through every step of becoming a functioning agent. Do not skip steps. Do not start normal operations until onboarding is complete."
 triggers: ["onboarding", "/onboarding", "first boot", "run onboarding", "setup", "not onboarded", "configure agent", "set up identity", "establish identity", "set goals", "onboard me", "start onboarding", "redo onboarding", "onboarding interrupted", "first time setup", "initial setup", "agent setup"]
 ---
 
@@ -76,4 +76,4 @@ If a session crash or restart interrupts onboarding mid-way:
 - Do NOT send a Telegram message claiming you are online until onboarding is complete
 - Do NOT set up crons until IDENTITY.md and GOALS.md are written
 - Do NOT start processing user requests until `.onboarded` is written
-- The user is waiting — be efficient, but do not skip steps
+- The user is waiting - be efficient, but do not skip steps

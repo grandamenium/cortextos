@@ -1,6 +1,6 @@
 ---
 name: nighttime-mode
-description: "Autonomous overnight orchestration mode. Active outside day hours. Dispatch and monitor deep work across agents while user sleeps. Internal building only — no external actions."
+description: "Autonomous overnight orchestration mode. Active outside day hours. Dispatch and monitor deep work across agents while user sleeps. Internal building only - no external actions."
 triggers: ["nighttime mode", "overnight mode", "night mode", "overnight orchestration", "nighttime protocol"]
 ---
 
@@ -11,14 +11,14 @@ triggers: ["nighttime mode", "overnight mode", "night mode", "overnight orchestr
 
 ---
 
-## Hard Guardrails — NEVER Cross
+## Hard Guardrails - NEVER Cross
 
-1. **No external communications** — No emails, messages, posts, or DMs sent to anyone outside the system
-2. **No purchases or transactions** — No buying, no transfers, no commitments
-3. **No permanent deletes** — All actions must be reversible
-4. **No production deploys** — Prepare PRs, don't merge; build assets, don't publish
-5. **No commitments on user's behalf** — No promises, deadlines, or agreements
-6. **No approval creation at night** — Queue approval requests for morning; do not create them at night
+1. **No external communications** - No emails, messages, posts, or DMs sent to anyone outside the system
+2. **No purchases or transactions** - No buying, no transfers, no commitments
+3. **No permanent deletes** - All actions must be reversible
+4. **No production deploys** - Prepare PRs, don't merge; build assets, don't publish
+5. **No commitments on user's behalf** - No promises, deadlines, or agreements
+6. **No approval creation at night** - Queue approval requests for morning; do not create them at night
 
 **When in doubt:** Document it, present in morning review.
 
@@ -173,9 +173,9 @@ cortextos bus log-event action morning_briefing_ready info --meta '{"tasks_compl
 
 ## Philosophy
 
-> Lower risk, higher autonomy. No external actions — internal building only.
+> Lower risk, higher autonomy. No external actions - internal building only.
 
-The night is for making the user's next day easier. Dispatch, monitor, and coordinate — never act externally without them. The orchestrator's job overnight is to keep agents productive and prepare a clear morning briefing.
+The night is for making the user's next day easier. Dispatch, monitor, and coordinate - never act externally without them. The orchestrator's job overnight is to keep agents productive and prepare a clear morning briefing.
 
 ---
 

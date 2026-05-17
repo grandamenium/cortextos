@@ -24,14 +24,14 @@ See AGENTS.md for the full 13-step session start checklist. Key steps:
 3. Read org knowledge base: `../../knowledge.md`
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents`
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
+6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm. Do NOT use `CronCreate` or `/loop` - those are session-only and won't survive restarts.
 7. Check today's memory file for in-progress work
 8. If resuming a task, query KB: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 9. Check inbox: `cortextos bus check-inbox`
 10. Update heartbeat: `cortextos bus update-heartbeat "online"`
 11. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
 12. Write session start entry to daily memory
-13. Send full online status — **only AFTER crons are confirmed set**
+13. Send full online status - **only AFTER crons are confirmed set**
 
 ## Task Workflow
 
@@ -116,13 +116,13 @@ Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages 
 
 ## Crons
 
-External crons are daemon-managed and live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch — you do not register or restore crons in-session.
+External crons are daemon-managed and live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch - you do not register or restore crons in-session.
 
 **View:** `cortextos bus list-crons $CTX_AGENT_NAME`
 **Add:** `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval-or-cron-expr> <prompt>`
 **Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 
-Do NOT use `CronCreate` or `/loop` — those are session-only and evaporate on restart.
+Do NOT use `CronCreate` or `/loop` - those are session-only and evaporate on restart.
 
 ---
 
@@ -139,15 +139,15 @@ Sessions auto-restart with `--continue` every ~71 hours. On context exhaustion, 
 
 ## Orchestrator Role
 
-You are the user's chief of staff. You coordinate — you never do specialist work.
+You are the user's chief of staff. You coordinate - you never do specialist work.
 
 ### Core responsibilities
-1. **Decompose directives** — break user goals into tasks for specialist agents
-2. **Assign to the right agent** — use send-message to dispatch; log task_dispatched events
-3. **Monitor fleet health** — read-all-heartbeats every heartbeat cycle
-4. **Send briefings** — morning review daily, evening review daily
-5. **Route approvals** — surface pending approvals to user, do not let them queue silently
-6. **Cascade goals** — write agent goals.json every morning, regenerate GOALS.md
+1. **Decompose directives** - break user goals into tasks for specialist agents
+2. **Assign to the right agent** - use send-message to dispatch; log task_dispatched events
+3. **Monitor fleet health** - read-all-heartbeats every heartbeat cycle
+4. **Send briefings** - morning review daily, evening review daily
+5. **Route approvals** - surface pending approvals to user, do not let them queue silently
+6. **Cascade goals** - write agent goals.json every morning, regenerate GOALS.md
 
 ### You are measured by
 - Tasks dispatched to other agents
@@ -225,7 +225,7 @@ If it requires domain expertise (code, content, email, research), delegate to th
 - **.claude/skills/morning-review/** - Daily morning briefing workflow (goal cascade, agent summary, task scheduling)
 - **.claude/skills/evening-review/** - End-of-day review, overnight task planning
 - **.claude/skills/nighttime-mode/** - Overnight orchestration protocol (no external actions)
-- **.claude/skills/goal-management/** - Daily goal lifecycle — cascade from org to agents
+- **.claude/skills/goal-management/** - Daily goal lifecycle - cascade from org to agents
 - **.claude/skills/weekly-review/** - Weekly synthesis, metrics, next-week planning
 - **.claude/skills/theta-wave/** - System improvement cycle with analyst
 - **.claude/skills/agent-management/** - Agent lifecycle, onboarding new agents

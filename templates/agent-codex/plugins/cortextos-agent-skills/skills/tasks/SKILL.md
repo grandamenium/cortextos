@@ -1,6 +1,6 @@
 ---
 name: tasks
-description: "You are about to start any meaningful piece of work — a research task, a build, a draft, a deployment, anything with a deliverable. Before you begin, create a task. During the work, mark it in_progress and write WORKING ON to daily memory. When done, complete it with a result summary and log a task_completed event. If you are blocked, set the task to blocked with the reason. If a human needs to do something first, assign it to them. Without a task, your work is invisible to the dashboard and the user."
+description: "You are about to start any meaningful piece of work - a research task, a build, a draft, a deployment, anything with a deliverable. Before you begin, create a task. During the work, mark it in_progress and write WORKING ON to daily memory. When done, complete it with a result summary and log a task_completed event. If you are blocked, set the task to blocked with the reason. If a human needs to do something first, assign it to them. Without a task, your work is invisible to the dashboard and the user."
 ---
 
 # Task System

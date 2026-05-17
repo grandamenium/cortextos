@@ -1,6 +1,6 @@
 # Agent Migration Skill
 
-> Port any existing agent workspace — cortextOS legacy, custom Claude setup, or any other agent system — into a cortextOS v2 agent. This skill is for the orchestrator. Run it when the user wants to bring an existing agent into the system.
+> Port any existing agent workspace - cortextOS legacy, custom Claude setup, or any other agent system - into a cortextOS v2 agent. This skill is for the orchestrator. Run it when the user wants to bring an existing agent into the system.
 
 ---
 
@@ -8,7 +8,7 @@
 
 **Knowledge transfers. Behavior does not.**
 
-Extract durable facts, user preferences, domain expertise, skills, and documents from the old workspace. Write fresh v2 bootstrap files informed by that data. Do NOT copy-paste files wholesale — rewrite them in clean v2 format.
+Extract durable facts, user preferences, domain expertise, skills, and documents from the old workspace. Write fresh v2 bootstrap files informed by that data. Do NOT copy-paste files wholesale - rewrite them in clean v2 format.
 
 ---
 
@@ -38,7 +38,7 @@ Read each file type and note what exists:
 | Meetings / notes | meetings/, briefs/ | Copy preserving structure |
 | Documents / research | Any .md docs, outputs | Copy to docs/ with topic subfolders |
 | Config | config.json | Extract crons + approval rules |
-| Secrets / .env | .env | DO NOT copy — source fresh from user |
+| Secrets / .env | .env | DO NOT copy - source fresh from user |
 
 ### 1c. Present audit to user
 
@@ -65,7 +65,7 @@ EOF
 chmod 600 "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<new_name>/.env"
 ```
 
-**Do NOT start the agent yet** — pre-load files first.
+**Do NOT start the agent yet** - pre-load files first.
 
 ---
 
@@ -131,7 +131,7 @@ for skill in email-management calendar-management flight-booking contacts-manage
 done
 ```
 
-Standard v2 skills (tasks, comms, heartbeat, cron-management, etc.) are already in the template — do not overwrite them with old versions.
+Standard v2 skills (tasks, comms, heartbeat, cron-management, etc.) are already in the template - do not overwrite them with old versions.
 
 ### CRM
 
@@ -158,7 +158,7 @@ Preserve the existing category structure (e.g. business/, personal/, etc.).
 DEST_DOCS="$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<new_name>/docs"
 # Create topic subfolders based on what exists
 mkdir -p "$DEST_DOCS/band" "$DEST_DOCS/ios" "$DEST_DOCS/product"
-# Copy by topic — review each file to determine correct subfolder
+# Copy by topic - review each file to determine correct subfolder
 ```
 
 Rule: one subfolder per distinct topic. If unsure, ask the user. Do not dump everything into docs/ root.
@@ -227,15 +227,15 @@ cortextos bus kb-ingest ./MEMORY.md ./crm/contacts.json \
 cd "$CTX_FRAMEWORK_ROOT" && cortextos start <new_name>
 ```
 
-Send a workspace orientation message via the bus. This is the first message the agent will receive. It must instruct the agent to read the entire migrated workspace before doing anything else — including before contacting the user — and then run a migration-aware onboarding:
+Send a workspace orientation message via the bus. This is the first message the agent will receive. It must instruct the agent to read the entire migrated workspace before doing anything else - including before contacting the user - and then run a migration-aware onboarding:
 
 ```bash
 cortextos bus send-message <new_name> normal \
-  'You have been migrated from a legacy agent workspace into cortextOS v2. Before doing anything else — before messaging the user, before setting up crons, before running onboarding — read your entire workspace:
+  'You have been migrated from a legacy agent workspace into cortextOS v2. Before doing anything else - before messaging the user, before setting up crons, before running onboarding - read your entire workspace:
 
 1. Bootstrap files: IDENTITY.md, SOUL.md, MEMORY.md, USER.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md
-2. All files in .claude/skills/ — understand what each skill does
-3. All files in docs/ — understand what knowledge has been ported
+2. All files in .claude/skills/ - understand what each skill does
+3. All files in docs/ - understand what knowledge has been ported
 4. Any additional folders (crm/, meetings/, scripts/, etc.)
 
 Once you have read everything, send the user a Telegram message confirming what you found: your role, what skills you have, what docs are loaded, and any gaps or missing credentials you noticed.
@@ -267,22 +267,22 @@ Update SYSTEM.md team roster:
 | GUARDRAILS.md rows | Selectively | Keep user-set rules, discard bug patches |
 | USER.md | Yes (fully) | Rewrite in v2 format |
 | IDENTITY.md | Yes (role/vibe/style) | Rewrite in v2 format |
-| SOUL.md | No — write fresh | Only extract day/night hours + explicit autonomy rules |
-| TOOLS.md | No — use v2 template | Template is better |
+| SOUL.md | No - write fresh | Only extract day/night hours + explicit autonomy rules |
+| TOOLS.md | No - use v2 template | Template is better |
 | Domain skills (.claude/skills/) | Yes | Copy directly |
 | CRM / contacts | Yes | Copy directly |
 | Meetings / briefs | Yes | Copy, preserve structure |
 | Documents / research | Yes | Copy, organize into docs/topic/ subfolders |
 | config.json crons | Selectively | Port user-defined schedules, update paths |
 | .env (tokens/secrets) | Never | Source fresh from user |
-| Daily memory files | No | These are session logs — discard |
+| Daily memory files | No | These are session logs - discard |
 | Old bus script references | Never | Update all paths to v2 cortextos bus commands |
 
 ---
 
 ## Notes
 
-- Always present the audit to the user before executing — confirm what to include/exclude
+- Always present the audit to the user before executing - confirm what to include/exclude
 - If the source uses old bash bus scripts (`bus/send-message.sh`, etc.), translate all commands to `cortextos bus <command>` equivalents
 - If the source workspace has custom tools or MCP configs, check with user whether to port them
-- The permission-prompt issue (agent getting stuck at file edit approval dialog) is fixed in v2 via pre-approved .claude settings — verify the new agent's .claude/settings.json allows edits
+- The permission-prompt issue (agent getting stuck at file edit approval dialog) is fixed in v2 via pre-approved .claude settings - verify the new agent's .claude/settings.json allows edits

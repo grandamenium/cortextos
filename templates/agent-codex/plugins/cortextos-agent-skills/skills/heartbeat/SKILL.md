@@ -1,6 +1,6 @@
 ---
 name: heartbeat
-description: "Your heartbeat cron has fired and you need to update your status so the dashboard shows you as alive. Or you are checking whether another agent is responsive before sending them work. Or an agent appears offline or stale in the dashboard and you need to investigate whether their session is still running. A dead heartbeat means the system thinks you are down — update it proactively and check fleet health on every heartbeat cycle."
+description: "Your heartbeat cron has fired and you need to update your status so the dashboard shows you as alive. Or you are checking whether another agent is responsive before sending them work. Or an agent appears offline or stale in the dashboard and you need to investigate whether their session is still running. A dead heartbeat means the system thinks you are down - update it proactively and check fleet health on every heartbeat cycle."
 ---
 
 # Heartbeat

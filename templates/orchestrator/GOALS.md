@@ -5,10 +5,10 @@
 > To regenerate: `cortextos goals generate-md --agent {{agent_name}} --org {{org}}`
 
 ## Focus
-(not set — check with your orchestrator)
+(not set - check with your orchestrator)
 
 ## Goals
-(none set — message your orchestrator to request today's goals)
+(none set - message your orchestrator to request today's goals)
 
 ## Bottleneck
 (none)

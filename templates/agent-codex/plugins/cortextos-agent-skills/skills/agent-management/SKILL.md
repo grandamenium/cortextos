@@ -28,11 +28,11 @@ description: "You need to create a new agent, restart a crashed agent, change an
 ```bash
 # Option A: CLI (recommended)
 
-# STEP 0 — REQUIRED BEFORE SCAFFOLDING — Ask the user which runtime:
+# STEP 0 - REQUIRED BEFORE SCAFFOLDING - Ask the user which runtime:
 #   "Should this agent run on Claude Code (Anthropic) or Codex (OpenAI gpt-5-codex)?"
 # Default to claude-code if the user has no preference. Never silently pick.
 # Codex agents MUST use the agent-codex template; orchestrator/analyst/m2c1-worker
-# do not have codex variants — the CLI will reject the mismatch.
+# do not have codex variants - the CLI will reject the mismatch.
 
 # claude-code path (the common one):
 cortextos add-agent <name> --template agent --org <org> --runtime claude-code
@@ -127,7 +127,7 @@ cortextos enable "$AGENT_NAME" --org "$ORG"
 ### Soft Restart (Preserves Conversation)
 
 ```bash
-# Via bus command (preferred — writes marker file automatically)
+# Via bus command (preferred - writes marker file automatically)
 cortextos bus self-restart --reason "<reason>"
 
 # Restart a DIFFERENT agent
@@ -150,7 +150,7 @@ cortextos bus hard-restart --reason "context exhaustion"
 
 ### Hook Reload Lifecycle
 
-`.claude/settings.json` hooks (PreToolUse, PostToolUse, Stop, SessionStart, etc) are loaded once when the Claude CLI process starts. They are NOT reloaded by `cortextos bus self-restart` — soft restart relaunches Claude with `--continue`, which reuses the existing process settings cache. Project-level hooks added or changed in `settings.json` since the original boot DO NOT take effect under soft restart.
+`.claude/settings.json` hooks (PreToolUse, PostToolUse, Stop, SessionStart, etc) are loaded once when the Claude CLI process starts. They are NOT reloaded by `cortextos bus self-restart` - soft restart relaunches Claude with `--continue`, which reuses the existing process settings cache. Project-level hooks added or changed in `settings.json` since the original boot DO NOT take effect under soft restart.
 
 **When wiring a new hook to a running agent, use a hard restart, not a soft restart:**
 
@@ -162,9 +162,9 @@ cortextos bus hard-restart --reason "loading new hook"
 cortextos stop <agent> && cortextos start <agent>
 ```
 
-Both kill the existing PID and respawn a fresh process that re-reads `settings.json` from scratch. Verify by adding a one-line debug write to your hook script before testing — if the file shows up after a benign tool call, the hook is loaded.
+Both kill the existing PID and respawn a fresh process that re-reads `settings.json` from scratch. Verify by adding a one-line debug write to your hook script before testing - if the file shows up after a benign tool call, the hook is loaded.
 
-This bit us hard on the coder-telegram-guardrail wire-up before upstream PR #217 fixed `bus hard-restart` to actually signal the daemon. On any fork that has not pulled in #217 (commit `a38ef7a`), `bus hard-restart` writes markers without killing the PID — fall back to external `stop && start` until the fork is rebased.
+This bit us hard on the coder-telegram-guardrail wire-up before upstream PR #217 fixed `bus hard-restart` to actually signal the daemon. On any fork that has not pulled in #217 (commit `a38ef7a`), `bus hard-restart` writes markers without killing the PID - fall back to external `stop && start` until the fork is rebased.
 
 ### Restart from Another Agent
 
@@ -279,7 +279,7 @@ fi
 
 ## 6. Managing Crons
 
-Crons are daemon-managed and persisted to `${CTX_ROOT}/state/<agent>/crons.json`. The daemon dispatches them automatically — no agent-side restoration needed. Use the bus commands listed below; this is the only persistent scheduling path. Editing `config.json.crons[]` mid-session does NOT hot-reload (the daemon only re-reads `config.json` on agent boot).
+Crons are daemon-managed and persisted to `${CTX_ROOT}/state/<agent>/crons.json`. The daemon dispatches them automatically - no agent-side restoration needed. Use the bus commands listed below; this is the only persistent scheduling path. Editing `config.json.crons[]` mid-session does NOT hot-reload (the daemon only re-reads `config.json` on agent boot).
 
 ### Adding a Cron
 ```bash
@@ -393,7 +393,7 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 ### New Hook Not Firing After Wiring It Up
 1. Confirm `settings.json` is valid JSON and the hook block is in the right shape (matcher, type=command, etc).
 2. Try a benign tool call that should trigger the hook. If nothing happens, the hook is not loaded.
-3. **Do NOT soft-restart** — `--continue` does not reload project hooks (see Hook Reload Lifecycle in Section 2).
+3. **Do NOT soft-restart** - `--continue` does not reload project hooks (see Hook Reload Lifecycle in Section 2).
 4. Hard-restart the agent: `cortextos bus hard-restart --reason "load new hook"`. The daemon kills the PID and respawns a fresh process that re-reads `settings.json`.
 5. If the hook still does not fire after a fresh PID, instrument the script with an unconditional write to `/tmp/<agent>-hook-test.log` at the very top of `main()`, run a benign tool, and check whether the file appears. If yes, the hook is firing but the script is returning early. If no, the hook is wired wrong in `settings.json`.
 

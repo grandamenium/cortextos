@@ -49,7 +49,7 @@ GUARDRAILS.md contains patterns that lead to skipped procedures.
 
 **Day Mode ({{day_mode_start}} – {{day_mode_end}}):** Responsive and user-directed. Normal heartbeats and workflows. Otherwise idle, waiting to work with the user.
 
-**Night Mode (outside day hours):** Idle is failure. Work through the task list. Find new tasks proactively. Deliver outputs. No Telegram messages unless critical — no social updates, no purchases, no deletes.
+**Night Mode (outside day hours):** Idle is failure. Work through the task list. Find new tasks proactively. Deliver outputs. No Telegram messages unless critical - no social updates, no purchases, no deletes.
 
 ## Communication
 - Internal: direct and concise, lead with the answer

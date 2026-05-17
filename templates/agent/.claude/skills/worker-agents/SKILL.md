@@ -1,12 +1,12 @@
 ---
 name: worker-agents
-description: "You have a task that would benefit from running in a separate isolated Claude Code session — either because it is long-running and you do not want it to consume your context window, or because you want multiple pieces of work running in parallel that each require a full Claude Code session with its own tools, memory, and context (not just a subagent call). You will spawn one or more ephemeral worker sessions, give each a focused task, monitor their progress via the bus, and collect their outputs when done."
+description: "You have a task that would benefit from running in a separate isolated Claude Code session - either because it is long-running and you do not want it to consume your context window, or because you want multiple pieces of work running in parallel that each require a full Claude Code session with its own tools, memory, and context (not just a subagent call). You will spawn one or more ephemeral worker sessions, give each a focused task, monitor their progress via the bus, and collect their outputs when done."
 triggers: ["worker", "parallelize", "spawn worker", "spin up", "parallel work", "background task", "isolated session", "separate session", "long running task", "run in background", "parallel research", "multiple workers", "worker session", "spawn session", "full claude code session", "context window", "parallel tasks", "run simultaneously", "independent sessions"]
 ---
 
 # Worker Agents
 
-> Spawn ephemeral Claude Code sessions for parallelized long-running tasks. Workers get a scoped task, produce deliverables, and are cleaned up when done. Use when work requires a full independent Claude Code session — not just a subagent tool call.
+> Spawn ephemeral Claude Code sessions for parallelized long-running tasks. Workers get a scoped task, produce deliverables, and are cleaned up when done. Use when work requires a full independent Claude Code session - not just a subagent tool call.
 
 > Worker session spawn is fully implemented. Use `cortextos spawn-worker` to launch isolated Claude Code sessions for parallelized tasks.
 
@@ -32,7 +32,7 @@ triggers: ["worker", "parallelize", "spawn worker", "spin up", "parallel work", 
 | | Persistent Agent | Worker Agent |
 |---|---|---|
 | Lifetime | 24/7, survives restarts | Dies when task is done |
-| Identity | IDENTITY.md, SOUL.md, GOALS.md | None — just a task prompt |
+| Identity | IDENTITY.md, SOUL.md, GOALS.md | None - just a task prompt |
 | Heartbeat | Updates every 4h | None |
 | Crons | config.json scheduled tasks | None |
 | Inbox | Bus messages via check-inbox | Bus messages (optional) |
@@ -41,7 +41,7 @@ triggers: ["worker", "parallelize", "spawn worker", "spin up", "parallel work", 
 
 ---
 
-## Workflow (Concepts — Implementation TBD)
+## Workflow (Concepts - Implementation TBD)
 
 ### Step 1: Scope the Work
 
@@ -64,7 +64,7 @@ The worker:
 - Runs `claude --dangerously-skip-permissions` in the given directory
 - Gets a bus identity (`CTX_AGENT_NAME=<worker-name>`) for two-way communication
 - Logs to `~/.cortextos/<instance>/logs/<worker-name>/stdout.log`
-- Is tracked by the daemon — use `cortextos list-workers` to monitor status
+- Is tracked by the daemon - use `cortextos list-workers` to monitor status
 
 ### Step 3: Inject Task Prompt
 

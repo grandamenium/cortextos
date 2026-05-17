@@ -1,6 +1,6 @@
 ---
 name: m2c1-worker
-description: "You need to build software autonomously — a new project, a major feature, or any structured development task. You will act as the 'human' supervisor for a dedicated M2C1 worker session, managing it through all 12 phases: provide the brain dump, answer discovery questions, configure tools and credentials, monitor progress via bus messages and git, validate the output, and clean up when done. Use when the work is large enough to warrant a dedicated isolated build session."
+description: "You need to build software autonomously - a new project, a major feature, or any structured development task. You will act as the 'human' supervisor for a dedicated M2C1 worker session, managing it through all 12 phases: provide the brain dump, answer discovery questions, configure tools and credentials, monitor progress via bus messages and git, validate the output, and clean up when done. Use when the work is large enough to warrant a dedicated isolated build session."
 triggers: ["build", "m2c1", "worker agent", "autonomous build", "spin up worker", "new project", "build from scratch", "create software", "develop a tool", "full build", "m2c1 worker"]
 ---
 
@@ -175,9 +175,9 @@ cortextos bus log-event action worker_spawned info \
 ## Phase 2: Monitor and Communicate
 
 ### Communication Priority
-1. **Bus messages** (primary) — worker sends you updates, you reply via bus.
-2. **Direct session intervention** (fallback) — only when the worker is stuck or unresponsive to bus. **Implementation pending.**
-3. **Git** (monitoring) — check commits to see what was built without interrupting the worker.
+1. **Bus messages** (primary) - worker sends you updates, you reply via bus.
+2. **Direct session intervention** (fallback) - only when the worker is stuck or unresponsive to bus. **Implementation pending.**
+3. **Git** (monitoring) - check commits to see what was built without interrupting the worker.
 
 ### Checking Progress
 
@@ -222,7 +222,7 @@ If the worker appears stuck (no bus messages, no new git commits > 15 minutes):
 
 ## Phase 3: Tool Setup Support (CRITICAL - Act Like a Human)
 
-This is one of the most important phases. You act exactly like a human developer setting up a project: installing tools, configuring MCPs, setting env variables, logging into services, testing that everything works. The worker cannot do this itself — it needs you to configure its environment.
+This is one of the most important phases. You act exactly like a human developer setting up a project: installing tools, configuring MCPs, setting env variables, logging into services, testing that everything works. The worker cannot do this itself - it needs you to configure its environment.
 
 ### Think Holistically About Tools
 
@@ -302,7 +302,7 @@ Tell the worker to create a /loop for task polling within its session:
 cortextos bus send-message <worker-name> normal \
   'Set up a /loop every 10 minutes to check START.md for pending tasks. If not working on a task, pick the next one.'
 ```
-<!-- Note: /loop is intentionally used here — this is a short-lived session-scoped poll for the worker's task queue, not a persistent cron. For persistent recurring crons, use cortextos bus add-cron instead. -->
+<!-- Note: /loop is intentionally used here - this is a short-lived session-scoped poll for the worker's task queue, not a persistent cron. For persistent recurring crons, use cortextos bus add-cron instead. -->
 
 
 ### Periodic Check-ins
@@ -322,7 +322,7 @@ cat $PROJECT_DIR/.claude/orchestration-*/PROGRESS.md 2>/dev/null | tail -20
 ### When NOT to Intervene
 - Worker sent a bus update and is actively building
 - Worker is in a research subagent phase
-- Worker sent you a question and is waiting — check inbox first
+- Worker sent you a question and is waiting - check inbox first
 
 ### When to Intervene
 - No bus messages AND no new git commits > 15 minutes
@@ -337,7 +337,7 @@ cat $PROJECT_DIR/.claude/orchestration-*/PROGRESS.md 2>/dev/null | tail -20
 Verify the worker's task files are coherent:
 ```bash
 ls $PROJECT_DIR/.claude/orchestration-*/tasks/
-# Read a few task files — do they reference each other correctly?
+# Read a few task files - do they reference each other correctly?
 # Are there gaps? Overlaps?
 ```
 
@@ -410,7 +410,7 @@ cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal \
 4. **Validate at phase gates.** Check PRD, discovery, task plans, and final output.
 5. **The worker spawns its own subagents.** You do not manage them directly.
 6. **Keep the scope tight.** If the worker goes off-scope, redirect it immediately.
-7. **Testing is non-negotiable.** Do not accept "it should work" — verify it works.
+7. **Testing is non-negotiable.** Do not accept "it should work" - verify it works.
 8. **Log everything.** Tasks, events, milestones. Invisible work does not exist.
 
 ---

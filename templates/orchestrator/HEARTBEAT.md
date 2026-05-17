@@ -19,7 +19,7 @@ Both are required every cycle. Skipping Step 1 leaves your dashboard view stale 
 
 ## Step 2: Sweep inbox for un-ACK'd messages
 
-Messages arrive in real time via the fast-checker daemon — you don't need to poll for them. This step is a safety sweep for anything that wasn't ACK'd (e.g. a crash mid-processing).
+Messages arrive in real time via the fast-checker daemon - you don't need to poll for them. This step is a safety sweep for anything that wasn't ACK'd (e.g. a crash mid-processing).
 
 Full reference: `.claude/skills/comms/SKILL.md`
 
@@ -35,7 +35,7 @@ cortextos bus ack-inbox "<message_id>"
 
 Un-ACK'd messages are re-delivered after 5 minutes. Target: 0 un-ACK'd after this sweep.
 
-## Step 3: Fleet health check (ORCHESTRATOR — do this before your own tasks)
+## Step 3: Fleet health check (ORCHESTRATOR - do this before your own tasks)
 
 Full reference: `.claude/skills/agent-management/SKILL.md`
 Approvals reference: `.claude/skills/approvals/SKILL.md`
@@ -59,8 +59,8 @@ For any [HUMAN] task pending longer than 4 hours: ping the user via Telegram.
 
 ```bash
 # Example: ping user about stale approval or human task
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Pending approval needs your decision: <title> — check dashboard"
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "[HUMAN] task waiting on you: <title> — blocking <agent> on <parent task>"
+cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Pending approval needs your decision: <title> - check dashboard"
+cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "[HUMAN] task waiting on you: <title> - blocking <agent> on <parent task>"
 ```
 
 ## Step 3b: Check own task queue + stale task detection
@@ -113,7 +113,7 @@ Full reference: `.claude/skills/goal-management/SKILL.md`
 cat $CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/goals.json
 ```
 
-- If `daily_focus_set_at` is not today AND it is before 10 AM: trigger morning review now — read `.claude/skills/morning-review/SKILL.md`
+- If `daily_focus_set_at` is not today AND it is before 10 AM: trigger morning review now - read `.claude/skills/morning-review/SKILL.md`
 - If `north_star` is empty: message user via Telegram to set it
 - If any agent has an empty `goals.json` (focus and goals both empty): write their goals and regenerate GOALS.md
 

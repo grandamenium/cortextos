@@ -144,7 +144,7 @@ echo "$EXISTING" | jq \
 
 ### Step 10: Configure heartbeat
 
-My heartbeat cron runs every 4 hours and includes a system health check (Step 3 — checks all agent heartbeats). Confirm with the user:
+My heartbeat cron runs every 4 hours and includes a system health check (Step 3 - checks all agent heartbeats). Confirm with the user:
 
 > "My heartbeat runs every 4 hours and checks all agent health on each cycle. I flag agents silent for more than 5 hours and alert the orchestrator if something is unresponsive for 8+ hours. Does that cadence work for you?"
 
@@ -171,7 +171,7 @@ echo "Knowledge Base: $KB_STATUS"
 ```
 
 **If NOT configured:**
-> "The knowledge base is a critical dependency for my analytics and monitoring work — I use it to correlate past incidents, search runbooks, and build up a historical memory of system behavior.
+> "The knowledge base is a critical dependency for my analytics and monitoring work - I use it to correlate past incidents, search runbooks, and build up a historical memory of system behavior.
 >
 > To enable: add GEMINI_API_KEY to orgs/${CTX_ORG}/secrets.env (free key at https://aistudio.google.com/app/apikey). Recommend setting this up before going live."
 
@@ -226,7 +226,7 @@ echo "Day starts: ${DAY_HOUR}:00, Night starts: ${NIGHT_HOUR}:00"
 cortextos bus add-cron $CTX_AGENT_NAME heartbeat 4h Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task.
 ```
 
-Check whether `nightly-metrics` is already registered (it should be in config.json by default — the migration will carry it over):
+Check whether `nightly-metrics` is already registered (it should be in config.json by default - the migration will carry it over):
 ```bash
 cortextos bus list-crons $CTX_AGENT_NAME
 ```
@@ -236,7 +236,7 @@ If `nightly-metrics` is not present, add it:
 cortextos bus add-cron $CTX_AGENT_NAME nightly-metrics 24h Run cortextos bus collect-metrics and log results.
 ```
 
-Do NOT use `/loop` for these crons — persistent crons survive restarts automatically.
+Do NOT use `/loop` for these crons - persistent crons survive restarts automatically.
 
 **Ask about additional crons:**
 > "I have a heartbeat cycle every 4 hours and nightly metrics collection. Want me to add any other recurring checks? For example: daily reports, integration health checks, custom monitoring."
@@ -459,7 +459,7 @@ NIGHT_HOUR=${NIGHT_HOUR:-18}
 DAILY_HOUR=$(( (NIGHT_HOUR + 1) % 24 ))
 ```
 
-For each enabled feature, create a persistent cron via `cortextos bus add-cron`. Do NOT use CronCreate or config.json edits — all crons are daemon-managed from `crons.json`:
+For each enabled feature, create a persistent cron via `cortextos bus add-cron`. Do NOT use CronCreate or config.json edits - all crons are daemon-managed from `crons.json`:
 
 **local_version_control** (time-anchored, daily):
 ```bash

@@ -1,6 +1,6 @@
 ---
 name: activity-channel
-description: "You have completed something significant and want the whole org — all agents and the user — to know about it. Or you need to broadcast a status update, a briefing summary, or a coordination announcement that is not directed at one specific agent. Use this skill any time the audience is the entire org rather than a single person or agent."
+description: "You have completed something significant and want the whole org - all agents and the user - to know about it. Or you need to broadcast a status update, a briefing summary, or a coordination announcement that is not directed at one specific agent. Use this skill any time the audience is the entire org rather than a single person or agent."
 ---
 
 # Activity Channel
@@ -46,7 +46,7 @@ When you send a message to another agent via `send-message`, it is automatically
 cortextos bus post-activity "Morning briefing complete. Today's focus: <goals>. Active agents: <list>."
 
 # Major completion
-cortextos bus post-activity "researcher completed competitive analysis — 3 key findings in task task_abc123."
+cortextos bus post-activity "researcher completed competitive analysis - 3 key findings in task task_abc123."
 
 # Agent coming online
 cortextos bus post-activity "analyst (sentinel) is online and running nightly metrics."
@@ -59,4 +59,4 @@ cortextos bus post-activity "New agent 'writer' is now online and onboarding."
 
 ## Keep It Signal, Not Noise
 
-Post to the activity channel for things worth the whole org knowing. Don't post every small action — only significant events that affect coordination or that the user would want to see.
+Post to the activity channel for things worth the whole org knowing. Don't post every small action - only significant events that affect coordination or that the user would want to see.

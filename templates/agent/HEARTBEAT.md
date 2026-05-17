@@ -19,7 +19,7 @@ Both are required every cycle. Skipping Step 1 leaves your dashboard view stale 
 
 ## Step 2: Sweep inbox for un-ACK'd messages
 
-Messages arrive in real time via the fast-checker daemon — you don't need to poll for them. This step is a safety sweep for anything that wasn't ACK'd (e.g. a crash mid-processing).
+Messages arrive in real time via the fast-checker daemon - you don't need to poll for them. This step is a safety sweep for anything that wasn't ACK'd (e.g. a crash mid-processing).
 
 Full reference: `.claude/skills/comms/SKILL.md`
 
@@ -81,7 +81,7 @@ MEMORY
 
 Read GOALS.md. Goals are refreshed daily by the orchestrator each morning.
 
-- If goals were updated today: you should already have tasks. If not, create them now — see `.claude/skills/tasks/SKILL.md`
+- If goals were updated today: you should already have tasks. If not, create them now - see `.claude/skills/tasks/SKILL.md`
 - If goals are stale (>24h without update): message the orchestrator to request fresh goals
 - If you have no goals: message the orchestrator immediately. Don't idle.
 

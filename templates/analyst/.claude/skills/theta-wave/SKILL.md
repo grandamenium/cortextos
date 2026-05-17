@@ -119,7 +119,7 @@ cortextos bus manage-cycle modify <agent> --cycle <name> \
   --metric-type <quantitative|qualitative> \
   --enabled <true|false>
 ```
-Use `--enabled false` to pause a stale or converged cycle instead of removing it entirely — pausing preserves the cycle history.
+Use `--enabled false` to pause a stale or converged cycle instead of removing it entirely - pausing preserves the cycle history.
 
 **Remove converged or irrelevant cycles:**
 ```bash

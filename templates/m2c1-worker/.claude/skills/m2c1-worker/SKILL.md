@@ -1,6 +1,6 @@
 ---
 name: m2c1-worker
-description: "You need to build software autonomously — a new project, a major feature, or any structured development task. You will act as the 'human' supervisor for a dedicated M2C1 worker session, managing it through all 12 phases: provide the brain dump, answer discovery questions, configure tools and credentials, monitor progress via bus messages and git, validate the output, and clean up when done. Use when the work is large enough to warrant a dedicated isolated build session."
+description: "You need to build software autonomously - a new project, a major feature, or any structured development task. You will act as the 'human' supervisor for a dedicated M2C1 worker session, managing it through all 12 phases: provide the brain dump, answer discovery questions, configure tools and credentials, monitor progress via bus messages and git, validate the output, and clean up when done. Use when the work is large enough to warrant a dedicated isolated build session."
 triggers: ["build", "m2c1", "worker agent", "autonomous build", "spin up worker", "new project", "build from scratch", "create software", "develop a tool", "full build", "m2c1 worker"]
 ---
 
@@ -134,7 +134,7 @@ cortextos bus check-inbox
 You must self-monitor for looping behavior. After every tool call, check: is this the same tool call I just made, with the same arguments, multiple times in a row?
 
 If you detect the same tool call repeated 5 or more times consecutively (same tool name, same arguments):
-1. Stop immediately — do not make the call again
+1. Stop immediately - do not make the call again
 2. Send a stuck alert to <your-agent-name>:
    ```
    cortextos bus send-message <your-agent-name> urgent 'STUCK ALERT: Detected repeated tool call loop. Tool: <tool-name>. Args: <args summary>. Repeated 5 times. Pausing for supervisor guidance.'
@@ -222,9 +222,9 @@ cortextos bus log-event action worker_spawned info \
 ## Phase 2: Monitor and Communicate
 
 ### Communication Priority
-1. **Bus messages** (primary) — worker sends you updates, you reply via bus.
-2. **Direct session intervention** (fallback) — only when the worker is stuck or unresponsive to bus. **Implementation pending.**
-3. **Git** (monitoring) — check commits to see what was built without interrupting the worker.
+1. **Bus messages** (primary) - worker sends you updates, you reply via bus.
+2. **Direct session intervention** (fallback) - only when the worker is stuck or unresponsive to bus. **Implementation pending.**
+3. **Git** (monitoring) - check commits to see what was built without interrupting the worker.
 
 ### Checking Progress
 
@@ -262,9 +262,9 @@ The worker will send a `PLAN READY FOR REVIEW` message with the full PLAN.md con
 
 **Review checklist:**
 - Architecture makes sense for the requirements in BRAINDUMP.md
-- File list is complete — no obvious missing pieces
-- Task order is logical — dependencies resolved before dependents
-- No scope creep — worker isn't building more than asked
+- File list is complete - no obvious missing pieces
+- Task order is logical - dependencies resolved before dependents
+- No scope creep - worker isn't building more than asked
 - Open questions are addressed or explicitly deferred
 
 **To approve:**
@@ -277,7 +277,7 @@ cortextos bus send-message <worker-name> normal 'PLAN_APPROVED. Proceed with imp
 cortextos bus send-message <worker-name> normal 'PLAN_REJECTED. Revise: <specific feedback>. Resend when updated.'
 ```
 
-The worker will not write any source files until it receives `PLAN_APPROVED`. Do not leave it waiting — review promptly.
+The worker will not write any source files until it receives `PLAN_APPROVED`. Do not leave it waiting - review promptly.
 
 ### Handling Stuck States
 
@@ -296,18 +296,18 @@ The worker self-monitors for repeated tool call loops and will send you a `STUCK
 
 **When you receive a STUCK ALERT:**
 
-1. Read the alert carefully — it includes the tool name and arguments that are looping
+1. Read the alert carefully - it includes the tool name and arguments that are looping
 2. Diagnose the cause:
    - Permission error? The tool may need a different approach
-   - File not found? The path may be wrong — check it
+   - File not found? The path may be wrong - check it
    - Infinite retry on a transient error? Tell worker to skip and continue
    - Wrong approach entirely? Redirect with a different strategy
 
 ```bash
-# If the approach is wrong — redirect:
+# If the approach is wrong - redirect:
 cortextos bus send-message <worker-name> normal 'Understood. Stop that approach. Instead: <alternative>. Continue from there.'
 
-# If it is a transient error — tell worker to skip:
+# If it is a transient error - tell worker to skip:
 cortextos bus send-message <worker-name> normal 'Skip that step for now and continue to the next task. We will revisit.'
 
 # If you need to inspect first:
@@ -316,13 +316,13 @@ cd $PROJECT_DIR && git log --oneline | head -5
 cortextos bus send-message <worker-name> normal '<directive>'
 ```
 
-**Do not send a generic 'continue' message.** The worker is paused because it is genuinely stuck — it needs a specific direction change, not permission to loop again.
+**Do not send a generic 'continue' message.** The worker is paused because it is genuinely stuck - it needs a specific direction change, not permission to loop again.
 
 ---
 
 ## Phase 3: Tool Setup Support (CRITICAL - Act Like a Human)
 
-This is one of the most important phases. You act exactly like a human developer setting up a project: installing tools, configuring MCPs, setting env variables, logging into services, testing that everything works. The worker cannot do this itself — it needs you to configure its environment.
+This is one of the most important phases. You act exactly like a human developer setting up a project: installing tools, configuring MCPs, setting env variables, logging into services, testing that everything works. The worker cannot do this itself - it needs you to configure its environment.
 
 ### Think Holistically About Tools
 
@@ -352,7 +352,7 @@ cp "$CTX_FRAMEWORK_ROOT/templates/agent/.claude/skills/agent-browser/SKILL.md" \
 
 # 2. Worker can use agent-browser via Bash (no MCP restart required):
 cortextos bus send-message <worker-name> normal \
-  'agent-browser is available globally. Test by running: agent-browser open https://example.com && agent-browser get title && agent-browser close. Use snapshot-then-ref pattern for AI-driven flows. The .claude/skills/agent-browser/SKILL.md was added — invoke `agent-browser skills get <name>` for current per-version command syntax.'
+  'agent-browser is available globally. Test by running: agent-browser open https://example.com && agent-browser get title && agent-browser close. Use snapshot-then-ref pattern for AI-driven flows. The .claude/skills/agent-browser/SKILL.md was added - invoke `agent-browser skills get <name>` for current per-version command syntax.'
 ```
 
 ### Iterative Tool Verification
@@ -403,7 +403,7 @@ Tell the worker to create a /loop for task polling within its session:
 cortextos bus send-message <worker-name> normal \
   'Set up a /loop every 10 minutes to check START.md for pending tasks. If not working on a task, pick the next one.'
 ```
-<!-- Note: /loop is intentionally used here — this is a short-lived session-scoped poll for the worker's task queue, not a persistent cron. For persistent recurring crons, use cortextos bus add-cron instead. -->
+<!-- Note: /loop is intentionally used here - this is a short-lived session-scoped poll for the worker's task queue, not a persistent cron. For persistent recurring crons, use cortextos bus add-cron instead. -->
 
 
 ### Periodic Check-ins
@@ -423,7 +423,7 @@ cat $PROJECT_DIR/.claude/orchestration-*/PROGRESS.md 2>/dev/null | tail -20
 ### When NOT to Intervene
 - Worker sent a bus update and is actively building
 - Worker is in a research subagent phase
-- Worker sent you a question and is waiting — check inbox first
+- Worker sent you a question and is waiting - check inbox first
 
 ### When to Intervene
 - No bus messages AND no new git commits > 15 minutes
@@ -438,7 +438,7 @@ cat $PROJECT_DIR/.claude/orchestration-*/PROGRESS.md 2>/dev/null | tail -20
 Verify the worker's task files are coherent:
 ```bash
 ls $PROJECT_DIR/.claude/orchestration-*/tasks/
-# Read a few task files — do they reference each other correctly?
+# Read a few task files - do they reference each other correctly?
 # Are there gaps? Overlaps?
 ```
 
@@ -511,7 +511,7 @@ cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal \
 4. **Validate at phase gates.** Check PRD, discovery, task plans, and final output.
 5. **The worker spawns its own subagents.** You do not manage them directly.
 6. **Keep the scope tight.** If the worker goes off-scope, redirect it immediately.
-7. **Testing is non-negotiable.** Do not accept "it should work" — verify it works.
+7. **Testing is non-negotiable.** Do not accept "it should work" - verify it works.
 8. **Log everything.** Tasks, events, milestones. Invisible work does not exist.
 
 ---

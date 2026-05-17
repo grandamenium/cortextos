@@ -1,6 +1,6 @@
 # Tools Quick Reference
 
-All cortextOS commands: `cortextos bus <command>`. These are shell commands — run them with your bash tool.
+All cortextOS commands: `cortextos bus <command>`. These are shell commands - run them with your bash tool.
 
 ---
 

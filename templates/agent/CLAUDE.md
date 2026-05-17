@@ -24,14 +24,14 @@ See AGENTS.md for the full 13-step session start checklist. Key steps:
 3. Read org knowledge base: `../../knowledge.md`
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents`
-6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
+6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm. Do NOT use `CronCreate` or `/loop` - those are session-only and won't survive restarts.
 7. Check today's memory file for in-progress work
 8. If resuming a task, query KB: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 9. Check inbox: `cortextos bus check-inbox`
 10. Update heartbeat: `cortextos bus update-heartbeat "online"`
 11. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
 12. Write session start entry to daily memory
-13. Send full online status — **only AFTER crons are confirmed set**
+13. Send full online status - **only AFTER crons are confirmed set**
 
 ## Task Workflow
 
@@ -111,13 +111,13 @@ Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages 
 
 ## Crons
 
-External crons are daemon-managed and live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch — you do not register or restore crons in-session.
+External crons are daemon-managed and live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch - you do not register or restore crons in-session.
 
 **View:** `cortextos bus list-crons $CTX_AGENT_NAME`
 **Add:** `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval-or-cron-expr> <prompt>`
 **Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 
-Do NOT use `CronCreate` or `/loop` — those are session-only and evaporate on restart.
+Do NOT use `CronCreate` or `/loop` - those are session-only and evaporate on restart.
 
 ---
 

@@ -26,7 +26,7 @@ cortextOS uses a 4-layer env hierarchy. Later layers override earlier ones:
 
 **Rule:** If more than one agent uses a key, it belongs in `orgs/{org}/secrets.env`. If only one agent uses it, it belongs in that agent's `.env`.
 
-`ANTHROPIC_API_KEY` is inherited from the shell that launched the daemon — never stored in any file.
+`ANTHROPIC_API_KEY` is inherited from the shell that launched the daemon - never stored in any file.
 
 ---
 
@@ -69,7 +69,7 @@ cortextos bus self-restart --reason "new agent secret added: MY_KEY"
 ## Checking What Keys Are Configured
 
 ```bash
-# Check org-level keys (names only — never print values)
+# Check org-level keys (names only - never print values)
 grep -v '^#' "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/.env" | grep '=' | cut -d= -f1
 
 # Check agent-level keys (names only)
@@ -83,7 +83,7 @@ grep -v '^#' "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/$CTX_AGENT_NAME/.env" | g
 
 ## Rotating a Secret
 
-A key update without restarting the agent does nothing — the old value stays in the PTY environment until the process restarts.
+A key update without restarting the agent does nothing - the old value stays in the PTY environment until the process restarts.
 
 ### Rotation Decision Tree
 
@@ -124,7 +124,7 @@ AGENT_ENV="$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/AGENT_NAME/.env"
 # Update the value in the file
 chmod 600 "$AGENT_ENV"
 
-# Hard-restart that agent (not soft — PTY must rebuild env)
+# Hard-restart that agent (not soft - PTY must rebuild env)
 cortextos bus send-message AGENT_NAME high "hard-restart" "secret rotation: KEY_NAME"
 
 cortextos bus log-event action secret_rotated info \
@@ -135,17 +135,17 @@ cortextos bus log-event action secret_rotated info \
 
 1. Go to @BotFather → `/mybots` → select the bot → `API Token` → `Revoke current token`
 2. Copy the new token
-3. Update `agents/{agent}/.env` — replace `BOT_TOKEN=` value
+3. Update `agents/{agent}/.env` - replace `BOT_TOKEN=` value
 4. Hard-restart the agent immediately (old token is already invalid)
 
 ---
 
 ## Critical Rules
 
-1. **Never print secret values** — log key names only, never values
-2. **Never commit .env files** — they are in .gitignore by design
+1. **Never print secret values** - log key names only, never values
+2. **Never commit .env files** - they are in .gitignore by design
 3. **Always chmod 600** after writing any .env file
-4. **Never edit a running agent's .env without restarting** — changes won't take effect until the PTY env is rebuilt
-5. **Never add BOT_TOKEN to org .env** — each agent must have its own Telegram bot
-6. **ANTHROPIC_API_KEY lives only in the shell** — do not add to any .env file
-7. **Always hard-restart after rotating** — soft-restart preserves the PTY env which still has the old value
+4. **Never edit a running agent's .env without restarting** - changes won't take effect until the PTY env is rebuilt
+5. **Never add BOT_TOKEN to org .env** - each agent must have its own Telegram bot
+6. **ANTHROPIC_API_KEY lives only in the shell** - do not add to any .env file
+7. **Always hard-restart after rotating** - soft-restart preserves the PTY env which still has the old value

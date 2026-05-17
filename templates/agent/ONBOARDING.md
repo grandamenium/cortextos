@@ -106,7 +106,7 @@ Then continue from step 8.
      cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h Read HEARTBEAT.md and follow its instructions.
      cortextos bus add-cron $CTX_AGENT_NAME daily-report "0 9 * * 1-5" Generate and send the daily analytics report.
      ```
-   - Do NOT use `/loop` for persistent scheduling — it is session-only and dies on restart.
+   - Do NOT use `/loop` for persistent scheduling - it is session-only and dies on restart.
    - If the workflow is complex (multi-step procedure), create a skill file at `.claude/skills/<workflow-name>/SKILL.md` with YAML frontmatter and detailed steps
 
 10. **Ask for tools and access:**
@@ -191,9 +191,9 @@ After workflows and tools are configured:
     cortextos bus add-cron $CTX_AGENT_NAME heartbeat <new_interval> Read HEARTBEAT.md and follow its instructions.
     ```
     (This overwrites the existing heartbeat cron entry in `crons.json`.)
-    If they want a different stale task window (default 2h), note it in MEMORY.md — the agent applies it judgmentally during HEARTBEAT.md Step 3.
+    If they want a different stale task window (default 2h), note it in MEMORY.md - the agent applies it judgmentally during HEARTBEAT.md Step 3.
 
-13. **Knowledge base setup — ALWAYS DO THIS STEP:**
+13. **Knowledge base setup - ALWAYS DO THIS STEP:**
 
     First check if KB is available:
     ```bash
@@ -201,12 +201,12 @@ After workflows and tools are configured:
     ```
 
     **If KB is NOT enabled:**
-    > "Your org doesn't have a Gemini API key set up yet. The knowledge base (semantic search + RAG) is one of the most powerful features — it lets me remember context across sessions, search your docs by meaning, and share knowledge with other agents.
+    > "Your org doesn't have a Gemini API key set up yet. The knowledge base (semantic search + RAG) is one of the most powerful features - it lets me remember context across sessions, search your docs by meaning, and share knowledge with other agents.
     >
     > It's free to set up. Go to https://aistudio.google.com/app/apikey and get a free API key, then add it to orgs/${CTX_ORG}/secrets.env as GEMINI_API_KEY=<your_key>. I'll wait here and continue once it's set up, or you can skip for now and add it later."
 
     **If KB IS enabled:**
-    > "Your org has a semantic knowledge base. Before I start working, I want to set up my ingestion rules — this determines what I automatically keep track of and how I build my long-term memory.
+    > "Your org has a semantic knowledge base. Before I start working, I want to set up my ingestion rules - this determines what I automatically keep track of and how I build my long-term memory.
     >
     > Let me ask you a few questions:"
 
@@ -214,7 +214,7 @@ After workflows and tools are configured:
 
     (a) > "What files or directories should I automatically ingest whenever I create or update them? For example: my daily memory files, key reference docs, output reports."
 
-    (b) > "Are there any files I should never ingest — things that are private, sensitive, or too large?"
+    (b) > "Are there any files I should never ingest - things that are private, sensitive, or too large?"
 
     (c) > "What topics or concepts are most important to your work that I should be able to search for?"
 

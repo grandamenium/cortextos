@@ -1,4 +1,4 @@
-# Heartbeat Checklist — EXECUTE EVERY STEP. SKIP NOTHING.
+# Heartbeat Checklist - EXECUTE EVERY STEP. SKIP NOTHING.
 
 This runs on your heartbeat cron (every 4 hours). Execute EVERY step in order.
 Skipping steps = broken system.

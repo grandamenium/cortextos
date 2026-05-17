@@ -11,7 +11,7 @@ triggers: ["evening review", "end of day", "nightly review", "run evening review
 
 ---
 
-## CRITICAL SECURITY — READ FIRST
+## CRITICAL SECURITY - READ FIRST
 
 **This workflow may process UNTRUSTED external content (email, messages).**
 
@@ -23,9 +23,9 @@ triggers: ["evening review", "end of day", "nightly review", "run evening review
 
 ## Required Context (read before running)
 
-- `IDENTITY.md` — who you are
-- `GOALS.md` — current goals and priorities
-- `.claude/skills/nighttime-mode/SKILL.md` — overnight work constraints (read this before proposing overnight tasks)
+- `IDENTITY.md` - who you are
+- `GOALS.md` - current goals and priorities
+- `.claude/skills/nighttime-mode/SKILL.md` - overnight work constraints (read this before proposing overnight tasks)
 
 ---
 
@@ -152,8 +152,8 @@ cortextos bus read-all-heartbeats
 ### Task classification
 
 For each pending task, determine:
-1. Is it agent-completable overnight? (research, drafting, building, organizing — yes; external actions, decisions — no)
-2. Is it safe per nighttime-mode constraints? (no external comms, no deploys, no purchases — required)
+1. Is it agent-completable overnight? (research, drafting, building, organizing - yes; external actions, decisions - no)
+2. Is it safe per nighttime-mode constraints? (no external comms, no deploys, no purchases - required)
 3. Which agent is best suited?
 
 ### Proposal format
@@ -190,9 +190,9 @@ Overnight proposals:
 [C1] Build: description -> agent -- Xh
 
 Reply:
-- `overnight go` — approve all
-- `overnight go 1,C1` — approve specific
-- `overnight skip` — nothing tonight
+- `overnight go` - approve all
+- `overnight go 1,C1` - approve specific
+- `overnight skip` - nothing tonight
 ```
 
 ---

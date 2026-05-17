@@ -24,12 +24,12 @@ agent-browser skills get <name> --full    # Include references and templates
 
 ## Available Skills
 
-- **agent-browser** — Core browser automation
-- **dogfood** — Exploratory testing and QA
-- **electron** — Electron desktop app automation
-- **slack** — Slack workspace automation
-- **vercel-sandbox** — Browser automation in Vercel Sandbox
-- **agentcore** — Browser automation on AWS Bedrock AgentCore
+- **agent-browser** - Core browser automation
+- **dogfood** - Exploratory testing and QA
+- **electron** - Electron desktop app automation
+- **slack** - Slack workspace automation
+- **vercel-sandbox** - Browser automation in Vercel Sandbox
+- **agentcore** - Browser automation on AWS Bedrock AgentCore
 
 ## Why agent-browser
 

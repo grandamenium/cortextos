@@ -32,12 +32,12 @@ cortextos bus ack-inbox "<message_id>"
 Un-ACK'd messages are re-delivered in 5 minutes. Do not ignore them.
 Target: 0 un-ACK'd messages after this step.
 
-## Step 3: System health check (ANALYST — do this before your own tasks)
+## Step 3: System health check (ANALYST - do this before your own tasks)
 
 Full reference: `.claude/skills/agent-management/SKILL.md`
 
 ```bash
-# Check all agent heartbeats — flag any silent for >5 hours
+# Check all agent heartbeats - flag any silent for >5 hours
 cortextos bus read-all-heartbeats
 
 # Check for agents with no recent activity
@@ -51,7 +51,7 @@ cortextos bus send-message <agent_name> normal "Heartbeat check: are you running
 
 If an agent is unresponsive for >8 hours, notify the orchestrator and log the issue:
 ```bash
-cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal "Agent <name> appears unresponsive — last heartbeat >8h ago. May need restart."
+cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal "Agent <name> appears unresponsive - last heartbeat >8h ago. May need restart."
 cortextos bus log-event action agent_unresponsive warning --meta '{"agent":"<name>","hours_silent":8}'
 ```
 
