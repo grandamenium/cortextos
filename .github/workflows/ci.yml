@@ -75,6 +75,10 @@ jobs:
       # the prod code path AND the describeIfDb test gate accept it), so one
       # env var activates the full stack against the service container.
       SUPABASE_GBRAIN_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      # Vanilla postgres:16-alpine has no SSL support. PGSSL_DISABLE=1 is the
+      # symmetric escape hatch to PGSSL_NO_VERIFY=1 — verified TLS stays the
+      # default (spawn-claim.ts:94 against Supabase prod).
+      PGSSL_DISABLE: '1'
     services:
       postgres:
         # PG16-alpine: cortextos.spawn_leases (migration 0002) uses NULLS NOT

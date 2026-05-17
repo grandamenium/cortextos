@@ -33,7 +33,7 @@ describe.skipIf(!dbUrl)('Δ1 spawn-lease integration', () => {
   beforeAll(() => {
     pool = new Pool({
       connectionString: dbUrl!,
-      ssl: { rejectUnauthorized: false },
+      ssl: process.env.PGSSL_DISABLE === '1' ? false : { rejectUnauthorized: false },
       max: 20,
     });
     setPgPool(pool);

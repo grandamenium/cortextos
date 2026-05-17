@@ -85,13 +85,18 @@ export function getPgPool(): Pool {
   }
 
   const insecure = process.env.PGSSL_NO_VERIFY === '1';
+  // PGSSL_DISABLE=1 is the vanilla-Postgres escape hatch (CI integration
+  // service container, local docker-compose). Supabase requires TLS, so the
+  // default stays SSL-on.
+  const disableSsl = process.env.PGSSL_DISABLE === '1';
 
   cachedPool = new Pool({
     connectionString: connStr,
     max: 10,
     idleTimeoutMillis: 30_000,
-    // Verified TLS by default. PGSSL_NO_VERIFY=1 is the explicit escape hatch.
-    ssl: insecure ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
+    // Verified TLS by default. PGSSL_NO_VERIFY=1 relaxes verification,
+    // PGSSL_DISABLE=1 turns SSL off entirely (vanilla pg in CI).
+    ssl: disableSsl ? false : insecure ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
   });
   return cachedPool;
 }

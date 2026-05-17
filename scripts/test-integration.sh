@@ -59,7 +59,9 @@ for m in supabase/migrations/0001_*.sql supabase/migrations/0002_*.sql supabase/
 done
 
 echo "==> Running DB-backed integration tests"
+# PGSSL_DISABLE=1 — local compose pg has no TLS; symmetric to CI YAML env.
 SUPABASE_GBRAIN_DATABASE_URL="$DB_URL" \
+PGSSL_DISABLE=1 \
   npx vitest run \
     tests/integration/spawn-lease.test.ts \
     tests/integration/daemon-spawn-lease-cross-process.test.ts

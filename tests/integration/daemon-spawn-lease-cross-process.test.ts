@@ -52,6 +52,8 @@ function spawnWorker(args: string[]): Promise<WorkerHandle> {
       // cross-process worker takes the standard getPgPool() path, so we
       // pass the env-flag escape hatch here. Same posture as the
       // in-process tests — production daemons run with verified TLS.
+      // PGSSL_DISABLE inherited from parent env when set (CI vanilla-pg
+      // service container has no TLS at all — disable beats relax).
       env: { ...process.env, PGSSL_NO_VERIFY: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -138,7 +140,7 @@ describeIfDb('daemon spawn-lease — cross-process atomicity', { timeout: 60_000
     }
     auditPool = new Pool({
       connectionString: DB_URL,
-      ssl: { rejectUnauthorized: false },
+      ssl: process.env.PGSSL_DISABLE === '1' ? false : { rejectUnauthorized: false },
       max: 2,
     });
   });
