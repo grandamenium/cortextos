@@ -1,142 +1,114 @@
-# Wave-0/Wave-1 Session State — 2026-05-17
+# Wave-0/Wave-1 Session State — 2026-05-17 (update 2)
 
-**Last saved:** 2026-05-17 ~16:30 EDT (auto-save during MacBook Claude session, ~67% context)
-**Resume code phrase:** `resume wave-0` — pasted into any fresh Claude Code session on either machine
+**Last saved:** 2026-05-17 ~17:30 EDT (auto-save during MacBook Claude session resume of `resume wave-0`)
+**Resume code phrase:** `resume wave-0` — paste into any fresh Claude Code session on either machine
 
 ---
 
-## Current fleet state (as of save)
+## Snapshot
 
 ```
 MacBook (user: hari, host instance: default)
-  daemon: PID 37718, online, ecosystem.config.js LOCAL-PATCHED (Mac-mini paths→hari paths)
-  agents: sam, warden-mb, pa (3 — correctly scoped)
-  HMAC key:  ~/.cortextos/default/config/bus-signing-key  — MISSING (still)
+  daemon: PID varies, online, ecosystem.config.js generator is now HOME-portable
+  agents: sam, warden-mb, pa (3 — correctly scoped via host field)
+  HMAC key:  ~/.cortextos/default/config/bus-signing-key  — EXISTS, matches Mac mini
+  daemon.env: ~/.cortextos/default/config/daemon.env — loaded by daemon at start (Task #76)
+  enabled-agents.json: host fields added on all 17 entries
   Tailscale: 100.64.0.2, userspace networking, SOCKS5 localhost:1055
-  
+  installs: 25+ Week 1/2/3 packages under ~/installs (see /Users/hari/research/h1r9do/install/INSTALL-STATUS-2026-05-17.md)
+  docker: qdrant (:6333), activepieces (:9580)
+
 Mac mini (user: subbu_ai_assistant, host instance: default)
-  daemon: PID 25357 region, online, ecosystem.config.js canonical
+  daemon: should pick up new ecosystem generator + daemon.env loader on next pull
   agents: analyst, chief, dev, forge, research, research-codex, research-director, warden-mm (8)
-  HMAC key:  ~/.cortextos/default/config/bus-signing-key  — EXISTS (64-byte hex, mode 0600, mtime 2026-05-07)
-  Node:      /Users/subbu_ai_assistant/.local/bin/{node,npm,pm2}  (not in default PATH via ssh — set PATH manually)
+  ACTION ON NEXT MAC MINI SESSION:
+    1. git pull gitea
+    2. npm run build && cortextos ecosystem --instance default
+    3. Add ~/.cortextos/default/config/daemon.env (mirror MacBook)
+    4. Update enabled-agents.json to add host: "subbu_ai_assistant@mac-mini" to local entries
+    5. pm2 reload ecosystem.config.js --update-env
 ```
 
 ---
 
-## Substrate work done this session
+## Completed this session (`resume wave-0` invocation)
 
-1. **Tailscale fix on Mac mini** — plist socket arg `/var/run/tailscaled.socket` → `/Users/subbu_ai_assistant/.config/tailscaled/tailscaled.sock`. Done by Mac mini Claude. Mac mini now reachable on tailnet.
-2. **MacBook→Mac mini SSH** — dedicated ed25519 key at `~/.ssh/id_ed25519_mac_mini` + `~/.ssh/config` host `mac-mini` (uses SOCKS5 proxy via ProxyCommand). Public key in `subbu_ai_assistant@mac-mini:~/.ssh/authorized_keys`.
-3. **Git divergence reconciled** — MacBook 6-ahead + Mac mini 670c47f detached + gitea/main 2f3c416 → merged on feature branch `feat/macbook-md3-reliability-2026-05-17` → fast-forward pushed to `gitea/main` at SHA `0e1a460`.
-4. **Conflicts resolved** (during merge): ecosystem.config.js, scripts/bus-relay/bus-relay.sh, src/daemon/agent-process.ts (with CodexPTY→CodexAppServerPTY rename), src/daemon/fast-checker.ts.
-5. **Build fixes**: tsup.config.ts orphan `hook-episodic-post-tool` entry removed.
-6. **[WIP] dashboard auth security regression reverted** before main push.
-7. **Both daemons restarted** via `pm2 reload ecosystem.config.js --update-env` (regular `restart` doesn't pick up new env vars).
-8. **enabled-agents.json scoped manually** on both machines to prevent cross-host duplicate spawning (sam on Mac mini ate Telegram polling for the few minutes it ran).
+### Substrate (gitea/main commits)
+| Commit | Tasks | Summary |
+|---|---|---|
+| b0cf213 | #74 #75 #76 | HOME-portable ecosystem + daemon.env loader + host-based agent scoping |
+| 57e54ef | #62 #66 | agents.yaml runtime integration + typed bus contracts (29 new tests) |
+| (pending) | #60 | restart circuit-breaker (module + alert refactor — integration into agent-process.ts in flight) |
 
----
+### Wave-0 Tier-0 (auth resilience suite, in ~/.claude/)
+- `/Users/hari/bin/claude-safe.sh` — auth-guarded Claude CLI wrapper (Task #53)
+- `~/.claude/settings.json` — added SessionStart + PostToolUse JSON-lint hooks (Tasks #54, #56)
+- `/Users/hari/cortextos/agents.yaml` — 11-agent capability manifest (Task #55)
+- `~/.claude/skills/bootstrap/SKILL.md` — agent bootstrap sequence (Task #58)
+- `~/.claude/skills/resume-registry/SKILL.md` — code-phrase registry (Task #59)
 
-## Surprises caught + lessons learned
+### Tier-3 install execution (h1r9do/INSTALL-QUEUE)
+**Week 1 P0 — 16 packages installed + smoke-tested** (#67):
+whisper.cpp (Metal), qdrant (docker), moonshine, whisperx, chatterbox, supertonic, agno, openai-agents, python-telegram-bot, twilio, fastembed, faster-whisper, pipecat, livekit-agents, stripe-agent-toolkit, playwright-mcp.
 
-| Surprise | Lesson |
-|---|---|
-| Mac mini Claude refused my `openssl rand` proposal because key already existed | Always verify before generating randomness — destroying a running HMAC key kills all bus messaging |
-| Userspace tailnet means plain `curl http://100.64.0.1:X/` fails — needs SOCKS5 proxy at localhost:1055 | Configure git remote with `http.<url>.proxy socks5h://localhost:1055` |
-| `pm2 restart` keeps OLD env; need `pm2 reload --update-env` to load new ecosystem.config.js vars | Use `reload`, not `restart`, after ecosystem changes |
-| ecosystem.config.js with hardcoded user paths broke on host with different user | Use HOME-based / variable-based paths; tracked as Task #74 |
-| enabled-agents.json `status` field is ignored by daemon — only `enabled: true/false` is checked | Manually scope per-host until status enforcement is added; tracked as Task #75 |
-| tsup.config.ts had orphan reference to never-committed `hook-episodic-post-tool.ts` | Pre-existing gitea bug — removed from entry list with comment |
-| SSH to Mac mini drops user PATH — node/npm/pm2 at `~/.local/bin/` not in PATH | Always prepend `export PATH="$HOME/.local/bin:$PATH"` |
-| MacBook's old tailscale.err.log spam was just "can't reach Mac mini" — benign once Mac mini back | Not all log growth is a bug |
-| Three different commits across MacBook, Mac mini, gitea/main — true 3-way divergence | Establish gitea as canonical NOW so this never recurs |
+**Week 2 — 7 packages installed + smoke-tested** (#68):
+mem0, browser-use, firecrawl, pydantic-ai, piper-tts, claude-agent-sdk, activepieces (docker on :9580).
 
----
+**Week 3 partial — 3 packages installed** (#69 partial):
+letta-client, mcp-memory-service, open-notebook.
 
-## What's STILL TODO (in order)
+**Deferred (need keys/scaffold)**:
+- stagehand (OPENAI_API_KEY + interactive scaffold)
+- open-saas (Stripe test key + Wasp scaffold + Postgres)
+- chatterbox weights (3GB, lazy on first .from_pretrained call)
+- whisperx pyannote weights (HF license acceptance + token)
+- graphiti (needs Neo4j container — defer until use case)
+- ruflo (alpha-eval gate: 7-day federation smoke test required FIRST)
 
-### ~~B1: bus HMAC reconciliation + verifier fail-closed~~ ✅ COMPLETE 2026-05-17
+## Tasks still pending after this session
 
-- Key copied MacBook ← Mac mini via scp. sha256 verified identical (`b9a175c7e7f0...`)
-- `src/bus/message.ts` patched: `withinAuthGracePeriod()` helper + verifier fail-closed when key present + sig missing post-grace; commit `10bc8bd` on `gitea/main`
-- Grace window: `CTX_BUS_AUTH_GRACE_UNTIL=2026-05-18T20:20:49Z` (24h migration window). Embedded in ecosystem.config.js env block on both machines (NOT in daemon.env — PM2 ignores that path)
-- Both daemons reloaded via `pm2 reload ecosystem.config.js --update-env`
-- Verified end-to-end: MacBook receiving signed msgs from Mac mini's research-codex (sig=YES), Mac mini receiving signed msgs from dev (sig=YES), 0 `.errors` growth post-deploy
+| # | Task | Notes |
+|---|---|---|
+| 57 | Per-agent enabledPlugins scoping in daemon | Likely needs CLAUDE_CONFIG_DIR-per-agent or per-dir .claude/settings.json |
+| 60 | Rate-limit circuit breaker | Module written; agent-process.ts integration pending (subagent in flight) |
+| 61 | Convert top-5 Bash sequences to scripts/skills | bus/ already has 50+ scripts — the missing piece is /quick-bus skill consolidating dispatch |
+| 63 | auth-doctor supervisor agent in cortextOS | Existing scripts/check-claude-auth.sh + scripts/refresh-claude-token.sh + bin/claude-safe.sh mostly cover this — needs daemon-side metrics surface |
+| 64 | TDD autonomous loop tool | Heavy lift; design needed |
+| 65 | parallel-swarm primitive (extract from h1r9do pattern) | Heavy lift; mine ~/research/h1r9do/_scripts for the 60-agent parallel pattern |
+| 69 | ruflo alpha-eval gate | Real-world 7-day federation smoke test (not a code task) |
+| 70 | Voice-PAaaS productization v1 | Pipecat + moonshine + supertonic end-to-end test + first customer signing |
 
-**Lesson learned:** PM2 only reads env from ecosystem.config.js (not from shell exports, not from daemon.env file). For per-instance env vars, either embed in ecosystem.config.js OR add daemon-side loader for daemon.env (better — Task #76).
+## Manual rotations still pending (from earlier this session)
+- 🔴 Rotate Anthropic OAuth token at console.anthropic.com → `claude` re-login → refresh-claude-token.sh propagates
+- 🔴 Rotate Telegram bot 8640425235 via @BotFather → update sam/.env, warden-mb/.env, chief/.env
+- 🟡 Rotate stdout.log + outbound-messages.jsonl AFTER token rotations
+- 🟡 Configure git-credential osxkeychain helper (interactive password entry once)
 
-**Grace window expires 2026-05-18T20:20:49Z** — after that, unsigned messages will be dropped to .errors/. By then all running agents have restarted and are signing.
+## Key learnings this session
 
-### ~~B2: serena + 4 plugin commit-SHA pinning~~ ✅ COMPLETE 2026-05-17
-
-Pinning targets used:
-- serena: `7c7d5eef56b47d8ab0835dd9227ba4b80b90c50b` (HEAD of oraios/serena main, 2026-05-17)
-- @playwright/mcp: `0.0.75` (latest stable)
-- firebase-tools: `15.18.0` (latest stable)
-- @upstash/context7-mcp: `2.2.5` (latest stable)
-
-**Mac mini**: all 4 plugins pinned via jq edits to `external_plugins/*/.mcp.json`. Sweep confirmed all 15 plugins (asana/context7/discord/fakechat/firebase/github/gitlab/greptile/imessage/laravel-boost/linear/playwright/serena/telegram/terraform) are now cleanly pinned — no `@latest`/HEAD remaining.
-
-**MacBook**: only serena+firebase exist locally as `.mcp.json` (playwright/context7 dirs absent — already disabled at user-settings level). Both pinned.
-
-Plugin marketplace dirs are NOT shared between machines — pinning is per-machine work. Backups at `.mcp.json.bak.pre-b2` on each.
-
-### ~~B3: redact.ts + .env scrub~~ ✅ PARTIAL (manual rotation pending)
-
-**Done autonomously:**
-- `src/pty/redact.ts` extended (commit `62790de` on gitea/main) — now catches: sk-ant-oat01-*, sk-ant-api03-*, sk-or-v1-*, Telegram bot tokens (`\d+:[A-Za-z0-9_-]{30,}`), Bearer headers, Telegram API URLs containing tokens. Order-aware (URL pattern first).
-- Both machines pulled + rebuilt + reloaded with new redact.
-- `.env.bak.*` files deleted on both machines (3 on MacBook + 0 on Mac mini — already clean there).
-- `chmod 0600` on all `orgs/subbu-ops/agents/*/.env` files (both machines).
-- `.env.bak.*` added to `.gitignore` (commit `e01fc4d` on gitea/main).
-
-**Still pending — requires Hari manual:**
-- 🔴 **Rotate Anthropic OAuth token** at console.anthropic.com → re-login via `claude` CLI on MacBook → keychain updates → refresh-claude-token.sh propagates to agent .envs.
-- 🔴 **Rotate Telegram bot 8640425235** via @BotFather → update BOT_TOKEN in sam/.env, warden-mb/.env, chief/.env (Mac mini).
-- 🟡 **Rotate stdout.log + outbound-messages.jsonl** — they still contain old token traces. Recommend `mv` to `.OLD-2026-05-17` (preserve audit trail, allow new clean log to be written). Don't do this until AFTER rotation so log is closed with old token still active.
-- 🟡 **Plaintext gitea password in `.git/config`** — remove `hari:password@` from remote URL, configure `git-credential` helper (osxkeychain) on both machines. Requires interactive password entry once, then helper takes over.
-
-### Follow-ups in task list (#74, #75)
-- ecosystem.config.js HOME-based paths (committed fix)
-- agent-manager.ts: enforce `status` field in enabled-agents.json so daemons skip cross-host agents automatically
-
-### Tier 0/1/2/3 (the broader 100x roadmap, tasks #53-70)
-- Still pending — substrate sync was the prereq. Now flows cleanly via git.
-
----
-
-## Key paths + commands you'll need to remember
-
-```bash
-# SSH to Mac mini (works from MacBook, uses SOCKS5 ProxyCommand from ~/.ssh/config)
-ssh mac-mini 'whoami'   # subbu_ai_assistant
-
-# Mac mini PATH setup for any pm2/node command
-ssh mac-mini 'export PATH="$HOME/.local/bin:$PATH" && pm2 list'
-
-# gitea via SOCKS5 (already configured in ~/.gitconfig local for cortextos repo)
-git fetch gitea
-
-# pm2 reload (not restart) after ecosystem changes
-pm2 reload ecosystem.config.js --update-env
-
-# Check current agent count under daemon
-DP=$(pm2 jlist | python3 -c "import sys,json; [print(a['pid']) for a in json.load(sys.stdin) if a['name']=='cortextos-daemon']")
-pgrep -P $DP | wc -l
-```
+1. **PM2 env loader bug confirmed**: PM2 reads env ONLY from ecosystem.config.js — never from shell exports, never from external dotenv files. Task #76 (daemon.env) is the workaround.
+2. **Subagent dispatch worked beautifully** for parallel substrate work + auth-resilience suite + Tier-3 installs. Three subagents ran ~simultaneously without collision because they touched non-overlapping file trees.
+3. **Build is fast** (~35ms for tsup CJS bundle). Tests are slow (117s for full suite). Run targeted vitest for tight loops.
+4. **Pre-existing test failures** in `agent-process-codex-app-server.test.ts` (4 tests) need cleanup — not caused by this session's work but blocking clean `npm test` exit.
+5. **HMAC verifier deployed without incident** — 0 .errors growth across whole session.
 
 ## Resume protocol
 
-When resuming in fresh Claude Code session, paste:
+When resuming in a fresh Claude Code session, paste:
 
 ```
 resume wave-0
 
-The MacBook + Mac mini cortextOS fleet substrate sync was completed 2026-05-17.
-Both daemons running merged code (gitea/main at 0e1a460). 
 Read /Users/hari/cortextos/audits/2026-05-17-wave1/SESSION-STATE.md for full context.
-Pick up from the "STILL TODO" list — start with B1 (bus HMAC) unless I tell you otherwise.
+Substrate (#74 #75 #76 #62 #66) complete on gitea/main. #60 circuit breaker module
+written but agent-process.ts integration pending (check git status to see subagent
+result). Install execution: Week 1 done, Week 2 done, Week 3 partial. Deferred items
+need API keys / interactive scaffold. Tier-2 primitives (#57 #61 #63 #64 #65) all
+still pending.
+
+Pick up: either (a) complete #60 integration if not already done, or (b) start
+#64 TDD-loop / #65 swarm primitive design work, or (c) execute deferred Tier-3
+items if Hari has API keys ready.
 ```
 
----
-
-*This file lives in git at audits/2026-05-17-wave1/SESSION-STATE.md — committed before context expiry.*
+On Mac mini just substitute `/Users/subbu_ai_assistant/cortextos/...` for the path.
