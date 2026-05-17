@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, relative } from 'path';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
@@ -17,6 +17,7 @@ import { collectTelegramCommands, registerTelegramCommands } from '../bus/metric
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 import { transcribeVoice } from '../bus/transcribe-voice.js';
+import { stripBom } from '../utils/strip-bom.js';
 
 type LogFn = (msg: string) => void;
 
@@ -24,7 +25,7 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
+  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller; telegramRejectCount?: number; telegramLastRejectAlertAt?: number }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
@@ -36,11 +37,77 @@ export class AgentManager {
   private frameworkRoot: string;
   private org: string;
 
+  // Set true at construction time if any agent in state/ has a stale
+  // .daemon-crashed marker, meaning the previous daemon process died
+  // abruptly. Used by startAgent() to downgrade the BUG-011 regression
+  // alarm to an info log in the post-crash overlap case (PR #11 only
+  // closed the in-flight stop/start race; crash-restart can legitimately
+  // see overlapping registry state). Cleared after discoverAndStart()
+  // finishes so the next clean restart starts from a known-good baseline.
+  private daemonJustCrashed: boolean = false;
+
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+    this.daemonJustCrashed = this.detectDaemonCrashMarkers();
+    if (this.daemonJustCrashed) {
+      console.log('[agent-manager] Detected .daemon-crashed marker(s) — previous daemon exited abnormally. Will quiet BUG-011 alarm for this startup cycle.');
+    }
+  }
+
+  /**
+   * Scan state/<agent>/.daemon-crashed markers (written by daemon/index.ts:handleFatal).
+   * Presence means the previous daemon process died via uncaughtException
+   * or process.kill rather than a clean shutdown.
+   */
+  private detectDaemonCrashMarkers(): boolean {
+    const stateBase = join(this.ctxRoot, 'state');
+    if (!existsSync(stateBase)) return false;
+    try {
+      const dirs = readdirSync(stateBase, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+      return dirs.some(name => existsSync(join(stateBase, name, '.daemon-crashed')));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Delete .daemon-crashed markers after a successful discoverAndStart pass
+   * AND clear the daemonJustCrashed flag. Once the initial post-crash
+   * discovery has finished, any further startAgent calls — IPC-triggered
+   * agent enables, dashboard restarts, manual restartAgent — represent
+   * normal operation, not post-crash overlap. They should fire the real
+   * BUG-011 alarm, not the quieted variant.
+   *
+   * Called once per daemon startup at the end of discoverAndStart().
+   * Idempotent — if no markers exist, this is a no-op. Wrapped in
+   * best-effort try/catch so a missing dir or permission error never
+   * blocks daemon startup.
+   */
+  private clearDaemonCrashMarkers(): void {
+    if (!this.daemonJustCrashed) return;
+    const stateBase = join(this.ctxRoot, 'state');
+    if (existsSync(stateBase)) {
+      try {
+        const dirs = readdirSync(stateBase, { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => d.name);
+        for (const name of dirs) {
+          try {
+            const marker = join(stateBase, name, '.daemon-crashed');
+            if (existsSync(marker)) unlinkSync(marker);
+          } catch { /* per-agent best effort */ }
+        }
+      } catch { /* directory unreadable — leave markers, next clean startup will retry */ }
+    }
+    // Reset the flag so subsequent startAgent calls (IPC enable, dashboard
+    // restart, manual restartAgent) get the real BUG-011 alarm, not the
+    // quieted post-crash variant.
+    this.daemonJustCrashed = false;
   }
 
   /**
@@ -85,6 +152,13 @@ export class AgentManager {
       // of falling back to `this.org` (the daemon's startup org).
       await this.startAgent(name, dir, config, org);
     }
+
+    // Successful startup pass — clear .daemon-crashed markers from disk
+    // AND clear the in-memory daemonJustCrashed flag. After this point,
+    // any further startAgent() calls (IPC enable, dashboard restart, etc)
+    // are normal operation and should fire the real BUG-011 alarm if a
+    // race ever does leak through PR #11's protection.
+    this.clearDaemonCrashMarkers();
   }
 
   /**
@@ -190,7 +264,18 @@ export class AgentManager {
       // the core stability test plan + cycle 2 of PR #13 both confirmed
       // this branch is dormant. Once we have weeks of zero-warning
       // production data, we can delete the queue mechanism entirely.
-      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
+      if (this.daemonJustCrashed) {
+        // Post-crash startup. The previous daemon exited via
+        // uncaughtException without running stopAll(), so the in-memory
+        // registry from the prior process is gone — but the post-crash
+        // discoverAndStart pass can briefly re-enter startAgent for an
+        // agent whose pendingRestarts entry survived. This is benign and
+        // distinct from the BUG-011 in-flight race PR #11 closed. Log at
+        // info level so operators don't think PR #11 has regressed.
+        console.log(`[agent-manager] ${name} already in registry (post-crash discovery overlap, expected). Queueing restart.`);
+      } else {
+        console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
+      }
       this.pendingRestarts.add(name);
       return;
     }
@@ -238,6 +323,8 @@ export class AgentManager {
     let agentEnv: Record<string, string> = {};
 
     if (existsSync(agentEnvFile)) {
+      // parseEnvFile is BOM+CRLF-aware (patched in env.ts). Using it here
+      // rather than inline regex so the full key-value dict is available.
       agentEnv = parseEnvFile(agentEnvFile);
       botToken = agentEnv.BOT_TOKEN?.trim();
       chatId = agentEnv.CHAT_ID?.trim();
@@ -261,6 +348,12 @@ export class AgentManager {
       // whitelists their numeric user ID.
       if (botToken && !allowedUserId) {
         log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
+        if (chatId) {
+          const alertApi = new TelegramAPI(botToken);
+          alertApi.sendMessage(chatId,
+            `⚠️ WATCHDOG: ${name} has BOT_TOKEN but ALLOWED_USER is missing or malformed in .env. Telegram is DISABLED for this agent. Fix ALLOWED_USER and restart.`,
+          ).catch(() => {});
+        }
         botToken = undefined;
       }
 
@@ -343,6 +436,9 @@ export class AgentManager {
       const stateDir = join(this.ctxRoot, 'state', name);
       const poller = new TelegramPoller(telegramApi, stateDir, 1000, undefined, name);
 
+      const REJECT_ALERT_THRESHOLD = 3;
+      const REJECT_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
+
       poller.onMessage((msg) => {
         // ALLOWED_USER gate: if configured, ignore messages from other users.
         // Use numeric comparison to avoid string coercion issues.
@@ -350,9 +446,30 @@ export class AgentManager {
           const allowedId = parseInt(allowedUserId, 10);
           if (msg.from?.id !== allowedId) {
             log(`Ignoring message from unauthorized user (allowed_user gate)`);
+            const entry = this.agents.get(name);
+            if (entry) {
+              entry.telegramRejectCount = (entry.telegramRejectCount ?? 0) + 1;
+              if (entry.telegramRejectCount >= REJECT_ALERT_THRESHOLD) {
+                const now = Date.now();
+                const lastAlert = entry.telegramLastRejectAlertAt ?? 0;
+                if (now - lastAlert > REJECT_ALERT_COOLDOWN_MS) {
+                  entry.telegramLastRejectAlertAt = now;
+                  const fromId = msg.from?.id ?? 'unknown';
+                  const alertText = `⚠️ WATCHDOG: ${name} rejected ${entry.telegramRejectCount} consecutive Telegram messages (ALLOWED_USER gate). Last from_id: ${fromId}. Verify ALLOWED_USER in .env matches expected users, or this may be unsolicited contact.`;
+                  log(alertText);
+                  if (telegramApi && chatId) {
+                    telegramApi.sendMessage(chatId, alertText).catch(() => {});
+                  }
+                }
+              }
+            }
             return;
           }
         }
+
+        // Message passed ALLOWED_USER gate — reset rejection counter.
+        const agentEntry = this.agents.get(name);
+        if (agentEntry) agentEntry.telegramRejectCount = 0;
 
         const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
         const msgChatId = msg.chat?.id;
@@ -466,15 +583,32 @@ export class AgentManager {
       });
 
       poller.onReaction((reaction) => {
-        // ALLOWED_USER gate: same rule as message handler. If configured,
-        // ignore reactions from other users.
         if (allowedUserId) {
           const allowedId = parseInt(allowedUserId, 10);
           if (reaction.user?.id !== allowedId) {
             log('Ignoring reaction from unauthorized user (allowed_user gate)');
+            const entry = this.agents.get(name);
+            if (entry) {
+              entry.telegramRejectCount = (entry.telegramRejectCount ?? 0) + 1;
+              if (entry.telegramRejectCount >= REJECT_ALERT_THRESHOLD) {
+                const now = Date.now();
+                const lastAlert = entry.telegramLastRejectAlertAt ?? 0;
+                if (now - lastAlert > REJECT_ALERT_COOLDOWN_MS) {
+                  entry.telegramLastRejectAlertAt = now;
+                  const alertText = `⚠️ WATCHDOG: ${name} rejected ${entry.telegramRejectCount} consecutive Telegram interactions (ALLOWED_USER gate). Verify ALLOWED_USER in .env matches expected users, or this may be unsolicited contact.`;
+                  log(alertText);
+                  if (telegramApi && chatId) {
+                    telegramApi.sendMessage(chatId, alertText).catch(() => {});
+                  }
+                }
+              }
+            }
             return;
           }
         }
+
+        const agentEntry = this.agents.get(name);
+        if (agentEntry) agentEntry.telegramRejectCount = 0;
 
         const from = stripControlChars(reaction.user?.first_name || reaction.user?.username || 'Unknown');
         const reactionChatId = reaction.chat?.id ?? chatId ?? '';
@@ -492,8 +626,64 @@ export class AgentManager {
         checker.queueTelegramMessage(formatted);
       });
 
-      poller.start().catch(err => {
-        log(`Telegram poller error: ${err}`);
+      // Wrap poller.start() in a restart-on-Conflict loop. The poller's
+      // internal Conflict-self-die (see TelegramPoller.start) yields the
+      // Telegram getUpdates lock when a duplicate poller is detected — but
+      // without a restart layer above, the agent loses Telegram input
+      // permanently. After a daemon crash, the old getUpdates connections
+      // can hold the lock for ~60s in Telegram's cloud, so this loop
+      // sleeps and retries on 'conflict-self-die' until the lock clears.
+      // Intentional stops (stopAgent → poller.stop()) set
+      // lastExitReason='stopped-externally' and exit the loop cleanly.
+      const startPrimaryPollerWithRestart = async () => {
+        // 5min hard cap measured against CONSECUTIVE Conflict failures,
+        // not total wrapper lifetime. A long-running successful poll
+        // (>1min) resets the counter — without this reset, a poller that
+        // runs cleanly for hours and then hits a single Conflict would
+        // give up immediately because total runtime already exceeds 5min.
+        const MAX_CONSECUTIVE_CONFLICT_MS = 5 * 60 * 1000;
+        const LONG_RUN_RESET_MS = 60_000;
+        let consecutiveConflictStart: number | null = null;
+        while (true) {
+          // Pre-check: agent may have been deleted from registry during
+          // a previous sleep window. Skip the start() call entirely.
+          if (!this.agents.has(name)) return;
+          const runStart = Date.now();
+          try {
+            await poller.start();
+          } catch (err) {
+            log(`Telegram poller threw (will not restart): ${err}`);
+            return;
+          }
+          const runDuration = Date.now() - runStart;
+          if (poller.lastExitReason === 'stopped-externally') return;
+          if (!this.agents.has(name)) return;
+          // A poll session that ran for >LONG_RUN_RESET_MS proves the
+          // Conflict lock is no longer chronic — reset the retry budget.
+          if (runDuration > LONG_RUN_RESET_MS) consecutiveConflictStart = null;
+          if (consecutiveConflictStart === null) consecutiveConflictStart = Date.now();
+          if (Date.now() - consecutiveConflictStart > MAX_CONSECUTIVE_CONFLICT_MS) {
+            log(`Telegram poller for ${name} could not clear Conflict within 5min of consecutive failures — giving up. Inspect for duplicate bot instance.`);
+            return;
+          }
+          log(`Telegram poller for ${name} exited (${poller.lastExitReason}). Sleeping 30s then restarting to retake getUpdates lock.`);
+          await new Promise(r => setTimeout(r, 30_000));
+        }
+      };
+      startPrimaryPollerWithRestart().catch(err => {
+        log(`Telegram poller wrapper crashed: ${err}`);
+        // Best-effort operator alert via the agent's own bot. The wrapper
+        // crashing is rare (the only catchable path is a throw from
+        // poller.start() before its own try/catch), but when it happens the
+        // agent silently loses Telegram input — exactly the failure class
+        // the 2026-05-16 audit flagged. Surface it to the operator chat so
+        // they see "X poller crashed" instead of mysterious silence.
+        if (telegramApi && chatId) {
+          telegramApi.sendMessage(
+            String(chatId),
+            `${name}: Telegram poller wrapper crashed. Inbound messages may be dropped until restart. Check daemon log.`,
+          ).catch(() => { /* swallow alert failure; original log already captured */ });
+        }
       });
 
       // Store poller reference so stopAgent() can clean it up
@@ -501,6 +691,7 @@ export class AgentManager {
       if (entry) entry.poller = poller;
 
       log(`Telegram poller started (${name})`);
+
 
       // Orchestrator-only: start a second poller for the org's activity
       // channel bot so Telegram inline-button callbacks (currently just
@@ -538,7 +729,8 @@ export class AgentManager {
     // Only the org's orchestrator runs the activity-channel poller.
     let orchestratorName: string | undefined;
     try {
-      const contextJson = readFileSync(join(orgDir, 'context.json'), 'utf-8');
+      // stripBom: see src/utils/strip-bom.ts for incident context.
+      const contextJson = stripBom(readFileSync(join(orgDir, 'context.json'), 'utf-8'));
       orchestratorName = JSON.parse(contextJson).orchestrator;
     } catch {
       return; // No context.json or unreadable — skip
@@ -550,8 +742,11 @@ export class AgentManager {
     let activityBotToken: string | undefined;
     let activityChatId: string | undefined;
     try {
-      const content = readFileSync(activityEnvPath, 'utf-8');
-      for (const line of content.split('\n')) {
+      // stripBom + CRLF-aware split: Windows tooling writes activity-channel.env
+      // with BOM + CRLF. Without these, ACTIVITY_BOT_TOKEN never resolves
+      // and the activity-channel poller silently never starts.
+      const content = stripBom(readFileSync(activityEnvPath, 'utf-8'));
+      for (const line of content.split(/\r?\n/)) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) continue;
         const eqIdx = trimmed.indexOf('=');
@@ -594,14 +789,44 @@ export class AgentManager {
       log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
     });
 
-    activityPoller.start().catch((err) => {
-      log(`Activity-channel poller error: ${err}`);
+    // Same Conflict-restart wrapper as the primary poller — activity
+    // channel can lose its getUpdates lock after a daemon crash too.
+    // 5min retry budget measured against CONSECUTIVE failures; resets
+    // after a >1min successful run. See primary poller wrapper for rationale.
+    const startActivityPollerWithRestart = async () => {
+      const MAX_CONSECUTIVE_CONFLICT_MS = 5 * 60 * 1000;
+      const LONG_RUN_RESET_MS = 60_000;
+      let consecutiveConflictStart: number | null = null;
+      while (true) {
+        if (!this.agents.has(name)) return;
+        const runStart = Date.now();
+        try {
+          await activityPoller.start();
+        } catch (err) {
+          log(`Activity-channel poller threw (will not restart): ${err}`);
+          return;
+        }
+        const runDuration = Date.now() - runStart;
+        if (activityPoller.lastExitReason === 'stopped-externally') return;
+        if (!this.agents.has(name)) return;
+        if (runDuration > LONG_RUN_RESET_MS) consecutiveConflictStart = null;
+        if (consecutiveConflictStart === null) consecutiveConflictStart = Date.now();
+        if (Date.now() - consecutiveConflictStart > MAX_CONSECUTIVE_CONFLICT_MS) {
+          log(`Activity-channel poller for ${name} could not clear Conflict within 5min of consecutive failures — giving up.`);
+          return;
+        }
+        log(`Activity-channel poller for ${name} exited (${activityPoller.lastExitReason}). Sleeping 30s then restarting.`);
+        await new Promise(r => setTimeout(r, 30_000));
+      }
+    };
+    startActivityPollerWithRestart().catch((err) => {
+      log(`Activity-channel poller wrapper crashed: ${err}`);
     });
 
     const entry = this.agents.get(name);
     if (entry) entry.activityPoller = activityPoller;
 
-    log(`Activity-channel poller started (chat ${activityChatId})`);
+    log(`Activity-channel poller started (chat ${activityChatId}, with Conflict-restart wrapper)`);
   }
 
   /**
@@ -633,7 +858,11 @@ export class AgentManager {
     // as a safety net in case BUG-011 regresses; the warn line tells us
     // immediately if it ever does.
     if (this.pendingRestarts.has(name)) {
-      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: pendingRestarts fired for ${name} — race condition leaked through. Honoring queued restart as safety net.`);
+      if (this.daemonJustCrashed) {
+        console.log(`[agent-manager] pendingRestarts fired for ${name} (post-crash safety net, expected). Honoring queued restart.`);
+      } else {
+        console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: pendingRestarts fired for ${name} — race condition leaked through. Honoring queued restart as safety net.`);
+      }
       this.pendingRestarts.delete(name);
       console.log(`[agent-manager] Honoring queued restart for ${name}`);
       this.startAgent(name, '').catch(err =>

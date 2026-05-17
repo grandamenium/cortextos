@@ -306,12 +306,30 @@ function logHookAttempt(hook: HookEntry, event: Event): void {
 type HookEmitName = 'hook_fire' | 'hook_block' | 'hook_escalate';
 function emitHookBusEvent(name: HookEmitName, meta: Record<string, unknown>): void {
   try {
-    execFile(
-      'cortextos',
-      ['bus', 'log-event', 'action', name, 'info', '--meta', JSON.stringify(meta)],
-      { timeout: 5_000 },
-      () => { /* fire-and-forget */ },
-    );
+    // PATH-unaware execFile is unreliable on Windows: the daemon spawned by
+    // PM2 doesn't inherit the npm-link target, so 'cortextos' fails ENOENT
+    // and hook audit events are silently dropped. Invoke via process.execPath
+    // + the bundled dist/cli.js path (same pattern as fast-checker.ts heartbeat
+    // watchdog) so PATH doesn't matter. CTX_FRAMEWORK_ROOT is set by the
+    // daemon at startup; if unset (rare — e.g. unit test), fall back to legacy
+    // PATH lookup so the test doesn't fail outright.
+    const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+    if (frameworkRoot) {
+      const cliPath = join(frameworkRoot, 'dist', 'cli.js');
+      execFile(
+        process.execPath,
+        [cliPath, 'bus', 'log-event', 'action', name, 'info', '--meta', JSON.stringify(meta)],
+        { timeout: 5_000 },
+        () => { /* fire-and-forget */ },
+      );
+    } else {
+      execFile(
+        'cortextos',
+        ['bus', 'log-event', 'action', name, 'info', '--meta', JSON.stringify(meta)],
+        { timeout: 5_000 },
+        () => { /* fire-and-forget */ },
+      );
+    }
   } catch {
     // best-effort: never propagate logging failures
   }

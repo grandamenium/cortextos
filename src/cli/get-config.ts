@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { stripBom } from '../utils/strip-bom.js';
 
 export const getConfigCommand = new Command('get-config')
   .description('Show resolved operational config for an agent (org defaults + agent overrides)')
@@ -18,11 +19,18 @@ export const getConfigCommand = new Command('get-config')
       process.exit(1);
     }
 
-    // Read org defaults
+    // Read org defaults. stripBom: PowerShell-saved context.json may have a
+    // BOM that breaks JSON.parse silently (2026-05-16 incident — see
+    // src/utils/strip-bom.ts). WARN on parse failure instead of silently
+    // falling back to defaults so operators can see misconfiguration.
     let orgCtx: Record<string, any> = {};
     const orgCtxPath = join(frameworkRoot, 'orgs', org, 'context.json');
     if (existsSync(orgCtxPath)) {
-      try { orgCtx = JSON.parse(readFileSync(orgCtxPath, 'utf-8')); } catch {}
+      try {
+        orgCtx = JSON.parse(stripBom(readFileSync(orgCtxPath, 'utf-8')));
+      } catch (err) {
+        process.stderr.write(`Warning: failed to parse ${orgCtxPath} (${(err as Error).message}); using hardcoded defaults\n`);
+      }
     } else {
       process.stderr.write(`Warning: org context not found at ${orgCtxPath}, using hardcoded defaults\n`);
     }
@@ -32,7 +40,11 @@ export const getConfigCommand = new Command('get-config')
     if (agentName) {
       const agentCfgPath = join(frameworkRoot, 'orgs', org, 'agents', agentName, 'config.json');
       if (existsSync(agentCfgPath)) {
-        try { agentCfg = JSON.parse(readFileSync(agentCfgPath, 'utf-8')); } catch {}
+        try {
+          agentCfg = JSON.parse(stripBom(readFileSync(agentCfgPath, 'utf-8')));
+        } catch (err) {
+          process.stderr.write(`Warning: failed to parse ${agentCfgPath} (${(err as Error).message}); showing org defaults only\n`);
+        }
       } else if (options.agent) {
         // --agent was explicitly passed but no config found — warn, don't exit
         process.stderr.write(`Warning: agent config not found at ${agentCfgPath}, showing org defaults only\n`);
