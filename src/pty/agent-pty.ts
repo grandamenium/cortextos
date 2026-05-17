@@ -78,6 +78,14 @@ export class AgentPTY {
       CTX_ORG: this.env.org,
       CTX_AGENT_DIR: this.env.agentDir,
       CTX_PROJECT_ROOT: this.env.projectRoot,
+      // Session-lock ownership: agent-manager.startAgent writes
+      // state/{agent}/session.lock with `owner_pid = process.pid` (the daemon
+      // pid). Propagating that pid into the PTY env lets every cortextos bus
+      // CLI invocation inside this session prove ownership via
+      // verifySessionOwnership() in src/utils/session-lock.ts. A separately
+      // launched session for the same CTX_AGENT_NAME will not carry this env
+      // var and is rejected at the CLI bus mutation hook.
+      CTX_SESSION_OWNER_PID: String(process.pid),
       // Backward compat
       CRM_AGENT_NAME: this.env.agentName,
       CRM_TEMPLATE_ROOT: this.env.frameworkRoot,

@@ -11,6 +11,7 @@ import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { isAgentDirScaffolded, resolvePaths } from '../utils/paths.js';
+import { acquireSession, releaseSession } from '../utils/session-lock.js';
 import { parseEnvFile, resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
@@ -409,6 +410,25 @@ export class AgentManager {
 
     // Start agent
     await agentProcess.start();
+
+    // Single-session-per-identity enforcement: write state/{name}/session.lock
+    // with the daemon's own pid right after the PTY is up. AgentPTY injects
+    // CTX_SESSION_OWNER_PID=<daemonPid> into the PTY env, so every
+    // `cortextos bus *` mutation inside the session can prove ownership via
+    // src/utils/session-lock.ts verifySessionOwnership(). A separately
+    // launched session for the same name will not carry this env var and is
+    // rejected by the CLI mutation hook with a named-pid error.
+    try {
+      const status = agentProcess.getStatus();
+      acquireSession(paths.stateDir, {
+        agent: name,
+        instance_id: this.instanceId,
+        owner_pid: process.pid,
+        pty_pid: status.pid,
+      });
+    } catch (err) {
+      log(`Session lock write failed (non-fatal, mutations may be rejected until next start): ${err}`);
+    }
 
     // Clear stale stop sentinels now the agent is running again. A leftover
     // .user-stop / .daemon-stop would otherwise mis-classify a later crash as
@@ -869,6 +889,13 @@ export class AgentManager {
     entry.checker.stop();
     await entry.process.stop();
     this.agents.delete(name);
+
+    // Release the session.lock so a fresh startAgent (or external recovery
+    // tool) can take ownership without tripping verifySessionOwnership().
+    // releaseSession is idempotent — safe if the lock was never written.
+    try {
+      releaseSession(join(this.ctxRoot, 'state', name));
+    } catch { /* non-fatal */ }
 
     // Stop and remove the agent's cron scheduler (if one was wired)
     const scheduler = this.cronSchedulers.get(name);

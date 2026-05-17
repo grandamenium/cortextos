@@ -45,6 +45,7 @@ import { checkOrgoLeaseWatchdog, claimOrgoLease, formatLeaseStatus, listOrgoLeas
 import { atomicWriteSync } from '../utils/atomic.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv, applySecretsToEnv } from '../utils/env.js';
+import { verifySessionOwnership, SessionOwnershipError } from '../utils/session-lock.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -86,6 +87,100 @@ function checkDeliverableRequirement(taskId: string, frameworkRoot: string, org:
   return null;
 }
 
+/**
+ * Commands that mutate bus state. These MUST verify session ownership before
+ * running and MUST NOT honor CTX_SESSION_BYPASS — a dup-spawned session
+ * setting BYPASS would re-create the exact collision we're guarding against.
+ *
+ * Keep this list explicit (no startsWith() matching) so a new mutation
+ * command does not silently slip past the guard. Read-only commands stay
+ * unlisted and pass through without a check, for a safer rollout.
+ */
+const MUTATION_COMMANDS: ReadonlySet<string> = new Set([
+  // Inbox / messaging
+  'send-message',
+  'ack-inbox',
+  'send-telegram',
+  'send-telegram-voice',
+  'send-mobile-reply',
+  'send-slack',
+  'voice-reply',
+  'notify-agent',
+  'edit-message',
+  'answer-callback',
+  'register-telegram-commands',
+  'reply-mode',
+  // Tasks
+  'create-task',
+  'update-task',
+  'complete-task',
+  'claim-task',
+  'save-output',
+  'compact-tasks',
+  'archive-tasks',
+  // Events / heartbeat / activity
+  'log-event',
+  'update-heartbeat',
+  'post-activity',
+  // Restart / lifecycle
+  'self-restart',
+  'hard-restart',
+  'soft-restart',
+  'soft-restart-all',
+  'auto-compact-agent',
+  'auto-commit',
+  // Approvals / reminders
+  'create-approval',
+  'update-approval',
+  'create-reminder',
+  'ack-reminder',
+  'prune-reminders',
+  // Crons (write side)
+  'add-cron',
+  'remove-cron',
+  'update-cron',
+  'update-cron-fire',
+  'test-cron-fire',
+  'migrate-crons',
+  'upgrade-cron-teaching',
+  // Knowledge base writes
+  'kb-ingest',
+  // Lease writes
+  'orgo-lease-claim',
+  'orgo-lease-release',
+  // Skill / catalog writes
+  'create-skill-pr',
+  'install-community-item',
+  'submit-community-item',
+  'prepare-submission',
+  'generate-skill',
+  'sync-skills',
+  // Experiments (write side)
+  'create-experiment',
+  'run-experiment',
+  'evaluate-experiment',
+  'manage-cycle',
+  'sync-experiments',
+]);
+
+/**
+ * Read-only commands that may honor CTX_SESSION_BYPASS=1 in a future
+ * expansion of session-lock to cover reads. Today, unlisted commands
+ * skip the check entirely, so BYPASS is documentation — but recording
+ * the allowlist here makes the intent explicit and easy to widen later.
+ *
+ * Per orchestrator direction: keep this list conservative.
+ * The set is exported so tests and audit tooling can reference it.
+ */
+export const SESSION_LOCK_READ_ONLY_ALLOWLIST: ReadonlySet<string> = new Set([
+  'check-inbox',
+  'read-all-heartbeats',
+  'kb-query',
+  'kb-collections',
+  'get-cron-log',
+  // list-* commands are also read-only by convention.
+]);
+
 export const busCommand = new Command('bus')
   .description('Bus commands for agent messaging, tasks, and events')
   .hook('preAction', () => {
@@ -93,6 +188,42 @@ export const busCommand = new Command('bus')
     // can access SUPABASE_RGOS_URL, SUPABASE_RGOS_SERVICE_KEY, etc. without
     // requiring the parent shell to manually source them.
     applySecretsToEnv(resolveEnv());
+  })
+  .hook('preAction', (_thisCommand, actionCommand) => {
+    // Session-lock enforcement. Mutation commands must prove the caller
+    // owns the daemon-spawned PTY for CTX_AGENT_NAME. A separately launched
+    // session for the same agent (manual claude-code, scoped spawn-codex,
+    // orphaned snapshot run) will not carry CTX_SESSION_OWNER_PID matching
+    // the daemon's pid, and will be rejected here with a hard error that
+    // names the conflicting pid for operator diagnosis.
+    //
+    // BYPASS semantics: CTX_SESSION_BYPASS=1 is intentionally ignored for
+    // every mutation command in MUTATION_COMMANDS. The escape hatch only
+    // applies to the read-only allowlist; mutations must never be forced
+    // through, because the bug we are fixing IS a dup session writing.
+    const commandName = actionCommand.name();
+    if (!MUTATION_COMMANDS.has(commandName)) return;
+
+    const agentName = process.env.CTX_AGENT_NAME;
+    if (!agentName) return; // no agent identity → nothing to lock
+    const instanceId = process.env.CTX_INSTANCE_ID || 'default';
+
+    let paths: ReturnType<typeof resolvePaths>;
+    try {
+      paths = resolvePaths(agentName, instanceId);
+    } catch {
+      return; // invalid agent name will be rejected by the downstream action
+    }
+
+    try {
+      verifySessionOwnership(paths.stateDir, agentName);
+    } catch (err) {
+      if (err instanceof SessionOwnershipError) {
+        process.stderr.write(err.message + '\n');
+        process.exit(2);
+      }
+      throw err;
+    }
   });
 
 // ---------------------------------------------------------------------------

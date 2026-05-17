@@ -1021,6 +1021,9 @@ export class CodexAppServerPTY {
     env['CTX_ORG'] = this._env.org;
     env['CTX_AGENT_DIR'] = this._env.agentDir;
     env['CTX_PROJECT_ROOT'] = this._env.projectRoot;
+    // Session-lock ownership: daemon pid for downstream cortextos bus calls.
+    // See agent-pty.ts for full rationale.
+    env['CTX_SESSION_OWNER_PID'] = String(process.pid);
 
     if (this._env.org && this._env.projectRoot) {
       this.loadEnvFile(join(this._env.projectRoot, 'orgs', this._env.org, 'secrets.env'), env);
