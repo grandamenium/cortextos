@@ -6,6 +6,67 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
 
+// ---------------------------------------------------------------------------
+// Per-instance env loader (Task #76).
+//
+// PM2 only loads env vars declared in ecosystem.config.js — not from shell
+// exports and not from any external dotenv-style file. The fleet hit this
+// limitation during the 2026-05-17 Wave-0 B1 deploy: setting
+// CTX_BUS_AUTH_GRACE_UNTIL via `pm2 reload --update-env` worked only
+// because the var was embedded in ecosystem.config.js. Operators who tried
+// `export CTX_BUS_AUTH_GRACE_UNTIL=...` saw the daemon ignore it.
+//
+// Fix: load ~/.cortextos/<instance>/config/daemon.env (if present) into
+// process.env BEFORE the rest of the daemon initializes. Existing
+// process.env entries win — PM2-supplied env always trumps file values, so
+// the file is for additive overrides and per-host customization, not for
+// stealing precedence from intentional PM2 config.
+// ---------------------------------------------------------------------------
+export function parseDaemonEnv(content: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const rawLine of content.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let value = line.slice(eq + 1).trim();
+    // Strip matching single or double quotes around the value.
+    if (
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) ||
+       (value.startsWith("'") && value.endsWith("'")))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+export function loadDaemonEnv(ctxRoot: string): { loaded: string[]; skipped: string[] } {
+  const envPath = join(ctxRoot, 'config', 'daemon.env');
+  const result = { loaded: [] as string[], skipped: [] as string[] };
+  if (!existsSync(envPath)) return result;
+  let content: string;
+  try {
+    content = readFileSync(envPath, 'utf-8');
+  } catch {
+    return result;
+  }
+  const parsed = parseDaemonEnv(content);
+  for (const [key, value] of Object.entries(parsed)) {
+    if (key in process.env) {
+      result.skipped.push(key);
+      continue;
+    }
+    process.env[key] = value;
+    result.loaded.push(key);
+  }
+  return result;
+}
+
 // Each fast-checker registers a process-level SIGUSR1 handler (see
 // fast-checker.ts:102). With >10 active agents the default Node listener cap
 // trips MaxListenersExceededWarning. Bump for the full fleet.
@@ -237,6 +298,17 @@ class Daemon {
     }
 
     console.log(`[daemon] Starting cortextOS daemon (instance: ${this.instanceId})`);
+
+    // Task #76: load per-instance env from ~/.cortextos/<instance>/config/daemon.env
+    // BEFORE reading any env-driven flags. PM2-supplied env wins (loadDaemonEnv
+    // skips keys already in process.env).
+    const envResult = loadDaemonEnv(this.ctxRoot);
+    if (envResult.loaded.length > 0) {
+      console.log(`[daemon] Loaded ${envResult.loaded.length} env var(s) from daemon.env: ${envResult.loaded.join(', ')}`);
+    }
+    if (envResult.skipped.length > 0) {
+      console.log(`[daemon] Skipped ${envResult.skipped.length} daemon.env var(s) already set in process.env: ${envResult.skipped.join(', ')}`);
+    }
 
     const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || '';
     const org = process.env.CTX_ORG || '';
