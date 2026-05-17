@@ -273,15 +273,17 @@ export class FastChecker {
         this.lastPollCycleCompletedAt = Date.now();
       } catch (err) {
         this.log(`Poll error: ${err}`);
-        // On a timeout (not an unexpected error) the loop is still cycling —
-        // just slowly (e.g. Conflict back-off from a duplicate Telegram poller
-        // after a rapid restart). Update the watchdog timestamp so it does not
-        // trigger another hard-restart, which would create a new poller and
-        // repeat the Conflict, producing a restart loop.
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('pollCycle timeout')) {
-          this.lastPollCycleCompletedAt = Date.now();
-        }
+        // Reaching the catch means the loop completed an iteration: it errored,
+        // but it is NOT wedged. Refresh the stall-watchdog timestamp for every
+        // caught error, not just timeouts. A fast-erroring pollCycle (a
+        // transient ENOSPC from inbox lock contention, or Conflict back-off from
+        // a duplicate Telegram poller) is still cycling once per pollInterval
+        // and self-heals when the transient condition clears. Treating it as a
+        // stall is what previously turned a brief transient blip into a multi-hour
+        // outage: 3 false hard-restarts tripped the circuit breaker and wedged
+        // the daemon. The pollCycle timeout in the Promise.race above remains the
+        // guard against a genuinely hung cycle.
+        this.lastPollCycleCompletedAt = Date.now();
       }
       await this.sleepInterruptible(this.pollInterval);
     }
