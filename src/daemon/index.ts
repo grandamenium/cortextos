@@ -266,6 +266,9 @@ class Daemon {
     // Discover and start agents
     await this.agentManager.discoverAndStart();
 
+    // Ensure all enabled agents actually spawned (detect silent failures).
+    this.agentManager.ensureSpawned();
+
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
     // Handle shutdown signals

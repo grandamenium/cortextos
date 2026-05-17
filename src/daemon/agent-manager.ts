@@ -73,26 +73,106 @@ export class AgentManager {
     const requireExplicit = isTruthyEnv(process.env['CTX_REQUIRE_EXPLICIT_ENABLE']);
 
     for (const { name, dir, org, config } of agentDirs) {
-      // Per-agent config.json `enabled: false` (existing behavior, unchanged)
-      if (config.enabled === false) {
-        console.log(`[agent-manager] Skipping disabled agent: ${name} (per-agent config.json)`);
-        continue;
-      }
       const entry = instanceEnabled[name];
-      // Instance-level enabled-agents.json `enabled: false` (BUG-028 fix)
+
+      // BUG-FIX: enabled-agents.json is the authoritative source of truth.
+      // Check it FIRST, before per-agent config.json.
+      // Instance-level enabled-agents.json `enabled: false` takes precedence.
       if (entry && entry.enabled === false) {
-        console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
+        console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json — authoritative)`);
         continue;
       }
+
       // Strict mode: an unlisted agent is treated as disabled.
       if (requireExplicit && !entry) {
         console.log(`[agent-manager] Skipping unlisted agent: ${name} (CTX_REQUIRE_EXPLICIT_ENABLE — not in enabled-agents.json)`);
         continue;
       }
+
+      // Fall back to per-agent config.json only if not in enabled-agents.json.
+      // If entry exists but enabled is not explicitly set, it defaults to the
+      // value in per-agent config (backwards compatibility for agents added
+      // before enabled-agents.json was implemented).
+      if (!entry && config.enabled === false) {
+        console.log(`[agent-manager] Skipping disabled agent: ${name} (per-agent config.json — no entry in enabled-agents.json)`);
+        continue;
+      }
+
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead
       // of falling back to `this.org` (the daemon's startup org).
       await this.startAgent(name, dir, config, org);
     }
+  }
+
+  /**
+   * Ensure all enabled agents in enabled-agents.json are actually running.
+   * Call this after discoverAndStart() to detect silent spawn failures.
+   * Logs a warning if an enabled agent is not in the running agents map.
+   */
+  ensureSpawned(): void {
+    const instanceEnabled = this.readInstanceEnableList();
+    const running = Array.from(this.agents.keys());
+
+    for (const [agentName, entry] of Object.entries(instanceEnabled)) {
+      // Only check agents that should be enabled.
+      if (!entry || entry.enabled === false) continue;
+
+      // If the agent should be enabled but is not running, log a warning.
+      if (!running.includes(agentName)) {
+        console.warn(
+          `[agent-manager] ENSURE-SPAWN WARNING: agent '${agentName}' is enabled in enabled-agents.json but not running. ` +
+          `This indicates a spawn failure at daemon startup. Check logs for startup errors.`
+        );
+      }
+    }
+  }
+
+  /**
+   * Detect silent deaths: agents that are enabled but have stale heartbeats (>2h).
+   * This is called by heartbeat monitor crons to alert chief of daemon-level
+   * agent spawn/crash issues. Returns a list of dead agent names.
+   */
+  detectSilentDeaths(): string[] {
+    const instanceEnabled = this.readInstanceEnableList();
+    const now = new Date();
+    const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+    const deadAgents: string[] = [];
+
+    for (const [agentName, entry] of Object.entries(instanceEnabled)) {
+      // Only check agents that should be enabled.
+      if (!entry || entry.enabled === false) continue;
+
+      // Read the agent's heartbeat file
+      const heartbeatPath = join(
+        this.ctxRoot,
+        'state',
+        agentName,
+        'heartbeat.json'
+      );
+
+      if (!existsSync(heartbeatPath)) {
+        // No heartbeat file — likely never started
+        deadAgents.push(agentName);
+        continue;
+      }
+
+      try {
+        const hb = JSON.parse(readFileSync(heartbeatPath, 'utf-8'));
+        if (hb.updated_at) {
+          const lastUpdate = new Date(hb.updated_at);
+          if (lastUpdate < twoHoursAgo) {
+            deadAgents.push(agentName);
+          }
+        } else {
+          deadAgents.push(agentName); // No timestamp — stale
+        }
+      } catch {
+        // Unreadable heartbeat file
+        deadAgents.push(agentName);
+      }
+    }
+
+    return deadAgents;
   }
 
   /**

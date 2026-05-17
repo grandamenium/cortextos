@@ -32,6 +32,7 @@ module.exports = {
         // enabled-agents.json. Prevents framework-relay-mirrored Mac mini
         // agent dirs from auto-spawning on MacBook (bug 1778770012799).
         CTX_REQUIRE_EXPLICIT_ENABLE: '1',
+        CTX_BUS_AUTH_GRACE_UNTIL: '2026-05-18T20:20:49Z',
       },
       max_restarts: 50,
       restart_delay: 5000,

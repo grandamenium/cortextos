@@ -446,6 +446,15 @@ export class AgentProcess {
       return;
     }
 
+    // BUG-FIX: exit_code=0 (clean exit) should not trigger crash recovery.
+    // Clean exits indicate intentional shutdown or normal process termination,
+    // not a crash. Repeated clean exits (loop) should be logged but not counted
+    // against the crash limit. Only non-zero exit codes are actual crashes.
+    if (exitCode === 0) {
+      this.log(`Clean exit (exit_code=0) — no crash recovery`);
+      return;
+    }
+
     // Check crash limit
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];
