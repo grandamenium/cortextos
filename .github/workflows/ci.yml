@@ -59,6 +59,67 @@ jobs:
       - name: Run codex parity tests
         run: npm run test:codex
 
+  integration-tests:
+    name: Integration Tests (DB)
+    runs-on: ubuntu-latest
+    needs: build
+    # Allow-fail for the first 24h post-landing per top-g 2026-05-17 directive
+    # (msg 1778991694986). Catches CI-only flakes (service container timing,
+    # pg version surprises, psql client behavior) without blocking real PRs.
+    # Flip required-for-merge in a separate one-line PR after 24h clean run.
+    continue-on-error: true
+    env:
+      CTX_INSTANCE_ID: ci-integration
+      CTX_ORG: testorg
+      # spawn-claim.ts:79 reads SUPABASE_GBRAIN_DATABASE_URL exclusively (both
+      # the prod code path AND the describeIfDb test gate accept it), so one
+      # env var activates the full stack against the service container.
+      SUPABASE_GBRAIN_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    services:
+      postgres:
+        # PG16-alpine: cortextos.spawn_leases (migration 0002) uses NULLS NOT
+        # DISTINCT on the active-artifact partial unique index — a PG15+
+        # feature. Alpine for fast pull / small image.
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Apply cortextos migrations
+        run: |
+          for m in supabase/migrations/0001_*.sql supabase/migrations/0002_*.sql supabase/migrations/0003_*.sql; do
+            echo "applying $(basename "$m")"
+            PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d postgres -v ON_ERROR_STOP=1 -f "$m"
+          done
+
+      - name: Run DB-backed integration tests
+        run: |
+          npx vitest run \
+            tests/integration/spawn-lease.test.ts \
+            tests/integration/daemon-spawn-lease-cross-process.test.ts
+
   dashboard-build:
     name: Dashboard Build
     runs-on: ubuntu-latest

@@ -1,0 +1,31 @@
+# Local-parity integration test stack. Mirrors the GH Actions postgres
+# service container so devs can run `npm run test:integration` locally
+# and get the same DB story CI uses.
+#
+# postgres:16-alpine: cortextos.spawn_leases (migration 0002) uses
+# NULLS NOT DISTINCT on the active-artifact partial unique index, a PG15+
+# feature. Alpine for small image + fast pull.
+#
+# Port 54330: avoids collision with a local supabase stack (54322) and a
+# system Postgres (5432). Devs running both keep them isolated.
+#
+# tmpfs on /var/lib/postgresql/data: DB is ephemeral; no persistence needed
+# for tests + faster I/O than a disk-backed volume.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cortextos-test-pg
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "54330:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data
