@@ -698,7 +698,7 @@ describe('FastChecker', () => {
   });
 
   describe('formatTelegramPhotoMessage', () => {
-    it('formats photo message with caption and local_file', () => {
+    it('formats photo message with caption and a suppressed-path marker', () => {
       const result = FastChecker.formatTelegramPhotoMessage(
         'Alice',
         '123456789',
@@ -709,15 +709,22 @@ describe('FastChecker', () => {
       expect(result).toContain('=== TELEGRAM PHOTO from Alice (chat_id:123456789) ===');
       expect(result).toContain('caption:');
       expect(result).toContain('Check this out');
-      expect(result).toContain('local_file: /tmp/telegram-images/20260403_abc12345678.jpg');
+      expect(result).toContain('[image attached');
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
 
-    it('formats photo message with empty caption', () => {
-      const result = FastChecker.formatTelegramPhotoMessage('Alice', '999', '', '/tmp/photo.jpg');
+    it('does not leak the raw image path (auto-attach crash guard)', () => {
+      const result = FastChecker.formatTelegramPhotoMessage(
+        'Alice',
+        '999',
+        '',
+        '/tmp/telegram-images/20260403_abc12345678.jpg',
+      );
 
       expect(result).toContain('=== TELEGRAM PHOTO from Alice (chat_id:999) ===');
-      expect(result).toContain('local_file: /tmp/photo.jpg');
+      expect(result).not.toContain('/tmp/telegram-images/20260403_abc12345678.jpg');
+      expect(result).not.toContain('.jpg');
+      expect(result).not.toMatch(/local_file:\s*\//);
     });
   });
 

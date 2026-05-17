@@ -303,7 +303,12 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
   /**
    * Format a Telegram photo message for injection.
-   * Matches bash fast-checker.sh format.
+   *
+   * The raw image path is intentionally NOT injected into the agent message:
+   * claude-code auto-attaches local image files referenced by path in user
+   * input, which triggers `API Error: 400 image/png not supported` and wedges
+   * the session permanently (force-fresh is the only recovery). The file
+   * remains on disk at `imagePath` for a future vision-pre-call to consume.
    */
   static formatTelegramPhotoMessage(
     from: string,
@@ -311,12 +316,15 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     caption: string,
     imagePath: string,
   ): string {
+    // imagePath is reserved for a future vision-side-channel that produces a
+    // text description; currently unused here to prevent auto-attach crash.
+    void imagePath;
     return `=== TELEGRAM PHOTO from ${from} (chat_id:${chatId}) ===
 caption:
 \`\`\`
 ${caption}
 \`\`\`
-local_file: ${imagePath}
+[image attached — local path suppressed to prevent claude-code auto-attach crash; vision pre-call not yet wired]
 Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
 `;
