@@ -55,11 +55,7 @@ export async function resolveApproval(
     }
 
     // Sync so SQLite reflects the change
-    try {
-      syncAll();
-    } catch {
-      // Sync is best-effort
-    }
+    void syncAll().catch(() => {});
 
     // Revalidate pages that show approval data
     revalidatePath('/approvals');

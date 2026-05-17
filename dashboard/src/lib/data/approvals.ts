@@ -1,58 +1,31 @@
 // cortextOS Dashboard - Approval data fetcher
-// Reads from SQLite (synced from JSON approval files on disk).
+// Reads from Postgres (synced from JSON approval files on disk).
 
-import { db } from '@/lib/db';
+import { sql } from '@/lib/db';
 import type { Approval } from '@/lib/types';
 
-/**
- * Get pending approvals, newest first.
- */
-export function getPendingApprovals(org?: string): Approval[] {
+export async function getPendingApprovals(org?: string): Promise<Approval[]> {
   return getApprovalsByStatus('pending', org);
 }
 
-/**
- * Get resolved approvals with optional filters.
- */
-export function getResolvedApprovals(
+export async function getResolvedApprovals(
   org?: string,
-  filters?: { agent?: string; category?: string; dateRange?: [Date, Date] }
-): Approval[] {
-  const conditions: string[] = ["status != 'pending'"];
-  const params: (string | number)[] = [];
-
-  if (org) {
-    conditions.push('org = ?');
-    params.push(org);
-  }
-  if (filters?.agent) {
-    conditions.push('agent = ?');
-    params.push(filters.agent);
-  }
-  if (filters?.category) {
-    conditions.push('category = ?');
-    params.push(filters.category);
-  }
-  if (filters?.dateRange) {
-    conditions.push('resolved_at >= ? AND resolved_at <= ?');
-    params.push(
-      filters.dateRange[0].toISOString(),
-      filters.dateRange[1].toISOString()
-    );
-  }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
+  filters?: { agent?: string; category?: string; dateRange?: [Date, Date] },
+): Promise<Approval[]> {
   try {
-    const rows = db
-      .prepare(
-        `SELECT id, title, category, description, status, agent, org,
-                created_at, resolved_at, resolved_by, resolution_note, source_file
-         FROM approvals ${where}
-         ORDER BY resolved_at DESC`
-      )
-      .all(...params) as Record<string, unknown>[];
-
+    const rows = await sql<Record<string, unknown>[]>`
+      SELECT id, title, category, description, status, agent, org,
+             created_at, resolved_at, resolved_by, resolution_note, source_file
+      FROM approvals
+      WHERE status != 'pending'
+      ${org ? sql`AND org = ${org}` : sql``}
+      ${filters?.agent ? sql`AND agent = ${filters.agent}` : sql``}
+      ${filters?.category ? sql`AND category = ${filters.category}` : sql``}
+      ${filters?.dateRange
+        ? sql`AND resolved_at >= ${filters.dateRange[0].toISOString()} AND resolved_at <= ${filters.dateRange[1].toISOString()}`
+        : sql``}
+      ORDER BY resolved_at DESC
+    `;
     return rows.map(rowToApproval);
   } catch (err) {
     console.error('[data/approvals] getResolvedApprovals error:', err);
@@ -60,45 +33,27 @@ export function getResolvedApprovals(
   }
 }
 
-/**
- * Get count of pending approvals (for sidebar badge).
- */
-export function getPendingCount(org?: string): number {
-  const conditions: string[] = ["status = 'pending'"];
-  const params: (string | number)[] = [];
-
-  if (org) {
-    conditions.push('org = ?');
-    params.push(org);
-  }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
+export async function getPendingCount(org?: string): Promise<number> {
   try {
-    const row = db
-      .prepare(`SELECT COUNT(*) as count FROM approvals ${where}`)
-      .get(...params) as { count: number } | undefined;
-
-    return row?.count ?? 0;
+    const [row] = await sql<{ count: string }[]>`
+      SELECT COUNT(*) as count FROM approvals
+      WHERE status = 'pending'
+      ${org ? sql`AND org = ${org}` : sql``}
+    `;
+    return Number(row?.count ?? 0);
   } catch (err) {
     console.error('[data/approvals] getPendingCount error:', err);
     return 0;
   }
 }
 
-/**
- * Get a single approval by ID.
- */
-export function getApprovalById(id: string): Approval | null {
+export async function getApprovalById(id: string): Promise<Approval | null> {
   try {
-    const row = db
-      .prepare(
-        `SELECT id, title, category, description, status, agent, org,
-                created_at, resolved_at, resolved_by, resolution_note, source_file
-         FROM approvals WHERE id = ?`
-      )
-      .get(id) as Record<string, unknown> | undefined;
-
+    const [row] = await sql<Record<string, unknown>[]>`
+      SELECT id, title, category, description, status, agent, org,
+             created_at, resolved_at, resolved_by, resolution_note, source_file
+      FROM approvals WHERE id = ${id}
+    `;
     return row ? rowToApproval(row) : null;
   } catch (err) {
     console.error('[data/approvals] getApprovalById error:', err);
@@ -106,31 +61,16 @@ export function getApprovalById(id: string): Approval | null {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-function getApprovalsByStatus(status: string, org?: string): Approval[] {
-  const conditions: string[] = ['status = ?'];
-  const params: (string | number)[] = [status];
-
-  if (org) {
-    conditions.push('org = ?');
-    params.push(org);
-  }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
+async function getApprovalsByStatus(status: string, org?: string): Promise<Approval[]> {
   try {
-    const rows = db
-      .prepare(
-        `SELECT id, title, category, description, status, agent, org,
-                created_at, resolved_at, resolved_by, resolution_note, source_file
-         FROM approvals ${where}
-         ORDER BY created_at DESC`
-      )
-      .all(...params) as Record<string, unknown>[];
-
+    const rows = await sql<Record<string, unknown>[]>`
+      SELECT id, title, category, description, status, agent, org,
+             created_at, resolved_at, resolved_by, resolution_note, source_file
+      FROM approvals
+      WHERE status = ${status}
+      ${org ? sql`AND org = ${org}` : sql``}
+      ORDER BY created_at DESC
+    `;
     return rows.map(rowToApproval);
   } catch (err) {
     console.error('[data/approvals] getApprovalsByStatus error:', err);

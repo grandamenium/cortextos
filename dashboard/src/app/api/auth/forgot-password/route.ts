@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
-import { db } from '@/lib/db';
+import { sql } from '@/lib/db';
 import { checkForgotPasswordLimit } from '@/lib/rate-limit';
 import { verifyTurnstile } from '@/lib/turnstile';
 import type { User } from '@/lib/types';
@@ -18,7 +18,7 @@ function getIp(req: NextRequest): string {
 
 export async function POST(req: NextRequest) {
   const ip = getIp(req);
-  const { allowed, retryAfter } = checkForgotPasswordLimit(ip);
+  const { allowed, retryAfter } = await checkForgotPasswordLimit(ip);
   if (!allowed) {
     return NextResponse.json(
       { error: 'Too many requests. Try again later.' },
@@ -45,19 +45,16 @@ export async function POST(req: NextRequest) {
   }
 
   // Always return 200 to prevent email enumeration
-  const user = db
-    .prepare('SELECT id, username, email FROM users WHERE email = ?')
-    .get(email) as (User & { email?: string }) | undefined;
+  const [user] = await sql<(User & { email?: string })[]>`
+    SELECT id, username, email FROM users WHERE email = ${email}
+  `;
 
   if (user) {
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = Date.now() + TOKEN_TTL_MS;
 
-    // Invalidate any existing unused tokens for this user
-    db.prepare('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0').run(user.id);
-    db.prepare('INSERT INTO password_resets (token, user_id, expires_at) VALUES (?, ?, ?)').run(
-      token, user.id, expiresAt,
-    );
+    await sql`UPDATE password_resets SET used = 1 WHERE user_id = ${user.id} AND used = 0`;
+    await sql`INSERT INTO password_resets (token, user_id, expires_at) VALUES (${token}, ${user.id}, ${expiresAt})`;
 
     const resetUrl = `${process.env.AUTH_URL ?? 'http://localhost:3000'}/reset-password?token=${token}`;
 

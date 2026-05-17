@@ -145,7 +145,7 @@ export async function discoverAgents(org?: string): Promise<AgentSummary[]> {
       let currentTask: string | undefined;
       let tasksToday = 0;
       try {
-        const agentTasks = getTasksByAgent(agent.name, agent.org);
+        const agentTasks = await getTasksByAgent(agent.name, agent.org);
         const inProgress = agentTasks.find((t) => t.status === 'in_progress');
         currentTask = inProgress?.title ?? hb?.current_task ?? undefined;
 

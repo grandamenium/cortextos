@@ -5,7 +5,7 @@ import path from 'path';
 import bcrypt from 'bcryptjs';
 import { revalidatePath } from 'next/cache';
 import { CTX_ROOT, getOrgs, getAgentsForOrg, getAgentDir, getOrgContextPath, getOrgBrandVoicePath, getAllowedRootsConfigPath } from '@/lib/config';
-import { db } from '@/lib/db';
+import { sql } from '@/lib/db';
 import type { ActionResult, User } from '@/lib/types';
 
 // ---------------------------------------------------------------------------
@@ -230,7 +230,9 @@ export async function saveSystemConfig(config: SystemConfig): Promise<ActionResu
 
 export async function fetchUsers(): Promise<Array<{ id: number; username: string; created_at: string }>> {
   try {
-    const rows = db.prepare('SELECT id, username, created_at FROM users ORDER BY id').all() as User[];
+    const rows = await sql<{ id: number; username: string; created_at: string }[]>`
+      SELECT id, username, created_at FROM users ORDER BY id
+    `;
     return rows.map((r) => ({ id: r.id, username: r.username, created_at: r.created_at }));
   } catch {
     return [];
@@ -245,12 +247,11 @@ export async function addUser(username: string, password: string): Promise<Actio
     if (trimmed.length > 50) return { success: false, error: 'Username must be under 50 characters' };
     if (!password || password.length < 6) return { success: false, error: 'Password must be at least 6 characters' };
 
-    // Check for duplicate
-    const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(trimmed) as User | undefined;
+    const [existing] = await sql<{ id: number }[]>`SELECT id FROM users WHERE username = ${trimmed}`;
     if (existing) return { success: false, error: 'Username already exists' };
 
     const hash = await bcrypt.hash(password, 12);
-    db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(trimmed, hash);
+    await sql`INSERT INTO users (username, password_hash) VALUES (${trimmed}, ${hash})`;
 
     revalidatePath('/settings');
     return { success: true };
@@ -261,14 +262,13 @@ export async function addUser(username: string, password: string): Promise<Actio
 
 export async function deleteUser(userId: number): Promise<ActionResult> {
   try {
-    // Prevent deleting the last user
-    const count = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number };
-    if (count.count <= 1) {
+    const [countRow] = await sql<{ count: string }[]>`SELECT COUNT(*) as count FROM users`;
+    if (Number(countRow?.count ?? 0) <= 1) {
       return { success: false, error: 'Cannot delete the last user' };
     }
 
-    const result = db.prepare('DELETE FROM users WHERE id = ?').run(userId);
-    if (result.changes === 0) {
+    const result = await sql`DELETE FROM users WHERE id = ${userId}`;
+    if (result.count === 0) {
       return { success: false, error: 'User not found' };
     }
 

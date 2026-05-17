@@ -1,9 +1,10 @@
-// cortextOS Dashboard - JSON/JSONL to SQLite sync engine
-// Bridges agent-written files on disk with the SQLite read cache.
+// cortextOS Dashboard - JSON/JSONL to Postgres sync engine
+// Bridges agent-written files on disk with the Postgres read cache.
+// On Vercel (no CTX_ROOT), all sync functions are no-ops.
 
 import fs from 'fs';
 import path from 'path';
-import { db } from './db';
+import { sql } from './db';
 import {
   CTX_ROOT,
   getOrgs,
@@ -18,94 +19,98 @@ import {
 // Mtime tracking helpers
 // ---------------------------------------------------------------------------
 
-function hasFileChanged(filePath: string): boolean {
+async function hasFileChanged(filePath: string): Promise<boolean> {
   try {
     const stat = fs.statSync(filePath);
-    const row = db
-      .prepare('SELECT mtime FROM sync_meta WHERE file_path = ?')
-      .get(filePath) as { mtime: number } | undefined;
+    const [row] = await sql<{ mtime: number }[]>`
+      SELECT mtime FROM sync_meta WHERE file_path = ${filePath}
+    `;
     return !row || row.mtime < stat.mtimeMs;
   } catch {
-    return false; // file doesn't exist
+    return false;
   }
 }
 
-function markSynced(filePath: string): void {
+async function markSynced(filePath: string): Promise<void> {
   const stat = fs.statSync(filePath);
-  db.prepare(
-    `INSERT OR REPLACE INTO sync_meta (file_path, mtime, last_synced)
-     VALUES (?, ?, datetime('now'))`,
-  ).run(filePath, stat.mtimeMs);
+  await sql`
+    INSERT INTO sync_meta (file_path, mtime, last_synced)
+    VALUES (${filePath}, ${stat.mtimeMs}, NOW()::TEXT)
+    ON CONFLICT (file_path) DO UPDATE SET mtime = EXCLUDED.mtime, last_synced = EXCLUDED.last_synced
+  `;
 }
 
 // ---------------------------------------------------------------------------
 // Task sync
 // ---------------------------------------------------------------------------
 
-export function syncTasks(org: string): number {
+export async function syncTasks(org: string): Promise<number> {
+  if (!CTX_ROOT) return 0;
   const taskDir = getTaskDir(org);
   console.log(`[sync] syncTasks org=${org} dir=${taskDir} exists=${fs.existsSync(taskDir)}`);
   if (!fs.existsSync(taskDir)) return 0;
 
   let synced = 0;
-
-  const upsert = db.prepare(`
-    INSERT OR REPLACE INTO tasks
-      (id, title, description, status, priority, assignee, org, project, needs_approval, created_at, updated_at, completed_at, notes, source_file)
-    VALUES
-      (@id, @title, @description, @status, @priority, @assignee, @org, @project, @needs_approval, @created_at, @updated_at, @completed_at, @notes, @source_file)
-  `);
-
+  const activePaths: string[] = [];
   const files = fs.readdirSync(taskDir).filter((f) => f.endsWith('.json'));
   console.log(`[sync] Found ${files.length} task files in ${taskDir}`);
 
-  const run = db.transaction(() => {
-    const activePaths: string[] = [];
+  for (const file of files) {
+    const filePath = path.join(taskDir, file);
+    activePaths.push(filePath);
+    if (!(await hasFileChanged(filePath))) continue;
 
-    for (const file of files) {
-      const filePath = path.join(taskDir, file);
-      activePaths.push(filePath);
-      if (!hasFileChanged(filePath)) continue;
-
-      try {
-        const raw = fs.readFileSync(filePath, 'utf-8');
-        const task = JSON.parse(raw);
-        upsert.run({
-          id: task.id ?? path.basename(file, '.json'),
-          title: task.title ?? 'Untitled',
-          description: task.description ?? null,
-          status: task.status ?? 'pending',
-          priority: task.priority ?? 'normal',
-          assignee: task.assigned_to ?? task.assignee ?? null,
-          org,
-          project: task.project ?? null,
-          needs_approval: task.needs_approval ? 1 : 0,
-          created_at: task.created_at ?? new Date().toISOString(),
-          updated_at: task.updated_at ?? null,
-          completed_at: task.completed_at ?? null,
-          notes: task.notes ?? null,
-          source_file: filePath,
-        });
-        markSynced(filePath);
-        synced++;
-      } catch (err) {
-        console.error(`[sync] Failed to sync task ${file}:`, err);
-      }
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const task = JSON.parse(raw);
+      await sql`
+        INSERT INTO tasks
+          (id, title, description, status, priority, assignee, org, project, needs_approval,
+           created_at, updated_at, completed_at, notes, source_file)
+        VALUES
+          (${task.id ?? path.basename(file, '.json')},
+           ${task.title ?? 'Untitled'},
+           ${task.description ?? null},
+           ${task.status ?? 'pending'},
+           ${task.priority ?? 'normal'},
+           ${task.assigned_to ?? task.assignee ?? null},
+           ${org},
+           ${task.project ?? null},
+           ${task.needs_approval ? 1 : 0},
+           ${task.created_at ?? new Date().toISOString()},
+           ${task.updated_at ?? null},
+           ${task.completed_at ?? null},
+           ${task.notes ?? null},
+           ${filePath})
+        ON CONFLICT (id) DO UPDATE SET
+          title = EXCLUDED.title,
+          description = EXCLUDED.description,
+          status = EXCLUDED.status,
+          priority = EXCLUDED.priority,
+          assignee = EXCLUDED.assignee,
+          org = EXCLUDED.org,
+          project = EXCLUDED.project,
+          needs_approval = EXCLUDED.needs_approval,
+          created_at = EXCLUDED.created_at,
+          updated_at = EXCLUDED.updated_at,
+          completed_at = EXCLUDED.completed_at,
+          notes = EXCLUDED.notes,
+          source_file = EXCLUDED.source_file
+      `;
+      await markSynced(filePath);
+      synced++;
+    } catch (err) {
+      console.error(`[sync] Failed to sync task ${file}:`, err);
     }
+  }
 
-    // Prune rows whose source files no longer exist on disk
-    if (activePaths.length > 0) {
-      const placeholders = activePaths.map(() => '?').join(',');
-      db.prepare(
-        `DELETE FROM tasks WHERE org = ? AND source_file NOT IN (${placeholders})`,
-      ).run(org, ...activePaths);
-    } else {
-      // No files at all — delete all tasks for this org
-      db.prepare('DELETE FROM tasks WHERE org = ?').run(org);
-    }
-  });
+  // Prune rows whose source files no longer exist on disk
+  if (activePaths.length > 0) {
+    await sql`DELETE FROM tasks WHERE org = ${org} AND source_file NOT IN ${sql(activePaths)}`;
+  } else {
+    await sql`DELETE FROM tasks WHERE org = ${org}`;
+  }
 
-  run();
   return synced;
 }
 
@@ -113,57 +118,61 @@ export function syncTasks(org: string): number {
 // Approval sync
 // ---------------------------------------------------------------------------
 
-export function syncApprovals(org: string): number {
+export async function syncApprovals(org: string): Promise<number> {
+  if (!CTX_ROOT) return 0;
   const approvalDir = getApprovalDir(org);
   let synced = 0;
 
-  const upsert = db.prepare(`
-    INSERT OR REPLACE INTO approvals
-      (id, title, category, description, status, agent, org, created_at, resolved_at, resolved_by, resolution_note, source_file)
-    VALUES
-      (@id, @title, @category, @description, @status, @agent, @org, @created_at, @resolved_at, @resolved_by, @resolution_note, @source_file)
-  `);
+  for (const subdir of ['pending', 'resolved'] as const) {
+    const dir = path.join(approvalDir, subdir);
+    if (!fs.existsSync(dir)) continue;
 
-  const run = db.transaction(() => {
-    for (const subdir of ['pending', 'resolved'] as const) {
-      const dir = path.join(approvalDir, subdir);
-      if (!fs.existsSync(dir)) continue;
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+    for (const file of files) {
+      const filePath = path.join(dir, file);
+      if (!(await hasFileChanged(filePath))) continue;
 
-      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
-      for (const file of files) {
-        const filePath = path.join(dir, file);
-        if (!hasFileChanged(filePath)) continue;
-
-        try {
-          const raw = fs.readFileSync(filePath, 'utf-8');
-          const approval = JSON.parse(raw);
-          upsert.run({
-            id: approval.id ?? path.basename(file, '.json'),
-            title: approval.title ?? 'Untitled',
-            category: approval.category ?? 'other',
-            description: approval.description ?? null,
-            status:
-              subdir === 'pending'
-                ? 'pending'
-                : (approval.status ?? 'approved'),
-            agent: approval.requesting_agent ?? approval.agent ?? 'unknown',
-            org,
-            created_at: approval.created_at ?? new Date().toISOString(),
-            resolved_at: approval.resolved_at ?? null,
-            resolved_by: approval.resolved_by ?? null,
-            resolution_note: approval.resolution_note ?? null,
-            source_file: filePath,
-          });
-          markSynced(filePath);
-          synced++;
-        } catch (err) {
-          console.error(`[sync] Failed to sync approval ${file}:`, err);
-        }
+      try {
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        const approval = JSON.parse(raw);
+        await sql`
+          INSERT INTO approvals
+            (id, title, category, description, status, agent, org,
+             created_at, resolved_at, resolved_by, resolution_note, source_file)
+          VALUES
+            (${approval.id ?? path.basename(file, '.json')},
+             ${approval.title ?? 'Untitled'},
+             ${approval.category ?? 'other'},
+             ${approval.description ?? null},
+             ${subdir === 'pending' ? 'pending' : (approval.status ?? 'approved')},
+             ${approval.requesting_agent ?? approval.agent ?? 'unknown'},
+             ${org},
+             ${approval.created_at ?? new Date().toISOString()},
+             ${approval.resolved_at ?? null},
+             ${approval.resolved_by ?? null},
+             ${approval.resolution_note ?? null},
+             ${filePath})
+          ON CONFLICT (id) DO UPDATE SET
+            title = EXCLUDED.title,
+            category = EXCLUDED.category,
+            description = EXCLUDED.description,
+            status = EXCLUDED.status,
+            agent = EXCLUDED.agent,
+            org = EXCLUDED.org,
+            created_at = EXCLUDED.created_at,
+            resolved_at = EXCLUDED.resolved_at,
+            resolved_by = EXCLUDED.resolved_by,
+            resolution_note = EXCLUDED.resolution_note,
+            source_file = EXCLUDED.source_file
+        `;
+        await markSynced(filePath);
+        synced++;
+      } catch (err) {
+        console.error(`[sync] Failed to sync approval ${file}:`, err);
       }
     }
-  });
+  }
 
-  run();
   return synced;
 }
 
@@ -171,61 +180,53 @@ export function syncApprovals(org: string): number {
 // Event sync (JSONL)
 // ---------------------------------------------------------------------------
 
-export function syncEvents(org: string, agent: string): number {
+export async function syncEvents(org: string, agent: string): Promise<number> {
+  if (!CTX_ROOT) return 0;
   const eventsDir = getEventsDir(org, agent);
   if (!fs.existsSync(eventsDir)) return 0;
 
   let synced = 0;
-
-  const upsert = db.prepare(`
-    INSERT OR REPLACE INTO events
-      (id, timestamp, agent, org, type, category, severity, data, message, source_file)
-    VALUES
-      (@id, @timestamp, @agent, @org, @type, @category, @severity, @data, @message, @source_file)
-  `);
-
   const files = fs.readdirSync(eventsDir).filter((f) => f.endsWith('.jsonl'));
 
-  const run = db.transaction(() => {
-    for (const file of files) {
-      const filePath = path.join(eventsDir, file);
-      if (!hasFileChanged(filePath)) continue;
+  for (const file of files) {
+    const filePath = path.join(eventsDir, file);
+    if (!(await hasFileChanged(filePath))) continue;
 
-      try {
-        const raw = fs.readFileSync(filePath, 'utf-8');
-        const lines = raw.split('\n').filter((l) => l.trim());
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const lines = raw.split('\n').filter((l) => l.trim());
 
-        for (let i = 0; i < lines.length; i++) {
-          try {
-            const event = JSON.parse(lines[i]);
-            const eventId = event.id ?? `${agent}-${file}-${i}`;
-            upsert.run({
-              id: eventId,
-              timestamp: event.timestamp ?? new Date().toISOString(),
-              agent: event.agent ?? agent,
-              org,
-              type: event.category ?? event.type ?? 'action',
-              category: event.category ?? null,
-              severity: event.severity ?? 'info',
-              data: event.metadata ? JSON.stringify(event.metadata) : (event.data ? JSON.stringify(event.data) : null),
-              message: event.event ?? event.message ?? null,
-              source_file: filePath,
-            });
-            synced++;
-          } catch {
-            console.warn(
-              `[sync] Skipping malformed JSONL line ${i} in ${filePath}`,
-            );
-          }
+      for (let i = 0; i < lines.length; i++) {
+        try {
+          const event = JSON.parse(lines[i]);
+          const eventId = event.id ?? `${agent}-${file}-${i}`;
+          await sql`
+            INSERT INTO events
+              (id, timestamp, agent, org, type, category, severity, data, message, source_file)
+            VALUES
+              (${eventId},
+               ${event.timestamp ?? new Date().toISOString()},
+               ${event.agent ?? agent},
+               ${org},
+               ${event.category ?? event.type ?? 'action'},
+               ${event.category ?? null},
+               ${event.severity ?? 'info'},
+               ${event.metadata ? JSON.stringify(event.metadata) : (event.data ? JSON.stringify(event.data) : null)},
+               ${event.event ?? event.message ?? null},
+               ${filePath})
+            ON CONFLICT (id) DO NOTHING
+          `;
+          synced++;
+        } catch {
+          console.warn(`[sync] Skipping malformed JSONL line ${i} in ${filePath}`);
         }
-        markSynced(filePath);
-      } catch (err) {
-        console.error(`[sync] Failed to sync events ${file}:`, err);
       }
+      await markSynced(filePath);
+    } catch (err) {
+      console.error(`[sync] Failed to sync events ${file}:`, err);
     }
-  });
+  }
 
-  run();
   return synced;
 }
 
@@ -233,31 +234,38 @@ export function syncEvents(org: string, agent: string): number {
 // Heartbeat sync
 // ---------------------------------------------------------------------------
 
-export function syncHeartbeat(agent: string): boolean {
+export async function syncHeartbeat(agent: string): Promise<boolean> {
+  if (!CTX_ROOT) return false;
   const heartbeatPath = getHeartbeatPath(agent);
   if (!fs.existsSync(heartbeatPath)) return false;
-  if (!hasFileChanged(heartbeatPath)) return false;
+  if (!(await hasFileChanged(heartbeatPath))) return false;
 
   try {
     const raw = fs.readFileSync(heartbeatPath, 'utf-8');
     const hb = JSON.parse(raw);
 
-    db.prepare(
-      `INSERT OR REPLACE INTO heartbeats
+    await sql`
+      INSERT INTO heartbeats
         (agent, org, status, current_task, mode, last_heartbeat, loop_interval, uptime_seconds)
-       VALUES
-        (@agent, @org, @status, @current_task, @mode, @last_heartbeat, @loop_interval, @uptime_seconds)`,
-    ).run({
-      agent,
-      org: hb.org ?? '',
-      status: hb.status ?? null,
-      current_task: hb.current_task ?? null,
-      mode: hb.mode ?? null,
-      last_heartbeat: hb.last_heartbeat ?? hb.timestamp ?? null,
-      loop_interval: hb.loop_interval ?? null,
-      uptime_seconds: hb.uptime_seconds ?? null,
-    });
-    markSynced(heartbeatPath);
+      VALUES
+        (${agent},
+         ${hb.org ?? ''},
+         ${hb.status ?? null},
+         ${hb.current_task ?? null},
+         ${hb.mode ?? null},
+         ${hb.last_heartbeat ?? hb.timestamp ?? null},
+         ${hb.loop_interval ?? null},
+         ${hb.uptime_seconds ?? null})
+      ON CONFLICT (agent) DO UPDATE SET
+        org = EXCLUDED.org,
+        status = EXCLUDED.status,
+        current_task = EXCLUDED.current_task,
+        mode = EXCLUDED.mode,
+        last_heartbeat = EXCLUDED.last_heartbeat,
+        loop_interval = EXCLUDED.loop_interval,
+        uptime_seconds = EXCLUDED.uptime_seconds
+    `;
+    await markSynced(heartbeatPath);
     return true;
   } catch (err) {
     console.error(`[sync] Failed to sync heartbeat for ${agent}:`, err);
@@ -276,15 +284,16 @@ export interface SyncResult {
   heartbeats: number;
 }
 
-export function syncAll(): SyncResult {
+export async function syncAll(): Promise<SyncResult> {
+  if (!CTX_ROOT) return { tasks: 0, approvals: 0, events: 0, heartbeats: 0 };
+
   const results: SyncResult = { tasks: 0, approvals: 0, events: 0, heartbeats: 0 };
 
   const orgs = getOrgs();
   for (const org of orgs) {
-    results.tasks += syncTasks(org);
-    results.approvals += syncApprovals(org);
+    results.tasks += await syncTasks(org);
+    results.approvals += await syncApprovals(org);
 
-    // Scan events directory directly for agent subdirs (agents may not exist in state dir)
     const eventsBaseDir = path.join(CTX_ROOT, 'orgs', org, 'analytics', 'events');
     if (fs.existsSync(eventsBaseDir)) {
       const eventAgentDirs = fs
@@ -292,19 +301,18 @@ export function syncAll(): SyncResult {
         .filter((d) => d.isDirectory())
         .map((d) => d.name);
       for (const agent of eventAgentDirs) {
-        results.events += syncEvents(org, agent);
+        results.events += await syncEvents(org, agent);
       }
     }
   }
 
-  // Heartbeats are flat (not org-scoped)
   const stateDir = path.join(CTX_ROOT, 'state');
   if (fs.existsSync(stateDir)) {
     const agentDirs = fs
       .readdirSync(stateDir, { withFileTypes: true })
       .filter((d) => d.isDirectory());
     for (const agentDir of agentDirs) {
-      if (syncHeartbeat(agentDir.name)) results.heartbeats++;
+      if (await syncHeartbeat(agentDir.name)) results.heartbeats++;
     }
   }
 
@@ -316,15 +324,13 @@ export function syncAll(): SyncResult {
       for (const [name, config] of Object.entries(enabled)) {
         const agentOrg = (config as Record<string, string>).org ?? '';
         if (agentOrg) {
-          db.prepare('UPDATE heartbeats SET org = ? WHERE agent = ? AND (org IS NULL OR org = \'\')').run(agentOrg, name);
+          await sql`UPDATE heartbeats SET org = ${agentOrg} WHERE agent = ${name} AND (org IS NULL OR org = '')`;
         }
       }
     }
   } catch {
     // Best effort
   }
-
-  // Cost sync moved to syncCostsLazy() - only runs when Analytics page is visited
 
   console.log(`[sync] Full sync complete:`, results);
   return results;
@@ -336,13 +342,14 @@ export function syncAll(): SyncResult {
 
 const COST_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
-export function syncCostsLazy(): void {
+export async function syncCostsLazy(): Promise<void> {
+  if (!CTX_ROOT) return;
   const now = Date.now();
   const lastCostSync = (globalThis as unknown as Record<string, number>).__lastCostSync ?? 0;
   if (now - lastCostSync > COST_SYNC_INTERVAL_MS) {
     try {
-      const { syncCosts } = require('./cost-parser');
-      const costResult = syncCosts();
+      const { syncCosts } = await import('./cost-parser');
+      const costResult = await syncCosts();
       (globalThis as unknown as Record<string, number>).__lastCostSync = now;
       if (costResult.inserted > 0) {
         console.log(`[sync] Cost sync: ${costResult.scanned} scanned, ${costResult.inserted} inserted`);
@@ -357,25 +364,20 @@ export function syncCostsLazy(): void {
 // Single-file sync (called by file watcher)
 // ---------------------------------------------------------------------------
 
-export function syncFile(filePath: string): void {
+export async function syncFile(filePath: string): Promise<void> {
+  if (!CTX_ROOT) return;
   if (filePath.includes('/tasks/') && filePath.endsWith('.json')) {
     const org = extractOrgFromPath(filePath);
-    if (org) syncTasks(org);
+    if (org) await syncTasks(org);
   } else if (filePath.includes('/approvals/') && filePath.endsWith('.json')) {
     const org = extractOrgFromPath(filePath);
-    if (org) syncApprovals(org);
-  } else if (
-    filePath.includes('/analytics/events/') &&
-    filePath.endsWith('.jsonl')
-  ) {
+    if (org) await syncApprovals(org);
+  } else if (filePath.includes('/analytics/events/') && filePath.endsWith('.jsonl')) {
     const { org, agent } = extractOrgAndAgentFromEventPath(filePath);
-    if (org && agent) syncEvents(org, agent);
-  } else if (
-    filePath.includes('/state/') &&
-    filePath.endsWith('heartbeat.json')
-  ) {
+    if (org && agent) await syncEvents(org, agent);
+  } else if (filePath.includes('/state/') && filePath.endsWith('heartbeat.json')) {
     const agent = extractAgentFromStatePath(filePath);
-    if (agent) syncHeartbeat(agent);
+    if (agent) await syncHeartbeat(agent);
   }
 }
 
@@ -391,9 +393,7 @@ export function extractOrgFromPath(filePath: string): string | null {
 export function extractOrgAndAgentFromEventPath(
   filePath: string,
 ): { org: string | null; agent: string | null } {
-  const match = filePath.match(
-    /\/orgs\/([^/]+)\/analytics\/events\/([^/]+)\//,
-  );
+  const match = filePath.match(/\/orgs\/([^/]+)\/analytics\/events\/([^/]+)\//);
   return { org: match?.[1] ?? null, agent: match?.[2] ?? null };
 }
 

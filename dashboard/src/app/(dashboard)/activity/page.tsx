@@ -13,7 +13,7 @@ export default async function ActivityPage({
   const org = orgParam && orgs.includes(orgParam) ? orgParam : undefined;
 
   // Initial load: most recent 100 events
-  const initialEvents = getRecentEvents(100, org);
+  const initialEvents = await getRecentEvents(100, org);
 
   // Get unique agent names for the filter dropdown
   const allAgents = getAllAgents();

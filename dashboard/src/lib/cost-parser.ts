@@ -5,7 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { db } from '@/lib/db';
+import { sql } from '@/lib/db';
 import { CTX_ROOT, getAgentsForOrg, getAllAgents, getOrgs } from '@/lib/config';
 import type { CostEntry } from '@/lib/types';
 
@@ -203,11 +203,6 @@ interface CodexTokenEntry {
   turn_id?: string;
 }
 
-/**
- * Parse a single codex-tokens.jsonl file. Schema differs from claude JSONL:
- * one record per `thread/tokenUsage/updated` notification with the shape
- * written by CodexAppServerPTY.appendCodexTokenLog.
- */
 function parseCodexJsonlFile(filePath: string, agent: string, org: string): CostEntry[] {
   const entries: CostEntry[] = [];
   let content: string;
@@ -253,17 +248,9 @@ function parseCodexJsonlFile(filePath: string, agent: string, org: string): Cost
   return entries;
 }
 
-/**
- * Scan <ctxRoot>/logs/<agent>/codex-tokens.jsonl for every enabled agent.
- * Codex token logs are written per-agent under the instance's logs dir, not
- * under ~/.claude/projects, so we walk the agent registry instead of a single
- * root directory.
- */
 export function scanCodexLogsCosts(): CostEntry[] {
   const allEntries: CostEntry[] = [];
 
-  // Build (agent, org) pairs. Prefer getAllAgents so we pick up CLI-created
-  // agents; fall back to per-org enumeration if it returns nothing.
   const pairs: Array<{ name: string; org: string }> = getAllAgents();
   if (pairs.length === 0) {
     for (const org of getOrgs()) {
@@ -281,50 +268,27 @@ export function scanCodexLogsCosts(): CostEntry[] {
 }
 
 // ---------------------------------------------------------------------------
-// SQLite persistence
+// Postgres persistence
 // ---------------------------------------------------------------------------
 
-const INSERT_COST = db.prepare(`
-  INSERT OR IGNORE INTO cost_entries (timestamp, agent, org, model, input_tokens, output_tokens, total_tokens, cost_usd, source_file)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-`);
-
-/**
- * Persist cost entries to SQLite. Skips duplicates via INSERT OR IGNORE.
- */
-export function persistCostEntries(entries: CostEntry[]): number {
+export async function persistCostEntries(entries: CostEntry[]): Promise<number> {
   let inserted = 0;
-  const insertMany = db.transaction((items: CostEntry[]) => {
-    for (const e of items) {
-      const result = INSERT_COST.run(
-        e.timestamp,
-        e.agent,
-        e.org,
-        e.model,
-        e.input_tokens,
-        e.output_tokens,
-        e.total_tokens,
-        e.cost_usd,
-        e.source_file ?? null,
-      );
-      if (result.changes > 0) inserted++;
+  for (const e of entries) {
+    try {
+      const result = await sql`
+        INSERT INTO cost_entries (timestamp, agent, org, model, input_tokens, output_tokens, total_tokens, cost_usd, source_file)
+        VALUES (${e.timestamp}, ${e.agent}, ${e.org}, ${e.model}, ${e.input_tokens}, ${e.output_tokens}, ${e.total_tokens}, ${e.cost_usd}, ${e.source_file ?? null})
+        ON CONFLICT DO NOTHING
+      `;
+      if (result.count > 0) inserted++;
+    } catch {
+      // skip individual insert errors
     }
-  });
-  insertMany(entries);
+  }
   return inserted;
 }
 
-/**
- * Full sync: scan claude JSONL + codex JSONL files and persist to DB.
- *
- * Dedup contract: an (agent, model, source_file, timestamp) tuple from claude
- * scan and codex scan should never collide in practice, because codex turns are
- * only ever written to <ctxRoot>/logs/<agent>/codex-tokens.jsonl while claude
- * turns are only ever written under ~/.claude/projects/. We still build the
- * union explicitly so any future overlap (e.g., a codex agent that also gets
- * scanned through claude's projects dir) does not double-count.
- */
-export function syncCosts(): { scanned: number; inserted: number } {
+export async function syncCosts(): Promise<{ scanned: number; inserted: number }> {
   const claudeEntries = scanClaudeProjectsCosts();
   const codexEntries = scanCodexLogsCosts();
 
@@ -337,7 +301,7 @@ export function syncCosts(): { scanned: number; inserted: number } {
     merged.push(entry);
   }
 
-  const inserted = merged.length > 0 ? persistCostEntries(merged) : 0;
+  const inserted = merged.length > 0 ? await persistCostEntries(merged) : 0;
   return { scanned: merged.length, inserted };
 }
 
@@ -345,122 +309,86 @@ export function syncCosts(): { scanned: number; inserted: number } {
 // Query helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Get cost entries from the DB, newest first.
- */
-export function getCostEntries(
-  limit: number = 100,
-  org?: string,
-): CostEntry[] {
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  if (org) {
-    conditions.push('org = ?');
-    params.push(org);
-  }
-
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
+export async function getCostEntries(limit = 100, org?: string): Promise<CostEntry[]> {
   try {
-    return db
-      .prepare(
-        `SELECT id, timestamp, agent, org, model, input_tokens, output_tokens, total_tokens, cost_usd, source_file
-         FROM cost_entries ${where}
-         ORDER BY timestamp DESC
-         LIMIT ?`,
-      )
-      .all(...params, limit) as CostEntry[];
+    return await sql<CostEntry[]>`
+      SELECT id, timestamp, agent, org, model, input_tokens, output_tokens, total_tokens, cost_usd, source_file
+      FROM cost_entries
+      WHERE TRUE
+      ${org ? sql`AND org = ${org}` : sql``}
+      ORDER BY timestamp DESC
+      LIMIT ${limit}
+    `;
   } catch {
     return [];
   }
 }
 
-/**
- * Get daily cost totals for the last N days.
- */
-export function getDailyCosts(days: number = 30): Array<{ date: string; cost: number }> {
+export async function getDailyCosts(days = 30): Promise<Array<{ date: string; cost: number }>> {
+  const cutoff = new Date(Date.now() - days * 86400 * 1000).toISOString().slice(0, 10);
   try {
-    const rows = db
-      .prepare(
-        `SELECT DATE(timestamp) as date, SUM(cost_usd) as cost
-         FROM cost_entries
-         WHERE timestamp >= DATE('now', ?)
-         GROUP BY DATE(timestamp)
-         ORDER BY date ASC`,
-      )
-      .all(`-${days} days`) as Array<{ date: string; cost: number }>;
-    return rows;
+    const rows = await sql<{ date: string; cost: string }[]>`
+      SELECT LEFT(timestamp, 10) as date, SUM(cost_usd) as cost
+      FROM cost_entries
+      WHERE timestamp >= ${cutoff}
+      GROUP BY LEFT(timestamp, 10)
+      ORDER BY date ASC
+    `;
+    return rows.map((r) => ({ date: r.date, cost: Number(r.cost) }));
   } catch {
     return [];
   }
 }
 
-/**
- * Get cost totals grouped by model.
- */
-export function getCostByModel(): Array<{ model: string; cost: number; tokens: number }> {
+export async function getCostByModel(): Promise<Array<{ model: string; cost: number; tokens: number }>> {
   try {
-    return db
-      .prepare(
-        `SELECT model, SUM(cost_usd) as cost, SUM(total_tokens) as tokens
-         FROM cost_entries
-         GROUP BY model
-         ORDER BY cost DESC`,
-      )
-      .all() as Array<{ model: string; cost: number; tokens: number }>;
+    const rows = await sql<{ model: string; cost: string; tokens: string }[]>`
+      SELECT model, SUM(cost_usd) as cost, SUM(total_tokens) as tokens
+      FROM cost_entries
+      GROUP BY model
+      ORDER BY cost DESC
+    `;
+    return rows.map((r) => ({ model: r.model, cost: Number(r.cost), tokens: Number(r.tokens) }));
   } catch {
     return [];
   }
 }
 
-/**
- * Get daily cost breakdown by model for stacked bar chart.
- */
-export function getDailyCostByModel(
-  days: number = 30,
-): Array<Record<string, unknown>> {
+export async function getDailyCostByModel(days = 30): Promise<Array<Record<string, unknown>>> {
+  const cutoff = new Date(Date.now() - days * 86400 * 1000).toISOString().slice(0, 10);
   try {
-    const rows = db
-      .prepare(
-        `SELECT DATE(timestamp) as date, model, SUM(cost_usd) as cost
-         FROM cost_entries
-         WHERE timestamp >= DATE('now', ?)
-         GROUP BY DATE(timestamp), model
-         ORDER BY date ASC`,
-      )
-      .all(`-${days} days`) as Array<{ date: string; model: string; cost: number }>;
+    const rows = await sql<{ date: string; model: string; cost: string }[]>`
+      SELECT LEFT(timestamp, 10) as date, model, SUM(cost_usd) as cost
+      FROM cost_entries
+      WHERE timestamp >= ${cutoff}
+      GROUP BY LEFT(timestamp, 10), model
+      ORDER BY date ASC
+    `;
 
-    // Pivot: group by date, model names as keys
     const dateMap = new Map<string, Record<string, unknown>>();
     for (const row of rows) {
-      if (!dateMap.has(row.date)) {
-        dateMap.set(row.date, { date: row.date });
-      }
+      if (!dateMap.has(row.date)) dateMap.set(row.date, { date: row.date });
       const entry = dateMap.get(row.date)!;
       const key = resolvePricingKey(row.model);
-      entry[key] = ((entry[key] as number) ?? 0) + row.cost;
+      entry[key] = ((entry[key] as number) ?? 0) + Number(row.cost);
     }
-
     return Array.from(dateMap.values());
   } catch {
     return [];
   }
 }
 
-/**
- * Get total cost for the current month, useful for projections.
- */
-export function getCurrentMonthCost(): number {
+export async function getCurrentMonthCost(): Promise<number> {
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
   try {
-    const row = db
-      .prepare(
-        `SELECT SUM(cost_usd) as total
-         FROM cost_entries
-         WHERE timestamp >= DATE('now', 'start of month')`,
-      )
-      .get() as { total: number | null } | undefined;
-    return row?.total ?? 0;
+    const [row] = await sql<{ total: string | null }[]>`
+      SELECT SUM(cost_usd) as total
+      FROM cost_entries
+      WHERE timestamp >= ${monthStart.toISOString()}
+    `;
+    return Number(row?.total ?? 0);
   } catch {
     return 0;
   }

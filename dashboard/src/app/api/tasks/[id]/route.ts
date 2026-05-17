@@ -49,7 +49,7 @@ export async function GET(
   }
 
   try {
-    const task = getTaskById(id);
+    const task = await getTaskById(id);
     if (!task) {
       return Response.json({ error: 'Task not found' }, { status: 404 });
     }
@@ -85,7 +85,7 @@ export async function DELETE(
     return Response.json({ error: 'Invalid task ID' }, { status: 400 });
   }
 
-  const task = getTaskById(id);
+  const task = await getTaskById(id);
   if (!task) {
     return Response.json({ error: 'Task not found' }, { status: 404 });
   }
@@ -101,7 +101,7 @@ export async function DELETE(
 
   try {
     await fs.default.unlink(taskFile);
-    try { syncAll(); } catch { /* best-effort */ }
+    void syncAll().catch(() => {});
     return Response.json({ success: true });
   } catch (err) {
     console.error('[api/tasks/[id]] DELETE error:', err);
@@ -122,7 +122,7 @@ export async function PUT(
     return Response.json({ error: 'Invalid task ID' }, { status: 400 });
   }
 
-  const task = getTaskById(id);
+  const task = await getTaskById(id);
   if (!task) {
     return Response.json({ error: 'Task not found' }, { status: 404 });
   }
@@ -194,7 +194,7 @@ export async function PUT(
       } catch { /* non-fatal */ }
     }
 
-    try { syncAll(); } catch { /* best-effort */ }
+    void syncAll().catch(() => {});
     return Response.json({ success: true });
   } catch (err) {
     console.error('[api/tasks/[id]] PUT error:', err);
@@ -251,7 +251,7 @@ export async function PATCH(
   }
 
   // Look up task's org to pass CTX_ORG to bus script
-  const task = getTaskById(id);
+  const task = await getTaskById(id);
 
   const frameworkRoot = getFrameworkRoot();
   const env = {
@@ -322,11 +322,7 @@ export async function PATCH(
     }
 
     // Trigger sync so subsequent reads reflect the update
-    try {
-      syncAll();
-    } catch {
-      // Sync is best-effort
-    }
+    void syncAll().catch(() => {});
 
     return Response.json({ success: true });
   } catch (err: unknown) {

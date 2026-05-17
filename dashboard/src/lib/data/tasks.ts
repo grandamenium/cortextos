@@ -1,62 +1,30 @@
 // cortextOS Dashboard - Task data fetcher
-// Reads from SQLite (synced from JSON task files on disk).
+// Reads from Postgres (synced from JSON task files on disk).
 
-import { db } from '@/lib/db';
+import { sql } from '@/lib/db';
 import type { Task, TaskFilters } from '@/lib/types';
 
-/**
- * Get tasks with optional filters.
- * Returns newest first by default.
- */
-export function getTasks(filters?: TaskFilters): Task[] {
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  if (filters?.org) {
-    conditions.push('org = ?');
-    params.push(filters.org);
-  }
-  if (filters?.agent) {
-    // 'human' is a virtual filter: returns tasks assigned to any non-agent human
-    // (agents create human tasks with assigned_to 'user', 'human', etc.)
-    if (filters.agent === 'human') {
-      conditions.push("(assignee IN ('human', 'user') OR title LIKE '[HUMAN]%' OR project = 'human-tasks')");
-    } else {
-      conditions.push('assignee = ?');
-      params.push(filters.agent);
-    }
-  }
-  if (filters?.priority) {
-    conditions.push('priority = ?');
-    params.push(filters.priority);
-  }
-  if (filters?.status) {
-    conditions.push('status = ?');
-    params.push(filters.status);
-  }
-  if (filters?.project) {
-    conditions.push('project = ?');
-    params.push(filters.project);
-  }
-  if (filters?.search) {
-    conditions.push('(title LIKE ? OR description LIKE ?)');
-    const term = `%${filters.search}%`;
-    params.push(term, term);
-  }
-
-  const where =
-    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
+export async function getTasks(filters?: TaskFilters): Promise<Task[]> {
   try {
-    const rows = db
-      .prepare(
-        `SELECT id, title, description, status, priority, assignee, org, project,
-                needs_approval, created_at, updated_at, completed_at, notes, source_file
-         FROM tasks ${where}
-         ORDER BY created_at DESC`
-      )
-      .all(...params) as Record<string, unknown>[];
-
+    const rows = await sql<Record<string, unknown>[]>`
+      SELECT id, title, description, status, priority, assignee, org, project,
+             needs_approval, created_at, updated_at, completed_at, notes, source_file
+      FROM tasks
+      WHERE TRUE
+      ${filters?.org ? sql`AND org = ${filters.org}` : sql``}
+      ${filters?.agent
+        ? filters.agent === 'human'
+          ? sql`AND (assignee IN ('human', 'user') OR title LIKE '[HUMAN]%' OR project = 'human-tasks')`
+          : sql`AND assignee = ${filters.agent}`
+        : sql``}
+      ${filters?.priority ? sql`AND priority = ${filters.priority}` : sql``}
+      ${filters?.status ? sql`AND status = ${filters.status}` : sql``}
+      ${filters?.project ? sql`AND project = ${filters.project}` : sql``}
+      ${filters?.search
+        ? sql`AND (title ILIKE ${'%' + filters.search + '%'} OR description ILIKE ${'%' + filters.search + '%'})`
+        : sql``}
+      ORDER BY created_at DESC
+    `;
     return rows.map(rowToTask);
   } catch (err) {
     console.error('[data/tasks] getTasks error:', err);
@@ -64,19 +32,13 @@ export function getTasks(filters?: TaskFilters): Task[] {
   }
 }
 
-/**
- * Get a single task by ID.
- */
-export function getTaskById(id: string): Task | null {
+export async function getTaskById(id: string): Promise<Task | null> {
   try {
-    const row = db
-      .prepare(
-        `SELECT id, title, description, status, priority, assignee, org, project,
-                needs_approval, created_at, updated_at, completed_at, notes, source_file
-         FROM tasks WHERE id = ?`
-      )
-      .get(id) as Record<string, unknown> | undefined;
-
+    const [row] = await sql<Record<string, unknown>[]>`
+      SELECT id, title, description, status, priority, assignee, org, project,
+             needs_approval, created_at, updated_at, completed_at, notes, source_file
+      FROM tasks WHERE id = ${id}
+    `;
     return row ? rowToTask(row) : null;
   } catch (err) {
     console.error('[data/tasks] getTaskById error:', err);
@@ -84,48 +46,27 @@ export function getTaskById(id: string): Task | null {
   }
 }
 
-/**
- * Get tasks filtered by status (useful for kanban columns).
- */
-export function getTasksByStatus(status: string, org?: string): Task[] {
+export async function getTasksByStatus(status: string, org?: string): Promise<Task[]> {
   return getTasks({ status, org });
 }
 
-/**
- * Get tasks assigned to a specific agent.
- */
-export function getTasksByAgent(agentName: string, org?: string): Task[] {
+export async function getTasksByAgent(agentName: string, org?: string): Promise<Task[]> {
   return getTasks({ agent: agentName, org });
 }
 
-/**
- * Get tasks completed today (UTC).
- */
-export function getTasksCompletedToday(org?: string): Task[] {
+export async function getTasksCompletedToday(org?: string): Promise<Task[]> {
   const todayStart = new Date();
   todayStart.setUTCHours(0, 0, 0, 0);
   const todayISO = todayStart.toISOString();
-
-  const conditions: string[] = ['completed_at >= ?'];
-  const params: (string | number)[] = [todayISO];
-
-  if (org) {
-    conditions.push('org = ?');
-    params.push(org);
-  }
-
-  const where = `WHERE ${conditions.join(' AND ')}`;
-
   try {
-    const rows = db
-      .prepare(
-        `SELECT id, title, description, status, priority, assignee, org, project,
-                needs_approval, created_at, updated_at, completed_at, notes, source_file
-         FROM tasks ${where}
-         ORDER BY completed_at DESC`
-      )
-      .all(...params) as Record<string, unknown>[];
-
+    const rows = await sql<Record<string, unknown>[]>`
+      SELECT id, title, description, status, priority, assignee, org, project,
+             needs_approval, created_at, updated_at, completed_at, notes, source_file
+      FROM tasks
+      WHERE completed_at >= ${todayISO}
+      ${org ? sql`AND org = ${org}` : sql``}
+      ORDER BY completed_at DESC
+    `;
     return rows.map(rowToTask);
   } catch (err) {
     console.error('[data/tasks] getTasksCompletedToday error:', err);
@@ -133,47 +74,24 @@ export function getTasksCompletedToday(org?: string): Task[] {
   }
 }
 
-/**
- * Get count of in-progress tasks (for sidebar badge).
- */
-export function getInProgressCount(org?: string): number {
+export async function getInProgressCount(org?: string): Promise<number> {
   return getTaskCount(org, 'in_progress');
 }
 
-/**
- * Get count of tasks matching optional org/status.
- */
-export function getTaskCount(org?: string, status?: string): number {
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  if (org) {
-    conditions.push('org = ?');
-    params.push(org);
-  }
-  if (status) {
-    conditions.push('status = ?');
-    params.push(status);
-  }
-
-  const where =
-    conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
+export async function getTaskCount(org?: string, status?: string): Promise<number> {
   try {
-    const row = db
-      .prepare(`SELECT COUNT(*) as count FROM tasks ${where}`)
-      .get(...params) as { count: number } | undefined;
-
-    return row?.count ?? 0;
+    const [row] = await sql<{ count: string }[]>`
+      SELECT COUNT(*) as count FROM tasks
+      WHERE TRUE
+      ${org ? sql`AND org = ${org}` : sql``}
+      ${status ? sql`AND status = ${status}` : sql``}
+    `;
+    return Number(row?.count ?? 0);
   } catch (err) {
     console.error('[data/tasks] getTaskCount error:', err);
     return 0;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Row mapping
-// ---------------------------------------------------------------------------
 
 function rowToTask(row: Record<string, unknown>): Task {
   return {
@@ -185,7 +103,7 @@ function rowToTask(row: Record<string, unknown>): Task {
     assignee: (row.assignee as string) ?? undefined,
     org: row.org as string,
     project: (row.project as string) ?? undefined,
-    needs_approval: row.needs_approval === 1,
+    needs_approval: row.needs_approval === 1 || row.needs_approval === true,
     created_at: row.created_at as string,
     updated_at: (row.updated_at as string) ?? undefined,
     completed_at: (row.completed_at as string) ?? undefined,

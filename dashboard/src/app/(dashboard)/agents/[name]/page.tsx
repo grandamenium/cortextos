@@ -48,7 +48,7 @@ export default async function AgentDetailPage({
   // Get tasks for this agent (use system name to match task assignee field)
   let tasks: import('@/lib/types').Task[] = [];
   try {
-    tasks = getTasksByAgent(systemName, detail.org || undefined);
+    tasks = await getTasksByAgent(systemName, detail.org || undefined);
   } catch {
     tasks = [];
   }

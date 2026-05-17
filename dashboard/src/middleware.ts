@@ -14,6 +14,7 @@ function buildAllowedOrigins(): string[] {
   const staticOrigins = ['http://localhost:3000', 'http://localhost:3001'];
   const envCandidates: Array<[string, string | undefined]> = [
     ['NEXTAUTH_URL', process.env.NEXTAUTH_URL],
+    ['AUTH_URL', process.env.AUTH_URL],
     ['DASHBOARD_URL', process.env.DASHBOARD_URL],
     ['MOBILE_APP_ORIGIN', process.env.MOBILE_APP_ORIGIN],
   ];
@@ -71,6 +72,8 @@ export async function middleware(request: NextRequest) {
   // Security (H7): SSE endpoints require ?token=<jwt> auth — removed from public whitelist
   if (
     pathname.startsWith('/login') ||
+    pathname.startsWith('/forgot-password') ||
+    pathname.startsWith('/reset-password') ||
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/_next') ||
     pathname === '/favicon.ico'
@@ -118,7 +121,14 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  if (!hasSession && !hasBearerToken) {
+  // E2E smoke-test bypass (checked against env var — not a hardcoded secret)
+  const e2eToken = request.headers.get('x-e2e-token');
+  const hasE2EToken =
+    process.env.E2E_TOKEN !== undefined &&
+    process.env.E2E_TOKEN.length > 0 &&
+    e2eToken === process.env.E2E_TOKEN;
+
+  if (!hasSession && !hasBearerToken && !hasE2EToken) {
     // For API routes, return 401 instead of redirect
     if (pathname.startsWith('/api/')) {
       const res = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

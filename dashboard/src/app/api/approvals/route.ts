@@ -20,7 +20,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
 
-  try { syncAll(); } catch { /* best-effort */ }
+  void syncAll().catch(() => {});
 
   const status = searchParams.get('status') || 'pending';
   const org = searchParams.get('org') || undefined;
@@ -31,12 +31,12 @@ export async function GET(request: NextRequest) {
     let approvals;
 
     if (status === 'pending') {
-      approvals = getPendingApprovals(org);
+      approvals = await getPendingApprovals(org);
     } else if (status === 'resolved') {
-      approvals = getResolvedApprovals(org, { agent, category });
+      approvals = await getResolvedApprovals(org, { agent, category });
     } else if (status === 'all') {
-      const pending = getPendingApprovals(org);
-      const resolved = getResolvedApprovals(org, { agent, category });
+      const pending = await getPendingApprovals(org);
+      const resolved = await getResolvedApprovals(org, { agent, category });
       approvals = [...pending, ...resolved];
     } else {
       return Response.json(

@@ -24,7 +24,7 @@ const VALID_PRIORITIES = ['urgent', 'high', 'normal', 'low'];
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
 
-  try { syncAll(); } catch { /* best-effort */ }
+  void syncAll().catch(() => {});
 
   const filters = {
     org: searchParams.get('org') || undefined,
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
   };
 
   try {
-    const tasks = getTasks(filters);
+    const tasks = await getTasks(filters);
     return Response.json(tasks);
   } catch (err) {
     console.error('[api/tasks] GET error:', err);
@@ -122,11 +122,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Trigger sync so subsequent reads reflect the new task
-    try {
-      syncAll();
-    } catch {
-      // Sync is best-effort
-    }
+    void syncAll().catch(() => {});
 
     return Response.json(
       { success: true, taskId: result.trim() },

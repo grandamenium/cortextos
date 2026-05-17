@@ -33,16 +33,16 @@ export async function GET(request: NextRequest) {
     }
 
     // Task throughput
-    const throughput = getTaskThroughput(days, org);
+    const throughput = await getTaskThroughput(days, org);
 
     // Agent effectiveness
-    const effectiveness = getAgentEffectiveness(org);
+    const effectiveness = await getAgentEffectiveness(org);
 
     // Cost data
-    const dailyCosts = getDailyCosts(days);
-    const dailyCostByModel = getDailyCostByModel(days);
-    const currentMonthCost = getCurrentMonthCost();
-    const costByModel = getCostByModel();
+    const dailyCosts = await getDailyCosts(days);
+    const dailyCostByModel = await getDailyCostByModel(days);
+    const currentMonthCost = await getCurrentMonthCost();
+    const costByModel = await getCostByModel();
 
     return Response.json({
       fleetHealth,

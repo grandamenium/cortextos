@@ -1,39 +1,29 @@
-// Security (H8): SQLite-backed rate limiter — survives server restarts.
+// Security (H8): Postgres-backed rate limiter — survives server restarts.
 // Fails closed if db is unavailable (denying is safer than allowing unlimited attempts).
 import { execSync } from 'node:child_process';
-import { db } from '@/lib/db';
+import { sql } from '@/lib/db';
 
 const MAX = 5;
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
-// Threshold for failed-login Telegram alert (Phase 5)
 const FAIL_ALERT_THRESHOLD = 3;
-// Key prefix distinguishes failed-auth counters from general rate-limit counters
 const FAIL_PREFIX = 'fail:';
 
-export function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+export async function checkRateLimit(ip: string): Promise<{ allowed: boolean; retryAfter?: number }> {
   const now = Date.now();
-
   try {
-    db.prepare('DELETE FROM rate_limits WHERE reset_at <= ?').run(now);
-
-    const row = db.prepare('SELECT count, reset_at FROM rate_limits WHERE ip = ?').get(ip) as
-      | { count: number; reset_at: number }
-      | undefined;
-
+    await sql`DELETE FROM rate_limits WHERE reset_at <= ${now}`;
+    const [row] = await sql<{ count: number; reset_at: string }[]>`
+      SELECT count, reset_at FROM rate_limits WHERE ip = ${ip}
+    `;
     if (!row) {
-      db.prepare('INSERT INTO rate_limits (ip, count, reset_at) VALUES (?, 1, ?)').run(
-        ip,
-        now + WINDOW_MS,
-      );
+      await sql`INSERT INTO rate_limits (ip, count, reset_at) VALUES (${ip}, 1, ${now + WINDOW_MS})`;
       return { allowed: true };
     }
-
     if (row.count >= MAX) {
-      return { allowed: false, retryAfter: Math.ceil((row.reset_at - now) / 1000) };
+      return { allowed: false, retryAfter: Math.ceil((Number(row.reset_at) - now) / 1000) };
     }
-
-    db.prepare('UPDATE rate_limits SET count = count + 1 WHERE ip = ?').run(ip);
+    await sql`UPDATE rate_limits SET count = count + 1 WHERE ip = ${ip}`;
     return { allowed: true };
   } catch (err) {
     console.error('[rate-limit] DB error, failing closed (denying request):', err);
@@ -41,9 +31,9 @@ export function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: num
   }
 }
 
-export function resetRateLimit(ip: string): void {
+export async function resetRateLimit(ip: string): Promise<void> {
   try {
-    db.prepare('DELETE FROM rate_limits WHERE ip = ?').run(ip);
+    await sql`DELETE FROM rate_limits WHERE ip = ${ip}`;
   } catch (err) {
     console.error('[rate-limit] DB error on reset:', err);
   }
@@ -52,23 +42,22 @@ export function resetRateLimit(ip: string): void {
 const FORGOT_PW_MAX = 3;
 const FORGOT_PW_PREFIX = 'forgotpw:';
 
-/** Rate-limit forgot-password requests: 3 per 15min per IP. */
-export function checkForgotPasswordLimit(ip: string): { allowed: boolean; retryAfter?: number } {
+export async function checkForgotPasswordLimit(ip: string): Promise<{ allowed: boolean; retryAfter?: number }> {
   const now = Date.now();
   const key = `${FORGOT_PW_PREFIX}${ip}`;
   try {
-    db.prepare('DELETE FROM rate_limits WHERE ip = ? AND reset_at <= ?').run(key, now);
-    const row = db.prepare('SELECT count, reset_at FROM rate_limits WHERE ip = ?').get(key) as
-      | { count: number; reset_at: number }
-      | undefined;
+    await sql`DELETE FROM rate_limits WHERE ip = ${key} AND reset_at <= ${now}`;
+    const [row] = await sql<{ count: number; reset_at: string }[]>`
+      SELECT count, reset_at FROM rate_limits WHERE ip = ${key}
+    `;
     if (!row) {
-      db.prepare('INSERT INTO rate_limits (ip, count, reset_at) VALUES (?, 1, ?)').run(key, now + WINDOW_MS);
+      await sql`INSERT INTO rate_limits (ip, count, reset_at) VALUES (${key}, 1, ${now + WINDOW_MS})`;
       return { allowed: true };
     }
     if (row.count >= FORGOT_PW_MAX) {
-      return { allowed: false, retryAfter: Math.ceil((row.reset_at - now) / 1000) };
+      return { allowed: false, retryAfter: Math.ceil((Number(row.reset_at) - now) / 1000) };
     }
-    db.prepare('UPDATE rate_limits SET count = count + 1 WHERE ip = ?').run(key);
+    await sql`UPDATE rate_limits SET count = count + 1 WHERE ip = ${key}`;
     return { allowed: true };
   } catch (err) {
     console.error('[rate-limit] DB error on forgot-password check:', err);
@@ -76,35 +65,22 @@ export function checkForgotPasswordLimit(ip: string): { allowed: boolean; retryA
   }
 }
 
-/**
- * Record a failed login attempt for an IP.
- * Sends a Telegram alert when FAIL_ALERT_THRESHOLD is first crossed in a 15-min window.
- * Fire-and-forget — never throws.
- */
-export function recordFailedLogin(ip: string, username: string): void {
+export async function recordFailedLogin(ip: string, username: string): Promise<void> {
   const now = Date.now();
   const key = `${FAIL_PREFIX}${ip}`;
-
   try {
-    db.prepare('DELETE FROM rate_limits WHERE ip = ? AND reset_at <= ?').run(key, now);
-
-    const row = db.prepare('SELECT count, reset_at FROM rate_limits WHERE ip = ?').get(key) as
-      | { count: number; reset_at: number }
-      | undefined;
-
+    await sql`DELETE FROM rate_limits WHERE ip = ${key} AND reset_at <= ${now}`;
+    const [row] = await sql<{ count: number }[]>`
+      SELECT count FROM rate_limits WHERE ip = ${key}
+    `;
     let newCount: number;
     if (!row) {
-      db.prepare('INSERT INTO rate_limits (ip, count, reset_at) VALUES (?, 1, ?)').run(
-        key,
-        now + WINDOW_MS,
-      );
+      await sql`INSERT INTO rate_limits (ip, count, reset_at) VALUES (${key}, 1, ${now + WINDOW_MS})`;
       newCount = 1;
     } else {
-      db.prepare('UPDATE rate_limits SET count = count + 1 WHERE ip = ?').run(key);
+      await sql`UPDATE rate_limits SET count = count + 1 WHERE ip = ${key}`;
       newCount = row.count + 1;
     }
-
-    // Alert exactly when threshold is first crossed — not on every subsequent attempt
     if (newCount === FAIL_ALERT_THRESHOLD) {
       sendFailedLoginAlert(ip, username, newCount);
     }
@@ -116,9 +92,7 @@ export function recordFailedLogin(ip: string, username: string): void {
 function sendFailedLoginAlert(ip: string, username: string, count: number): void {
   const chatId = process.env.CTX_TELEGRAM_CHAT_ID;
   if (!chatId) return;
-
   const msg = `Security alert: ${count} failed login attempts for user "${username}" from IP ${ip} in the last 15 minutes on dashboard.clicktoacquire.com`;
-
   try {
     execSync(`cortextos bus send-telegram ${chatId} "${msg.replace(/"/g, '\\"')}"`, {
       timeout: 10_000,

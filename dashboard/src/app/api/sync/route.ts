@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 export async function POST() {
   try {
-    const result = syncAll();
+    const result = await syncAll();
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
     return NextResponse.json(
@@ -17,7 +17,7 @@ export async function POST() {
 
 export async function GET() {
   try {
-    const result = syncAll();
+    const result = await syncAll();
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
     return NextResponse.json(

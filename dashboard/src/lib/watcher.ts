@@ -67,11 +67,9 @@ function handleFileChange(
 
   // Sync the changed file to SQLite (skip for deletions)
   if (changeType !== 'remove') {
-    try {
-      syncFile(filePath);
-    } catch (err) {
+    void syncFile(filePath).catch((err) => {
       console.error(`[watcher] Sync failed for ${filePath}:`, err);
-    }
+    });
   }
 
   // Emit SSE event

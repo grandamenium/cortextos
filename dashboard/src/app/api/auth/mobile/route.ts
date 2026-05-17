@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { db } from '@/lib/db';
+import { sql } from '@/lib/db';
 import type { User } from '@/lib/types';
 import { checkRateLimit, resetRateLimit } from '@/lib/rate-limit';
 
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
   const ip = trustProxy
     ? (request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown')
     : (request.headers.get('x-real-ip') ?? 'unknown');
-  const { allowed, retryAfter } = checkRateLimit(ip);
+  const { allowed, retryAfter } = await checkRateLimit(ip);
   if (!allowed) {
     return Response.json({ error: 'Too many attempts' }, { status: 429, headers: { 'Retry-After': String(retryAfter) } } as any);
   }
@@ -45,9 +45,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const user = db
-      .prepare('SELECT * FROM users WHERE username = ?')
-      .get(username) as User | undefined;
+    const [user] = await sql<User[]>`SELECT * FROM users WHERE username = ${username}`;
 
     if (!user) {
       // Constant-time defense: run a dummy bcrypt comparison so the response time
@@ -62,7 +60,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Auth successful — reset rate limit counter
-    resetRateLimit(ip);
+    await resetRateLimit(ip);
 
     // Generate JWT
     const token = jwt.sign(

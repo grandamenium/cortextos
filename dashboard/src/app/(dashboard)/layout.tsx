@@ -14,11 +14,9 @@ export default async function DashboardLayout({
 
   // Sync filesystem state to SQLite on every page load
   // This ensures the dashboard always reflects the latest agent activity
-  try {
-    syncAll();
-  } catch (e) {
+  void syncAll().catch((e) => {
     console.error('Sync failed:', e);
-  }
+  });
 
   const orgs = getOrgs();
 

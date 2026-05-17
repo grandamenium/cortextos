@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server';
-import { db } from '@/lib/db';
+import { sql } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/events - Query historical events from SQLite.
+ * GET /api/events - Query historical events from Postgres.
  *
  * Query params:
  *   limit  - max rows (default 50, max 500)
@@ -32,44 +32,21 @@ export async function GET(request: NextRequest) {
   const from = searchParams.get('from');
   const to = searchParams.get('to');
 
-  const conditions: string[] = [];
-  const params: (string | number)[] = [];
-
-  if (type) {
-    conditions.push('type = ?');
-    params.push(type);
-  }
-  if (agent) {
-    conditions.push('agent = ?');
-    params.push(agent);
-  }
-  if (org) {
-    conditions.push('org = ?');
-    params.push(org);
-  }
-  if (from) {
-    conditions.push('timestamp >= ?');
-    params.push(from);
-  }
-  if (to) {
-    conditions.push('timestamp <= ?');
-    params.push(to);
-  }
-
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
   try {
-    const rows = db
-      .prepare(
-        `SELECT id, timestamp, agent, org, type, category, severity, data, message, source_file
-         FROM events ${where}
-         ORDER BY timestamp DESC
-         LIMIT ? OFFSET ?`
-      )
-      .all(...params, limit, offset);
+    const rows = await sql<Record<string, unknown>[]>`
+      SELECT id, timestamp, agent, org, type, category, severity, data, message, source_file
+      FROM events
+      WHERE TRUE
+      ${type ? sql`AND type = ${type}` : sql``}
+      ${agent ? sql`AND agent = ${agent}` : sql``}
+      ${org ? sql`AND org = ${org}` : sql``}
+      ${from ? sql`AND timestamp >= ${from}` : sql``}
+      ${to ? sql`AND timestamp <= ${to}` : sql``}
+      ORDER BY timestamp DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
 
-    // Parse the data column from JSON string back to object
-    const events = (rows as Record<string, unknown>[]).map((row) => ({
+    const events = rows.map((row) => ({
       ...row,
       data: row.data ? JSON.parse(row.data as string) : null,
     }));
