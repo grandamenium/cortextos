@@ -107,6 +107,11 @@ jobs:
       - name: Install psql client
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
 
+      - name: Bootstrap Supabase-managed roles (vanilla-pg only)
+        run: |
+          PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -f supabase/test-fixtures/00-supabase-roles.sql
+
       - name: Apply cortextos migrations
         run: |
           for m in supabase/migrations/0001_*.sql supabase/migrations/0002_*.sql supabase/migrations/0003_*.sql; do

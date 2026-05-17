@@ -46,6 +46,11 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
+echo "==> Bootstrapping Supabase-managed roles (vanilla-pg only)"
+docker compose -f "$COMPOSE_FILE" exec -T postgres \
+  psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  < supabase/test-fixtures/00-supabase-roles.sql >/dev/null
+
 echo "==> Applying migrations (0001-0003)"
 for m in supabase/migrations/0001_*.sql supabase/migrations/0002_*.sql supabase/migrations/0003_*.sql; do
   echo "    $(basename "$m")"
