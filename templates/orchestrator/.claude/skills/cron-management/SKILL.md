@@ -45,6 +45,11 @@ cortextos bus add-cron $CTX_AGENT_NAME morning-report "0 9 * * 1-5" "Generate an
 cortextos bus add-cron $CTX_AGENT_NAME weekly-summary "0 17 * * 5" "Compile and deliver the weekly summary."
 ```
 
+**Offset to avoid `:00` stampede** — when several crons share a high-frequency cadence (e.g. many agents on `0 */6 * * *`), the daemon fires them all in the same second. Stagger with a non-zero minute offset:
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME inbox-sweep "17 */2 * * *" "Sweep inbox for stale messages."
+```
+
 The daemon reloads automatically after `add-cron`. Confirm with `list-crons`.
 
 ---

@@ -148,6 +148,22 @@ describe('3.1 — templates/*/AGENTS.md Crons section + cron-management skill', 
         expect(content).toContain('cortextos bus get-cron-log');
       });
 
+      // Intent guards preserved from the original AGENTS.md "## Crons" block per
+      // Sam (codex-g) PR #473 adversarial review. Both were dropped in the
+      // initial reconcile pass; reinstated against the skill location.
+      it('documents `:00` stampede offset pattern (non-zero-minute cron example)', () => {
+        const content = readRequired(skillPath);
+        // Require both the stampede rationale and a concrete non-zero-minute
+        // cron expression (e.g. "17 */2 * * *") in an add-cron example.
+        expect(content).toMatch(/stampede|offset/i);
+        expect(content).toMatch(/add-cron[^\n]*"[1-9][0-9]* /);
+      });
+
+      it('documents dashboard Test Fire / test-cron-fire path', () => {
+        const content = readRequired(skillPath);
+        expect(content).toMatch(/Test Fire|test-cron-fire/);
+      });
+
       it('does not contain stale "CronList first" pattern', () => {
         const content = readRequired(skillPath);
         expect(STALE_CRONLIST_FIRST.test(content)).toBe(false);
