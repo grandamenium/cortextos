@@ -43,7 +43,10 @@ const EXCLUDED_DIR_PREFIXES = [
   '.venv/',
 ];
 
-const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-|ghp_|xoxb-|AKIA)/;
+// Require 20+ alphanumeric chars after sk- to avoid false positives on substrings
+// like task-id, task-history, task-poll, and instructional text like "(starts with sk-...)".
+// Real Anthropic/OpenAI tokens are 40+ chars; 20 chars eliminates all known false positives.
+const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-[A-Za-z0-9]{20,}|ghp_|xoxb-|AKIA)/;
 
 const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
 
