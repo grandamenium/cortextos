@@ -278,6 +278,10 @@ export interface SyncResult {
 export function syncAll(): SyncResult {
   const results: SyncResult = { tasks: 0, approvals: 0, events: 0, heartbeats: 0 };
 
+  // Sync root/default tasks (org='') — these live at CTX_ROOT/tasks/ and are
+  // not org-scoped. Fleet Tasks UI uses scope=root to display these separately.
+  results.tasks += syncTasks('');
+
   const orgs = getOrgs();
   for (const org of orgs) {
     results.tasks += syncTasks(org);
@@ -360,7 +364,8 @@ export function syncCostsLazy(): void {
 export function syncFile(filePath: string): void {
   if (filePath.includes('/tasks/') && filePath.endsWith('.json')) {
     const org = extractOrgFromPath(filePath);
-    if (org) syncTasks(org);
+    // Root tasks live at CTX_ROOT/tasks/ with no /orgs/ segment — org='' for these.
+    syncTasks(org ?? '');
   } else if (filePath.includes('/approvals/') && filePath.endsWith('.json')) {
     const org = extractOrgFromPath(filePath);
     if (org) syncApprovals(org);
