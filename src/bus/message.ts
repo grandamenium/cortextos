@@ -44,6 +44,24 @@ function signPayload(msgId: string, from: string, to: string, text: string): str
 }
 
 /**
+ * Security (B1): is the bus currently in HMAC grace-window mode?
+ * During grace, unsigned messages are logged but accepted. Post-grace, they're dropped.
+ * Controlled by env var CTX_BUS_AUTH_GRACE_UNTIL (ISO 8601 UTC timestamp).
+ * Returns false if env not set or timestamp invalid/past.
+ */
+function withinAuthGracePeriod(): boolean {
+  const grace = process.env['CTX_BUS_AUTH_GRACE_UNTIL'];
+  if (!grace) return false;
+  try {
+    const expiresAt = new Date(grace);
+    if (isNaN(expiresAt.getTime())) return false;
+    return new Date() < expiresAt;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Send a message to another agent's inbox.
  * Creates a JSON file with format: {pnum}-{epochMs}-from-{sender}-{rand5}.json
  * Identical to bash send-message.sh output.
@@ -126,19 +144,33 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
         const content = readFileSync(srcPath, 'utf-8');
         const msg: InboxMessage = JSON.parse(content);
 
-        // Security (H10): Verify HMAC signature if key is available and message has sig.
+        // Security (B1, supersedes H10): HMAC fail-closed when key present.
+        // Three states:
+        //  (1) no key on disk           → legacy install; accept all (warn once)
+        //  (2) key + msg.sig valid      → accept
+        //  (3) key + msg.sig invalid    → drop + move to .errors
+        //  (4) key + msg.sig missing    → grace-window check:
+        //         within grace → accept + log "accepted_grace"
+        //         post-grace   → drop + move to .errors
         if (signingKey && msg.sig) {
           const valid = hmacVerify(signingKey, signPayload(msg.id, msg.from, msg.to, msg.text), msg.sig);
           if (!valid) {
-            console.error(`[bus/message] SECURITY: Message ${msg.id} from '${msg.from}' failed HMAC verification — rejecting`);
+            console.error(`[bus/message] SECURITY: Message ${msg.id} from '${msg.from}' failed HMAC verification — dropping`);
             const errDir = join(inbox, '.errors');
             ensureDir(errDir);
             try { renameSync(srcPath, join(errDir, file)); } catch { /* ignore */ }
             continue;
           }
         } else if (signingKey && !msg.sig) {
-          // Signing key exists but message has no sig — legacy message, log warning
-          console.warn(`[bus/message] WARNING: Unsigned message ${msg.id} from '${msg.from}' — accepted (legacy)`);
+          if (withinAuthGracePeriod()) {
+            console.warn(`[bus/message] SECURITY: Unsigned message ${msg.id} from '${msg.from}' — accepted (grace window active, CTX_BUS_AUTH_GRACE_UNTIL=${process.env['CTX_BUS_AUTH_GRACE_UNTIL']})`);
+          } else {
+            console.error(`[bus/message] SECURITY: Unsigned message ${msg.id} from '${msg.from}' — DROPPING (post-grace; set CTX_BUS_AUTH_GRACE_UNTIL=<ISO> env var to allow temporarily during migration)`);
+            const errDir = join(inbox, '.errors');
+            ensureDir(errDir);
+            try { renameSync(srcPath, join(errDir, file)); } catch { /* ignore */ }
+            continue;
+          }
         }
 
         // Move to inflight
