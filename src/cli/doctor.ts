@@ -293,6 +293,7 @@ export const doctorCommand = new Command('doctor')
     // means last_idle.flag never writes, which is exactly the 2026-05-16
     // analyst/smith production incident. This catches drift before it
     // surfaces as "agent X stopped responding."
+    const orgsDir = join(frameworkRoot, 'orgs');
     if (existsSync(orgsDir)) {
       const HOOK_KEYS = ['Stop', 'PreCompact', 'SessionEnd', 'PreToolUse', 'PermissionRequest', 'UserPromptSubmit'];
       const driftFindings: Array<{ agent: string; org: string; missing: string[] }> = [];
