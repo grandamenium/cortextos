@@ -40,13 +40,39 @@
 const JWT_PATTERN = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
 
 /**
- * Redact JWT-shaped tokens from a PTY output chunk.
+ * Extended secret patterns (Wave-0 B3) — surfaced by 2026-05-17 security audit
+ * SEC-001/003: live OAuth + Telegram bot tokens were found in plaintext logs
+ * and outbound-messages.jsonl because JWT-only redaction missed them.
+ */
+// Anthropic OAuth + API key tokens. sk-ant-oat01-* is OAuth (long-lived per fleet);
+// sk-ant-api03-* is direct API key. Both ~100+ chars after the prefix.
+const ANTHROPIC_TOKEN_PATTERN = /sk-ant-(?:oat01|api03)-[A-Za-z0-9_-]{20,}/g;
+// OpenRouter sk-or-v1-... keys (occasionally injected for multi-LLM bridges).
+const OPENROUTER_TOKEN_PATTERN = /sk-or-v1-[A-Za-z0-9]{20,}/g;
+// Telegram bot token: <int>:<base64-ish> (35-char random suffix).
+// Anchor on word boundary to avoid false positives mid-hex-string.
+const TELEGRAM_BOT_TOKEN_PATTERN = /\b\d{6,}:[A-Za-z0-9_-]{30,}/g;
+// Bearer <token> in Authorization headers. Case-insensitive.
+const BEARER_HEADER_PATTERN = /[Bb]earer\s+[A-Za-z0-9._\-+\/=]{16,}/g;
+// Telegram API URLs that embed the bot token in the path: /bot<token>/<method>.
+// Strip the token portion so log lines like "fetch failed for https://api.telegram.org/bot<TOKEN>/getUpdates" don't leak.
+const TELEGRAM_BOT_URL_PATTERN = /\/bot\d+:[A-Za-z0-9_-]{30,}\//g;
+
+/**
+ * Redact secrets from a PTY output chunk.
  *
- * Replaces each JWT with the literal string `[REDACTED_JWT]` in-place.
- * Non-token content (TUI ANSI escapes, regular stdout, shell prompts,
- * etc.) passes through unchanged. Safe to call on every PTY chunk — the
- * regex is stateless and scales linearly with input length.
+ * Replaces each match with a literal `[REDACTED_*]` marker in-place.
+ * Order matters: more-specific patterns first (URL containing token before
+ * the bare token pattern) so we don't double-redact partial matches.
+ * Non-secret content passes through unchanged. Safe to call on every PTY
+ * chunk — all regexes are stateless and scale linearly with input length.
  */
 export function redactSecrets(data: string): string {
-  return data.replace(JWT_PATTERN, '[REDACTED_JWT]');
+  return data
+    .replace(TELEGRAM_BOT_URL_PATTERN, '/bot[REDACTED_TG_TOKEN]/')
+    .replace(ANTHROPIC_TOKEN_PATTERN, '[REDACTED_ANTHROPIC_TOKEN]')
+    .replace(OPENROUTER_TOKEN_PATTERN, '[REDACTED_OPENROUTER_TOKEN]')
+    .replace(BEARER_HEADER_PATTERN, 'Bearer [REDACTED_BEARER]')
+    .replace(TELEGRAM_BOT_TOKEN_PATTERN, '[REDACTED_TG_TOKEN]')
+    .replace(JWT_PATTERN, '[REDACTED_JWT]');
 }
