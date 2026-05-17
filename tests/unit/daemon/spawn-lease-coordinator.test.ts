@@ -29,11 +29,13 @@ const MOCK_LEASE = {
 const acquireMock = vi.fn();
 const renewMock = vi.fn();
 const releaseSessionMock = vi.fn();
+const listMock = vi.fn();
 
 vi.mock('../../../src/bus/spawn-claim.js', () => ({
   acquireSpawnLease: (...args: unknown[]) => acquireMock(...args),
   renewSpawnLease: (...args: unknown[]) => renewMock(...args),
   releaseSessionLeases: (...args: unknown[]) => releaseSessionMock(...args),
+  listSpawnLeases: (...args: unknown[]) => listMock(...args),
 }));
 
 interface EmittedEvent {
@@ -64,6 +66,9 @@ describe('SpawnLeaseCoordinator', () => {
     acquireMock.mockReset();
     renewMock.mockReset();
     releaseSessionMock.mockReset();
+    listMock.mockReset();
+    // Default: no prior holder. Steal-path tests override.
+    listMock.mockResolvedValue([]);
     originalDbUrl = process.env.SUPABASE_GBRAIN_DATABASE_URL;
     process.env.SUPABASE_GBRAIN_DATABASE_URL = 'postgres://mock';
   });
@@ -171,6 +176,124 @@ describe('SpawnLeaseCoordinator', () => {
         held_by: otherHolder,
         by: 'daemon-spawn:inst-A',
       });
+    });
+  });
+
+  describe('acquire — steal-by-liveness path', () => {
+    it('emits spawn_lease_expired for prior holder BEFORE spawn_lease_acquired when stealing', async () => {
+      const priorHolder = {
+        ...MOCK_LEASE,
+        id: 41,
+        holder_id: 'daemon-spawn:inst-DEAD:vid-g',
+        acquired_at: '2026-05-16T23:00:00Z',
+        expires_at: '2026-05-16T23:30:00Z', // expired
+      };
+      listMock.mockResolvedValueOnce([priorHolder]);
+      // SQL steal: result.acquired=true, result.lease.holder_id is now ours
+      acquireMock.mockResolvedValueOnce({
+        acquired: true,
+        lease: {
+          ...MOCK_LEASE,
+          holder_id: 'daemon-spawn:inst-A:vid-g',
+        },
+      });
+
+      const { coord, events } = makeCoordinator();
+      const r = await coord.acquireAgentSpawn('vid-g', '1evo');
+
+      expect(r.acquired).toBe(true);
+
+      // Two events in causal order: expired (prior) → acquired (us)
+      expect(events).toHaveLength(2);
+      expect(events[0].name).toBe('spawn_lease_expired');
+      expect(events[0].severity).toBe('warning');
+      expect(events[0].meta).toMatchObject({
+        reason: 'stolen_by_liveness',
+        lease_id: 41,
+        prior_holder: 'daemon-spawn:inst-DEAD:vid-g',
+        prior_acquired_at: '2026-05-16T23:00:00Z',
+        prior_expires_at: '2026-05-16T23:30:00Z',
+        artifact: 'agent:vid-g',
+        stolen_by: 'daemon-spawn:inst-A:vid-g',
+      });
+      expect(events[1].name).toBe('spawn_lease_acquired');
+      expect(events[1].severity).toBe('info');
+
+      releaseSessionMock.mockResolvedValueOnce(1);
+      await coord.releaseAgentSpawn('vid-g');
+    });
+
+    it('does NOT emit spawn_lease_expired when no prior holder existed (fresh slot)', async () => {
+      listMock.mockResolvedValueOnce([]);
+      acquireMock.mockResolvedValueOnce({ acquired: true, lease: MOCK_LEASE });
+
+      const { coord, events } = makeCoordinator();
+      await coord.acquireAgentSpawn('vid-g', '1evo');
+
+      // Only the acquired event — no expired
+      const expiredEvents = events.filter((e) => e.name === 'spawn_lease_expired');
+      expect(expiredEvents).toHaveLength(0);
+      expect(events).toHaveLength(1);
+      expect(events[0].name).toBe('spawn_lease_acquired');
+
+      releaseSessionMock.mockResolvedValueOnce(1);
+      await coord.releaseAgentSpawn('vid-g');
+    });
+
+    it('does NOT emit spawn_lease_expired when the prior holder is ourselves (renew-like re-acquire)', async () => {
+      // Same holderId as ours — this is the "slide expires_at" branch
+      listMock.mockResolvedValueOnce([
+        { ...MOCK_LEASE, holder_id: 'daemon-spawn:inst-A:vid-g' },
+      ]);
+      acquireMock.mockResolvedValueOnce({
+        acquired: true,
+        lease: { ...MOCK_LEASE, holder_id: 'daemon-spawn:inst-A:vid-g' },
+      });
+
+      const { coord, events } = makeCoordinator();
+      await coord.acquireAgentSpawn('vid-g', '1evo');
+
+      const expiredEvents = events.filter((e) => e.name === 'spawn_lease_expired');
+      expect(expiredEvents).toHaveLength(0);
+
+      releaseSessionMock.mockResolvedValueOnce(1);
+      await coord.releaseAgentSpawn('vid-g');
+    });
+
+    it('swallows listSpawnLeases errors silently (best-effort observability)', async () => {
+      listMock.mockRejectedValueOnce(new Error('connect ETIMEDOUT'));
+      acquireMock.mockResolvedValueOnce({ acquired: true, lease: MOCK_LEASE });
+
+      const { coord, events } = makeCoordinator();
+      const r = await coord.acquireAgentSpawn('vid-g', '1evo');
+
+      // Acquire still succeeds; only the acquired event fires (no expired,
+      // no leaked error event).
+      expect(r.acquired).toBe(true);
+      expect(events).toHaveLength(1);
+      expect(events[0].name).toBe('spawn_lease_acquired');
+
+      releaseSessionMock.mockResolvedValueOnce(1);
+      await coord.releaseAgentSpawn('vid-g');
+    });
+
+    it('does NOT emit spawn_lease_expired when we LOSE the acquire (live contender)', async () => {
+      const liveContender = {
+        ...MOCK_LEASE,
+        holder_id: 'daemon-spawn:inst-B:vid-g',
+      };
+      listMock.mockResolvedValueOnce([liveContender]);
+      // Active live holder = no-op acquire = acquired=false
+      acquireMock.mockResolvedValueOnce({ acquired: false, lease: liveContender });
+
+      const { coord, events } = makeCoordinator();
+      const r = await coord.acquireAgentSpawn('vid-g', '1evo');
+
+      expect(r.acquired).toBe(false);
+      // Only spawn_rejected — no expired event (the prior holder is still
+      // alive and holding; nothing was stolen).
+      expect(events).toHaveLength(1);
+      expect(events[0].name).toBe('spawn_rejected');
     });
   });
 

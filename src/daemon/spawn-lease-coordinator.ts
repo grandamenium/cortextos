@@ -2,6 +2,7 @@ import {
   acquireSpawnLease,
   renewSpawnLease,
   releaseSessionLeases,
+  listSpawnLeases,
   type SpawnLease,
 } from '../bus/spawn-claim.js';
 
@@ -117,6 +118,31 @@ export class SpawnLeaseCoordinator {
       return { acquired: true, holderId, lease: null };
     }
 
+    // Best-effort prior-holder lookup. v3 §1 Δ1 (line 57) requires
+    // `spawn_lease_expired` to fire on the PREVIOUS holder's side when their
+    // lease gets stolen via the SQL function's TTL-expiry steal branch.
+    // The renew loop on the prior daemon only notices later (or never, if
+    // the daemon is hung/dead) — without this preflight, the previous
+    // holder's lease can vanish with no event.
+    //
+    // List is best-effort observability: failures are silently swallowed so
+    // a transient DB blip doesn't block the acquire that follows. The window
+    // between list and acquire (race: prior holder voluntarily releases, or
+    // a third daemon races us) is acceptable — the event semantics are
+    // "someone was here, now they aren't, and we won the slot."
+    let priorHolder: SpawnLease | null = null;
+    try {
+      const priors = await listSpawnLeases({
+        projectId,
+        artifactKey,
+        state: 'active',
+      });
+      const other = priors.find((l) => l.holder_id !== holderId);
+      if (other) priorHolder = other;
+    } catch {
+      // observability-only; never block acquire
+    }
+
     // Defensive: never let a transient DB blip take the daemon down. Surface
     // the failure as a warn event but fail-open so the agent still starts.
     // The alternative (fail-closed) would block the whole fleet on a single
@@ -143,6 +169,23 @@ export class SpawnLeaseCoordinator {
     }
 
     if (result.acquired) {
+      // Previous-holder visibility event: if a different-identity holder was
+      // present pre-acquire and we now hold the slot, their lease was stolen
+      // via the SQL steal branch (TTL-expired active row → rewrite). Emit
+      // BEFORE spawn_lease_acquired so the event log reads "A's expired,
+      // then B took it" in causal order.
+      if (priorHolder && priorHolder.holder_id !== holderId) {
+        this.emit(agentName, 'spawn_lease_expired', 'warning', {
+          reason: 'stolen_by_liveness',
+          lease_id: priorHolder.id,
+          prior_holder: priorHolder.holder_id,
+          prior_acquired_at: priorHolder.acquired_at,
+          prior_expires_at: priorHolder.expires_at,
+          artifact: artifactKey,
+          stolen_by: holderId,
+        }, projectId);
+      }
+
       this.startRenewLoop(agentName, result.lease.id, holderId, projectId);
       this.emit(agentName, 'spawn_lease_acquired', 'info', {
         lease_id: result.lease.id,
