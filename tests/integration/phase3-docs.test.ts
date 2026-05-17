@@ -57,94 +57,100 @@ const STALE_CRONS_DIE_RESTART = /crons die on restart/i;
 // 3.1 — AGENTS.md Comprehensive Rewrite
 // ---------------------------------------------------------------------------
 
-describe('3.1 — templates/*/AGENTS.md External Persistent Crons section', () => {
+// Post-2ec77d1 ("strip CLAUDE.md to bootstrap + compress AGENTS.md cron
+// deep-dive") templates/*/AGENTS.md is intentionally a pointer: "## Crons"
+// section with the headline model + cross-ref to the cron-management skill.
+// The deep-dive examples / get-cron-log / test-fire details now live in
+// templates/*/.claude/skills/cron-management/SKILL.md. Migration-specific
+// guidance (".crons-migrated" marker, "automatic migration" wording) lives
+// in CRONS_MIGRATION_GUIDE.md and is asserted by the 3.4 block. Don't
+// double-cover here.
+describe('3.1 — templates/*/AGENTS.md Crons section + cron-management skill', () => {
   for (let i = 0; i < TEMPLATE_AGENTS_MD.length; i++) {
-    const filePath = TEMPLATE_AGENTS_MD[i];
+    const agentsPath = TEMPLATE_AGENTS_MD[i];
     const name = TEMPLATE_NAMES[i];
+    const skillPath = join(ROOT, 'templates', name, '.claude', 'skills', 'cron-management', 'SKILL.md');
 
     describe(`templates/${name}/AGENTS.md`, () => {
-      let content: string;
       it('file exists', () => {
-        expect(existsSync(filePath)).toBe(true);
-        content = readRequired(filePath);
+        expect(existsSync(agentsPath)).toBe(true);
       });
 
-      it('contains "## External Persistent Crons" section header', () => {
-        content = readRequired(filePath);
-        expect(content).toContain('## External Persistent Crons');
+      it('contains "## Crons" section header', () => {
+        const content = readRequired(agentsPath);
+        expect(content).toMatch(/^## Crons\b/m);
       });
 
       it('explains crons.json as the source of truth', () => {
-        content = readRequired(filePath);
+        const content = readRequired(agentsPath);
         expect(content).toContain('crons.json');
       });
 
-      it('explains daemon-managed model with retry logic', () => {
-        content = readRequired(filePath);
+      it('explains daemon-managed model', () => {
+        const content = readRequired(agentsPath);
         expect(content).toMatch(/daemon.*manages|daemon owns|daemon reads|daemon-managed/i);
       });
 
       it('distinguishes /loop (ephemeral) from persistent crons', () => {
-        content = readRequired(filePath);
+        const content = readRequired(agentsPath);
         expect(content).toContain('/loop');
         expect(content).toMatch(/session.only|ephemeral|dies when|dies on restart/i);
       });
 
-      it('mentions automatic migration from config.json', () => {
-        content = readRequired(filePath);
-        expect(content).toMatch(/auto.migrat|migrat.*automatic|migrat.*config\.json/i);
-      });
-
-      it('mentions .crons-migrated marker file', () => {
-        content = readRequired(filePath);
-        expect(content).toContain('.crons-migrated');
-      });
-
-      it('contains example 1: heartbeat interval cron with bus add-cron', () => {
-        content = readRequired(filePath);
-        expect(content).toMatch(/cortextos bus add-cron.*heartbeat.*[0-9]+h/);
-      });
-
-      it('contains example 2: cron expression schedule', () => {
-        content = readRequired(filePath);
-        // Should have a cron expression (5-field) example
-        expect(content).toMatch(/add-cron.*"[0-9*]+ [0-9*]+ \* \* /);
-      });
-
-      it('contains example 3: offset cron to avoid stampede', () => {
-        content = readRequired(filePath);
-        // Offset minute (non-zero) to avoid :00 stampede
-        expect(content).toMatch(/add-cron.*"[0-9]+ \*\//);
-      });
-
-      it('contains example 4: test-cron-fire command', () => {
-        content = readRequired(filePath);
-        expect(content).toContain('cortextos bus test-cron-fire');
-      });
-
-      it('contains "How to Verify" subsection with list-crons', () => {
-        content = readRequired(filePath);
+      it('references cortextos bus list-crons for verification', () => {
+        const content = readRequired(agentsPath);
         expect(content).toContain('cortextos bus list-crons');
       });
 
-      it('contains get-cron-log command for execution history', () => {
-        content = readRequired(filePath);
-        expect(content).toContain('cortextos bus get-cron-log');
-      });
-
       it('cross-references cron-management skill', () => {
-        content = readRequired(filePath);
+        const content = readRequired(agentsPath);
         expect(content).toContain('cron-management');
       });
 
       it('does not contain stale "CronList first" pattern', () => {
-        content = readRequired(filePath);
+        const content = readRequired(agentsPath);
         expect(STALE_CRONLIST_FIRST.test(content)).toBe(false);
       });
 
       it('does not claim crons die on restart', () => {
-        content = readRequired(filePath);
+        const content = readRequired(agentsPath);
         expect(STALE_CRONS_DIE_RESTART.test(content)).toBe(false);
+      });
+    });
+
+    describe(`templates/${name}/.claude/skills/cron-management/SKILL.md`, () => {
+      it('skill file exists', () => {
+        expect(existsSync(skillPath), `Missing skill: ${skillPath}`).toBe(true);
+      });
+
+      it('explains daemon-managed model', () => {
+        const content = readRequired(skillPath);
+        expect(content).toMatch(/daemon-managed|daemon.*manages|daemon owns/i);
+      });
+
+      it('contains heartbeat interval cron example (bus add-cron <name> <Nh>)', () => {
+        const content = readRequired(skillPath);
+        expect(content).toMatch(/cortextos bus add-cron.*heartbeat.*[0-9]+h/);
+      });
+
+      it('contains a 5-field cron expression example', () => {
+        const content = readRequired(skillPath);
+        expect(content).toMatch(/add-cron.*"[0-9*]+ [0-9*]+ \* \* /);
+      });
+
+      it('documents cortextos bus list-crons', () => {
+        const content = readRequired(skillPath);
+        expect(content).toContain('cortextos bus list-crons');
+      });
+
+      it('documents cortextos bus get-cron-log for execution history', () => {
+        const content = readRequired(skillPath);
+        expect(content).toContain('cortextos bus get-cron-log');
+      });
+
+      it('does not contain stale "CronList first" pattern', () => {
+        const content = readRequired(skillPath);
+        expect(STALE_CRONLIST_FIRST.test(content)).toBe(false);
       });
     });
   }
