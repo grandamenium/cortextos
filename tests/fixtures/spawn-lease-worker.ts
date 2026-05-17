@@ -82,11 +82,14 @@ async function main(): Promise<void> {
   const connStr = process.env.SUPABASE_GBRAIN_DATABASE_URL;
   if (connStr) {
     const insecure = process.env.PGSSL_NO_VERIFY === '1';
+    // PGSSL_DISABLE=1 — vanilla pg in CI has no TLS at all; relaxed-cert
+    // still attempts handshake. Symmetric to spawn-claim.ts production path.
+    const disableSsl = process.env.PGSSL_DISABLE === '1';
     setPgPool(new Pool({
       connectionString: connStr,
       max: 2,
       idleTimeoutMillis: 5_000,
-      ssl: insecure ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
+      ssl: disableSsl ? false : insecure ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
     }));
   }
 
