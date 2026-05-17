@@ -387,7 +387,8 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 ### PM2 Not Restarting Agent
 1. Check PM2 status: `pm2 list`
 2. Check PM2 logs: `pm2 logs <agent-process-name>`
-3. Regenerate ecosystem config: `cortextos ecosystem` then `pm2 restart ecosystem.config.js`
+3. Regenerate ecosystem config: `cortextos ecosystem`
+   ⚠️ NEVER run `pm2 restart ecosystem.config.js` or `pm2 restart cortextos-daemon` — this restarts the daemon and sends SIGTERM to all running agent sessions, causing a fleet-wide SESSION CONTINUATION flood. Use `cortextos start <agent>` or `cortextos enable <agent> --restart` for individual agent issues.
 4. If exit code shows throttling, wait 10s then `cortextos enable <agent> --restart`
 
 ### New Hook Not Firing After Wiring It Up
