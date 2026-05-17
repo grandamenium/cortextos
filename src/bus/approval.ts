@@ -261,11 +261,21 @@ export function updateApproval(
     const { unlinkSync } = require('fs');
     unlinkSync(filePath);
 
-    // Notify requesting agent via inbox
+    // Notify requesting agent via inbox.
+    // B1 (Sam CONCERN 1d): the derived decision inbox message inherits the
+    // approval's project_id so the requesting agent sees the same scope.
     if (approval.requesting_agent) {
       const noteText = note ? ` Note: ${note}` : '';
       const msg = `Approval decision: ${status.toUpperCase()}\napproval_id: ${approvalId}\ndecision: ${status}${noteText}`;
-      sendMessage(paths, 'system', approval.requesting_agent, 'urgent', msg);
+      sendMessage(
+        paths,
+        'system',
+        approval.requesting_agent,
+        'urgent',
+        msg,
+        undefined,
+        approval.project_id ?? null,
+      );
     }
   } catch (err) {
     throw new Error(`Approval ${approvalId} not found: ${err}`);

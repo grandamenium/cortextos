@@ -8,8 +8,9 @@ export { updateHeartbeat, readAllHeartbeats } from './heartbeat.js';
 export { createApproval, updateApproval, listPendingApprovals } from './approval.js';
 export {
   acquireSpawnLease,
+  renewSpawnLease,
   releaseSpawnLease,
-  heartbeatSpawnLease,
+  releaseSessionLeases,
   listSpawnLeases,
   expireSpawnLeases,
   getPgPool,
@@ -18,6 +19,8 @@ export {
   withPgClient,
   type SpawnLease,
   type AcquireResult,
+  type AcquireOpts,
+  type ListFilter,
 } from './spawn-claim.js';
 export {
   selfRestart,

@@ -2,24 +2,28 @@
 /**
  * Δ1 (Phase 2e) — Spawn-lease soak runner.
  *
- * Simulates concurrent claimers racing for the same (project_id, agent_name)
+ * Simulates concurrent claimers racing for the same (project_id, artifact_key)
  * slot to verify the atomicity claim of cortextos.acquire_spawn_lease at
- * scale. Each iteration: pick a random claimer holder_id, attempt acquire,
- * record outcome.
+ * scale. Reworked per Sam HOLD 2026-05-17 BLOCK 1+2:
+ *   - identity is (project_id, artifact_key), not (project_id, agent_name)
+ *   - acquire is a single INSERT ON CONFLICT, not SELECT-FOR-UPDATE + INSERT
  *
  * Invariants checked:
  *   1. Across all acquire calls in a given instant, at most ONE caller
- *      sees acquired=true for the SAME (slot, generation). Detected
- *      indirectly: every reported "winner" lease.holder_id must match a
- *      single most-recent winner during a contested window.
+ *      sees acquired=true for the SAME (slot, generation). When the slot
+ *      is contested by N workers and TTL never elapses mid-run, exactly
+ *      one row exists with the original winner's holder still on it (or
+ *      a steal-chain if TTL is short — both are atomic).
  *   2. Final table state shows exactly the most-recent winner, OR is
- *      empty if --release-after is set.
+ *      empty if --release-after is set (every worker's releaseSession
+ *      drained their leases).
  *   3. No DB-side errors thrown (atomic function never crashes).
  *
  * Usage:
  *   SUPABASE_GBRAIN_DATABASE_URL=... tsx scripts/spawn-lease-soak.ts \
  *     [--workers 8] [--iterations 200] [--ttl 5] \
- *     [--agent soak-target] [--project null|<id>] [--release-after]
+ *     [--artifact agent:soak-target] [--task-class spawn] \
+ *     [--project null|<id>] [--release-after]
  *
  * Default: 8 workers × 200 iters × 5s TTL → ~1600 acquires against one
  * slot. With pgbouncer pooling this finishes in 30-90s depending on
@@ -28,7 +32,7 @@
 import { Pool } from 'pg';
 import {
   acquireSpawnLease,
-  releaseSpawnLease,
+  releaseSessionLeases,
   listSpawnLeases,
   setPgPool,
   closePgPool,
@@ -38,7 +42,8 @@ type Args = {
   workers: number;
   iterations: number;
   ttl: number;
-  agent: string;
+  artifactKey: string;
+  taskClass: string;
   project: string | null;
   releaseAfter: boolean;
 };
@@ -48,7 +53,8 @@ function parseArgs(argv: string[]): Args {
     workers: 8,
     iterations: 200,
     ttl: 5,
-    agent: 'soak-target',
+    artifactKey: 'agent:soak-target',
+    taskClass: 'spawn',
     project: null,
     releaseAfter: false,
   };
@@ -59,12 +65,13 @@ function parseArgs(argv: string[]): Args {
       case '--workers':       out.workers = parseInt(next(), 10); break;
       case '--iterations':    out.iterations = parseInt(next(), 10); break;
       case '--ttl':           out.ttl = parseInt(next(), 10); break;
-      case '--agent':         out.agent = next(); break;
+      case '--artifact':      out.artifactKey = next(); break;
+      case '--task-class':    out.taskClass = next(); break;
       case '--project':       { const p = next(); out.project = p === 'null' ? null : p; break; }
       case '--release-after': out.releaseAfter = true; break;
       case '--help':
       case '-h':
-        console.log('Usage: tsx scripts/spawn-lease-soak.ts [--workers N] [--iterations N] [--ttl S] [--agent NAME] [--project null|ID] [--release-after]');
+        console.log('Usage: tsx scripts/spawn-lease-soak.ts [--workers N] [--iterations N] [--ttl S] [--artifact KEY] [--task-class CLASS] [--project null|ID] [--release-after]');
         process.exit(0);
     }
   }
@@ -78,6 +85,7 @@ interface WorkerStats {
   losses: number;
   errors: number;
   errorMessages: string[];
+  holderId: string;
 }
 
 async function runWorker(
@@ -93,13 +101,21 @@ async function runWorker(
     losses: 0,
     errors: 0,
     errorMessages: [],
+    holderId,
   };
   results[workerId] = stats;
 
   for (let i = 0; i < args.iterations; i++) {
     stats.attempts++;
     try {
-      const r = await acquireSpawnLease(args.project, args.agent, holderId, args.ttl, `soak-${workerId}`);
+      const r = await acquireSpawnLease({
+        projectId: args.project,
+        artifactKey: args.artifactKey,
+        taskClass: args.taskClass,
+        holderId,
+        ttlSeconds: args.ttl,
+        reason: `soak-${workerId}`,
+      });
       if (r.acquired) stats.wins++;
       else stats.losses++;
     } catch (err) {
@@ -107,13 +123,14 @@ async function runWorker(
       const msg = err instanceof Error ? err.message : String(err);
       if (stats.errorMessages.length < 5) stats.errorMessages.push(msg);
     }
-    // Tiny jitter so workers don't lockstep
+    // Tiny jitter so workers don't lockstep.
     await new Promise((r) => setTimeout(r, Math.random() * 3));
   }
 
   if (args.releaseAfter) {
-    // Best-effort release; only succeeds if this worker still holds it
-    try { await releaseSpawnLease(args.project, args.agent, holderId); } catch { /* ignore */ }
+    // Best-effort mass-release of every lease this worker still holds
+    // (its session). Drains the tombstones cleanly.
+    try { await releaseSessionLeases(holderId); } catch { /* ignore */ }
   }
 }
 
@@ -136,16 +153,18 @@ async function main(): Promise<void> {
   console.log(`  workers      : ${args.workers}`);
   console.log(`  iterations   : ${args.iterations} per worker = ${args.workers * args.iterations} total acquires`);
   console.log(`  ttl_seconds  : ${args.ttl}`);
-  console.log(`  agent        : ${args.agent}`);
+  console.log(`  artifact_key : ${args.artifactKey}`);
+  console.log(`  task_class   : ${args.taskClass}`);
   console.log(`  project_id   : ${args.project === null ? '<null>' : args.project}`);
   console.log(`  releaseAfter : ${args.releaseAfter}`);
 
-  // Clean slate for the target slot.
+  // Clean slate for the target slot — drop active AND tombstone rows so the
+  // partial-unique invariant starts uncontested.
   await pool.query(
     `delete from cortextos.spawn_leases
-     where agent_name = $1
+     where artifact_key = $1
        and project_id is not distinct from $2`,
-    [args.agent, args.project],
+    [args.artifactKey, args.project],
   );
 
   const results: WorkerStats[] = [];
@@ -171,11 +190,11 @@ async function main(): Promise<void> {
   console.log(`  elapsed: ${(elapsedMs / 1000).toFixed(2)}s  (${(totalAttempts / (elapsedMs / 1000)).toFixed(1)} acquires/sec)`);
 
   const finalState = await listSpawnLeases({
-    agentName: args.agent,
+    artifactKey: args.artifactKey,
     projectId: args.project,
   });
 
-  console.log('\n--- final table state ---');
+  console.log('\n--- final table state (active rows) ---');
   console.log(`  rows: ${finalState.length}`);
   if (finalState.length > 0) console.log(`  ${JSON.stringify(finalState[0])}`);
 
@@ -187,12 +206,12 @@ async function main(): Promise<void> {
   }
   if (args.releaseAfter) {
     if (finalState.length !== 0) {
-      console.error(`  FAIL: expected 0 rows after release-after, got ${finalState.length}`);
+      console.error(`  FAIL: expected 0 active rows after release-after, got ${finalState.length}`);
       pass = false;
     }
   } else {
     if (finalState.length !== 1) {
-      console.error(`  FAIL: expected exactly 1 row at end (most-recent winner), got ${finalState.length}`);
+      console.error(`  FAIL: expected exactly 1 active row at end (most-recent winner), got ${finalState.length}`);
       pass = false;
     }
   }

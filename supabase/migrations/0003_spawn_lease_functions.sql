@@ -1,36 +1,37 @@
 -- 0003_spawn_lease_functions.sql
 -- Phase 2e (Δ1) — atomic lease functions on cortextos.spawn_leases.
 --
--- The acquire/release/heartbeat operations MUST be atomic at the database
--- layer; a naive SELECT-then-UPDATE race would let two daemons believe
--- they hold the same lease during the window. Functions wrap the atomic
--- INSERT ... ON CONFLICT logic so the client-side library can stay simple.
+-- Reworked per Sam's HOLD review 2026-05-17 BLOCK 2:
+--   acquire is now a single INSERT ... ON CONFLICT against the partial
+--   unique index `spawn_leases_active_artifact_uniq` — atomic against the
+--   absent-row race that broke the original SELECT-FOR-UPDATE-then-INSERT.
 --
--- All functions are SECURITY INVOKER (default) — they run with the caller's
--- (service_role) privileges, which already has full access per migration
--- 0001. No SECURITY DEFINER bypass needed at this phase.
+-- Outputs follow the (acquired boolean, row) pair convention; the SQL
+-- function returns a SETOF composite that the wrapper unpacks into
+-- { acquired, lease }. Same shape as the original — only the inputs change.
 
 -- ---------------------------------------------------------------------------
--- acquire_spawn_lease(project_id, agent, holder, ttl, reason)
+-- acquire_spawn_lease
 --
--- Returns the (now-current) lease row. Behavior:
---   - If no live lease exists for (project_id, agent) — creates one held
---     by `holder`, slides expires_at to now()+ttl.
---   - If a live lease exists held by the SAME holder — refreshes
---     expires_at = now()+ttl (sliding window), keeps acquired_at.
---   - If a live lease exists held by a DIFFERENT holder — DOES NOT update,
---     returns the existing row. Caller compares returned holder_id to its
---     own to detect conflict.
---   - If an EXPIRED lease exists (expires_at <= now()) — treats it as
---     stolen-by-expiry: rewrites holder/acquired_at/expires_at to the
---     new claim.
+-- Atomic insert-or-conditional-update against the active-row slot.
 --
--- The function returns the row that is now in the table — caller MUST
--- check returned.holder_id == requested_holder to confirm acquisition.
+-- Semantics:
+--   no active row              → INSERT, caller wins.
+--   active row, same holder    → refresh expires_at + ttl_seconds + reason;
+--                                keep acquired_at sticky. caller wins.
+--   active row, expired        → steal: rewrite holder/acquired_at/expires_at.
+--                                caller wins (note: row id stays the same
+--                                because the row was never released).
+--   active row, different live → no-op write-back; caller LOSES.
+--                                Returned row.holder_id ≠ caller → acquired=false.
+--
+-- All three outcomes complete in a single SQL statement, so there is no
+-- window for two concurrent callers to both believe they won.
 -- ---------------------------------------------------------------------------
 create or replace function cortextos.acquire_spawn_lease(
   p_project_id   text,
-  p_agent_name   text,
+  p_artifact_key text,
+  p_task_class   text,
   p_holder_id    text,
   p_ttl_seconds  integer default 90,
   p_reason       text default null
@@ -39,161 +40,217 @@ returns cortextos.spawn_leases
 language plpgsql
 as $$
 declare
-  existing cortextos.spawn_leases;
-  result   cortextos.spawn_leases;
+  v_now timestamptz := clock_timestamp();
+  v_row cortextos.spawn_leases;
 begin
-  if p_ttl_seconds <= 0 then
+  -- Input validation.
+  if p_ttl_seconds is null or p_ttl_seconds <= 0 then
     raise exception 'ttl_seconds must be positive, got %', p_ttl_seconds;
   end if;
-  if p_agent_name is null or p_agent_name = '' then
-    raise exception 'agent_name must be non-empty';
+  if p_artifact_key is null or length(p_artifact_key) = 0 then
+    raise exception 'artifact_key must be non-empty';
   end if;
-  if p_holder_id is null or p_holder_id = '' then
+  if p_task_class is null or length(p_task_class) = 0 then
+    raise exception 'task_class must be non-empty';
+  end if;
+  if p_holder_id is null or length(p_holder_id) = 0 then
     raise exception 'holder_id must be non-empty';
   end if;
 
-  -- Use FOR UPDATE to serialize against concurrent acquires on the same row.
-  -- NULL project_id requires IS NOT DISTINCT FROM to match the NULL slot.
-  select * into existing
-  from cortextos.spawn_leases
-  where project_id is not distinct from p_project_id
-    and agent_name = p_agent_name
-  for update;
+  -- Single-statement insert-or-conditional-update.
+  -- The partial unique index spawn_leases_active_artifact_uniq is the
+  -- conflict target; we name (project_id, artifact_key) WHERE released_at IS NULL
+  -- to match it. Postgres detects partial-unique conflicts by inferring the
+  -- predicate from the index — only one such index can match per ON CONFLICT.
+  insert into cortextos.spawn_leases
+    (project_id, artifact_key, task_class, holder_id,
+     acquired_at, expires_at, ttl_seconds, reason)
+  values
+    (p_project_id, p_artifact_key, p_task_class, p_holder_id,
+     v_now, v_now + make_interval(secs => p_ttl_seconds),
+     p_ttl_seconds, p_reason)
+  on conflict (project_id, artifact_key) where released_at is null
+  do update set
+    holder_id   = case
+                    when cortextos.spawn_leases.holder_id = excluded.holder_id
+                      then excluded.holder_id
+                    when cortextos.spawn_leases.expires_at <= v_now
+                      then excluded.holder_id
+                    else cortextos.spawn_leases.holder_id
+                  end,
+    acquired_at = case
+                    when cortextos.spawn_leases.holder_id = excluded.holder_id
+                      then cortextos.spawn_leases.acquired_at   -- sticky
+                    when cortextos.spawn_leases.expires_at <= v_now
+                      then v_now                                  -- steal
+                    else cortextos.spawn_leases.acquired_at
+                  end,
+    expires_at  = case
+                    when cortextos.spawn_leases.holder_id = excluded.holder_id
+                      then excluded.expires_at
+                    when cortextos.spawn_leases.expires_at <= v_now
+                      then excluded.expires_at
+                    else cortextos.spawn_leases.expires_at
+                  end,
+    ttl_seconds = case
+                    when cortextos.spawn_leases.holder_id = excluded.holder_id
+                      then excluded.ttl_seconds
+                    when cortextos.spawn_leases.expires_at <= v_now
+                      then excluded.ttl_seconds
+                    else cortextos.spawn_leases.ttl_seconds
+                  end,
+    task_class  = case
+                    when cortextos.spawn_leases.holder_id = excluded.holder_id
+                      then excluded.task_class
+                    when cortextos.spawn_leases.expires_at <= v_now
+                      then excluded.task_class
+                    else cortextos.spawn_leases.task_class
+                  end,
+    reason      = case
+                    when cortextos.spawn_leases.holder_id = excluded.holder_id
+                      then coalesce(excluded.reason, cortextos.spawn_leases.reason)
+                    when cortextos.spawn_leases.expires_at <= v_now
+                      then excluded.reason
+                    else cortextos.spawn_leases.reason
+                  end
+  returning * into v_row;
 
-  if not found then
-    -- No row exists — insert fresh.
-    insert into cortextos.spawn_leases
-      (project_id, agent_name, holder_id, acquired_at, expires_at, ttl_seconds, reason)
-    values
-      (p_project_id, p_agent_name, p_holder_id,
-       now(), now() + (p_ttl_seconds || ' seconds')::interval,
-       p_ttl_seconds, p_reason)
-    returning * into result;
-    return result;
-  end if;
-
-  if existing.expires_at <= now() then
-    -- Expired — steal it.
-    update cortextos.spawn_leases
-    set holder_id   = p_holder_id,
-        acquired_at = now(),
-        expires_at  = now() + (p_ttl_seconds || ' seconds')::interval,
-        ttl_seconds = p_ttl_seconds,
-        reason      = p_reason
-    where project_id is not distinct from p_project_id
-      and agent_name = p_agent_name
-    returning * into result;
-    return result;
-  end if;
-
-  if existing.holder_id = p_holder_id then
-    -- Same holder — slide expires_at, keep acquired_at.
-    update cortextos.spawn_leases
-    set expires_at  = now() + (p_ttl_seconds || ' seconds')::interval,
-        ttl_seconds = p_ttl_seconds,
-        reason      = coalesce(p_reason, existing.reason)
-    where project_id is not distinct from p_project_id
-      and agent_name = p_agent_name
-    returning * into result;
-    return result;
-  end if;
-
-  -- Live lease held by a different holder — no change, return existing.
-  return existing;
+  -- Caller compares returned.holder_id to its own to detect win vs loss.
+  return v_row;
 end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- release_spawn_lease(project_id, agent, holder)
+-- renew_spawn_lease(lease_id, holder_id, ttl_seconds)
 --
--- Drops the lease IFF the caller is the current holder AND it has not
--- expired. Returns true on successful release, false otherwise (lease was
--- not held by this caller, or already expired/gone — caller can treat the
--- absent case as "already released" idempotently).
+-- Slides expires_at forward iff the caller still holds the lease AND it is
+-- still active (released_at IS NULL) AND it has not yet expired. Returns
+-- the refreshed lease row, or NULL row when the caller no longer holds it.
 -- ---------------------------------------------------------------------------
-create or replace function cortextos.release_spawn_lease(
-  p_project_id text,
-  p_agent_name text,
-  p_holder_id  text
-)
-returns boolean
-language plpgsql
-as $$
-declare
-  deleted_count integer;
-begin
-  delete from cortextos.spawn_leases
-  where project_id is not distinct from p_project_id
-    and agent_name = p_agent_name
-    and holder_id  = p_holder_id
-    and expires_at > now();
-
-  get diagnostics deleted_count = row_count;
-  return deleted_count > 0;
-end;
-$$;
-
--- ---------------------------------------------------------------------------
--- heartbeat_spawn_lease(project_id, agent, holder, ttl)
---
--- Extends an existing live lease held by the caller by sliding expires_at
--- forward by `ttl` seconds. Returns the row on success, NULL on failure
--- (lease not held by caller, expired, or absent).
--- ---------------------------------------------------------------------------
-create or replace function cortextos.heartbeat_spawn_lease(
-  p_project_id   text,
-  p_agent_name   text,
-  p_holder_id    text,
-  p_ttl_seconds  integer default 90
+create or replace function cortextos.renew_spawn_lease(
+  p_lease_id    bigint,
+  p_holder_id   text,
+  p_ttl_seconds integer default 90
 )
 returns cortextos.spawn_leases
 language plpgsql
 as $$
 declare
-  result cortextos.spawn_leases;
+  v_now timestamptz := clock_timestamp();
+  v_row cortextos.spawn_leases;
 begin
-  if p_ttl_seconds <= 0 then
+  if p_ttl_seconds is null or p_ttl_seconds <= 0 then
     raise exception 'ttl_seconds must be positive, got %', p_ttl_seconds;
+  end if;
+  if p_holder_id is null or length(p_holder_id) = 0 then
+    raise exception 'holder_id must be non-empty';
   end if;
 
   update cortextos.spawn_leases
-  set expires_at  = now() + (p_ttl_seconds || ' seconds')::interval,
+  set expires_at  = v_now + make_interval(secs => p_ttl_seconds),
       ttl_seconds = p_ttl_seconds
-  where project_id is not distinct from p_project_id
-    and agent_name = p_agent_name
-    and holder_id  = p_holder_id
-    and expires_at > now()
-  returning * into result;
+  where id          = p_lease_id
+    and holder_id   = p_holder_id
+    and released_at is null
+    and expires_at  > v_now
+  returning * into v_row;
 
-  return result;  -- NULL when no row matched
+  return v_row;  -- NULL row when no match
 end;
 $$;
 
 -- ---------------------------------------------------------------------------
--- expire_spawn_leases() — sweep helper for observability and cleanup.
+-- release_spawn_lease(lease_id, holder_id)
 --
--- Deletes all rows where expires_at <= now(). Returns the count purged.
--- Safe to run on a poll cadence (cron / daemon background task). Acquire
--- treats expired-and-still-present rows as steal-able anyway, so the sweep
--- is purely housekeeping — it does NOT change correctness, only table size.
+-- Soft-deletes the lease (set released_at = now()) iff the caller is the
+-- current holder AND the lease is still active. Returns true on release,
+-- false on no-op. Idempotent.
+-- ---------------------------------------------------------------------------
+create or replace function cortextos.release_spawn_lease(
+  p_lease_id  bigint,
+  p_holder_id text
+)
+returns boolean
+language plpgsql
+as $$
+declare
+  v_now timestamptz := clock_timestamp();
+  v_count integer;
+begin
+  if p_holder_id is null or length(p_holder_id) = 0 then
+    raise exception 'holder_id must be non-empty';
+  end if;
+
+  update cortextos.spawn_leases
+  set released_at = v_now
+  where id          = p_lease_id
+    and holder_id   = p_holder_id
+    and released_at is null;
+
+  get diagnostics v_count = row_count;
+  return v_count > 0;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- release_session_leases(holder_id)
+--
+-- Mass-release: soft-deletes EVERY active lease held by `holder_id`. Used by
+-- session stop hooks so a dying parent agent doesn't strand its claims.
+-- Returns the count of leases released.
+-- ---------------------------------------------------------------------------
+create or replace function cortextos.release_session_leases(
+  p_holder_id text
+)
+returns integer
+language plpgsql
+as $$
+declare
+  v_now timestamptz := clock_timestamp();
+  v_count integer;
+begin
+  if p_holder_id is null or length(p_holder_id) = 0 then
+    raise exception 'holder_id must be non-empty';
+  end if;
+
+  update cortextos.spawn_leases
+  set released_at = v_now
+  where holder_id   = p_holder_id
+    and released_at is null;
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- expire_spawn_leases() — sweep helper.
+--
+-- HARD-deletes tombstones (released >24h ago) AND old expired-but-never-
+-- released rows (>24h past expiry). Active rows are never touched even if
+-- their TTL has elapsed — acquire takes care of those via the steal branch.
+-- Returns the count purged.
 -- ---------------------------------------------------------------------------
 create or replace function cortextos.expire_spawn_leases()
 returns integer
 language plpgsql
 as $$
 declare
-  purged integer;
+  v_now timestamptz := clock_timestamp();
+  v_count integer;
 begin
   delete from cortextos.spawn_leases
-  where expires_at <= now();
+  where (released_at is not null and released_at < v_now - interval '24 hours')
+     or (released_at is null      and expires_at  < v_now - interval '24 hours');
 
-  get diagnostics purged = row_count;
-  return purged;
+  get diagnostics v_count = row_count;
+  return v_count;
 end;
 $$;
 
 -- Grants — service_role only (no anon/authenticated).
-grant execute on function cortextos.acquire_spawn_lease(text, text, text, integer, text)   to service_role;
-grant execute on function cortextos.release_spawn_lease(text, text, text)                  to service_role;
-grant execute on function cortextos.heartbeat_spawn_lease(text, text, text, integer)       to service_role;
-grant execute on function cortextos.expire_spawn_leases()                                  to service_role;
+grant execute on function cortextos.acquire_spawn_lease(text, text, text, text, integer, text) to service_role;
+grant execute on function cortextos.renew_spawn_lease(bigint, text, integer)                    to service_role;
+grant execute on function cortextos.release_spawn_lease(bigint, text)                            to service_role;
+grant execute on function cortextos.release_session_leases(text)                                 to service_role;
+grant execute on function cortextos.expire_spawn_leases()                                        to service_role;

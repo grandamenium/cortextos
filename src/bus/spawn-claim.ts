@@ -1,21 +1,29 @@
 import { Pool, type PoolClient } from 'pg';
 
 /**
- * Δ1 (Phase 2e) — Postgres-backed spawn lease.
+ * Δ1 (Phase 2e) — Postgres-backed spawn lease, reworked per Sam HOLD 2026-05-17.
  *
- * Replaces the file-based per-agent lock in the daemon spawn path. Lease
- * is keyed by (project_id, agent_name) where project_id may be NULL
- * (unscoped/fleet-wide) per B1 NULL-tolerant project_id conventions.
+ * Replaces the file-based per-agent lock used in the daemon spawn path AND
+ * the new direct-spawn lease helper used by persistent Opus agents (per
+ * .claude/rules/codex-subagent-direct-spawn.md G1).
  *
- * Atomic operations are implemented as SQL functions in migration 0003
- * (cortextos.acquire_spawn_lease / release_spawn_lease /
- * heartbeat_spawn_lease / expire_spawn_leases). This module is a thin
- * pg-client wrapper — no client-side race logic.
+ * Identity model (vs v1 of this module):
+ *   was:  lease per (project_id, agent_name)
+ *   now:  lease per ACTIVE (project_id, artifact_key); released rows
+ *         drop out of the partial unique index. lease_id (bigserial) is
+ *         the renew/release handle so callers don't re-supply the composite
+ *         key on every heartbeat.
+ *
+ * Atomicity guarantee: acquire is a single INSERT ... ON CONFLICT against
+ * the partial unique index `spawn_leases_active_artifact_uniq`. Two
+ * concurrent first-acquires against the same fresh slot serialize at the
+ * index — one wins via INSERT, the other goes through DO UPDATE and reads
+ * the existing row as the "current holder". See migration 0003 acquire
+ * function for the CASE-per-column logic.
  *
  * Why pg and not supabase-js: the cortextos schema is NOT exposed via
  * PostgREST (intentional — service-role-only per top-g 2026-05-17 signoff).
- * Direct pg connection over the Supabase pooled connection string
- * sidesteps PostgREST entirely.
+ * Direct pg over the pooled connection string sidesteps PostgREST entirely.
  *
  * Required env (loaded from /root/cortextos/orgs/1evo/secrets.env in
  * production; caller must source before invocation):
@@ -23,37 +31,47 @@ import { Pool, type PoolClient } from 'pg';
  */
 
 export interface SpawnLease {
+  id: number;                  // surrogate PK; used by renew / release
   project_id: string | null;
-  agent_name: string;
+  artifact_key: string;
+  task_class: string;
   holder_id: string;
-  acquired_at: string; // ISO 8601 (pg TIMESTAMPTZ → ISO via json serialization)
+  acquired_at: string;         // ISO 8601
   expires_at: string;
   ttl_seconds: number;
   reason: string | null;
+  released_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface AcquireResult {
-  /** True iff THIS caller now holds the lease (current.holder_id === holder). */
+  /** True iff this caller now holds the lease. Caller MUST branch on this. */
   acquired: boolean;
-  /** Whichever lease row is currently in the table — may be held by someone else. */
+  /** The current row in the table — may be held by someone else when acquired=false. */
   lease: SpawnLease;
+}
+
+export interface ListFilter {
+  projectId?: string | null;
+  artifactKey?: string;
+  taskClass?: string;
+  holderId?: string;
+  /** 'active' = released_at IS NULL (default); 'released' = NOT NULL; 'all' = both. */
+  state?: 'active' | 'released' | 'all';
 }
 
 let cachedPool: Pool | null = null;
 
 /**
- * Lazy singleton pg Pool. Reads SUPABASE_GBRAIN_DATABASE_URL from
- * process.env. Caller is responsible for sourcing secrets.env before
- * invocation.
+ * Lazy singleton pg Pool. Verified TLS (rejectUnauthorized=true) against the
+ * Supabase pooler chain — Supabase certs are publicly-trusted, so the system
+ * trust store validates them without a custom CA bundle.
  *
- * Why pooled: spawn-lease ops are short, frequent, called by the daemon
- * dispatcher on every spawn attempt. A pool amortizes TCP/TLS handshake
- * cost. Default max=10 connections is fine for the per-host daemon.
- *
- * For tests / alternate hosts, pass an override pool via `setPgPool`
- * instead of mutating env.
+ * If a deployment hits cert-validation issues (e.g. an outdated trust store
+ * or a non-standard Supabase pooler), set PGSSL_NO_VERIFY=1 explicitly to
+ * downgrade. We do NOT default to insecure TLS — that was the v1 mistake
+ * Sam flagged as CONCERN 2.
  */
 export function getPgPool(): Pool {
   if (cachedPool) return cachedPool;
@@ -66,27 +84,24 @@ export function getPgPool(): Pool {
     );
   }
 
+  const insecure = process.env.PGSSL_NO_VERIFY === '1';
+
   cachedPool = new Pool({
     connectionString: connStr,
     max: 10,
     idleTimeoutMillis: 30_000,
-    // Supabase requires TLS; ssl=true uses the system trust store.
-    ssl: { rejectUnauthorized: false },
+    // Verified TLS by default. PGSSL_NO_VERIFY=1 is the explicit escape hatch.
+    ssl: insecure ? { rejectUnauthorized: false } : { rejectUnauthorized: true },
   });
   return cachedPool;
 }
 
-/**
- * Inject an external pool (tests, alternate hosts). Set null to clear and
- * fall back to env-derived singleton on next call.
- */
+/** Inject a pool (tests / alt hosts). Null clears so next call rebuilds. */
 export function setPgPool(pool: Pool | null): void {
   cachedPool = pool;
 }
 
-/**
- * Tear down the cached pool. Call on process shutdown to flush sockets.
- */
+/** Tear down the cached pool. Call on process shutdown / CLI exit. */
 export async function closePgPool(): Promise<void> {
   if (cachedPool) {
     const p = cachedPool;
@@ -96,9 +111,8 @@ export async function closePgPool(): Promise<void> {
 }
 
 /**
- * Normalize a pg row (with Date objects on timestamptz columns) into the
- * ISO-string SpawnLease shape so JSON.stringify produces stable output
- * across local/CI/prod.
+ * Normalize a pg row into the ISO-string SpawnLease shape so JSON.stringify
+ * produces stable output across local/CI/prod.
  */
 function normalizeLease(row: Record<string, unknown>): SpawnLease {
   const toIso = (v: unknown): string => {
@@ -106,44 +120,56 @@ function normalizeLease(row: Record<string, unknown>): SpawnLease {
     if (typeof v === 'string') return v;
     throw new Error(`spawn-claim: expected Date/string, got ${typeof v}`);
   };
+  const toIsoNullable = (v: unknown): string | null => {
+    if (v === null || v === undefined) return null;
+    return toIso(v);
+  };
   return {
+    id: typeof row.id === 'number' ? row.id : Number(row.id),
     project_id: (row.project_id as string | null) ?? null,
-    agent_name: row.agent_name as string,
+    artifact_key: row.artifact_key as string,
+    task_class: row.task_class as string,
     holder_id: row.holder_id as string,
     acquired_at: toIso(row.acquired_at),
     expires_at: toIso(row.expires_at),
     ttl_seconds: row.ttl_seconds as number,
     reason: (row.reason as string | null) ?? null,
+    released_at: toIsoNullable(row.released_at),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
   };
 }
 
+export interface AcquireOpts {
+  projectId: string | null;
+  artifactKey: string;
+  taskClass: string;
+  holderId: string;
+  ttlSeconds?: number;
+  reason?: string | null;
+}
+
 /**
- * Attempt to acquire a lease for (projectId, agentName) on behalf of holder.
+ * Attempt to acquire the active lease for (projectId, artifactKey).
  *
- * Semantics (enforced by cortextos.acquire_spawn_lease):
- *   - No row exists → create, holder wins.
- *   - Live lease held by SAME holder → slide expires_at forward, holder wins.
- *   - Live lease held by DIFFERENT holder → no change, holder LOSES; returned
- *     lease.holder_id will not match holder.
- *   - Expired lease → steal regardless of prior holder, new caller wins.
+ * Semantics (enforced by cortextos.acquire_spawn_lease, atomic INSERT ON CONFLICT):
+ *   - No active row → insert; caller wins.
+ *   - Active row, same holder → slide expires_at, keep acquired_at; caller wins.
+ *   - Active row, expired → steal (rewrite holder/acquired_at/expires_at); caller wins.
+ *   - Active row, different live holder → no-op; caller LOSES.
  *
- * Returns { acquired, lease }. Caller checks `acquired` to branch — the
- * lease row is always populated (even on loss) so callers can log who is
- * currently holding it.
+ * Returns { acquired, lease }. The lease row is ALWAYS populated — branch on
+ * `acquired` to decide. lease.id is the handle for renew/release.
  */
-export async function acquireSpawnLease(
-  projectId: string | null,
-  agentName: string,
-  holderId: string,
-  ttlSeconds: number = 90,
-  reason: string | null = null,
-): Promise<AcquireResult> {
+export async function acquireSpawnLease(opts: AcquireOpts): Promise<AcquireResult> {
+  const {
+    projectId, artifactKey, taskClass, holderId,
+    ttlSeconds = 90, reason = null,
+  } = opts;
   const pool = getPgPool();
   const { rows } = await pool.query(
-    'select * from cortextos.acquire_spawn_lease($1, $2, $3, $4, $5)',
-    [projectId, agentName, holderId, ttlSeconds, reason],
+    'select * from cortextos.acquire_spawn_lease($1, $2, $3, $4, $5, $6)',
+    [projectId, artifactKey, taskClass, holderId, ttlSeconds, reason],
   );
   if (rows.length === 0) {
     throw new Error('spawn-claim acquire returned no row');
@@ -153,60 +179,72 @@ export async function acquireSpawnLease(
 }
 
 /**
- * Release the lease IFF the caller still holds it. Returns true on release,
- * false on no-op (caller never held it / already expired / row gone).
+ * Slide expires_at forward by ttlSeconds. Returns the refreshed lease on
+ * success, null when caller no longer holds a live active lease.
+ */
+export async function renewSpawnLease(
+  leaseId: number,
+  holderId: string,
+  ttlSeconds = 90,
+): Promise<SpawnLease | null> {
+  const pool = getPgPool();
+  const { rows } = await pool.query(
+    'select * from cortextos.renew_spawn_lease($1, $2, $3)',
+    [leaseId, holderId, ttlSeconds],
+  );
+  if (rows.length === 0) return null;
+  // The composite-return function emits one row of NULLs when no UPDATE
+  // matched; detect via id nullity.
+  if (rows[0].id === null || rows[0].id === undefined) return null;
+  return normalizeLease(rows[0]);
+}
+
+/**
+ * Soft-release the lease IFF caller still holds it. Returns true on release,
+ * false on no-op (already released / not your lease / lease_id gone).
  * Idempotent — safe to call multiple times.
  */
 export async function releaseSpawnLease(
-  projectId: string | null,
-  agentName: string,
+  leaseId: number,
   holderId: string,
 ): Promise<boolean> {
   const pool = getPgPool();
   const { rows } = await pool.query(
-    'select cortextos.release_spawn_lease($1, $2, $3) as released',
-    [projectId, agentName, holderId],
+    'select cortextos.release_spawn_lease($1, $2) as released',
+    [leaseId, holderId],
   );
   return rows[0]?.released === true;
 }
 
 /**
- * Slide expires_at forward by ttlSeconds. Returns the refreshed lease on
- * success, null when caller no longer holds a live lease (expired / stolen
- * / different holder).
+ * Mass-release: soft-deletes every active lease held by `holderId`. Used by
+ * session stop hooks so a dying parent doesn't strand its claims. Returns
+ * the count of leases released.
  */
-export async function heartbeatSpawnLease(
-  projectId: string | null,
-  agentName: string,
-  holderId: string,
-  ttlSeconds: number = 90,
-): Promise<SpawnLease | null> {
+export async function releaseSessionLeases(holderId: string): Promise<number> {
   const pool = getPgPool();
   const { rows } = await pool.query(
-    'select * from cortextos.heartbeat_spawn_lease($1, $2, $3, $4)',
-    [projectId, agentName, holderId, ttlSeconds],
+    'select cortextos.release_session_leases($1) as released',
+    [holderId],
   );
-  if (rows.length === 0) return null;
-  // The function returns a composite row. When no match, pg may return a row
-  // with all-null columns rather than zero rows — detect via agent_name nullity.
-  if (rows[0].agent_name === null) return null;
-  return normalizeLease(rows[0]);
+  return (rows[0]?.released as number) ?? 0;
 }
 
 /**
- * List leases. Optional filters apply on the server side. Returns rows
- * sorted by (project_id NULLS FIRST, agent_name) for deterministic output.
+ * List leases with optional filters. Default `state='active'` returns only
+ * unreleased rows; pass 'released' for tombstones, 'all' for both. Rows are
+ * sorted by (project_id NULLS FIRST, artifact_key, acquired_at).
  */
-export async function listSpawnLeases(
-  filter: { agentName?: string; projectId?: string | null } = {},
-): Promise<SpawnLease[]> {
+export async function listSpawnLeases(filter: ListFilter = {}): Promise<SpawnLease[]> {
   const pool = getPgPool();
+  const state = filter.state ?? 'active';
   const conds: string[] = [];
   const args: unknown[] = [];
-  if (filter.agentName !== undefined) {
-    args.push(filter.agentName);
-    conds.push(`agent_name = $${args.length}`);
-  }
+
+  if (state === 'active')   conds.push('released_at is null');
+  if (state === 'released') conds.push('released_at is not null');
+  // 'all' adds nothing.
+
   if (filter.projectId !== undefined) {
     if (filter.projectId === null) {
       conds.push('project_id is null');
@@ -215,32 +253,43 @@ export async function listSpawnLeases(
       conds.push(`project_id = $${args.length}`);
     }
   }
+  if (filter.artifactKey !== undefined) {
+    args.push(filter.artifactKey);
+    conds.push(`artifact_key = $${args.length}`);
+  }
+  if (filter.taskClass !== undefined) {
+    args.push(filter.taskClass);
+    conds.push(`task_class = $${args.length}`);
+  }
+  if (filter.holderId !== undefined) {
+    args.push(filter.holderId);
+    conds.push(`holder_id = $${args.length}`);
+  }
+
   const where = conds.length ? `where ${conds.join(' and ')}` : '';
   const { rows } = await pool.query(
     `select * from cortextos.spawn_leases ${where}
-     order by project_id nulls first, agent_name`,
+     order by project_id nulls first, artifact_key, acquired_at`,
     args,
   );
   return rows.map(normalizeLease);
 }
 
 /**
- * Sweep expired rows. Returns the count purged. Housekeeping only — acquire
- * already treats expired-and-still-present rows as steal-able, so this does
- * not change correctness, just keeps the table small.
+ * Sweep tombstones + stale-expired rows older than 24h. Returns the count
+ * purged. Active rows are never touched even past their TTL — acquire
+ * handles those via the steal branch.
  */
 export async function expireSpawnLeases(): Promise<number> {
   const pool = getPgPool();
-  const { rows } = await pool.query(
-    'select cortextos.expire_spawn_leases() as purged',
-  );
+  const { rows } = await pool.query('select cortextos.expire_spawn_leases() as purged');
   return (rows[0]?.purged as number) ?? 0;
 }
 
 /**
- * Run a callback with a dedicated client checked out from the pool — useful
- * for tests that need to wrap multiple ops in a transaction. Production
- * lease ops do NOT need this because each SQL function is internally atomic.
+ * Run a callback with a dedicated client checked out from the pool — for
+ * tests that need to wrap multiple ops in a transaction. Production lease
+ * ops do NOT need this; each SQL function is internally atomic.
  */
 export async function withPgClient<T>(
   fn: (client: PoolClient) => Promise<T>,

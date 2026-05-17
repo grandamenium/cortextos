@@ -134,7 +134,18 @@ busCommand
 
     const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo, projectId);
     try {
-      logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null, project_id: projectId ?? null }), projectId);
+      // B1: project_id rides on the event-level field via the 8th arg —
+      // do NOT also stamp project_id into metadata (no-null-write rule).
+      logEvent(
+        paths,
+        env.agentName,
+        env.org,
+        'message',
+        'agent_message_sent',
+        'info',
+        JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null }),
+        projectId,
+      );
     } catch { /* non-fatal */ }
     console.log(msgId);
   });
@@ -188,12 +199,21 @@ busCommand
       blocks: parseList(opts.blocks),
     });
     console.log(taskId);
-    // Auto-notify assignee so the task is visible immediately (issue #78)
+    // Auto-notify assignee so the task is visible immediately (issue #78).
+    // B1 (Sam CONCERN 1c): thread project_id into the derived inbox message
+    // so the assignee's inbox carries the same scope as the parent task.
     if (opts.assignee && opts.assignee !== env.agentName) {
       const assigneePaths = resolvePaths(opts.assignee, env.instanceId, env.org);
       const desc = opts.desc ? ` — ${opts.desc.slice(0, 120)}` : '';
-      sendMessage(assigneePaths, env.agentName, opts.assignee, 'normal',
-        `Task assigned: [${opts.priority}] ${title}${desc} (id: ${taskId})`);
+      sendMessage(
+        assigneePaths,
+        env.agentName,
+        opts.assignee,
+        'normal',
+        `Task assigned: [${opts.priority}] ${title}${desc} (id: ${taskId})`,
+        undefined,
+        projectId,
+      );
     }
   });
 
@@ -2900,30 +2920,62 @@ busCommand
     }
   });
 
-// --- spawn-lease (Δ1, Phase 2e) ---
+// --- spawn-claim (Δ1, Phase 2e) ---
 //
 // Postgres-backed spawn lease on cortextos.spawn_leases (Seoul Supabase).
-// Replaces the daemon's file-based per-agent lock. NULL-tolerant project_id
-// per B1 conventions — omit --project for fleet-wide / unscoped lease.
+// Reworked per Sam HOLD 2026-05-17 BLOCK 1: keyed by (project_id, artifact_key)
+// with a surrogate lease_id PK. The artifact is the thing being protected
+// (file path, agent name, deploy target, kb slug). holder_id is opaque —
+// typically a session_id so stop hooks can release-by-session.
+//
+// CLI shape (from Sam spec):
+//   spawn-claim acquire --artifact <key> --project <id> --task-class <name>
+//     --holder <id> [--ttl 90] [--reason <text>]      → JSON {acquired, lease}
+//   spawn-claim release <lease_id> --holder <id>      → true/false
+//   spawn-claim heartbeat <lease_id> --holder <id> [--ttl 90]
+//                                                     → JSON of refreshed lease
+//   spawn-claim release-session --holder <id>         → count released
+//   spawn-claim list [--project <id|null>] [--artifact <key>] [--task-class <c>]
+//                    [--holder <id>] [--state active|released|all]
+//   spawn-claim expire                                → purged count
 
-busCommand
+const spawnClaimCommand = busCommand
   .command('spawn-claim')
-  .description('Acquire a spawn lease (Postgres). Prints JSON {acquired, lease}.')
-  .argument('<agent>', 'Target agent name')
-  .argument('<holder>', 'Opaque holder id (typically a UUID)')
-  .option('--project <id>', 'Project scope (NULL/omit = unscoped/fleet-wide)')
+  .description('Postgres-backed spawn lease ops (Δ1, Phase 2e). See subcommands.');
+
+spawnClaimCommand
+  .command('acquire')
+  .description('Acquire the active lease for (project_id, artifact_key). Prints JSON {acquired, lease}.')
+  .requiredOption('--artifact <key>', 'The thing being claimed (file path, agent name, kb slug, ...)')
+  .requiredOption('--task-class <name>', 'Coarse classifier for telemetry (e.g. spawn, scrape, refactor)')
+  .requiredOption('--holder <id>', 'Opaque caller-chosen id (typically session_id)')
+  .option('--project <id>', 'Project scope (omit / "null" = unscoped/fleet-wide)')
   .option('--ttl <seconds>', 'Lease TTL in seconds (default 90)', '90')
   .option('--reason <text>', 'Audit reason (free-form)')
-  .action(async (agent: string, holder: string, opts: { project?: string; ttl?: string; reason?: string }) => {
+  .action(async (opts: {
+    artifact: string;
+    taskClass: string;
+    holder: string;
+    project?: string;
+    ttl?: string;
+    reason?: string;
+  }) => {
     const { acquireSpawnLease, closePgPool } = await import('../bus/spawn-claim.js');
-    const projectId = resolveProjectId(opts.project);
+    const projectId = opts.project === 'null' ? null : resolveProjectId(opts.project);
     const ttl = parseInt(opts.ttl ?? '90', 10);
     if (!Number.isFinite(ttl) || ttl <= 0) {
       console.error(`Invalid --ttl '${opts.ttl}', must be a positive integer`);
       process.exit(1);
     }
     try {
-      const result = await acquireSpawnLease(projectId, agent, holder, ttl, opts.reason ?? null);
+      const result = await acquireSpawnLease({
+        projectId,
+        artifactKey: opts.artifact,
+        taskClass: opts.taskClass,
+        holderId: opts.holder,
+        ttlSeconds: ttl,
+        reason: opts.reason ?? null,
+      });
       console.log(JSON.stringify(result));
       await closePgPool();
       process.exit(result.acquired ? 0 : 2);
@@ -2934,17 +2986,20 @@ busCommand
     }
   });
 
-busCommand
-  .command('spawn-release')
-  .description('Release a spawn lease IFF caller still holds it. Prints true/false.')
-  .argument('<agent>', 'Target agent name')
-  .argument('<holder>', 'Holder id that originally acquired')
-  .option('--project <id>', 'Project scope (NULL/omit = unscoped/fleet-wide)')
-  .action(async (agent: string, holder: string, opts: { project?: string }) => {
+spawnClaimCommand
+  .command('release')
+  .description('Release a lease by lease_id IFF caller still holds it. Prints true/false.')
+  .argument('<lease_id>', 'Surrogate id returned by acquire')
+  .requiredOption('--holder <id>', 'Holder id that originally acquired')
+  .action(async (leaseIdRaw: string, opts: { holder: string }) => {
+    const leaseId = parseInt(leaseIdRaw, 10);
+    if (!Number.isFinite(leaseId) || leaseId <= 0) {
+      console.error(`Invalid lease_id '${leaseIdRaw}', must be a positive integer`);
+      process.exit(1);
+    }
     const { releaseSpawnLease, closePgPool } = await import('../bus/spawn-claim.js');
-    const projectId = resolveProjectId(opts.project);
     try {
-      const released = await releaseSpawnLease(projectId, agent, holder);
+      const released = await releaseSpawnLease(leaseId, opts.holder);
       console.log(released ? 'true' : 'false');
       await closePgPool();
       process.exit(released ? 0 : 2);
@@ -2955,23 +3010,26 @@ busCommand
     }
   });
 
-busCommand
-  .command('spawn-heartbeat')
-  .description('Slide expires_at forward on a held lease. Prints JSON of refreshed lease.')
-  .argument('<agent>', 'Target agent name')
-  .argument('<holder>', 'Holder id')
-  .option('--project <id>', 'Project scope (NULL/omit = unscoped/fleet-wide)')
+spawnClaimCommand
+  .command('heartbeat')
+  .description('Slide expires_at forward on a held lease. Prints JSON of refreshed lease (null on loss).')
+  .argument('<lease_id>', 'Surrogate id returned by acquire')
+  .requiredOption('--holder <id>', 'Holder id')
   .option('--ttl <seconds>', 'New TTL in seconds (default 90)', '90')
-  .action(async (agent: string, holder: string, opts: { project?: string; ttl?: string }) => {
-    const { heartbeatSpawnLease, closePgPool } = await import('../bus/spawn-claim.js');
-    const projectId = resolveProjectId(opts.project);
+  .action(async (leaseIdRaw: string, opts: { holder: string; ttl?: string }) => {
+    const leaseId = parseInt(leaseIdRaw, 10);
+    if (!Number.isFinite(leaseId) || leaseId <= 0) {
+      console.error(`Invalid lease_id '${leaseIdRaw}', must be a positive integer`);
+      process.exit(1);
+    }
     const ttl = parseInt(opts.ttl ?? '90', 10);
     if (!Number.isFinite(ttl) || ttl <= 0) {
       console.error(`Invalid --ttl '${opts.ttl}', must be a positive integer`);
       process.exit(1);
     }
+    const { renewSpawnLease, closePgPool } = await import('../bus/spawn-claim.js');
     try {
-      const lease = await heartbeatSpawnLease(projectId, agent, holder, ttl);
+      const lease = await renewSpawnLease(leaseId, opts.holder, ttl);
       console.log(JSON.stringify(lease));
       await closePgPool();
       process.exit(lease === null ? 2 : 0);
@@ -2982,18 +3040,58 @@ busCommand
     }
   });
 
-busCommand
-  .command('spawn-list')
-  .description('List spawn leases. Optional --agent / --project filters.')
-  .option('--agent <name>', 'Filter by agent')
+spawnClaimCommand
+  .command('release-session')
+  .description('Mass-release every active lease held by --holder. Prints count released.')
+  .requiredOption('--holder <id>', 'Holder id (typically session_id) to drain')
+  .action(async (opts: { holder: string }) => {
+    const { releaseSessionLeases, closePgPool } = await import('../bus/spawn-claim.js');
+    try {
+      const count = await releaseSessionLeases(opts.holder);
+      console.log(String(count));
+      await closePgPool();
+      process.exit(0);
+    } catch (err) {
+      console.error(String(err));
+      await closePgPool().catch(() => undefined);
+      process.exit(1);
+    }
+  });
+
+spawnClaimCommand
+  .command('list')
+  .description('List spawn leases. Default state=active; pass --state for tombstones / both.')
   .option('--project <id>', 'Filter by project (use "null" for unscoped slot)')
-  .action(async (opts: { agent?: string; project?: string }) => {
+  .option('--artifact <key>', 'Filter by artifact_key')
+  .option('--task-class <name>', 'Filter by task_class')
+  .option('--holder <id>', 'Filter by holder_id')
+  .option('--state <state>', 'active | released | all (default active)', 'active')
+  .action(async (opts: {
+    project?: string;
+    artifact?: string;
+    taskClass?: string;
+    holder?: string;
+    state?: string;
+  }) => {
     const { listSpawnLeases, closePgPool } = await import('../bus/spawn-claim.js');
-    const filter: { agentName?: string; projectId?: string | null } = {};
-    if (opts.agent) filter.agentName = opts.agent;
+    const state = (opts.state ?? 'active') as 'active' | 'released' | 'all';
+    if (!['active', 'released', 'all'].includes(state)) {
+      console.error(`Invalid --state '${opts.state}', must be one of: active, released, all`);
+      process.exit(1);
+    }
+    const filter: {
+      projectId?: string | null;
+      artifactKey?: string;
+      taskClass?: string;
+      holderId?: string;
+      state?: 'active' | 'released' | 'all';
+    } = { state };
     if (opts.project !== undefined) {
       filter.projectId = opts.project === 'null' ? null : opts.project;
     }
+    if (opts.artifact) filter.artifactKey = opts.artifact;
+    if (opts.taskClass) filter.taskClass = opts.taskClass;
+    if (opts.holder) filter.holderId = opts.holder;
     try {
       const leases = await listSpawnLeases(filter);
       console.log(JSON.stringify(leases, null, 2));
@@ -3006,9 +3104,9 @@ busCommand
     }
   });
 
-busCommand
-  .command('spawn-expire')
-  .description('Sweep expired spawn-lease rows. Prints purged count.')
+spawnClaimCommand
+  .command('expire')
+  .description('Sweep tombstones + stale-expired rows older than 24h. Prints purged count.')
   .action(async () => {
     const { expireSpawnLeases, closePgPool } = await import('../bus/spawn-claim.js');
     try {

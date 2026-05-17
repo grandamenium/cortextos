@@ -471,12 +471,14 @@ export function completeTask(
   let prevStatus: TaskStatus | undefined;
   let assignee: string | undefined;
   let taskOrg: string = '';
+  let taskProjectId: string | null = null;
   try {
     const content = readFileSync(filePath, 'utf-8');
     const task: Task = JSON.parse(content);
     prevStatus = task.status;
     assignee = task.assigned_to;
     taskOrg = task.org || '';
+    taskProjectId = task.project_id ?? null;
     task.status = 'completed';
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     task.completed_at = task.updated_at;
@@ -490,12 +492,23 @@ export function completeTask(
   appendTaskAudit(paths, taskId, { event: 'complete', agent: assignee || 'unknown', from: prevStatus, to: 'completed', note: result });
 
   // Activity-feed event. Best-effort — the task is already persisted.
+  // B1 (Sam CONCERN 1e): derived task_completed event inherits the task's
+  // project_id so the event row carries the same scope.
   if (assignee) {
     try {
-      logEvent(paths, assignee, taskOrg, 'task', 'task_completed', 'info', {
-        task_id: taskId,
-        ...(result ? { result } : {}),
-      });
+      logEvent(
+        paths,
+        assignee,
+        taskOrg,
+        'task',
+        'task_completed',
+        'info',
+        {
+          task_id: taskId,
+          ...(result ? { result } : {}),
+        },
+        taskProjectId,
+      );
     } catch {
       // Never let observability break task completion.
     }
