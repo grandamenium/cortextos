@@ -124,8 +124,15 @@ jobs:
           done
 
       - name: Run DB-backed integration tests
+        # --no-file-parallelism: the two integration test files share the
+        # cortextos.spawn_leases table. spawn-lease.test.ts has unscoped
+        # listSpawnLeases() assertions that assume exclusive DB ownership;
+        # daemon-spawn-lease-cross-process.test.ts uses prefix-scoped DELETE
+        # in beforeEach to preserve its own rows. Running in parallel exposes
+        # the isolation gap. Serialize until the unit-style file is refactored
+        # to scope every list call (or the suite is split into separate DBs).
         run: |
-          npx vitest run \
+          npx vitest run --no-file-parallelism \
             tests/integration/spawn-lease.test.ts \
             tests/integration/daemon-spawn-lease-cross-process.test.ts
 

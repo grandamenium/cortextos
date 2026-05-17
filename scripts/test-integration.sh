@@ -60,9 +60,11 @@ done
 
 echo "==> Running DB-backed integration tests"
 # PGSSL_DISABLE=1 — local compose pg has no TLS; symmetric to CI YAML env.
+# --no-file-parallelism: the two test files share spawn_leases; serialize to
+# avoid the unscoped-listSpawnLeases() isolation gap (see CI YAML comment).
 SUPABASE_GBRAIN_DATABASE_URL="$DB_URL" \
 PGSSL_DISABLE=1 \
-  npx vitest run \
+  npx vitest run --no-file-parallelism \
     tests/integration/spawn-lease.test.ts \
     tests/integration/daemon-spawn-lease-cross-process.test.ts
 
