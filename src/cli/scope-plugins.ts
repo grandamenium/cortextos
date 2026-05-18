@@ -236,7 +236,7 @@ function readExistingSettings(path: string): { enabledPlugins?: Record<string, b
 export interface ScopePluginsOptions {
   apply?: boolean;
   dryRun?: boolean;
-  /** Override for tests / scripts; defaults to `/Users/hari/cortextos` (via env CTX_FRAMEWORK_ROOT) */
+  /** Override for tests / scripts; defaults to CTX_FRAMEWORK_ROOT env or ~/cortextos */
   frameworkRoot?: string;
   /** Override for tests; defaults to `~/.claude/settings.json` */
   userSettingsPath?: string;
@@ -261,7 +261,7 @@ interface ScopeRun {
 export function planScopePlugins(opts: ScopePluginsOptions = {}): ScopeRun[] {
   const frameworkRoot = opts.frameworkRoot
     ?? process.env.CTX_FRAMEWORK_ROOT
-    ?? '/Users/hari/cortextos';
+    ?? join(homedir(), 'cortextos');
   const userSettingsPath = opts.userSettingsPath
     ?? join(homedir(), '.claude', 'settings.json');
 
