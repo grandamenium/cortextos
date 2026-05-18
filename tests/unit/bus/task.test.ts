@@ -546,7 +546,7 @@ describe('Task audit log (append-only JSONL)', () => {
 
   it('updateTask audit captures from->to transition with assignee as agent', () => {
     const id = createTask(paths, 'alice', 'acme', 'Updatable', { assignee: 'alice' });
-    updateTask(paths, id, 'blocked');
+    updateTask(paths, id, 'blocked', { blocker: { blocker_reason: 'audit test', next_proof_required: 'test passes' } });
     updateTask(paths, id, 'pending');
 
     const log = readTaskAudit(paths, id);
@@ -563,7 +563,7 @@ describe('Task audit log (append-only JSONL)', () => {
     const id = createTask(paths, 'alice', 'acme', 'Append proof');
     const path = join(paths.taskDir, 'audit', `${id}.jsonl`);
     const before = readFileSync(path, 'utf-8');
-    updateTask(paths, id, 'blocked');
+    updateTask(paths, id, 'blocked', { blocker: { blocker_reason: 'append test', next_proof_required: 'test passes' } });
     const after = readFileSync(path, 'utf-8');
     expect(after.startsWith(before)).toBe(true);
     expect(after.length).toBeGreaterThan(before.length);
@@ -793,7 +793,7 @@ describe('compactTasks — semantic compaction of old completed tasks', () => {
     const a = createTask(paths, 'alice', 'acme', 'In progress');
     claimTask(paths, a, 'alice'); // -> in_progress
     const b = createTask(paths, 'alice', 'acme', 'Blocked');
-    updateTask(paths, b, 'blocked');
+    updateTask(paths, b, 'blocked', { blocker: { blocker_reason: 'compact test', next_proof_required: 'test passes' } });
 
     const report = compactTasks(paths, { olderThanDays: 0 });
     expect(report.archived).toEqual([]);
@@ -903,9 +903,10 @@ describe('Task r/m/w lock — no deadlock under sequential mutations', () => {
 
   it('sequential updateTask calls on the same task complete without deadlock', () => {
     const id = createTask(paths, 'dev', 'acme', 'Lock test task');
+    const blockerMeta = { blocker: { blocker_reason: 'waiting on dep', next_proof_required: 'dep completes' } };
     // Rapid sequential status transitions — each must acquire and release the lock cleanly.
     updateTask(paths, id, 'in_progress');
-    updateTask(paths, id, 'blocked');
+    updateTask(paths, id, 'blocked', blockerMeta);
     updateTask(paths, id, 'in_progress');
     const task = JSON.parse(readFileSync(join(paths.taskDir, `${id}.json`), 'utf-8'));
     expect(task.status).toBe('in_progress');
@@ -923,6 +924,38 @@ describe('Task r/m/w lock — no deadlock under sequential mutations', () => {
   it('claimTask then updateTask on the same task both succeed', () => {
     const id = createTask(paths, 'dev', 'acme', 'Lock test — claim then update');
     claimTask(paths, id, 'dev');
+    updateTask(paths, id, 'blocked', { blocker: { blocker_reason: 'waiting for review', next_proof_required: 'review approved' } });
+    const task = JSON.parse(readFileSync(join(paths.taskDir, `${id}.json`), 'utf-8'));
+    expect(task.status).toBe('blocked');
+  });
+
+  it('updateTask to blocked requires blocker_reason and next_proof_required', () => {
+    const id = createTask(paths, 'dev', 'acme', 'Needs blocker context');
+    expect(() => updateTask(paths, id, 'blocked')).toThrow(/blocker context/);
+  });
+
+  it('updateTask to blocked without next_proof_required fails', () => {
+    const id = createTask(paths, 'dev', 'acme', 'Missing next_proof');
+    expect(() =>
+      updateTask(paths, id, 'blocked', { blocker: { blocker_reason: 'reason only', next_proof_required: '' } }),
+    ).toThrow(/blocker context/);
+  });
+
+  it('updateTask to blocked with both fields in metaMerge succeeds', () => {
+    const id = createTask(paths, 'dev', 'acme', 'Full blocker context');
+    updateTask(paths, id, 'blocked', {
+      blocker: { blocker_reason: 'waiting for API key', next_proof_required: 'key appears in secrets.env' },
+    });
+    const task = JSON.parse(readFileSync(join(paths.taskDir, `${id}.json`), 'utf-8'));
+    expect(task.status).toBe('blocked');
+    expect(task.meta.blocker.blocker_reason).toBe('waiting for API key');
+    expect(task.meta.blocker.next_proof_required).toBe('key appears in secrets.env');
+  });
+
+  it('updateTask to blocked uses pre-existing meta.blocker if flags not passed', () => {
+    const id = createTask(paths, 'dev', 'acme', 'Pre-set blocker', {
+      meta: { blocker: { blocker_reason: 'pre-set reason', next_proof_required: 'pre-set proof' } },
+    });
     updateTask(paths, id, 'blocked');
     const task = JSON.parse(readFileSync(join(paths.taskDir, `${id}.json`), 'utf-8'));
     expect(task.status).toBe('blocked');

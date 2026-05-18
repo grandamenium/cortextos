@@ -326,6 +326,7 @@ export function updateTask(
   paths: BusPaths,
   taskId: string,
   status: TaskStatus,
+  metaMerge?: Record<string, unknown>,
 ): void {
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
@@ -342,6 +343,26 @@ export function updateTask(
       const task: Task = JSON.parse(content);
       prevStatus = task.status;
       assignee = task.assigned_to;
+
+      // Merge optional meta fields atomically before validation.
+      if (metaMerge && Object.keys(metaMerge).length > 0) {
+        task.meta = { ...(task.meta ?? {}), ...metaMerge };
+      }
+
+      // Require blocker context when transitioning to blocked.
+      if (status === 'blocked') {
+        const blocker = task.meta?.blocker as Record<string, unknown> | undefined;
+        const reason = typeof blocker?.blocker_reason === 'string' ? blocker.blocker_reason.trim() : '';
+        const proof = typeof blocker?.next_proof_required === 'string' ? blocker.next_proof_required.trim() : '';
+        if (!reason || !proof) {
+          throw new Error(
+            `Task ${taskId} cannot transition to blocked without blocker context.\n` +
+            `Set both fields in one command:\n` +
+            `  cortextos bus update-task ${taskId} blocked --blocker-reason "<what is blocking>" --next-proof "<observable proof it resolved>"`,
+          );
+        }
+      }
+
       task.status = status;
       task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
       atomicWriteSync(filePath, JSON.stringify(task));
