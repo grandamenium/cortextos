@@ -167,25 +167,36 @@ export class AgentPTY {
       }
     });
 
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+    // Claude Code shows up to two blocking prompts on first run:
+    //  1. "trust this folder?" — default selection is already "Yes", a plain
+    //     Enter accepts it.
+    //  2. "Bypass Permissions mode" warning (shown because we pass
+    //     --dangerously-skip-permissions) — its default selection is
+    //     "1. No, exit", so a blind Enter QUITS the agent (exit code 1).
+    //     We must arrow down to "2. Yes, I accept" before confirming.
+    // Poll for either prompt over the first ~15s and answer each exactly once.
+    // NOTE: Claude Code renders spaces between words as cursor-forward escape
+    // codes, not literal spaces — so multi-word matches like "Bypass Permissions"
+    // never hit. Match single-word tokens via searchSync (which strips ANSI).
+    let trustHandled = false;
+    let bypassHandled = false;
+    const answerBootPrompts = () => {
+      if (!this.pty) return;
+      const buf = this.outputBuffer;
+      if (!bypassHandled && buf.searchSync('Bypass') && buf.searchSync('accept')) {
+        this.pty.write('\x1b[B'); // arrow down to "2. Yes, I accept"
+        setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 200); // confirm
+        bypassHandled = true;
+        return;
       }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+      if (!trustHandled && buf.searchSync('trust')) {
+        this.pty.write('\r');
+        trustHandled = true;
       }
-    }, 8000);
+    };
+    for (const delay of [4000, 6000, 8000, 11000, 14000]) {
+      setTimeout(answerBootPrompts, delay);
+    }
   }
 
   /**
