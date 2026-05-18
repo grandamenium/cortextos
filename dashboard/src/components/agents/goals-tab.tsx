@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { IconDeviceFloppy, IconTarget } from '@tabler/icons-react';
+import { IconAlertTriangle, IconCircleCheck, IconDeviceFloppy, IconTarget } from '@tabler/icons-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 
 interface AgentGoals {
@@ -18,6 +18,65 @@ interface GoalsTabProps {
 }
 
 type MessageState = { type: 'success' | 'error'; text: string } | null;
+type GoalsFreshness =
+  | { status: 'fresh'; label: string; description: string }
+  | { status: 'stale'; label: string; description: string }
+  | { status: 'critical'; label: string; description: string }
+  | { status: 'missing'; label: string; description: string };
+
+const STALE_GOALS_HOURS = 24;
+const CRITICAL_GOALS_HOURS = 72;
+
+function formatAge(hours: number) {
+  if (hours < 1) return 'less than 1h';
+  if (hours < 48) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+function getGoalsFreshness(updatedAt: string, updatedBy?: string): GoalsFreshness {
+  if (!updatedAt) {
+    return {
+      status: 'missing',
+      label: 'No goals timestamp',
+      description: 'GOALS.md has no last-updated marker, so current policy drift cannot be ruled out.',
+    };
+  }
+
+  const updatedTime = new Date(updatedAt).getTime();
+  if (Number.isNaN(updatedTime)) {
+    return {
+      status: 'missing',
+      label: 'Invalid goals timestamp',
+      description: 'GOALS.md has an unreadable last-updated marker. Refresh it before using it as operating policy.',
+    };
+  }
+
+  const ageHours = Math.max(0, Math.floor((Date.now() - updatedTime) / 36e5));
+  const ageLabel = formatAge(ageHours);
+  const owner = updatedBy ? ` by ${updatedBy}` : '';
+
+  if (ageHours >= CRITICAL_GOALS_HOURS) {
+    return {
+      status: 'critical',
+      label: `${ageLabel} stale`,
+      description: `GOALS.md was last updated ${ageLabel} ago${owner}. Confirm it still matches current policy before acting on it.`,
+    };
+  }
+
+  if (ageHours >= STALE_GOALS_HOURS) {
+    return {
+      status: 'stale',
+      label: `${ageLabel} stale`,
+      description: `GOALS.md was last updated ${ageLabel} ago${owner}. It may have drifted from the latest operating policy.`,
+    };
+  }
+
+  return {
+    status: 'fresh',
+    label: 'Fresh',
+    description: `GOALS.md was refreshed ${ageLabel} ago${owner}.`,
+  };
+}
 
 export function GoalsTab({ agentName, org }: GoalsTabProps) {
   const [goals, setGoals] = useState<AgentGoals>({
@@ -97,6 +156,8 @@ export function GoalsTab({ agentName, org }: GoalsTabProps) {
   const updatedLabel = goals.updated_at
     ? `Last updated ${new Date(goals.updated_at).toLocaleString()}${goals.updated_by ? ` by ${goals.updated_by}` : ''}`
     : 'Not yet set';
+  const freshness = getGoalsFreshness(goals.updated_at, goals.updated_by);
+  const showFreshnessWarning = freshness.status !== 'fresh';
 
   return (
     <div className="space-y-4 p-1">
@@ -112,6 +173,20 @@ export function GoalsTab({ agentName, org }: GoalsTabProps) {
             Set by the orchestrator during morning cascade. Editable here for overrides.
             Changes regenerate GOALS.md automatically.
           </p>
+
+          {showFreshnessWarning && (
+            <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
+              freshness.status === 'critical'
+                ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                : 'border-warning/50 bg-warning/10 text-warning'
+            }`}>
+              <IconAlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <div className="space-y-0.5">
+                <p className="font-medium">{freshness.label}</p>
+                <p className="text-xs opacity-90">{freshness.description}</p>
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="text-xs text-muted-foreground">Daily Focus</label>
@@ -148,7 +223,19 @@ export function GoalsTab({ agentName, org }: GoalsTabProps) {
             />
           </div>
 
-          <p className="text-xs text-muted-foreground italic">{updatedLabel}</p>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs text-muted-foreground italic">{updatedLabel}</p>
+            <span className={`inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+              freshness.status === 'fresh'
+                ? 'border-green-500/30 bg-green-500/10 text-green-600'
+                : freshness.status === 'critical'
+                  ? 'border-destructive/30 bg-destructive/10 text-destructive'
+                  : 'border-warning/40 bg-warning/10 text-warning'
+            }`}>
+              {freshness.status === 'fresh' ? <IconCircleCheck size={12} /> : <IconAlertTriangle size={12} />}
+              {freshness.label}
+            </span>
+          </div>
 
           {message && (
             <div className={`rounded-md px-3 py-2 text-xs ${message.type === 'success' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
