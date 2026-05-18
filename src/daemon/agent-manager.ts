@@ -906,6 +906,18 @@ export class AgentManager {
       return;
     }
 
+    // Stop the cron scheduler synchronously, before the first await below.
+    // The stop-agent IPC handler dispatches stopAgent() fire-and-forget
+    // (no await), so only the synchronous prefix of this function runs in
+    // the same event-loop tick as the IPC response. Stopping the scheduler
+    // here eliminates the window where enabled-agents.json already shows
+    // the agent as disabled but the scheduler is still queuing cron fires.
+    const scheduler = this.cronSchedulers.get(name);
+    if (scheduler) {
+      scheduler.stop();
+      this.cronSchedulers.delete(name);
+    }
+
     if (entry.poller) {
       entry.poller.stop();
       if (entry.pollerToken) this.unregisterPoller(entry.pollerToken, entry.poller);
@@ -924,13 +936,6 @@ export class AgentManager {
     try {
       releaseSession(join(this.ctxRoot, 'state', name));
     } catch { /* non-fatal */ }
-
-    // Stop and remove the agent's cron scheduler (if one was wired)
-    const scheduler = this.cronSchedulers.get(name);
-    if (scheduler) {
-      scheduler.stop();
-      this.cronSchedulers.delete(name);
-    }
 
     // BUG-031: honor any restart that was queued while we were stopping.
     // After PR #11 (BUG-011 fix) this branch should never fire — see the
