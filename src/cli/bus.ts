@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { createTask, updateTask, completeTask, claimTask, commentTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -243,7 +243,7 @@ busCommand
 
 busCommand
   .command('task-history')
-  .description("Show a task's append-only audit log (every status change, claim, and completion)")
+  .description("Show a task's append-only audit log (every status change, claim, completion, and comment)")
   .argument('<id>', 'Task ID')
   .option('--json', 'Emit raw JSONL instead of formatted text')
   .action((id: string, opts: { json?: boolean }) => {
@@ -263,6 +263,29 @@ busCommand
       const transition = e.from && e.to ? `${e.from} -> ${e.to}` : e.to || '';
       const note = e.note ? ` | ${e.note}` : '';
       console.log(`  ${e.ts}  ${e.event.padEnd(8)}  ${e.agent.padEnd(16)}  ${transition}${note}`);
+    }
+  });
+
+busCommand
+  .command('task-comment')
+  .description('Append a free-form comment to a task without changing its status — for mid-task progress notes, blockers, or watcher annotations')
+  .argument('<id>', 'Task ID')
+  .argument('<text>', 'Comment text')
+  .option('--agent <name>', 'Agent posting the comment (defaults to CTX_AGENT_NAME)')
+  .action((id: string, text: string, opts: { agent?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const agent = opts.agent || env.agentName;
+    if (!agent) {
+      console.error('ERROR: --agent or CTX_AGENT_NAME required');
+      process.exit(1);
+    }
+    try {
+      commentTask(paths, id, agent, text);
+      console.log(`Commented on ${id} as ${agent}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
     }
   });
 
