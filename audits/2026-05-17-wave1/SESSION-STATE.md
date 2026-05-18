@@ -1,6 +1,6 @@
 # Wave-0/Wave-1 Session State — 2026-05-17 (TRULY final)
 
-**Last saved:** 2026-05-18 ~00:05 EDT (end of resume wave-0 + 4 continues)
+**Last saved:** 2026-05-18 ~00:25 EDT (end of resume wave-0 + 5 continues)
 **Resume code phrase:** `resume wave-0`
 
 ## Scoreboard
@@ -63,6 +63,12 @@ Mac mini (user: subbu_ai_assistant, host id (override): subbu_ai_assistant@mac-m
   per-agent plugin scoping: DEFERRED — needs `claude plugin add ...` first
                             (subbu_ai_assistant user hasn't installed plugins)
 ```
+
+## What's NEW in the 5th continue round (2026-05-18 ~00:25)
+
+- **`cortextos status --watch [seconds]` mode** — clears screen + redraws each tick (default 5s, clamped to [2, 600]). `--json --watch` emits one JSON object per tick (newline-delimited, pipe-friendly for `jq -c` or log file). SIGINT / SIGTERM / EPIPE all trigger clean exit. Commit `f2119c4`.
+- **`/voice-pa <wav-path>` user-level skill** at `~/.claude/skills/voice-pa/SKILL.md` — invokable from ANY Claude session (not just inside the demo dir). Documents the moonshine → agent → supertonic flow, the pipeline.py JSON-on-stdout quirk (use `raw_decode`), what's stubbed vs real, and pointers to fakechat wiring + INSTALL-STATUS. Visible in skill registry.
+- **GitHub mirror push deferred** — `origin` points at the upstream public repo `grandamenium/cortextos`; without explicit consent, didn't push my private gitea fork commits there.
 
 ## What's NEW in the 4th continue round (2026-05-18 ~midnight)
 
