@@ -577,19 +577,15 @@ cortextos bus submit-community-item <item-name> <item-type> "<description>" [--d
 ### agent-browser (Browser Automation — replaces Playwright)
 - **Binary**: `agent-browser` (Rust CLI, npm-installed globally; Chrome auto-downloaded by `agent-browser install`)
 - **Use for**: Scraping websites, browser-based automation, OSINT, form filling, screenshots, login flows — anything previously done via the Playwright MCP server
+- **Runtime policy**: Default to Codex-CU / Orgo VM. Do not run agent-browser or Chrome on Greg's Mac unless a current Orgo-failure artifact explicitly authorizes Mac fallback. OB1 e2e/dogfood runs on Compl1 VM `23e7d600` against `https://ob1.revopsglobal.com`.
 - **Skill loaded**: `plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md` — that skill instructs running `agent-browser skills get <name>` to fetch current per-version command syntax from the CLI itself
 - **Quick verify**: `agent-browser open https://example.com && agent-browser get title && agent-browser close`
 - **Snapshot-ref pattern**: prefer `agent-browser snapshot` (returns a11y tree with refs e1/e2/...) then `agent-browser click @e1` / `fill @e2 "text"` — more reliable than text-search selectors for AI-driven flows
 - **NOT to be confused with**: dashboard E2E tests under `dashboard/` which use Playwright DIRECTLY (not via MCP). agent-browser only replaces the agent-facing browser MCP layer that was previously `mcp__plugin_playwright_*`. The dashboard's Playwright dependency stays
 
 
-### Peekaboo (macOS Desktop Automation)
-- **Binary**: `peekaboo`
-- **Use for**: Screenshot capture, UI clicking, typing, drag, window/app management, desktop automation
-- **Permissions**: Screen Recording + Accessibility granted to the process (permissions inherited from daemon)
-- **Usage**: `peekaboo image` (screenshot), `peekaboo list` (apps/windows), `peekaboo run <script>` (automation)
-- **Learn**: `peekaboo learn` for comprehensive AI agent usage guide
-- **Note**: Works in headful mode only (needs a display). All agents running under the daemon have access.
+### macOS Desktop Automation
+- Quarantined by default. Do not use Peekaboo, osascript, headed Chrome, or local Playwright on Greg's Mac unless a current explicit Orgo-failure artifact and task approval authorize that exception.
 
 
 ### gogcli (Google Workspace CLI)

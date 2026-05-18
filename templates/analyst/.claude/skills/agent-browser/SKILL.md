@@ -10,6 +10,8 @@ Browser automation CLI for AI agents. Uses Chrome/Chromium via CDP directly.
 
 Install: `npm i -g agent-browser && agent-browser install`
 
+Runtime policy: run on Codex-CU / Orgo VM by default. Do not run Chrome or agent-browser on Greg's Mac unless a current Orgo-failure artifact explicitly authorizes Mac fallback. OB1 e2e/dogfood uses Compl1 VM `23e7d600` against `https://ob1.revopsglobal.com`.
+
 ## Loading Skills
 
 **You must run `agent-browser skills get <name>` before running any agent-browser commands.**
