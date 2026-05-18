@@ -3,7 +3,6 @@
 import {
   LineChart,
   Line,
-  ResponsiveContainer,
 } from 'recharts';
 import { CHART_GOLD } from './chart-theme';
 
@@ -29,18 +28,16 @@ export function SparkLine({
 
   return (
     <div className={className} style={{ display: 'inline-block', width, height, minWidth: 1, minHeight: 1 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={chartData}>
-          <Line
-            type="monotone"
-            dataKey="v"
-            stroke={color}
-            strokeWidth={1.5}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+      <LineChart data={chartData} width={width} height={height}>
+        <Line
+          type="monotone"
+          dataKey="v"
+          stroke={color}
+          strokeWidth={1.5}
+          dot={false}
+          isAnimationActive={false}
+        />
+      </LineChart>
     </div>
   );
 }

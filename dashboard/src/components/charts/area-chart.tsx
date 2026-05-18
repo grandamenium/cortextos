@@ -16,6 +16,7 @@ import {
   TOOLTIP_STYLE,
   getChartColor,
 } from './chart-theme';
+import { cn } from '@/lib/utils';
 
 export interface AreaChartProps {
   data: Record<string, unknown>[];
@@ -39,7 +40,10 @@ export function AreaChart({
   className,
 }: AreaChartProps) {
   return (
-    <div className={className}>
+    <div
+      className={cn('min-w-0 w-full overflow-hidden', className)}
+      style={{ minHeight: height, height }}
+    >
       <ResponsiveContainer width="100%" height={height}>
         <RechartsAreaChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -12 }}>
           <defs>
