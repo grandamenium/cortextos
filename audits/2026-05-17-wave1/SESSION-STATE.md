@@ -1,6 +1,6 @@
 # Wave-0/Wave-1 Session State — 2026-05-17 (TRULY final)
 
-**Last saved:** 2026-05-17 ~23:18 EDT (end of resume wave-0 + continue + continue)
+**Last saved:** 2026-05-18 ~00:05 EDT (end of resume wave-0 + 4 continues)
 **Resume code phrase:** `resume wave-0`
 
 ## Scoreboard
@@ -64,6 +64,14 @@ Mac mini (user: subbu_ai_assistant, host id (override): subbu_ai_assistant@mac-m
                             (subbu_ai_assistant user hasn't installed plugins)
 ```
 
+## What's NEW in the 4th continue round (2026-05-18 ~midnight)
+
+- **agents.yaml manifest drift CLOSED on both hosts.** Added 4 security/network agents (security-vp/redteam/blueteam/home-net) + 3 dormant dirs (compute/media/graphify-out). `cortextos status` on both MacBook + Mac mini now reports `drift on disk: (none)`. 18 entries total covering every dir on either fleet. Commits `1f4fe8c` + `b938243`.
+- **scope-plugins role map expanded** with security_lead, security_offense, security_defense, network_guardian roles — all get minimal guardrails (fewer-permission-prompts + simplify + hookify), no comms.
+- **ruflo eval gate ADVANCED.** Found that the federation plugin doesn't actually ship: `@claude-flow/plugin-gastown-bridge` is registered but CID is empty + checksum is placeholder `sha256:gastown123`. Also tried `bun install` on the alpha-33 monorepo clone — fails on better-sqlite3 native build incompatible with Node v26. **Capability 1 (federation) eval is BLOCKED** until upstream publishes a real CID OR fixes the Node 26 bindings. Capabilities 2-4 (HNSW, GOAP, Queen-OMC) can still proceed. Runbook updated.
+- **Open-SaaS scaffold READY for keys.** Wasp 0.23.0 saas template at `/Users/hari/installs/open-saas-app/` (584 MB). Postgres 16 in docker (`open-saas-postgres` on :5432). Initial migration applied. `.env.server` has 24 TODO placeholders. Runbook at `~/installs/open-saas-app/RUNBOOK.md`. Hari just needs to fill Stripe TEST key + OPENAI/SENDGRID keys, then `wasp start`.
+- **Voice-PA fakechat wiring DONE** at `/Users/hari/voice-pa-demo/fakechat/`: `voice-pa-loop.md` skill + `convert-to-wav-16k.sh` + `record-from-mic.sh` + `interactive-demo.md` + `wire-into-pa.md` + sample-run.{json,jsonl,wav}. JFK sample sums to 3.4s active stages (full pipeline 13s incl. interpreter startup). Bug caught: pipeline.py mixes JSON + timing text on stdout (consumers need `raw_decode`).
+
 ## What's NEW vs SESSION-STATE.md before this "continue" round
 
 - **#65 swarm primitive** — `cortextos swarm run|status|collect|reconcile`. Fan items across worker(s), persist JSONL, reconcile multi-model agreement. 59 tests.
@@ -77,14 +85,14 @@ Mac mini (user: subbu_ai_assistant, host id (override): subbu_ai_assistant@mac-m
 - **ruflo installed + smoke-tested** via `npm install -g claude-flow@alpha` → v3.7.0-alpha.67. Two alpha-quality issues caught (memory backend not persisting, federation plugin not bundled). Full eval runbook at audits/RUFLO-EVAL-RUNBOOK.md.
 - **Multi-host doc + lessons** — `audits/2026-05-17-wave1/MULTI-HOST.md` + CLAUDE.md pointer + Hari's auto-memory updated with `cortextos_wave1_complete.md` + `feedback_multi_host_first.md`.
 
-## What's STILL pending — 4 items, all real-world
+## What's STILL pending — all real-world / interactive
 
 | # | Task | Disposition |
 |---|---|---|
-| 69 | ruflo alpha-eval gate | Install + smoke-test done; 7-day federation soak needs Hari to install the federation plugin + run sam ↔ analyst over Tailscale for a week. Full procedure in `audits/RUFLO-EVAL-RUNBOOK.md`. |
-| 70 | Voice-PAaaS productize v1 | Pipeline works end-to-end at `/Users/hari/voice-pa-demo/`. Needs (a) wire to twilio test number for real PSTN, (b) sign first 3 customers. |
+| 69 | ruflo alpha-eval gate | Install + smoke-test done; 7-day federation soak BLOCKED — federation plugin doesn't actually ship in alpha-67 + Node v26 native-build issue blocks rebuilding from source. Capabilities 2-4 (HNSW, GOAP, Queen-OMC) can proceed standalone. Full status: `audits/RUFLO-EVAL-RUNBOOK.md` (in repo) + `/Users/hari/installs/ruflo-eval-workspace/EVAL-RUNBOOK.md` (canonical). |
+| 70 | Voice-PAaaS productize v1 | (a) local batch pipeline works end-to-end (`~/voice-pa-demo/`, 13.2s on JFK), (b) fakechat-driven interactive demo wired (`~/voice-pa-demo/fakechat/`), (c) open-saas scaffold ready (`~/installs/open-saas-app/` — Postgres up, runbook ready). Remaining: Hari fills Stripe TEST + OPENAI + SENDGRID keys, runs `wasp start`; wires twilio test number for real PSTN; signs first 3 customers. |
 | — | Hari manual rotations | Anthropic OAuth (console.anthropic.com → `claude login`), Telegram bot 8640425235 (@BotFather), git-credential osxkeychain. |
-| — | Mac mini `claude plugin add ...` | Per agents.yaml role map, then `cortextos scope-plugins --apply`. ~10 min interactive. |
+| — | Mac mini `claude plugin add ...` | Per agents.yaml role map (18 entries now), then `cortextos scope-plugins --apply`. ~10 min interactive. |
 
 ## How to operate this fleet now
 
