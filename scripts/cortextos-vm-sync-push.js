@@ -148,6 +148,110 @@ function yesterdayDateStr() {
 
 const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
 
+// Agents whose Claude Code sessions run on Greg's Mac rather than this VM.
+// Their ~/.claude/projects/ data lives on the Mac and must be fetched via SSH.
+const MAC_AGENTS = ["codex", "codex-2"];
+const MAC_SSH_HOST = secrets.MAC_SSH_HOST || process.env.MAC_SSH_HOST || "gregs-mac";
+// Temp dir for rsync'd Mac project JSONL files (recreated on each run).
+const MAC_PROJECTS_CACHE = path.join(os.tmpdir(), "cortextos-mac-projects");
+
+/**
+ * Rsync today's Claude Code JSONL files for a Mac-hosted agent into a local
+ * temp dir, then aggregate token usage using the same logic as
+ * readDailyTokensForAgent. Returns the same shape or null on failure.
+ */
+function readDailyTokensFromMac(agentName) {
+  const { spawnSync } = require("child_process");
+  const today = todayDateStr();
+
+  // Derive the expected dir suffix patterns (e.g. "-agents-codex-2")
+  const suffix = `-agents-${agentName}`;
+  const localCache = path.join(MAC_PROJECTS_CACHE, agentName);
+
+  // Find matching dirs on Mac via SSH ls
+  let macDirs;
+  try {
+    const lsResult = spawnSync(
+      "ssh",
+      ["-o", "ConnectTimeout=5", "-o", "BatchMode=yes", MAC_SSH_HOST,
+       `ls -1 ~/.claude/projects/ 2>/dev/null | grep '${suffix}$' || true`],
+      { encoding: "utf8", timeout: 8000 },
+    );
+    if (lsResult.status !== 0 || !lsResult.stdout.trim()) return null;
+    macDirs = lsResult.stdout.trim().split("\n").filter(Boolean);
+  } catch {
+    return null;
+  }
+
+  // Rsync today's JSONL from each matching Mac dir
+  try {
+    fs.mkdirSync(localCache, { recursive: true });
+  } catch {
+    return null;
+  }
+
+  let fetched = false;
+  for (const dir of macDirs) {
+    const remoteSrc = `${MAC_SSH_HOST}:~/.claude/projects/${dir}/`;
+    const localDest = path.join(localCache, dir);
+    fs.mkdirSync(localDest, { recursive: true });
+    const rsyncResult = spawnSync(
+      "rsync",
+      ["-az", "--include=*.jsonl", "--exclude=*",
+       "-e", "ssh -o ConnectTimeout=5 -o BatchMode=yes",
+       remoteSrc, `${localDest}/`],
+      { timeout: 20000 },
+    );
+    if (rsyncResult.status === 0) fetched = true;
+  }
+  if (!fetched) return null;
+
+  // Parse the rsync'd JSONL files using the same aggregation logic
+  let inputTokens = 0, outputTokens = 0, cacheWriteTokens = 0, cacheReadTokens = 0, costUsd = 0;
+  let found = false;
+
+  for (const dir of macDirs) {
+    const localDest = path.join(localCache, dir);
+    let files;
+    try {
+      files = fs.readdirSync(localDest).filter((f) => f.endsWith(".jsonl"));
+    } catch { continue; }
+
+    for (const file of files) {
+      const lines = readJsonlFile(path.join(localDest, file));
+      for (const entry of lines) {
+        const ts = entry.timestamp;
+        if (!ts || !ts.startsWith(today)) continue;
+        const msg = entry.message || entry;
+        const model = msg.model;
+        if (!model) continue;
+        const usage = msg.usage || {};
+        const inp = usage.input_tokens ?? msg.input_tokens ?? 0;
+        const out = usage.output_tokens ?? msg.output_tokens ?? 0;
+        const cw  = usage.cache_creation_input_tokens ?? 0;
+        const cr  = usage.cache_read_input_tokens ?? 0;
+        if (inp === 0 && out === 0 && cw === 0 && cr === 0) continue;
+        inputTokens      += inp;
+        outputTokens     += out;
+        cacheWriteTokens += cw;
+        cacheReadTokens  += cr;
+        costUsd          += msg.costUSD ?? calcCost(model, inp, out, cw, cr);
+        found = true;
+      }
+    }
+  }
+
+  if (!found) return null;
+  return {
+    date: today,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_creation_tokens: cacheWriteTokens,
+    cost_usd: Math.round(costUsd * 1e6) / 1e6,
+    source: "mac-ssh",
+  };
+}
+
 const MODEL_PRICING = {
   opus:   { inputPerM: 15,  outputPerM: 75,  cacheWritePerM: 3.75, cacheReadPerM: 1.50 },
   sonnet: { inputPerM: 3,   outputPerM: 15,  cacheWritePerM: 3.75, cacheReadPerM: 0.30 },
@@ -462,7 +566,8 @@ function buildPayload(watermark) {
     const transitions = taskTransitions[agentName] || [];
     const counts = taskCounts[agentName] || { completed: 0, failed: 0 };
 
-    const daily = readDailyTokensForAgent(agentName);
+    const daily = readDailyTokensForAgent(agentName) ??
+      (MAC_AGENTS.includes(agentName) ? readDailyTokensFromMac(agentName) : null);
 
     const agentPayload = { name: agentName };
 
