@@ -46,6 +46,18 @@ function parseEnvFile(path: string): Record<string, string> {
   return vars;
 }
 
+function isTelegramEnabled(agentEnvPath: string): boolean {
+  const configPath = join(agentEnvPath, '..', 'config.json');
+  if (!existsSync(configPath)) return true;
+
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf-8')) as { telegram_enabled?: unknown };
+    return parsed.telegram_enabled !== false;
+  } catch {
+    return true;
+  }
+}
+
 function getEnabledAgentsPath(instanceId: string): string {
   return join(homedir(), '.cortextos', instanceId, 'config', 'enabled-agents.json');
 }
@@ -175,49 +187,54 @@ export const enableAgentCommand = new Command('enable')
     }
 
     const env = parseEnvFile(agentEnvPath);
-    const missing = (['BOT_TOKEN', 'CHAT_ID'] as const).filter(k => !env[k]);
-    if (missing.length > 0) {
-      console.error(`Error: .env for agent "${agent}" is missing required values: ${missing.join(', ')}`);
-      console.error(`Edit ${agentEnvPath} and set BOT_TOKEN and CHAT_ID before enabling.`);
-      process.exit(1);
-    }
-
-    // self-chat trap preflight: validate BOT_TOKEN + CHAT_ID against the live
-    // Telegram API before registering. Catches bad tokens, unreachable chats,
-    // bot-recipient configs, and the self_chat trap (CHAT_ID == bot's own
-    // user id) BEFORE the agent boots up on a silently broken config. Without
-    // this, the first real sendMessage call fails with a cryptic 401/400/403
-    // buried in the agent's stdout log, and the dashboard happily shows the
-    // agent as alive.
-    //
-    // Hard-fails on config-level reasons (bad_token, chat_not_found,
-    // bot_recipient, self_chat). Warns but does not block on transient
-    // reasons (network_error, rate_limited) so offline enable and burst
-    // enables during the morning cascade still succeed.
-    try {
-      const telegramApi = new TelegramAPI(env.BOT_TOKEN);
-      const validation = await telegramApi.validateCredentials(env.CHAT_ID);
-      if (validation.ok) {
-        const label = validation.chatTitle ? ` (${validation.chatTitle})` : '';
-        console.log(
-          `Telegram validated: bot=@${validation.botUsername} chat=${env.CHAT_ID} type=${validation.chatType}${label}`,
-        );
-      } else if (validation.reason === 'network_error' || validation.reason === 'rate_limited') {
-        console.error(`Warning: could not verify Telegram credentials (${validation.reason}).`);
-        console.error(`  ${formatValidateError(validation)}`);
-        console.error('  Continuing anyway — re-run enable after connectivity is restored to confirm.');
-      } else {
-        console.error(`Error: Telegram credentials for agent "${agent}" failed validation.`);
-        console.error(`  ${formatValidateError(validation)}`);
-        console.error(`  Edit ${agentEnvPath} and re-run: cortextos enable ${agent}`);
+    const telegramEnabled = isTelegramEnabled(agentEnvPath);
+    if (telegramEnabled) {
+      const missing = (['BOT_TOKEN', 'CHAT_ID'] as const).filter(k => !env[k]);
+      if (missing.length > 0) {
+        console.error(`Error: .env for agent "${agent}" is missing required values: ${missing.join(', ')}`);
+        console.error(`Edit ${agentEnvPath} and set BOT_TOKEN and CHAT_ID before enabling.`);
         process.exit(1);
       }
-    } catch (err) {
-      // Defensive: validateCredentials should never throw, but if it does,
-      // fall through with a warning rather than blocking enable on a bug in
-      // the validator itself.
-      console.error(`Warning: Telegram credential validation crashed: ${err instanceof Error ? err.message : String(err)}`);
-      console.error('  Continuing enable. Investigate the validator if this recurs.');
+
+      // self-chat trap preflight: validate BOT_TOKEN + CHAT_ID against the live
+      // Telegram API before registering. Catches bad tokens, unreachable chats,
+      // bot-recipient configs, and the self_chat trap (CHAT_ID == bot's own
+      // user id) BEFORE the agent boots up on a silently broken config. Without
+      // this, the first real sendMessage call fails with a cryptic 401/400/403
+      // buried in the agent's stdout log, and the dashboard happily shows the
+      // agent as alive.
+      //
+      // Hard-fails on config-level reasons (bad_token, chat_not_found,
+      // bot_recipient, self_chat). Warns but does not block on transient
+      // reasons (network_error, rate_limited) so offline enable and burst
+      // enables during the morning cascade still succeed.
+      try {
+        const telegramApi = new TelegramAPI(env.BOT_TOKEN);
+        const validation = await telegramApi.validateCredentials(env.CHAT_ID);
+        if (validation.ok) {
+          const label = validation.chatTitle ? ` (${validation.chatTitle})` : '';
+          console.log(
+            `Telegram validated: bot=@${validation.botUsername} chat=${env.CHAT_ID} type=${validation.chatType}${label}`,
+          );
+        } else if (validation.reason === 'network_error' || validation.reason === 'rate_limited') {
+          console.error(`Warning: could not verify Telegram credentials (${validation.reason}).`);
+          console.error(`  ${formatValidateError(validation)}`);
+          console.error('  Continuing anyway — re-run enable after connectivity is restored to confirm.');
+        } else {
+          console.error(`Error: Telegram credentials for agent "${agent}" failed validation.`);
+          console.error(`  ${formatValidateError(validation)}`);
+          console.error(`  Edit ${agentEnvPath} and re-run: cortextos enable ${agent}`);
+          process.exit(1);
+        }
+      } catch (err) {
+        // Defensive: validateCredentials should never throw, but if it does,
+        // fall through with a warning rather than blocking enable on a bug in
+        // the validator itself.
+        console.error(`Warning: Telegram credential validation crashed: ${err instanceof Error ? err.message : String(err)}`);
+        console.error('  Continuing enable. Investigate the validator if this recurs.');
+      }
+    } else {
+      console.log(`Telegram disabled in ${join(agentEnvPath, '..', 'config.json')}; skipping BOT_TOKEN and CHAT_ID validation.`);
     }
 
     const agents = readEnabledAgents(options.instance);
