@@ -153,6 +153,20 @@ cortextos dashboard          # Start web dashboard (--port 3000)
 
 ---
 
+## State Directory
+
+`cortextos install` creates a named instance directory under `~/.cortextos/`:
+
+```
+~/.cortextos/
+  cortextos1/        ← named instance (created by install)
+  default -> cortextos1   ← symlink, NOT a hardlink
+```
+
+`~/.cortextos/default` is a **symlink** to the first installed instance (e.g. `cortextos1`). Both paths resolve to the same physical directory — there is only one daemon and one set of state files. Tooling that uses `$CTX_ROOT` or the `default` path will see identical results. Do not delete the symlink; anything still referencing `~/.cortextos/default` (shell aliases, older scripts) will break.
+
+---
+
 ## Security
 
 cortextOS has undergone a dedicated security hardening sprint covering prompt injection resistance, guardrail enforcement, and approval gate integrity. Agents require explicit human approval before any external action (email, deploy, delete, financial). The guardrails system is self-improving: agents log near-misses and extend GUARDRAILS.md each session.
