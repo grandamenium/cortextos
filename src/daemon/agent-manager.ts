@@ -13,6 +13,7 @@ import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
+import { logEvent } from '../bus/event.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 
@@ -339,7 +340,50 @@ export class AgentManager {
     // running its own poller (only the designated orchestrator agent should poll).
     if (telegramApi && chatId && config.telegram_polling !== false) {
       const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir);
+      // Guard #2: this is the comms-liveness-managed poller. Inject the
+      // in-process restart (fresh API client) + a RESILIENT out-of-band
+      // sink — logEvent writes the events JSONL + refreshes heartbeat.json
+      // (filesystem-local, NOT a Telegram HTTP call), complementing the
+      // durable .comms-degraded marker the poller itself writes. Both
+      // survive the very outage they signal (analyst eve-review §4).
+      const poller = new TelegramPoller(telegramApi, stateDir, 1000, undefined, {
+        recreateApi: botToken ? () => new TelegramAPI(botToken) : undefined,
+        onCommsDegraded: (info) => {
+          log(
+            `[comms-liveness] DEGRADED — ${info.consecutiveFailures} consecutive ` +
+            `poll failures since ${info.since} (${info.lastErrorClass}: ${info.lastError})`,
+          );
+          try {
+            logEvent(paths, name, resolvedOrg, 'error', 'comms_degraded', 'error', {
+              agent: name,
+              consecutive_failures: info.consecutiveFailures,
+              since: info.since,
+              last_error_class: info.lastErrorClass,
+              last_error: info.lastError,
+              last_success_at: info.lastSuccessAt,
+              detector: 'guard2-poller-in-process',
+            });
+          } catch {
+            /* events JSONL is secondary to the durable .comms-degraded marker */
+          }
+        },
+        onCommsRecovered: (info) => {
+          log(
+            `[comms-liveness] RECOVERED — comms back after ~${info.downSeconds}s ` +
+            `(${info.consecutiveFailures} failures cleared)`,
+          );
+          try {
+            logEvent(paths, name, resolvedOrg, 'action', 'comms_recovered', 'info', {
+              agent: name,
+              down_seconds: info.downSeconds,
+              recovered_at: info.recoveredAt,
+              detector: 'guard2-poller-in-process',
+            });
+          } catch {
+            /* best-effort */
+          }
+        },
+      });
 
       poller.onMessage((msg) => {
         // ALLOWED_USER gate: if configured, ignore messages from other users.
