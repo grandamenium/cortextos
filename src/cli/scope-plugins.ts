@@ -118,6 +118,33 @@ export const ROLE_PLUGIN_MAP: Record<string, readonly string[]> = {
     'simplify',
     'hookify',
   ],
+  // Security agents — added 2026-05-17 to cover the Mac mini security cluster
+  // surfaced by `cortextos status` manifest drift detection. All three share
+  // the same minimal plugin set: defensive tooling + minimal Bash surface;
+  // none get telegram/imessage (they report up through chief, not directly).
+  security_lead: [
+    'fewer-permission-prompts',
+    'simplify',
+    'hookify',
+    'pr-review-toolkit',
+  ],
+  security_offense: [
+    'fewer-permission-prompts',
+    'simplify',
+    'hookify',
+  ],
+  security_defense: [
+    'fewer-permission-prompts',
+    'simplify',
+    'hookify',
+  ],
+  // Network guardian — Tailscale + router-state monitoring; minimal plugins,
+  // no comms (alerts route via chief).
+  network_guardian: [
+    'fewer-permission-prompts',
+    'simplify',
+    'hookify',
+  ],
 };
 
 /**

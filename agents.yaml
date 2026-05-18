@@ -15,12 +15,16 @@ hosts:
     user: subbu_ai_assistant
     agents:
       - analyst
+      - blueteam
       - chief
       - dev
       - forge
+      - home-net
+      - redteam
       - research
       - research-codex
       - research-director
+      - security-vp
       - warden-mm
 
 agents:
@@ -134,3 +138,46 @@ agents:
     chat_id_env_var: null
     verified: false
     notes: "Coordinates the research/research-codex pair; outbound user comms via chief."
+
+  # Security agents — added to manifest 2026-05-17 to close drift caught by
+  # `cortextos status` on Mac mini. Surfaced by Mac mini commit 89e6f80
+  # which set these enabled:true after the silent-death incident.
+  security-vp:
+    host: mac_mini
+    org: subbu-ops
+    role: security_lead
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    notes: "Security VP — coordinates redteam + blueteam, reports to chief."
+
+  redteam:
+    host: mac_mini
+    org: subbu-ops
+    role: security_offense
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    notes: "Adversarial security probing; reports findings up through security-vp."
+
+  blueteam:
+    host: mac_mini
+    org: subbu-ops
+    role: security_defense
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    notes: "Defensive security monitoring; pairs with redteam under security-vp."
+
+  home-net:
+    host: mac_mini
+    org: subbu-ops
+    role: network_guardian
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    notes: "Home network monitoring; Tailscale + Caddy + router state."
