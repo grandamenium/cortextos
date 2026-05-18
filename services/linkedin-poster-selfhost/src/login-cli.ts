@@ -1,13 +1,15 @@
 /**
- * Mac-side LinkedIn login CLI
+ * Guarded LinkedIn login CLI
  *
- * Run on Greg's Mac to seed a fresh Chrome profile with a LinkedIn session,
- * validate it, then rsync to the Linux poster server.
+ * Run on an approved Orgo/Codex-CU browser lane to seed a fresh Chrome profile
+ * with a LinkedIn session, validate it, then rsync to the Linux poster server.
+ * macOS execution is blocked unless an explicit approved Mac fallback sets
+ * ALLOW_MAC_BROWSER_AUTOMATION=1 and ORGO_FAILURE_ARTIFACT.
  *
  * Usage:
  *   npx tsx src/login-cli.ts --user greg --server cortextos@100.84.86.6
  *
- * Requirements (Mac-side):
+ * Requirements:
  *   - Node >= 20
  *   - playwright (already in devDependencies)
  *   - rsync (pre-installed on macOS)
@@ -58,6 +60,12 @@ function log(msg: string) {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  if (process.platform === 'darwin' && (
+    process.env.ALLOW_MAC_BROWSER_AUTOMATION !== '1' || !process.env.ORGO_FAILURE_ARTIFACT
+  )) {
+    throw new Error('LinkedIn login CLI is Orgo/Codex-CU by default and is blocked on macOS. Set ALLOW_MAC_BROWSER_AUTOMATION=1 and ORGO_FAILURE_ARTIFACT only for an approved Mac fallback.');
+  }
+
   // Clean up any previous temp run
   if (existsSync(localTempDir)) {
     log(`Cleaning previous temp profile: ${localTempDir}`);

@@ -35,9 +35,9 @@ SENDER_NAME="Greg Harned" \
 npm start
 ```
 
-## Seeding a Login Profile (P2 — login CLI)
+## Seeding a Login Profile (P2 - login CLI)
 
-Run on **Greg's Mac** to seed a fresh profile, validate it, and rsync to the server.
+Run on an approved Orgo/Codex-CU browser lane to seed a fresh profile, validate it, and rsync to the server. macOS execution is blocked unless an explicit approved Mac fallback sets `ALLOW_MAC_BROWSER_AUTOMATION=1` and `ORGO_FAILURE_ARTIFACT`.
 
 ```bash
 # First run (one-time): create the base directory on the server

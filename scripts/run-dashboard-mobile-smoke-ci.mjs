@@ -8,6 +8,13 @@ if (!shouldRun) {
   process.exit(0);
 }
 
+if (process.platform === 'darwin' && (
+  process.env.ALLOW_MAC_BROWSER_AUTOMATION !== '1' || !process.env.ORGO_FAILURE_ARTIFACT
+)) {
+  console.error('[dashboard-mobile-smoke] refused on macOS. Run this on CI/Codex-CU/Orgo, or set ALLOW_MAC_BROWSER_AUTOMATION=1 and ORGO_FAILURE_ARTIFACT only with an approved Mac fallback.');
+  process.exit(78);
+}
+
 const env = {
   ...process.env,
   AUTH_SECRET: process.env.AUTH_SECRET || 'ci-fallback-do-not-use-in-prod',

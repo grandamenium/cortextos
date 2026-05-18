@@ -34,6 +34,12 @@ async function waitForConsoleLogin(page: Page): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (process.platform === 'darwin' && (
+    process.env.ALLOW_MAC_BROWSER_AUTOMATION !== '1' || !process.env.ORGO_FAILURE_ARTIFACT
+  )) {
+    throw new Error('GCP auth browser setup is Orgo/Codex-CU by default and is blocked on macOS. Set ALLOW_MAC_BROWSER_AUTOMATION=1 and ORGO_FAILURE_ARTIFACT only for an approved Mac fallback.');
+  }
+
   fs.mkdirSync(AUTH_DIR, { recursive: true });
 
   const browser = await chromium.launch({ headless: false });

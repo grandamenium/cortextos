@@ -6,13 +6,13 @@ These scripts replace repeated computer-use driven GCP and Vercel setup flows wi
 
 - Node 20+
 - Dependencies installed with `npm install`
-- Run `gcp-auth-setup` once before using the Playwright-backed Google Cloud Console scripts:
+- Run `gcp-auth-setup` once on an approved Orgo/Codex-CU browser lane before using the Playwright-backed Google Cloud Console scripts:
 
 ```bash
 npx tsx scripts/gcp-flows/gcp-auth-setup.ts
 ```
 
-The setup helper launches Chromium in headed mode, lets you log in to Google manually, and saves browser state to `scripts/gcp-flows/.auth/google-session.json`.
+The setup helper launches Chromium in headed mode, lets you log in to Google manually, and saves browser state to `scripts/gcp-flows/.auth/google-session.json`. It refuses to run on macOS unless an explicit approved Mac fallback sets `ALLOW_MAC_BROWSER_AUTOMATION=1` and `ORGO_FAILURE_ARTIFACT`.
 
 ## Environment Variables
 
