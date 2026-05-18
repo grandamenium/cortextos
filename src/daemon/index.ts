@@ -110,7 +110,7 @@ export function writeDaemonCrashedMarkers(ctxRoot: string): void {
   }
 }
 
-function getOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken: string } | null {
+export function getOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken: string } | null {
   // Priority 1: explicit operator env (recommended for production).
   const envChat = process.env.CTX_OPERATOR_CHAT_ID;
   const envToken = process.env.CTX_OPERATOR_BOT_TOKEN;
@@ -119,6 +119,13 @@ function getOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken
   }
   // Priority 2: fall back to the first agent's .env. Good enough for
   // small single-operator installs — alert still lands SOMEWHERE visible.
+  //
+  // Per-agent parse failures (BOM, bad encoding, no/invalid BOT_TOKEN line)
+  // emit a one-line WARN to stderr. Without it the entire crash-loop alert
+  // pipeline can silently die when only the first scanned agent's .env has
+  // a UTF-8 BOM — `^BOT_TOKEN=` misses, fall-through skips, return null,
+  // operator never sees the alert. This is the same silent-failure class
+  // that caused the 2026-05-17 6-agent ALLOWED_USER incident.
   try {
     const orgsRoot = join(frameworkRoot, 'orgs');
     if (!existsSync(orgsRoot)) return null;
@@ -131,19 +138,46 @@ function getOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken
         const envFile = join(agentsRoot, a.name, '.env');
         if (!existsSync(envFile)) continue;
         try {
-          const content = readFileSync(envFile, 'utf-8');
+          // Strip UTF-8 BOM (0xEF 0xBB 0xBF → U+FEFF) so `^BOT_TOKEN=` regex
+          // matches even when Windows tooling writes the file with a BOM.
+          // String#replace with anchored regex is a no-op when no BOM is present.
+          const content = readFileSync(envFile, 'utf-8').replace(/^﻿/, '');
           const tokenMatch = content.match(/^BOT_TOKEN=(.+)$/m);
           const chatMatch = content.match(/^CHAT_ID=(.+)$/m);
-          if (!tokenMatch || !chatMatch) continue;
+          if (!tokenMatch || !chatMatch) {
+            const missing = [
+              !tokenMatch ? 'BOT_TOKEN' : null,
+              !chatMatch ? 'CHAT_ID' : null,
+            ].filter(Boolean).join(' + ');
+            console.error(
+              `[daemon] getOperatorChatCreds: skipping ${org.name}/${a.name} — .env missing ${missing} ` +
+              `(check for BOM, CRLF, or quoted values; this agent will not be available for crash-loop alerts)`,
+            );
+            continue;
+          }
           const botToken = tokenMatch[1].trim();
           const chatId = envChat || chatMatch[1].trim();
           if (/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
             return { chatId, botToken };
           }
-        } catch { /* skip this agent */ }
+          console.error(
+            `[daemon] getOperatorChatCreds: skipping ${org.name}/${a.name} — BOT_TOKEN format invalid ` +
+            `(expected 123456:ABC..., got <${botToken.length} chars>); continuing to next agent`,
+          );
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[daemon] getOperatorChatCreds: skipping ${org.name}/${a.name} — .env read/parse failed: ${reason}`,
+          );
+        }
       }
     }
-  } catch { /* fall through */ }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[daemon] getOperatorChatCreds: orgs/ scan failed (${reason}); no crash-loop alert chat will be configured`,
+    );
+  }
   return null;
 }
 
