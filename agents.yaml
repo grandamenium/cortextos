@@ -10,7 +10,7 @@ generated: 2026-05-17
 hosts:
   macbook:
     user: hari
-    agents: [sam, warden-mb, pa]
+    agents: [sam, warden-mb, pa, compute, media]   # compute + media dormant
   mac_mini:
     user: subbu_ai_assistant
     agents:
@@ -19,6 +19,7 @@ hosts:
       - chief
       - dev
       - forge
+      - graphify-out      # dormant
       - home-net
       - redteam
       - research
@@ -181,3 +182,40 @@ agents:
     chat_id_env_var: null
     verified: false
     notes: "Home network monitoring; Tailscale + Caddy + router state."
+
+  # Dormant agents — directories exist on disk but enabled:false in
+  # enabled-agents.json. Listed here so `cortextos status` doesn't flag
+  # them as manifest drift. If you delete the dirs from disk you can
+  # also remove these entries.
+  compute:
+    host: macbook
+    org: subbu-ops
+    role: compute_worker
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    enabled: false
+    notes: "Dormant MacBook compute-worker agent dir. Enabled when GPU-heavy tasks need a dedicated PTY."
+
+  media:
+    host: macbook
+    org: subbu-ops
+    role: media_processor
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    enabled: false
+    notes: "Dormant MacBook media-processing agent dir (audio/video conversion staging)."
+
+  graphify-out:
+    host: mac_mini
+    org: subbu-ops
+    role: graph_exporter
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    enabled: false
+    notes: "Dormant Mac mini graph-export staging dir. Not in enabled-agents.json; consider deleting if no longer used."
