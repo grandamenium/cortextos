@@ -195,6 +195,7 @@ function rowToTask(row: Record<string, unknown>): Task {
     description: (row.description as string) ?? undefined,
     status: row.status as Task['status'],
     priority: row.priority as Task['priority'],
+    assigned_to: (row.assignee as string) ?? undefined,
     assignee: (row.assignee as string) ?? undefined,
     org: row.org as string,
     project: (row.project as string) ?? undefined,

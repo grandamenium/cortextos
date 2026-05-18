@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { getTasks } from '@/lib/data/tasks';
-import { getFrameworkRoot, getCTXRoot, getOrgs } from '@/lib/config';
+import { getFrameworkRoot, getCTXRoot, getOrgs, CTX_INSTANCE_ID, CTX_ROOT_REAL } from '@/lib/config';
 import { syncAll } from '@/lib/sync';
 
 export const dynamic = 'force-dynamic';
@@ -39,7 +39,12 @@ export async function GET(request: NextRequest) {
 
   try {
     const tasks = getTasks(filters);
-    return Response.json(tasks);
+    return Response.json(tasks, {
+      headers: {
+        'X-CortexOS-Instance': CTX_INSTANCE_ID,
+        'X-CortexOS-Root': CTX_ROOT_REAL,
+      },
+    });
   } catch (err) {
     console.error('[api/tasks] GET error:', err);
     return Response.json({ error: 'Failed to fetch tasks' }, { status: 500 });

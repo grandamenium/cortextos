@@ -3,7 +3,7 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { getTaskById } from '@/lib/data/tasks';
-import { getFrameworkRoot, getCTXRoot } from '@/lib/config';
+import { getFrameworkRoot, getCTXRoot, CTX_INSTANCE_ID, CTX_ROOT_REAL } from '@/lib/config';
 import { syncAll } from '@/lib/sync';
 
 export const dynamic = 'force-dynamic';
@@ -64,7 +64,12 @@ export async function GET(
       } catch { /* non-fatal — outputs are optional */ }
     }
 
-    return Response.json(task);
+    return Response.json(task, {
+      headers: {
+        'X-CortexOS-Instance': CTX_INSTANCE_ID,
+        'X-CortexOS-Root': CTX_ROOT_REAL,
+      },
+    });
   } catch (err) {
     console.error('[api/tasks/[id]] GET error:', err);
     return Response.json({ error: 'Failed to fetch task' }, { status: 500 });

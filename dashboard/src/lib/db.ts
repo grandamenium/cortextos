@@ -4,12 +4,11 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { CTX_INSTANCE_ID, CTX_ROOT_REAL } from './config';
 
-const instanceId = process.env.CTX_INSTANCE_ID ?? 'default';
-const ctxRoot = process.env.CTX_ROOT;
-const DB_PATH = ctxRoot
-  ? path.join(ctxRoot, 'dashboard', `cortextos-${instanceId}.db`)
-  : path.join(process.cwd(), '.data', `cortextos-${instanceId}.db`);
+const DB_PATH = CTX_ROOT_REAL
+  ? path.join(CTX_ROOT_REAL, 'dashboard', `cortextos-${CTX_INSTANCE_ID}.db`)
+  : path.join(process.cwd(), '.data', `cortextos-${CTX_INSTANCE_ID}.db`);
 
 function createDatabase(): Database.Database {
   // Ensure .data directory exists

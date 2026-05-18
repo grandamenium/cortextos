@@ -74,6 +74,9 @@ export interface Task {
   description?: string;
   status: TaskStatus;
   priority: TaskPriority;
+  /** Canonical v1 routing/owner field from CortexOS bus task JSON. */
+  assigned_to?: string;
+  /** Legacy dashboard alias retained for backwards-compatible filters/UI. */
   assignee?: string;
   org: string;
   project?: string;

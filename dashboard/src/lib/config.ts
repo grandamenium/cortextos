@@ -10,14 +10,23 @@ function expandTilde(p: string): string {
   return p;
 }
 
-// Core identity
-const CTX_INSTANCE_ID = process.env.CTX_INSTANCE_ID ?? 'default';
+// Core identity. Some long-running dashboard processes may be started with
+// CTX_INSTANCE_ID=default while CTX_ROOT points at a symlinked active instance.
+// Resolve CTX_ROOT below and derive the effective instance from that real path
+// so API metadata, DB names, and VM file readback all describe the same ledger.
+const RAW_CTX_INSTANCE_ID = process.env.CTX_INSTANCE_ID ?? 'default';
 
 // Core path constants - mirror bus/_ctx-env.sh logic
 export const CTX_ROOT = expandTilde(
   process.env.CTX_ROOT ??
-  path.join(os.homedir(), '.cortextos', CTX_INSTANCE_ID),
+  path.join(os.homedir(), '.cortextos', RAW_CTX_INSTANCE_ID),
 );
+
+export const CTX_ROOT_REAL = fs.existsSync(CTX_ROOT)
+  ? fs.realpathSync(CTX_ROOT)
+  : CTX_ROOT;
+
+export const CTX_INSTANCE_ID = path.basename(CTX_ROOT_REAL) || RAW_CTX_INSTANCE_ID;
 
 export const CTX_FRAMEWORK_ROOT = expandTilde(
   process.env.CTX_FRAMEWORK_ROOT ??
@@ -28,7 +37,7 @@ export const CTX_FRAMEWORK_ROOT = expandTilde(
 // Helper functions required by downstream tasks
 
 export function getCTXRoot(): string {
-  return CTX_ROOT;
+  return CTX_ROOT_REAL;
 }
 
 export function getFrameworkRoot(): string {
