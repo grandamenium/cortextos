@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Capture PTY exit handler so tests can simulate worker exit
 let capturedOnExit: ((code: number) => void) | null = null;
+let capturedPtyConfig: unknown = null;
 const mockPty = {
   spawn: vi.fn().mockResolvedValue(undefined),
   kill: vi.fn(),
@@ -13,7 +14,10 @@ const mockPty = {
 };
 
 vi.mock('../../../src/pty/agent-pty.js', () => ({
-  AgentPTY: function AgentPTY() { return mockPty; },
+  AgentPTY: function AgentPTY(_env: unknown, config: unknown) {
+    capturedPtyConfig = config;
+    return mockPty;
+  },
 }));
 
 const mockInjectMessage = vi.fn();
@@ -40,6 +44,7 @@ const mockEnv = {
 
 beforeEach(() => {
   capturedOnExit = null;
+  capturedPtyConfig = null;
   mockPty.spawn.mockClear();
   mockPty.kill.mockClear();
   mockPty.write.mockClear();
@@ -141,6 +146,20 @@ describe('WorkerProcess', () => {
       capturedOnExit!(1);
       expect(w.getStatus().status).toBe('failed');
       expect(w.getStatus().exitCode).toBe(1);
+    });
+  });
+
+  describe('model config (#283)', () => {
+    it('passes empty config to AgentPTY when no model arg is supplied', async () => {
+      const w = new WorkerProcess('w-model-default', '/tmp/proj', undefined);
+      await w.spawn(mockEnv, 'task');
+      expect(capturedPtyConfig).toEqual({});
+    });
+
+    it('threads model into AgentPTY config when supplied', async () => {
+      const w = new WorkerProcess('w-model-explicit', '/tmp/proj', undefined);
+      await w.spawn(mockEnv, 'task', { model: 'claude-opus-4-7' });
+      expect(capturedPtyConfig).toEqual({ model: 'claude-opus-4-7' });
     });
   });
 

@@ -92,27 +92,22 @@ beforeEach(() => {
 });
 
 describe('CodexAppServerPTY socket path policy', () => {
-  it('uses codex.sock in the agent state dir by default', () => {
+  // codex 0.118.0 dropped unix:// transport — these tests verify the TCP fallback
+  // (ws://127.0.0.1:<port>) with a stable port derived from the state dir.
+  it('uses a TCP loopback address by default', () => {
     const pty = new CodexAppServerPTY(mockEnv, {});
-    expect((pty as unknown as { _socketPath: string })._socketPath).toBe('/tmp/ctx/state/codex-app-agent/codex.sock');
-    expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toBe('unix://./codex.sock');
+    expect((pty as unknown as { _socketPath: string })._socketPath).toMatch(/^127\.0\.0\.1:\d+$/);
+    expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
   });
 
-  it('falls back to /tmp/cas-*.sock when the state socket path is too long', () => {
+  it('still returns a TCP address when the state path is long', () => {
     const longEnv = {
       ...mockEnv,
       ctxRoot: `/tmp/${'x'.repeat(120)}`,
     };
     const pty = new CodexAppServerPTY(longEnv, {});
-    const socketPath = (pty as unknown as { _socketPath: string })._socketPath;
-    expect(socketPath).toMatch(/\/cas-[a-f0-9]{8}\.sock$/);
-    expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toMatch(/^unix:\/\/\.\/cas-[a-f0-9]{8}\.sock$/);
-    expect((pty as unknown as { _socketCwd: string })._socketCwd).toBe('/tmp');
-    expect(fsMocks.writeFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('codex-app-server-socket.json'),
-      expect.stringContaining('"fallback": true'),
-      'utf-8',
-    );
+    expect((pty as unknown as { _socketPath: string })._socketPath).toMatch(/^127\.0\.0\.1:\d+$/);
+    expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toMatch(/^ws:\/\/127\.0\.0\.1:\d+$/);
   });
 });
 

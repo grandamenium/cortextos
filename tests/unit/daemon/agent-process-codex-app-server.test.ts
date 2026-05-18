@@ -70,6 +70,7 @@ vi.mock('fs', async () => {
   return {
     ...actual,
     mkdirSync: vi.fn(),
+    unlinkSync: vi.fn(),
     get existsSync() { return fsMocks.existsSync; },
     get readFileSync() { return fsMocks.readFileSync; },
     get writeFileSync() { return fsMocks.writeFileSync; },
@@ -127,6 +128,55 @@ describe('AgentProcess codex-app-server runtime', () => {
     await ap.start();
 
     expect(mockCodexAppServerPty.setTelegramHandle).toHaveBeenCalledWith(api, '12345');
+  });
+
+  it('sends back-online Telegram directly from daemon on fresh start (issue #392)', async () => {
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const api = { sendChatAction: vi.fn().mockResolvedValue(undefined), sendMessage };
+
+    ap.setTelegramHandle(api as any, '12345');
+    await ap.start();
+
+    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online');
+  });
+
+  it('skips back-online Telegram on handoff restart (issue #392)', async () => {
+    // Simulate handoff doc marker present at .handoff-doc-path so
+    // consumeHandoffBlock() returns a non-empty fragment, marking the spawn
+    // as a handoff restart that should suppress the daemon-direct ping.
+    // existsSync must return true for BOTH the marker file and the doc path
+    // it points at — consumeHandoffBlock checks both.
+    const handoffDocPath = '/tmp/handoff-doc.md';
+    fsMocks.existsSync.mockImplementation((path: string) =>
+      typeof path === 'string'
+      && (path.endsWith('.handoff-doc-path') || path === handoffDocPath),
+    );
+    fsMocks.readFileSync.mockReturnValue(handoffDocPath);
+
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const api = { sendChatAction: vi.fn().mockResolvedValue(undefined), sendMessage };
+
+    ap.setTelegramHandle(api as any, '12345');
+    await ap.start();
+
+    const prompt = mockCodexAppServerPty.spawn.mock.calls[0]?.[1] ?? '';
+    expect(prompt).toContain('CONTEXT HANDOFF');
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not send daemon-direct back-online Telegram for claude-code runtime (issue #392)', async () => {
+    // claude-code already executes the inline "Send a Telegram message..."
+    // bootstrap instruction itself, so the daemon must not double up.
+    const ap = new AgentProcess('claude-agent', mockEnv, { runtime: 'claude-code' });
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const api = { sendChatAction: vi.fn().mockResolvedValue(undefined), sendMessage };
+
+    ap.setTelegramHandle(api as any, '12345');
+    await ap.start();
+
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it('uses direct kill path on stop, not Claude /exit choreography', async () => {

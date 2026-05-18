@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -27,6 +27,12 @@ export class AgentProcess {
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
+  // CrashLoopPauser (instar-inspired): sliding-window crash detection.
+  // Timestamps of recent crashes within the configured window. If the
+  // window fills, the agent auto-pauses instead of retrying with backoff.
+  private crashTimestamps: number[] = [];
+  private crashWindowMs: number = 0;
+  private crashWindowMax: number = 0;
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
@@ -66,6 +72,11 @@ export class AgentProcess {
   private streamingEnabled = false;
   private streamingStarterPlaceholder = '…';
   private activeStreamer: TelegramStreamer | null = null;
+  // Issue #392: tracks whether the most recently built startup prompt consumed
+  // a handoff doc marker. start() reads this after spawn to decide whether the
+  // daemon should fire the codex-app-server back-online Telegram directly
+  // (skipped on handoff restart — the agent sends its own contextual reply).
+  private lastSpawnWasHandoff = false;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -73,6 +84,10 @@ export class AgentProcess {
     this.config = config;
     if (config.max_crashes_per_day !== undefined) {
       this.maxCrashesPerDay = config.max_crashes_per_day;
+    }
+    if (config.crash_window?.seconds) {
+      this.crashWindowMs = config.crash_window.seconds * 1000;
+      this.crashWindowMax = config.crash_window.max_crashes ?? 3;
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
@@ -177,6 +192,13 @@ export class AgentProcess {
       this.status = 'running';
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
+
+      // Issue #392: codex-app-server does not reliably execute the inline
+      // "Send a Telegram message saying you are back online" instruction the
+      // way claude-code does, so fire the back-online ping directly from the
+      // daemon for that runtime. Skipped on handoff restart — the agent
+      // sends its own contextual "back — ..." reply in that case.
+      this.maybeSendCodexBootNotification();
 
       // Start session timer
       this.startSessionTimer();
@@ -294,20 +316,34 @@ export class AgentProcess {
   }
 
   /**
-   * Inject a message into the agent's PTY.
+   * Inject a message into the agent's PTY — structured outcome.
+   *
+   * Distinguishes NOT_RUNNING (agent registered but no live PTY) from
+   * DEDUPED (content collapsed against the in-process MessageDedup window).
+   * See issue #346 — both used to surface as a bare `false` and got mistaken
+   * for "agent not found" by operators investigating restart/cron failures.
    */
-  injectMessage(content: string): boolean {
+  injectMessageDetailed(content: string): { ok: true } | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED'; message: string } {
     if (!this.pty || this.status !== 'running') {
-      return false;
+      return { ok: false, code: 'NOT_RUNNING', message: `agent "${this.name}" is registered but not running (status: ${this.status})` };
     }
 
     if (this.dedup.isDuplicate(content)) {
       this.log('Dedup: skipping duplicate message');
-      return false;
+      return { ok: false, code: 'DEDUPED', message: `inject for "${this.name}" deduped — content matches MessageDedup hash window` };
     }
 
     injectMessage((data) => this.pty?.write(data), content);
-    return true;
+    return { ok: true };
+  }
+
+  /**
+   * Inject a message into the agent's PTY (back-compat boolean wrapper).
+   * New callers that need to distinguish DEDUPED from NOT_RUNNING should use
+   * `injectMessageDetailed()` instead.
+   */
+  injectMessage(content: string): boolean {
+    return this.injectMessageDetailed(content).ok;
   }
 
   /**
@@ -497,7 +533,31 @@ export class AgentProcess {
       return;
     }
 
-    // Check crash limit
+    // CrashLoopPauser (instar-inspired): if a sliding window is configured,
+    // check whether the agent is crash-looping before falling through to
+    // the legacy daily counter. The window is a more precise signal than
+    // the per-day count: 3 crashes in 30 minutes is a crash loop even if
+    // the daily budget of 10 is far from exhausted.
+    if (this.crashWindowMs > 0) {
+      const now = Date.now();
+      this.crashTimestamps.push(now);
+      // Prune timestamps outside the window.
+      this.crashTimestamps = this.crashTimestamps.filter(
+        (ts) => now - ts <= this.crashWindowMs,
+      );
+      if (this.crashTimestamps.length >= this.crashWindowMax) {
+        this.log(
+          `CRASH_LOOP: ${this.crashTimestamps.length} crashes in ${this.crashWindowMs / 1000}s window — auto-pausing`,
+        );
+        this.appendCrashToRestartsLog(exitCode, 0, 'CRASH_LOOP');
+        this.status = 'halted';
+        this.notifyStatusChange();
+        return;
+      }
+    }
+
+    // Legacy daily crash counter (fallback when no crash_window is configured,
+    // or as a secondary gate when the window hasn't filled yet).
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];
     this.resetCrashCountIfNewDay(today);
@@ -592,6 +652,7 @@ export class AgentProcess {
     const deliverablesBlock = this.buildDeliverablesBlock();
     const handoffBlock = this.consumeHandoffBlock();
     const isHandoffRestart = handoffBlock.length > 0;
+    this.lastSpawnWasHandoff = isHandoffRestart;
     // HANDOFF UX: the pickup message MUST be the first action after reading the handoff doc —
     // before cron restoration, before heartbeat, before anything else. Placing this instruction
     // immediately after the handoffBlock in the prompt ensures it is not buried.
@@ -608,6 +669,8 @@ export class AgentProcess {
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
     const deliverablesBlock = this.buildDeliverablesBlock();
+    // Session refresh (--continue) is never a handoff restart.
+    this.lastSpawnWasHandoff = false;
     return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations. After checking inbox, send a Telegram message to the user saying you are back online.`;
   }
 
@@ -661,7 +724,6 @@ export class AgentProcess {
     const markerPath = join(this.env.ctxRoot, 'state', this.name, '.handoff-doc-path');
     if (!existsSync(markerPath)) return '';
     try {
-      const { unlinkSync } = require('fs');
       const docPath = readFileSync(markerPath, 'utf-8').trim();
       unlinkSync(markerPath);
       if (!docPath || !existsSync(docPath)) return '';
@@ -669,6 +731,29 @@ export class AgentProcess {
     } catch {
       return '';
     }
+  }
+
+  /**
+   * Issue #392: send the back-online Telegram notification directly from the
+   * daemon when the codex-app-server runtime spawns. The boot prompt's inline
+   * "Send a Telegram message..." instruction reaches the codex thread but is
+   * not executed reliably as a tool call, leaving James without the standard
+   * post-restart notification claude-code peers send.
+   *
+   * Skipped when:
+   *  - runtime is anything other than codex-app-server (claude-code/hermes
+   *    already emit this via the prompt),
+   *  - the most recent prompt was built for a handoff restart (the agent
+   *    sends its own contextual "back — ..." reply in that case),
+   *  - no Telegram handle has been wired (no chat_id configured).
+   */
+  private maybeSendCodexBootNotification(): void {
+    if (this.config.runtime !== 'codex-app-server') return;
+    if (this.lastSpawnWasHandoff) return;
+    if (!this.telegramApi || !this.telegramChatId) return;
+    this.telegramApi
+      .sendMessage(this.telegramChatId, `Agent ${this.name} is back online`)
+      .catch(() => { /* non-fatal: notification is observability only */ });
   }
 
   private startSessionTimer(): void {
@@ -755,7 +840,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
