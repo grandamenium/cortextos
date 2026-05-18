@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { detectDayNightMode } from '../src/bus/heartbeat.js';
+import { resolveEnv } from '../src/utils/env.js';
 
 describe('Sprint 7: Environment & Config Completeness', () => {
   const testDir = join(tmpdir(), `cortextos-sprint7-${Date.now()}`);
@@ -151,6 +152,80 @@ describe('Sprint 7: Environment & Config Completeness', () => {
       expect(existsSync(ctxRoot)).toBe(true);
       rmSync(ctxRoot, { recursive: true, force: true });
       expect(existsSync(ctxRoot)).toBe(false);
+    });
+  });
+
+  describe('Sandbox/live env subordination (issue #313)', () => {
+    const ctxKeys = [
+      'CTX_FRAMEWORK_ROOT',
+      'CTX_AGENT_DIR',
+      'CTX_PROJECT_ROOT',
+      'CTX_AGENT_NAME',
+      'CTX_ORG',
+      'CTX_INSTANCE_ID',
+      'CTX_ROOT',
+      'CTX_TIMEZONE',
+      'CTX_ORCHESTRATOR',
+    ];
+    const savedEnv: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const k of ctxKeys) {
+        savedEnv[k] = process.env[k];
+        delete process.env[k];
+      }
+    });
+
+    afterEach(() => {
+      for (const k of ctxKeys) {
+        if (savedEnv[k] === undefined) delete process.env[k];
+        else process.env[k] = savedEnv[k];
+      }
+    });
+
+    it('TC-A subordinate: agentDir under frameworkRoot resolves without throwing', () => {
+      const fwRoot = join(testDir, 'sandbox');
+      const agentDir = join(fwRoot, 'orgs', 'test', 'agents', 'foo');
+      expect(() => resolveEnv({
+        frameworkRoot: fwRoot,
+        projectRoot: fwRoot,
+        agentDir,
+        agentName: 'foo',
+      })).not.toThrow();
+    });
+
+    it('TC-B leak: agentDir not under frameworkRoot throws sandbox/live leak error', () => {
+      const fwRoot = join(testDir, 'sandbox');
+      const liveAgentDir = '/Users/cortextos/cortextos/orgs/testorg/agents/cortext-designer';
+      expect(() => resolveEnv({
+        frameworkRoot: fwRoot,
+        agentDir: liveAgentDir,
+        agentName: 'cortext-designer',
+      })).toThrow(/not under CTX_FRAMEWORK_ROOT/);
+    });
+
+    it('TC-C divergence: projectRoot diverging from frameworkRoot throws', () => {
+      const fwRoot = join(testDir, 'sandbox');
+      expect(() => resolveEnv({
+        frameworkRoot: fwRoot,
+        agentDir: join(fwRoot, 'orgs', 'foo', 'agents', 'bar'),
+        projectRoot: '/Users/cortextos/cortextos',
+        agentName: 'bar',
+      })).toThrow(/must equal CTX_FRAMEWORK_ROOT/);
+    });
+
+    it('TC-D back-compat: happy-path frameworkRoot=projectRoot with derived agentDir resolves', () => {
+      const root = join(testDir, 'repo');
+      mkdirSync(root, { recursive: true });
+      const result = resolveEnv({
+        frameworkRoot: root,
+        projectRoot: root,
+        agentName: 'test-agent',
+        org: 'testorg',
+      });
+      expect(result.frameworkRoot).toBe(root);
+      expect(result.projectRoot).toBe(root);
+      expect(result.agentDir).toBe(join(root, 'orgs', 'testorg', 'agents', 'test-agent'));
     });
   });
 });

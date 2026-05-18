@@ -43,7 +43,7 @@ export class WorkerProcess {
   /**
    * Spawn the worker Claude Code session with the given task prompt.
    */
-  async spawn(env: CtxEnv, prompt: string): Promise<void> {
+  async spawn(env: CtxEnv, prompt: string, config: { model?: string } = {}): Promise<void> {
     // Ensure bus dirs exist so the worker can use cortextos bus commands
     try {
       mkdirSync(join(env.ctxRoot, 'inbox', this.name), { recursive: true });
@@ -52,7 +52,7 @@ export class WorkerProcess {
     } catch { /* ignore */ }
 
     const logPath = join(env.ctxRoot, 'logs', this.name, 'stdout.log');
-    this.pty = new AgentPTY(env, {}, logPath);
+    this.pty = new AgentPTY(env, config, logPath);
 
     this.pty.onExit((code) => {
       this.exitCode = code;

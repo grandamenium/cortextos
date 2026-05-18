@@ -199,6 +199,20 @@ export const addAgentCommand = new Command('add-agent')
       }
     }
 
+    // Persist non-default runtime into config.json regardless of whether the
+    // file came from a template or was created above. The template-supplied
+    // config.json wins file existence, so we read-merge-write to inject the
+    // runtime field that agent-process.ts branches on.
+    if (options.runtime !== 'claude-code' && existsSync(configPath)) {
+      try {
+        const existingCfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+        existingCfg.runtime = options.runtime;
+        writeFileSync(configPath, JSON.stringify(existingCfg, null, 2) + '\n', 'utf-8');
+      } catch (err) {
+        console.error(`Warning: failed to set runtime field in config.json: ${(err as Error).message}`);
+      }
+    }
+
     // Create .env placeholder with helpful comments
     const envPath = join(agentDir, '.env');
     if (!existsSync(envPath)) {
@@ -273,6 +287,7 @@ export const addAgentCommand = new Command('add-agent')
             '',
             '- Agent-to-agent: `cortextos bus send-message <agent> <priority> "<text>"`',
             '- Telegram to user: `cortextos bus send-telegram <chat_id> "<text>"`',
+            '- React to a Telegram message (single emoji ack, no verbal noise): `cortextos bus react-telegram <chat_id> <message_id> 👍`',
             '- Check inbox: `cortextos bus check-inbox`',
             '',
           ].join('\n');
@@ -558,5 +573,6 @@ Complete tasks: \`cortextos bus complete-task <id> --result "<text>"\`
 Log events: \`cortextos bus log-event <category> <event> <severity>\`
 Update heartbeat: \`cortextos bus update-heartbeat "<status>"\`
 Send Telegram: \`cortextos bus send-telegram <chat_id> "<text>"\`
+React to Telegram message (single emoji ack): \`cortextos bus react-telegram <chat_id> <message_id> 👍\`
 `;
 }
