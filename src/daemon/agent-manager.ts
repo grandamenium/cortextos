@@ -245,9 +245,12 @@ export class AgentManager {
         botToken = undefined;
       }
 
-      // ALLOWED_USER must be a numeric Telegram user ID, not a username
+      // ALLOWED_USER must be a numeric Telegram user ID, not a username.
+      // Capture the bad value for outbound notification before discarding.
+      let badAllowedUser: string | undefined;
       if (allowedUserId && !/^\d+$/.test(allowedUserId)) {
         log(`SECURITY: ALLOWED_USER is not a numeric ID. Telegram user IDs are numbers (e.g. 123456789). Refusing to enable Telegram. Fix the .env file.`);
+        badAllowedUser = allowedUserId;
         allowedUserId = undefined;
       }
 
@@ -255,8 +258,21 @@ export class AgentManager {
       // ANY Telegram user who finds the bot @handle could control the agent.
       // Fail closed: refuse to start Telegram unless the operator explicitly
       // whitelists their numeric user ID.
+      //
+      // Surface the silent failure via outbound Telegram BEFORE nuking
+      // botToken — bus outbound has no ALLOWED_USER gate, so a one-shot
+      // notice to CHAT_ID reaches the operator even when the inbound poller
+      // is disabled. Without this notice the bug is invisible: PM2 stdout is
+      // the only signal, and operators don't watch it.
+      if (botToken && !allowedUserId && chatId) {
+        const reason = badAllowedUser
+          ? `ALLOWED_USER="${badAllowedUser}" is not numeric`
+          : `ALLOWED_USER is missing`;
+        const notice = `[${name}] Telegram inbound DISABLED — ${reason}. Set ALLOWED_USER to your numeric Telegram user ID in the agent's .env (curl https://api.telegram.org/bot<TOKEN>/getUpdates and copy .result[-1].message.from.id), then run: cortextos restart ${name}`;
+        new TelegramAPI(botToken).sendMessage(chatId, notice).catch(() => {});
+      }
       if (botToken && !allowedUserId) {
-        log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
+        log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing or non-numeric. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
         botToken = undefined;
       }
 
