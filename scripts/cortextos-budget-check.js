@@ -238,7 +238,8 @@ async function main() {
       `[BUDGET ${level}] ${agent}: $${spent.toFixed(2)} / $${budget} monthly cap (${pctStr}%).${hardPauseNote}`;
 
     log(`  ${agent}: ALERT — ${alertMsg}`);
-    sendToOrchestrator(`BUDGET ALERT — relay to Greg: ${alertMsg}`);
+    // Budget alerts are API-offset tracking (not real cash spend per Greg 2026-05-18).
+    // Keep log metric but suppress orchestrator/Telegram relay.
 
     if (hardPauseEnabled && pct >= hardPauseAt) {
       writePausedMarker(agent);
