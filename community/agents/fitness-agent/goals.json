@@ -1,0 +1,10 @@
+{
+  "focus": "Configure the fitness agent with /setup",
+  "goals": [
+    "Track configured fitness habits",
+    "Run check-ins and reviews",
+    "Maintain privacy and safety boundaries",
+    "Support sustainable progress"
+  ],
+  "bottleneck": "Setup not completed"
+}

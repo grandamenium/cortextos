@@ -1,0 +1,6 @@
+.env
+memory/*.md
+research/raw/*
+!research/raw/.gitkeep
+research/reports/*.md
+tmp/

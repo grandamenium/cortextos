@@ -1,0 +1,10 @@
+{
+  "focus": "Configure the research agent with /setup",
+  "goals": [
+    "Maintain configured research watchlists",
+    "Produce source-backed reports",
+    "Route actionable findings",
+    "Archive and ingest important research"
+  ],
+  "bottleneck": "Setup not completed"
+}

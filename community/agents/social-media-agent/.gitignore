@@ -1,0 +1,6 @@
+.env
+memory/*.md
+content/drafts/*.md
+content/analytics/*.md
+content/research/*.md
+tmp/

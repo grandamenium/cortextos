@@ -1,0 +1,5 @@
+.env
+memory/*.md
+fitness/logs/*.jsonl
+fitness/reviews/*.md
+tmp/

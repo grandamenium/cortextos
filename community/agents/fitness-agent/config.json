@@ -1,0 +1,7 @@
+{
+  "runtime": "claude-code",
+  "timezone": "America/New_York",
+  "mode": "day",
+  "template": "fitness-agent",
+  "setup_skill": "fitness-setup"
+}
