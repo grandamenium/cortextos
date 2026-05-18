@@ -3,6 +3,7 @@ import { execSync, spawnSync } from 'child_process';
 import { existsSync, writeFileSync, readFileSync, mkdirSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { stripBom } from '../utils/strip-bom.js';
 
 const TUNNEL_NAME = 'cortextos';
 const PLIST_LABEL = 'com.cortextos.tunnel';
@@ -24,7 +25,8 @@ function getTunnelConfigPath(instance: string): string {
 
 function readTunnelConfig(instance: string): TunnelConfig {
   try {
-    return JSON.parse(readFileSync(getTunnelConfigPath(instance), 'utf-8'));
+    // stripBom: see src/utils/strip-bom.ts for incident context.
+    return JSON.parse(stripBom(readFileSync(getTunnelConfigPath(instance), 'utf-8')));
   } catch {
     return {};
   }
