@@ -41,10 +41,10 @@ Run on an approved Orgo/Codex-CU browser lane to seed a fresh profile, validate 
 
 ```bash
 # First run (one-time): create the base directory on the server
-ssh cortextos@100.84.86.6 "sudo mkdir -p /var/lib/linkedin-poster/profiles && sudo chown cortextos:cortextos /var/lib/linkedin-poster"
+ssh <poster-server-ssh> "sudo mkdir -p /var/lib/linkedin-poster/profiles && sudo chown cortextos:cortextos /var/lib/linkedin-poster"
 
 # Seed / refresh a user profile
-npm run login -- --user greg --server cortextos@100.84.86.6
+npm run login -- --user greg --server <poster-server-ssh>
 
 # Custom remote base (optional)
 npm run login -- --user greg --server user@host --remote-base /custom/path

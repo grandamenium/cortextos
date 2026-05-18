@@ -7,7 +7,7 @@
  * ALLOW_MAC_BROWSER_AUTOMATION=1 and ORGO_FAILURE_ARTIFACT.
  *
  * Usage:
- *   npx tsx src/login-cli.ts --user greg --server cortextos@100.84.86.6
+ *   npx tsx src/login-cli.ts --user greg --server <poster-server-ssh>
  *
  * Requirements:
  *   - Node >= 20
@@ -37,7 +37,7 @@ function arg(flag: string, required = true): string {
 }
 
 const userId = arg('--user');
-const server = arg('--server', false) || 'cortextos@100.84.86.6';
+const server = arg('--server');
 const remoteBase = arg('--remote-base', false) || '/var/lib/linkedin-poster/profiles';
 
 const localTempDir = join(tmpdir(), `poster-login-${userId}`);
