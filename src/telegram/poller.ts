@@ -22,6 +22,7 @@ export class TelegramPoller {
   private callbackHandlers: CallbackHandler[] = [];
   private reactionHandlers: ReactionHandler[] = [];
   private pollInterval: number;
+  public lastExitReason: string | undefined;
 
   /**
    * @param api Telegram API client scoped to a single bot token.
@@ -92,6 +93,7 @@ export class TelegramPoller {
    */
   stop(): void {
     this.running = false;
+    this.lastExitReason = 'stopped-externally';
   }
 
   /**
