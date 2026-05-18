@@ -1,23 +1,22 @@
 /**
- * computer-use — bus command that dispatches a prompt to Codex on Greg's Mac
- * via SSH and the codex-dispatch.sh script, which runs Codex non-interactively
- * with the @Computer Use plugin.
+ * computer-use — bus command for legacy Codex dispatch.
  *
  * Usage (CLI):
- *   cortextos bus computer-use "take a screenshot and describe what you see"
+ *   cortextos bus computer-use --ssh-host gregs-mac --orgo-failure-artifact /path/to/failure.json "take a screenshot and describe what you see"
  *   cortextos bus computer-use --no-plugin "just a regular Codex task"
  *   cortextos bus computer-use --workdir /path/to/repo "refactor this file"
  *   cortextos bus computer-use --timeout 120 "slow task"
  *
  * How it works:
- *   1. SSH to Greg's Mac (gregs-mac / 100.84.86.6 via Tailscale)
+ *   1. If --no-plugin and no --ssh-host is provided, run local Codex on the VM.
+ *   2. If --ssh-host is provided, SSH to that host and run codex-dispatch.sh.
  *   2. Run ~/work/team-brain/scripts/codex-dispatch.sh with the prompt
  *   3. codex-dispatch.sh invokes `codex exec` with the Computer Use plugin
  *      reference ([@Computer Use](plugin://computer-use@openai-bundled))
  *   4. Codex runs the task non-interactively and writes the last message to stdout
  *   5. The result is returned and logged as a computer_use_task event
  *
- * Fallback chain (Mac SSH → localhost Codex CLI):
+ * Fallback chain (explicit SSH host → localhost Codex CLI):
  *   When SSH to the Mac fails with a connection-level error (host unreachable,
  *   ConnectTimeout, EHOSTUNREACH, etc.), the function falls back to running
  *   `codex exec --json` locally on the cortex VM. This fallback only applies
@@ -26,7 +25,7 @@
  *   running them locally would silently degrade without display access.
  *
  * Orgo-first gate:
- *   Mac SSH is now a fallback path, not the default path for browser/UI work.
+ *   Mac SSH is now an explicit exception, not the default path for browser/UI work.
  *   Calls targeting Greg's Mac must include a recent (<10 minutes) failed Orgo
  *   lease attempt artifact via --orgo-failure-artifact or
  *   CORTEXTOS_ORGO_FAILURE_ARTIFACT before SSH is attempted.
@@ -82,11 +81,11 @@ function buildRemoteCommand(
 export interface ComputerUseOptions {
   /** Skip the @Computer Use plugin prefix — send a plain Codex prompt */
   noPlugin?: boolean;
-  /** Working directory for Codex on the Mac (or locally when fallback is used) */
+  /** Working directory for Codex on the remote host (or locally for no-host code-only tasks) */
   workdir?: string;
   /** Timeout in seconds (default: 300) */
   timeout?: number;
-  /** SSH host (default: gregs-mac) */
+  /** SSH host. Greg's Mac requires an explicit Orgo failure artifact. */
   sshHost?: string;
   /** Path to codex-dispatch.sh on the Mac */
   dispatchScript?: string;
@@ -105,7 +104,7 @@ export interface ComputerUseResult {
   usedFallback?: boolean;
 }
 
-const DEFAULT_SSH_HOST = 'gregs-mac';
+const GREGS_MAC_HOST = 'gregs-mac';
 const DEFAULT_DISPATCH_SCRIPT = '/Users/gregharned/work/team-brain/scripts/codex-dispatch.sh';
 const DEFAULT_MAC_CODEX_BIN = '/Applications/Codex.app/Contents/Resources/codex';
 const GREGS_MAC_TAILSCALE_IP = '100.84.86.6';
@@ -134,7 +133,7 @@ function isSshConnectionError(msg: string): boolean {
 
 function isMacSshHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
-  return normalized === DEFAULT_SSH_HOST || normalized === GREGS_MAC_TAILSCALE_IP;
+  return normalized === GREGS_MAC_HOST || normalized === GREGS_MAC_TAILSCALE_IP;
 }
 
 function validateRecentOrgoFailureArtifact(artifactPath?: string): string | null {
@@ -217,15 +216,77 @@ function parseCodexExecOutput(raw: string): { output: string; exitCode: number }
   return { output: trimmed, exitCode: sawJsonEvent ? exitCode : 0 };
 }
 
+function runLocalCodex(
+  prompt: string,
+  opts: Pick<ComputerUseOptions, 'workdir' | 'timeout'>,
+  start: number,
+): ComputerUseResult {
+  try {
+    const codexBin = resolveLocalCodexBin();
+    const raw = execFileSync(codexBin, ['exec', '--json', prompt], {
+      timeout: (opts.timeout ?? 300) * 1000,
+      encoding: 'utf-8',
+      cwd: opts.workdir,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    const parsed = parseCodexExecOutput(raw);
+    if (parsed.exitCode !== 0) {
+      return {
+        ok: false,
+        error: `codex exec exited with code ${parsed.exitCode}: ${parsed.output}`,
+        durationMs: Date.now() - start,
+        usedFallback: true,
+      };
+    }
+
+    return {
+      ok: true,
+      output: parsed.output,
+      durationMs: Date.now() - start,
+      usedFallback: true,
+    };
+  } catch (fallbackErr) {
+    const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+    return {
+      ok: false,
+      error: `localhost codex exec failed: ${fallbackMsg}`,
+      durationMs: Date.now() - start,
+      usedFallback: true,
+    };
+  }
+}
+
 export async function computerUse(
   prompt: string,
   opts: ComputerUseOptions = {},
 ): Promise<ComputerUseResult> {
-  const sshHost = opts.sshHost ?? DEFAULT_SSH_HOST;
+  const sshHost = opts.sshHost;
   const dispatchScript = opts.dispatchScript ?? DEFAULT_DISPATCH_SCRIPT;
   const timeoutSec = opts.timeout ?? 300;
   const start = Date.now();
   const orgoFailureArtifact = opts.orgoFailureArtifact ?? process.env.CORTEXTOS_ORGO_FAILURE_ARTIFACT;
+
+  if (!sshHost) {
+    if (opts.noPlugin) {
+      const localResult = runLocalCodex(prompt, opts, start);
+      if (localResult.ok) {
+        try {
+          execFileSync('cortextos', ['bus', 'log-event', 'action', 'computer_use_local_codex', 'info',
+            '--meta', JSON.stringify({ promptLength: prompt.length, durationMs: localResult.durationMs, ok: true })],
+            { encoding: 'utf-8', timeout: 10_000 });
+        } catch { /* non-fatal */ }
+      }
+      return localResult;
+    }
+
+    return {
+      ok: false,
+      error: 'computer-use no longer defaults to Greg\'s Mac. Browser/UI automation must run on Orgo/Codex-CU VM. Mac fallback requires explicit --ssh-host gregs-mac and --orgo-failure-artifact <recent-failed-Orgo-artifact>.',
+      durationMs: Date.now() - start,
+      usedFallback: false,
+    };
+  }
 
   if (isMacSshHost(sshHost)) {
     const artifactError = validateRecentOrgoFailureArtifact(orgoFailureArtifact);
@@ -330,49 +391,23 @@ export async function computerUse(
       };
     }
 
-    // Fallback: run codex exec --json locally on the cortex VM
-    try {
-      const codexBin = resolveLocalCodexBin();
-      const raw = execFileSync(codexBin, ['exec', '--json', prompt], {
-        timeout: timeoutSec * 1000,
-        encoding: 'utf-8',
-        cwd: opts.workdir,
-        maxBuffer: 10 * 1024 * 1024,
-      });
+    const fallbackResult = runLocalCodex(prompt, opts, start);
 
-      let output: string;
-      const parsed = parseCodexExecOutput(raw);
-      if (parsed.exitCode !== 0) {
-        return {
-          ok: false,
-          error: `codex exec exited with code ${parsed.exitCode}: ${parsed.output}`,
-          durationMs: Date.now() - start,
-          usedFallback: true,
-        };
-      }
-      output = parsed.output;
-
-      // Log successful fallback use
+    if (fallbackResult.ok) {
       try {
         execFileSync('cortextos', ['bus', 'log-event', 'action', 'computer_use_fallback', 'info',
-          '--meta', JSON.stringify({ promptLength: prompt.length, durationMs: Date.now() - start, ok: true })],
+          '--meta', JSON.stringify({ promptLength: prompt.length, durationMs: fallbackResult.durationMs, ok: true })],
           { encoding: 'utf-8', timeout: 10_000 });
       } catch { /* non-fatal */ }
+    }
 
+    if (!fallbackResult.ok) {
       return {
-        ok: true,
-        output,
-        durationMs: Date.now() - start,
-        usedFallback: true,
-      };
-    } catch (fallbackErr) {
-      const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-      return {
-        ok: false,
-        error: `Mac SSH unreachable; localhost codex exec also failed: ${fallbackMsg}`,
-        durationMs: Date.now() - start,
-        usedFallback: true,
+        ...fallbackResult,
+        error: `Mac SSH unreachable; ${fallbackResult.error}`,
       };
     }
+
+    return fallbackResult;
   }
 }

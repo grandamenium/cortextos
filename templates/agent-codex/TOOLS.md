@@ -165,16 +165,16 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 - For file inspection prefer `cat` / `sed -n` / `head` / `tail`; for edits prefer `sed -i` / `awk` / a redirect pipeline.
 
 ### agent-browser (Browser Automation)
+- Default runtime: Codex-CU / Orgo VM. Do not run browser automation on Greg's Mac unless a current Orgo-failure artifact authorizes Mac fallback.
+- OB1 browser proof is Compl1-only: VM `23e7d600`, target `https://ob1.revopsglobal.com`.
 - `agent-browser` is the framework's Chrome/CDP browser automation tool — runtime-agnostic CLI, no MCP setup required. It is the codex equivalent of (and replacement for) the `mcp__playwright__*` tools that Claude-Code-runtime agents formerly used.
 - `agent-browser` CLI (Rust binary, npm-installed globally) drives Chrome via CDP
 - Snapshot-then-ref interaction pattern: `agent-browser snapshot` returns an a11y tree with refs (e1, e2, ...), then `agent-browser click @e1` / `fill @e2 "text"` operate by ref
 - Loaded via `plugins/cortextos-agent-skills/skills/agent-browser/SKILL.md` — that skill says to run `agent-browser skills get <name>` for current command syntax (workflow docs are versioned with the binary, so always fetch fresh)
 - Quick verify: `agent-browser open https://example.com && agent-browser get title && agent-browser close`
 
-### Peekaboo (macOS Desktop Automation)
-- `peekaboo image` (screenshot), `peekaboo list` (apps), `peekaboo run <script>`
-- Screen Recording + Accessibility permissions granted
-- `peekaboo learn` for full usage guide
+### macOS Desktop Automation
+- Quarantined by default. Do not use Peekaboo, osascript, headed Chrome, or local Playwright on Greg's Mac unless a current explicit Orgo-failure artifact and task approval authorize that exception.
 
 ### gogcli (Google Workspace)
 - Binary: `gog` (v0.12.0 at `/opt/homebrew/bin/gog`)

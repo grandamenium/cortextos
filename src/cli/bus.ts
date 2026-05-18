@@ -5065,11 +5065,11 @@ busCommand
 
 busCommand
   .command('computer-use <prompt>')
-  .description('Run a prompt on Codex with @Computer Use plugin via SSH to Greg\'s Mac')
+  .description('Run a legacy Codex dispatch prompt. Defaults to local code-only Codex; Greg Mac requires explicit guarded fallback.')
   .option('--no-plugin', 'Send a plain Codex prompt without the Computer Use plugin')
-  .option('--workdir <dir>', 'Working directory for Codex on the Mac')
+  .option('--workdir <dir>', 'Working directory for Codex')
   .option('--timeout <seconds>', 'Max wait time in seconds (default: 300)', '300')
-  .option('--ssh-host <host>', 'SSH host (default: gregs-mac)', 'gregs-mac')
+  .option('--ssh-host <host>', 'Explicit SSH host. Use gregs-mac only with --orgo-failure-artifact.')
   .option('--dispatch-script <path>', 'Path to codex-dispatch.sh on the Mac', '/Users/gregharned/work/team-brain/scripts/codex-dispatch.sh')
   .option('--orgo-failure-artifact <path>', 'Recent failed Orgo lease attempt artifact required before Mac SSH fallback')
   .option('--disable-fallback', 'Disable localhost codex exec fallback when Mac SSH is unreachable')
