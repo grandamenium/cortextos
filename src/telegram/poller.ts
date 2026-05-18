@@ -5,6 +5,7 @@ import { TelegramAPI } from './api.js';
 import { ensureDir } from '../utils/atomic.js';
 
 export type MessageHandler = (msg: TelegramMessage) => void;
+export type EditedMessageHandler = (msg: TelegramMessage) => void;
 export type CallbackHandler = (query: TelegramCallbackQuery) => void;
 export type ReactionHandler = (reaction: TelegramMessageReaction) => void;
 
@@ -19,6 +20,7 @@ export class TelegramPoller {
   private stateDir: string;
   private offsetFileName: string;
   private messageHandlers: MessageHandler[] = [];
+  private editedMessageHandlers: EditedMessageHandler[] = [];
   private callbackHandlers: CallbackHandler[] = [];
   private reactionHandlers: ReactionHandler[] = [];
   private pollInterval: number;
@@ -52,6 +54,23 @@ export class TelegramPoller {
    */
   onMessage(handler: MessageHandler): void {
     this.messageHandlers.push(handler);
+  }
+
+  /**
+   * Register a handler for edits to previously sent messages.
+   *
+   * Telegram delivers edits as a separate `edited_message` update type, NOT
+   * as a re-emitted `message`. Subscribing here is opt-in: existing
+   * `onMessage` handlers do not fire on edits, so agents will not double-
+   * reply to the same conversation point unless they explicitly want to
+   * surface edits.
+   *
+   * Typical use: log the edit so the agent can notice content changed,
+   * then decide per-handler whether to re-process. Most chat-style agents
+   * should stay quiet on edits to avoid annoying re-replies.
+   */
+  onEditedMessage(handler: EditedMessageHandler): void {
+    this.editedMessageHandlers.push(handler);
   }
 
   /**
@@ -118,6 +137,18 @@ export class TelegramPoller {
             handler(update.message);
           } catch (err) {
             console.error('[telegram-poller] Message handler error:', err);
+            handlerFailed = true;
+            break;
+          }
+        }
+      }
+
+      if (!handlerFailed && update.edited_message) {
+        for (const handler of this.editedMessageHandlers) {
+          try {
+            handler(update.edited_message);
+          } catch (err) {
+            console.error('[telegram-poller] Edited-message handler error:', err);
             handlerFailed = true;
             break;
           }

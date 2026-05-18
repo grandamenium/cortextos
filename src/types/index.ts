@@ -460,6 +460,14 @@ export interface OrgContext {
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  /**
+   * An edit to a previously sent message. Telegram emits this as a separate
+   * update type from `message`; the bot must opt in via `allowed_updates`
+   * to receive it. Same shape as `message`. Handlers are registered
+   * separately on the poller (see `TelegramPoller.onEditedMessage`) so
+   * existing message handlers do not double-fire on edits.
+   */
+  edited_message?: TelegramMessage;
   callback_query?: TelegramCallbackQuery;
   message_reaction?: TelegramMessageReaction;
 }
