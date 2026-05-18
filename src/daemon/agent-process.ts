@@ -11,6 +11,8 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { RestartCircuitBreaker } from './restart-circuit-breaker.js';
+import { sendAuthHaltAlertBestEffort } from './operator-alert.js';
 
 type LogFn = (msg: string) => void;
 
@@ -60,6 +62,14 @@ export class AgentProcess {
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
   private telegramChatId: string | null = null;
+  /**
+   * Task #60: per-agent restart circuit breaker. Holds rolling windows of
+   * crash events keyed by classified cause so the daemon can apply
+   * exponential cool-down for `rate_limit` causes and a HALT-and-alert
+   * policy for `auth` storms. One instance is created per AgentProcess
+   * (matches the one-AgentProcess-per-agent lifecycle).
+   */
+  private restartBreaker: RestartCircuitBreaker;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -70,6 +80,7 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
+    this.restartBreaker = new RestartCircuitBreaker();
   }
 
   /**
@@ -118,14 +129,14 @@ export class AgentProcess {
     this.log(`Log path: ${logPath}`);
     this.pty = this.config.runtime === 'hermes'
       ? new HermesPTY(this.env, this.config, logPath)
-      : this.config.runtime === 'codex'
+      : this.config.runtime === 'codex-app-server'
         ? new CodexAppServerPTY(this.env, this.config, logPath)
         : new AgentPTY(this.env, this.config, logPath);
 
     // Issue #330: re-wire the Telegram handle on every start() (session refresh
     // creates a fresh CodexAppServerPTY). Only CodexAppServerPTY uses this — Claude / Hermes
     // typing indicators flow through fast-checker.
-    if (this.config.runtime === 'codex' && this.telegramApi && this.telegramChatId) {
+    if (this.config.runtime === 'codex-app-server' && this.telegramApi && this.telegramChatId) {
       (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
     }
 
@@ -209,7 +220,7 @@ export class AgentProcess {
           // so we use Ctrl+D which exits cleanly on the first press.
           pty.write('\x04'); // Ctrl+D
           await sleep(3000);
-        } else if (this.config.runtime === 'codex') {
+        } else if (this.config.runtime === 'codex-app-server') {
           // Codex uses an exec-per-turn model — there is no persistent REPL
           // between turns, so /exit + sleep below are no-ops on CodexAppServerPTY
           // (write() just buffers). The only meaningful stop step is
@@ -364,7 +375,7 @@ export class AgentProcess {
   setTelegramHandle(api: TelegramAPI, chatId: string): void {
     this.telegramApi = api;
     this.telegramChatId = chatId;
-    if (this.config.runtime === 'codex' && this.pty) {
+    if (this.config.runtime === 'codex-app-server' && this.pty) {
       (this.pty as CodexAppServerPTY).setTelegramHandle(api, chatId);
     }
   }
@@ -468,14 +479,58 @@ export class AgentProcess {
       return;
     }
 
-    // Exponential backoff restart
+    // Exponential backoff restart (existing PM2-style behavior).
     const backoff = Math.min(5000 * Math.pow(2, this.crashCount - 1), 300000);
-    this.log(`Crash recovery: restart in ${backoff / 1000}s (crash #${this.crashCount})`);
+
+    // Task #60: consult the restart circuit breaker. The breaker classifies
+    // the crash by scanning the last ~200 lines of stdout/stderr and returns
+    // one of:
+    //   - 'restart'  : unknown cause; preserve existing backoff (PM2-style)
+    //   - 'cooldown' : rate_limit; use the longer of breaker delay vs backoff
+    //   - 'halt'     : 3+ auth failures in 15 min; do NOT restart, page operator
+    // Breaker integration is purely additive: when classifier returns 'unknown'
+    // and breaker says 'restart', behavior is byte-equivalent to the prior path.
+    const recentOutput = this.getRecentOutputForClassifier();
+    const decision = this.restartBreaker.recordExit(this.name, recentOutput, backoff);
+
+    if (decision.action === 'halt') {
+      this.log(
+        `HALTED: ${decision.recentAuthCount} auth failures in 15 min — auto-restart disabled, ` +
+        `operator must run \`cortextos start ${this.name}\``,
+      );
+      this.appendCrashToRestartsLog(exitCode, 0, 'HALTED');
+      this.status = 'halted';
+      this.notifyStatusChange();
+      if (decision.emitAlert) {
+        // Fire-and-forget: best-effort Telegram alert. Sync curl is bounded
+        // at 3s inside sendOperatorTelegramBestEffort so this can't stall the
+        // exit handler beyond that.
+        try {
+          sendAuthHaltAlertBestEffort(
+            this.env.frameworkRoot,
+            this.name,
+            decision.recentAuthCount,
+          );
+        } catch { /* swallow — alert is best-effort */ }
+      }
+      return;
+    }
+
+    const finalBackoff = decision.action === 'cooldown' ? decision.delayMs : backoff;
+    if (decision.action === 'cooldown') {
+      this.log(
+        `Crash recovery: rate_limit cool-down ${finalBackoff / 1000}s (crash #${this.crashCount}, ` +
+        `recent rate_limit: ${decision.recentRateLimitCount})`,
+      );
+    } else {
+      this.log(`Crash recovery: restart in ${finalBackoff / 1000}s (crash #${this.crashCount}, cause=${decision.cause})`);
+    }
+
     // Persist the crash to restarts.log so operators have a durable audit
     // trail. Previously only planned SELF-RESTART / HARD-RESTART from
     // bus/system.ts wrote here, which left daemon-classified crashes
     // invisible outside the rotating PM2 daemon stdout log.
-    this.appendCrashToRestartsLog(exitCode, backoff, 'CRASH');
+    this.appendCrashToRestartsLog(exitCode, finalBackoff, 'CRASH');
     this.status = 'crashed';
     this.notifyStatusChange();
 
@@ -483,7 +538,44 @@ export class AgentProcess {
       if (this.status === 'crashed') {
         this.start().catch(err => this.log(`Restart failed: ${err}`));
       }
-    }, backoff);
+    }, finalBackoff);
+  }
+
+  /**
+   * Pull the most recent ~200 lines from the PTY output buffer for use by
+   * the restart classifier. Returns '' when the PTY is already torn down
+   * (handleExit nulled it) — the classifier will then default to 'unknown'
+   * which preserves legacy behaviour.
+   *
+   * Reads from `pty.getOutputBuffer()` (set BEFORE handleExit's pty=null)
+   * via the captured-via-closure reference, but since handleExit nulls
+   * this.pty up-front, we need an alternate route: re-read the stdout.log
+   * tail. The buffer is gone by the time we get here, so use the log file.
+   */
+  private getRecentOutputForClassifier(): string {
+    const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
+    try {
+      if (!existsSync(logPath)) return '';
+      // Read the tail. statSync to bound the read at 64KB — classifier patterns
+      // are short and 64KB > 200 lines for any realistic agent output.
+      const stat = statSync(logPath);
+      const TAIL_BYTES = 64 * 1024;
+      if (stat.size <= TAIL_BYTES) {
+        return readFileSync(logPath, 'utf-8');
+      }
+      // Read only the last TAIL_BYTES via a positioned read.
+      const { openSync, readSync, closeSync } = require('fs') as typeof import('fs');
+      const fd = openSync(logPath, 'r');
+      try {
+        const buf = Buffer.alloc(TAIL_BYTES);
+        readSync(fd, buf, 0, TAIL_BYTES, stat.size - TAIL_BYTES);
+        return buf.toString('utf-8');
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return '';
+    }
   }
 
   private shouldContinue(): boolean {

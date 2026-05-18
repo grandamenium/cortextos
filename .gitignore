@@ -56,3 +56,4 @@ dashboard/screenshots/
 dashboard/test-*.py
 .aider*
 .env.bak.*
+dashboard/PORT=*

@@ -7,6 +7,7 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { acquireLock, releaseLock, withFileLockSync } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
+import { parseBusContract } from './contracts.js';
 
 // ---------------------------------------------------------------------------
 // Security (H10): HMAC-SHA256 message signing
@@ -170,6 +171,25 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
             ensureDir(errDir);
             try { renameSync(srcPath, join(errDir, file)); } catch { /* ignore */ }
             continue;
+          }
+        }
+
+        // Task #66: typed bus contract parse. Runs AFTER HMAC verification so
+        // we never validate an unsigned/tampered text body. parseBusContract
+        // returns null for legacy plain-text messages (the common case) —
+        // those flow through unchanged. When the body looks JSON-shaped but
+        // fails validation, we log a one-line warning so authoring bugs are
+        // visible, but still deliver the message (backward compat — receiver
+        // can decide what to do with it).
+        const contract = parseBusContract(msg.text);
+        if (contract) {
+          msg.contract = contract;
+        } else {
+          const trimmed = msg.text?.trim();
+          if (trimmed && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+            // JSON-shaped but not a valid contract — surface the schema gap
+            // without dropping the message.
+            console.warn(`[bus/message] CONTRACT: Message ${msg.id} from '${msg.from}' looks JSON-shaped but failed bus contract validation — delivered as plain text (legacy fallback)`);
           }
         }
 

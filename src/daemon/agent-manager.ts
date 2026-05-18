@@ -1,11 +1,13 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join, relative } from 'path';
+import { hostname, userInfo } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
+import { loadAgentsManifest, type AgentsManifest, type AgentManifestEntry } from './agents-yaml.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -29,6 +31,36 @@ function isTruthyEnv(value: string | undefined): boolean {
 }
 
 /**
+ * Task #75: derive a stable host identifier for cross-host agent scoping.
+ *
+ * Multi-machine setups (MacBook + Mac mini sharing the same orgs/ tree via
+ * gitea) needed a way to declare "this agent runs on host X". Previously the
+ * fleet relied on manual enabled=false toggling per host, which silently broke
+ * after a `git pull` overwrote the file (2026-05-17 incident: sam spawned on
+ * Mac mini and ate Telegram polling). With this hash we honor an optional
+ * `host` field in enabled-agents.json entries and skip agents whose declared
+ * host doesn't match.
+ *
+ * Identifier shape: `${user}@${shortHostname}` — e.g. `hari@Haris-MacBook-Pro`
+ * or `subbu_ai_assistant@mac-mini`. The `.local` mDNS suffix is stripped so the
+ * value is stable across network reconfigs.
+ *
+ * Override via CTX_HOST env var when hostname is unreliable (CI, containers).
+ */
+export function currentHostId(): string {
+  const override = process.env['CTX_HOST'];
+  if (override) return override.trim();
+  let user = '';
+  try {
+    user = userInfo().username;
+  } catch {
+    user = process.env['USER'] || process.env['LOGNAME'] || 'unknown';
+  }
+  const short = hostname().split('.')[0] || 'unknown';
+  return `${user}@${short}`;
+}
+
+/**
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
@@ -43,12 +75,33 @@ export class AgentManager {
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
+  /**
+   * Task #62: per-agent manifest loaded once at startup from
+   * `frameworkRoot/agents.yaml`. Null when the file is absent or unreadable —
+   * callers must treat absent manifest as "no opinion, preserve legacy
+   * behaviour" so this stays purely additive.
+   */
+  private agentsManifest: AgentsManifest | null;
 
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+    this.agentsManifest = loadAgentsManifest(frameworkRoot);
+    if (this.agentsManifest) {
+      const count = Object.keys(this.agentsManifest.agents).length;
+      console.log(`[agent-manager] Loaded agents.yaml manifest (${count} entr${count === 1 ? 'y' : 'ies'})`);
+    }
+  }
+
+  /**
+   * Look up a per-agent manifest entry from agents.yaml. Returns undefined
+   * when the manifest is absent OR when the agent isn't listed — both cases
+   * mean "no opinion, fall back to legacy behaviour".
+   */
+  private getManifestEntry(name: string): AgentManifestEntry | undefined {
+    return this.agentsManifest?.agents[name];
   }
 
   /**
@@ -72,6 +125,10 @@ export class AgentManager {
     // behavior preserved for single-machine installs).
     const requireExplicit = isTruthyEnv(process.env['CTX_REQUIRE_EXPLICIT_ENABLE']);
 
+    // Task #75: this host's identity for cross-host agent scoping.
+    const thisHost = currentHostId();
+    console.log(`[agent-manager] Host scoping active (this host: ${thisHost})`);
+
     for (const { name, dir, org, config } of agentDirs) {
       const entry = instanceEnabled[name];
 
@@ -82,7 +139,18 @@ export class AgentManager {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json — authoritative)`);
         continue;
       }
-
+      // Task #75: host-scoped skip. `host` field wins if set; falls back to
+      // `status === 'remote'` for installs that haven't migrated to the
+      // explicit host field yet. Either marker causes the daemon to leave
+      // the agent dormant on this host (the canonical home runs it).
+      if (entry?.host && entry.host !== thisHost) {
+        console.log(`[agent-manager] Skipping cross-host agent: ${name} (host=${entry.host}, this=${thisHost})`);
+        continue;
+      }
+      if (!entry?.host && entry?.status && entry.status === 'remote') {
+        console.log(`[agent-manager] Skipping remote-flagged agent: ${name} (status=remote — set host field for explicit scoping)`);
+        continue;
+      }
       // Strict mode: an unlisted agent is treated as disabled.
       if (requireExplicit && !entry) {
         console.log(`[agent-manager] Skipping unlisted agent: ${name} (CTX_REQUIRE_EXPLICIT_ENABLE — not in enabled-agents.json)`);
@@ -181,7 +249,7 @@ export class AgentManager {
    * agents not present in the file default to enabled, matching the existing
    * default-on behavior of `discoverAndStart`.
    */
-  private readInstanceEnableList(): Record<string, { enabled?: boolean; org?: string; status?: string }> {
+  private readInstanceEnableList(): Record<string, { enabled?: boolean; org?: string; status?: string; host?: string }> {
     const enabledFile = join(this.ctxRoot, 'config', 'enabled-agents.json');
     if (!existsSync(enabledFile)) return {};
     try {
@@ -270,6 +338,17 @@ export class AgentManager {
     // BUG-043 fix: resolve the agent's true org instead of using `this.org`.
     const resolvedOrg = this.resolveAgentOrg(name, org);
 
+    // Task #62: annotated start-log line when the manifest knows about this
+    // agent. Operators can `grep "[agent-manager] Starting agent"` and see
+    // role + host at a glance. Skipped silently when no manifest entry exists
+    // so legacy installs aren't spammed with "(role=undefined, host=undefined)".
+    const manifestEntry = this.getManifestEntry(name);
+    if (manifestEntry) {
+      const role = manifestEntry.role ?? 'unknown';
+      const host = manifestEntry.host ?? 'unknown';
+      console.log(`[agent-manager] Starting agent: ${name} (role=${role}, host=${host})`);
+    }
+
     // Auto-discover agent directory if not provided (e.g. when started via IPC)
     if (!agentDir || !existsSync(agentDir)) {
       const discovered = join(this.frameworkRoot, 'orgs', resolvedOrg, 'agents', name);
@@ -308,7 +387,18 @@ export class AgentManager {
     let allowedUserId: string | undefined;
     let botToken: string | undefined;
 
-    if (existsSync(agentEnvFile)) {
+    // Task #62: authoritative gate from agents.yaml. When the manifest
+    // explicitly says `telegram_enabled: false` (e.g. forge has no bot by
+    // design) we MUST NOT instantiate TelegramAPI, validate ALLOWED_USER,
+    // or spawn a poller — regardless of whether the .env happens to have
+    // a BOT_TOKEN. The leading "Telegram disabled by manifest" log replaces
+    // the per-restart 401/403 retry storm caused by an orphaned token.
+    const telegramDisabledByManifest = manifestEntry?.telegram_enabled === false;
+    if (telegramDisabledByManifest) {
+      log(`Telegram disabled by agents.yaml manifest — skipping poller setup`);
+    }
+
+    if (!telegramDisabledByManifest && existsSync(agentEnvFile)) {
       const envContent = readFileSync(agentEnvFile, 'utf-8');
       const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
       const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);

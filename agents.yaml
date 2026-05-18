@@ -1,0 +1,136 @@
+version: 1
+generated: 2026-05-17
+# Per-agent manifest for the cortextOS multi-host fleet.
+# Source of truth for "does this agent have Telegram?" so bootstrap/auth code
+# does not blindly probe agents that were never wired (e.g. forge by design).
+#
+# verified: true   = .env / config.json was inspected for this run
+# verified: false  = best-guess based on prior session knowledge (host not
+#                    directly accessible from this build session — Mac mini)
+hosts:
+  macbook:
+    user: hari
+    agents: [sam, warden-mb, pa]
+  mac_mini:
+    user: subbu_ai_assistant
+    agents:
+      - analyst
+      - chief
+      - dev
+      - forge
+      - research
+      - research-codex
+      - research-director
+      - warden-mm
+
+agents:
+  sam:
+    host: macbook
+    org: subbu-ops
+    role: telegram_orchestrator
+    telegram_enabled: true
+    bot_token_env_var: BOT_TOKEN
+    chat_id_env_var: CHAT_ID
+    env_path: /Users/hari/cortextos/orgs/subbu-ops/agents/sam/.env
+    verified: true
+    notes: "Primary inbound Telegram for Hari (@sam1491_bot). Also holds HARPAL_RESEARCH_BOT_TOKEN for research relay."
+
+  pa:
+    host: macbook
+    org: subbu-ops
+    role: personal_assistant
+    telegram_enabled: true
+    bot_token_env_var: BOT_TOKEN
+    chat_id_env_var: CHAT_ID
+    env_path: /Users/hari/cortextos/orgs/subbu-ops/agents/pa/.env
+    verified: true
+    notes: "Swapna — Hari's personal assistant on Ollama gemma4:31b. Has a working BOT_TOKEN; config sets telegram_polling=true. Updated from initial guess of false after .env inspection."
+
+  warden-mb:
+    host: macbook
+    org: subbu-ops
+    role: host_guardian
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    env_path: /Users/hari/cortextos/orgs/subbu-ops/agents/warden-mb/.env
+    verified: true
+    notes: "MacBook host guardian. .env has BOT_TOKEN= and CHAT_ID= empty by design; config sets telegram_polling=false. Routes via sam for outbound."
+
+  chief:
+    host: mac_mini
+    org: subbu-ops
+    role: orchestrator
+    telegram_enabled: true
+    bot_token_env_var: BOT_TOKEN
+    chat_id_env_var: CHAT_ID
+    verified: false
+    notes: "Mac mini co-CEO peer to sam. Owns original family Telegram bot."
+
+  forge:
+    host: mac_mini
+    org: subbu-ops
+    role: builder
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    notes: "Builder; no Telegram by design — do not retry, do not provision a bot."
+
+  warden-mm:
+    host: mac_mini
+    org: subbu-ops
+    role: host_guardian
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    notes: "Mac mini host guardian. Pairs with warden-mb via cross-instance bus relay."
+
+  analyst:
+    host: mac_mini
+    org: subbu-ops
+    role: data_analyst
+    telegram_enabled: true
+    bot_token_env_var: BOT_TOKEN
+    chat_id_env_var: CHAT_ID
+    verified: false
+    notes: "Hari's 'subbu / analyst' on Mac mini. Has its own bot per prior session knowledge."
+
+  dev:
+    host: mac_mini
+    org: subbu-ops
+    role: code_writer
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    notes: "Code writer; replies routed through chief."
+
+  research:
+    host: mac_mini
+    org: subbu-ops
+    role: researcher_claude
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+
+  research-codex:
+    host: mac_mini
+    org: subbu-ops
+    role: researcher_codex
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+
+  research-director:
+    host: mac_mini
+    org: subbu-ops
+    role: research_lead
+    telegram_enabled: false
+    bot_token_env_var: null
+    chat_id_env_var: null
+    verified: false
+    notes: "Coordinates the research/research-codex pair; outbound user comms via chief."
