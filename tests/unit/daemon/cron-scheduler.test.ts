@@ -29,6 +29,27 @@ vi.mock('../../../src/bus/crons.js', () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Mock cron-state.ts I/O — updateCronFire writes cron-state.json to disk.
+// Without this mock, real disk writes from one test pollute loadCrons() in
+// subsequent tests: the written last_fire shifts referenceMs into the future,
+// making nextFireAt > now so crons never appear due.
+// parseDurationMs and readCronState are kept real so the scheduler's internal
+// timing logic is unaffected.
+// ---------------------------------------------------------------------------
+
+vi.mock('../../../src/bus/cron-state.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/bus/cron-state.js')>();
+  return {
+    ...actual,
+    // Return empty state so loadCrons() never picks up stale last_fire values
+    // from disk written by a previous test run.
+    readCronState: vi.fn(() => ({ updated_at: new Date().toISOString(), crons: [] })),
+    // No-op so fires don't write cron-state.json to disk and pollute later tests.
+    updateCronFire: vi.fn(),
+  };
+});
+
+// ---------------------------------------------------------------------------
 // Imports AFTER mock setup
 // ---------------------------------------------------------------------------
 

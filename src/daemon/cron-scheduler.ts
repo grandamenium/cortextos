@@ -27,7 +27,7 @@
 
 import { homedir } from 'os';
 import { join } from 'path';
-import { parseDurationMs, readCronState } from '../bus/cron-state.js';
+import { parseDurationMs, readCronState, updateCronFire } from '../bus/cron-state.js';
 import { readCronsWithStatus, updateCron } from '../bus/crons.js';
 import type { CronDefinition } from '../types/index.js';
 import { appendExecutionLog } from './cron-execution-log.js';
@@ -507,6 +507,17 @@ export class CronScheduler {
             `${err instanceof Error ? err.message : String(err)}. ` +
             `In-memory schedule retained; state will be lost if daemon restarts.`
           );
+        }
+
+        // Update cron-state.json so the gap-detection loop sees this fire.
+        // Without this, gap-detector never sees daemon-fired crons and emits
+        // spurious "[SYSTEM] Cron gap detected" nudges indefinitely.
+        try {
+          const ctxRoot = process.env.CTX_ROOT || join(homedir(), '.cortextos', process.env.CTX_INSTANCE_ID || 'default');
+          const stateDir = join(ctxRoot, 'state', this.agentName);
+          updateCronFire(stateDir, name, cron.schedule);
+        } catch {
+          // Non-fatal — gap-detector nudge is noise, not a correctness issue.
         }
 
         // Advance in-memory nextFireAt
