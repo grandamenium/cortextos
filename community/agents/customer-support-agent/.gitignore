@@ -1,0 +1,5 @@
+.env
+memory/*.md
+support/reports/*.md
+support/tickets.jsonl
+tmp/

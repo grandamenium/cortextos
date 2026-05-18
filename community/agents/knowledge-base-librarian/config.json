@@ -1,0 +1,7 @@
+{
+  "runtime": "claude-code",
+  "timezone": "America/New_York",
+  "mode": "day",
+  "template": "knowledge-base-librarian",
+  "setup_skill": "knowledge-base-librarian-setup"
+}

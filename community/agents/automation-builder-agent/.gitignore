@@ -1,0 +1,5 @@
+.env
+memory/*.md
+automations/specs/*.md
+automations/runbooks/*.md
+tmp/

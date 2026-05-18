@@ -1,0 +1,4 @@
+.env
+memory/*.md
+projects/reports/*.md
+tmp/
