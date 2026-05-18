@@ -44,11 +44,12 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
     envFile.CTX_AGENT_NAME ||
     basename(process.cwd());
 
+  // Use 'in' check so CTX_ORG='' explicitly selects root scope instead of
+  // falling through to the .cortextos-env value via the falsy || chain.
   const org =
-    overrides?.org ||
-    process.env.CTX_ORG ||
-    envFile.CTX_ORG ||
-    '';
+    overrides?.org !== undefined ? overrides.org :
+    'CTX_ORG' in process.env ? (process.env.CTX_ORG ?? '') :
+    envFile.CTX_ORG ?? '';
 
   const projectRoot =
     overrides?.projectRoot ||

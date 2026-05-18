@@ -783,11 +783,17 @@ busCommand
   .action((opts: { agent?: string; status?: string; format?: string; respectDeps?: boolean }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const tasks = listTasks(paths, {
-      agent: opts.agent,
-      status: opts.status as TaskStatus,
-      respectDeps: opts.respectDeps ?? false,
-    });
+    let tasks;
+    try {
+      tasks = listTasks(paths, {
+        agent: opts.agent,
+        status: opts.status as TaskStatus,
+        respectDeps: opts.respectDeps ?? false,
+      });
+    } catch (err: unknown) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
 
     if (opts.format === 'json') {
       console.log(JSON.stringify(tasks, null, 2));

@@ -613,8 +613,14 @@ export function listTasks(
     files = readdirSync(taskDir).filter(
       f => f.startsWith('task_') && f.endsWith('.json'),
     );
-  } catch {
-    return [];
+  } catch (err: unknown) {
+    // Surface directory-not-found so callers know the path is wrong,
+    // not just that there happen to be zero tasks.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      throw new Error(`list-tasks: task directory not found: ${taskDir}`);
+    }
+    throw err;
   }
 
   const tasks: Task[] = [];

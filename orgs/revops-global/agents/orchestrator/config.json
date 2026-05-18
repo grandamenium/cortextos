@@ -41,13 +41,19 @@
     {
       "name": "rgos-task-poll",
       "type": "recurring",
-      "interval": "15m",
+      "interval": "4h",
       "prompt": "Check for tasks assigned to you in the RGOS kanban: use mcp__rgos__cortex_list_tasks with assigned_to=\"orchestrator\" and status=\"approved\". If any tasks are found, claim each one with mcp__rgos__cortex_claim_task (agent_id=\"orchestrator\"), then work them in priority order. Log a cortextos bus log-event for each claimed task. ALSO update heartbeat (cortextos bus update-heartbeat online). If no tasks AND heartbeat already fresh, do nothing."
+    },
+    {
+      "name": "fleet-tick",
+      "type": "recurring",
+      "interval": "2h",
+      "prompt": "Fleet-tick: light coordination pass — (1) cortextos bus list-tasks; (2) check heartbeats; (3) scan inbox; (4) update heartbeat. Silent unless action needed."
     },
     {
       "name": "kanban-sync",
       "type": "recurring",
-      "cron": "17,47 * * * *",
+      "cron": "0 8,17 * * *",
       "prompt": "Kanban hygiene sweep: (1) cortextos bus list-tasks --agent orchestrator status filters; (2) mcp__rgos__cortex_list_tasks for tasks created_by orchestrator and tasks assigned_to orchestrator — compare to current dispatches in today's memory file. (3) For any RGOS task stuck in approved/in_progress that's actually done, complete it via mcp__rgos__cortex_complete_task. (4) For any in-flight work without an RGOS task, create one. (5) update-heartbeat. Silent unless something requires action."
     }
   ],
