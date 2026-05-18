@@ -40,6 +40,33 @@ export interface TaskOutput {
   label?: string;
 }
 
+/**
+ * Structured task brief — stored at `task.meta.brief`. All 9 fields are
+ * required; use `"field-not-applicable: <reason>"` for fields not relevant
+ * to a given task rather than omitting them, so the Fleet Tasks UI can
+ * render a consistent contract view across all task types.
+ */
+export interface TaskBrief {
+  /** What observable state proves this task is done. */
+  success_criteria: string;
+  /** What this task explicitly will NOT do. */
+  out_of_scope: string;
+  /** Conditions that should trigger escalation to a human. */
+  escalation_triggers: string;
+  /** Ordered list of authoritative sources (first = highest authority). */
+  source_hierarchy: string | string[];
+  /** Preferred agent runtime (e.g. "codex", "dev", "analyst"). */
+  preferred_runtime: string;
+  /** Agent capabilities this task requires. */
+  required_capabilities: string | string[];
+  /** Evidence that a fallback path exists if the primary path fails. */
+  fallback_proof: string;
+  /** Expected deliverable files or API responses. */
+  artifact_expectations: string;
+  /** Goal chain this task derives from (e.g. ["G1", "sprint objective"]). */
+  goal_ancestry: string | string[];
+}
+
 export interface Task {
   id: string;
   title: string;
