@@ -51,6 +51,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "(Write|Edit)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortextos bus hook-env-write-guard",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionStart": [
