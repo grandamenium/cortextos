@@ -423,10 +423,10 @@ export class AgentProcess implements ManagedAgent {
         writeFileSync(cronFile, content, 'utf-8');
       } catch (err) {
         this.log(`[hermes inject] failed to write cron file: ${err}`);
-        return false;
+        return { ok: false, code: 'NOT_RUNNING', message: `[hermes inject] failed to write cron file: ${err}` };
       }
       this.pty.write('Read .cortextos-cron.md and follow the instructions there.\r');
-      return true;
+      return { ok: true };
     }
 
     injectMessage((data) => this.pty?.write(data), content);
@@ -577,7 +577,6 @@ export class AgentProcess implements ManagedAgent {
       return;
     }
 
-<<<<<<< HEAD
     // Rate-limit recovery: if the output buffer detected a rate-limit signature,
     // treat this as a controlled pause rather than a crash. Do NOT increment
     // crashCount or call watchdog recordFailure. Write a marker file so the next
