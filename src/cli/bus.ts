@@ -2918,7 +2918,7 @@ busCommand
         env.org,
         'message',
         'hotfix_dispatch',
-        'warn',
+        'warning',
         JSON.stringify({ to: agent, hotfix_id: hotfixId, reason, msg_id: msgId, pending_file: pendingPath })
       );
     } catch { /* non-fatal */ }
