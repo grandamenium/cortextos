@@ -144,6 +144,31 @@ export class AgentManager {
    * spawn each agent in its correct org dir regardless of what
    * `CTX_ORG` the daemon was started with.
    */
+  /**
+   * Synchronously classify a start/stop/restart request before dispatch.
+   *
+   * Lets the IPC handler distinguish DEDUPED (agent already in registry, so
+   * a start is collapsing against an in-flight identical op — or a stop /
+   * restart of an agent that was just removed) from NOT_FOUND (agent never
+   * existed in the registry). The dedup logic in startAgent / stopAgent /
+   * restartAgent is unchanged — this read-only check exists purely to give
+   * the IPC layer enough info to set IPCResponse.code. See issue #346.
+   */
+  inspectAgentOp(op: 'start' | 'stop' | 'restart', name: string): { ok: true } | { ok: false; code: 'DEDUPED' | 'NOT_FOUND'; message: string } {
+    const inRegistry = this.agents.has(name);
+    if (op === 'start') {
+      if (inRegistry) {
+        return { ok: false, code: 'DEDUPED', message: `start request for "${name}" deduped — agent already in registry (in-flight start or already running)` };
+      }
+      return { ok: true };
+    }
+    // stop / restart need the agent to be present
+    if (!inRegistry) {
+      return { ok: false, code: 'NOT_FOUND', message: `agent "${name}" not in registry — cannot ${op}` };
+    }
+    return { ok: true };
+  }
+
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
     if (this.agents.has(name)) {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
@@ -772,9 +797,23 @@ export class AgentManager {
    * Returns true if the agent is running and the inject succeeded; false otherwise.
    */
   injectAgent(agentName: string, text: string): boolean {
+    return this.injectAgentDetailed(agentName, text).ok;
+  }
+
+  /**
+   * Inject text into an agent's PTY with structured outcome — issue #346.
+   *
+   * Returns NOT_FOUND if the agent isn't in the registry, NOT_RUNNING if
+   * registered but the PTY is gone, DEDUPED on a MessageDedup hash hit. The
+   * boolean-returning `injectAgent()` is preserved for callers (cron
+   * scheduler, fast-checker, fire-cron) that only need pass/fail.
+   */
+  injectAgentDetailed(agentName: string, text: string): { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NOT_RUNNING' | 'DEDUPED'; message: string } {
     const entry = this.agents.get(agentName);
-    if (!entry) return false;
-    return entry.process.injectMessage(text);
+    if (!entry) {
+      return { ok: false, code: 'NOT_FOUND', message: `agent "${agentName}" not in registry` };
+    }
+    return entry.process.injectMessageDetailed(text);
   }
 
   /**

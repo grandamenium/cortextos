@@ -754,6 +754,12 @@ export interface IPCResponse {
   success: boolean;
   data?: unknown;
   error?: string;
+  /**
+   * Structured error code for failed responses. Lets operators distinguish
+   * "agent does not exist" (NOT_FOUND) from "request collapsed against an
+   * in-flight identical op" (DEDUPED). See issue #346.
+   */
+  code?: 'NOT_FOUND' | 'DEDUPED' | 'INVALID_INPUT' | 'NOT_RUNNING';
 }
 
 // Agent Discovery Types
