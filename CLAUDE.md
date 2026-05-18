@@ -40,4 +40,4 @@ cortextOS runs on multiple machines (MacBook + Mac mini at minimum). Two bug cla
 - Incomplete config-string renames (grep BOTH src/ and tests/ for the old value)
 - Hardcoded user paths in fallbacks (use `path.join(homedir(), 'cortextos')`)
 
-Run `npx vitest run tests/unit/multi-host-conformance.test.ts` before claiming substrate is done. Full rationale in [docs/multi-host.md](docs/multi-host.md).
+Run `npx vitest run tests/unit/multi-host-conformance.test.ts` before claiming substrate is done. Full rationale in [audits/2026-05-17-wave1/MULTI-HOST.md](audits/2026-05-17-wave1/MULTI-HOST.md).
