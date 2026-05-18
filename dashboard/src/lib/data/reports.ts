@@ -269,11 +269,61 @@ export interface PlanUsage {
   week_sonnet: { used_pct: number };
 }
 
+function utilizationToPct(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  const pct = value <= 1 ? value * 100 : value;
+  return Math.max(0, Math.min(100, Math.round(pct)));
+}
+
+function normalizePlanUsage(raw: unknown): PlanUsage | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const nested = data as Partial<PlanUsage>;
+
+  if (nested.session || nested.week_all_models || nested.week_sonnet) {
+    return {
+      agent: typeof nested.agent === 'string' ? nested.agent : 'unknown',
+      timestamp: typeof nested.timestamp === 'string' ? nested.timestamp : new Date().toISOString(),
+      session: {
+        used_pct: utilizationToPct(nested.session?.used_pct),
+        resets: typeof nested.session?.resets === 'string' ? nested.session.resets : '',
+      },
+      week_all_models: {
+        used_pct: utilizationToPct(nested.week_all_models?.used_pct),
+        resets: typeof nested.week_all_models?.resets === 'string' ? nested.week_all_models.resets : '',
+      },
+      week_sonnet: {
+        used_pct: utilizationToPct(nested.week_sonnet?.used_pct),
+      },
+    };
+  }
+
+  if ('five_hour_utilization' in data || 'seven_day_utilization' in data) {
+    return {
+      agent: typeof data.account === 'string' ? data.account : 'unknown',
+      timestamp: typeof data.fetched_at === 'string' ? data.fetched_at : new Date().toISOString(),
+      session: {
+        used_pct: utilizationToPct(data.five_hour_utilization),
+        resets: '',
+      },
+      week_all_models: {
+        used_pct: utilizationToPct(data.seven_day_utilization),
+        resets: '',
+      },
+      week_sonnet: {
+        used_pct: 0,
+      },
+    };
+  }
+
+  return null;
+}
+
 export function getPlanUsage(): PlanUsage | null {
   const file = path.join(CTX_ROOT, 'state', 'usage', 'latest.json');
   if (!fs.existsSync(file)) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    return normalizePlanUsage(JSON.parse(fs.readFileSync(file, 'utf-8')));
   } catch {
     return null;
   }
@@ -312,10 +362,10 @@ export function getUsageHistory(days: number = 7): UsageDataPoint[] {
         try {
           const entry = JSON.parse(line);
           points.push({
-            timestamp: entry.timestamp,
-            session_pct: entry.session?.used_pct ?? 0,
-            week_pct: entry.week_all_models?.used_pct ?? 0,
-            sonnet_pct: entry.week_sonnet?.used_pct ?? 0,
+            timestamp: entry.timestamp ?? entry.fetched_at ?? dateStr,
+            session_pct: utilizationToPct(entry.session?.used_pct ?? entry.five_hour_utilization),
+            week_pct: utilizationToPct(entry.week_all_models?.used_pct ?? entry.seven_day_utilization),
+            sonnet_pct: utilizationToPct(entry.week_sonnet?.used_pct),
           });
         } catch { /* skip bad lines */ }
       }
