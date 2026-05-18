@@ -647,17 +647,84 @@ function formatUptime(seconds: number): string {
 // so the tests can drive it without simulating argv.
 // ---------------------------------------------------------------------------
 
+/**
+ * Sleep helper for --watch. Kept inline (not a util import) because this is
+ * the only place we need it.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Clamp the --watch interval. Floor of 2s prevents accidental flood; ceiling
+ * of 600s prevents an operator from forgetting an unattended `--watch 3600`
+ * and burning the terminal.
+ */
+function clampWatchSeconds(raw: string | undefined): number {
+  const fallback = 5;
+  if (!raw) return fallback;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 2) return fallback;
+  if (parsed > 600) return 600;
+  return parsed;
+}
+
 export const statusCommand = new Command('status')
   .description('One-shot fleet health view: daemon, agents, bus, breaker, HMAC, manifest, crashes')
   .option('--instance <id>', 'Instance ID (default: $CTX_INSTANCE_ID or "default")')
   .option('--json', 'Emit JSON instead of human-readable text')
-  .action(async (options: { instance?: string; json?: boolean }) => {
-    const report = await collectStatus({ instance: options.instance });
-    if (options.json) {
-      process.stdout.write(JSON.stringify(report, null, 2) + '\n');
-    } else {
-      process.stdout.write(renderStatusText(report) + '\n');
+  .option('--watch [seconds]', 'Refresh every N seconds (default 5; clamped to [2, 600]). Ctrl-C to exit.')
+  .action(async (options: { instance?: string; json?: boolean; watch?: string | boolean }) => {
+    // One-shot mode (existing behaviour) — preserved exactly.
+    if (!options.watch) {
+      const report = await collectStatus({ instance: options.instance });
+      if (options.json) {
+        process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+      } else {
+        process.stdout.write(renderStatusText(report) + '\n');
+      }
+      // Exit code 0 even on alerts — operators want to pipe this through grep
+      // without `|| true`. Real failures (`--json` parse?) still throw.
+      return;
     }
-    // Exit code 0 even on alerts — operators want to pipe this through grep
-    // without `|| true`. Real failures (`--json` parse?) still throw.
+
+    // Watch mode. Refreshes the report every `intervalSeconds` until the
+    // operator interrupts (Ctrl-C → SIGINT). Each refresh writes a clear-
+    // screen escape (only for human output — --json --watch streams raw
+    // JSON objects separated by newlines, suitable for piping into `jq -c`
+    // or a log file).
+    const intervalSeconds = clampWatchSeconds(
+      typeof options.watch === 'string' ? options.watch : undefined,
+    );
+    const clearScreen = '\x1b[2J\x1b[H';
+
+    // Trap SIGINT so we exit cleanly with code 0 instead of leaking a
+    // half-written report on stdout. Cron callers that pipe this through
+    // `head` etc. depend on a graceful EPIPE-tolerant exit.
+    let interrupted = false;
+    const handleSig = () => { interrupted = true; };
+    process.on('SIGINT', handleSig);
+    process.on('SIGTERM', handleSig);
+    process.stdout.on('error', (err) => {
+      if ((err as NodeJS.ErrnoException).code === 'EPIPE') interrupted = true;
+    });
+
+    while (!interrupted) {
+      const report = await collectStatus({ instance: options.instance });
+      if (options.json) {
+        // Emit one JSON object per tick, newline-terminated — pipe-friendly.
+        process.stdout.write(JSON.stringify(report) + '\n');
+      } else {
+        // Clear screen + redraw for human readability.
+        process.stdout.write(clearScreen + renderStatusText(report) + '\n');
+        process.stdout.write(`\n(refreshing every ${intervalSeconds}s — Ctrl-C to exit)\n`);
+      }
+      if (interrupted) break;
+      // Interruptible sleep — break on SIGINT immediately rather than
+      // waiting up to N seconds before honouring the interrupt.
+      const wakeAt = Date.now() + intervalSeconds * 1000;
+      while (!interrupted && Date.now() < wakeAt) {
+        await sleep(Math.min(250, wakeAt - Date.now()));
+      }
+    }
   });
