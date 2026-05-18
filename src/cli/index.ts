@@ -25,6 +25,7 @@ import { setupCommand } from './setup.js';
 import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
 import { importAgentCommand } from './import-agent.js';
 import { scopePluginsCommand } from './scope-plugins.js';
+import { tddLoopCommand } from './tdd-loop.js';
 import { swarmCommand } from './swarm.js';
 
 const program = new Command();
@@ -62,6 +63,7 @@ program.addCommand(injectWorkerCommand);
 program.addCommand(importAgentCommand);
 program.addCommand(scopePluginsCommand);
 program.addCommand(swarmCommand);
+program.addCommand(tddLoopCommand);
 
 // crash-alert: SessionEnd hook — cross-platform replacement for crash-alert.sh
 const crashAlertCommand = new Command('crash-alert')
