@@ -44,7 +44,7 @@ import { checkOrgoLeaseWatchdog, claimOrgoLease, formatLeaseStatus, listOrgoLeas
 
 import { atomicWriteSync } from '../utils/atomic.js';
 import { resolvePaths } from '../utils/paths.js';
-import { resolveEnv, applySecretsToEnv } from '../utils/env.js';
+import { resolveEnv, applySecretsToEnv, validateEnvContent } from '../utils/env.js';
 import { verifySessionOwnership, SessionOwnershipError } from '../utils/session-lock.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
@@ -122,6 +122,7 @@ const MUTATION_COMMANDS: ReadonlySet<string> = new Set([
   'log-event',
   'update-heartbeat',
   'post-activity',
+  'update-env-file',
   // Restart / lifecycle
   'self-restart',
   'hard-restart',
@@ -1690,6 +1691,53 @@ busCommand
     } else {
       console.error('Failed to post activity. Check that ACTIVITY_CHAT_ID is set in your org secrets.env or .env file.');
     }
+  });
+
+busCommand
+  .command('update-env-file')
+  .description('Safely write KEY=VALUE content to an env file with pre-write validation (rejects empty/malformed writes)')
+  .argument('<file>', 'Path to the env file to write (absolute or relative to cwd)')
+  .option('--content <text>', 'New file content (KEY=VALUE lines). Reads from stdin if omitted.')
+  .option('--require <keys>', 'Comma-separated list of keys that must be present and non-empty', '')
+  .action(async (file: string, opts: { content?: string; require?: string }) => {
+    const { resolve } = await import('path');
+    const { readFileSync, writeFileSync, chmodSync } = await import('fs');
+
+    const filePath = resolve(file);
+    const requiredKeys = opts.require ? opts.require.split(',').map(k => k.trim()).filter(Boolean) : [];
+
+    // Read content: from --content flag or stdin
+    let content = opts.content ?? '';
+    if (!content) {
+      try {
+        content = readFileSync('/dev/stdin', 'utf-8');
+      } catch {
+        console.error('Error: no content provided via --content and stdin is not readable');
+        process.exit(1);
+      }
+    }
+
+    // Validate before any write touches disk
+    let parsed: Record<string, string>;
+    try {
+      parsed = validateEnvContent(content, requiredKeys);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    // Write atomically: chmod 644 → write → chmod 444
+    try {
+      try { chmodSync(filePath, 0o644); } catch { /* file may not exist yet */ }
+      writeFileSync(filePath, content.endsWith('\n') ? content : content + '\n', 'utf-8');
+      try { chmodSync(filePath, 0o444); } catch { /* best-effort lock */ }
+    } catch (err) {
+      console.error(`Error writing ${filePath}: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    const keyList = Object.keys(parsed).join(', ');
+    console.log(`Written ${Object.keys(parsed).length} key(s) to ${filePath} [chmod 444]: ${keyList}`);
   });
 
 busCommand

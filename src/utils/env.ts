@@ -170,6 +170,57 @@ export function writeCortextosEnv(agentDir: string, env: CtxEnv): void {
 }
 
 /**
+ * Validate env file content before writing it to disk.
+ *
+ * Rejects content that is:
+ *   - Empty or whitespace-only (the most common wipe failure mode)
+ *   - Contains no parseable KEY=VALUE pairs
+ *   - Missing any of the caller-specified required keys
+ *
+ * Throws an Error with a human-readable message on rejection.
+ * Returns the parsed key→value map on success so callers can inspect it.
+ */
+export function validateEnvContent(
+  content: string,
+  requiredKeys: string[] = [],
+): Record<string, string> {
+  if (!content || !content.trim()) {
+    throw new Error('env write rejected: content is empty');
+  }
+
+  // Parse inline to reuse the same logic as parseEnvFile (no I/O)
+  const result: Record<string, string> = {};
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx <= 0) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    let value = trimmed.slice(eqIdx + 1).trim();
+    if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'")))) {
+      value = value.slice(1, -1);
+    }
+    result[key] = value;
+  }
+
+  if (Object.keys(result).length === 0) {
+    throw new Error('env write rejected: content has no parseable KEY=VALUE pairs');
+  }
+
+  for (const key of requiredKeys) {
+    if (!result[key] && result[key] !== '') {
+      throw new Error(`env write rejected: required key "${key}" is missing`);
+    }
+    if (!result[key]) {
+      throw new Error(`env write rejected: required key "${key}" has an empty value`);
+    }
+  }
+
+  return result;
+}
+
+/**
  * Parse a KEY=VALUE env file. Supports:
  *   - `#` comments at start of line
  *   - Surrounding single or double quotes on the value (stripped)
