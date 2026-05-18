@@ -798,8 +798,38 @@ describe('FastChecker', () => {
       expect(execFile).toHaveBeenCalledWith(
         'cortextos',
         expect.arrayContaining(['bus', 'update-heartbeat', expect.stringContaining('[watchdog] my-agent alive — idle session')]),
+        expect.objectContaining({ env: expect.any(Object) }),
         expect.any(Function),
       );
+      checker.stop();
+      checker.wake();
+    });
+
+    it('passes CTX_AGENT_NAME explicitly so the child does not fall back to basename(cwd)', async () => {
+      const { execFile } = await import('child_process');
+      const execMock = execFile as ReturnType<typeof vi.fn>;
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      checker.start();
+      await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
+
+      // Find the watchdog call (filter by '[watchdog]' marker in args)
+      const watchdogCall = execMock.mock.calls.find((args: unknown[]) => {
+        const argv = args[1] as string[] | undefined;
+        return Array.isArray(argv) && argv.some(a => typeof a === 'string' && a.includes('[watchdog]'));
+      });
+      expect(watchdogCall).toBeDefined();
+
+      const options = watchdogCall![2] as { env: Record<string, string> };
+      expect(options).toBeDefined();
+      expect(options.env).toBeDefined();
+      // The fix: CTX_AGENT_NAME is forwarded explicitly so the spawned
+      // `cortextos bus update-heartbeat` does NOT fall back to
+      // basename(process.cwd()) — which would yield the repo dir name
+      // (e.g. 'MudBot') and fail validateAgentName() because of the
+      // uppercase letter.
+      expect(options.env.CTX_AGENT_NAME).toBe('my-agent');
+
       checker.stop();
       checker.wake();
     });
@@ -821,16 +851,17 @@ describe('FastChecker', () => {
 
     it('does not fire before bootstrap completes', async () => {
       const { execFile } = await import('child_process');
+      const execMock = execFile as ReturnType<typeof vi.fn>;
       const agent = createMockAgent('my-agent');
       agent.isBootstrapped.mockReturnValue(false);
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       checker.start();
       await vi.advanceTimersByTimeAsync(20 * 1000);
-      expect(execFile).not.toHaveBeenCalledWith(
-        'cortextos',
-        expect.arrayContaining([expect.stringContaining('[watchdog]')]),
-        expect.any(Function),
-      );
+      const fired = execMock.mock.calls.some((args: unknown[]) => {
+        const argv = args[1] as string[] | undefined;
+        return Array.isArray(argv) && argv.some(a => typeof a === 'string' && a.includes('[watchdog]'));
+      });
+      expect(fired).toBe(false);
       checker.stop();
       checker.wake();
     });

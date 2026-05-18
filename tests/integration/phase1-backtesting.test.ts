@@ -475,7 +475,7 @@ describe('Scenario 4: PTY injection failure / retries', () => {
     expect(fired[0].error).toBeNull();
   });
 
-  it('exhausts all 4 attempts and logs status=failed after all retries fail', async () => {
+  it('exhausts all 8 attempts and logs status=failed after all retries fail', async () => {
     const agent = 'exhaust-agent';
     ensureAgentDir(agent);
 
@@ -494,44 +494,48 @@ describe('Scenario 4: PTY injection failure / retries', () => {
     });
     s.start();
 
-    // Drive through all 4 attempts: tick + 1s + 4s + 16s + buffer
+    // Drive through all 8 attempts: tick + 1+2+4+8+16+32+64s + buffer
     await vi.advanceTimersByTimeAsync(TICK_MS);
     await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     await vi.advanceTimersByTimeAsync(16_000);
+    await vi.advanceTimersByTimeAsync(32_000);
+    await vi.advanceTimersByTimeAsync(64_000);
     await vi.advanceTimersByTimeAsync(1_000);
 
     s.stop();
 
-    // 4 attempts total
-    expect(alwaysFail).toHaveBeenCalledTimes(4);
+    // 8 attempts total
+    expect(alwaysFail).toHaveBeenCalledTimes(8);
 
     const logEntries = readLog(agent).filter(e => e.cron === 'failing-cron');
     const retried = logEntries.filter(e => e.status === 'retried');
     const failed = logEntries.filter(e => e.status === 'failed');
 
-    // 3 retried + 1 failed
-    expect(retried).toHaveLength(3);
+    // 7 retried + 1 failed
+    expect(retried).toHaveLength(7);
     expect(failed).toHaveLength(1);
 
-    expect(failed[0].attempt).toBe(4);
+    expect(failed[0].attempt).toBe(8);
     expect(failed[0].error).toContain('total PTY failure');
 
     // Scheduler must NOT crash
     expect(logs.some(l => l.includes('giving up'))).toBe(true);
   });
 
-  it('retry timing matches 1s/4s/16s schedule', async () => {
+  it('retry timing matches exponential 1/2/4/8/16/32/64s schedule', async () => {
     const agent = 'timing-agent';
     ensureAgentDir(agent);
 
     const callTimes: number[] = [];
     let callCount = 0;
 
-    const failFirst3 = vi.fn().mockImplementation(async () => {
+    const failFirst7 = vi.fn().mockImplementation(async () => {
       callTimes.push(Date.now());
       callCount++;
-      if (callCount < 4) throw new Error('retry me');
+      if (callCount < 8) throw new Error('retry me');
     });
 
     addCron(agent, makeCronDef('timed-cron', '24h', {
@@ -540,31 +544,37 @@ describe('Scenario 4: PTY injection failure / retries', () => {
 
     const s = new CronScheduler({
       agentName: agent,
-      onFire: failFirst3,
+      onFire: failFirst7,
       logger: () => {},
     });
     s.start();
 
-    // Drive all retries
+    // Drive all retries (1+2+4+8+16+32+64 = 127s cumulative)
     await vi.advanceTimersByTimeAsync(TICK_MS);
-    await vi.advanceTimersByTimeAsync(1_000 + 4_000 + 16_000 + 1_000);
+    await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000 + 8_000 + 16_000 + 32_000 + 64_000 + 1_000);
 
     s.stop();
 
-    expect(callTimes).toHaveLength(4);
+    expect(callTimes).toHaveLength(8);
 
     // Gaps between successive calls should approximate the backoff delays
-    const gap1 = callTimes[1] - callTimes[0]; // ~1s
-    const gap2 = callTimes[2] - callTimes[1]; // ~4s
-    const gap3 = callTimes[3] - callTimes[2]; // ~16s
+    const gaps = [
+      callTimes[1] - callTimes[0],   // ~1s
+      callTimes[2] - callTimes[1],   // ~2s
+      callTimes[3] - callTimes[2],   // ~4s
+      callTimes[4] - callTimes[3],   // ~8s
+      callTimes[5] - callTimes[4],   // ~16s
+      callTimes[6] - callTimes[5],   // ~32s
+      callTimes[7] - callTimes[6],   // ~64s
+    ];
+    const expectedDelays = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000];
 
-    // With fake timers the gaps should match the sleep durations closely
-    expect(gap1).toBeGreaterThanOrEqual(1_000);
-    expect(gap1).toBeLessThanOrEqual(2_000);
-    expect(gap2).toBeGreaterThanOrEqual(4_000);
-    expect(gap2).toBeLessThanOrEqual(6_000);
-    expect(gap3).toBeGreaterThanOrEqual(16_000);
-    expect(gap3).toBeLessThanOrEqual(20_000);
+    for (let i = 0; i < gaps.length; i++) {
+      const min = expectedDelays[i];
+      const max = expectedDelays[i] + Math.max(1_000, expectedDelays[i] * 0.25);
+      expect(gaps[i]).toBeGreaterThanOrEqual(min);
+      expect(gaps[i]).toBeLessThanOrEqual(max);
+    }
   });
 });
 

@@ -270,7 +270,7 @@ describe('CronScheduler', () => {
   // onFire failure + retry
   // -------------------------------------------------------------------------
 
-  it('retries onFire 3 times on failure then gives up without crashing', async () => {
+  it('retries onFire 7 times on failure then gives up without crashing', async () => {
     const failingFire = vi.fn().mockRejectedValue(new Error('PTY unavailable'));
 
     // Use a very long schedule so the cron never becomes due a SECOND time
@@ -294,11 +294,16 @@ describe('CronScheduler', () => {
 
     retryScheduler.start();
 
-    // Advance through one tick (fires catch-up) plus all retry back-offs (1s+4s+16s)
-    await vi.advanceTimersByTimeAsync(TICK + 1_000 + 4_000 + 16_000 + 1_000);
+    // Advance through one tick (fires catch-up) plus all retry back-offs
+    // (1s+2s+4s+8s+16s+32s+64s = 127s). Window widened from 4 -> 8 attempts
+    // so a cron firing during a slow Claude Code `--continue` rehydration
+    // (PTY status='running' but transcript still loading) is not dropped.
+    await vi.advanceTimersByTimeAsync(
+      TICK + 1_000 + 2_000 + 4_000 + 8_000 + 16_000 + 32_000 + 64_000 + 1_000,
+    );
 
-    // 4 total calls: 1 initial + 3 retries
-    expect(failingFire).toHaveBeenCalledTimes(4);
+    // 8 total calls: 1 initial + 7 retries
+    expect(failingFire).toHaveBeenCalledTimes(8);
 
     // Scheduler must NOT crash — the log should contain a give-up message
     expect(retryLogs.some(l => l.includes('giving up'))).toBe(true);

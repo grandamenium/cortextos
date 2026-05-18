@@ -1259,7 +1259,7 @@ describe('AF-2: Sequential fire under slow PTY — drift quantification', () => 
 // ---------------------------------------------------------------------------
 
 describe('FM-6: PTY blocked — retries until accepting, recovery within spec', () => {
-  it('PTY blocks for first 3 attempts then succeeds on attempt 4; log shows all 4 attempts', async () => {
+  it('PTY blocks for first 4 attempts then succeeds on attempt 5; log shows all 5 attempts', async () => {
     const agent = 'fm-pty-blocked';
     ensureAgentDir(agent);
 
@@ -1271,31 +1271,31 @@ describe('FM-6: PTY blocked — retries until accepting, recovery within spec', 
 
     const scheduler = buildScheduler(agent, async (c) => {
       callCount++;
-      if (callCount < 4) {
+      if (callCount < 5) {
         throw new Error(`PTY blocked (attempt ${callCount})`);
       }
       fired.push(c.name);
     }, logs);
     scheduler.start();
 
-    // Advance to trigger + enough time for 3 retries (1s + 4s + 16s = 21s)
-    await vi.advanceTimersByTimeAsync(ONE_HOUR + TICK_MS + 25_000);
+    // Advance to trigger + enough time for 4 retries (1s + 2s + 4s + 8s = 15s)
+    await vi.advanceTimersByTimeAsync(ONE_HOUR + TICK_MS + 20_000);
 
     expect(fired.length).toBe(1);
-    expect(callCount).toBe(4); // exactly 4 attempts
+    expect(callCount).toBe(5); // exactly 5 attempts
 
-    // Log shows retried (×3) + fired (×1)
+    // Log shows retried (×4) + fired (×1)
     const log = readLog(agent);
     const retriedEntries = log.filter(e => e.status === 'retried');
     const firedEntries = log.filter(e => e.status === 'fired');
-    expect(retriedEntries.length).toBe(3);
+    expect(retriedEntries.length).toBe(4);
     expect(firedEntries.length).toBe(1);
-    expect(firedEntries[0].attempt).toBe(4);
+    expect(firedEntries[0].attempt).toBe(5);
 
     scheduler.stop();
   });
 
-  it('PTY permanently blocked — all 4 attempts exhausted; scheduler continues, healthy cron unaffected', async () => {
+  it('PTY permanently blocked — all 8 attempts exhausted; scheduler continues, healthy cron unaffected', async () => {
     const agent = 'fm-pty-dead';
     ensureAgentDir(agent);
 
@@ -1318,11 +1318,12 @@ describe('FM-6: PTY blocked — retries until accepting, recovery within spec', 
     }, logs);
     scheduler.start();
 
-    // One tick fires both; dead-cron goes through 4 attempts in ~21s
-    await vi.advanceTimersByTimeAsync(TICK_MS + 25_000);
+    // One tick fires both; dead-cron goes through 8 attempts over ~127s
+    // (1+2+4+8+16+32+64s back-offs). Extra buffer for fake-timer slop.
+    await vi.advanceTimersByTimeAsync(TICK_MS + 135_000);
 
-    // dead-cron: 4 attempts, all failed
-    expect(deadCallCount).toBe(4);
+    // dead-cron: 8 attempts, all failed
+    expect(deadCallCount).toBe(8);
 
     // healthy-cron: fired successfully despite neighbor failing
     expect(healthyCallCount).toBeGreaterThan(0);
@@ -1331,7 +1332,7 @@ describe('FM-6: PTY blocked — retries until accepting, recovery within spec', 
     expect(scheduler.getNextFireTimes().length).toBeGreaterThan(0);
 
     // giving-up log message present
-    const givingUpMsg = logs.find(l => l.includes('giving up') || l.includes('all 4 attempts'));
+    const givingUpMsg = logs.find(l => l.includes('giving up') || l.includes('all 8 attempts'));
     expect(givingUpMsg).toBeDefined();
 
     scheduler.stop();

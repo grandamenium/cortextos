@@ -167,7 +167,14 @@ function computeNextFireAt(cron: CronDefinition, referenceMs: number): number {
 // Retry helper
 // ---------------------------------------------------------------------------
 
-const RETRY_DELAYS_MS = [1_000, 4_000, 16_000];
+// Exponential back-off across 8 attempts (initial + 7 retries) for a cumulative
+// wait of ~127 s before giving up. The previous 4-attempt window (1 + 4 + 16 s
+// = 21 s) was reliably exhausted when a cron fired during a Claude Code
+// `--continue` restart: status flips to 'running' on PTY spawn but the session
+// is still rehydrating its transcript, so `injectMessage()` returns false until
+// bootstrap completes. Heavy transcripts (multi-MB) can take well over 21 s,
+// causing the prompt to be lost. 127 s covers observed worst-case rehydration.
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000];
 
 async function fireWithRetry(
   cron: CronDefinition,
@@ -175,7 +182,7 @@ async function fireWithRetry(
   onFire: (c: CronDefinition) => Promise<void> | void,
   logger: (msg: string) => void,
 ): Promise<boolean> {
-  const maxAttempts = RETRY_DELAYS_MS.length + 1; // 4 attempts total
+  const maxAttempts = RETRY_DELAYS_MS.length + 1; // 8 attempts total
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const start = Date.now();
     try {
@@ -196,7 +203,7 @@ async function fireWithRetry(
         const delay = RETRY_DELAYS_MS[attempt];
         logger(
           `[cron-scheduler] onFire failed for "${cron.name}" ` +
-          `(attempt ${attempt + 1}/4, retrying in ${delay}ms): ${errMsg}`
+          `(attempt ${attempt + 1}/${maxAttempts}, retrying in ${delay}ms): ${errMsg}`
         );
         appendExecutionLog(agentName, {
           ts: new Date().toISOString(),
@@ -210,7 +217,7 @@ async function fireWithRetry(
       } else {
         logger(
           `[cron-scheduler] onFire failed for "${cron.name}" ` +
-          `after all 4 attempts — giving up. Last error: ${errMsg}`
+          `after all ${maxAttempts} attempts — giving up. Last error: ${errMsg}`
         );
         appendExecutionLog(agentName, {
           ts: new Date().toISOString(),

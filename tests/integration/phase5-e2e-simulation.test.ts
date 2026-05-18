@@ -802,8 +802,10 @@ describe('Scenario 5: PTY degradation — slow injection, intermittent failure, 
    * thin synchronous boolean wrapper around AgentProcess.injectMessage(). Retries at
    * the scheduler layer cover all injectAgent failure modes — PTY slow, PTY absent, etc.
    *
-   * The scheduler retries 3 times with 1s/4s/16s backoff (4 attempts total).
-   * "Eventual delivery" window: max 21s after initial attempt.
+   * The scheduler retries 7 times with 1/2/4/8/16/32/64 s backoff (8 attempts total).
+   * "Eventual delivery" window: max ~127 s after initial attempt. The window was
+   * widened from the original 4-attempt / 21 s budget so a cron firing during a
+   * Claude Code `--continue` restart is not dropped while the session rehydrates.
    *
    * Documented as finding, not a gap — the design is intentional.
    */
@@ -904,7 +906,7 @@ describe('Scenario 5: PTY degradation — slow injection, intermittent failure, 
     expect(succeeded[0].ts).toBeDefined();
   });
 
-  it('5c: persistent failure — exhausts 4 attempts, logs final failure with attempt counts', async () => {
+  it('5c: persistent failure — exhausts 8 attempts, logs final failure with attempt counts', async () => {
     const agent = 'dead-pty-agent';
     ensureAgentDir(agent);
 
@@ -923,31 +925,35 @@ describe('Scenario 5: PTY degradation — slow injection, intermittent failure, 
     const s = buildScheduler(agent, alwaysFail, logs);
     s.start();
 
-    // Drive all 4 attempts: tick + 1s + 4s + 16s + buffer
+    // Drive all 8 attempts: tick + 1+2+4+8+16+32+64s + buffer
     await vi.advanceTimersByTimeAsync(TICK_MS);
     await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     await vi.advanceTimersByTimeAsync(16_000);
+    await vi.advanceTimersByTimeAsync(32_000);
+    await vi.advanceTimersByTimeAsync(64_000);
     await vi.advanceTimersByTimeAsync(1_000);
 
     s.stop();
 
-    // 4 total attempts
-    expect(alwaysFail).toHaveBeenCalledTimes(4);
+    // 8 total attempts
+    expect(alwaysFail).toHaveBeenCalledTimes(8);
 
     const logEntries = readLog(agent).filter(e => e.cron === 'dead-cron');
     const retriedEntries = logEntries.filter(e => e.status === 'retried');
     const failedEntries = logEntries.filter(e => e.status === 'failed');
 
-    // 3 retried + 1 final failed
-    expect(retriedEntries).toHaveLength(3);
+    // 7 retried + 1 final failed
+    expect(retriedEntries).toHaveLength(7);
     expect(failedEntries).toHaveLength(1);
 
-    // Attempt numbers logged correctly (1, 2, 3 for retried; 4 for failed)
-    expect(retriedEntries[0].attempt).toBe(1);
-    expect(retriedEntries[1].attempt).toBe(2);
-    expect(retriedEntries[2].attempt).toBe(3);
-    expect(failedEntries[0].attempt).toBe(4);
+    // Attempt numbers logged correctly (1..7 for retried; 8 for failed)
+    for (let i = 0; i < 7; i++) {
+      expect(retriedEntries[i].attempt).toBe(i + 1);
+    }
+    expect(failedEntries[0].attempt).toBe(8);
 
     // "giving up" log message present
     expect(logs.some(l => l.includes('giving up'))).toBe(true);
@@ -956,43 +962,50 @@ describe('Scenario 5: PTY degradation — slow injection, intermittent failure, 
     // (tested by successful stop() call above without throw)
   });
 
-  it('5d: retry timing matches 1s/4s/16s exponential backoff schedule', async () => {
+  it('5d: retry timing matches 1/2/4/8/16/32/64s exponential backoff schedule', async () => {
     const agent = 'timing-pty-agent';
     ensureAgentDir(agent);
 
     const callTimes: number[] = [];
     let count = 0;
 
-    const failFirst3 = vi.fn().mockImplementation(async () => {
+    const failFirst7 = vi.fn().mockImplementation(async () => {
       callTimes.push(Date.now());
       count++;
-      if (count < 4) throw new Error('retry me');
+      if (count < 8) throw new Error('retry me');
     });
 
     addCron(agent, makeCronDef('timed', '24h', {
       last_fired_at: new Date(Date.now() - 25 * ONE_HOUR).toISOString(),
     }));
 
-    const s = buildScheduler(agent, failFirst3);
+    const s = buildScheduler(agent, failFirst7);
     s.start();
 
     await vi.advanceTimersByTimeAsync(TICK_MS);
-    await vi.advanceTimersByTimeAsync(1_000 + 4_000 + 16_000 + 1_000);
+    await vi.advanceTimersByTimeAsync(1_000 + 2_000 + 4_000 + 8_000 + 16_000 + 32_000 + 64_000 + 1_000);
 
     s.stop();
 
-    expect(callTimes).toHaveLength(4);
+    expect(callTimes).toHaveLength(8);
 
-    const gap1 = callTimes[1] - callTimes[0]; // ~1s
-    const gap2 = callTimes[2] - callTimes[1]; // ~4s
-    const gap3 = callTimes[3] - callTimes[2]; // ~16s
+    const gaps = [
+      callTimes[1] - callTimes[0],
+      callTimes[2] - callTimes[1],
+      callTimes[3] - callTimes[2],
+      callTimes[4] - callTimes[3],
+      callTimes[5] - callTimes[4],
+      callTimes[6] - callTimes[5],
+      callTimes[7] - callTimes[6],
+    ];
+    const expected = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000];
 
-    expect(gap1).toBeGreaterThanOrEqual(1_000);
-    expect(gap1).toBeLessThanOrEqual(2_000);
-    expect(gap2).toBeGreaterThanOrEqual(4_000);
-    expect(gap2).toBeLessThanOrEqual(6_000);
-    expect(gap3).toBeGreaterThanOrEqual(16_000);
-    expect(gap3).toBeLessThanOrEqual(20_000);
+    for (let i = 0; i < gaps.length; i++) {
+      const min = expected[i];
+      const max = expected[i] + Math.max(1_000, expected[i] * 0.25);
+      expect(gaps[i]).toBeGreaterThanOrEqual(min);
+      expect(gaps[i]).toBeLessThanOrEqual(max);
+    }
   });
 });
 

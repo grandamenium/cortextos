@@ -111,9 +111,18 @@ export class FastChecker {
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
-        if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-      });
+      // Pass CTX_AGENT_NAME explicitly: the daemon (parent) has no per-agent
+      // value in its own env, and resolveEnv() falls back to basename(cwd)
+      // which yields the repo dir name (e.g. "MudBot") and trips
+      // validateAgentName() because of the capital letter.
+      execFile(
+        'cortextos',
+        ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`],
+        { env: { ...process.env, CTX_AGENT_NAME: agentName } },
+        (err) => {
+          if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
+        },
+      );
     }, HEARTBEAT_INTERVAL_MS);
 
     while (this.running) {
