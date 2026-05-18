@@ -190,6 +190,19 @@ export interface SSEEvent {
   timestamp: string;
 }
 
+// -- Task Audit Types --
+
+export type TaskAuditEvent = 'create' | 'claim' | 'update' | 'complete' | 'comment';
+
+export interface TaskAuditEntry {
+  ts: string; // ISO 8601
+  event: TaskAuditEvent;
+  agent: string;
+  from?: TaskStatus;
+  to?: TaskStatus;
+  note?: string;
+}
+
 // -- Task Filters --
 
 export interface TaskFilters {
