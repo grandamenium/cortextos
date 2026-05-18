@@ -433,6 +433,7 @@ export class AgentManager {
           replyToText,
           lastSent ?? undefined,
           recentHistory,
+          msg.message_id,
         );
 
         if (checker.isDuplicate(formatted)) {
