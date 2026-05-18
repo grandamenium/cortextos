@@ -12,6 +12,8 @@ export default defineConfig({
     'hooks/hook-extract-facts': 'src/hooks/hook-extract-facts.ts',
     'hooks/hook-idle-flag': 'src/hooks/hook-idle-flag.ts',
     'hooks/hook-context-status': 'src/hooks/hook-context-status.ts',
+    'hooks/hook-session-start': 'src/hooks/hook-session-start.ts',
+    'hooks/hook-session-end': 'src/hooks/hook-session-end.ts',
   },
   format: ['cjs'],
   target: 'node20',
