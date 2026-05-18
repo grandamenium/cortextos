@@ -150,6 +150,7 @@ const MUTATION_COMMANDS: ReadonlySet<string> = new Set([
   // Lease writes
   'orgo-lease-claim',
   'orgo-lease-release',
+  'farm-dispatch',
   // Skill / catalog writes
   'create-skill-pr',
   'install-community-item',
@@ -1029,6 +1030,174 @@ busCommand
           console.log(`${item.node_key} expired at ${item.expired_at}: ${item.lease.escalation_rule}`);
         }
       }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+const FARM_ORGO_COMPUTER_ID = '3ec3d7f3-a5da-4678-8b25-ce28b7aed829';
+const FARM_INBOX_DIR = '/opt/claude-farm/inbox';
+const FARM_RESULTS_DIR = '/opt/claude-farm/results';
+const ORGO_API_BASE = 'https://www.orgo.ai/api';
+
+type FarmDispatchTask = {
+  id: string;
+  prompt: string;
+};
+
+type FarmDispatchJob = {
+  run_id: string;
+  tasks: FarmDispatchTask[];
+  timeout: number;
+  reply_to: string;
+};
+
+type OrgoExecResponse = {
+  success: boolean;
+  output: string;
+};
+
+function parseFarmTasks(raw: string): FarmDispatchTask[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`--tasks-json must be valid JSON: ${(err as Error).message}`);
+  }
+
+  const candidate = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object' && Array.isArray((parsed as { tasks?: unknown }).tasks)
+      ? (parsed as { tasks: unknown[] }).tasks
+      : null;
+
+  if (!candidate) {
+    throw new Error('--tasks-json must be an array of {id,prompt} objects, or an object with a tasks array');
+  }
+
+  if (candidate.length === 0) {
+    throw new Error('--tasks-json must include at least one task');
+  }
+
+  return candidate.map((item, idx) => {
+    if (!item || typeof item !== 'object') {
+      throw new Error(`task ${idx + 1} must be an object`);
+    }
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    const prompt = typeof record.prompt === 'string' ? record.prompt.trim() : '';
+    if (!id) throw new Error(`task ${idx + 1} is missing a non-empty string id`);
+    if (!prompt) throw new Error(`task ${idx + 1} is missing a non-empty string prompt`);
+    return { id, prompt };
+  });
+}
+
+async function orgoExec(computerId: string, apiKey: string, code: string): Promise<OrgoExecResponse> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(`${ORGO_API_BASE}/computers/${computerId}/exec`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ code, timeout: 20 }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`Orgo exec failed: HTTP ${res.status} ${body}`.trim());
+    }
+    return res.json() as Promise<OrgoExecResponse>;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildFarmDropCode(job: FarmDispatchJob, jobFileName: string): string {
+  const encoded = Buffer.from(JSON.stringify(job, null, 2) + '\n', 'utf-8').toString('base64');
+  return `
+import base64, json, os, tempfile
+
+inbox_dir = ${JSON.stringify(FARM_INBOX_DIR)}
+results_dir = ${JSON.stringify(FARM_RESULTS_DIR)}
+job_file = ${JSON.stringify(jobFileName)}
+payload = base64.b64decode(${JSON.stringify(encoded)})
+
+os.makedirs(inbox_dir, exist_ok=True)
+os.makedirs(results_dir, exist_ok=True)
+target = os.path.join(inbox_dir, job_file)
+
+fd, tmp = tempfile.mkstemp(prefix=".farm-", suffix=".json", dir=inbox_dir)
+try:
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, target)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+
+print(json.dumps({"ok": True, "job_path": target, "bytes": len(payload)}))
+`.trim();
+}
+
+busCommand
+  .command('farm-dispatch')
+  .description('Dispatch a batch job to the Codex-CU Claude farm inbox')
+  .requiredOption('--tasks-json <json>', 'JSON array of {id,prompt} tasks, or {"tasks":[...]}')
+  .option('--timeout <seconds>', 'Per-job timeout passed to the farm daemon', '60')
+  .option('--computer <id>', 'Codex-CU Orgo computer ID', FARM_ORGO_COMPUTER_ID)
+  .option('--api-key <key>', 'Orgo API key (defaults to ORGO_API_KEY)')
+  .action(async (opts: { tasksJson: string; timeout: string; computer: string; apiKey?: string }) => {
+    try {
+      const timeout = parseInt(opts.timeout, 10);
+      if (!Number.isFinite(timeout) || timeout <= 0) {
+        throw new Error('--timeout must be a positive integer number of seconds');
+      }
+
+      const apiKey = opts.apiKey || process.env['ORGO_API_KEY'] || '';
+      if (!apiKey) {
+        throw new Error('ORGO_API_KEY is required; set it in secrets.env or pass --api-key');
+      }
+
+      const env = resolveEnv();
+      const timestamp = new Date().toISOString().replace(/[-:.TZ]/g, '');
+      const runId = `farm-${timestamp}-${randomString(6).toLowerCase()}`;
+      const jobFileName = `${runId}.json`;
+      const job: FarmDispatchJob = {
+        run_id: runId,
+        tasks: parseFarmTasks(opts.tasksJson),
+        timeout,
+        reply_to: env.agentName,
+      };
+
+      const response = await orgoExec(opts.computer, apiKey, buildFarmDropCode(job, jobFileName));
+      if (!response.success) {
+        throw new Error(`Orgo exec returned success=false: ${response.output}`);
+      }
+
+      let remote: unknown = null;
+      try {
+        remote = JSON.parse((response.output || '').trim());
+      } catch {
+        remote = { raw_output: response.output };
+      }
+
+      const result = {
+        run_id: runId,
+        task_count: job.tasks.length,
+        timeout,
+        reply_to: job.reply_to,
+        computer_id: opts.computer,
+        job_path: `${FARM_INBOX_DIR}/${jobFileName}`,
+        result_path: `${FARM_RESULTS_DIR}/result-${runId}.json`,
+        remote,
+      };
+      console.log(JSON.stringify(result, null, 2));
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
