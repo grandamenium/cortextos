@@ -27,16 +27,35 @@ function createMockTelegramApi() {
   } as any;
 }
 
-function createCallbackQuery(data: string, overrides: Partial<TelegramCallbackQuery> = {}): TelegramCallbackQuery {
+/**
+ * Build a generic CallbackPayload. PR4 c7 (Codex P1.A) migrated
+ * handleCallback / handleActivityCallback off the Telegram-specific
+ * TelegramCallbackQuery shape. The helper preserves the old
+ * convenience signature (data + overrides) but the overrides shape now
+ * mirrors CallbackPayload directly. `raw` is left undefined — call sites
+ * exercising the new typed paths don't need it.
+ */
+function createCallbackQuery(
+  data: string,
+  overrides: {
+    id?: string;
+    from?: { id: number | string; first_name?: string; username?: string };
+    message?: { message_id: number | string; chat?: { id: number | string } };
+  } = {},
+): import('../../../src/connectors/index.js').CallbackPayload {
+  const from = overrides.from ?? { id: 1, first_name: 'Test' };
+  const message = overrides.message ?? { message_id: 42, chat: { id: 999 } };
   return {
-    id: 'cb-123',
-    from: { id: 1, first_name: 'Test' },
-    message: {
-      message_id: 42,
-      chat: { id: 999, type: 'private' },
+    id: overrides.id ?? 'cb-123',
+    from: {
+      id: String(from.id),
+      username: from.username,
+      name: from.first_name,
     },
     data,
-    ...overrides,
+    message_id: String(message.message_id),
+    chat_id: message.chat?.id !== undefined ? String(message.chat.id) : undefined,
+    raw: undefined,
   };
 }
 
@@ -97,21 +116,48 @@ describe('FastChecker', () => {
       writeFileSync(join(pendingDir, `${id}.json`), JSON.stringify(approval));
     }
 
+    // PR3 commit 3: handleActivityCallback now accepts a MessageConnector
+    // instead of a raw TelegramAPI. The connector knows its bound chatId,
+    // so editMessage takes (messageId, text) — no chat-id arg.
+    function createMockActivityConnector() {
+      return {
+        kind: 'telegram' as const,
+        capabilities: {
+          inlineButtons: true,
+          media: true,
+          voiceTranscription: false,
+          formattedText: true,
+          inbound: "poll" as const,
+          typingIndicator: true,
+          reactions: true,
+          interactiveCallbacks: true,
+          messageEdits: true,
+        },
+        validateCredentials: vi.fn(),
+        sendMessage: vi.fn().mockResolvedValue({ id: '1', ts: 0 }),
+        sendMedia: vi.fn(),
+        startInbound: vi.fn(),
+        stopInbound: vi.fn(),
+        acknowledgeCallback: vi.fn().mockResolvedValue(undefined),
+        editMessage: vi.fn().mockResolvedValue(undefined),
+        setTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      } as any;
+    }
+
     it('appr_allow_<id>: resolves approval to approved, answers callback, edits message', async () => {
       const approvalId = 'approval_1234567890_abcde';
       writeTestApproval(approvalId);
 
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
       const query = createCallbackQuery(`appr_allow_${approvalId}`, {
         from: { id: 42, first_name: 'Alice', username: 'alice' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
       // Approval file moved from pending/ to resolved/ with status approved.
       const pendingFile = join(paths.approvalDir, 'pending', `${approvalId}.json`);
@@ -123,11 +169,13 @@ describe('FastChecker', () => {
       expect(approval.resolved_by).toContain('Alice');
       expect(approval.resolved_by).toContain('@alice');
 
-      // Telegram side effects: answerCallbackQuery + editMessageText called.
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Approved');
-      expect(activityApi.editMessageText).toHaveBeenCalled();
-      const editCall = activityApi.editMessageText.mock.calls[0];
-      expect(String(editCall[2])).toMatch(/Approved by Alice/);
+      // Connector side effects: acknowledgeCallback + editMessage called.
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Approved');
+      expect(activityConnector.editMessage).toHaveBeenCalled();
+      const editCall = activityConnector.editMessage.mock.calls[0];
+      // editMessage(messageId, text) — connector knows the chatId itself.
+      expect(editCall[0]).toBe('42');
+      expect(String(editCall[1])).toMatch(/Approved by Alice/);
     });
 
     it('appr_deny_<id>: resolves approval to denied with audit label', async () => {
@@ -135,24 +183,23 @@ describe('FastChecker', () => {
       writeTestApproval(approvalId);
 
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
       const query = createCallbackQuery(`appr_deny_${approvalId}`, {
         from: { id: 42, first_name: 'Alice', username: 'alice' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
       const resolvedFile = join(paths.approvalDir, 'resolved', `${approvalId}.json`);
       expect(existsSync(resolvedFile)).toBe(true);
       const approval = JSON.parse(readFileSync(resolvedFile, 'utf-8'));
       expect(approval.status).toBe('rejected');
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Denied');
-      const editCall = activityApi.editMessageText.mock.calls[0];
-      expect(String(editCall[2])).toMatch(/Denied by Alice/);
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Denied');
+      const editCall = activityConnector.editMessage.mock.calls[0];
+      expect(String(editCall[1])).toMatch(/Denied by Alice/);
     });
 
     it('rejects callbacks from non-whitelisted users with no state change', async () => {
@@ -160,44 +207,42 @@ describe('FastChecker', () => {
       writeTestApproval(approvalId);
 
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
       const query = createCallbackQuery(`appr_allow_${approvalId}`, {
         from: { id: 9999, first_name: 'Attacker', username: 'evil' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
       // Approval NOT resolved — still in pending/.
       const pendingFile = join(paths.approvalDir, 'pending', `${approvalId}.json`);
       expect(existsSync(pendingFile)).toBe(true);
       // Security callback answered but edit NEVER called.
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Not authorized');
-      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Not authorized');
+      expect(activityConnector.editMessage).not.toHaveBeenCalled();
     });
 
     it('unknown approval_id: fails gracefully, answers with error, no state mutation', async () => {
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
       const query = createCallbackQuery('appr_allow_approval_1_ghost', {
         from: { id: 42, first_name: 'Alice', username: 'alice' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
-      // No resolved file created, editMessageText not called (approval
+      // No resolved file created, editMessage not called (approval
       // file never existed so no successful resolution path).
       expect(existsSync(join(paths.approvalDir, 'resolved'))).toBe(false);
-      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+      expect(activityConnector.editMessage).not.toHaveBeenCalled();
       // User gets a friendly "not found" on the callback spinner.
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith(
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith(
         'cb-123',
         expect.stringMatching(/not found|already resolved/i),
       );
@@ -205,9 +250,8 @@ describe('FastChecker', () => {
 
     it('non-appr_* prefix: ignored with "Unknown button" response, no state mutation', async () => {
       const agent = createMockAgent();
-      const activityApi = createMockTelegramApi();
+      const activityConnector = createMockActivityConnector();
       const checker = new FastChecker(agent, paths, '/tmp/framework', {
-        telegramApi: activityApi,
         allowedUserId: 42,
       });
 
@@ -218,10 +262,10 @@ describe('FastChecker', () => {
       const query = createCallbackQuery('perm_allow_deadbeef', {
         from: { id: 42, first_name: 'Alice', username: 'alice' },
       });
-      await checker.handleActivityCallback(query, activityApi);
+      await checker.handleActivityCallback(query, activityConnector);
 
-      expect(activityApi.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Unknown button');
-      expect(activityApi.editMessageText).not.toHaveBeenCalled();
+      expect(activityConnector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Unknown button');
+      expect(activityConnector.editMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -648,52 +692,55 @@ describe('FastChecker', () => {
     });
   });
 
-  describe('formatTelegramReaction', () => {
+  describe('formatReaction', () => {
+    // PR4 c8 (Codex P1.F): renamed from formatTelegramReaction, takes
+    // ConnectorReaction[] instead of Telegram tagged union, and string
+    // message_id instead of numeric.
     it('formats a newly-added emoji reaction with user, chat, and message ids', () => {
-      const result = FastChecker.formatTelegramReaction(
+      const result = FastChecker.formatReaction(
         'Alice',
         '123456789',
-        42,
+        '42',
         [],
-        [{ type: 'emoji', emoji: '👍' }],
+        [{ kind: 'unicode', value: '👍' }],
       );
       expect(result).toContain('=== REACTION from [USER: Alice] (chat_id:123456789) on message 42: 👍 ===');
     });
 
     it('renders multiple concurrent emojis joined by spaces', () => {
-      const result = FastChecker.formatTelegramReaction(
+      const result = FastChecker.formatReaction(
         'Alice',
         '1',
-        7,
+        '7',
         [],
         [
-          { type: 'emoji', emoji: '👍' },
-          { type: 'emoji', emoji: '🔥' },
+          { kind: 'unicode', value: '👍' },
+          { kind: 'unicode', value: '🔥' },
         ],
       );
       expect(result).toContain('on message 7: 👍 🔥 ===');
     });
 
     it('marks a cleared reaction as "removed <old>" when new_reaction is empty', () => {
-      const result = FastChecker.formatTelegramReaction(
+      const result = FastChecker.formatReaction(
         'Alice',
         '1',
-        9,
-        [{ type: 'emoji', emoji: '❤️' }],
+        '9',
+        [{ kind: 'unicode', value: '❤️' }],
         [],
       );
       expect(result).toContain('on message 9: removed ❤️ ===');
     });
 
-    it('renders custom_emoji as [custom_emoji] placeholder', () => {
-      const result = FastChecker.formatTelegramReaction(
+    it('renders custom-emoji reactions as [custom] placeholder', () => {
+      const result = FastChecker.formatReaction(
         'Alice',
         '1',
-        11,
+        '11',
         [],
-        [{ type: 'custom_emoji', custom_emoji_id: '5123456789012345678' }],
+        [{ kind: 'custom', value: '5123456789012345678' }],
       );
-      expect(result).toContain('on message 11: [custom_emoji] ===');
+      expect(result).toContain('on message 11: [custom] ===');
     });
   });
 
@@ -854,6 +901,149 @@ describe('FastChecker', () => {
       expect(result).toContain('local_file: /tmp/telegram-images/video_1743718313.mp4');
       expect(result).toContain('file_name: video_1743718313.mp4');
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
+    });
+  });
+
+  /**
+   * PR3 of pluggable-connectors: handleCallback's per-decision ack +
+   * edit paths now route through the active connector's
+   * `acknowledgeCallback` / `editMessage` methods when the connector
+   * advertises the matching capability. Legacy `telegramApi` is the
+   * fallback for agents not yet wired to a connector.
+   *
+   * These tests pin both branches at the FastChecker integration
+   * layer (the unit tests for the connector methods themselves live
+   * in `tests/unit/connectors/telegram-connector.test.ts`).
+   */
+  describe('handleCallback connector routing (PR3)', () => {
+    function makeMockConnector(opts: { interactiveCallbacks?: boolean; messageEdits?: boolean } = {}) {
+      return {
+        kind: 'telegram' as const,
+        capabilities: {
+          inlineButtons: true,
+          media: true,
+          voiceTranscription: false,
+          formattedText: true,
+          inbound: "poll" as const,
+          typingIndicator: true,
+          reactions: true,
+          interactiveCallbacks: opts.interactiveCallbacks ?? true,
+          messageEdits: opts.messageEdits ?? true,
+        },
+        validateCredentials: vi.fn(),
+        sendMessage: vi.fn().mockResolvedValue({ id: '1', ts: 0 }),
+        sendMedia: vi.fn(),
+        startInbound: vi.fn(),
+        stopInbound: vi.fn(),
+        acknowledgeCallback: vi.fn().mockResolvedValue(undefined),
+        editMessage: vi.fn().mockResolvedValue(undefined),
+        setTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      } as any;
+    }
+
+    it('routes ack + edit through connector when both capabilities are present', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const connector = makeMockConnector();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        connector,
+      });
+
+      const query = createCallbackQuery('perm_allow_abc123');
+      await checker.handleCallback(query);
+
+      // Connector path: called
+      expect(connector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Got it');
+      expect(connector.editMessage).toHaveBeenCalledWith('42', 'Approved');
+
+      // Legacy direct path: NOT called (response file proves the rest of the
+      // handler ran — only the comms surface routed through the connector)
+      expect(api.answerCallbackQuery).not.toHaveBeenCalled();
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      const responseFile = join(paths.stateDir, 'hook-response-abc123.json');
+      expect(existsSync(responseFile)).toBe(true);
+    });
+
+    it('falls back to legacy telegramApi when connector lacks interactiveCallbacks', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const connector = makeMockConnector({ interactiveCallbacks: false });
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        connector,
+      });
+
+      const query = createCallbackQuery('perm_allow_cdb789');
+      await checker.handleCallback(query);
+
+      // Ack: capability missing → fallback to legacy api
+      expect(connector.acknowledgeCallback).not.toHaveBeenCalled();
+      expect(api.answerCallbackQuery).toHaveBeenCalledWith('cb-123', 'Got it');
+      // Edit: capability still present → connector wins
+      expect(connector.editMessage).toHaveBeenCalledWith('42', 'Approved');
+    });
+
+    it('asksubmit routes both ack + edit through connector with the toast "Submitted"', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const connector = makeMockConnector();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        connector,
+      });
+
+      const query = createCallbackQuery('asksubmit_0');
+      await checker.handleCallback(query);
+
+      expect(connector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Submitted');
+      expect(connector.editMessage).toHaveBeenCalledWith('42', 'Submitted');
+    });
+
+    it('asktoggle routes the keyboard rebuild through connector.editMessage with buttons', async () => {
+      const agent = createMockAgent();
+      const api = createMockTelegramApi();
+      const connector = makeMockConnector();
+      // Seed ask-state so the toggle has options to render
+      const askStatePath = join(paths.stateDir, 'ask-state.json');
+      writeFileSync(
+        askStatePath,
+        JSON.stringify({
+          total_questions: 1,
+          current_question: 0,
+          questions: [{ options: ['A', 'B', 'C'] }],
+          multi_select_chosen: [],
+        }) + '\n',
+        'utf-8',
+      );
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '999',
+        connector,
+      });
+
+      const query = createCallbackQuery('asktoggle_0_1');
+      await checker.handleCallback(query);
+
+      // Ack uses "Toggled"
+      expect(connector.acknowledgeCallback).toHaveBeenCalledWith('cb-123', 'Toggled');
+      // Edit receives the rebuilt keyboard with toggle + submit rows
+      expect(connector.editMessage).toHaveBeenCalled();
+      const editArgs = connector.editMessage.mock.calls[0];
+      expect(editArgs[0]).toBe('42');
+      expect(editArgs[2]).toBeDefined();
+      expect(editArgs[2].buttons).toBeDefined();
+      // PR4 c9 (Codex P1.G): keyboard is ConnectorAction[][] now,
+      // not Telegram { text, callback_data } rows.
+      const keyboard = editArgs[2].buttons as Array<Array<import('../../../src/connectors/index.js').ConnectorAction>>;
+      // 3 option rows + 1 submit row
+      expect(keyboard).toHaveLength(4);
+      expect(keyboard[3][0].actionId).toBe('asksubmit_0');
+      expect(keyboard[3][0].label).toBe('Submit Selections');
     });
   });
 });

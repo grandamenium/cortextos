@@ -1,5 +1,475 @@
 # CHANGELOG
 
+## [unreleased] — Pluggable Communications Connectors (audit pass)
+
+Pre-release security + correctness sweep over the pluggable-connectors
+stack. Two independent reviews (Claude Opus 4.7 + GPT-5.4 Codex) ran
+the diff against upstream/main and the fixes below address every
+finding. No interface changes — purely internal hardening.
+
+### Security
+- **`src/hooks/hook-planmode-approval.ts`** — `tool_input.plan_file`
+  is now confined to `~/.claude/plans/` via `realpathSync`-based
+  resolution (`confinePlanPath()`). Closes an arbitrary-file-read
+  exfil channel where a prompt-injected agent could substitute a
+  host path (e.g. `/etc/passwd`) into `ExitPlanMode`'s input and
+  ship the first 3600 chars of its contents to the operator chat.
+- **`src/hooks/hook-planmode-approval.ts`** — now honors
+  `config.connector === 'none'` as a hard short-circuit, matching
+  `hook-permission-request.ts`. Previously gated only on
+  `BOT_TOKEN`/`CHAT_ID` env, so a `connector: 'none'` agent with
+  inherited Telegram creds would still post plans to Telegram.
+- **`src/connectors/telegram/api.ts:downloadFile`** — replaced
+  `response.arrayBuffer()` with a streaming `response.body.getReader()`
+  loop that byte-counts per chunk and `cancel()`s the reader the
+  instant the cap is exceeded. Closes a memory-exhaustion vector
+  when the origin omits or misreports `Content-Length` (the prior
+  Content-Length precheck was bypassable on a headerless response).
+- **`src/daemon/index.ts`** crash-loop alerter — replaced
+  `spawnSync('curl', [..., URL_WITH_TOKEN, ...])` with
+  `spawnSync(process.execPath, ['-e', childScript], { input: ... })`.
+  The BOT_TOKEN now flows over the child process's stdin instead of
+  appearing in argv, removing the "token visible to `ps` /
+  `/proc/$pid/cmdline`" surface during the alert window.
+
+### Correctness
+- **`src/connectors/telegram/poller.ts`** — added a monotonic
+  `generation` counter and `runPromise` tracking. `stop()` is now
+  async, bumps the generation, and awaits the in-flight `start()`
+  loop before returning. A `stopped()` guard runs before every
+  handler dispatch (message + callback + reaction), so no handler
+  can fire after `stop()` resolves. Pre-fix, callback and reaction
+  paths had no generation guard at all — only the message path did.
+- **`src/connectors/telegram/telegram-connector.ts:stopInbound`** —
+  now `await`s `poller.stop()`, matching the new async contract.
+- **`src/connectors/telegram/media.ts:enforceQuota`** — throws
+  when a single file's bytes alone exceed the total cache quota
+  instead of silently returning (the pre-fix "defense-in-depth log
+  line" comment was actually a silent pass-through that broke the
+  quota's invariant whenever `perFileBytes > totalQuotaBytes` got
+  mis-configured).
+- **`src/connectors/telegram/telegram-connector.ts:sendReaction`** —
+  shape-validates the emoji before the wire call: rejects non-string
+  / empty input, control characters (charCodeAt over 0x00-0x1F and
+  0x7F-0x9F), and any value longer than 16 codepoints (well above
+  the longest legitimate ZWJ-sequence reaction). Deliberately does
+  NOT enforce Telegram's exact allowlist — that drifts upstream and
+  a strict mirror would lock the project's portable vocabulary
+  (✅ ❌ 🛠 ⏸) ahead of any Telegram expansion.
+- **`src/connectors/index.ts`** — added `isConnectorKind()` type
+  guard, `CONNECTOR_ENV_KEYS` registry, and `getAllConnectorCredKeys()`
+  aggregator. `getOperatorConnector()` now warns (instead of
+  silently dropping) when `CTX_OPERATOR_BOT_TOKEN` is set but
+  malformed.
+- **`src/daemon/agent-manager.ts:loadAgentConfig`** — runtime-validates
+  `config.connector` against `CONNECTOR_ALLOWLIST` and drops the
+  field on a mismatch so the legacy-inference path stays the default
+  for unrecognized values. Without this, a typo like `"telegrm"`
+  would reach `getConnector()` inside `startAgent()` and throw —
+  killing the entire startup loop.
+- **`src/daemon/agent-manager.ts:discoverAndStart`** — wraps the
+  per-agent `await this.startAgent(...)` in a try/catch so one
+  broken agent (corrupt config, malformed .env, unknown connector
+  kind) only kills its own startup, not every other agent's.
+- **`src/bus/approval.ts:pingAgentViaConnector`**,
+  **`src/cli/enable-agent.ts`**, **`src/cli/bus.ts:readConnectorKindFromAgent`** —
+  all three sites now runtime-validate `config.connector` against
+  the allowlist via `isConnectorKind()`. Approval ping silently
+  ignores invalid (best-effort contract preserved); `enable`
+  hard-errors with a clear message; `bus` warns and falls back.
+- **`src/cli/bus.ts`** — both `bus send` and `bus react` now
+  source the "clear caller-inherited creds from base env" key
+  list from `getAllConnectorCredKeys()` instead of a hardcoded
+  `['BOT_TOKEN', 'CHAT_ID', 'ALLOWED_USER']`. Adding a future
+  connector (Matrix, RocketChat) becomes a one-line registry
+  change instead of a hunt across CLI sites.
+
+### Quality / hygiene
+- **`src/cli/setup.ts:writeAgentEnv`** — refuses to write if
+  BOT_TOKEN or CHAT_ID contain newline / CR (defensive — today's
+  API-validated values can't, but a malformed `.env` from
+  interpolation would break every subsequent enable).
+- **`src/cli/enable-agent.ts`** — switched from a local
+  `parseEnvFile` (no quote/comment handling) to the shared
+  `src/utils/env.ts` parser. Inconsistency between this and
+  `src/hooks/index.ts` was a latent footgun where a quoted
+  `BOT_TOKEN="abc"` would validate at setup but fail at runtime.
+- **`src/cli/bus.ts:readConnectorKindFromAgent`** — surfaces JSON
+  parse errors via `console.warn` instead of silently dropping
+  (corrupt config no longer silently downgrades to legacy
+  inference).
+- **Agent template** (`templates/agent/CLAUDE.md`,
+  `templates/agent/TOOLS.md`) — promoted `bus send $CTX_AGENT_NAME`
+  as the preferred reply command (connector-agnostic), with
+  `bus send-telegram <chat_id>` re-documented as a Telegram-only
+  escape hatch. Per the project's agent-awareness rule, ships
+  the new connector-agnostic vocabulary into the prompts that
+  spawn new agents.
+
+### Tests
+- All 837 tests across `tests/unit/{connectors,hooks,bus,cli,telegram,daemon}`
+  + the two integration smokes + `tests/lint-no-stray-raw-api.test.ts`
+  pass on the audited diff. Typecheck clean.
+
+---
+
+## [unreleased] — Pluggable Communications Connectors (PR4 commit 1 — first-class media)
+
+Lifts media handling out of the daemon's onMessage handler into the
+connector itself. `NormalizedMessage.media` becomes a first-class
+shape (the standalone `NormalizedMedia` interface), and TelegramConnector
+owns the photo / document / voice / audio / video / video_note
+download + transcription pipeline that the daemon used to do inline
+via `processMediaMessage(...).then(...)`. The daemon's onMessage
+handler now dispatches synchronously on `m.media.kind` — one less
+`m.raw as TelegramMessage` cast in the hot path. Removes the PR3
+CHANGELOG out-of-scope item naming this work.
+
+### Added
+- **`NormalizedMedia` interface** at `src/connectors/types.ts` —
+  exported shape for pre-processed media attachments. Fields: `kind`
+  (photo/voice/document/video/audio/**video_note** — added in this PR),
+  `localPath` (absolute), `mime?`, `fileName?`, `duration?`,
+  `transcription?`.
+- **`TelegramConnector` constructor option `opts.downloadDir?: string`** —
+  when set, the connector's inbound polling pipeline downloads media
+  files to this directory and emits `NormalizedMessage.media` populated.
+  When unset (e.g. activity-channel connector — outbound primarily,
+  inbound is logged-only), media flags on inbound messages are ignored
+  and a text-only normalized message is emitted (caption still flows
+  through `m.text`).
+- **`TelegramConnector.toNormalizedMedia` private helper** — translates
+  the legacy Telegram-specific `ProcessedMedia` shape (where photo
+  uses `image_path`, everything else uses `file_path`) into the
+  generic `NormalizedMedia.localPath` field.
+
+### Changed
+- **`NormalizedMessage.media`** now references `NormalizedMedia`
+  instead of its previous inline shape. The previous shape required
+  `mime: string`; the new shape makes `mime` optional (no Telegram
+  caller populated it). `kind` union gained `'video_note'`.
+- **`AgentManager.startAgent` constructs the agent's primary
+  TelegramConnector with `downloadDir: join(agentDir,
+  'telegram-images')`** — path matches the pre-PR4 daemon-inline
+  download dir byte-for-byte so existing downloaded files keep their
+  paths. The activity-channel connector is constructed without
+  downloadDir (out-of-scope by design — activity channel doesn't
+  receive media).
+- **`AgentManager.startAgent` onMessage handler** drops the
+  `if (isMedia && telegramApi) { processMediaMessage(...).then(...) }`
+  block (44 lines), replaced by synchronous dispatch on `m.media.kind`.
+  Path-relativization (`relative(launchDir, localPath)` per BUG-046 +
+  BUG-049) still lives in the daemon — the connector returns absolute
+  paths, the daemon makes them relative to the agent's launch cwd.
+
+### Out of scope (deferred to PR4+)
+- Removing the legacy `telegramApi`/`chatId` constructor options on
+  FastChecker (currently kept for one-release backwards-compat).
+- Implementing Matrix / RocketChat connectors.
+
+## [unreleased] — Pluggable Communications Connectors (PR4 commit 2 — chat_id + reply_to.text normalization)
+
+Drops the two remaining `m.raw as TelegramMessage` casts in the daemon's
+onMessage formatting hot path by lifting their inputs onto
+`NormalizedMessage`. After this commit the only place the daemon casts
+back to the Telegram shape is the `recordInboundTelegram` JSONL-logger
+call — a telegram-namespace helper that legitimately consumes the
+provider payload. The CHANGELOG out-of-scope item naming
+`reply_to_message` normalization (PR4 commit 1) is removed because this
+commit lands it.
+
+### Added
+- **`NormalizedMessage.chat_id?: string`** — inbound message's own chat
+  id, stringified at the connector. Daemon now resolves
+  `effectiveChatId = m.chat_id ?? chatId ?? ''` instead of
+  `msg.chat?.id ?? chatId ?? ''` via a `m.raw` cast. Stringification
+  matches the existing `String(reaction.chat.id)` convention used on
+  `NormalizedReactionPayload.chat_id` (PR1).
+- **`NormalizedMessage.reply_to.text?: string`** — human-readable
+  rendering of the replied-to message (text/caption when present,
+  otherwise a media-kind label like `[photo]` / `[voice message]` /
+  `[document: <filename>]`). The `reply_to` field gains the optional
+  `text` alongside the existing `id`.
+- **`buildTelegramReplyContext`** at
+  `src/connectors/telegram/telegram-connector.ts` — exported helper that
+  renders a `TelegramMessage` into the reply-context string. Moved from
+  `src/daemon/agent-manager.ts` (where it was `buildReplyContext`,
+  exported for tests) and renamed for greppability — the daemon no
+  longer inspects Telegram-specific media fields (`replyMsg.video`,
+  `replyMsg.voice`, ...) to render reply context.
+
+### Changed
+- **`TelegramConnector.toNormalizedMessage`** populates `chat_id` from
+  `String(msg.chat.id)` and, when `msg.reply_to_message` is present,
+  emits `reply_to: { id: String(msg.reply_to_message.message_id), text:
+  buildTelegramReplyContext(...) }`. Existing fields (`id`, `ts`,
+  `from`, `text`, `raw`) are unchanged byte-for-byte.
+- **`AgentManager.startAgent` onMessage handler** drops the
+  `const msg = m.raw as TelegramMessage` declaration. The two former
+  uses of `msg` in the formatting path (`msg.chat?.id` and
+  `msg.reply_to_message`) become `m.chat_id` and `m.reply_to?.text`
+  respectively. The `recordInboundTelegram(... msg ...)` call keeps the
+  cast inline as `m.raw as TelegramMessage` so the cast is localized
+  to the one call that legitimately needs the provider shape (a
+  telegram-namespace JSONL logger).
+- **Comment block at the top of the onMessage handler** updated to
+  reflect that the only remaining cast in this handler is the
+  recordInboundTelegram one.
+
+### Tests
+- 3 new tests in `tests/unit/connectors/telegram-connector.test.ts`
+  ("message normalization (PR4 commit 2)") exercise the full
+  `startPolling → onMessage` pipeline with fetch-mocked `getUpdates`
+  and assert that emitted `NormalizedMessage` carries `chat_id` (as a
+  string), `reply_to` (with the id + rendered text), and that
+  `reply_to` stays undefined when the inbound has no
+  `reply_to_message`.
+- 12 `buildTelegramReplyContext` tests moved from
+  `tests/unit/daemon/agent-manager.test.ts` into the connector test
+  file (renamed import) — they exercise per-media-kind label rendering
+  and were previously named `buildReplyContext`. Behavior is unchanged.
+
+### Out of scope (deferred to PR4+)
+- Removing the legacy `telegramApi`/`chatId` constructor options on
+  FastChecker (currently kept for one-release backwards-compat).
+- Implementing Matrix / RocketChat connectors.
+- Lifting `recordInboundTelegram` out of the daemon (would eliminate
+  the last `m.raw as TelegramMessage` cast in `startAgent`, but the
+  JSONL logger touches `paths`, `ctxRoot`, and `resolvedOrg` from the
+  daemon's closure — a separate refactor).
+
+## [unreleased] — Pluggable Communications Connectors (PR3 — interactive lifecycle)
+
+Lands the interactive-message lifecycle abstraction PR2's CHANGELOG
+named as out-of-scope. FastChecker's per-callback ack + edit + typing
+paths now route through `MessageConnector` methods instead of
+`telegramApi` direct calls. Brings the count of remaining Telegram-
+direct call sites in `src/daemon/fast-checker.ts` down from 17
+to 5 (all in the dual-path `routeApprovalCallback` /
+`handleActivityCallback`, blocked on activity-channel pluggability).
+
+### Added
+- **`MessageConnector.acknowledgeCallback?(callbackId, text?)`** — optional
+  interface method that acknowledges a callback query the connector
+  emitted via `PollingHandlers.onCallback`. Telegram maps to
+  `answerCallbackQuery` (which defaults missing text to `'OK'`); future
+  connectors (Slack ephemeral response, RocketChat triggerId reply)
+  follow the same generic shape. Gated by the new
+  `capabilities.interactiveCallbacks` flag.
+- **`MessageConnector.editMessage?(messageId, text, opts?)`** — optional
+  interface method that edits a previously-sent message in the
+  connector's **bound chat**. `opts.buttons` becomes the new inline
+  keyboard (preserves existing on Telegram per the API contract when
+  omitted). Cross-chat editing is out of scope; that path remains
+  Telegram-direct in `routeApprovalCallback` pending activity-channel
+  pluggability. Gated by the new `capabilities.messageEdits` flag.
+- **`ConnectorCapabilities.interactiveCallbacks`** + **`messageEdits`** —
+  two new boolean capability flags. `TelegramConnector` sets both to
+  `true`; `NullConnector` sets both to `false` (and omits the methods
+  entirely — callers must gate via the flag before invoking).
+- **`FastChecker.ackCallback` + `FastChecker.editCallbackMessage`
+  helpers** — private dispatch helpers that route through the active
+  connector when wired and capability-advertised, falling back to the
+  legacy `telegramApi`/`chatId` fields. Pattern mirrors PR2's
+  `if (this.connector) ... else if (this.telegramApi) ...` precedent
+  at `fast-checker.ts:850-853` and `:1042-1045`.
+
+### Migrated (FastChecker — 12 call sites)
+- `sendTyping(api, chatId)` → `sendTyping()` reading `this.connector`
+  and `this.telegramApi` internally; routes through
+  `connector.setTypingIndicator(true)` when the connector advertises
+  `typingIndicator`. NullConnector's `typingIndicator: false` skips
+  the send entirely, eliminating the wasted poll on no-Telegram agents.
+- Permission callback (`perm_*`) — ack + edit migrated.
+- Restart callback (`restart_*`) — ack + edit migrated.
+- AskUserQuestion single-select (`askopt_*`) — ack + edit migrated.
+- AskUserQuestion multi-select toggle (`asktoggle_*`) — ack +
+  keyboard-rebuild edit (with `buttons`) migrated.
+- AskUserQuestion multi-select submit (`asksubmit_*`) — ack + edit
+  migrated.
+
+### Migrated (PR3 commit 2 — daemon poller through connector.startPolling)
+- **`AgentManager.startAgent` primary poller now routes through
+  `connector.startPolling(handlers, { stateDir })`** instead of
+  constructing `TelegramPoller` directly. Handlers consume the
+  generic `NormalizedMessage` / `CallbackPayload` /
+  `NormalizedReactionPayload` shapes; the Telegram tagged-union shape
+  is read off `.raw` where media detection + `reply_to_message` access
+  still require it (PR4+ generalizes those). The connector's stateDir
+  contract preserves `<ctxRoot>/state/<name>/.telegram-offset`
+  byte-for-byte across the migration.
+- **`AgentManager.stopAgent` calls `connector.stopPolling()`**
+  unconditionally — NullConnector's no-op stop is safe when polling
+  was never enabled.
+- **`AgentManager.agents` map field renamed `poller` → `connector`**.
+  The activity-channel `activityPoller` field is unchanged.
+- **Polling-enablement gate** now reads
+  `connector?.capabilities.longPolling && pollingEnabled` instead of
+  `telegramApi && chatId && pollingEnabled`. NullConnector's
+  `longPolling: false` cleanly suppresses the inbound loop on
+  no-Telegram agents (replaces the implicit
+  `if (telegramApi && chatId)` skip).
+- **ALLOWED_USER gate** in onMessage + onReaction now compares the
+  stringified `from.id` from the normalized payload directly against
+  the env-var value (no `parseInt` indirection); reasoning in the
+  migrated comments.
+
+### Migrated (PR3 commit 3 — activity-channel pluggability)
+- **Activity-channel poller now uses a second `TelegramConnector`
+  instance.** Constructed with the new
+  `opts.pollerNamespace: 'activity'` so its offset file stays at
+  `.telegram-offset-activity` (byte-identical to PR2's direct
+  TelegramPoller wiring). Routes inbound through
+  `connector.startPolling({onMessage, onCallback}, {stateDir})` —
+  the same generic lifecycle as the agent's primary connector.
+- **`FastChecker.handleActivityCallback` signature changed**:
+  `(query, activityApi: TelegramAPI)` →
+  `(query, activityConnector: MessageConnector)`. The connector knows
+  its bound chatId, so `editMessage` is now `(messageId, text)` with
+  no chat-id arg.
+- **`FastChecker.routeApprovalCallback` signature changed**:
+  `(decision, approvalId, query, api: TelegramAPI | undefined)` →
+  `(decision, approvalId, query, connector: MessageConnector | undefined)`.
+  Both callers (own-bot path via `this.connector`, activity path via
+  the activity connector) now pass connectors instead of raw APIs.
+- **5 final FastChecker direct-call sites migrated**:
+  - `handleActivityCallback`: lines 484 ("Not authorized" ack), 492
+    ("Unknown button" ack) — both now route through
+    `activityConnector.acknowledgeCallback`.
+  - `routeApprovalCallback`: lines 537 ("Approval not found" ack), 543
+    ("Approved"/"Denied" ack), 546 ("✅ Approved by …" edit) — all
+    three now route through `connector.acknowledgeCallback` /
+    `connector.editMessage` with capability gating.
+- **`AgentManager.agents` map field renamed `activityPoller` →
+  `activityConnector`.** stopAgent calls
+  `activityConnector.stopPolling()` unconditionally — no-op when the
+  activity connector was never started.
+- **`TelegramConnector` constructor accepts
+  `opts.pollerNamespace?: string`** — passed through to
+  TelegramPoller as `offsetFileSuffix` so multiple connector instances
+  in the same stateDir don't clobber each other's offset files.
+
+### Net direct-call count after PR3 (3 commits)
+- Pre-PR3 FastChecker direct calls (sendChatAction/answerCallbackQuery/
+  editMessageText/editMessageText): **17 sites**
+- Post-PR3: **3 sites**, all inside the connector-fallback helpers
+  (`sendTyping`, `ackCallback`, `editCallbackMessage`) — exercised only
+  when an agent has no connector wired but has a legacy `telegramApi`
+  set on FastChecker. PR4 cleanup will remove these once the legacy
+  `telegramApi`/`chatId` constructor options can be retired.
+- Pre-PR3 AgentManager direct `TelegramPoller` constructions: **2**
+  (primary + activity). Post-PR3: **0**. Both pollers now flow through
+  `connector.startPolling()`.
+
+### Out of scope (deferred to PR4+)
+- Removing the legacy `telegramApi`/`chatId` constructor options on
+  FastChecker (currently kept for one-release backwards-compat).
+- Implementing Matrix / RocketChat connectors.
+- First-class `NormalizedMessage.media` payload (replacing the
+  `m.raw` cast in onMessage's media branch).
+
+## [unreleased] — Pluggable Communications Connectors (PR1 + PR2)
+
+Extracts Telegram from being a hardcoded dependency into a pluggable
+`MessageConnector` interface. PR1 ships the seam; PR2 generalizes hooks
++ CLI + bus/approval + daemon-level paths so no-Telegram agents become
+first-class. Sets up Matrix + RocketChat as the named next-two-real
+connectors (separate future PRs).
+
+### Changed (BREAKING — security-relevant)
+- **`hook-permission-telegram` renamed `hook-permission-request` and now
+  uses tool-class-aware decisions when no remote-approval channel is
+  configured:** safe read-only tools (Read/Glob/Grep/LS/NotebookRead)
+  auto-allow; write/exec/network tools (Bash/Edit/Write/WebFetch/WebSearch)
+  fall through to Claude Code's built-in terminal permission prompt by
+  exiting 0 with no JSON output. Previous behavior (deny ALL on missing
+  creds) is available via `config.json` `require_remote_approval: true`.
+  This makes agents with `connector: 'none'` actually functional —
+  they can execute tool calls instead of being blocked at the
+  permission layer.
+
+  **Security posture shift for current Telegram users with misconfigured
+  creds:** Pre-PR2, an agent with a typo in `BOT_TOKEN` had Telegram API
+  calls fail at `hook-permission-telegram`, which exited non-zero and
+  Claude Code denied the tool. Post-PR2, the same agent has its
+  connector inferred as `'none'` by the legacy resolver, `require_remote_approval`
+  defaults to `false`, and read-only tools auto-allow. Operators who want
+  strict-deny set `require_remote_approval: true`.
+
+- **`hook-ask-telegram` → `hook-ask-user`**, **`hook-planmode-telegram` →
+  `hook-planmode-approval`**, **`hook-compact-telegram` →
+  `hook-compact-outbound`** — renamed for connector-agnostic naming.
+  Old CLI subcommand names (`cortextos bus hook-*-telegram`) preserved
+  as `[deprecated]` aliases for one release. JS file shims at old paths.
+  Template `.claude/settings.json` files updated to new names.
+
+- **`cortextos bus send-telegram` hard-errors with exit 1 for non-Telegram
+  connectors.** Helpful message tells operators to use `bus send` for
+  connector-agnostic messaging. For `connector: 'telegram'` or absent,
+  existing behavior preserved.
+
+### Added
+- **`MessageConnector` interface** at `src/connectors/` — pluggable
+  abstraction for user-facing messaging transports. Two implementations:
+  `TelegramConnector` (wraps existing `TelegramAPI`+`TelegramPoller`),
+  `NullConnector` (no-op). Factory `getConnector(kind, agentDir, env)`
+  with `CONNECTOR_ALLOWLIST = ['telegram', 'none']`.
+- **`AgentConfig.connector?: 'telegram' | 'none'`** — explicit connector
+  kind. When absent, the daemon's legacy-compat resolver infers from
+  `.env` (validated BOT_TOKEN + CHAT_ID + numeric ALLOWED_USER → telegram;
+  else none).
+- **`AgentConfig.inbound_polling?: boolean`** — connector-agnostic
+  successor to `telegram_polling`. Both honored; `inbound_polling` wins
+  when both set.
+- **`AgentConfig.require_remote_approval?: boolean`** — `@security` opt-in
+  for strict permission-hook mode.
+- **`cortextos bus send <agent> <message>`** — connector-agnostic
+  outbound CLI. Silent drop + stderr warn under `connector: 'none'`.
+  Supports `--image`, `--file`, `--plain-text`.
+- **`cortextos add-agent --connector <kind>`** flag (default: telegram).
+  `--connector none` skips `.env` stub and writes `connector: 'none'` to
+  config.json.
+- **`cortextos setup --connector <kind>`** non-interactive flag, plus
+  interactive "Connector choice" step in the wizard. None flow still
+  creates+enables the orchestrator (skips only Telegram-cred prompts).
+- **`getOperatorConnector()` helper** at `src/connectors/index.ts` for
+  daemon-level operator notifications.
+- **`MessageConnector.startPolling(handlers, opts?: { stateDir? })`** —
+  optional stateDir for the connector's poller state file (preserves
+  Telegram's historical `.telegram-offset` path through the wire migration).
+- **`CallbackPayload.raw: unknown`** — transitional field for FastChecker's
+  callback-edit + answer-query paths. PR3+ removes.
+
+### Migrated
+- `src/bus/approval.ts:pingAgentChatId` → `pingAgentViaConnector` uses
+  `getConnector(...)` instead of `new TelegramAPI(botToken)`. Honors
+  `config.connector === 'none'` for silent skip.
+- `src/daemon/index.ts:sendCrashLoopAlertBestEffort` — opt-out gate
+  via `CTX_OPERATOR_CONNECTOR=none`. Send remains synchronous via
+  `spawnSync('curl', ...)` because the daemon's uncaughtException
+  handler is a sync hot path.
+- FastChecker's 2 outbound `sendMessage` call sites route through
+  `this.connector.sendMessage(...)` when wired; legacy field fallback
+  during transition.
+
+### Deprecated (one release cycle)
+- `hook-*-telegram.ts` filenames (JS shims at old paths).
+- `cortextos bus hook-*-telegram` CLI subcommand names (aliased).
+- `AgentConfig.telegram_polling` (aliased to `inbound_polling`).
+- `TelegramConnector.rawTelegramApi()` — `@internal @deprecated PR3+`
+  escape hatch with CI grep guard limiting callers.
+- `src/telegram/*` deep imports (each old path is a 1-line re-export
+  from `src/connectors/telegram/*`).
+
+### Out of scope (deferred)
+- Implementing Matrix / RocketChat connectors — separate future PRs.
+- Webhook/websocket inbound transport — v1 is polling-only.
+- Activity channel pluggability.
+- Daemon-poller wire migration through `connector.startPolling()` —
+  PR3+ when the interactive-message lifecycle abstraction lands.
+- 4 of 6 FastChecker Telegram-direct call sites (`sendChatAction`,
+  `answerCallbackQuery`, `editMessageText`, activity-channel handler).
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.

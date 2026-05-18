@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join, relative } from 'path';
-import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
+import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
@@ -8,13 +8,80 @@ import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
-import { TelegramPoller } from '../telegram/poller.js';
+import { TelegramConnector, NullConnector, getConnector, isConnectorKind, CONNECTOR_ALLOWLIST } from '../connectors/index.js';
+import type {
+  MessageConnector,
+  NormalizedMessage,
+  NormalizedReactionPayload,
+  CallbackPayload,
+} from '../connectors/index.js';
 import { resolvePaths } from '../utils/paths.js';
-import { resolveEnv } from '../utils/env.js';
+import { resolveEnv, parseEnvFile } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
-import { processMediaMessage } from '../telegram/media.js';
+
+/**
+ * Legacy-compat Telegram enablement resolver (PR1 of pluggable connectors).
+ *
+ * Reproduces byte-identically the existing inline gate at this file's
+ * startAgent() block (the BOT_TOKEN format check, the numeric ALLOWED_USER
+ * check, the "BOT_TOKEN set + ALLOWED_USER missing → refuse" security
+ * gate). Returns the parsed values when all three gates pass; otherwise
+ * returns `{ enabled: false }` after firing the same WARNING/SECURITY log
+ * lines today's code emits.
+ *
+ * Used by startAgent() to drive both the legacy `telegramApi`/`chatId`/
+ * `allowedUserId` field population AND the new connector instantiation —
+ * a single source of truth so the two stay in lock-step.
+ *
+ * @param agentEnvFile  Path to the agent's .env file (may not exist).
+ * @param log           Optional log sink. Defaults to a no-op so test
+ *                      contexts can call this without console noise; the
+ *                      daemon passes its real agent-scoped log.
+ */
+function resolveLegacyTelegramEnablement(
+  agentEnvFile: string,
+  log: LogFn = () => {},
+):
+  | { enabled: true; botToken: string; chatId: string; allowedUserId: string }
+  | { enabled: false }
+{
+  if (!existsSync(agentEnvFile)) return { enabled: false };
+
+  const envContent = readFileSync(agentEnvFile, 'utf-8');
+  const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
+  const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
+  const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
+  let botToken = botTokenMatch?.[1]?.trim();
+  const chatId = chatIdMatch?.[1]?.trim();
+  let allowedUserId = allowedUserMatch?.[1]?.trim() || undefined;
+
+  // Validate BOT_TOKEN format: must be numeric_id:alphanumeric_secret
+  if (botToken && !/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
+    log(`WARNING: BOT_TOKEN format invalid (expected: 123456:ABC...). Telegram will not start.`);
+    botToken = undefined;
+  }
+
+  // ALLOWED_USER must be a numeric Telegram user ID, not a username
+  if (allowedUserId && !/^\d+$/.test(allowedUserId)) {
+    log(`SECURITY: ALLOWED_USER is not a numeric ID. Telegram user IDs are numbers (e.g. 123456789). Refusing to enable Telegram. Fix the .env file.`);
+    allowedUserId = undefined;
+  }
+
+  // Security: ALLOWED_USER is REQUIRED when BOT_TOKEN is set.
+  if (botToken && !allowedUserId) {
+    log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
+    botToken = undefined;
+  }
+
+  if (botToken && chatId && allowedUserId) {
+    return { enabled: true, botToken, chatId, allowedUserId };
+  }
+  return { enabled: false };
+}
+
+export { resolveLegacyTelegramEnablement };
 
 type LogFn = (msg: string) => void;
 
@@ -22,7 +89,7 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
+  private agents: Map<string, { process: AgentProcess; checker: FastChecker; connector?: MessageConnector; activityConnector?: MessageConnector }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
@@ -68,7 +135,21 @@ export class AgentManager {
       }
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead
       // of falling back to `this.org` (the daemon's startup org).
-      await this.startAgent(name, dir, config, org);
+      //
+      // Per-agent isolation (audit fix): wrap in try/catch so one agent
+      // with a broken config (corrupt config.json, unknown connector kind
+      // that slipped past loadAgentConfig's validator, malformed .env that
+      // crashes the legacy resolver, etc.) does NOT take down every OTHER
+      // agent's startup. Failures here used to abort the for-loop because
+      // `await this.startAgent(...)` propagated synchronously.
+      try {
+        await this.startAgent(name, dir, config, org);
+      } catch (err) {
+        console.error(
+          `[agent-manager] Failed to start agent "${name}" — skipping and continuing. ` +
+          `Cause: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
@@ -198,48 +279,92 @@ export class AgentManager {
       console.log(`[${name}] ${msg}`);
     };
 
-    // Read agent .env for Telegram credentials
+    // Read agent .env for Telegram credentials via the legacy-compat
+    // resolver (PR1 of pluggable connectors). The resolver reproduces the
+    // existing BOT_TOKEN + CHAT_ID + numeric ALLOWED_USER gate byte-
+    // identically, including the same WARNING/SECURITY log lines. Output
+    // drives both the legacy `telegramApi`/`chatId`/`allowedUserId` fields
+    // and the new MessageConnector instantiation below — single source of
+    // truth.
     const agentEnvFile = join(agentDir, '.env');
     let telegramApi: TelegramAPI | undefined;
     let chatId: string | undefined;
     let allowedUserId: string | undefined;
     let botToken: string | undefined;
+    let connector: MessageConnector | null = null;
 
-    if (existsSync(agentEnvFile)) {
-      const envContent = readFileSync(agentEnvFile, 'utf-8');
-      const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
-      const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
-      const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
-      botToken = botTokenMatch?.[1]?.trim();
-      chatId = chatIdMatch?.[1]?.trim();
-      allowedUserId = allowedUserMatch?.[1]?.trim() || undefined;
-
-      // Validate BOT_TOKEN format: must be numeric_id:alphanumeric_secret
-      if (botToken && !/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
-        log(`WARNING: BOT_TOKEN format invalid (expected: 123456:ABC...). Telegram will not start.`);
-        botToken = undefined;
-      }
-
-      // ALLOWED_USER must be a numeric Telegram user ID, not a username
-      if (allowedUserId && !/^\d+$/.test(allowedUserId)) {
-        log(`SECURITY: ALLOWED_USER is not a numeric ID. Telegram user IDs are numbers (e.g. 123456789). Refusing to enable Telegram. Fix the .env file.`);
-        allowedUserId = undefined;
-      }
-
-      // Security: ALLOWED_USER is REQUIRED when BOT_TOKEN is set. Without it,
-      // ANY Telegram user who finds the bot @handle could control the agent.
-      // Fail closed: refuse to start Telegram unless the operator explicitly
-      // whitelists their numeric user ID.
-      if (botToken && !allowedUserId) {
-        log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
-        botToken = undefined;
-      }
-
-      if (botToken && chatId) {
-        telegramApi = new TelegramAPI(botToken);
+    // Dispatch on explicit `config.connector` first; fall back to the legacy
+    // gate when absent. Codex M1.cr — without this branch the override was
+    // declared in AgentConfig but silently ignored by startAgent. Three-way
+    // dispatch (Codex M1.crv refinement) so future connector kinds reach the
+    // factory without revisiting this site.
+    if (config.connector === 'none') {
+      // Explicit no-comms agent. Use NullConnector for the connector
+      // dispatch, but STILL run the legacy Telegram-env validation pass
+      // so operators see the informational WARNING/SECURITY log lines
+      // about malformed BOT_TOKEN, non-numeric ALLOWED_USER, etc.
+      // PR4 c22 (regression audit restoration): pre-c22 HEAD silently
+      // skipped this entire log path when `connector: 'none'`, hiding
+      // misconfiguration that main always surfaced. The validation is
+      // strictly informational here — its return value is discarded
+      // and the NullConnector dispatch is unchanged.
+      resolveLegacyTelegramEnablement(agentEnvFile, log);
+      connector = new NullConnector();
+    } else if (config.connector && config.connector !== 'telegram') {
+      // Future connector kinds (Matrix, RocketChat, etc.). Dormant today —
+      // CONNECTOR_ALLOWLIST is just ['telegram', 'none'] — but the factory
+      // is the dispatch point so adding a new kind is purely additive
+      // (extend the union in AgentConfig, extend CONNECTOR_ALLOWLIST, add
+      // the implementation under src/connectors/<kind>/, add to the
+      // factory's switch). No edit to startAgent required.
+      connector = getConnector(config.connector, agentDir, process.env);
+    } else {
+      // config.connector === 'telegram' explicit, or undefined (today's
+      // default inference path). Resolve the legacy gate against .env.
+      const legacy = resolveLegacyTelegramEnablement(agentEnvFile, log);
+      if (legacy.enabled) {
+        botToken = legacy.botToken;
+        chatId = legacy.chatId;
+        allowedUserId = legacy.allowedUserId;
+        // Construct the TelegramConnector FIRST, then extract its internal
+        // TelegramAPI for the legacy fields. Codex M2.cr — single shared
+        // TelegramAPI instance so rate-limiting (api.ts:85) and self-chat
+        // warning dedup (api.ts:88) stay in lock-step across the connector
+        // path and the legacy-field path. Previously these were two
+        // distinct instances against the same bot token.
+        // PR4: `downloadDir` enables the connector's media-enrichment
+        // pipeline (photo / document / voice / audio / video /
+        // video_note → `NormalizedMessage.media`). Path matches the
+        // pre-PR4 daemon-inline `join(agentDir, 'telegram-images')`
+        // byte-for-byte so existing downloaded files keep their paths.
+        connector = new TelegramConnector(agentDir, {
+          BOT_TOKEN: legacy.botToken,
+          CHAT_ID: legacy.chatId,
+          ALLOWED_USER: legacy.allowedUserId,
+        }, { downloadDir: join(agentDir, 'telegram-images') });
+        // PR4 c12 (Codex P1.C): narrow the `rawTelegramApi()` escape
+        // hatch to the only production caller that genuinely needs a
+        // raw TelegramAPI handle — `CodexAppServerPTY.setTelegramHandle`,
+        // which uses it for the `sendChatAction('typing')` call from
+        // inside the codex-app-server JSONL stream. The shared-instance
+        // contract (rate-limit + self-chat-warning dedup parity per
+        // Codex M2.cr) is preserved because we route the same
+        // TelegramAPI instance that the connector already constructed.
+        //
+        // Other callers (crash notifications, approval pings) now go
+        // through `connector.sendMessage()` directly. When a future PR
+        // migrates CodexAppServerPTY to accept a MessageConnector
+        // (calling `connector.setTypingIndicator(true)` instead of
+        // `api.sendChatAction(chatId, 'typing')`), this last
+        // rawTelegramApi caller goes away.
+        if (config.runtime === 'codex-app-server') {
+          telegramApi = (connector as TelegramConnector).rawTelegramApi();
+        }
         // Don't log sensitive user IDs — just indicate the gate is enabled
         log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
       }
+      // (else: connector remains null — byte-identical to today's behavior of
+      // leaving telegramApi/chatId/allowedUserId undefined when the gate fails.)
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
@@ -249,26 +374,40 @@ export class AgentManager {
     if (telegramApi && chatId) {
       agentProcess.setTelegramHandle(telegramApi, chatId);
     }
+    // PR1 of pluggable connectors: also wire the MessageConnector handle
+    // when present. AgentProcess.setConnector populates the legacy
+    // telegramApi/telegramChatId fields when the connector is a
+    // TelegramConnector (one-way mirror), so this call after
+    // setTelegramHandle is idempotent for the legacy fields and additive
+    // for the new connector field.
+    if (connector) {
+      agentProcess.setConnector(connector);
+    }
     const checker = new FastChecker(agentProcess, paths, this.frameworkRoot, {
       log,
       telegramApi,
       chatId,
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
+      connector: connector ?? undefined,
     });
 
-    // Send Telegram notification on crashes and session refreshes
-    if (telegramApi && chatId) {
-      const tgApi = telegramApi;
-      const tgChatId = chatId;
+    // Send connector notification on crashes and session refreshes.
+    // PR4 c12 (Codex P1.C): routes through `connector.sendMessage` instead
+    // of the legacy `telegramApi.sendMessage(chatId, ...)` so the same
+    // crash-loop UX works on any connector kind (Telegram today; Discord
+    // / Mattermost / RocketChat when they land). Uses the connector's
+    // bound chat — the per-message chatId argument is gone.
+    if (connector) {
+      const notifyConnector = connector;
       let prevStatus: string | null = null;
       agentProcess.onStatusChanged((status) => {
         if (status.status === 'crashed') {
           const crashNum = status.crashCount ?? '?';
-          tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
+          notifyConnector.sendMessage(`Agent ${name} crashed (crash #${crashNum}) — auto-restarting`, { parseMode: 'plain' }).catch(() => {});
         } else if (status.status === 'halted') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
+          notifyConnector.sendMessage(`Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`, { parseMode: 'plain' }).catch(() => {});
         } else if (status.status === 'running' && prevStatus === 'crashed') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
+          notifyConnector.sendMessage(`Agent ${name} recovered and is back online`, { parseMode: 'plain' }).catch(() => {});
         }
         prevStatus = status.status;
       });
@@ -310,26 +449,57 @@ export class AgentManager {
     }
 
     // Start Telegram poller if credentials are available and not explicitly disabled.
-    // Set telegram_polling: false in config.json to prevent a specialist agent from
-    // running its own poller (only the designated orchestrator agent should poll).
-    if (telegramApi && chatId && config.telegram_polling !== false) {
+    // PR2 of pluggable-connectors + Codex M1.cr code-review fix:
+    // `inbound_polling` takes precedence when set. Only fall back to legacy
+    // `telegram_polling` when `inbound_polling` is undefined. Both default
+    // to true. Setting either to false (when it's the active field)
+    // suppresses the poller. Specialist-agent semantics preserved exactly.
+    const pollingEnabled = config.inbound_polling !== undefined
+      ? config.inbound_polling !== false
+      : config.telegram_polling !== false;
+    if (connector && connector.capabilities.inbound !== 'none' && pollingEnabled) {
       const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir);
 
-      poller.onMessage((msg) => {
-        // ALLOWED_USER gate: if configured, ignore messages from other users.
-        // Use numeric comparison to avoid string coercion issues.
+      // PR3 of pluggable-connectors: route inbound polling through the
+      // connector's `startPolling` lifecycle instead of constructing a
+      // TelegramPoller directly. The connector's stateDir contract
+      // (Codex Q5 lock — connector.ts:48-55) preserves
+      // `<ctxRoot>/state/<name>/.telegram-offset` byte-for-byte across the
+      // wire migration. Handlers consume NormalizedMessage /
+      // CallbackPayload / NormalizedReactionPayload. PR4 commit 1 lifted
+      // media handling onto the connector (`m.media`); PR4 commit 2
+      // normalized `chat_id` and `reply_to.text` onto `NormalizedMessage`
+      // so the formatting hot path no longer casts back to TelegramMessage.
+      // The only remaining `m.raw as TelegramMessage` cast lives at the
+      // `recordInboundTelegram` JSONL-logger call, which is a telegram-
+      // namespace helper that legitimately consumes the provider shape.
+      // The activity-channel poller (`maybeStartActivityChannelPoller`
+      // below) uses the same connector lifecycle through a SECOND
+      // TelegramConnector instance with `pollerNamespace: 'activity'`.
+      const onMessage = (m: NormalizedMessage) => {
+        // ALLOWED_USER gate: NormalizedMessage.from.id is the stringified
+        // provider user id, so comparison is string-equality with the
+        // raw `.env` value (no parseInt indirection). Empty string is
+        // treated as "no sender" — gate denies.
         if (allowedUserId) {
-          const allowedId = parseInt(allowedUserId, 10);
-          if (msg.from?.id !== allowedId) {
+          if (!m.from.id || m.from.id !== allowedUserId) {
             log(`Ignoring message from unauthorized user (allowed_user gate)`);
             return;
           }
         }
 
-        const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
-        const msgChatId = msg.chat?.id;
-        const effectiveChatId = msgChatId ?? chatId ?? '';
+        // PR4 commit 1: media processing happens inside TelegramConnector's
+        // polling pipeline, so `m.media` is pre-populated when this handler
+        // fires for a media message. PR4 commit 2: `m.chat_id` carries the
+        // inbound message's own chat id (formerly read off `m.raw.chat.id`)
+        // and `m.reply_to.text` carries the rendered reply context (formerly
+        // built in this file by `buildReplyContext`; now produced by
+        // `buildTelegramReplyContext` at normalization time — see
+        // src/connectors/telegram/telegram-connector.ts). The only
+        // remaining `m.raw as TelegramMessage` cast in this handler is
+        // for the telegram-namespace JSONL logger below.
+        const from = stripControlChars(m.from.name || m.from.username || 'Unknown');
+        const effectiveChatId = m.chat_id ?? chatId ?? '';
         const stateDir = join(this.ctxRoot, 'state', name);
 
         // Persist the inbound message to JSONL AND emit a
@@ -339,67 +509,57 @@ export class AgentManager {
         // inbound messages on a window where Eros replied to multiple
         // agents — the JSONL had the data but it never reached the
         // event log.
-        recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
+        recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, m.raw as TelegramMessage, log);
 
-        // Check for media messages (photo, document, voice, audio, video, video_note)
-        const isMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
+        // PR4: media-formatted-message path uses `m.media` directly.
+        if (m.media) {
+          // BUG-046: Convert absolute paths to relative (from agent working
+          // dir). Claude Code strips absolute paths from pasted user input,
+          // so the agent never sees them. Relative paths survive injection.
+          // BUG-049: Use the agent's actual launch cwd
+          // (config.working_directory if set, else agentDir) so the path
+          // resolves when Read() is invoked.
+          const launchDir = config?.working_directory || agentDir;
+          const relLocalPath = relative(launchDir, m.media.localPath);
 
-        if (isMedia && telegramApi) {
-          const downloadDir = join(agentDir, 'telegram-images');
-          processMediaMessage(msg, telegramApi, downloadDir).then((media) => {
-            if (!media) {
-              log('Media processing returned null - falling back to text format');
-              const text = stripControlChars(msg.caption || '');
-              const formatted = FastChecker.formatTelegramTextMessage(from, effectiveChatId, text, this.frameworkRoot);
-              if (!checker.isDuplicate(formatted)) checker.queueTelegramMessage(formatted);
-              return;
-            }
+          log(`[DEBUG] media.kind=${m.media.kind} localPath=${JSON.stringify(relLocalPath)}`);
+          let formatted: string;
+          if (m.media.kind === 'photo') {
+            formatted = FastChecker.formatTelegramPhotoMessage(from, effectiveChatId, m.text, relLocalPath);
+          } else if (m.media.kind === 'document') {
+            formatted = FastChecker.formatTelegramDocumentMessage(from, effectiveChatId, m.text, relLocalPath, m.media.fileName ?? '');
+          } else if (m.media.kind === 'voice' || m.media.kind === 'audio') {
+            formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relLocalPath, m.media.duration, m.media.transcription);
+          } else {
+            // video or video_note
+            formatted = FastChecker.formatTelegramVideoMessage(from, effectiveChatId, m.text, relLocalPath, m.media.fileName ?? '', m.media.duration);
+          }
 
-            // BUG-046: Convert absolute paths to relative (from agent working dir).
-            // Claude Code strips absolute paths from pasted user input, so the
-            // agent never sees them. Relative paths survive injection.
-            // BUG-049: Use the agent's actual launch cwd (config.working_directory
-            // if set, else agentDir) so the path resolves when Read() is invoked.
-            const launchDir = config?.working_directory || agentDir;
-            const toRel = (p: string | undefined) => p ? relative(launchDir, p) : '';
-            const relImagePath = toRel(media.image_path);
-            const relFilePath = toRel(media.file_path);
-
-            log(`[DEBUG] media.type=${media.type} image_path=${JSON.stringify(relImagePath)} file_path=${JSON.stringify(relFilePath)}`);
-            let formatted: string;
-            if (media.type === 'photo') {
-              formatted = FastChecker.formatTelegramPhotoMessage(from, effectiveChatId, media.text, relImagePath);
-            } else if (media.type === 'document') {
-              formatted = FastChecker.formatTelegramDocumentMessage(from, effectiveChatId, media.text, relFilePath, media.file_name!);
-            } else if (media.type === 'voice' || media.type === 'audio') {
-              formatted = FastChecker.formatTelegramVoiceMessage(from, effectiveChatId, relFilePath, media.duration, media.transcript);
-            } else {
-              // video or video_note
-              formatted = FastChecker.formatTelegramVideoMessage(from, effectiveChatId, media.text, relFilePath, media.file_name || '', media.duration);
-            }
-
-            if (checker.isDuplicate(formatted)) {
-              log('Duplicate Telegram media message suppressed');
-              return;
-            }
-            log(`Media message received: type=${media.type}, path=${media.image_path || media.file_path}`);
-            checker.queueTelegramMessage(formatted);
-          }).catch((err) => {
-            log(`Media processing error: ${err} - falling back to text format`);
-            const text = stripControlChars(msg.caption || '');
-            const formatted = FastChecker.formatTelegramTextMessage(from, effectiveChatId, text, this.frameworkRoot);
-            if (!checker.isDuplicate(formatted)) checker.queueTelegramMessage(formatted);
-          });
+          if (checker.isDuplicate(formatted)) {
+            log('Duplicate Telegram media message suppressed');
+            return;
+          }
+          log(`Media message received: kind=${m.media.kind}, path=${m.media.localPath}`);
+          checker.queueTelegramMessage(formatted);
           return;
         }
 
-        // Text message (non-media)
-        const text = stripControlChars(msg.text || '');
+        // Text message (non-media). The connector emits this path either
+        // because the inbound message had no media flags, OR because
+        // media processing returned null (e.g. Telegram getFile failed) —
+        // in both cases `m.text` carries the right body (msg.text or
+        // msg.caption fallback per TelegramConnector.toNormalizedMessage).
+        const text = stripControlChars(m.text);
         const lastSent = FastChecker.readLastSent(stateDir, effectiveChatId);
-        // Build reply context from the replied-to message.
-        const replyToText = buildReplyContext(msg.reply_to_message);
+        // Reply context populated by TelegramConnector at normalization
+        // time (PR4 commit 2) — see `buildTelegramReplyContext` in
+        // src/connectors/telegram/telegram-connector.ts.
+        const replyToText = m.reply_to?.text;
 
         const recentHistory = buildRecentHistory(this.ctxRoot, name, effectiveChatId, 6) ?? undefined;
+        // PR4 c24: pass NormalizedMessage.id so the formatter can include
+        // `message_id:<id>` in the agent prompt + the "React using:"
+        // helper. Without this the agent has no target for `bus react`.
         const formatted = FastChecker.formatTelegramTextMessage(
           from,
           effectiveChatId,
@@ -408,6 +568,7 @@ export class AgentManager {
           replyToText,
           lastSent ?? undefined,
           recentHistory,
+          m.id,
         );
 
         if (checker.isDuplicate(formatted)) {
@@ -415,52 +576,88 @@ export class AgentManager {
           return;
         }
         checker.queueTelegramMessage(formatted);
-      });
 
-      poller.onCallback((query) => {
-        // Route to fast-checker for hook response handling (perm_allow/deny, askopt, etc.)
-        // handleCallback writes hook-response files and edits Telegram messages
-        checker.handleCallback(query).catch(err => {
+        // PR4 c25: auto-react 👀 to give the user instant "agent saw
+        // this" feedback BEFORE the agent's first reasoning step. The
+        // agent's job is to SWAP the eyes to ✅/❌/🛠/🤔 when done —
+        // Telegram's setMessageReaction is set-to-list, so any later
+        // `bus react` from the agent replaces this. Gated by:
+        //   - connector advertises outboundReactions capability
+        //   - config.auto_eyes_ack !== false (default true)
+        // Fire-and-forget: any failure (rate limit, emoji not in the
+        // chat's allowed set, network blip) must not delay or block the
+        // agent's PTY injection.
+        const autoEyesEnabled = config.auto_eyes_ack !== false;
+        if (autoEyesEnabled && connector?.capabilities.outboundReactions && connector.sendReaction && m.id) {
+          // Fire-and-forget. Log only on FAILURE — the verbose verification
+          // logs from c25 (kickoff + OK + skipped) were useful during smoke
+          // but produce 2-3 log lines per inbound user message in steady
+          // state. Errors stay loud because they signal real config or
+          // network issues (rate limit, missing capability, Telegram chat
+          // disallowing the emoji). To re-enable success/skipped tracing,
+          // gate via your own `log(...)` wrapper or a CTX_DEBUG_AUTO_EYES
+          // env var in a follow-up.
+          connector.sendReaction(m.id, '👀')
+            .catch((err) => log(`auto-eyes-ack failed for message ${m.id}: ${err instanceof Error ? err.message : String(err)}`));
+        }
+      };
+
+      const onCallback = (c: CallbackPayload) => {
+        // Route to fast-checker for hook response handling (perm_*, askopt,
+        // etc.). PR4 c7 (Codex P1.A): handleCallback now consumes the typed
+        // `CallbackPayload` directly. The previous `c.raw as
+        // TelegramCallbackQuery` cast is gone — the daemon path is
+        // provider-agnostic and Discord / Mattermost / RocketChat
+        // connectors don't have to fabricate a Telegram-shaped raw.
+        checker.handleCallback(c).catch(err => {
           log(`Callback handling error: ${err}`);
         });
-      });
+      };
 
-      poller.onReaction((reaction) => {
-        // ALLOWED_USER gate: same rule as message handler. If configured,
-        // ignore reactions from other users.
+      const onReaction = (r: NormalizedReactionPayload) => {
+        // ALLOWED_USER gate: NormalizedReactionPayload.from.id is the
+        // stringified provider user id. Same string-equality rule as
+        // onMessage above.
         if (allowedUserId) {
-          const allowedId = parseInt(allowedUserId, 10);
-          if (reaction.user?.id !== allowedId) {
+          if (!r.from.id || r.from.id !== allowedUserId) {
             log('Ignoring reaction from unauthorized user (allowed_user gate)');
             return;
           }
         }
 
-        const from = stripControlChars(reaction.user?.first_name || reaction.user?.username || 'Unknown');
-        const reactionChatId = reaction.chat?.id ?? chatId ?? '';
-        const formatted = FastChecker.formatTelegramReaction(
+        const from = stripControlChars(r.from.name || r.from.username || 'Unknown');
+        const reactionChatId = r.chat_id ?? chatId ?? '';
+        // PR4 c8: r.message_id is now string; r.old/new_reaction are
+        // ConnectorReaction[] (generalized from TelegramReactionType).
+        const formatted = FastChecker.formatReaction(
           from,
           reactionChatId,
-          reaction.message_id,
-          reaction.old_reaction ?? [],
-          reaction.new_reaction ?? [],
+          r.message_id,
+          r.old_reaction,
+          r.new_reaction,
         );
         if (checker.isDuplicate(formatted)) {
           log('Duplicate Telegram reaction suppressed');
           return;
         }
         checker.queueTelegramMessage(formatted);
+      };
+
+      // Fire-and-forget per the connector's contract (resolves AFTER the
+      // loop is scheduled, NOT after it completes). Matches the prior
+      // `poller.start().catch(...)` pattern byte-for-byte. PR4 c11
+      // renamed startPolling → startInbound to accommodate push-inbound
+      // connectors (Discord gateway WS, Mattermost webhooks, RocketChat
+      // DDP) that don't poll.
+      connector.startInbound({ onMessage, onCallback, onReaction }, { stateDir }).catch(err => {
+        log(`Connector inbound error: ${err}`);
       });
 
-      poller.start().catch(err => {
-        log(`Telegram poller error: ${err}`);
-      });
-
-      // Store poller reference so stopAgent() can clean it up
+      // Store connector reference so stopAgent() can call stopInbound().
       const entry = this.agents.get(name);
-      if (entry) entry.poller = poller;
+      if (entry) entry.connector = connector;
 
-      log('Telegram poller started');
+      log(`Inbound delivery started via ${connector.kind} connector (${connector.capabilities.inbound})`);
 
       // Orchestrator-only: start a second poller for the org's activity
       // channel bot so Telegram inline-button callbacks (currently just
@@ -476,8 +673,8 @@ export class AgentManager {
 
   /**
    * If this agent is the org's orchestrator AND the org has an
-   * activity-channel.env configured, start a second TelegramPoller bound
-   * to ACTIVITY_BOT_TOKEN. Callbacks route to fast-checker's
+   * activity-channel.env configured, start a second TelegramConnector
+   * bound to ACTIVITY_BOT_TOKEN. Callbacks route to fast-checker's
    * handleActivityCallback. Safe no-op in every other case — if the
    * context.json is missing/corrupt, the orchestrator field is empty,
    * this agent is not the orchestrator, or the activity-channel.env
@@ -504,62 +701,69 @@ export class AgentManager {
     if (!orchestratorName || orchestratorName !== name) return;
 
     // Parse activity-channel.env for the separate bot token + chat id.
+    // PR4 c13 (Codex P2.5 ACTIVITY_ENV_PARSER_IS_NOT_THE_SHARED_ENV_PARSER):
+    // route through the shared `parseEnvFile` helper instead of the
+    // local loop. parseEnvFile handles quoted values and inline `#`
+    // comments correctly — the previous inline loop did not, so a
+    // quoted ACTIVITY_BOT_TOKEN or one with a trailing `# comment`
+    // would have produced a corrupted token.
     const activityEnvPath = join(orgDir, 'activity-channel.env');
-    let activityBotToken: string | undefined;
-    let activityChatId: string | undefined;
-    try {
-      const content = readFileSync(activityEnvPath, 'utf-8');
-      for (const line of content.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx <= 0) continue;
-        const key = trimmed.slice(0, eqIdx).trim();
-        const value = trimmed.slice(eqIdx + 1).trim();
-        if (key === 'ACTIVITY_BOT_TOKEN') activityBotToken = value;
-        if (key === 'ACTIVITY_CHAT_ID') activityChatId = value;
-      }
-    } catch {
+    if (!existsSync(activityEnvPath)) {
       return; // activity-channel.env absent — silent no-op
     }
+    const activityEnv = parseEnvFile(activityEnvPath);
+    const activityBotToken = activityEnv.ACTIVITY_BOT_TOKEN;
+    const activityChatId = activityEnv.ACTIVITY_CHAT_ID;
 
     if (!activityBotToken || !activityChatId) {
       log('Activity-channel env present but missing BOT_TOKEN or CHAT_ID — skipping poller');
       return;
     }
 
-    const activityApi = new TelegramAPI(activityBotToken);
     const stateDir = join(this.ctxRoot, 'state', name);
-    // offsetFileSuffix keeps the activity poller's offset file distinct
-    // from the primary bot's .telegram-offset — without this they would
-    // clobber each other in the same stateDir.
-    const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity');
+    // PR3 activity-channel pluggability: the activity channel is now
+    // its own MessageConnector instance. `pollerNamespace: 'activity'`
+    // keeps the activity poller's offset file at
+    // `.telegram-offset-activity` so it doesn't clobber the agent's
+    // primary `.telegram-offset` in the shared stateDir. `agentDir` is
+    // unused for the activity connector (we always pass `stateDir`
+    // explicitly via startPolling), so the orchestrator's stateDir is
+    // a safe placeholder.
+    const activityConnector = new TelegramConnector(stateDir, {
+      BOT_TOKEN: activityBotToken,
+      CHAT_ID: activityChatId,
+      ALLOWED_USER: '',
+    }, { pollerNamespace: 'activity' });
 
-    activityPoller.onCallback((query) => {
+    const onCallback = (c: CallbackPayload) => {
       const entry = this.agents.get(name);
       if (!entry) return;
-      entry.checker.handleActivityCallback(query, activityApi).catch((err) => {
+      // PR3 final-stage migration: handleActivityCallback now accepts a
+      // MessageConnector instead of a TelegramAPI; the connector knows
+      // its own chatId so the callback's chat-routing is implicit.
+      // PR4 c7 (Codex P1.A): consumes typed CallbackPayload, no raw cast.
+      entry.checker.handleActivityCallback(c, activityConnector).catch((err) => {
         log(`Activity-channel callback error: ${err}`);
       });
-    });
+    };
 
     // Best-effort message logger — activity channel is primarily outbound
     // but any inbound chatter (broadcasts, user DMs, etc.) gets logged
     // so operators can see what is flowing. No PTY injection.
-    activityPoller.onMessage((msg) => {
-      const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
-      const text = stripControlChars(msg.text || msg.caption || '');
+    const onMessage = (m: NormalizedMessage) => {
+      const from = stripControlChars(m.from.name || m.from.username || 'Unknown');
+      const text = stripControlChars(m.text);
       log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
-    });
+    };
 
-    activityPoller.start().catch((err) => {
-      log(`Activity-channel poller error: ${err}`);
+    activityConnector.startInbound({ onMessage, onCallback }, { stateDir }).catch((err) => {
+      log(`Activity-channel inbound error: ${err}`);
     });
 
     const entry = this.agents.get(name);
-    if (entry) entry.activityPoller = activityPoller;
+    if (entry) entry.activityConnector = activityConnector;
 
-    log(`Activity-channel poller started (chat ${activityChatId})`);
+    log(`Activity-channel poller started via ${activityConnector.kind} connector (chat ${activityChatId})`);
   }
 
   /**
@@ -572,8 +776,20 @@ export class AgentManager {
       return;
     }
 
-    if (entry.poller) entry.poller.stop();
-    if (entry.activityPoller) entry.activityPoller.stop();
+    // PR3: primary + activity inbound channels are both owned by their
+    // connectors. stopInbound is a no-op when the connector never started
+    // (e.g. NullConnector or pollingEnabled=false), so calling
+    // unconditionally is safe. PR4 c11 renamed stopPolling → stopInbound.
+    if (entry.connector) {
+      await entry.connector.stopInbound().catch((err) => {
+        console.log(`[agent-manager] connector.stopInbound error for ${name}: ${err}`);
+      });
+    }
+    if (entry.activityConnector) {
+      await entry.activityConnector.stopInbound().catch((err) => {
+        console.log(`[agent-manager] activity connector.stopInbound error for ${name}: ${err}`);
+      });
+    }
     entry.checker.stop();
     await entry.process.stop();
     this.agents.delete(name);
@@ -941,13 +1157,30 @@ export class AgentManager {
   }
 
   /**
-   * Load agent config from config.json.
+   * Load agent config from config.json. Runtime-validates `connector`
+   * against `CONNECTOR_ALLOWLIST` — a typo or future-kind value would
+   * otherwise reach `getConnector()` inside `startAgent()` and throw
+   * "Unknown connector", taking the whole `discoverAndStart()` loop
+   * down with it (per-agent isolation is handled at the call site, but
+   * we ALSO sanitize the value here so the legacy-inference path stays
+   * the default when the field is unrecognized).
    */
   private loadAgentConfig(agentDir: string): AgentConfig {
     const configPath = join(agentDir, 'config.json');
     try {
       if (existsSync(configPath)) {
-        return JSON.parse(readFileSync(configPath, 'utf-8'));
+        const parsed = JSON.parse(readFileSync(configPath, 'utf-8'));
+        if (parsed && typeof parsed === 'object' && 'connector' in parsed) {
+          const c = parsed.connector;
+          if (c !== undefined && !isConnectorKind(c)) {
+            console.warn(
+              `[agent-manager] ${configPath}: unknown connector "${String(c)}" — ` +
+              `falling back to legacy inference. Allowed: ${CONNECTOR_ALLOWLIST.join(', ')}.`,
+            );
+            delete parsed.connector;
+          }
+        }
+        return parsed;
       }
     } catch {
       // Ignore parse errors
@@ -956,27 +1189,3 @@ export class AgentManager {
   }
 }
 
-/**
- * Derive a human-readable reply context string from a Telegram replied-to message.
- *
- * Priority: text > caption > media type label.
- * This is exported for unit testing; call sites use it via the message handler.
- *
- * Before this fix (BUG: reply context lost for media messages): only `.text` was
- * checked, so replies to videos/photos/voice arrived as bare text with no
- * indication of what was being replied to (e.g. "This one" with zero context).
- */
-export function buildReplyContext(
-  replyMsg: TelegramMessage | undefined,
-): string | undefined {
-  if (!replyMsg) return undefined;
-  if (replyMsg.text) return stripControlChars(replyMsg.text);
-  if (replyMsg.caption) return stripControlChars(replyMsg.caption);
-  if (replyMsg.video) return '[video]';
-  if (replyMsg.video_note) return '[video note]';
-  if (replyMsg.photo) return '[photo]';
-  if (replyMsg.voice) return '[voice message]';
-  if (replyMsg.audio) return '[audio]';
-  if (replyMsg.document) return `[document: ${replyMsg.document.file_name ?? 'file'}]`;
-  return undefined;
-}

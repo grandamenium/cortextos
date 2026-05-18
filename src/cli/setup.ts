@@ -72,6 +72,15 @@ function runCli(cwd: string, args: string[], label: string): boolean {
 }
 
 function writeAgentEnv(agentDir: string, botToken: string, chatId: string): void {
+  // Defensive sanity check: reject newline/CR in the values. Today both
+  // come from API-validated input so they can't contain newlines, but
+  // template-literal interpolation would silently corrupt the .env if
+  // they ever did — a malformed .env then breaks every agent.
+  if (/[\r\n]/.test(botToken) || /[\r\n]/.test(chatId)) {
+    throw new Error(
+      `writeAgentEnv: BOT_TOKEN or CHAT_ID contains a newline — refusing to write malformed .env`,
+    );
+  }
   const envPath = join(agentDir, '.env');
   const content = `BOT_TOKEN=${botToken}\nCHAT_ID=${chatId}\n`;
   writeFileSync(envPath, content, 'utf-8');
@@ -199,8 +208,9 @@ function findProjectRoot(): string {
 
 export const setupCommand = new Command('setup')
   .option('--instance <id>', 'Instance ID', 'default')
+  .option('--connector <kind>', 'Communication connector kind (telegram | none) — skips interactive prompt when set. PR2 of pluggable-connectors stack.', '')
   .description('Interactive first-run setup wizard — install, create org, configure agents, start daemon')
-  .action(async (options: { instance: string }) => {
+  .action(async (options: { instance: string; connector: string }) => {
     const instanceId = options.instance;
     const projectRoot = findProjectRoot();
     const ctxRoot = join(homedir(), '.cortextos', instanceId);
@@ -251,16 +261,46 @@ export const setupCommand = new Command('setup')
       process.exit(1);
     }
 
+    // ─── Step 2.5: Connector choice (PR2 of pluggable-connectors stack) ──────
+
+    let chosenConnector: 'telegram' | 'none';
+    if (options.connector === 'telegram' || options.connector === 'none') {
+      chosenConnector = options.connector;
+      console.log(`\n  Communication connector: ${chosenConnector} (from --connector flag)`);
+    } else if (options.connector) {
+      console.error(`\n  Error: --connector must be 'telegram' or 'none' (got "${options.connector}")`);
+      iface.close();
+      process.exit(1);
+    } else {
+      console.log('\n  ─────────────────────────────────────\n');
+      console.log('  Communication connector\n');
+      console.log('  cortextOS agents send and receive operator messages through a connector.');
+      console.log('  Today: Telegram (requires a bot via @BotFather).');
+      console.log('  Future: Matrix, RocketChat, Slack (when those connectors ship).\n');
+      console.log('  Choose:');
+      console.log('    [1] Telegram (current default — requires BotFather bot)');
+      console.log('    [2] None (no remote operator channel — agents reply via bus + dashboard only)\n');
+      const answer = await askDefault(iface, '  Connector choice (1 or 2)', '1');
+      chosenConnector = answer.trim() === '2' ? 'none' : 'telegram';
+      console.log(`  Connector: ${chosenConnector}\n`);
+    }
+
     // ─── Step 3: Orchestrator agent ──────────────────────────────────────────
 
     console.log('\n  ─────────────────────────────────────\n');
     console.log('  Step 3: Create your orchestrator agent\n');
-    console.log('  The orchestrator coordinates all other agents, routes messages,');
-    console.log('  and sends you morning/evening briefings via Telegram.\n');
-    console.log('  You need a Telegram bot token. Create one via @BotFather on Telegram:');
-    console.log('    1. Open Telegram, search @BotFather');
-    console.log('    2. Send /newbot, follow the prompts');
-    console.log('    3. Copy the token it gives you (looks like 123456789:AAA...)\n');
+    if (chosenConnector === 'telegram') {
+      console.log('  The orchestrator coordinates all other agents, routes messages,');
+      console.log('  and sends you morning/evening briefings via Telegram.\n');
+      console.log('  You need a Telegram bot token. Create one via @BotFather on Telegram:');
+      console.log('    1. Open Telegram, search @BotFather');
+      console.log('    2. Send /newbot, follow the prompts');
+      console.log('    3. Copy the token it gives you (looks like 123456789:AAA...)\n');
+    } else {
+      console.log('  The orchestrator coordinates all other agents and routes messages.');
+      console.log('  With `connector: none`, you interact via the dashboard and the bus —');
+      console.log('  no Telegram bot needed.\n');
+    }
 
     let orchName = '';
     while (true) {
@@ -272,44 +312,49 @@ export const setupCommand = new Command('setup')
       break;
     }
 
-    const orchToken = await askRequired(
-      iface,
-      '  Orchestrator bot token (from @BotFather): ',
-      'Bot token is required.'
-    );
-
-    console.log('\n  Now send a message to your new bot in Telegram (any message).');
-    console.log('  This lets us fetch your chat ID.\n');
-    await ask(iface, '  Press Enter when done...');
-
+    let orchToken = '';
     let orchChatId = '';
-    console.log('\n  Fetching your chat ID...');
-    orchChatId = fetchChatId(orchToken);
+    if (chosenConnector === 'telegram') {
+      orchToken = await askRequired(
+        iface,
+        '  Orchestrator bot token (from @BotFather): ',
+        'Bot token is required.'
+      );
 
-    if (!orchChatId) {
-      orchChatId = await askRequired(iface, '  Enter your Telegram chat ID manually: ', 'Chat ID is required.');
-    }
+      console.log('\n  Now send a message to your new bot in Telegram (any message).');
+      console.log('  This lets us fetch your chat ID.\n');
+      await ask(iface, '  Press Enter when done...');
 
-    // self-chat trap preflight: validate credentials against the live Telegram API
-    // BEFORE writing .env. Catches bad tokens, unreachable chats, bot
-    // recipients, and the self_chat trap (CHAT_ID == bot's own user id).
-    const validatedOrchChatId = await validateTelegramCredsInteractive(
-      iface,
-      orchToken,
-      orchChatId,
-      `orchestrator ${orchName}`,
-    );
-    if (!validatedOrchChatId) {
-      console.error('\n  Cannot continue without validated orchestrator credentials.');
-      iface.close();
-      process.exit(1);
+      console.log('\n  Fetching your chat ID...');
+      orchChatId = fetchChatId(orchToken);
+
+      if (!orchChatId) {
+        orchChatId = await askRequired(iface, '  Enter your Telegram chat ID manually: ', 'Chat ID is required.');
+      }
+
+      // self-chat trap preflight: validate credentials against the live Telegram API
+      // BEFORE writing .env. Catches bad tokens, unreachable chats, bot
+      // recipients, and the self_chat trap (CHAT_ID == bot's own user id).
+      const validatedOrchChatId = await validateTelegramCredsInteractive(
+        iface,
+        orchToken,
+        orchChatId,
+        `orchestrator ${orchName}`,
+      );
+      if (!validatedOrchChatId) {
+        console.error('\n  Cannot continue without validated orchestrator credentials.');
+        iface.close();
+        process.exit(1);
+      }
+      orchChatId = validatedOrchChatId;
     }
-    orchChatId = validatedOrchChatId;
+    // For 'none', no credentials to collect — orchestrator still gets
+    // created/enabled below.
 
     // Create orchestrator agent
     const addOrchOk = runCli(
       projectRoot,
-      ['add-agent', orchName, '--template', 'orchestrator', '--org', orgName, '--instance', instanceId],
+      ['add-agent', orchName, '--template', 'orchestrator', '--org', orgName, '--instance', instanceId, '--connector', chosenConnector],
       'cortextos add-agent orchestrator'
     );
     if (!addOrchOk) {
@@ -318,10 +363,14 @@ export const setupCommand = new Command('setup')
       process.exit(1);
     }
 
-    // Write .env
-    const orchDir = join(projectRoot, 'orgs', orgName, 'agents', orchName);
-    writeAgentEnv(orchDir, orchToken, orchChatId);
-    console.log(`  Wrote .env for ${orchName}`);
+    // Write .env only for Telegram connector. `connector: 'none'` agents
+    // need no credentials file (Codex H7 — None still creates+enables
+    // orchestrator; just skips credential prompts).
+    if (chosenConnector === 'telegram') {
+      const orchDir = join(projectRoot, 'orgs', orgName, 'agents', orchName);
+      writeAgentEnv(orchDir, orchToken, orchChatId);
+      console.log(`  Wrote .env for ${orchName}`);
+    }
 
     // Enable orchestrator
     const enableOrchOk = runCli(
@@ -365,42 +414,47 @@ export const setupCommand = new Command('setup')
       let template = await askDefault(iface, `  Template for ${agentName} (orchestrator/analyst/agent)`, 'agent');
       if (!templateChoices.includes(template)) template = 'agent';
 
-      console.log(`\n  Create a Telegram bot for ${agentName} via @BotFather, then enter its token.\n`);
-      const agentToken = await askRequired(iface, `  Bot token for ${agentName}: `, 'Bot token is required.');
-
-      console.log(`\n  Send a message to the ${agentName} bot in Telegram, then press Enter.`);
-      await ask(iface, '  Press Enter when done...');
-
+      let agentToken = '';
       let agentChatId = '';
-      agentChatId = fetchChatId(agentToken);
+      if (chosenConnector === 'telegram') {
+        console.log(`\n  Create a Telegram bot for ${agentName} via @BotFather, then enter its token.\n`);
+        agentToken = await askRequired(iface, `  Bot token for ${agentName}: `, 'Bot token is required.');
 
-      if (!agentChatId) {
-        agentChatId = await askRequired(iface, `  Enter chat ID for ${agentName} manually: `, 'Chat ID is required.');
-      }
+        console.log(`\n  Send a message to the ${agentName} bot in Telegram, then press Enter.`);
+        await ask(iface, '  Press Enter when done...');
 
-      // self-chat trap preflight (see validateTelegramCredsInteractive above).
-      const validatedAgentChatId = await validateTelegramCredsInteractive(
-        iface,
-        agentToken,
-        agentChatId,
-        `agent ${agentName}`,
-      );
-      if (!validatedAgentChatId) {
-        console.log(`  Skipping ${agentName} — fix the credentials and re-run cortextos setup or cortextos enable ${agentName}.`);
-        continue;
+        agentChatId = fetchChatId(agentToken);
+
+        if (!agentChatId) {
+          agentChatId = await askRequired(iface, `  Enter chat ID for ${agentName} manually: `, 'Chat ID is required.');
+        }
+
+        // self-chat trap preflight (see validateTelegramCredsInteractive above).
+        const validatedAgentChatId = await validateTelegramCredsInteractive(
+          iface,
+          agentToken,
+          agentChatId,
+          `agent ${agentName}`,
+        );
+        if (!validatedAgentChatId) {
+          console.log(`  Skipping ${agentName} — fix the credentials and re-run cortextos setup or cortextos enable ${agentName}.`);
+          continue;
+        }
+        agentChatId = validatedAgentChatId;
       }
-      agentChatId = validatedAgentChatId;
 
       const addOk = runCli(
         projectRoot,
-        ['add-agent', agentName, '--template', template, '--org', orgName, '--instance', instanceId],
+        ['add-agent', agentName, '--template', template, '--org', orgName, '--instance', instanceId, '--connector', chosenConnector],
         `cortextos add-agent ${agentName}`
       );
 
       if (addOk) {
-        const agentDir = join(projectRoot, 'orgs', orgName, 'agents', agentName);
-        writeAgentEnv(agentDir, agentToken, agentChatId);
-        console.log(`  Wrote .env for ${agentName}`);
+        if (chosenConnector === 'telegram') {
+          const agentDir = join(projectRoot, 'orgs', orgName, 'agents', agentName);
+          writeAgentEnv(agentDir, agentToken, agentChatId);
+          console.log(`  Wrote .env for ${agentName}`);
+        }
 
         runCli(projectRoot, ['enable', agentName, '--org', orgName, '--instance', instanceId], `enable ${agentName}`);
         addedAgents.push(agentName);

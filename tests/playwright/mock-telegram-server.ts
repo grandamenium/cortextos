@@ -87,6 +87,38 @@ export class MockTelegramServer {
     });
   }
 
+  /**
+   * Queue a message_reaction update for getUpdates.
+   * Mirrors queueMessage/queueCallback. Caller passes optional old/new
+   * reaction arrays (TelegramReactionType[] shape: `{type:'emoji',emoji}`
+   * or `{type:'custom_emoji',custom_emoji_id}`). Default arrays are empty,
+   * matching Telegram's wire format for "no prior reaction" / "user
+   * removed all reactions".
+   */
+  queueReaction(opts: {
+    messageId?: number;
+    oldReaction?: Array<
+      | { type: 'emoji'; emoji: string }
+      | { type: 'custom_emoji'; custom_emoji_id: string }
+    >;
+    newReaction?: Array<
+      | { type: 'emoji'; emoji: string }
+      | { type: 'custom_emoji'; custom_emoji_id: string }
+    >;
+  } = {}): void {
+    this.pendingUpdates.push({
+      update_id: this.updateIdCounter++,
+      message_reaction: {
+        chat: { id: 12345, type: 'private' },
+        user: { id: 67890, first_name: 'Test', username: 'testuser' },
+        message_id: opts.messageId ?? this.messageIdCounter - 1,
+        date: Math.floor(Date.now() / 1000),
+        old_reaction: opts.oldReaction ?? [],
+        new_reaction: opts.newReaction ?? [],
+      },
+    });
+  }
+
   /** Store a file for getFile/download */
   storeFile(fileId: string, content: Buffer): void {
     this.fileStore.set(fileId, content);

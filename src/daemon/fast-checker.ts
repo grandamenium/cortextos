@@ -59,11 +59,25 @@ export class FastChecker {
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
 
+  // PR1 of pluggable connectors: holds the agent's MessageConnector handle.
+  // Coexists with legacy telegramApi/chatId/allowedUserId for one release.
+  // The 5 outbound `telegramApi.sendMessage(chatId, text)` call sites in
+  // this file remain Telegram-direct in PR1; PR2 routes them through the
+  // connector once hooks + CLI are generalized.
+  private connector?: import('../connectors/index.js').MessageConnector;
+
   constructor(
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: {
+      pollInterval?: number;
+      log?: LogFn;
+      telegramApi?: TelegramAPI;
+      chatId?: string;
+      allowedUserId?: number;
+      connector?: import('../connectors/index.js').MessageConnector;
+    } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
@@ -73,6 +87,7 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+    this.connector = options.connector;
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
@@ -204,9 +219,13 @@ export class FastChecker {
       }
     }
 
-    // Typing indicator: send while Claude is actively working
-    if (this.chatId && this.telegramApi && this.isAgentActive()) {
-      await this.sendTyping(this.telegramApi, this.chatId);
+    // Typing indicator: send while Claude is actively working.
+    // PR3: prefer connector.setTypingIndicator when the active connector
+    // advertises typingIndicator capability; fall back to legacy
+    // telegramApi.sendChatAction so agents not yet migrated to a
+    // connector keep working.
+    if (this.isAgentActive()) {
+      await this.sendTyping();
     }
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
@@ -240,6 +259,7 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
     replyToText?: string,
     lastSentText?: string,
     recentHistory?: string,
+    messageId?: string,
   ): string {
     let replyCx = '';
     if (replyToText) {
@@ -263,10 +283,17 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
     const body = isSlashCommand
       ? text.trim()
       : `\`\`\`\n${text}\n\`\`\``;
-    return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}) ===
+    // PR4 c24: include inbound `message_id` so the agent can target it
+    // with `cortextos bus react <message_id> <emoji>` for emoji-ack UX
+    // (spec §11). Omitted when undefined (legacy callers that don't
+    // pass it stay byte-identical to pre-c24 output).
+    const reactHint = messageId
+      ? `React using: cortextos bus react ${messageId} <emoji>  (preferred for short acks — silent + non-cluttering, vs a whole reply)\n`
+      : '';
+    return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}${messageId ? `, message_id:${messageId}` : ''}) ===
 ${replyCx}${historyCx}${body}
 ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
-
+${reactHint}
 `;
   }
 
@@ -278,20 +305,26 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    *
    * `newReaction` is the current reaction state (an empty list means the
    * user REMOVED their reaction). `oldReaction` lets the formatter
-   * distinguish "added X" from "removed Y". Custom emoji (type=custom_emoji)
-   * render as [custom_emoji] since we don't resolve the custom_emoji_id.
+   * distinguish "added X" from "removed Y". Custom emoji (kind=custom)
+   * render as [custom] since we don't resolve the provider id.
+   *
+   * PR4 c8 (Codex P1.F) renamed `formatTelegramReaction` → `formatReaction`
+   * and generalized the reaction-array element shape from the
+   * Telegram-specific tagged union to the connector-agnostic
+   * `ConnectorReaction { kind: 'unicode' | 'custom'; value: string }`.
+   * `messageId` is now string (provider-agnostic).
    */
-  static formatTelegramReaction(
+  static formatReaction(
     from: string,
     chatId: string | number,
-    messageId: number,
-    oldReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
-    newReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
+    messageId: string,
+    oldReaction: import('../connectors/index.js').ConnectorReaction[],
+    newReaction: import('../connectors/index.js').ConnectorReaction[],
   ): string {
-    const render = (list: typeof newReaction): string =>
+    const render = (list: import('../connectors/index.js').ConnectorReaction[]): string =>
       list.length === 0
         ? '(none)'
-        : list.map((r) => (r.type === 'emoji' ? r.emoji : '[custom_emoji]')).join(' ');
+        : list.map((r) => (r.kind === 'unicode' ? r.value : '[custom]')).join(' ');
 
     const removed = newReaction.length === 0 && oldReaction.length > 0;
     const label = removed ? `removed ${render(oldReaction)}` : render(newReaction);
@@ -415,16 +448,108 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
   /**
    * Send typing indicator, rate-limited to once every 4 seconds.
+   *
+   * PR3 of pluggable-connectors: routes through the active connector's
+   * `setTypingIndicator` capability when wired (covers no-Telegram
+   * agents transparently — NullConnector's `typingIndicator: false`
+   * skips the send entirely). Falls back to legacy
+   * `telegramApi.sendChatAction(this.chatId, 'typing')` for agents
+   * still on the direct path.
    */
-  private async sendTyping(api: TelegramAPI, chatId: string): Promise<void> {
+  private async sendTyping(): Promise<void> {
     const now = Date.now();
-    if (now - this.typingLastSent >= 4000) {
-      try {
-        await api.sendChatAction(chatId, 'typing');
-      } catch {
-        // Ignore typing indicator failures (matches bash: || true)
+    if (now - this.typingLastSent < 4000) return;
+    try {
+      if (this.connector?.capabilities.typingIndicator && this.connector.setTypingIndicator) {
+        await this.connector.setTypingIndicator(true);
+      } else if (this.telegramApi && this.chatId) {
+        await this.telegramApi.sendChatAction(this.chatId, 'typing');
+      } else {
+        return;
       }
-      this.typingLastSent = now;
+    } catch {
+      // Ignore typing indicator failures (matches bash: || true)
+    }
+    this.typingLastSent = now;
+  }
+
+  /**
+   * PR3 of pluggable-connectors: acknowledge an inline-button callback
+   * through the active connector when wired, falling back to legacy
+   * `telegramApi.answerCallbackQuery`. Errors are swallowed — failing
+   * the toast must never abort the surrounding interactive flow.
+   */
+  private async ackCallback(callbackQueryId: string, toast: string): Promise<void> {
+    if (this.connector?.capabilities.interactiveCallbacks && this.connector.acknowledgeCallback) {
+      try { await this.connector.acknowledgeCallback(callbackQueryId, toast); } catch { /* ignore */ }
+    } else if (this.telegramApi) {
+      try { await this.telegramApi.answerCallbackQuery(callbackQueryId, toast); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * Edit a previously-sent message. PR3 of pluggable-connectors
+   * routed this through the active connector when wired; PR4 c15
+   * (Codex round-2 P1.B) changed the signature to accept string
+   * `chatId` / `messageId` so non-Telegram providers
+   * (Slack ts `"1690000000.000001"`, RocketChat opaque ids) survive
+   * the call without lossy `Number(...)` conversion. The legacy
+   * `telegramApi.editMessageText` fallback (only reached for the
+   * codex-app-server runtime path today) does its own
+   * string→numeric conversion locally and only proceeds if the id
+   * is actually a safe integer.
+   *
+   * The connector path is provider-agnostic — `connector.editMessage`
+   * takes a string `messageId` and the connector decides how to
+   * marshal it on the wire (TelegramConnector validates positive
+   * integer; a Discord connector would use the snowflake string
+   * unchanged; a Slack connector would use the float-string ts
+   * unchanged).
+   *
+   * Errors are swallowed (non-fatal per spec §2).
+   */
+  private async editCallbackMessage(
+    chatId: string | undefined,
+    messageId: string | undefined,
+    text: string,
+    buttons?: Array<Array<import('../connectors/index.js').ConnectorAction>>,
+  ): Promise<void> {
+    if (!messageId) return;
+    if (this.connector?.capabilities.messageEdits && this.connector.editMessage) {
+      try {
+        if (buttons) {
+          await this.connector.editMessage(messageId, text, { buttons });
+        } else {
+          await this.connector.editMessage(messageId, text);
+        }
+      } catch { /* ignore */ }
+    } else if (this.telegramApi && chatId !== undefined) {
+      // PR4 c9 + c15: legacy non-connector path translates
+      // ConnectorAction back to the Telegram inline_keyboard shape and
+      // converts the string ids back to numeric for the
+      // `telegramApi.editMessageText` wire call. A non-integer string
+      // (Slack ts) here is a sign of a misrouted Discord/Slack
+      // callback reaching the Telegram fallback path — skip the
+      // edit rather than send NaN to Telegram.
+      const numChatId = Number(chatId);
+      const numMsgId = Number(messageId);
+      if (!Number.isSafeInteger(numChatId) || !Number.isSafeInteger(numMsgId) || numMsgId <= 0) return;
+      try {
+        if (buttons) {
+          // PR4 c15 (Codex round-2 P1.C): handle both ConnectorAction
+          // variants. URL buttons translate to Telegram `{text, url}`;
+          // callback buttons to `{text, callback_data}`.
+          const tgKeyboard = buttons.map((row) =>
+            row.map((a) => a.kind === 'url'
+              ? { text: a.label, url: a.url }
+              : { text: a.label, callback_data: a.actionId },
+            ),
+          );
+          await this.telegramApi.editMessageText(numChatId, numMsgId, text, { inline_keyboard: tgKeyboard });
+        } else {
+          await this.telegramApi.editMessageText(numChatId, numMsgId, text);
+        }
+      } catch { /* ignore */ }
     }
   }
 
@@ -451,22 +576,34 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * is the org's orchestrator (see agent-manager.ts for the wiring). Only
    * appr_(allow|deny)_<approvalId> prefixes are accepted here — the
    * activity-channel bot only ever posts approval buttons, so any other
-   * callback is rejected. The responding API must be the activity-channel
-   * API (not the agent's own bot) so answerCallbackQuery + editMessageText
-   * target the right message on the right bot.
+   * callback is rejected. The responding connector must be the activity-
+   * channel connector (not the agent's own bot) so the ack +
+   * editMessage target the right bot.
+   *
+   * PR3 commit 3 of pluggable-connectors: signature changed from
+   * `(query, activityApi: TelegramAPI)` → `(query, activityConnector:
+   * MessageConnector)`. The connector knows its bound chatId, so the
+   * editMessage call doesn't need an explicit chat-id argument.
    */
-  async handleActivityCallback(query: TelegramCallbackQuery, activityApi: TelegramAPI): Promise<void> {
-    const data = stripControlChars(query.data || '');
-    const callbackQueryId = query.id;
+  async handleActivityCallback(
+    callback: import('../connectors/index.js').CallbackPayload,
+    activityConnector: import('../connectors/index.js').MessageConnector,
+  ): Promise<void> {
+    const data = stripControlChars(callback.data || '');
+    const callbackQueryId = callback.id;
 
     // SECURITY: callbacks must come from the whitelisted user. Identical
     // check to handleCallback — approval clicks are as sensitive as
-    // permission clicks and the same gate applies.
+    // permission clicks and the same gate applies. PR4 c7 (Codex P1.A):
+    // gate uses CallbackPayload.from.id (stringified provider id) directly
+    // — same string-equality rule the message gate uses.
     if (this.allowedUserId !== undefined) {
-      const fromUserId = query.from?.id;
-      if (fromUserId !== this.allowedUserId) {
-        this.log(`SECURITY: activity-channel callback from unauthorized user ${fromUserId} - rejecting`);
-        try { await activityApi.answerCallbackQuery(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
+      const fromUserId = callback.from?.id;
+      if (!fromUserId || fromUserId !== String(this.allowedUserId)) {
+        this.log(`SECURITY: activity-channel callback from unauthorized user ${fromUserId || '<unknown>'} - rejecting`);
+        if (activityConnector.capabilities.interactiveCallbacks && activityConnector.acknowledgeCallback) {
+          try { await activityConnector.acknowledgeCallback(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
+        }
         return;
       }
     }
@@ -474,82 +611,100 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const apprMatch = data.match(/^appr_(allow|deny)_(approval_\d+_[a-zA-Z0-9]+)$/);
     if (!apprMatch) {
       this.log(`activity-channel callback ignored (unknown prefix): ${data.slice(0, 40)}`);
-      try { await activityApi.answerCallbackQuery(callbackQueryId, 'Unknown button'); } catch { /* ignore */ }
+      if (activityConnector.capabilities.interactiveCallbacks && activityConnector.acknowledgeCallback) {
+        try { await activityConnector.acknowledgeCallback(callbackQueryId, 'Unknown button'); } catch { /* ignore */ }
+      }
       return;
     }
 
-    await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, activityApi);
+    await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], callback, activityConnector);
   }
 
   /**
    * Shared approval-callback resolution path. Called by both handleCallback
-   * (agent's own bot) and handleActivityCallback (activity-channel bot).
+   * (agent's own bot, passing `this.connector`) and handleActivityCallback
+   * (activity-channel bot, passing the activity connector).
    *
    * Resolves the approval via updateApproval (which moves the file from
    * pending/ to resolved/ and notifies the requesting agent via inbox),
-   * answers the Telegram callback so the spinner stops, and edits the
+   * acknowledges the callback so the spinner stops, and edits the
    * original message to show who approved/denied for the audit trail.
    *
-   * `api` is the TelegramAPI that owns the bot the callback came from —
-   * answerCallbackQuery and editMessageText must target the same bot.
+   * `connector` is the MessageConnector that owns the bot the callback
+   * came from — ack + editMessage must target the same bot, so the
+   * connector knowing its bound chatId is the contract that makes this
+   * routing implicit. PR3 commit 3 of pluggable-connectors.
    */
   private async routeApprovalCallback(
     decision: 'allow' | 'deny',
     approvalId: string,
-    query: TelegramCallbackQuery,
-    api: TelegramAPI | undefined,
+    callback: import('../connectors/index.js').CallbackPayload,
+    connector: import('../connectors/index.js').MessageConnector | undefined,
   ): Promise<void> {
-    const chatId = query.message?.chat?.id;
-    const messageId = query.message?.message_id;
-    const callbackQueryId = query.id;
+    const messageId = callback.message_id;
+    const callbackQueryId = callback.id;
     const status = decision === 'allow' ? 'approved' : 'rejected';
 
     // Build a friendly audit-trail suffix: "by Alice (@alice)" or just
-    // "by Alice" if no username. Falls back to the Telegram user id if
-    // both are missing (shouldn't happen in practice but guards edge).
-    const firstName = query.from?.first_name;
-    const username = query.from?.username;
+    // "by Alice" if no username. Falls back to the connector user id if
+    // both are missing. PR4 c7 (Codex P1.A) reads these off the typed
+    // CallbackPayload.from.{name,username,id} so the formatter is
+    // provider-agnostic (Telegram first_name + username, Discord
+    // global_name + username, Mattermost first_name + username, etc.).
+    const firstName = callback.from?.name;
+    const username = callback.from?.username;
     const auditWho = firstName && username
       ? `${firstName} (@${username})`
-      : firstName ?? (username ? `@${username}` : `user ${query.from?.id ?? 'unknown'}`);
-    const auditNote = `via Telegram activity channel by ${auditWho}`;
+      : firstName ?? (username ? `@${username}` : `user ${callback.from?.id || 'unknown'}`);
+    const auditNote = `via activity channel by ${auditWho}`;
 
     try {
       updateApproval(this.paths, approvalId, status, auditNote);
     } catch (err) {
       this.log(`Approval callback: updateApproval failed for ${approvalId}: ${err}`);
-      if (api) {
-        try { await api.answerCallbackQuery(callbackQueryId, 'Approval not found or already resolved'); } catch { /* ignore */ }
+      if (connector?.capabilities.interactiveCallbacks && connector.acknowledgeCallback) {
+        try { await connector.acknowledgeCallback(callbackQueryId, 'Approval not found or already resolved'); } catch { /* ignore */ }
       }
       return;
     }
 
-    if (api) {
-      try { await api.answerCallbackQuery(callbackQueryId, decision === 'allow' ? 'Approved' : 'Denied'); } catch { /* ignore */ }
-      if (chatId && messageId) {
-        const label = decision === 'allow' ? `✅ Approved by ${auditWho}` : `❌ Denied by ${auditWho}`;
-        try { await api.editMessageText(chatId, messageId, label); } catch { /* ignore */ }
-      }
+    if (connector?.capabilities.interactiveCallbacks && connector.acknowledgeCallback) {
+      try { await connector.acknowledgeCallback(callbackQueryId, decision === 'allow' ? 'Approved' : 'Denied'); } catch { /* ignore */ }
+    }
+    if (messageId && connector?.capabilities.messageEdits && connector.editMessage) {
+      const label = decision === 'allow' ? `✅ Approved by ${auditWho}` : `❌ Denied by ${auditWho}`;
+      try { await connector.editMessage(messageId, label); } catch { /* ignore */ }
     }
     this.log(`Approval callback: ${decision} for ${approvalId} by ${auditWho}`);
   }
 
   /**
-   * Handle a Telegram inline button callback query.
-   * Routes to permission, restart, or AskUserQuestion handlers.
+   * Handle an inline button callback. Routes to permission, restart, or
+   * AskUserQuestion handlers. Provider-agnostic — consumes a typed
+   * `CallbackPayload` instead of the raw provider query (PR4 c7).
    */
-  async handleCallback(query: TelegramCallbackQuery): Promise<void> {
-    const data = stripControlChars(query.data || '');
-    const chatId = query.message?.chat?.id;
-    const messageId = query.message?.message_id;
-    const callbackQueryId = query.id;
+  async handleCallback(callback: import('../connectors/index.js').CallbackPayload): Promise<void> {
+    const data = stripControlChars(callback.data || '');
+    // PR4 c7 + c15 (Codex round-2 P1.B): chat_id and message_id stay as
+    // strings throughout the connector dispatch. Pre-c15 they were
+    // Number()-converted here, which produced NaN for non-integer
+    // provider ids (Slack ts `"1690000000.000001"` precision-lost,
+    // RocketChat opaque ids → NaN). Slack and RocketChat connectors
+    // would have had every editCallbackMessage call no-op silently.
+    // The legacy Telegram fallback inside editCallbackMessage does its
+    // own numeric conversion locally with safe-integer validation.
+    const chatId = callback.chat_id;
+    const messageId = callback.message_id;
+    const callbackQueryId = callback.id;
 
     // SECURITY: callbacks must come from the whitelisted user. Without this,
-    // anyone who sees a button (forwarded message, group, etc.) could click it.
+    // anyone who sees a button (forwarded message, group, etc.) could click
+    // it. String-equality against the stringified provider id (matches the
+    // message gate at agent-manager.ts onMessage).
     if (this.allowedUserId !== undefined) {
-      const fromUserId = query.from?.id;
-      if (fromUserId !== this.allowedUserId) {
-        this.log(`SECURITY: callback from unauthorized user ${fromUserId} - rejecting`);
+      const fromUserId = callback.from?.id;
+      if (!fromUserId || fromUserId !== String(this.allowedUserId)) {
+        this.log(`SECURITY: callback from unauthorized user ${fromUserId || '<unknown>'} - rejecting`);
         return;
       }
     }
@@ -561,7 +716,12 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     // prefix check is cheap and routing-agnostic.
     const apprMatch = data.match(/^appr_(allow|deny)_(approval_\d+_[a-zA-Z0-9]+)$/);
     if (apprMatch) {
-      await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], query, this.telegramApi);
+      // PR3 commit 3: pass the agent's own connector for the (rare) case
+      // an approval button is routed through the agent's primary bot
+      // rather than the activity channel. The activity-channel path
+      // calls routeApprovalCallback through handleActivityCallback with
+      // the activity connector instead.
+      await this.routeApprovalCallback(apprMatch[1] as 'allow' | 'deny', apprMatch[2], callback, this.connector);
       return;
     }
 
@@ -573,13 +733,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const responseFile = join(this.paths.stateDir, `hook-response-${hexId}.json`);
       writeFileSync(responseFile, JSON.stringify({ decision: hookDecision }) + '\n', 'utf-8');
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
-        if (chatId && messageId) {
-          const labelMap: Record<string, string> = { allow: 'Approved', deny: 'Denied', continue: 'Continue in Chat' };
-          try { await this.telegramApi.editMessageText(chatId, messageId, labelMap[decision] || decision); } catch { /* ignore */ }
-        }
-      }
+      await this.ackCallback(callbackQueryId, 'Got it');
+      const labelMap: Record<string, string> = { allow: 'Approved', deny: 'Denied', continue: 'Continue in Chat' };
+      await this.editCallbackMessage(chatId, messageId, labelMap[decision] || decision);
       this.log(`Permission callback: ${decision} for ${hexId}`);
       return;
     }
@@ -591,13 +747,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const responseFile = join(this.paths.stateDir, `restart-response-${hexId}.json`);
       writeFileSync(responseFile, JSON.stringify({ decision }) + '\n', 'utf-8');
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
-        if (chatId && messageId) {
-          const label = decision === 'allow' ? 'Restart Approved' : 'Restart Denied';
-          try { await this.telegramApi.editMessageText(chatId, messageId, label); } catch { /* ignore */ }
-        }
-      }
+      await this.ackCallback(callbackQueryId, 'Got it');
+      const label = decision === 'allow' ? 'Restart Approved' : 'Restart Denied';
+      await this.editCallbackMessage(chatId, messageId, label);
       this.log(`Restart callback: ${decision} for ${hexId}`);
       return;
     }
@@ -608,12 +760,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const qIdx = parseInt(askoptMatch[1], 10);
       const oIdx = parseInt(askoptMatch[2], 10);
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
-        if (chatId && messageId) {
-          try { await this.telegramApi.editMessageText(chatId, messageId, 'Answered'); } catch { /* ignore */ }
-        }
-      }
+      await this.ackCallback(callbackQueryId, 'Got it');
+      await this.editCallbackMessage(chatId, messageId, 'Answered');
 
       // Navigate TUI: Down * oIdx, then Enter
       for (let k = 0; k < oIdx; k++) {
@@ -654,9 +802,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const qIdx = parseInt(toggleMatch[1], 10);
       const oIdx = parseInt(toggleMatch[2], 10);
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Toggled'); } catch { /* ignore */ }
-      }
+      await this.ackCallback(callbackQueryId, 'Toggled');
 
       const askStatePath = join(this.paths.stateDir, 'ask-state.json');
       if (existsSync(askStatePath)) {
@@ -673,26 +819,28 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
           writeFileSync(askStatePath, JSON.stringify(state) + '\n', 'utf-8');
 
           // Update Telegram message with current selections
-          if (this.telegramApi && chatId && messageId) {
+          if (messageId) {
             const chosen = [...state.multi_select_chosen].sort((a: number, b: number) => a - b);
             const chosenDisplay = chosen.map((i: number) => i + 1).join(', ');
             const question = state.questions?.[qIdx];
             const options: string[] = question?.options || [];
 
-            // Build keyboard with toggle buttons + submit
-            const keyboard: Array<Array<{ text: string; callback_data: string }>> = options.map((opt: string, i: number) => [{
-              text: opt || `Option ${i + 1}`,
-              callback_data: `asktoggle_${qIdx}_${i}`,
+            // Build keyboard with toggle buttons + submit. PR4 c9 +
+            // c15: keyboard is ConnectorAction[][] with explicit
+            // `kind: 'callback'` discriminator (Codex round-2 P1.C
+            // added the URL variant; callback is the existing case).
+            const keyboard: Array<Array<import('../connectors/index.js').ConnectorAction>> = options.map((opt: string, i: number) => [{
+              kind: 'callback' as const,
+              label: opt || `Option ${i + 1}`,
+              actionId: `asktoggle_${qIdx}_${i}`,
             }]);
-            keyboard.push([{ text: 'Submit Selections', callback_data: `asksubmit_${qIdx}` }]);
+            keyboard.push([{ kind: 'callback' as const, label: 'Submit Selections', actionId: `asksubmit_${qIdx}` }]);
 
             const text = chosenDisplay
               ? `Selected: ${chosenDisplay}\nTap more options or Submit`
               : 'Tap options to toggle, then tap Submit';
 
-            try {
-              await this.telegramApi.editMessageText(chatId, messageId, text, { inline_keyboard: keyboard });
-            } catch { /* ignore */ }
+            await this.editCallbackMessage(chatId, messageId, text, keyboard);
           }
         } catch { /* ignore parse errors */ }
       }
@@ -705,12 +853,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     if (submitMatch) {
       const qIdx = parseInt(submitMatch[1], 10);
 
-      if (this.telegramApi) {
-        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Submitted'); } catch { /* ignore */ }
-        if (chatId && messageId) {
-          try { await this.telegramApi.editMessageText(chatId, messageId, 'Submitted'); } catch { /* ignore */ }
-        }
-      }
+      await this.ackCallback(callbackQueryId, 'Submitted');
+      await this.editCallbackMessage(chatId, messageId, 'Submitted');
 
       const askStatePath = join(this.paths.stateDir, 'ask-state.json');
       if (existsSync(askStatePath)) {
@@ -772,12 +916,18 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
-   * Send the next AskUserQuestion to Telegram.
+   * Send the next AskUserQuestion to the operator's connector.
    * Reads ask-state.json and builds the question message and inline keyboard.
+   *
+   * PR4 c6 (Codex P1.E): gate on connector OR legacy Telegram handle —
+   * the dispatch below already preferred `this.connector` when present,
+   * but this preflight check was Telegram-only and silently dropped
+   * AskUser flows on connector-only agents (e.g. an agent with
+   * `config.connector: 'mattermost'` would never see question 2+).
    */
   async sendNextQuestion(questionIdx: number): Promise<void> {
-    if (!this.telegramApi || !this.chatId) {
-      this.log('sendNextQuestion: no Telegram API or chatId configured');
+    if (!this.connector && (!this.telegramApi || !this.chatId)) {
+      this.log('sendNextQuestion: no connector or Telegram API/chatId configured');
       return;
     }
 
@@ -812,23 +962,45 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         msg += `\n${i + 1}. ${qOptions[i] || `Option ${i + 1}`}`;
       }
 
-      // Build inline keyboard
-      let keyboard: Array<Array<{ text: string; callback_data: string }>>;
+      // Build inline keyboard. PR4 c9 + c15: ConnectorAction[][] with
+      // discriminator (`kind: 'callback'` for the existing case;
+      // `kind: 'url'` reserved for future link-button UX).
+      let keyboard: Array<Array<import('../connectors/index.js').ConnectorAction>>;
       if (qMulti) {
         keyboard = qOptions.map((opt, i) => [{
-          text: opt || `Option ${i + 1}`,
-          callback_data: `asktoggle_${questionIdx}_${i}`,
+          kind: 'callback' as const,
+          label: opt || `Option ${i + 1}`,
+          actionId: `asktoggle_${questionIdx}_${i}`,
         }]);
-        keyboard.push([{ text: 'Submit Selections', callback_data: `asksubmit_${questionIdx}` }]);
+        keyboard.push([{ kind: 'callback' as const, label: 'Submit Selections', actionId: `asksubmit_${questionIdx}` }]);
       } else {
         keyboard = qOptions.map((opt, i) => [{
-          text: opt || `Option ${i + 1}`,
-          callback_data: `askopt_${questionIdx}_${i}`,
+          kind: 'callback' as const,
+          label: opt || `Option ${i + 1}`,
+          actionId: `askopt_${questionIdx}_${i}`,
         }]);
       }
 
-      await this.telegramApi.sendMessage(this.chatId, msg, { inline_keyboard: keyboard });
-      this.log(`Sent question ${questionIdx + 1}/${totalQ} to Telegram`);
+      // PR2 of pluggable-connectors: route through the active connector
+      // when wired (covers no-Telegram agents transparently). Falls back
+      // to the legacy `telegramApi`/`chatId` fields only when the connector
+      // path is absent. The connector's sendMessage takes a generic
+      // `buttons` option that TelegramConnector translates to inline_keyboard.
+      // PR4 c6 narrowed the preflight gate to allow connector-only agents.
+      if (this.connector) {
+        await this.connector.sendMessage(msg, { buttons: keyboard });
+      } else if (this.telegramApi && this.chatId) {
+        // PR4 c9 + c15: legacy fallback translates both ConnectorAction
+        // variants back to Telegram inline_keyboard shapes.
+        const tgKeyboard = keyboard.map((row) =>
+          row.map((a) => a.kind === 'url'
+            ? { text: a.label, url: a.url }
+            : { text: a.label, callback_data: a.actionId },
+          ),
+        );
+        await this.telegramApi.sendMessage(this.chatId, msg, { inline_keyboard: tgKeyboard });
+      }
+      this.log(`Sent question ${questionIdx + 1}/${totalQ} to operator connector`);
     } catch (err) {
       this.log(`sendNextQuestion error: ${err}`);
     }
@@ -1013,7 +1185,11 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       this.saveCtxCircuit();
       const msg = `Context circuit breaker TRIPPED for ${this.agent.name}: 3 restarts in 15min. Watchdog paused 30min. Check logs/${this.agent.name}/restarts.log for details.`;
       this.log(msg);
-      if (this.telegramApi && this.chatId) {
+      // PR2 of pluggable-connectors: route through active connector.
+      // Falls back to legacy fields for any caller that hasn't migrated.
+      if (this.connector) {
+        this.connector.sendMessage(msg).catch(() => {});
+      } else if (this.telegramApi && this.chatId) {
         this.telegramApi.sendMessage(this.chatId, msg).catch(() => {});
       }
       return;

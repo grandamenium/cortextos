@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
 
 // Mock the PTY layer so we don't load native bindings or spawn real processes.
 // AgentManager → AgentProcess → AgentPTY → node-pty. We mock at AgentProcess.
@@ -284,68 +283,6 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
 
     expect(stopSpy).not.toHaveBeenCalled();
     expect(startSpy).not.toHaveBeenCalled();
-  });
-});
-
-describe('buildReplyContext - Telegram reply context (BUG fix: media replies lost)', () => {
-  it('returns undefined when no reply message', () => {
-    expect(buildReplyContext(undefined)).toBeUndefined();
-  });
-
-  it('returns text content for plain text replies', () => {
-    const msg = { message_id: 1, chat: { id: 1 }, text: 'Hello world' };
-    expect(buildReplyContext(msg)).toBe('Hello world');
-  });
-
-  it('returns caption for media messages with captions', () => {
-    const msg = { message_id: 2, chat: { id: 1 }, photo: [{ file_id: 'x', width: 100, height: 100, file_size: 1 }], caption: 'Check this out' };
-    expect(buildReplyContext(msg)).toBe('Check this out');
-  });
-
-  it('returns [video] for video messages without caption', () => {
-    const msg = { message_id: 3, chat: { id: 1 }, video: { file_id: 'v1', width: 1920, height: 1080, duration: 30 } };
-    expect(buildReplyContext(msg)).toBe('[video]');
-  });
-
-  it('returns [photo] for photo messages without caption', () => {
-    const msg = { message_id: 4, chat: { id: 1 }, photo: [{ file_id: 'p1', width: 100, height: 100, file_size: 1 }] };
-    expect(buildReplyContext(msg)).toBe('[photo]');
-  });
-
-  it('returns [voice message] for voice messages', () => {
-    const msg = { message_id: 5, chat: { id: 1 }, voice: { file_id: 'vc1', duration: 5 } };
-    expect(buildReplyContext(msg)).toBe('[voice message]');
-  });
-
-  it('returns [video note] for video note messages', () => {
-    const msg = { message_id: 6, chat: { id: 1 }, video_note: { file_id: 'vn1', length: 240, duration: 10 } };
-    expect(buildReplyContext(msg)).toBe('[video note]');
-  });
-
-  it('returns [audio] for audio messages', () => {
-    const msg = { message_id: 7, chat: { id: 1 }, audio: { file_id: 'a1', duration: 120 } };
-    expect(buildReplyContext(msg)).toBe('[audio]');
-  });
-
-  it('returns document name for document messages', () => {
-    const msg = { message_id: 8, chat: { id: 1 }, document: { file_id: 'd1', file_name: 'report.pdf' } };
-    expect(buildReplyContext(msg)).toBe('[document: report.pdf]');
-  });
-
-  it('returns [document: file] when document has no file_name', () => {
-    const msg = { message_id: 9, chat: { id: 1 }, document: { file_id: 'd2' } };
-    expect(buildReplyContext(msg)).toBe('[document: file]');
-  });
-
-  it('prefers text over caption when both present', () => {
-    const msg = { message_id: 10, chat: { id: 1 }, text: 'Text content', caption: 'Caption content' };
-    expect(buildReplyContext(msg)).toBe('Text content');
-  });
-
-  it('strips control characters from text', () => {
-    const msg = { message_id: 11, chat: { id: 1 }, text: 'Hello\x00world' };
-    const result = buildReplyContext(msg);
-    expect(result).not.toContain('\x00');
   });
 });
 

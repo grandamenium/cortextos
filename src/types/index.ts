@@ -188,13 +188,75 @@ export interface AgentConfig {
    */
   runtime?: 'claude-code' | 'hermes' | 'codex-app-server';
   /**
-   * Whether this agent runs a Telegram poller. Defaults to true when absent
-   * (preserves existing behaviour). Set to false on specialist agents that
-   * should not own a Telegram bot — only the designated orchestrator agent
-   * should poll. Requires BOT_TOKEN + CHAT_ID to already be unset or the
-   * poller will be skipped regardless.
+   * Communication connector kind. When absent, the daemon's legacy-compat
+   * resolver infers `'telegram'` iff the agent's .env passes the existing
+   * BOT_TOKEN + CHAT_ID + numeric ALLOWED_USER gate, else `'none'`. Explicit
+   * values override the inference. Added in the pluggable-connectors PR1
+   * (`work/feat-pluggable-connectors/PLAN.md`); follow-up PRs will add
+   * Matrix, RocketChat, and other kinds to this union and the runtime
+   * `CONNECTOR_ALLOWLIST` (`src/connectors/index.ts`) together.
+   */
+  connector?: 'telegram' | 'none';
+  /**
+   * @security Opt-in strict-mode for the permission hook. When `true`,
+   * tool calls that require permission are DENIED if no remote-approval
+   * channel is configured (the pre-PR2 hook-permission-telegram behavior).
+   * When `false` (default), the hook is tool-class-aware: safe read-only
+   * tools (Read/Glob/Grep/LS/NotebookRead) auto-allow; write/exec/network
+   * tools fall through to Claude Code's built-in terminal permission
+   * prompt by exiting 0 with no JSON output.
+   *
+   * Pre-PR2 agents with valid Telegram creds keep `connector` inferred to
+   * `'telegram'` and so retain today's deny-on-API-failure path via creds.
+   * Agents with `connector: 'none'` (or invalid Telegram creds inferred to
+   * `'none'`) start allow-by-default for read-only tools. Operators who
+   * want the old blanket-deny set this field to `true`.
+   *
+   * Added in pluggable-connectors PR2 (`work/feat-connector-hooks-cli/PLAN.md`).
+   */
+  require_remote_approval?: boolean;
+  /**
+   * Whether this agent runs an inbound polling loop on its connector.
+   * Defaults to true when absent. Set to `false` on specialist agents
+   * that should not own a bot — only the designated orchestrator agent
+   * should poll. Connector-agnostic (replaces the legacy
+   * `telegram_polling` field below).
+   *
+   * Added in PR2 of the pluggable-connectors stack. When both
+   * `inbound_polling` and `telegram_polling` are set, `inbound_polling`
+   * takes precedence. The legacy field is honored for one release cycle
+   * for backwards compat.
+   */
+  inbound_polling?: boolean;
+  /**
+   * @deprecated Use `inbound_polling` (introduced in PR2 of the
+   * pluggable-connectors stack). Retained for one release cycle —
+   * agents on disk that pre-date `inbound_polling` keep working. When
+   * both fields are set, `inbound_polling` wins.
+   *
+   * Original semantics: whether this agent runs a Telegram poller.
+   * Defaults to true when absent. Requires BOT_TOKEN + CHAT_ID to be
+   * set or the poller is skipped regardless. For non-Telegram
+   * connectors this field is IGNORED, not an error.
    */
   telegram_polling?: boolean;
+  /**
+   * Auto-react 👀 on every inbound user message to give the user
+   * instant "agent saw this" feedback, BEFORE the agent's first
+   * reasoning step. The agent's job is then to swap the eyes to a
+   * terminal state when done: ✅ success, ❌ failure, 🛠 long-running,
+   * 🤔 needs clarification. Telegram's setMessageReaction is
+   * set-to-list, so any later `bus react` call from the agent
+   * replaces the daemon's eyes automatically.
+   *
+   * Default: true. Set to `false` to disable (the daemon emits no
+   * meta-reaction; the agent owns all reaction-state from the start).
+   * Gated by `connector.capabilities.outboundReactions === true` —
+   * no-op on connectors without outbound reactions.
+   *
+   * Added in PR4 c25 of the pluggable-connectors stack.
+   */
+  auto_eyes_ack?: boolean;
 }
 
 export interface CronEntry {
@@ -524,33 +586,39 @@ export interface TelegramPhotoSize {
   file_id: string;
   width: number;
   height: number;
+  file_size?: number;
 }
 
 export interface TelegramDocument {
   file_id: string;
   file_name?: string;
+  file_size?: number;
 }
 
 export interface TelegramVoice {
   file_id: string;
   duration: number;
+  file_size?: number;
 }
 
 export interface TelegramAudio {
   file_id: string;
   duration: number;
   file_name?: string;
+  file_size?: number;
 }
 
 export interface TelegramVideo {
   file_id: string;
   duration: number;
   file_name?: string;
+  file_size?: number;
 }
 
 export interface TelegramVideoNote {
   file_id: string;
   duration: number;
+  file_size?: number;
 }
 
 // Task Management Report Types

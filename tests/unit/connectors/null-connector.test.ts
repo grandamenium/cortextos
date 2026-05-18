@@ -1,0 +1,46 @@
+import { describe, it, expect } from 'vitest';
+import { NullConnector } from '../../../src/connectors/index.js';
+
+describe('NullConnector', () => {
+  it('validates trivially with a descriptive identity', async () => {
+    const c = new NullConnector();
+    const result = await c.validateCredentials();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identity).toContain('null-connector');
+    }
+  });
+
+  it('sendMessage is a silent no-op that returns a stable shape', async () => {
+    const c = new NullConnector();
+    const res = await c.sendMessage('hello world');
+    expect(res.id).toBe('noop');
+    expect(typeof res.ts).toBe('number');
+  });
+
+  it('sendMedia is a silent no-op', async () => {
+    const c = new NullConnector();
+    const res = await c.sendMedia({ localPath: '/tmp/x.jpg', kind: 'photo' });
+    expect(res.id).toBe('noop');
+  });
+
+  it('startInbound resolves immediately without throwing', async () => {
+    const c = new NullConnector();
+    // SYNC handler — the contract is sync ()=>void
+    await c.startInbound({ onMessage: () => {} });
+  });
+
+  it('stopInbound is a no-op even when startInbound was never called', async () => {
+    const c = new NullConnector();
+    await c.stopInbound(); // must not throw
+  });
+
+  it('declares interactiveCallbacks=false and messageEdits=false (PR3)', () => {
+    const c = new NullConnector();
+    expect(c.capabilities.interactiveCallbacks).toBe(false);
+    expect(c.capabilities.messageEdits).toBe(false);
+    // Methods are omitted entirely — callers must gate via capabilities
+    expect(c.acknowledgeCallback).toBeUndefined();
+    expect(c.editMessage).toBeUndefined();
+  });
+});

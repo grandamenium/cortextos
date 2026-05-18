@@ -10,20 +10,31 @@ vi.mock('../../../src/bus/message', () => ({
   sendMessage: vi.fn(),
 }));
 
-// Mock TelegramAPI so the agent-bot ping is observable without hitting the
-// network. Constructor records the bot token; sendMessage records its call.
-const telegramSendMessageSpy = vi.fn().mockResolvedValue({ result: { message_id: 1 } });
-const telegramConstructorSpy = vi.fn();
-vi.mock('../../../src/telegram/api', () => ({
-  TelegramAPI: class {
+// Mock TelegramAPI so the agent-bot ping is observable without hitting
+// the network. PR2 of pluggable-connectors routes approval.ts pings
+// through getConnector → TelegramConnector → TelegramAPI. The connector
+// imports TelegramAPI from the NEW canonical path
+// (`src/connectors/telegram/api`); the OLD path (`src/telegram/api`) is
+// a 1-line re-export shim. We mock BOTH paths to cover both reach paths.
+//
+// vi.mock factories are hoisted, so the mock body can't close over local
+// variables defined later — we use vi.hoisted to lift the spy and class
+// definitions to the same hoist phase.
+const { telegramSendMessageSpy, telegramConstructorSpy, TelegramAPIMockClass } = vi.hoisted(() => {
+  const sendSpy = vi.fn().mockResolvedValue({ result: { message_id: 1 } });
+  const ctorSpy = vi.fn();
+  const cls = class {
     constructor(token: string) {
-      telegramConstructorSpy(token);
+      ctorSpy(token);
     }
     sendMessage(...args: unknown[]) {
-      return telegramSendMessageSpy(...args);
+      return sendSpy(...args);
     }
-  },
-}));
+  };
+  return { telegramSendMessageSpy: sendSpy, telegramConstructorSpy: ctorSpy, TelegramAPIMockClass: cls };
+});
+vi.mock('../../../src/telegram/api', () => ({ TelegramAPI: TelegramAPIMockClass }));
+vi.mock('../../../src/connectors/telegram/api', () => ({ TelegramAPI: TelegramAPIMockClass }));
 
 import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';

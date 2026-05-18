@@ -152,10 +152,28 @@ function sendCrashLoopAlertBestEffort(
   crashCount: number,
   errStr: string,
 ): boolean {
+  // PR2: consult getOperatorConnector() for opt-out gate. When the
+  // operator opted out (`CTX_OPERATOR_CONNECTOR=none`), skip the alert
+  // entirely — log to stderr only. When opted in (default telegram),
+  // resolve creds the legacy way and POST via a short-lived Node child
+  // process (see the `spawnSync(process.execPath, ['-e', ...])` block
+  // below). The audit pass switched this away from curl-with-token-in-
+  // argv so the bot token never lands in `/proc/$pid/cmdline` or `ps`
+  // output; URL + token + chat_id now flow over stdin into the child.
+  //
+  // The send remains synchronous (spawnSync, not an awaited fetch)
+  // because this code path runs inside Node's uncaughtException /
+  // unhandledRejection handler, where awaiting async would race the
+  // process exit. PR3+ may revisit if the daemon's fatal-error flow
+  // becomes async-safe.
+  if (process.env.CTX_OPERATOR_CONNECTOR === 'none') {
+    console.error('[daemon] Crash-loop alert: operator opted out (CTX_OPERATOR_CONNECTOR=none) — skipping notification');
+    return false;
+  }
   const creds = getOperatorChatCreds(frameworkRoot);
   if (!creds) {
     console.error('[daemon] Crash-loop alert: no operator chat configured ' +
-      '(set CTX_OPERATOR_CHAT_ID + CTX_OPERATOR_BOT_TOKEN, or ensure at least one agent .env exists)');
+      '(set CTX_OPERATOR_CHAT_ID + CTX_OPERATOR_BOT_TOKEN, set CTX_OPERATOR_CONNECTOR=none to suppress, or ensure at least one agent .env exists)');
     return false;
   }
   const message =
@@ -164,13 +182,35 @@ function sendCrashLoopAlertBestEffort(
     `Last error: ${errStr.slice(0, 500)}\n` +
     `Next alert in 30 min if the pattern continues.`;
   try {
-    const r = spawnSync('curl', [
-      '-s', '--max-time', '3',
-      '-X', 'POST',
-      `https://api.telegram.org/bot${creds.botToken}/sendMessage`,
-      '-d', `chat_id=${creds.chatId}`,
-      '--data-urlencode', `text=${message}`,
-    ], { timeout: TELEGRAM_SEND_TIMEOUT_MS, stdio: 'pipe' });
+    // Send via a short-lived node child process that fetches with the
+    // URL/token/chat_id read from STDIN — keeps the bot token out of
+    // argv (visible via `ps` / `/proc/PID/cmdline` to any process on
+    // the same UID). Pre-audit this used curl with the token embedded
+    // in argv. We stay synchronous (spawnSync) because the caller runs
+    // inside Node's uncaughtException / unhandledRejection handler,
+    // where awaiting would race the process exit.
+    const childScript =
+      "const data = JSON.parse(require('fs').readFileSync(0, 'utf8'));" +
+      "const ctrl = new AbortController();" +
+      "const t = setTimeout(() => ctrl.abort(), 3000);" +
+      "fetch(data.url, {" +
+        "method: 'POST'," +
+        "headers: { 'Content-Type': 'application/x-www-form-urlencoded' }," +
+        "body: new URLSearchParams({ chat_id: data.chatId, text: data.text })," +
+        "signal: ctrl.signal" +
+      "}).then((r) => process.exit(r.ok ? 0 : 1))" +
+      ".catch(() => process.exit(2))" +
+      ".finally(() => clearTimeout(t));";
+    const payload = JSON.stringify({
+      url: `https://api.telegram.org/bot${creds.botToken}/sendMessage`,
+      chatId: creds.chatId,
+      text: message,
+    });
+    const r = spawnSync(process.execPath, ['-e', childScript], {
+      input: payload,
+      timeout: TELEGRAM_SEND_TIMEOUT_MS,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     if (r.status === 0) {
       console.error('[daemon] Crash-loop alert sent to operator chat');
       return true;

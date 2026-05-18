@@ -42,12 +42,16 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `ack-inbox "<msg_id>"` | ACK a message (un-ACK'd re-deliver after 5 min) |
 | `notify-agent <agent> "<msg>"` | Urgently signal agent's fast-checker |
 
-### Telegram — full docs: `.claude/skills/comms/SKILL.md`
+### Comms — full docs: `.claude/skills/comms/SKILL.md`
 | Command | What it does |
 |---|---|
-| `send-telegram <chat_id> "<msg>"` | Message the user |
-| `send-telegram <chat_id> "<caption>" --image <path>` | Send a photo |
-| `send-telegram <chat_id> "<caption>" --file <path>` | Send any file (PDF, txt, etc.) |
+| `send $CTX_AGENT_NAME "<msg>"` | **Preferred.** Send a reply via your active connector (Telegram today; Matrix/RocketChat/Discord future). Connector-agnostic. |
+| `send $CTX_AGENT_NAME "<caption>" --image <path>` | Send a photo via the active connector |
+| `send $CTX_AGENT_NAME "<caption>" --file <path>` | Send any file (PDF, txt, etc.) via the active connector |
+| `send-telegram <chat_id> "<msg>"` | Telegram-only escape hatch: target a specific chat_id directly. Prefer `bus send` for normal replies. |
+| `send-telegram <chat_id> "<caption>" --image <path>` | Telegram-only: photo to a specific chat_id |
+| `send-telegram <chat_id> "<caption>" --file <path>` | Telegram-only: file to a specific chat_id |
+| `react <message_id> <emoji>` | React with an emoji — **prefer this over a text reply for short acks** (👀 seen / ✅ done / ❌ failed / 👍 ack / 🛠 working / ⏸ paused / 🤔 ambiguous). `react <id> <emoji> --remove` clears the bot's reaction. Re-calling with a new emoji REPLACES the previous one (Telegram set-to-list contract). |
 | `edit-message <chat_id> <msg_id> "<text>"` | Edit an existing message |
 | `answer-callback <query_id> [toast]` | Dismiss button loading state |
 | `post-activity "<msg>"` | Post to org activity channel |

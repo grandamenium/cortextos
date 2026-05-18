@@ -1,11 +1,2 @@
-export { TelegramAPI } from './api.js';
-export { TelegramPoller } from './poller.js';
-export {
-  logOutboundMessage,
-  logInboundMessage,
-  recordInboundTelegram,
-  cacheLastSent,
-  readLastSent,
-} from './logging.js';
-export { sanitizeFilename, processMediaMessage } from './media.js';
-export type { ProcessedMedia } from './media.js';
+/** @deprecated Moved to `../connectors/telegram/index.js` in PR1 of the pluggable-connectors stack. Removed in the release shipping PR2. */
+export * from '../connectors/telegram/index.js';

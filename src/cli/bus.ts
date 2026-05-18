@@ -944,15 +944,63 @@ busCommand
     console.log(JSON.stringify(result, null, 2));
   });
 
+/**
+ * Read `connector` from an agent's config.json without taking a daemon
+ * dependency. Returns undefined when no config or no field. Used by
+ * `bus send` / `bus send-telegram` to gate dispatch by connector kind.
+ */
+function readConnectorKindFromAgent(agentDir: string | undefined): string | undefined {
+  if (!agentDir) return undefined;
+  const { readFileSync, existsSync } = require('fs');
+  const { join } = require('path');
+  const { isConnectorKind, CONNECTOR_ALLOWLIST } = require('../connectors/index.js') as typeof import('../connectors/index.js');
+  const configPath = join(agentDir, 'config.json');
+  if (!existsSync(configPath)) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(configPath, 'utf-8')).connector;
+  } catch (err) {
+    // Surface a parse failure so a corrupted config.json doesn't silently
+    // downgrade to the legacy telegram inference path. Best-effort log,
+    // then fall through to undefined (legacy behavior).
+    console.warn(`[bus] could not parse ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+    return undefined;
+  }
+  if (raw === undefined) return undefined;
+  if (isConnectorKind(raw)) return raw;
+  console.warn(
+    `[bus] ${configPath} has unknown connector "${String(raw)}"; ignoring. ` +
+    `Allowed: ${CONNECTOR_ALLOWLIST.join(', ')}.`,
+  );
+  return undefined;
+}
+
 busCommand
   .command('send-telegram')
-  .description('Send a message to a Telegram chat')
+  .description('[telegram-only] Send a message to a Telegram chat. For connector-agnostic messaging, use `bus send`.')
   .argument('<chat-id>', 'Telegram chat ID')
   .argument('<message>', 'Message text (supports Telegram Markdown unless --plain-text is set)')
   .option('--image <path>', 'Send a photo with caption')
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
   .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
+    // PR4 c22 (regression audit restoration): on main, `bus send-telegram`
+    // always attempted a Telegram send when BOT_TOKEN was available,
+    // regardless of agent config. Pre-c22 HEAD hard-errored when the agent
+    // had `connector: 'none'` or another non-telegram kind — a regression
+    // for hook scripts and operator workflows that explicitly use
+    // `bus send-telegram` as a direct Telegram channel while routing
+    // inbound through a different connector. Restored: log a warn so the
+    // surprise doesn't bite silently, but proceed with the send.
+    // Connector-aware operators should use `bus send <agent> <message>`
+    // for the connector-agnostic path.
+    const probeEnv = resolveEnv();
+    const explicitKind = readConnectorKindFromAgent(probeEnv.agentDir);
+    if (explicitKind && explicitKind !== 'telegram') {
+      console.error(
+        `Warning: agent '${probeEnv.agentName}' connector is '${explicitKind}', not 'telegram' — proceeding with direct Telegram send. Use 'bus send' for connector-agnostic messaging.`,
+      );
+    }
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
     // Telegram renders them as visible text. Normalize before send + log.
@@ -1018,6 +1066,194 @@ busCommand
       console.log('Message sent');
     } catch (err: any) {
       console.error(`Failed to send: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * `bus send <agent> <message>` — connector-agnostic outbound CLI added
+ * in PR2 of the pluggable communications connectors stack. Reads the
+ * agent's `config.connector` (PR1's field) and dispatches through the
+ * resolved connector. Unlike `send-telegram`, this command takes NO
+ * chat-id argument — the connector is already bound to its recipient
+ * (Telegram CHAT_ID, future Matrix room_id, RocketChat channel).
+ *
+ * Semantics under `connector: 'none'`: silent drop + stderr warn,
+ * exit 0. Operators get an audible signal but the command doesn't fail
+ * (matches the parent plan's "no-comms agents are first-class" goal).
+ */
+busCommand
+  .command('send')
+  .description('Send a message via the agent\'s active connector (connector-agnostic; use send-telegram for Telegram-specific operations)')
+  .argument('<agent>', 'Agent name')
+  .argument('<message>', 'Message text')
+  .option('--image <path>', 'Send a photo with caption')
+  .option('--file <path>', 'Send a document/file with caption')
+  .option('--plain-text', 'Skip Markdown parsing — useful for content with unescaped formatting chars', false)
+  .action(async (agentName: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
+    // Same '\n'/'\t' normalization as send-telegram (the Codex-agent
+    // shell-quoting quirk applies regardless of which command is used).
+    message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+
+    const env = resolveEnv({ agentName });
+    const kind = readConnectorKindFromAgent(env.agentDir);
+
+    if (kind === 'none') {
+      process.stderr.write(
+        `warning: agent '${agentName}' has connector 'none' — message dropped (no outbound channel configured).\n`,
+      );
+      process.exit(0);
+    }
+
+    // Build the connector. For 'telegram' (explicit or inferred via legacy
+    // gate from .env), construct via getConnector which unpacks env keys.
+    // Future kinds reach getConnector's factory dispatch.
+    //
+    // Codex M2.cr code-review fix: read the TARGET agent's .env and merge
+    // it onto process.env before passing to getConnector. Without this,
+    // an agent whose BOT_TOKEN/CHAT_ID live only in its own .env (the
+    // common case) would have those credentials missed entirely — or
+    // worse, accidentally pick up the caller's Telegram credentials from
+    // the surrounding shell.
+    const { getConnector } = require('../connectors/index.js');
+    const { parseEnvFile } = require('../utils/env.js');
+    const path = require('path');
+    const fs = require('fs');
+    const resolvedKind = kind ?? 'telegram'; // PR1's default inference
+
+    // Target agent env wins over the caller's process.env for connector
+    // creds. Codex M.crv code-review-verification fix: also CLEAR the
+    // caller's connector-credential keys (BOT_TOKEN/CHAT_ID/ALLOWED_USER)
+    // from the base when the agent's own .env doesn't supply them.
+    // Without this, a daemon caller's inherited credentials could leak
+    // through to a target agent that has no .env of its own — sending
+    // via the wrong agent's channel. Other env vars (CTX_*, PATH, etc.)
+    // still pass through from process.env unchanged.
+    const agentEnvPath = env.agentDir ? path.join(env.agentDir, '.env') : '';
+    const agentEnv: Record<string, string> = agentEnvPath && fs.existsSync(agentEnvPath)
+      ? parseEnvFile(agentEnvPath)
+      : {};
+    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    // Source the cred-key set from the connector registry so adding
+    // a new connector (Matrix, RocketChat, …) automatically extends
+    // this sanitization. Audit-found foot-gun: pre-fix this list was
+    // hardcoded in two CLI sites and would have rotted independently.
+    const { getAllConnectorCredKeys } = require('../connectors/index.js');
+    for (const k of getAllConnectorCredKeys()) {
+      if (!(k in agentEnv)) delete baseEnv[k];
+    }
+    const mergedEnv: NodeJS.ProcessEnv = { ...baseEnv, ...agentEnv };
+
+    let connector;
+    try {
+      connector = getConnector(resolvedKind, env.agentDir || '', mergedEnv);
+    } catch (err: any) {
+      console.error(`Error: ${err.message || err}`);
+      process.exit(1);
+    }
+
+    try {
+      if (opts.image) {
+        await connector.sendMedia({ localPath: opts.image, caption: message, kind: 'photo' });
+      } else if (opts.file) {
+        await connector.sendMedia({ localPath: opts.file, caption: message, kind: 'document' });
+      } else {
+        await connector.sendMessage(message, {
+          parseMode: opts.plainText ? 'plain' : 'markdown',
+        });
+      }
+      console.log('Message sent');
+    } catch (err: any) {
+      console.error(`Failed to send: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * `bus react <message_id> <emoji>` — agent-facing CLI for sending an
+ * outbound reaction. Added in PR4 c24 to wire the connector layer's
+ * `sendReaction` capability (PR4 c10) to the agent surface.
+ *
+ * UX rationale (spec §11): for short acknowledgements ("seen", "done",
+ * "working on it") an emoji reaction is preferred over a text reply
+ * because it's silent and doesn't clutter the conversation. The
+ * portable 7-emoji vocabulary the agent template recommends:
+ *   👀 seen / ✅ done / ❌ failed / 👍 ack / 🛠 working / ⏸ paused /
+ *   🤔 ambiguous
+ *
+ * Like `bus send`: resolves the agent's connector via getConnector +
+ * merged env, gates on `capabilities.outboundReactions`, calls
+ * `connector.sendReaction(messageId, emoji, opts)`. `messageId` is the
+ * connector-specific id round-tripped from the inbound NormalizedMessage
+ * (the `message_id:<id>` field in the agent's TELEGRAM prompt header
+ * since c24).
+ */
+busCommand
+  .command('react')
+  .description('React to a message with an emoji (preferred over text for short acks). Uses the agent\'s active connector.')
+  .argument('<message-id>', 'Connector-specific message id (from the inbound TELEGRAM prompt header)')
+  .argument('<emoji>', 'Unicode emoji character (e.g. 👍 ✅ 👀 ❌). Spec §11 portable vocabulary.')
+  .option('--remove', 'Remove the bot\'s reaction on this message instead of adding one', false)
+  .option('--big', 'Telegram-only: show the reaction with the big animation (private chats)', false)
+  .action(async (messageId: string, emoji: string, opts: { remove?: boolean; big?: boolean }) => {
+    const env = resolveEnv();
+    const kind = readConnectorKindFromAgent(env.agentDir);
+
+    if (kind === 'none') {
+      process.stderr.write(
+        `warning: agent '${env.agentName}' has connector 'none' — reaction dropped (no outbound channel configured).\n`,
+      );
+      process.exit(0);
+    }
+
+    const { getConnector } = require('../connectors/index.js');
+    const { parseEnvFile } = require('../utils/env.js');
+    const path = require('path');
+    const fs = require('fs');
+    const resolvedKind = kind ?? 'telegram';
+
+    // Same merged-env pattern as `bus send` — agent's .env wins over
+    // process.env for connector creds, with caller-inherited creds
+    // cleared when the agent has none of its own. See `bus send`
+    // commentary for the security rationale.
+    const agentEnvPath = env.agentDir ? path.join(env.agentDir, '.env') : '';
+    const agentEnv: Record<string, string> = agentEnvPath && fs.existsSync(agentEnvPath)
+      ? parseEnvFile(agentEnvPath)
+      : {};
+    const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+    // Same registry-sourced sanitization as `bus send` — see commentary
+    // above for the rationale.
+    const { getAllConnectorCredKeys } = require('../connectors/index.js');
+    for (const k of getAllConnectorCredKeys()) {
+      if (!(k in agentEnv)) delete baseEnv[k];
+    }
+    const mergedEnv: NodeJS.ProcessEnv = { ...baseEnv, ...agentEnv };
+
+    let connector;
+    try {
+      connector = getConnector(resolvedKind, env.agentDir || '', mergedEnv);
+    } catch (err: any) {
+      console.error(`Error: ${err.message || err}`);
+      process.exit(1);
+    }
+
+    if (!connector.capabilities.outboundReactions || !connector.sendReaction) {
+      console.error(
+        `Error: connector '${connector.kind}' does not support outbound reactions ` +
+        `(capabilities.outboundReactions=${connector.capabilities.outboundReactions}). ` +
+        `Use 'bus send' to send a text reply instead.`,
+      );
+      process.exit(1);
+    }
+
+    try {
+      await connector.sendReaction(messageId, emoji, {
+        remove: opts.remove === true,
+        isBig: opts.big === true,
+      });
+      console.log(opts.remove ? `Reaction removed from message ${messageId}` : `Reacted ${emoji} on message ${messageId}`);
+    } catch (err: any) {
+      console.error(`Failed to react: ${err.message || err}`);
       process.exit(1);
     }
   });
@@ -2377,24 +2613,51 @@ busCommand
   .description('StatusLine hook: writes context window % to state/context_status.json')
   .action(() => runHook('hook-context-status'));
 
+// PR2 of the pluggable-connectors stack renamed these hooks. New
+// canonical subcommands point at the new hook files; old subcommand
+// names are kept as @deprecated aliases that spawn the old (shim)
+// files. Each shim re-imports and calls the new hook's main().
+//
+// Old aliases will be removed in the release after this stack lands.
+
+busCommand
+  .command('hook-ask-user')
+  .description('PreToolUse hook: forward AskUserQuestion to the active connector')
+  .action(() => runHook('hook-ask-user'));
+
 busCommand
   .command('hook-ask-telegram')
-  .description('PreToolUse hook: forward AskUserQuestion to Telegram (cross-platform)')
+  .description('[deprecated, renamed to hook-ask-user] forward AskUserQuestion to Telegram')
   .action(() => runHook('hook-ask-telegram'));
 
 busCommand
+  .command('hook-permission-request')
+  .description('PermissionRequest hook: send approve/deny request via the active connector (tool-class-aware)')
+  .action(() => runHook('hook-permission-request'));
+
+busCommand
   .command('hook-permission-telegram')
-  .description('PermissionRequest hook: send approve/deny request to Telegram (cross-platform)')
+  .description('[deprecated, renamed to hook-permission-request] send approve/deny request to Telegram')
   .action(() => runHook('hook-permission-telegram'));
 
 busCommand
+  .command('hook-planmode-approval')
+  .description('ExitPlanMode hook: send plan for review via the active connector')
+  .action(() => runHook('hook-planmode-approval'));
+
+busCommand
   .command('hook-planmode-telegram')
-  .description('ExitPlanMode hook: send plan for review to Telegram (cross-platform)')
+  .description('[deprecated, renamed to hook-planmode-approval] send plan for review to Telegram')
   .action(() => runHook('hook-planmode-telegram'));
 
 busCommand
+  .command('hook-compact-outbound')
+  .description('PreCompact hook: notify user via the active connector when context compaction starts (#18)')
+  .action(() => runHook('hook-compact-outbound'));
+
+busCommand
   .command('hook-compact-telegram')
-  .description('PreCompact hook: notify user via Telegram when context compaction starts (#18)')
+  .description('[deprecated, renamed to hook-compact-outbound] notify user via Telegram when context compaction starts')
   .action(() => runHook('hook-compact-telegram'));
 
 busCommand

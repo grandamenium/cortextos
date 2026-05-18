@@ -19,7 +19,7 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 See AGENTS.md for the full 13-step session start checklist. Key steps:
 
-1. **Send boot message first**: `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"`
+1. **Send boot message first**: `cortextos bus send $CTX_AGENT_NAME "Booting up... one moment"` (connector-agnostic; for Telegram-only escape hatch use `bus send-telegram $CTX_TELEGRAM_CHAT_ID "<msg>"`)
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
 3. Read org knowledge base: `../../knowledge.md`
 4. Discover available skills: `cortextos bus list-skills --format text`
@@ -86,12 +86,30 @@ TARGET: >= 3 events per active session.
 Messages arrive in real time via the fast-checker daemon:
 
 ```
-=== TELEGRAM from <name> (chat_id:<id>) ===
+=== TELEGRAM from <name> (chat_id:<id>, message_id:<msg_id>) ===
 <text>
-Reply using: cortextos bus send-telegram <chat_id> "<reply>"
+Reply using: cortextos bus send $CTX_AGENT_NAME "<reply>"
+React using: cortextos bus react <message_id> <emoji>  (preferred for short acks)
 ```
 
-Photos include a `local_file:` path. Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
+`bus send` is connector-agnostic — it dispatches through whatever connector your agent's `config.json` declares (Telegram today; Matrix, RocketChat, Discord in future). Use it for normal replies. The legacy `bus send-telegram <chat_id> "<reply>"` remains as a Telegram-only escape hatch when you need to target a different chat_id than your bound one. Photos include a `local_file:` path. Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
+
+**Reactions vs replies — prefer reactions for short acks.** For binary acknowledgements ("seen", "done", "working on it") send a reaction with `cortextos bus react <message_id> <emoji>` INSTEAD of a text reply. Reactions are silent, non-cluttering, and don't push older context off the user's screen.
+
+**👀 is auto-placed by the daemon on every inbound user message BEFORE you see the message.** This gives the user instant "agent saw this" feedback within milliseconds, before your first reasoning step. Your job is to SWAP the 👀 to a terminal state when done:
+
+| Emoji | When to swap to |
+|---|---|
+| ✅ | done, success |
+| ❌ | failed, refused, or denied |
+| 👍 | acknowledged, no action needed (replaces 👀 for messages that didn't need work) |
+| 🛠 | working on a long task (swap to ✅ or ❌ when it actually finishes) |
+| ⏸ | paused, awaiting input |
+| 🤔 | ambiguous request, more info needed |
+
+Telegram's contract is set-to-list — any `bus react <id> <new-emoji>` REPLACES the previous reaction. So `cortextos bus react 21 ✅` automatically clears the daemon's 👀 on message 21. If you'd otherwise send a one-word text reply like "ok" / "thanks" / "got it" → use a reaction instead.
+
+To disable the auto-eyes (and own all reaction state yourself), set `auto_eyes_ack: false` in the agent's `config.json`.
 
 **Telegram formatting:** Uses Telegram's regular Markdown (not MarkdownV2). Do NOT escape characters like `!`, `.`, `(`, `)`, `-` with backslashes. Just write plain natural text. Only `_`, `*`, `` ` ``, and `[` have special meaning.
 
@@ -160,7 +178,9 @@ Sessions auto-restart with `--continue` every ~71 hours. On context exhaustion, 
 ### Communication
 | Action | Command |
 |--------|---------|
-| Send Telegram | `cortextos bus send-telegram <chat_id> "<msg>"` |
+| Reply via active connector | `cortextos bus send $CTX_AGENT_NAME "<msg>"` (connector-agnostic — Telegram today, Matrix/RocketChat/Discord future) |
+| Send to a specific Telegram chat | `cortextos bus send-telegram <chat_id> "<msg>"` (Telegram-only escape hatch; prefer `bus send` for normal replies) |
+| React on a Telegram message | `cortextos bus react <message_id> <emoji>` (prefer over text for short acks — see Telegram Messages section) |
 | Send to agent | `cortextos bus send-message <agent> <priority> '<msg>' [reply_to]` |
 | Check inbox | `cortextos bus check-inbox` |
 | ACK message | `cortextos bus ack-inbox <msg_id>` |
