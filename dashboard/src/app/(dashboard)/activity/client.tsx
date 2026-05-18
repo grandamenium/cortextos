@@ -33,12 +33,12 @@ export function ActivityPageClient({
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
             Filters
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-0">
           <ActivityFilters
             filters={filters}
             onFiltersChange={setFilters}
@@ -49,7 +49,7 @@ export function ActivityPageClient({
       </Card>
 
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="px-2 pt-4 sm:px-6 sm:pt-6">
           <EventFeed initialEvents={initialEvents} filters={filters} />
         </CardContent>
       </Card>

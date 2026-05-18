@@ -142,22 +142,29 @@ export function EventFeed({ initialEvents, filters }: EventFeedProps) {
         displayEvents.map((event) => (
           <div
             key={event.id}
-            className={`flex items-start gap-3 rounded-lg px-3 py-2.5 hover:bg-muted/50 transition-colors ${
+            className={`rounded-lg px-3 py-3 transition-colors hover:bg-muted/50 sm:flex sm:items-start sm:gap-3 sm:py-2.5 ${
               severityBg[event.severity] ?? ''
             }`}
           >
-            {/* Timestamp */}
-            <span className="shrink-0 text-xs text-muted-foreground tabular-nums w-[7rem] pt-0.5" suppressHydrationWarning>
-              {formatEventTime(event.timestamp)}
-            </span>
+            <div className="mb-2 flex items-center gap-2 sm:mb-0">
+              {/* Timestamp */}
+              <span className="shrink-0 text-xs text-muted-foreground tabular-nums sm:w-[7rem] sm:pt-0.5" suppressHydrationWarning>
+                {formatEventTime(event.timestamp)}
+              </span>
 
-            {/* Agent avatar */}
-            <AgentAvatar name={event.agent || '?'} size="sm" />
+              {/* Agent avatar */}
+              <AgentAvatar name={event.agent || '?'} size="sm" />
 
-            {/* Event type icon */}
-            <span className="shrink-0 mt-0.5 text-muted-foreground">
-              {eventTypeIcons[event.type] ?? <IconActivity size={16} />}
-            </span>
+              {/* Event type icon */}
+              <span className="shrink-0 text-muted-foreground sm:mt-0.5">
+                {eventTypeIcons[event.type] ?? <IconActivity size={16} />}
+              </span>
+
+              {/* Type badge */}
+              <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:hidden">
+                {event.type}
+              </span>
+            </div>
 
             {/* Message */}
             <div className="flex-1 min-w-0">
@@ -173,7 +180,7 @@ export function EventFeed({ initialEvents, filters }: EventFeedProps) {
             </div>
 
             {/* Type badge */}
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            <span className="hidden shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:inline">
               {event.type}
             </span>
           </div>
