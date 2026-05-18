@@ -837,6 +837,38 @@ describe('FastChecker', () => {
     });
   });
 
+  describe('handoff auto-resume nudge', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+
+    it('injects resume nudge once when consumeHandoffAutoResume returns true', async () => {
+      const agent = createMockAgent('my-agent');
+      agent.consumeHandoffAutoResume.mockReturnValueOnce(true);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      checker.start();
+      await vi.advanceTimersByTimeAsync(5 * 1000);
+      expect(agent.consumeHandoffAutoResume).toHaveBeenCalled();
+      expect(agent.injectMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Context handoff restart'),
+      );
+      checker.stop();
+      checker.wake();
+    });
+
+    it('does not inject nudge when consumeHandoffAutoResume returns false', async () => {
+      const agent = createMockAgent('my-agent');
+      // default mock returns false
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      checker.start();
+      await vi.advanceTimersByTimeAsync(5 * 1000);
+      expect(agent.injectMessage).not.toHaveBeenCalledWith(
+        expect.stringContaining('Context handoff restart'),
+      );
+      checker.stop();
+      checker.wake();
+    });
+  });
+
   describe('formatTelegramVideoMessage', () => {
     it('formats video message with all fields', () => {
       const result = FastChecker.formatTelegramVideoMessage(
