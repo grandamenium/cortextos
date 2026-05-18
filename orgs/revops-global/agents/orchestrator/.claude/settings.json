@@ -1,4 +1,5 @@
 {
+  "enabledMcpjsonServers": ["agentmemory", "qmd"],
   "permissions": {
     "allow": [
       "Bash",
@@ -6,7 +7,8 @@
       "Edit",
       "Write",
       "WebFetch",
-      "WebSearch"
+      "WebSearch",
+      "mcp__qmd__*"
     ]
   },
   "statusLine": {

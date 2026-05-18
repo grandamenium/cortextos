@@ -12,7 +12,8 @@
       "Edit",
       "Write",
       "WebFetch",
-      "WebSearch"
+      "WebSearch",
+      "mcp__qmd__*"
     ]
   },
   "hooks": {
@@ -133,5 +134,8 @@
         ]
       }
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "qmd"
+  ]
 }

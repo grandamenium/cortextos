@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "qmd": {
+      "command": "/home/cortextos/.local/bin/qmd",
+      "args": ["mcp"]
+    }
+  }
+}

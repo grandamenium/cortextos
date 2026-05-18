@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "qmd": {
+      "command": "/home/cortextos/.local/bin/qmd",
+      "args": ["mcp"]
+    },
+    "agentmemory": {
+      "command": "npx",
+      "args": ["-y", "agentmemory-mcp"],
+      "env": {
+        "TOKEN_BUDGET": "2000",
+        "AGENTMEMORY_TOOLS": "core"
+      }
+    }
+  }
+}

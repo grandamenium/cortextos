@@ -6,7 +6,8 @@
       "Edit",
       "Write",
       "WebFetch",
-      "WebSearch"
+      "WebSearch",
+      "mcp__qmd__*"
     ]
   },
   "statusLine": {
@@ -123,5 +124,8 @@
         ]
       }
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "qmd"
+  ]
 }
