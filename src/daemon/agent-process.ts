@@ -519,7 +519,7 @@ export class AgentProcess {
       return hermesDbExists(hermesHome);
     }
 
-    // Check for force-fresh marker
+    // Check for force-fresh marker (all runtimes honor it).
     const forceFreshPath = join(this.env.ctxRoot, 'state', this.name, '.force-fresh');
     if (existsSync(forceFreshPath)) {
       try {
@@ -529,7 +529,24 @@ export class AgentProcess {
       return false;
     }
 
-    // Check for existing conversation
+    // codex-app-server: session continuity is tracked by the adapter's own
+    // codex-app-server-thread.json under ctxRoot/state/<agent>/. The Claude
+    // JSONL check below is meaningless for the codex runtime, and a stale
+    // Claude JSONL left over from a prior Claude-runtime tenure caused
+    // continue-mode → thread/resume timeout → exit_code=0 crash loop
+    // (testorg codex-agent crashed 3x with this signature on 2026-05-09,
+    // 05-14, and 05-16 before backoff drained the pending resume RPC).
+    if (this.config.runtime === 'codex-app-server') {
+      const threadStatePath = join(
+        this.env.ctxRoot,
+        'state',
+        this.name,
+        'codex-app-server-thread.json',
+      );
+      return existsSync(threadStatePath);
+    }
+
+    // Default (Claude runtime): existing conversation = JSONL files present.
     const launchDir = this.config.working_directory || this.env.agentDir;
     if (!launchDir) return false;
 

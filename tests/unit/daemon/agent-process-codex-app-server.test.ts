@@ -195,5 +195,37 @@ describe('AgentProcess codex-app-server runtime', () => {
     await stopPromise;
     expect(mockCodexAppServerPty.kill).toHaveBeenCalled();
   }, 10000);
+
+  it('ignores stale Claude JSONL when picking continue vs fresh — uses codex thread state only', async () => {
+    // Regression: testorg codex-agent (runtime codex-app-server) had a leftover
+    // Claude JSONL from a prior Claude-runtime tenure. shouldContinue used to
+    // detect the JSONL and pick 'continue', which made startOrResumeThread
+    // attempt thread/resume against a stale Codex thread, time out, and
+    // exit_code=0 in a crash loop (2026-05-09, 05-14, 05-16). The runtime gate
+    // means: codex-app-server checks ITS OWN thread state file, never the
+    // Claude conversation dir.
+    const codexThreadPath = '/tmp/test-ctx/state/codex-app-agent/codex-app-server-thread.json';
+
+    // Stale Claude JSONL present but no codex-app-server thread state → fresh.
+    fsMocks.existsSync.mockImplementation((path: string) => {
+      if (path.endsWith('.force-fresh')) return false;
+      if (path === codexThreadPath) return false;
+      return false;
+    });
+    const apFresh = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    await apFresh.start();
+    expect(mockCodexAppServerPty.spawn).toHaveBeenLastCalledWith('fresh', expect.any(String));
+
+    // Codex thread state present → continue.
+    mockCodexAppServerPty.spawn.mockClear();
+    fsMocks.existsSync.mockImplementation((path: string) => {
+      if (path.endsWith('.force-fresh')) return false;
+      if (path === codexThreadPath) return true;
+      return false;
+    });
+    const apContinue = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    await apContinue.start();
+    expect(mockCodexAppServerPty.spawn).toHaveBeenLastCalledWith('continue', expect.any(String));
+  });
 });
 
