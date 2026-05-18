@@ -32,3 +32,12 @@ npm test
 - No external runtime dependencies beyond what's in `package.json`
 - File operations use atomic writes (see `src/utils/atomic.ts`)
 - All bus operations go through `src/bus/` modules
+
+## Multi-host conformance
+
+cortextOS runs on multiple machines (MacBook + Mac mini at minimum). Two bug classes surfaced on 2026-05-17 when Wave-1 deployed to host #2; both are now locked in via `tests/unit/multi-host-conformance.test.ts`:
+
+- Incomplete config-string renames (grep BOTH src/ and tests/ for the old value)
+- Hardcoded user paths in fallbacks (use `path.join(homedir(), 'cortextos')`)
+
+Run `npx vitest run tests/unit/multi-host-conformance.test.ts` before claiming substrate is done. Full rationale in [docs/multi-host.md](docs/multi-host.md).
