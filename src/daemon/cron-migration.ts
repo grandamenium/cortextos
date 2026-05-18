@@ -161,17 +161,25 @@ function convertEntry(
   entry: CronEntry,
   agentName: string,
 ): { cron: CronDefinition } | { skip: string } {
-  const { name, type, interval, cron: cronExpr, fire_at, prompt } = entry;
+  const { name, type, interval, cron: cronExpr, schedule: scheduleAlias, fire_at, prompt } = entry;
 
-  // Treat absent `type` as "recurring" (spec requirement)
+  // Treat absent `type` as "recurring" (spec requirement).
+  // `cron` is a synonym for `recurring` — both auto-load as a recurring
+  // CronDefinition. The distinct type lets config authors self-document a
+  // crontab-scheduled entry; CronScheduler interprets interval vs crontab from
+  // the `schedule` shape downstream, so the two paths converge here.
   const effectiveType = type ?? 'recurring';
+
+  // `schedule` on the config entry is an authoring alias for `cron`. If both
+  // are present the explicit `cron` field wins (no silent conflict).
+  const cronOrSchedule = cronExpr ?? scheduleAlias;
 
   // Disabled crons: migrate as disabled (preserve operator intent)
   if (effectiveType === 'disabled') {
     // Disabled entries still need a schedule — use interval or cron expression if present
-    const schedule = cronExpr ?? interval;
+    const schedule = cronOrSchedule ?? interval;
     if (!schedule) {
-      return { skip: `cron "${name}" is disabled and has no interval/cron — skipping` };
+      return { skip: `cron "${name}" is disabled and has no interval/cron/schedule — skipping` };
     }
     const def: CronDefinition = {
       name,
@@ -211,12 +219,12 @@ function convertEntry(
     };
   }
 
-  // Recurring cron — requires a schedule
-  // Use cron expression if present (takes precedence), else interval shorthand
-  const schedule = cronExpr ?? interval;
+  // Recurring cron (including type:"cron") — requires a schedule.
+  // Use crontab expression if present (takes precedence), else interval shorthand.
+  const schedule = cronOrSchedule ?? interval;
   if (!schedule) {
     return {
-      skip: `cron "${name}" has no interval or cron expression — skipping`,
+      skip: `cron "${name}" has no interval/cron/schedule — skipping`,
     };
   }
 

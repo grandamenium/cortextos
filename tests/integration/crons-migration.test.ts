@@ -415,6 +415,96 @@ describe('migrateCronsForAgent', () => {
     // cron field takes precedence (mirrors convertEntry logic)
     expect(crons[0].schedule).toBe('0 8 * * *');
   });
+
+  // ---------------------------------------------------------------------------
+  // Test: type:"cron" recognised as a recurring synonym (config-author shorthand)
+  // Regression: previously type:"cron" with a `schedule` field fell through to
+  // the recurring path but the `schedule` key wasn't read, so the migration
+  // skipped the entry with "no interval or cron expression".
+  // ---------------------------------------------------------------------------
+
+  it('migrates type:"cron" with cron field as recurring', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'cron-typed-cron');
+    writeConfigJson(agentDir, [
+      { name: 'daily-summary', type: 'cron', cron: '0 18 * * *', prompt: 'Daily summary.' },
+    ]);
+
+    const result = migrateCronsForAgent('cron-typed-cron', join(agentDir, 'config.json'), tmpCtxRoot);
+
+    expect(result.status).toBe('migrated');
+    expect(result.cronsMigrated).toBe(1);
+    expect(result.cronsSkipped).toHaveLength(0);
+
+    const crons = readCrons('cron-typed-cron');
+    expect(crons).toHaveLength(1);
+    expect(crons[0].schedule).toBe('0 18 * * *');
+    expect(crons[0].enabled).toBe(true);
+    expect(crons[0].metadata?.original_type).toBe('cron');
+  });
+
+  it('migrates type:"cron" with schedule alias field (author-friendly shorthand)', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'cron-schedule-alias');
+    writeConfigJson(agentDir, [
+      // Mudxero-style author convention: type:"cron" + schedule:"0 18 * * *"
+      { name: 'daily-summary', type: 'cron', schedule: '0 18 * * *', prompt: 'Daily summary.' },
+    ]);
+
+    const result = migrateCronsForAgent('cron-schedule-alias', join(agentDir, 'config.json'), tmpCtxRoot);
+
+    expect(result.status).toBe('migrated');
+    expect(result.cronsMigrated).toBe(1);
+    expect(result.cronsSkipped).toHaveLength(0);
+
+    const crons = readCrons('cron-schedule-alias');
+    expect(crons).toHaveLength(1);
+    expect(crons[0].schedule).toBe('0 18 * * *');
+    expect(crons[0].enabled).toBe(true);
+  });
+
+  it('accepts schedule alias on type:"recurring" entries too', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'rec-schedule-alias');
+    writeConfigJson(agentDir, [
+      { name: 'morning', type: 'recurring', schedule: '0 8 * * *', prompt: 'Morning.' },
+    ]);
+
+    migrateCronsForAgent('rec-schedule-alias', join(agentDir, 'config.json'), tmpCtxRoot);
+
+    const crons = readCrons('rec-schedule-alias');
+    expect(crons).toHaveLength(1);
+    expect(crons[0].schedule).toBe('0 8 * * *');
+  });
+
+  it('cron field wins when both cron and schedule are present on a type:"cron" entry', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'cron-both-fields');
+    writeConfigJson(agentDir, [
+      { name: 'conflict', type: 'cron', cron: '0 8 * * *', schedule: '0 18 * * *', prompt: 'Cron wins.' },
+    ]);
+
+    migrateCronsForAgent('cron-both-fields', join(agentDir, 'config.json'), tmpCtxRoot);
+
+    const crons = readCrons('cron-both-fields');
+    expect(crons).toHaveLength(1);
+    expect(crons[0].schedule).toBe('0 8 * * *');
+  });
+
+  it('skips type:"cron" entries with no cron, schedule, or interval', () => {
+    const agentDir = join(tmpFrameworkRoot, 'orgs', 'testorg', 'agents', 'cron-no-schedule');
+    writeConfigJson(agentDir, [
+      { name: 'nope', type: 'cron', prompt: 'No schedule field anywhere.' },
+    ]);
+
+    const logs: string[] = [];
+    const result = migrateCronsForAgent('cron-no-schedule', join(agentDir, 'config.json'), tmpCtxRoot, {
+      log: (m) => logs.push(m),
+    });
+
+    expect(result.status).toBe('migrated');
+    expect(result.cronsMigrated).toBe(0);
+    expect(result.cronsSkipped).toContain('nope');
+
+    const skipLog = logs.find((l) => l.includes('nope') && l.includes('interval/cron/schedule'));
+    expect(skipLog).toBeTruthy();
+  });
 });
 
 // ---------------------------------------------------------------------------

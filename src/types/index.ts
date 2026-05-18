@@ -209,12 +209,19 @@ export interface CronEntry {
   interval?: string;
   /** For time-anchored crons: a cron expression (e.g. "0 8 * * *"). Takes precedence over interval. */
   cron?: string;
+  /** Alias for `cron` — config-author shorthand. If both `cron` and `schedule`
+   *  are present, `cron` wins. Accepted so author-written configs that use the
+   *  more natural "schedule" key auto-load without a daemon-side rename. */
+  schedule?: string;
   /** For one-shot crons: ISO 8601 datetime when the cron should fire. */
   fire_at?: string;
   prompt: string;
   /** "recurring" (default) restores on every session start.
-   *  "once" restores only if fire_at is still in the future; deleted after firing. */
-  type?: 'recurring' | 'once' | 'disabled';
+   *  "cron" is a synonym for recurring with a crontab expression — auto-loads
+   *    identically to recurring; explicit type kept so configs can self-document.
+   *  "once" restores only if fire_at is still in the future; deleted after firing.
+   *  "disabled" preserves operator intent (entry migrated as enabled:false). */
+  type?: 'recurring' | 'cron' | 'once' | 'disabled';
 }
 
 // ---------------------------------------------------------------------------
