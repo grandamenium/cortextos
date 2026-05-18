@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Sora, JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SessionProvider } from "@/components/session-provider";
@@ -16,6 +16,12 @@ const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains",
 });
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
+
 // Brand-aware metadata: set ASCENDOPS_BRAND=1 in the dashboard's environment
 // (e.g. via .env.local in the dashboard directory) to show AscendOps branding.
 // Uses generateMetadata() instead of a static `metadata` export so that
@@ -29,7 +35,6 @@ export async function generateMetadata(): Promise<Metadata> {
     description: isAscendOps
       ? "AscendOps property management AI platform"
       : "cortextOS agent orchestration dashboard",
-    viewport: "width=device-width, initial-scale=1, viewport-fit=cover",
     appleWebApp: {
       capable: true,
       statusBarStyle: "default",
