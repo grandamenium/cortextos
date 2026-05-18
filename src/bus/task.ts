@@ -7,6 +7,7 @@ import { randomDigits } from '../utils/random.js';
 import { validatePriority } from '../utils/validate.js';
 import { mirrorTaskToRgos } from './rgos-mirror.js';
 import { logEvent } from './event.js';
+import { snapshotSessionCost } from './task-cost.js';
 
 // ---------------------------------------------------------------------------
 // Per-task read-modify-write lock
@@ -335,6 +336,8 @@ export function updateTask(
     );
   }
   const actualTaskDir = dirname(filePath);
+  // Snapshot outside the lock — file I/O, but no shared state
+  const costSnapshot = status === 'in_progress' ? snapshotSessionCost() : undefined;
   let prevStatus: TaskStatus | undefined;
   let assignee: string | undefined;
   try {
@@ -347,6 +350,11 @@ export function updateTask(
       // Merge optional meta fields atomically before validation.
       if (metaMerge && Object.keys(metaMerge).length > 0) {
         task.meta = { ...(task.meta ?? {}), ...metaMerge };
+      }
+
+      // Stamp cost baseline when starting work so completeTask can compute delta.
+      if (status === 'in_progress' && costSnapshot !== undefined) {
+        task.meta = { ...(task.meta ?? {}), cost_snapshot_start: costSnapshot };
       }
 
       // Require blocker context when transitioning to blocked.
@@ -575,6 +583,7 @@ export function completeTask(
     );
   }
   const actualTaskDir = dirname(filePath);
+  const endCost = snapshotSessionCost();
   let prevStatus: TaskStatus | undefined;
   let assignee: string | undefined;
   let taskOrg: string = '';
@@ -590,6 +599,13 @@ export function completeTask(
       task.completed_at = task.updated_at;
       if (result) {
         task.result = result;
+      }
+      // Compute session cost delta if a start snapshot was recorded.
+      const startCost = typeof task.meta?.cost_snapshot_start === 'number'
+        ? task.meta.cost_snapshot_start
+        : undefined;
+      if (startCost !== undefined) {
+        task.meta = { ...(task.meta ?? {}), session_cost_usd: Math.max(0, endCost - startCost) };
       }
       atomicWriteSync(filePath, JSON.stringify(task));
       // Mirror to Supabase (fire-and-forget)
