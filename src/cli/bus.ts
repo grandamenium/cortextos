@@ -1186,6 +1186,43 @@ busCommand
   });
 
 busCommand
+  .command('send-typing')
+  .description("Fire a Telegram typing indicator (sendChatAction). Telegram shows the indicator for ~5s; call again to keep it visible during longer turns.")
+  .argument('<chat-id>', 'Telegram chat ID')
+  .argument('[action]', "Chat action: typing | upload_photo | record_voice | upload_voice | upload_document | choose_sticker | find_location | record_video | upload_video | record_video_note | upload_video_note", 'typing')
+  .action(async (chatId: string, action: string) => {
+    // Resolve bot token: agent .env first, then process.env (same flow as
+    // send-telegram so the typing indicator comes from the agent that owns
+    // the conversation, not a global default).
+    const env = resolveEnv();
+    let botToken = '';
+    if (env.agentDir) {
+      const { readFileSync, existsSync } = require('fs');
+      const { join } = require('path');
+      const agentEnv = join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const content = readFileSync(agentEnv, 'utf-8');
+        const match = content.match(/^BOT_TOKEN=(.+)$/m);
+        if (match && match[1].trim()) botToken = match[1].trim();
+      }
+    }
+    if (!botToken) botToken = process.env.BOT_TOKEN || '';
+    if (!botToken) {
+      console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
+      process.exit(1);
+    }
+
+    const api = new TelegramAPI(botToken);
+    try {
+      await api.sendChatAction(chatId, action);
+      console.log(`Sent action: ${action}`);
+    } catch (err: any) {
+      console.error(`Failed to send chat action: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
   .command('create-approval')
   .description('Request human approval for a high-stakes action')
   .argument('<title>', 'What you are requesting approval for')
