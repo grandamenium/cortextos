@@ -775,7 +775,23 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return;
     }
 
-    this.log(`Unhandled callback data: ${data}`);
+    // Inject unhandled callbacks as a Telegram message so the agent can process custom button flows
+    if (chatId && this.agent) {
+      const senderName = query.from?.first_name || 'User';
+      const msg = [
+        `=== TELEGRAM from [USER: ${senderName}] (chat_id:${chatId}) ===`,
+        `callback_data: ${data}`,
+        `message_id: ${messageId}`,
+        `Reply using: cortextos bus send-telegram ${chatId} '<your reply>'`,
+      ].join('\n');
+      const injected = this.agent.injectMessage(msg);
+      if (injected && this.telegramApi) {
+        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
+      }
+      this.log(`Injected unhandled callback to agent: ${data.slice(0, 60)}`);
+    } else {
+      this.log(`Unhandled callback data (no agent/chatId): ${data}`);
+    }
   }
 
   /**
