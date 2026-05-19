@@ -46,11 +46,18 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | Command | What it does |
 |---|---|
 | `send-telegram <chat_id> "<msg>"` | Message the user |
+| `send-telegram <chat_id> "<msg>" --voice "<summary>"` | Voice note (TL;DR ≤80 words) + full text. See "When to use voice" below. |
 | `send-telegram <chat_id> "<caption>" --image <path>` | Send a photo |
 | `send-telegram <chat_id> "<caption>" --file <path>` | Send any file (PDF, txt, etc.) |
 | `edit-message <chat_id> <msg_id> "<text>"` | Edit an existing message |
 | `answer-callback <query_id> [toast]` | Dismiss button loading state |
 | `post-activity "<msg>"` | Post to org activity channel |
+
+**When to use `--voice`:**
+- YES - briefings, morning/evening reviews, decision points the user needs to weigh, research findings, substantive replies that warrant a 30-second listen
+- NO - ACKs ("got it, on it"), heartbeats, cron reports, usage checks, routine ops, error messages
+- The voice TL;DR should be ≤80 words (≈30 sec spoken). Full text follows as a normal message so the user can listen to the summary and read the detail.
+- Requires `OPENAI_API_KEY` in env and a voice declared either in your agent's `config.json` (`"voice": "cedar"` etc) or in `orgs/<org>/voices.json`. Falls back to text-only if either is missing.
 
 ### Events & Heartbeat - full docs: `.claude/skills/heartbeat/SKILL.md`
 | Command | What it does |
