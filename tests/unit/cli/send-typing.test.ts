@@ -117,16 +117,21 @@ describe('cortextos bus send-typing', () => {
 
   it('errors clearly when BOT_TOKEN is not configured', async () => {
     delete process.env.BOT_TOKEN;
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as any);
+    // Throw in the exit mock so execution actually stops at the BOT_TOKEN
+    // guard, matching real process.exit behavior. Without this the action
+    // handler continues past the check and the test's later assertions
+    // observe the WRONG stderr line.
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`__test_exit_${code ?? 0}__`);
+    }) as any);
 
-    await busCommand.parseAsync(
-      ['send-typing', '12345'],
-      { from: 'user' },
-    );
+    await expect(
+      busCommand.parseAsync(['send-typing', '12345'], { from: 'user' }),
+    ).rejects.toThrow(/__test_exit_1__/);
 
     const errs = consoleErrorSpy.mock.calls.map((c) => String(c[0]));
     expect(errs.some((e) => /BOT_TOKEN not configured/.test(e))).toBe(true);
-    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(sendChatActionSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
 });
