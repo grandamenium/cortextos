@@ -6,6 +6,7 @@ import {
   resolveAgentVoice,
   resolveReadAloudVoice,
   resolveAgentVoiceModel,
+  resolveAgentVoiceSpeed,
 } from '../../../src/telegram/voice-config';
 
 let tmpRoot: string;
@@ -174,5 +175,49 @@ describe('resolveAgentVoiceModel', () => {
   it('falls back to tts-1 when config.json is malformed', () => {
     writeFileSync(join(agentDir, 'config.json'), '{ not json');
     expect(resolveAgentVoiceModel(agentDir)).toBe('tts-1');
+  });
+});
+
+describe('resolveAgentVoiceSpeed', () => {
+  it('defaults to 1.0 when no agent config is present', () => {
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(1.0);
+  });
+
+  it('defaults to 1.0 when agentDir is undefined', () => {
+    expect(resolveAgentVoiceSpeed(undefined)).toBe(1.0);
+  });
+
+  it('returns the voice_speed from agent config when in range', () => {
+    writeFileSync(
+      join(agentDir, 'config.json'),
+      JSON.stringify({ voice_speed: 1.1 }),
+    );
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(1.1);
+  });
+
+  it('accepts values at the boundaries 0.25 and 4.0', () => {
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ voice_speed: 0.25 }));
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(0.25);
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ voice_speed: 4.0 }));
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(4.0);
+  });
+
+  it('falls back to 1.0 when voice_speed is out of range', () => {
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ voice_speed: 5.0 }));
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(1.0);
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ voice_speed: 0.1 }));
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(1.0);
+  });
+
+  it('falls back to 1.0 when voice_speed is not a number', () => {
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ voice_speed: '1.1' }));
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(1.0);
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ voice_speed: null }));
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(1.0);
+  });
+
+  it('falls back to 1.0 when config.json is malformed', () => {
+    writeFileSync(join(agentDir, 'config.json'), '{ not json');
+    expect(resolveAgentVoiceSpeed(agentDir)).toBe(1.0);
   });
 });

@@ -1004,7 +1004,7 @@ busCommand
         let voiceTempPath: string | undefined;
         try {
           const { synthesizeVoice } = await import('../telegram/tts.js');
-          const { resolveAgentVoice, resolveAgentVoiceModel } = await import('../telegram/voice-config.js');
+          const { resolveAgentVoice, resolveAgentVoiceModel, resolveAgentVoiceSpeed } = await import('../telegram/voice-config.js');
 
           const orgDir = env.projectRoot && env.org
             ? pathJoin(env.projectRoot, 'orgs', env.org)
@@ -1020,8 +1020,9 @@ busCommand
             );
           }
           const model = resolveAgentVoiceModel(env.agentDir || undefined);
+          const speed = resolveAgentVoiceSpeed(env.agentDir || undefined);
 
-          const oggBytes = await synthesizeVoice(voiceSummary, voice, { model });
+          const oggBytes = await synthesizeVoice(voiceSummary, voice, { model, speed });
           voiceTempDir = mkdtempSync(pathJoin(tmpdir(), 'cortextos-voice-'));
           const oggPath: string = pathJoin(voiceTempDir, 'voice.ogg');
           voiceTempPath = oggPath;

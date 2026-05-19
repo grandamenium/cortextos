@@ -27,11 +27,15 @@ import { Buffer } from 'buffer';
  * Kept as a frozen list rather than a Record so callers can iterate when
  * generating sample audio for the ear-pick step.
  */
-export const OPENAI_TTS_VOICES = Object.freeze([
+/**
+ * Voices supported by the legacy tts-1 / tts-1-hd models. The API rejects
+ * everything else for these models with an explicit "Input should be ..."
+ * error. Verified against OpenAI 2026-05-19 by Forge during the voice-
+ * conversation-build samples generation.
+ */
+export const OPENAI_TTS_VOICES_TTS1 = Object.freeze([
   'alloy',
   'ash',
-  'ballad',
-  'cedar',
   'coral',
   'echo',
   'fable',
@@ -39,7 +43,29 @@ export const OPENAI_TTS_VOICES = Object.freeze([
   'onyx',
   'sage',
   'shimmer',
+] as const);
+
+/**
+ * Voices that ONLY work on the gpt-4o-mini-tts model. tts-1 rejects these
+ * even though they appear in OpenAI's broader voice library. Verified
+ * 2026-05-19 (cedar tested live; ballad/marin/verse listed in OpenAI
+ * docs but not tested directly here - if API rejects, update this list).
+ */
+export const OPENAI_TTS_VOICES_GPT4O = Object.freeze([
+  'ballad',
+  'cedar',
+  'marin',
   'verse',
+] as const);
+
+/**
+ * Union of every known OpenAI TTS voice. Kept as a frozen list for callers
+ * that just want to iterate (sample generator). Use the model-specific
+ * lists above when validating a (voice, model) pair.
+ */
+export const OPENAI_TTS_VOICES = Object.freeze([
+  ...OPENAI_TTS_VOICES_TTS1,
+  ...OPENAI_TTS_VOICES_GPT4O,
 ] as const);
 
 export type OpenAITtsVoice = (typeof OPENAI_TTS_VOICES)[number];
@@ -54,6 +80,49 @@ export type OpenAITtsVoice = (typeof OPENAI_TTS_VOICES)[number];
  */
 export function isKnownOpenAITtsVoice(value: string): boolean {
   return (OPENAI_TTS_VOICES as readonly string[]).includes(value.toLowerCase());
+}
+
+/**
+ * Result of validateVoiceModelCompatibility - never throws on its own.
+ * Callers decide whether to throw (synthesizeVoice does, to catch the
+ * mismatch BEFORE the OpenAI round-trip) or just warn.
+ */
+export type VoiceModelCheck =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+/**
+ * Validate a (voice, model) pair against the known model-specific voice
+ * lists. Returns ok=true for unknown voices (OpenAI may add new ones
+ * before this code knows about them) and for tts-1 voices on any model.
+ * Returns ok=false with a clear hint when a known-gpt-4o-only voice is
+ * paired with tts-1 (or vice versa, though that path is currently empty).
+ */
+export function validateVoiceModelCompatibility(
+  voice: string,
+  model: string,
+): VoiceModelCheck {
+  const v = voice.trim().toLowerCase();
+  const m = model.trim().toLowerCase();
+
+  const isTts1Voice = (OPENAI_TTS_VOICES_TTS1 as readonly string[]).includes(v);
+  const isGpt4oVoice = (OPENAI_TTS_VOICES_GPT4O as readonly string[]).includes(v);
+
+  // gpt-4o-only voice on tts-1 / tts-1-hd
+  if (isGpt4oVoice && (m === 'tts-1' || m === 'tts-1-hd')) {
+    return {
+      ok: false,
+      reason: `voice "${v}" is not supported on model "${m}". Set voice_model to "gpt-4o-mini-tts" in agent config.json, or pick a tts-1 voice (${OPENAI_TTS_VOICES_TTS1.join(', ')}).`,
+    };
+  }
+
+  // tts-1 voice on gpt-4o is fine (gpt-4o-mini-tts accepts the tts-1 set
+  // plus the extra voices). Unknown voices pass through.
+  if (isTts1Voice || isGpt4oVoice || !isKnownOpenAITtsVoice(v)) {
+    return { ok: true };
+  }
+
+  return { ok: true };
 }
 
 export interface SynthesizeOptions {
@@ -107,6 +176,23 @@ export async function synthesizeVoice(
   const baseUrl = opts.baseUrl ?? 'https://api.openai.com/v1';
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const speed = opts.speed ?? 1.0;
+
+  // Pre-flight (voice, model) check - catches the gpt-4o-mini-tts-only
+  // voices (cedar/marin/etc) on tts-1 before the OpenAI round-trip, with
+  // a clearer error than the API's enum-rejection.
+  const compat = validateVoiceModelCompatibility(voice, model);
+  if (!compat.ok) {
+    throw new Error(`synthesizeVoice: ${compat.reason}`);
+  }
+
+  // Speed must be in OpenAI's accepted range. Out-of-range values get
+  // rejected by the API; we surface the error locally with the explicit
+  // range so callers do not have to dig through the API docs.
+  if (speed < 0.25 || speed > 4.0) {
+    throw new Error(
+      `synthesizeVoice: speed ${speed} is out of range. OpenAI accepts 0.25-4.0.`,
+    );
+  }
 
   const body = {
     model,

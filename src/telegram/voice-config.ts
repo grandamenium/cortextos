@@ -103,11 +103,13 @@ export function resolveReadAloudVoice(orgDir: string | undefined): string | null
 }
 
 /**
- * Per-agent TTS model resolution (tts-1 vs tts-1-hd).
+ * Per-agent TTS model resolution (tts-1 vs tts-1-hd vs gpt-4o-mini-tts).
  *
  * Looks for a `voice_model` field on the agent config.json. Falls back
- * to "tts-1" so cost stays low by default. Operators promote a specific
- * agent to "tts-1-hd" when its voice needs sharper prosody.
+ * to "tts-1" so cost stays low by default. Operators set
+ * "gpt-4o-mini-tts" when the agent's voice (e.g. cedar, marin) requires
+ * the newer model, or "tts-1-hd" when the agent's voice needs sharper
+ * prosody on the legacy model.
  *
  * Not present in org voices.json - this is per-agent only.
  */
@@ -120,6 +122,36 @@ export function resolveAgentVoiceModel(agentDir: string | undefined): string {
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
     if (typeof cfg?.voice_model === 'string' && cfg.voice_model.trim()) {
       return cfg.voice_model.trim();
+    }
+  } catch {
+    // malformed - fall through to default
+  }
+  return DEFAULT;
+}
+
+/**
+ * Per-agent voice speed resolution (0.25-4.0, default 1.0).
+ *
+ * Looks for a `voice_speed` field on the agent config.json. Operators
+ * tune this per-agent for prosody preference - e.g. an orchestrator
+ * delivering briefings can run slightly faster (1.1) than a measured
+ * analyst voice (1.0 or 0.95).
+ *
+ * Returns the default 1.0 for missing / malformed / out-of-range values.
+ * The synthesizeVoice call enforces the OpenAI-accepted range; this
+ * function is defensive but lenient (does not throw, returns default).
+ *
+ * Not present in org voices.json - this is per-agent only.
+ */
+export function resolveAgentVoiceSpeed(agentDir: string | undefined): number {
+  const DEFAULT = 1.0;
+  if (!agentDir) return DEFAULT;
+  const cfgPath = join(agentDir, 'config.json');
+  if (!existsSync(cfgPath)) return DEFAULT;
+  try {
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+    if (typeof cfg?.voice_speed === 'number' && cfg.voice_speed >= 0.25 && cfg.voice_speed <= 4.0) {
+      return cfg.voice_speed;
     }
   } catch {
     // malformed - fall through to default

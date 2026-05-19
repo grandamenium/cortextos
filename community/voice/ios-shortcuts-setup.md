@@ -77,8 +77,18 @@ The user-facing pattern: select text anywhere on iPhone → Share Sheet → "Rea
    |---|---|---|
    | 1 | **Get Shortcut Input** | Accept: Text. From: Share Sheet |
    | 2 | **URL** | `https://api.openai.com/v1/audio/speech` |
-   | 3 | **Get Contents of URL** | Method: POST.<br>Headers:<br>• `Authorization` = `Bearer <YOUR_OPENAI_API_KEY>`<br>• `Content-Type` = `application/json`<br>Request Body: JSON. Add Fields:<br>• `model` (Text) → `tts-1`<br>• `voice` (Text) → `cedar` (or your pick - see voice-conversation-spec.md)<br>• `input` (Text) → Shortcut Input variable<br>• `response_format` (Text) → `opus` |
+   | 3 | **Get Contents of URL** | Method: POST.<br>Headers:<br>• `Authorization` = `Bearer <YOUR_OPENAI_API_KEY>`<br>• `Content-Type` = `application/json`<br>Request Body: JSON. Add Fields:<br>• `model` (Text) → `tts-1` (or `gpt-4o-mini-tts` if your picked voice is cedar/marin/ballad/verse - see "Voice/model compatibility" below)<br>• `voice` (Text) → `echo` (the recommended Read-Aloud voice; see "Voice/model compatibility" for other picks)<br>• `input` (Text) → Shortcut Input variable<br>• `response_format` (Text) → `opus` |
    | 4 | **Play Sound** | (input: result of Get Contents of URL) |
+
+#### Voice/model compatibility (important)
+
+OpenAI's `tts-1` (the cheap default) accepts only:
+`alloy`, `ash`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`.
+
+The newer `gpt-4o-mini-tts` model accepts those nine PLUS:
+`cedar`, `marin`, `ballad`, `verse`.
+
+If you pick a voice from the second list, the Shortcut's `model` field must be `gpt-4o-mini-tts`. Cost goes up slightly (~2x) but the voice library doubles. The bot-side `send-telegram --voice` path validates this for you; the iOS Shortcut doesn't, so set it manually.
 
 4. In the Shortcut settings: **Show in Share Sheet** → on, **Accept**: Text only.
 

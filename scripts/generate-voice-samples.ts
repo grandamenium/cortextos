@@ -79,16 +79,23 @@ function resolveApiKey(): string {
   // 1. env var (fastest path - operator pre-exported)
   if (process.env.OPENAI_API_KEY?.trim()) return process.env.OPENAI_API_KEY.trim();
 
-  // 2. 1Password fallback (matches the pattern used elsewhere in cortextos
-  //    when a script needs a credential without requiring pre-export).
-  try {
-    const out = execSync(
-      'op item get "OpenAI" --vault Automation --fields credential --reveal',
-      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
-    ).trim();
-    if (out) return out;
-  } catch {
-    // 1Password unavailable or item lookup failed
+  // 2. 1Password fallback. The cortextos Automation vault sometimes has
+  //    the OpenAI key under field "api key" and sometimes "credential".
+  //    Caller can pin the item via OPENAI_OP_ITEM_ID env var when there
+  //    are multiple "OpenAI" items in the vault (causes by-name lookup
+  //    to error with "More than one item matches").
+  const itemRef = process.env.OPENAI_OP_ITEM_ID?.trim() || '"OpenAI"';
+  const fieldCandidates = ['credential', '"api key"', 'apikey'];
+  for (const field of fieldCandidates) {
+    try {
+      const out = execSync(
+        `op item get ${itemRef} --vault Automation --fields ${field} --reveal`,
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+      ).trim();
+      if (out) return out;
+    } catch {
+      // try the next field
+    }
   }
 
   return '';
