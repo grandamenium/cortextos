@@ -417,7 +417,7 @@ describe('rgos-mirror — broadcastPresence (STACK-11)', () => {
     expect((opts?.headers as Record<string, string>)['apikey']).toBe('test-service-key');
     expect((opts?.headers as Record<string, string>)['Authorization']).toBe('Bearer test-service-key');
     expect(JSON.parse(opts?.body as string)).toEqual({
-      messages: [{ topic: 'fleet-tasks-presence:revops-global', event: 'presence_update', payload }],
+      messages: [{ topic: 'agent-presence', event: 'presence_update', payload }],
     });
   });
 

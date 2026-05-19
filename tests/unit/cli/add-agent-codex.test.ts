@@ -107,7 +107,7 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     const cfgPath = join(tempRoot, 'orgs', 'testorg', 'agents', 'codex-cfg', 'config.json');
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
     expect(cfg.runtime).toBe('codex-app-server');
-    expect(cfg.model).toBe('gpt-5-codex');
+    expect(cfg.model).toBe('gpt-5.5');
     expect(cfg.agent_name).toBe('codex-cfg');
   });
 
