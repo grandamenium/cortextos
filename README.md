@@ -31,6 +31,7 @@ Boss:    Done. "morning-inbox" cron set — runs daily at 08:00.
 - **Multi-agent orchestration** — Orchestrator, Analyst, and specialist agents coordinate via a shared file bus. Tasks, blockers, and approvals flow automatically.
 - **Multi-runtime** — Run agents on `claude-code` (default) or OpenAI's `codex-app-server`. Both runtimes share the same bus, crons, dashboard, and Telegram integration; pick per-agent.
 - **Telegram + iOS control** — Send commands, approve actions, and get reports from anywhere. Native iOS app coming soon.
+- **Voice replies** — Agents can deliver substantive briefings + decisions as a short voice note (OpenAI TTS, ~30 sec spoken summary) followed by the full text. Per-agent voice config; opt-in via `send-telegram --voice`. Skips ACKs and routine ops automatically.
 - **Web dashboard** — Full-featured Next.js UI for tasks, approvals, experiments, analytics, and agent fleet health.
 - **Autoresearch (theta wave)** — Agents run autonomous experiments overnight, evaluate results, and surface findings for your review.
 

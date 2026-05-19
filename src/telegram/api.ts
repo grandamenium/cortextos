@@ -362,6 +362,71 @@ export class TelegramAPI {
   }
 
   /**
+   * Send a voice note with optional caption and duration hint.
+   *
+   * Telegram requires voice notes to be encoded as OGG/Opus (≤ 50 MB). MP3
+   * uploads via sendVoice are rejected by the API. Callers must transcode
+   * before calling this method - see src/telegram/audio.ts for the
+   * mp3-to-ogg helper used by the voice-reply pipeline.
+   *
+   * When a Telegram client opens the chat, voice notes auto-play. This is
+   * the bot-side surface for the ElevenLabs voice-reply build (Component 2
+   * of voice-conversation-spec.md): callers synthesize a TL;DR via
+   * ElevenLabs, transcode to OGG, then sendVoice + sendMessage in
+   * sequence (voice TL;DR + full text follow-up).
+   */
+  async sendVoice(
+    chatId: string | number,
+    filePath: string,
+    caption?: string,
+    durationSeconds?: number,
+    replyMarkup?: object,
+  ): Promise<any> {
+    if (!existsSync(filePath)) {
+      throw new Error(`Voice file not found: ${filePath}`);
+    }
+
+    await this.rateLimit(String(chatId));
+
+    const fileData = readFileSync(filePath);
+    const fileName = basename(filePath);
+
+    const formData = new FormData();
+    formData.append('chat_id', String(chatId));
+    formData.append('voice', new Blob([fileData]), fileName);
+    if (caption) {
+      formData.append('caption', caption);
+    }
+    if (durationSeconds !== undefined && durationSeconds > 0) {
+      formData.append('duration', String(Math.round(durationSeconds)));
+    }
+    if (replyMarkup) {
+      formData.append('reply_markup', JSON.stringify(replyMarkup));
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/sendVoice`, {
+        method: 'POST',
+        body: formData,
+        signal: AbortSignal.timeout(60000),
+      });
+      const result = await response.json() as any;
+      if (!result.ok) {
+        throw new Error(`Telegram API error: ${result.description || 'Unknown error'}`);
+      }
+      return result;
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Telegram API error')) {
+        throw err;
+      }
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(`Telegram API request timed out after 60s: sendVoice`);
+      }
+      throw new Error(`Telegram API request failed: ${err}`);
+    }
+  }
+
+  /**
    * Get updates via long polling.
    */
   async getUpdates(offset: number, timeout: number = 1): Promise<any> {

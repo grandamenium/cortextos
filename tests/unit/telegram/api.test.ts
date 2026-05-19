@@ -323,3 +323,124 @@ describe('formatValidateError', () => {
     expect(msg).toMatch(/retry/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// sendVoice tests
+// Bot-side surface for the ElevenLabs voice-reply pipeline. We mock fetch
+// and assert the resulting POST hits /sendVoice with a multipart form that
+// has chat_id + voice file + the optional caption/duration/reply_markup
+// fields. We do NOT round-trip a real OGG file — the audio.ts helper is
+// covered separately; here we only verify the HTTP shape.
+// ---------------------------------------------------------------------------
+import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+describe('TelegramAPI.sendVoice', () => {
+  const originalFetch = globalThis.fetch;
+  let tmpDir: string;
+  let voicePath: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'cortextos-sendvoice-'));
+    voicePath = join(tmpDir, 'test.ogg');
+    // 4-byte placeholder. Telegram won't see it — fetch is mocked.
+    writeFileSync(voicePath, Buffer.from([0x4f, 0x67, 0x67, 0x53]));
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    rmSync(tmpDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('throws a clear error when the voice file does not exist', async () => {
+    const api = new TelegramAPI('111:AAA');
+    await expect(api.sendVoice('222', '/nonexistent/path/to/voice.ogg')).rejects.toThrow(
+      /Voice file not found/,
+    );
+  });
+
+  it('POSTs to /sendVoice with chat_id and voice form fields', async () => {
+    let captured: { url: string; method: string; body: FormData } | null = null;
+    globalThis.fetch = vi.fn(async (input: any, init?: any) => {
+      captured = { url: String(input), method: init?.method, body: init?.body };
+      return new Response(
+        JSON.stringify({ ok: true, result: { message_id: 99 } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as any;
+
+    const api = new TelegramAPI('111:AAA');
+    const result = await api.sendVoice('222', voicePath);
+
+    expect(result.ok).toBe(true);
+    expect(captured).not.toBeNull();
+    expect(captured!.url).toBe('https://api.telegram.org/bot111:AAA/sendVoice');
+    expect(captured!.method).toBe('POST');
+    expect(captured!.body).toBeInstanceOf(FormData);
+    expect(captured!.body.get('chat_id')).toBe('222');
+    expect(captured!.body.get('voice')).toBeInstanceOf(Blob);
+  });
+
+  it('includes caption and duration when provided', async () => {
+    let captured: { body: FormData } | null = null;
+    globalThis.fetch = vi.fn(async (_input: any, init?: any) => {
+      captured = { body: init?.body };
+      return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    }) as any;
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendVoice('222', voicePath, 'Morning brief', 12.7);
+
+    expect(captured!.body.get('caption')).toBe('Morning brief');
+    // duration is rounded to the nearest integer second
+    expect(captured!.body.get('duration')).toBe('13');
+  });
+
+  it('omits duration when not provided or non-positive', async () => {
+    let captured: { body: FormData } | null = null;
+    globalThis.fetch = vi.fn(async (_input: any, init?: any) => {
+      captured = { body: init?.body };
+      return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    }) as any;
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendVoice('222', voicePath);
+    expect(captured!.body.get('duration')).toBeNull();
+
+    captured = null;
+    await api.sendVoice('222', voicePath, undefined, 0);
+    expect(captured!.body.get('duration')).toBeNull();
+  });
+
+  it('surfaces Telegram API errors with the description', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ ok: false, description: 'Bad Request: file is too big' }),
+        { status: 400 },
+      ),
+    ) as any;
+
+    const api = new TelegramAPI('111:AAA');
+    await expect(api.sendVoice('222', voicePath)).rejects.toThrow(
+      /Telegram API error: Bad Request: file is too big/,
+    );
+  });
+
+  it('surfaces a clear timeout error when fetch aborts', async () => {
+    globalThis.fetch = vi.fn(
+      (_input: any, init?: any) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            const err = new Error('aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        }),
+    ) as any;
+
+    const api = new TelegramAPI('111:AAA');
+    await expect(api.sendVoice('222', voicePath)).rejects.toThrow(/timed out after 60s: sendVoice/);
+  }, 70000);
+});
