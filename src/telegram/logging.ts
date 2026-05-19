@@ -113,6 +113,7 @@ export function recordInboundTelegram(
       from_name: fromName,
       has_media: hasMedia,
       text_chars: text.length,
+      text: text.slice(0, 200),
     });
   } catch (err) {
     log?.(`logEvent(telegram_received) failed: ${err}`);
