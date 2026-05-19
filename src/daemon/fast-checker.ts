@@ -6,6 +6,7 @@ import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
+import { getOverdueReminders, markReminderInjected } from '../bus/reminders.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
@@ -30,6 +31,18 @@ export class FastChecker {
   private outboundLogSize: number = 0;
   // Track stdout log size to detect when agent is actively producing output
   private stdoutLogSize: number = -1;
+  // Throttle reminder polling - reminders fire at minute granularity so
+  // checking every 60s is plenty. Cheaper than re-reading the
+  // pending-reminders.json file on every 1s poll cycle.
+  //
+  // Initialized to Date.now() at construction so the FIRST live poll
+  // fires 60s after session start, not immediately. The boot prompt in
+  // agent-process.ts already delivers any overdue reminders that exist
+  // at session start, but does NOT call markReminderInjected. Without
+  // the 60s grace window, fast-checker would re-inject those same
+  // reminders before the agent had time to ack them. Atlas caught this
+  // duplicate-delivery race during code review (2026-05-19).
+  private lastReminderCheck: number = Date.now();
   private frameworkRoot: string;
   private telegramApi?: TelegramAPI;
   private chatId?: string;
@@ -204,6 +217,13 @@ export class FastChecker {
       }
     }
 
+    // Live-session reminder delivery (Atlas investigation 2026-05-19).
+    // create-reminder used to be boot-only - reminders that fired during
+    // a live session arrived hours late on the next restart. Polling
+    // every 60s gives fire-at granularity that matches the agent's
+    // expectation without per-second file reads.
+    await this.pollReminders();
+
     // Typing indicator: send while Claude is actively working
     if (this.chatId && this.telegramApi && this.isAgentActive()) {
       await this.sendTyping(this.telegramApi, this.chatId);
@@ -211,6 +231,72 @@ export class FastChecker {
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
     await this.checkContextStatus();
+  }
+
+  /**
+   * Live-session reminder delivery. 60s gated (reminders fire at minute
+   * granularity, no need to re-read the file on every 1s pollCycle).
+   *
+   * Reminder lifecycle:
+   *   1. Agent calls `cortextos bus create-reminder <fire_at> <prompt>`
+   *   2. While live: this method picks up overdue reminders the moment
+   *      they cross fire_at, injects them, marks injected_at to prevent
+   *      double-delivery via the boot prompt on a later --continue
+   *      restart.
+   *   3. Agent eventually calls `cortextos bus ack-reminder <id>` which
+   *      moves status to 'acked' and removes it from pending entirely.
+   *
+   * Boot-path interaction:
+   *   The boot prompt in agent-process.ts delivers overdue reminders at
+   *   session start but does NOT call markReminderInjected (no change
+   *   to that file in this patch). To avoid duplicate delivery,
+   *   lastReminderCheck is initialized to Date.now() at construction,
+   *   delaying the first live poll to 60s after session start. That
+   *   window is plenty for agents to ack boot-delivered reminders
+   *   before the live poller fires.
+   *
+   * If a reminder fires while the agent is being restarted (rare race
+   * between pollReminders and a --continue cycle), the boot-prompt
+   * path in agent-process.ts still catches it - getOverdueReminders
+   * returns the same set in both contexts.
+   */
+  private async pollReminders(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastReminderCheck < 60_000) return;
+    this.lastReminderCheck = now;
+
+    let overdue;
+    try {
+      overdue = getOverdueReminders(this.paths);
+    } catch (err) {
+      this.log(`pollReminders read failed: ${(err as Error).message}`);
+      return;
+    }
+    if (overdue.length === 0) return;
+
+    for (const reminder of overdue) {
+      const block =
+        `=== REMINDER ===\n` +
+        `${reminder.prompt}\n` +
+        `\n` +
+        `Run when handled: cortextos bus ack-reminder ${reminder.id}\n`;
+      const injected = this.agent.injectMessage(block);
+      if (!injected) {
+        // Agent rejected the injection (busy, locked, etc). Leave the
+        // reminder un-marked so the next 60s cycle retries.
+        this.log(`Reminder ${reminder.id} injection deferred (agent not ready)`);
+        break;
+      }
+      try {
+        markReminderInjected(this.paths, reminder.id);
+      } catch (err) {
+        this.log(`markReminderInjected(${reminder.id}) failed: ${(err as Error).message}`);
+      }
+      this.log(`Injected reminder ${reminder.id} (fire_at=${reminder.fire_at})`);
+      // Small cooldown between reminders so each lands as a distinct
+      // turn rather than colliding mid-token.
+      await sleep(500);
+    }
   }
 
   /**

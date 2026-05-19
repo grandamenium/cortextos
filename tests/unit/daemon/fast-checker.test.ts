@@ -856,4 +856,174 @@ describe('FastChecker', () => {
       expect(result).toContain("cortextos bus send-telegram 123456789 '<your reply>'");
     });
   });
+
+  describe('pollReminders (live-session reminder injection)', () => {
+    // pollReminders is private; tests call it via (checker as any).
+    // Verifies: 60s throttle, overdue-only filter, injection format,
+    // markReminderInjected dedup, agent-reject defer-and-retry.
+    //
+    // NOTE: lastReminderCheck is initialized to Date.now() at FastChecker
+    // construction (Atlas review 2026-05-19) so the first live poll fires
+    // 60s after session start - this prevents duplicate delivery of
+    // boot-prompt-delivered reminders before the agent has time to ack.
+    // Tests force the throttle by setting (checker as any).lastReminderCheck = 0
+    // to simulate "we are past the 60s gate."
+    it('does NOT fire on a fresh checker within 60s of construction', async () => {
+      // Boot-path dedup guard: the boot prompt in agent-process.ts
+      // delivers any overdue reminders at session start. If pollReminders
+      // fires immediately on first cycle, it would re-deliver those same
+      // reminders before the agent can ack them. Verified by checking the
+      // first pollReminders call (no throttle override) is a no-op.
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      createReminder(paths, past, 'recently-boot-delivered');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      await (checker as any).pollReminders();
+      expect(agent.injectMessage).not.toHaveBeenCalled();
+    });
+
+    it('fires after the 60s window passes (throttle forced)', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      createReminder(paths, past, 'first reminder');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      // Simulate 60s having passed since construction.
+      (checker as any).lastReminderCheck = 0;
+
+      await (checker as any).pollReminders();
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('throttles to one call per 60s window', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      createReminder(paths, past, 'reminder one');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
+
+      // First call (throttle forced open): fires.
+      await (checker as any).pollReminders();
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+
+      // Add a second overdue reminder.
+      createReminder(paths, past, 'reminder two');
+
+      // Second call within 60s: must NOT fire.
+      await (checker as any).pollReminders();
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('marks reminders as injected and skips them on the next non-throttled cycle', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder, listReminders } = await import('../../../src/bus/reminders');
+      const r = createReminder(paths, past, 'one-shot reminder');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
+      await (checker as any).pollReminders();
+
+      const all = listReminders(paths, { all: true });
+      const updated = all.find((x: any) => x.id === r.id);
+      expect(updated?.injected_at).toBeTruthy();
+
+      // Force the throttle to allow another call.
+      (checker as any).lastReminderCheck = 0;
+      agent.injectMessage.mockClear();
+      await (checker as any).pollReminders();
+      // No new injection because reminder is marked injected.
+      expect(agent.injectMessage).not.toHaveBeenCalled();
+    });
+
+    it('skips future reminders entirely (even when throttle is open)', async () => {
+      const future = new Date(Date.now() + 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      createReminder(paths, future, 'tomorrow');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
+
+      await (checker as any).pollReminders();
+      expect(agent.injectMessage).not.toHaveBeenCalled();
+    });
+
+    it('formats the injected block with prompt + ack hint', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      const r = createReminder(paths, past, 'morning briefing time');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
+      await (checker as any).pollReminders();
+
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+      const block = agent.injectMessage.mock.calls[0][0];
+      expect(block).toContain('=== REMINDER ===');
+      expect(block).toContain('morning briefing time');
+      expect(block).toContain(`cortextos bus ack-reminder ${r.id}`);
+    });
+
+    it('defers when the agent rejects injection (agent busy)', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder, listReminders } = await import('../../../src/bus/reminders');
+      const r = createReminder(paths, past, 'will defer');
+
+      const agent = createMockAgent();
+      // Agent rejects this injection.
+      agent.injectMessage.mockReturnValueOnce(false);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
+
+      await (checker as any).pollReminders();
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+
+      // Reminder should NOT have been marked injected - so the next
+      // non-throttled cycle retries it.
+      const all = listReminders(paths, { all: true });
+      const updated = all.find((x: any) => x.id === r.id);
+      expect(updated?.injected_at).toBeUndefined();
+    });
+
+    it('handles multiple overdue reminders in order', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      createReminder(paths, past, 'first');
+      createReminder(paths, past, 'second');
+      createReminder(paths, past, 'third');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
+
+      await (checker as any).pollReminders();
+      expect(agent.injectMessage).toHaveBeenCalledTimes(3);
+      // Each call carries a distinct prompt.
+      const prompts = agent.injectMessage.mock.calls.map((c: any) => String(c[0]));
+      expect(prompts[0]).toContain('first');
+      expect(prompts[1]).toContain('second');
+      expect(prompts[2]).toContain('third');
+    });
+
+    it('survives a malformed pending-reminders.json without crashing', async () => {
+      // The reminders module swallows JSON errors and returns [];
+      // pollReminders just becomes a no-op rather than throwing.
+      writeFileSync(join(paths.stateDir, 'pending-reminders.json'), '{ not valid');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
+
+      await expect((checker as any).pollReminders()).resolves.toBeUndefined();
+      expect(agent.injectMessage).not.toHaveBeenCalled();
+    });
+  });
 });

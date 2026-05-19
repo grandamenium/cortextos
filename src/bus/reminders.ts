@@ -25,6 +25,13 @@ export interface Reminder {
   prompt: string;       // The text to inject into the boot prompt when overdue
   status: 'pending' | 'acked';
   acked_at?: string;
+  /**
+   * Set when fast-checker injects the reminder into the live PTY session.
+   * Filters the reminder out of subsequent getOverdueReminders() calls so
+   * a --continue restart does not redeliver it via the boot prompt.
+   * Cleared/ignored once the reminder is acked (status moves to 'acked').
+   */
+  injected_at?: string;
 }
 
 function remindersPath(paths: BusPaths): string {
@@ -85,14 +92,42 @@ export function listReminders(paths: BusPaths, opts: { all?: boolean } = {}): Re
 }
 
 /**
- * Return pending reminders whose fire_at is in the past (overdue).
- * Used by agent-process.ts to inject into the boot prompt.
+ * Return pending reminders whose fire_at is in the past (overdue) AND
+ * have not already been injected into a live session. Used by both
+ * agent-process.ts (boot prompt) and fast-checker.ts (live poll). The
+ * injected_at filter prevents a --continue restart from redelivering a
+ * reminder that the live session already received - acking it is the
+ * agent's job, but until they do, only one copy should land.
  */
 export function getOverdueReminders(paths: BusPaths): Reminder[] {
   const now = Date.now();
   return readReminders(paths).filter(
-    r => r.status === 'pending' && Date.parse(r.fire_at) <= now,
+    r => r.status === 'pending' &&
+         !r.injected_at &&
+         Date.parse(r.fire_at) <= now,
   );
+}
+
+/**
+ * Mark a reminder as injected into a live session. Subsequent calls to
+ * getOverdueReminders() will skip it until the agent acks it (which
+ * moves status to 'acked' and drops it entirely from the pending set).
+ *
+ * Idempotent: calling twice does not double-write. Throws if the
+ * reminder id is unknown so callers notice routing bugs.
+ */
+export function markReminderInjected(paths: BusPaths, id: string): void {
+  const reminders = readReminders(paths);
+  const idx = reminders.findIndex(r => r.id === id);
+  if (idx === -1) {
+    throw new Error(`Reminder ${id} not found`);
+  }
+  if (reminders[idx].injected_at) return;
+  reminders[idx] = {
+    ...reminders[idx],
+    injected_at: new Date().toISOString(),
+  };
+  writeReminders(paths, reminders);
 }
 
 /**
