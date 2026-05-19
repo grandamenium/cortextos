@@ -952,13 +952,13 @@ busCommand
   .option('--image <path>', 'Send a photo with caption')
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
-  .option('--voice <summary>', 'Synthesize <summary> via OpenAI TTS and send as a voice note BEFORE the full text message. Use for briefings, decisions, and substantive replies. Skip for ACKs, heartbeats, and routine ops (the spec reserves voice for content that warrants a ~30-second listen). Summary should be ≤80 words. Requires OPENAI_API_KEY in env; voice resolution falls back to the agent config.json voice field then orgs/<org>/voices.json. On any failure in the voice path, falls back to text-only with a stderr warning.')
+  .option('--voice <summary>', 'Synthesize <summary> via OpenAI TTS and send as a voice note BEFORE the full text message. Use for briefings, decisions, and substantive replies. Skip for ACKs, heartbeats, and routine ops (the spec reserves voice for content that warrants a ~30-second listen). Summary should be ≤80 words. Requires OPENAI_API_KEY in env; voice resolution falls back to the agent config.json voice field then orgs/<org>/voices.json. On any failure in the voice path, falls back to text-only with a stderr warning. Voice-default: agents whose config.json has a voice field set automatically synthesize voice for sends to $CTX_TELEGRAM_CHAT_ID even without --voice; the message body becomes the voice text. Disable via CORTEXTOS_VOICE_DEFAULT=off env.')
   .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean; voice?: string }) => {
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
     // Telegram renders them as visible text. Normalize before send + log.
     message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
-    const voiceSummary = opts.voice?.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    let voiceSummary = opts.voice?.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
     // Resolve bot token: agent .env first, then process.env
     const env = resolveEnv();
     let botToken = '';
@@ -990,7 +990,54 @@ busCommand
       let sentMessageId = 0;
       let voiceMessageId = 0;
 
-      // Voice note before the full text message, when --voice was passed.
+      // Voice-default: when the agent has a voice configured AND the
+      // target is the user's own chat ($CTX_TELEGRAM_CHAT_ID) AND no
+      // explicit --voice <text> was passed AND the kill switch is not
+      // set, auto-pass the message body as the voice content.
+      //
+      // Rationale: agents triggered from daemon-side processes (crons,
+      // codex callbacks, etc) cannot themselves opt in to --voice
+      // through any reasonable middleware, but they should still
+      // deliver voice when their config says they speak. This makes
+      // voice the default for any agent whose config.json carries
+      // voice/voice_model/voice_speed - opt-out per-agent by removing
+      // those fields, opt-out org-wide by setting
+      // CORTEXTOS_VOICE_DEFAULT=off in env.
+      //
+      // Agent-to-agent bus messages and any send to a chat other than
+      // the user's $CTX_TELEGRAM_CHAT_ID stay text-only.
+      if (
+        !voiceSummary &&
+        !opts.image &&
+        !opts.file &&
+        process.env.CORTEXTOS_VOICE_DEFAULT !== 'off'
+      ) {
+        const userChatId = process.env.CTX_TELEGRAM_CHAT_ID?.trim();
+        if (userChatId && String(chatId).trim() === userChatId) {
+          try {
+            const { resolveAgentVoice } = await import('../telegram/voice-config.js');
+            const orgDir = env.projectRoot && env.org
+              ? require('path').join(env.projectRoot, 'orgs', env.org)
+              : undefined;
+            const agentVoice = resolveAgentVoice({
+              agentName: env.agentName,
+              agentDir: env.agentDir || undefined,
+              orgDir,
+            });
+            if (agentVoice) {
+              voiceSummary = message;
+            }
+          } catch {
+            // Resolution failure leaves voiceSummary unset; we fall
+            // through to text-only without warning. The downstream
+            // synth path still warns if --voice is passed and synth
+            // fails; that path is what users opt into explicitly.
+          }
+        }
+      }
+
+      // Voice note before the full text message, when --voice was passed
+      // (or auto-set by the voice-default block above).
       // Any failure in the voice path falls back to text-only - we never
       // drop the original message just because TTS broke.
       // The OpenAI TTS pipeline returns OGG/Opus directly (no transcode),
