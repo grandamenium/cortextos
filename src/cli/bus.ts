@@ -952,11 +952,13 @@ busCommand
   .option('--image <path>', 'Send a photo with caption')
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
-  .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
+  .option('--voice <summary>', 'Synthesize <summary> via OpenAI TTS and send as a voice note BEFORE the full text message. Use for briefings, decisions, and substantive replies. Skip for ACKs, heartbeats, and routine ops (the spec reserves voice for content that warrants a ~30-second listen). Summary should be ≤80 words. Requires OPENAI_API_KEY in env; voice resolution falls back to the agent config.json voice field then orgs/<org>/voices.json. On any failure in the voice path, falls back to text-only with a stderr warning.')
+  .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean; voice?: string }) => {
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
     // Telegram renders them as visible text. Normalize before send + log.
     message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    const voiceSummary = opts.voice?.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
     // Resolve bot token: agent .env first, then process.env
     const env = resolveEnv();
     let botToken = '';
@@ -986,6 +988,69 @@ busCommand
     const api = new TelegramAPI(botToken);
     try {
       let sentMessageId = 0;
+      let voiceMessageId = 0;
+
+      // Voice note before the full text message, when --voice was passed.
+      // Any failure in the voice path falls back to text-only - we never
+      // drop the original message just because TTS broke.
+      // The OpenAI TTS pipeline returns OGG/Opus directly (no transcode),
+      // so the only fs work is a temp file for sendVoice's multipart
+      // upload + a cleanup at the end.
+      if (voiceSummary && !opts.image && !opts.file) {
+        const { mkdtempSync, writeFileSync, unlinkSync, rmdirSync, existsSync: fsExists } = require('fs');
+        const { join: pathJoin } = require('path');
+        const { tmpdir } = require('os');
+        let voiceTempDir: string | undefined;
+        let voiceTempPath: string | undefined;
+        try {
+          const { synthesizeVoice } = await import('../telegram/tts.js');
+          const { resolveAgentVoice, resolveAgentVoiceModel } = await import('../telegram/voice-config.js');
+
+          const orgDir = env.projectRoot && env.org
+            ? pathJoin(env.projectRoot, 'orgs', env.org)
+            : undefined;
+          const voice = resolveAgentVoice({
+            agentName: env.agentName,
+            agentDir: env.agentDir || undefined,
+            orgDir,
+          });
+          if (!voice) {
+            throw new Error(
+              `No voice configured for agent "${env.agentName}". Set "voice" in agent config.json or add "${env.agentName.toLowerCase()}" to orgs/${env.org}/voices.json.`,
+            );
+          }
+          const model = resolveAgentVoiceModel(env.agentDir || undefined);
+
+          const oggBytes = await synthesizeVoice(voiceSummary, voice, { model });
+          voiceTempDir = mkdtempSync(pathJoin(tmpdir(), 'cortextos-voice-'));
+          const oggPath: string = pathJoin(voiceTempDir, 'voice.ogg');
+          voiceTempPath = oggPath;
+          writeFileSync(oggPath, oggBytes);
+
+          // Best-effort duration estimate (Opus at ~32kbps inside OGG):
+          // bytes / (32000 / 8) ≈ seconds. Telegram uses this for the
+          // playback-bar preview before audio is fully loaded.
+          const estimatedDurationSeconds = (oggBytes.length * 8) / 32000;
+
+          const voiceResult = await api.sendVoice(
+            chatId,
+            oggPath,
+            undefined,
+            estimatedDurationSeconds,
+          );
+          voiceMessageId = voiceResult?.result?.message_id ?? 0;
+        } catch (voiceErr: any) {
+          console.error(`[voice] synthesis failed, falling back to text-only: ${voiceErr.message || voiceErr}`);
+        } finally {
+          if (voiceTempPath && fsExists(voiceTempPath)) {
+            try { unlinkSync(voiceTempPath); } catch { /* ignore */ }
+          }
+          if (voiceTempDir && fsExists(voiceTempDir)) {
+            try { rmdirSync(voiceTempDir); } catch { /* ignore */ }
+          }
+        }
+      }
+
       if (opts.image) {
         const result = await api.sendPhoto(chatId, opts.image, message);
         sentMessageId = result?.result?.message_id ?? 0;
@@ -999,8 +1064,8 @@ busCommand
         sentMessageId = result?.result?.message_id ?? 0;
       }
 
-      // Log outbound and cache last-sent for context injection
-      const env = resolveEnv();
+      // Log outbound and cache last-sent for context injection.
+      // env is already resolved at the top of the action handler.
       if (env.agentName && env.ctxRoot) {
         logOutboundMessage(env.ctxRoot, env.agentName, chatId, message, sentMessageId, {
           parseMode: opts.plainText ? 'none' : 'html',
@@ -1011,11 +1076,13 @@ busCommand
         try {
           const paths = resolvePaths(env.agentName, env.instanceId, env.org);
           const preview = message.length > 120 ? message.slice(0, 120) + '…' : message;
-          logEvent(paths, env.agentName, env.org, 'message', 'telegram_sent', 'info', JSON.stringify({ chat_id: chatId, message_id: sentMessageId, preview }));
+          const meta: Record<string, unknown> = { chat_id: chatId, message_id: sentMessageId, preview };
+          if (voiceMessageId > 0) meta.voice_message_id = voiceMessageId;
+          logEvent(paths, env.agentName, env.org, 'message', 'telegram_sent', 'info', JSON.stringify(meta));
         } catch { /* non-fatal */ }
       }
 
-      console.log('Message sent');
+      console.log(voiceMessageId > 0 ? 'Message sent (with voice note)' : 'Message sent');
     } catch (err: any) {
       console.error(`Failed to send: ${err.message || err}`);
       process.exit(1);
