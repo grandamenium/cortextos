@@ -3,6 +3,13 @@
 import { useMemo, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import type { AgentListItem } from '@/lib/agents';
 import type { SkillRecord } from '@/lib/skills';
 import type { RecentDispatch } from '@/lib/dispatch';
@@ -10,6 +17,7 @@ import type { RecentDispatch } from '@/lib/dispatch';
 interface ClaudeCodeLauncherProps {
   agents: AgentListItem[];
   skills: SkillRecord[];
+  allSkills: SkillRecord[];
   overflow: number;
   recentDispatches: RecentDispatch[];
 }
@@ -25,6 +33,7 @@ function toLauncherTestId(name: string): string {
 export function ClaudeCodeLauncher({
   agents,
   skills,
+  allSkills,
   overflow,
   recentDispatches,
 }: ClaudeCodeLauncherProps) {
@@ -32,11 +41,23 @@ export function ClaudeCodeLauncher({
   const [text, setText] = useState('');
   const [status, setStatus] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [skillsDialogOpen, setSkillsDialogOpen] = useState(false);
+  const [skillQuery, setSkillQuery] = useState('');
 
   const orderedDispatches = useMemo(
     () => recentDispatches.slice(0, 3),
     [recentDispatches],
   );
+
+  const filteredSkills = useMemo(() => {
+    const query = skillQuery.trim().toLowerCase();
+    if (!query) return allSkills;
+
+    return allSkills.filter((skill) =>
+      skill.name.toLowerCase().includes(query) ||
+      skill.description.toLowerCase().includes(query),
+    );
+  }, [allSkills, skillQuery]);
 
   function applySkill(name: string) {
     setText((current) => {
@@ -117,12 +138,14 @@ export function ClaudeCodeLauncher({
             </button>
           ))}
           {overflow > 0 && (
-            <span
+            <button
+              type="button"
+              onClick={() => setSkillsDialogOpen(true)}
               className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600"
               data-testid="launcher-skill-more"
             >
               + {overflow} more
-            </span>
+            </button>
           )}
         </div>
 
@@ -167,6 +190,50 @@ export function ClaudeCodeLauncher({
             )}
           </div>
         </div>
+
+        <Dialog open={skillsDialogOpen} onOpenChange={setSkillsDialogOpen}>
+          <DialogContent className="sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>All skills</DialogTitle>
+              <DialogDescription>
+                Search installed skills and inject the command directly into the Claude Code launcher.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <input
+                type="search"
+                value={skillQuery}
+                onChange={(event) => setSkillQuery(event.target.value)}
+                placeholder="Search skills"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none placeholder:text-slate-400 focus:border-slate-400"
+              />
+
+              <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex flex-wrap gap-2">
+                  {filteredSkills.length > 0 ? filteredSkills.map((skill) => (
+                    <button
+                      key={skill.name}
+                      type="button"
+                      onClick={() => {
+                        applySkill(skill.name);
+                        setSkillsDialogOpen(false);
+                        setSkillQuery('');
+                      }}
+                      className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-900 transition hover:border-amber-300 hover:bg-amber-100"
+                    >
+                      /{skill.name}
+                    </button>
+                  )) : (
+                    <div className="text-sm text-slate-500">
+                      No skills match your search.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );

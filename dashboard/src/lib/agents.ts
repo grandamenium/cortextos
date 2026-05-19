@@ -203,7 +203,7 @@ function readAgentListFromFilesystem(org?: string): AgentListItem[] {
   for (const orgName of orgNames) {
     const agentsDir = path.join(CTX_FRAMEWORK_ROOT, 'orgs', orgName, 'agents');
     if (!fs.existsSync(agentsDir)) continue;
-    for (const entryName of fs.readdirSync(agentsDir)) {
+    for (const entryName of safeReadDir(agentsDir)) {
       if (!agentMap.has(entryName)) {
         agentMap.set(entryName, { org: orgName, enabled: true });
       }

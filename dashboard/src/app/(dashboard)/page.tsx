@@ -206,6 +206,7 @@ export default async function HomePage({
         <ClaudeCodeLauncher
           agents={launcherAgents}
           skills={launcherSkills.visible}
+          allSkills={launcherSkills.all}
           overflow={launcherSkills.overflow}
           recentDispatches={recentDispatches}
         />

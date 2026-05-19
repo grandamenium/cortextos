@@ -122,12 +122,25 @@ export function getTasksByAgent(agentName: string, org?: string): Task[] {
 }
 
 /**
- * Get tasks completed today (UTC).
+ * Get tasks completed since Los Angeles local midnight.
  */
 export function getTasksCompletedToday(org?: string): Task[] {
-  const todayStart = new Date();
-  todayStart.setUTCHours(0, 0, 0, 0);
-  const todayISO = todayStart.toISOString();
+  const timezone = 'America/Los_Angeles';
+  const now = new Date();
+  const dateParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const ptDateParts = new Map(dateParts.map((part) => [part.type, part.value]));
+  const ptDate = `${ptDateParts.get('year')}-${ptDateParts.get('month')}-${ptDateParts.get('day')}`;
+  const offsetPart = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    timeZoneName: 'longOffset',
+  }).formatToParts(now).find((part) => part.type === 'timeZoneName')?.value ?? 'GMT-08:00';
+  const ptOffset = offsetPart.replace('GMT', '');
+  const todayISO = new Date(`${ptDate}T00:00:00${ptOffset}`).toISOString();
 
   const conditions: string[] = ['completed_at >= ?', NOISE_EXCLUSION_SQL];
   const params: (string | number)[] = [todayISO, ...NOISE_EXCLUSION_PARAMS];
