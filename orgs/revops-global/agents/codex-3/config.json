@@ -1,0 +1,37 @@
+{
+  "agent_name": "codex-3",
+  "enabled": true,
+  "runtime": "codex-app-server",
+  "model": "gpt-5.5",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "America/Los_Angeles",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+    },
+    {
+      "name": "rgos-task-poll",
+      "type": "recurring",
+      "interval": "5m",
+      "prompt": "Check for tasks assigned to you in the RGOS kanban: use mcp__rgos__cortex_list_tasks with assigned_to=\"codex-3\" and status=\"approved\". If any tasks are found, claim each one with mcp__rgos__cortex_claim_task (agent_id=\"codex-3\"), then work them in priority order. Log a cortextos bus log-event for each claimed task. If no tasks, do nothing."
+    }
+  ],
+  "day_mode_start": "07:00",
+  "day_mode_end": "20:00",
+  "communication_style": "technical",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  }
+}

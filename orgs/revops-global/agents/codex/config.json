@@ -1,0 +1,52 @@
+{
+  "agent_name": "codex",
+  "enabled": true,
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "runtime": "codex-app-server",
+  "model": "gpt-5.5",
+  "working_directory": "/home/cortextos/cortextos/orgs/revops-global/agents/codex",
+  "timezone": "America/Los_Angeles",
+  "day_mode_start": "07:00",
+  "day_mode_end": "20:00",
+  "communication_style": "technical",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  },
+  "crons_tz": "All cron expressions use local timezone (America/Los_Angeles). 0 7 = 7 AM PT = 14:00 UTC.",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "30m",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+    },
+    {
+      "name": "rgos-task-poll",
+      "type": "recurring",
+      "interval": "5m",
+      "prompt": "Check for tasks assigned to you in the RGOS kanban: use mcp__rgos__cortex_list_tasks with assigned_to=\"codex\" and status=\"approved\". If any tasks are found, claim each one with mcp__rgos__cortex_claim_task (agent_id=\"codex\"), then work them in priority order. Log a cortextos bus log-event for each claimed task. If no tasks, do nothing."
+    },
+    {
+      "name": "codex-task-poll",
+      "type": "recurring",
+      "interval": "10m",
+      "prompt": "Check inbox for tasks routed from orchestrator or dev. Do not dispatch browser/UI/web automation to Greg's Mac. Use Orgo/Codex-CU VM paths by default; for OB1 e2e/dogfood specifically use Compl1 VM 23e7d600 targeting https://ob1.revopsglobal.com. Only use `cortextos bus computer-use` for non-browser work or when a current explicit Orgo-failure artifact authorizes Mac fallback. Capture the response, validate completeness, reply to the requesting agent, and log a codex_dispatched event with the task summary, prompt length, runtime target, and duration."
+    }
+  ],
+  "ctx_autoreset_threshold": 0,
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    }
+  },
+  "codex_app_server_transport": "ws",
+  "telegram_polling": false
+}
