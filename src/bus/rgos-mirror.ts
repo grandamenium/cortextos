@@ -564,6 +564,9 @@ export interface AgentPresencePayload {
   current_task_id: string | null;
   cursor_position_hint: string | null;
   ts: string;
+  // Cursor anchor: task ID the agent is currently focused on. Cursor layer
+  // uses this to position the floating cursor near the matching task card.
+  anchor_task_id?: string | null;
   // Legacy cortextos-bus fields kept for local dashboard compat
   actor_id: string;
   kind: 'agent';
@@ -633,6 +636,8 @@ export async function mirrorTaskToRgos(
     current_task_id: task.id,
     cursor_position_hint: actionLabel,
     ts,
+    // Cursor layer: anchor to this task card on the kanban board
+    anchor_task_id: event === 'complete' ? null : task.id,
     // Local dashboard fields
     actor_id: agentId,
     kind: 'agent',
