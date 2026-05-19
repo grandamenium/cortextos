@@ -63,10 +63,16 @@ function makeHook(overrides: Partial<HookEntry> = {}): HookEntry {
 function lastEmittedEvent(): { name: string; meta: Record<string, unknown> } | null {
   if (execFileCalls.length === 0) return null;
   const args = execFileCalls[execFileCalls.length - 1].args;
-  // shape: [bus, log-event, action, <name>, info, --meta, <json>]
-  const name = args[3];
-  const metaIdx = args.indexOf('--meta');
-  const meta = metaIdx >= 0 && metaIdx + 1 < args.length ? JSON.parse(args[metaIdx + 1]) : {};
+  // emitHookBusEvent uses two call shapes depending on whether CTX_FRAMEWORK_ROOT is set:
+  //   cortextos form: ['bus', 'log-event', 'action', <name>, 'info', '--meta', <json>]
+  //   node+cliPath:   [cliPath, 'bus', 'log-event', 'action', <name>, 'info', '--meta', <json>]
+  // Normalise to the cortextos form by slicing from the 'bus' element.
+  const busIdx = args.indexOf('bus');
+  if (busIdx === -1) return null;
+  const normalised = args.slice(busIdx);
+  const name = normalised[3];
+  const metaIdx = normalised.indexOf('--meta');
+  const meta = metaIdx >= 0 && metaIdx + 1 < normalised.length ? JSON.parse(normalised[metaIdx + 1]) : {};
   return { name, meta };
 }
 

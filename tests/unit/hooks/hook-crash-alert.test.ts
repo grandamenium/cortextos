@@ -66,8 +66,15 @@ describe('readMaxCrashesPerDay', () => {
 });
 
 describe('notifyAgents', () => {
+  // notifyAgents uses execFile with 'cortextos' when CTX_FRAMEWORK_ROOT is unset.
+  // Clear it so tests don't inherit the live env's process.execPath + cliPath form.
+  const savedFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
   beforeEach(() => {
     execFileMock.mockReset();
+    delete process.env.CTX_FRAMEWORK_ROOT;
+  });
+  afterEach(() => {
+    if (savedFrameworkRoot !== undefined) process.env.CTX_FRAMEWORK_ROOT = savedFrameworkRoot;
   });
 
   it('sends one bus send-message per recipient', () => {
