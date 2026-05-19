@@ -10,6 +10,12 @@ import { createHash } from 'crypto';
 import { spawn, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { basename, join, resolve } from 'path';
+import {
+  appendAgentLiveLog,
+  createAgentLiveStateHandle,
+  mirrorAgentLiveState,
+  writeAgentLiveManifest,
+} from './agent-live-state.js';
 
 export interface SpawnCodexOptions {
   workdir?: string;
@@ -195,6 +201,12 @@ export function spawnCodex(promptFileOrDash: string, opts: SpawnCodexOptions = {
   const suffix = `${date}-spawn-codex-${slug}-${id}`;
   const outputDir = resolveOutputDir(opts.agentsRoot, opts.agentName);
   const { outputPath, sidecarPath, guard } = outputPaths(outputDir, suffix);
+  const liveState = createAgentLiveStateHandle({
+    ctxRoot: process.env.CTX_ROOT,
+    org: process.env.CTX_ORG,
+    agent: opts.agentName,
+    taskId: opts.taskId,
+  });
 
   const metadata: SpawnCodexRunMetadata = {
     ok,
@@ -260,6 +272,11 @@ export function spawnCodex(promptFileOrDash: string, opts: SpawnCodexOptions = {
 
   writeFileSync(outputPath, `${artifact}\n`, 'utf-8');
   writeFileSync(sidecarPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
+  if (liveState) {
+    writeFileSync(liveState.files.log, `${stdout.trim() || '(no stdout)'}\n`, 'utf-8');
+    writeAgentLiveManifest(liveState, { status, completed_at: metadata.completed_at });
+    void mirrorAgentLiveState(liveState);
+  }
 
   return {
     ok,
@@ -294,6 +311,20 @@ export async function spawnCodexAsync(promptFileOrDash: string, opts: SpawnCodex
   const timeoutSecs = opts.timeout ?? 300;
   const workdir = opts.workdir ?? process.cwd();
   const args = ['exec'];
+  const liveState = createAgentLiveStateHandle({
+    ctxRoot: process.env.CTX_ROOT,
+    org: process.env.CTX_ORG,
+    agent: opts.agentName,
+    taskId: opts.taskId,
+  });
+  if (liveState) {
+    writeAgentLiveManifest(liveState, {
+      status: 'running',
+      started_at: startedAt,
+      prompt_file: promptPath,
+    });
+    await mirrorAgentLiveState(liveState);
+  }
 
   if (opts.model) args.push('--model', opts.model);
   if (opts.effort) args.push('--effort', opts.effort);
@@ -322,8 +353,24 @@ export async function spawnCodexAsync(promptFileOrDash: string, opts: SpawnCodex
     child.stdin.end('');
     child.stdout.setEncoding('utf-8');
     child.stderr.setEncoding('utf-8');
-    child.stdout.on('data', (d: string) => { stdoutBuf += d; });
-    child.stderr.on('data', (d: string) => { stderrBuf += d; });
+    let lastMirrorAt = 0;
+    const mirrorLive = () => {
+      if (!liveState) return;
+      const now = Date.now();
+      if (now - lastMirrorAt < 2500) return;
+      lastMirrorAt = now;
+      void mirrorAgentLiveState(liveState);
+    };
+    child.stdout.on('data', (d: string) => {
+      stdoutBuf += d;
+      if (liveState) appendAgentLiveLog(liveState, d);
+      mirrorLive();
+    });
+    child.stderr.on('data', (d: string) => {
+      stderrBuf += d;
+      if (liveState) appendAgentLiveLog(liveState, d);
+      mirrorLive();
+    });
 
     const timer = setTimeout(() => {
       if (!settled) {
@@ -401,6 +448,10 @@ export async function spawnCodexAsync(promptFileOrDash: string, opts: SpawnCodex
 
   writeFileSync(outputPath, `${artifact}\n`, 'utf-8');
   writeFileSync(sidecarPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8');
+  if (liveState) {
+    writeAgentLiveManifest(liveState, { status, completed_at: metadata.completed_at });
+    await mirrorAgentLiveState(liveState);
+  }
 
   return { ok, status, outputPath, sidecarPath, output: stdout.trim(), stderr, exitCode, timedOut, durationMs, metadata };
 }
