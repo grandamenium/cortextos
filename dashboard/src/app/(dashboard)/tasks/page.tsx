@@ -11,6 +11,7 @@ import { TaskDetailSheet } from '@/components/tasks/task-detail-sheet';
 import { CreateTaskDialog } from '@/components/tasks/create-task-dialog';
 import { TaskFilters } from '@/components/tasks/task-filters';
 import { useAgentPresence } from '@/hooks/use-agent-presence';
+import { paletteForAgent } from '@/components/tasks/agent-cursor';
 import type { Task, TaskStatus } from '@/lib/types';
 
 type ViewMode = 'kanban' | 'list';
@@ -36,7 +37,7 @@ export default function TasksPage() {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [liveAgents, setLiveAgents] = useState<string[]>([]);
-  const { presenceByTask } = useAgentPresence();
+  const { presence, presenceByTask, parkedPresence } = useAgentPresence();
 
   // Fetch live agent list from enabled-agents registry (not task assignees) so
   // archived agents disappear and new agents appear without needing task history.
@@ -261,6 +262,36 @@ export default function TasksPage() {
         />
       </div>
 
+      {presence.length > 0 && (
+        <div
+          className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/25 px-3 py-2"
+          data-active-agents-banner="true"
+        >
+          <span className="text-xs font-medium text-muted-foreground">
+            Active agents
+          </span>
+          {presence.slice(0, 8).map((item) => {
+            const palette = paletteForAgent(item.actor_id);
+            return (
+              <span
+                key={item.actor_id}
+                className="inline-flex min-h-6 items-center gap-1.5 rounded-md border bg-background px-2 text-xs font-medium shadow-sm"
+                style={{ borderColor: palette.ring, boxShadow: `inset 3px 0 0 ${palette.accent}` }}
+                title={item.action_label || item.cursor_position_hint || item.current_action || item.status}
+              >
+                <span className="size-1.5 rounded-full" style={{ backgroundColor: palette.accent }} />
+                {item.name}
+              </span>
+            );
+          })}
+          {presence.length > 8 && (
+            <span className="text-xs text-muted-foreground">
+              +{presence.length - 8}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Content */}
       {tasks.length === 0 ? (
         hasActiveFilters ? (
@@ -293,6 +324,7 @@ export default function TasksPage() {
           tasks={displayTasks}
           completedTodayTasks={completedToday}
           presenceByTask={presenceByTask}
+          parkedPresence={parkedPresence}
           onTaskClick={handleTaskClick}
           onStatusChange={handleQuickStatusChange}
         />

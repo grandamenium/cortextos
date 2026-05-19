@@ -26,11 +26,15 @@ export function paletteForAgent(agentId: string) {
 
 export function presenceRingStyle(presence?: AgentPresencePayload[]): CSSProperties | undefined {
   if (!presence?.length) return undefined;
+  const primary = paletteForAgent(presence[0].actor_id);
   const shadows = presence.slice(0, 4).map((item, index) => {
     const palette = paletteForAgent(item.actor_id);
-    return `0 0 0 ${2 + index * 2}px ${isStale(item) ? palette.staleRing : palette.ring}`;
+    return `0 0 0 ${3 + index * 3}px ${isStale(item) ? palette.staleRing : palette.ring}`;
   });
-  return { boxShadow: shadows.join(', ') };
+  return {
+    borderColor: primary.accent,
+    boxShadow: [...shadows, `inset 4px 0 0 ${primary.accent}`].join(', '),
+  };
 }
 
 function isStale(presence: AgentPresencePayload) {
@@ -64,8 +68,8 @@ export function AgentCursor({
     presence.status.replaceAll('_', ' ');
   const palette = paletteForAgent(presence.actor_id);
   const stale = isStale(presence);
-  const x = -(compact ? index * 18 : index * 22);
-  const y = compact ? 0 : index * 3;
+  const x = compact ? -(index * 16) : 0;
+  const y = compact ? index * 8 : index * 28;
   const style = {
     '--agent-accent': palette.accent,
     '--agent-soft': palette.soft,
@@ -151,10 +155,42 @@ export function AgentCursorStack({
   if (!presence?.length) return null;
 
   return (
-    <AnimatePresence initial={false}>
-      {presence.slice(0, 3).map((item, index) => (
-        <AgentCursor key={item.actor_id} presence={item} index={index} compact={compact} />
-      ))}
-    </AnimatePresence>
+    <>
+      <AnimatePresence initial={false}>
+        {presence.slice(0, 3).map((item, index) => (
+          <AgentCursor key={item.actor_id} presence={item} index={index} compact={compact} />
+        ))}
+      </AnimatePresence>
+      {presence.length > 3 && (
+        <span
+          className={cn(
+            'pointer-events-none absolute right-2 z-20 inline-flex h-6 items-center rounded-md border bg-background/95 px-1.5 text-[11px] font-semibold text-foreground shadow-sm',
+            compact ? 'top-10' : 'top-[5.6rem]',
+          )}
+          data-agent-cursor-overflow={presence.length - 3}
+          title={`${presence.length - 3} more active agents on this task`}
+        >
+          +{presence.length - 3}
+        </span>
+      )}
+    </>
+  );
+}
+
+export function ParkedAgentDock({ presence }: { presence?: AgentPresencePayload[] }) {
+  if (!presence?.length) return null;
+
+  return (
+    <div
+      className="relative min-h-12 rounded-lg border border-dashed bg-muted/25 px-3 py-2"
+      data-agent-cursor-park="true"
+    >
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Parked
+      </div>
+      <div className="relative mt-1 min-h-8">
+        <AgentCursorStack presence={presence} compact />
+      </div>
+    </div>
   );
 }

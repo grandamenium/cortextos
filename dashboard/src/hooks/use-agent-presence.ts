@@ -62,14 +62,19 @@ export function useAgentPresence() {
 
   return useMemo(() => {
     const byTask: Record<string, AgentPresencePayload[]> = {};
+    const parked: AgentPresencePayload[] = [];
     for (const item of Object.values(presence)) {
       const taskId = presenceTaskId(item);
-      if (!taskId) continue;
+      if (!taskId) {
+        parked.push(item);
+        continue;
+      }
       byTask[taskId] = [...(byTask[taskId] ?? []), item];
     }
     for (const items of Object.values(byTask)) {
       items.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     }
-    return { presence: Object.values(presence), presenceByTask: byTask };
+    parked.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    return { presence: Object.values(presence), presenceByTask: byTask, parkedPresence: parked };
   }, [presence]);
 }

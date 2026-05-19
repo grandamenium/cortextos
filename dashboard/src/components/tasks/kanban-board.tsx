@@ -2,6 +2,7 @@
 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { StatusBadge } from '@/components/shared';
+import { ParkedAgentDock } from './agent-cursor';
 import { TaskCard } from './task-card';
 import type { AgentPresencePayload } from '@/lib/agent-presence';
 import type { Task, TaskStatus } from '@/lib/types';
@@ -16,6 +17,7 @@ interface KanbanBoardProps {
   tasks: Task[];
   completedTodayTasks: Task[];
   presenceByTask?: Record<string, AgentPresencePayload[]>;
+  parkedPresence?: AgentPresencePayload[];
   onTaskClick: (task: Task) => void;
   onStatusChange?: (taskId: string, status: TaskStatus) => Promise<void>;
 }
@@ -24,6 +26,7 @@ export function KanbanBoard({
   tasks,
   completedTodayTasks,
   presenceByTask = {},
+  parkedPresence = [],
   onTaskClick,
   onStatusChange,
 }: KanbanBoardProps) {
@@ -53,6 +56,7 @@ export function KanbanBoard({
   return (
     <>
       <div className="space-y-4 md:hidden">
+        <ParkedAgentDock presence={parkedPresence} />
         {columns.map((col) => (
           <section key={col.status} className="space-y-2">
             <div className="sticky top-0 z-10 -mx-4 flex items-center justify-between border-y bg-background/95 px-4 py-2 backdrop-blur">
@@ -84,7 +88,9 @@ export function KanbanBoard({
         ))}
       </div>
 
-      <div className="hidden grid-cols-1 gap-4 md:grid md:grid-cols-2 lg:grid-cols-4">
+      <div className="hidden space-y-3 md:block">
+        <ParkedAgentDock presence={parkedPresence} />
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         {columns.map((col) => (
           <div key={col.status} className="flex flex-col gap-2">
             <div className="flex items-center justify-between px-1">
@@ -116,6 +122,7 @@ export function KanbanBoard({
             </ScrollArea>
           </div>
         ))}
+        </div>
       </div>
     </>
   );
