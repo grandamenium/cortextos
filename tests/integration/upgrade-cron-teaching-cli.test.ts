@@ -44,10 +44,17 @@ function writeAgentFile(agent: string, rel: string, body: string): string {
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
+    // Strip CTX_AGENT_DIR and CTX_PROJECT_ROOT so resolveEnv()'s sandbox check
+    // doesn't reject the temp CTX_FRAMEWORK_ROOT vs the live agent dir.
+    const safeEnv: Record<string, string> = { ...process.env as Record<string, string> };
+    safeEnv.CTX_FRAMEWORK_ROOT = frameworkRoot;
+    safeEnv.CTX_ROOT = frameworkRoot;
+    delete safeEnv.CTX_AGENT_DIR;
+    delete safeEnv.CTX_PROJECT_ROOT;
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       [DIST_CLI, 'bus', 'upgrade-cron-teaching', ...args],
-      { env: { ...process.env, CTX_FRAMEWORK_ROOT: frameworkRoot, CTX_ROOT: frameworkRoot } },
+      { env: safeEnv },
     );
     return { stdout, stderr, code: 0 };
   } catch (err) {
