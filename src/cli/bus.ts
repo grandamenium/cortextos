@@ -103,6 +103,7 @@ const MUTATION_COMMANDS: ReadonlySet<string> = new Set([
   'send-message',
   'ack-inbox',
   'send-telegram',
+  'react-telegram',
   'send-telegram-voice',
   'send-mobile-reply',
   'send-slack',
@@ -2496,6 +2497,54 @@ busCommand
     // command. Without this, send-telegram can hang for hours (one 10s
     // timeout x N queued entries) and leave zombie processes.
     process.exit(0);
+  });
+
+busCommand
+  .command('react-telegram')
+  .description('React to a Telegram message with an emoji (default: 👍). Cuts ack-noise vs sending text.')
+  .argument('<chat-id>', 'Telegram chat ID')
+  .argument('<message-id>', 'Telegram message ID to react to')
+  .argument('[emoji]', 'Reaction emoji (default: 👍)', '👍')
+  .option('--bot-token <token>', 'Override BOT_TOKEN (default: agent .env)')
+  .action(async (chatId: string, messageIdStr: string, emoji: string, opts: { botToken?: string }) => {
+    const messageId = parseInt(messageIdStr, 10);
+    if (isNaN(messageId)) {
+      console.error('Error: message-id must be a number');
+      process.exit(1);
+    }
+
+    const env = resolveEnv();
+    let botToken = opts.botToken || '';
+
+    if (!botToken && env.agentDir) {
+      const { readFileSync, existsSync } = require('fs');
+      const { join } = require('path');
+      const agentEnv = join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const content = readFileSync(agentEnv, 'utf-8');
+        const match = content.match(/^BOT_TOKEN=(.+)$/m);
+        if (match && match[1].trim()) botToken = match[1].trim();
+      }
+    }
+    if (!botToken) botToken = process.env.BOT_TOKEN || '';
+    if (!botToken) {
+      console.error('Error: BOT_TOKEN not configured.');
+      process.exit(1);
+    }
+
+    const api = new TelegramAPI(botToken);
+    try {
+      const result = await api.setMessageReaction(chatId, messageId, [emoji]);
+      if (result?.ok) {
+        console.log(`react-telegram: reacted ${emoji} to message ${messageId} in chat ${chatId}`);
+      } else {
+        console.error(`react-telegram: API error — ${JSON.stringify(result)}`);
+        process.exit(1);
+      }
+    } catch (err: any) {
+      console.error(`react-telegram: ${err.message}`);
+      process.exit(1);
+    }
   });
 
 busCommand

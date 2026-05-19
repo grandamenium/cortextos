@@ -84,6 +84,7 @@ function fetchPRs(repo) {
             number
             title
             body
+            isDraft
             mergeable
             mergeStateStatus
             autoMergeRequest { mergeMethod }
@@ -135,6 +136,7 @@ function fetchPRs(repo) {
       number: pr.number,
       title: pr.title,
       body: pr.body ?? '',
+      isDraft: pr.isDraft ?? false,
       mergeable: pr.mergeable,
       mergeStateStatus: pr.mergeStateStatus,
       ciPassed: !hasFailure && allPassed,
@@ -163,9 +165,13 @@ async function main() {
     }
 
     for (const pr of prs) {
-      const { number, title, body, mergeable, mergeStateStatus, ciPassed, hasChangesRequested } = pr;
+      const { number, title, body, isDraft, mergeable, mergeStateStatus, ciPassed, hasChangesRequested } = pr;
 
       // Skip conditions
+      if (isDraft) {
+        console.log(`[auto-merge] SKIP #${number} ${repo} — draft PR`);
+        continue;
+      }
       if (shouldSkipBody(body)) {
         console.log(`[auto-merge] SKIP #${number} ${repo} — body contains skip signal`);
         continue;
