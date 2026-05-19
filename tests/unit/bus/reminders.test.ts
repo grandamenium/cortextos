@@ -8,6 +8,7 @@ import {
   ackReminder,
   pruneReminders,
   getOverdueReminders,
+  markReminderInjected,
 } from '../../../src/bus/reminders';
 import type { BusPaths } from '../../../src/types/index';
 
@@ -163,6 +164,87 @@ describe('reminders', () => {
 
     it('returns 0 when nothing to prune', () => {
       expect(pruneReminders(paths)).toBe(0);
+    });
+  });
+
+  describe('markReminderInjected', () => {
+    it('sets injected_at on a pending reminder', () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const r = createReminder(paths, past, 'test reminder');
+      markReminderInjected(paths, r.id);
+      const all = listReminders(paths, { all: true });
+      const updated = all.find((x) => x.id === r.id);
+      expect(updated?.injected_at).toBeTruthy();
+      expect(Date.parse(updated!.injected_at!)).toBeGreaterThan(0);
+    });
+
+    it('is idempotent - second call does not overwrite the first timestamp', async () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const r = createReminder(paths, past, 'test reminder');
+      markReminderInjected(paths, r.id);
+      const firstTs = listReminders(paths, { all: true })[0].injected_at;
+      // tiny delay to ensure clock has advanced
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      markReminderInjected(paths, r.id);
+      const secondTs = listReminders(paths, { all: true })[0].injected_at;
+      expect(secondTs).toBe(firstTs);
+    });
+
+    it('throws when the reminder id is unknown', () => {
+      expect(() => markReminderInjected(paths, 'nonexistent-id')).toThrow(/not found/);
+    });
+
+    it('does not change status or other fields', () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const r = createReminder(paths, past, 'test reminder');
+      markReminderInjected(paths, r.id);
+      const updated = listReminders(paths, { all: true })[0];
+      expect(updated.status).toBe('pending');
+      expect(updated.prompt).toBe('test reminder');
+      expect(updated.fire_at).toBe(r.fire_at);
+    });
+  });
+
+  describe('getOverdueReminders + injected_at filter', () => {
+    it('returns overdue reminders that have NOT been injected', () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      createReminder(paths, past, 'overdue and fresh');
+      expect(getOverdueReminders(paths)).toHaveLength(1);
+    });
+
+    it('skips reminders that have been injected (dedup vs --continue restart)', () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const r = createReminder(paths, past, 'already injected');
+      markReminderInjected(paths, r.id);
+      expect(getOverdueReminders(paths)).toHaveLength(0);
+    });
+
+    it('skips reminders that have been acked', () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const r = createReminder(paths, past, 'already done');
+      ackReminder(paths, r.id);
+      expect(getOverdueReminders(paths)).toHaveLength(0);
+    });
+
+    it('still skips future reminders even if not injected', () => {
+      const future = new Date(Date.now() + 3600_000).toISOString();
+      createReminder(paths, future, 'not yet');
+      expect(getOverdueReminders(paths)).toHaveLength(0);
+    });
+
+    it('mixed set: returns only the still-eligible overdue reminders', () => {
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const future = new Date(Date.now() + 60_000).toISOString();
+      const r1 = createReminder(paths, past, 'will return');
+      const r2 = createReminder(paths, past, 'already injected, skip');
+      createReminder(paths, future, 'future, skip');
+      const r4 = createReminder(paths, past, 'will be acked, skip');
+      markReminderInjected(paths, r2.id);
+      ackReminder(paths, r4.id);
+
+      const overdue = getOverdueReminders(paths);
+      expect(overdue).toHaveLength(1);
+      expect(overdue[0].id).toBe(r1.id);
     });
   });
 });
