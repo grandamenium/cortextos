@@ -1,15 +1,17 @@
 #!/usr/bin/env node
 /**
- * mac-codex-bridge — thin daemon that forwards bus messages directly to
- * Greg's Mac Codex app via SSH. No Claude Code REPL overhead.
+ * mac-codex-bridge — thin daemon that forwards bus messages to Greg's Mac
+ * Codex.app via SSH + AppleScript. A new chat appears in the Codex.app sidebar
+ * for each dispatched prompt — Greg sees and watches the work run live.
  *
  * Architecture:
  *   Any agent sends:  cortextos bus send-message mac-codex normal '<prompt>'
  *   Bridge receives:  inbox message via two channels:
  *     1. PTY stdin   — daemon fast-checker injects messages here (primary path)
  *     2. poll        — check-inbox fallback for any messages fast-checker missed
- *   Bridge executes:  ssh gregs-mac codex-dispatch.sh <prompt>
- *   Bridge replies:   cortextos bus send-message <from> normal '<result>' <msg_id>
+ *   Bridge executes:  ssh gregs-mac → osascript (File > New Chat → keystroke → Return)
+ *   Bridge replies:   cortextos bus send-message <from> normal '<thread_id>' <msg_id>
+ *                     (fire-and-forget: returns thread ID immediately, Greg watches live)
  *
  * The bridge bypasses the Orgo gate — it is explicitly Mac-first by design.
  * Set runtime='script' + script_path='scripts/mac-codex-bridge.js' in config.json.
@@ -22,10 +24,8 @@ const { execFileSync, spawn } = require('child_process');
 const AGENT_NAME = process.env.CTX_AGENT_NAME || 'mac-codex';
 const POLL_INTERVAL_MS = 2_000;
 const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
-const DISPATCH_SCRIPT = '/Users/gregharned/work/team-brain/scripts/codex-dispatch.sh';
 const SSH_HOST = 'gregs-mac';
-const CODEX_TIMEOUT_SEC = 360;
-const SSH_TIMEOUT_MS = (CODEX_TIMEOUT_SEC + 30) * 1_000;
+const SSH_TIMEOUT_MS = 30_000; // AppleScript dispatch is fast — no Codex execution wait
 
 // SSH connection failure patterns — used to distinguish offline vs execution errors
 const SSH_CONN_ERROR_PATTERNS = [
@@ -123,51 +123,55 @@ function checkInbox() {
 }
 
 /**
- * SSH to gregs-mac and run codex-dispatch.sh with the given prompt.
- * Prompt is base64-encoded to survive any quoting in the remote shell.
- * noPlugin=true skips the @Computer Use plugin (code-only tasks).
- * noPlugin=false includes the Computer Use plugin (UI/screen tasks).
- * Returns a Promise — callers do NOT block the event loop while SSH is in-flight.
+ * Open a new chat in Codex.app on gregs-mac via SSH + AppleScript.
+ * Uses File > New Chat menu item, types the prompt, presses Return.
+ * Fire-and-forget: returns the new thread ID immediately — Greg watches live.
+ *
+ * Writes the AppleScript to a temp file on the Mac to avoid all shell-quoting
+ * issues with special characters in the prompt.
  */
-function execOnMac(prompt, noPlugin) {
-  const b64 = Buffer.from(prompt, 'utf-8').toString('base64');
-  const parts = [DISPATCH_SCRIPT];
-  if (noPlugin) parts.push('--no-plugin');
-  parts.push('--timeout', String(CODEX_TIMEOUT_SEC));
-  // base64-decode the prompt on the remote side — avoids all shell quoting issues
-  parts.push(`"$(printf '%s' ${b64} | base64 -d)"`);
-  const remoteCmd = parts.join(' ');
+function execOnMac(prompt) {
+  // Escape prompt for AppleScript string literal (only \ and " need escaping)
+  const escaped = prompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const nonce = Date.now();
+  const tmpScript = `/tmp/codex-dispatch-${nonce}.applescript`;
+
+  // Build remote command: write script to temp file then run it
+  const scriptBody = [
+    'tell application "Codex" to activate',
+    'delay 0.6',
+    'tell application "System Events"',
+    '  tell process "Codex"',
+    '    click menu item "New Chat" of menu 1 of menu bar item "File" of menu bar 1',
+    '    delay 1.2',
+    `    keystroke "${escaped}"`,
+    '    delay 0.3',
+    '    key code 36',
+    '  end tell',
+    'end tell',
+    'delay 2',
+    'set threadId to do shell script "sqlite3 /Users/gregharned/.codex/state_5.sqlite \\"SELECT id FROM threads ORDER BY created_at DESC LIMIT 1;\\""',
+    'do shell script "rm -f ' + tmpScript + '"',
+    'return threadId',
+  ].join('\n');
+
+  // Use printf to write the script (avoids heredoc quoting issues over SSH)
+  const writeCmd = `printf '%s' ${JSON.stringify(scriptBody)} > ${tmpScript}`;
+  const runCmd   = `osascript ${tmpScript}`;
+  const remoteCmd = `${writeCmd} && ${runCmd}`;
 
   return spawnAsync('ssh', [
     '-n',
     '-o', 'StrictHostKeyChecking=accept-new',
     '-o', 'ConnectTimeout=10',
-    '-o', 'ServerAliveInterval=30',
+    '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=2',
     SSH_HOST,
     remoteCmd,
   ], {
     timeout: SSH_TIMEOUT_MS,
-    maxBuffer: 10 * 1024 * 1024,
+    maxBuffer: 1024 * 1024,
   });
-}
-
-/**
- * Infer whether the prompt needs the Computer Use plugin (GUI/screen) or
- * can run as a code-only task (no plugin, faster).
- */
-function wantsComputerUse(prompt) {
-  const lower = prompt.toLowerCase();
-  return (
-    lower.includes('@computer use') ||
-    lower.includes('screenshot') ||
-    lower.includes('click ') ||
-    lower.includes('open the ') ||
-    lower.includes('navigate to ') ||
-    lower.includes('in chrome') ||
-    lower.includes('in safari') ||
-    lower.includes('in the browser')
-  );
 }
 
 async function processMessage(msg) {
@@ -187,10 +191,10 @@ async function processMessage(msg) {
   let ok = false;
 
   try {
-    const noPlugin = !wantsComputerUse(text || '');
-    result = await execOnMac(text || '', noPlugin);
+    const threadId = await execOnMac(text || '');
+    result = `dispatched — new chat in Codex.app (thread ${threadId.trim()})`;
     ok = true;
-    log(`Done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+    log(`Dispatched in ${((Date.now() - start) / 1000).toFixed(1)}s — thread ${threadId.trim()}`);
   } catch (e) {
     result = `mac-codex error: ${e.message.slice(0, 500)}`;
     log(`Error: ${result}`);
@@ -203,7 +207,7 @@ async function processMessage(msg) {
     }
   }
 
-  // Reply to sender
+  // Reply to sender with thread ID (fire-and-forget — Greg watches Codex.app live)
   try {
     bus('send-message', from, 'normal', ok ? result : `ERROR: ${result}`, id);
   } catch (e) {
