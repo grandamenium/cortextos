@@ -861,13 +861,39 @@ describe('FastChecker', () => {
     // pollReminders is private; tests call it via (checker as any).
     // Verifies: 60s throttle, overdue-only filter, injection format,
     // markReminderInjected dedup, agent-reject defer-and-retry.
-    it('fires on first call (lastReminderCheck=0 satisfies the throttle gate)', async () => {
+    //
+    // NOTE: lastReminderCheck is initialized to Date.now() at FastChecker
+    // construction (Atlas review 2026-05-19) so the first live poll fires
+    // 60s after session start - this prevents duplicate delivery of
+    // boot-prompt-delivered reminders before the agent has time to ack.
+    // Tests force the throttle by setting (checker as any).lastReminderCheck = 0
+    // to simulate "we are past the 60s gate."
+    it('does NOT fire on a fresh checker within 60s of construction', async () => {
+      // Boot-path dedup guard: the boot prompt in agent-process.ts
+      // delivers any overdue reminders at session start. If pollReminders
+      // fires immediately on first cycle, it would re-deliver those same
+      // reminders before the agent can ack them. Verified by checking the
+      // first pollReminders call (no throttle override) is a no-op.
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      createReminder(paths, past, 'recently-boot-delivered');
+
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      await (checker as any).pollReminders();
+      expect(agent.injectMessage).not.toHaveBeenCalled();
+    });
+
+    it('fires after the 60s window passes (throttle forced)', async () => {
       const past = new Date(Date.now() - 60_000).toISOString();
       const { createReminder } = await import('../../../src/bus/reminders');
       createReminder(paths, past, 'first reminder');
 
       const agent = createMockAgent();
       const checker = new FastChecker(agent, paths, '/tmp/framework');
+      // Simulate 60s having passed since construction.
+      (checker as any).lastReminderCheck = 0;
 
       await (checker as any).pollReminders();
       expect(agent.injectMessage).toHaveBeenCalledTimes(1);
@@ -880,15 +906,16 @@ describe('FastChecker', () => {
 
       const agent = createMockAgent();
       const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
 
-      // First call: fires (lastReminderCheck=0).
+      // First call (throttle forced open): fires.
       await (checker as any).pollReminders();
       expect(agent.injectMessage).toHaveBeenCalledTimes(1);
 
       // Add a second overdue reminder.
       createReminder(paths, past, 'reminder two');
 
-      // Second call within 60s: must NOT fire (would have injected reminder two).
+      // Second call within 60s: must NOT fire.
       await (checker as any).pollReminders();
       expect(agent.injectMessage).toHaveBeenCalledTimes(1);
     });
@@ -900,6 +927,7 @@ describe('FastChecker', () => {
 
       const agent = createMockAgent();
       const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
       await (checker as any).pollReminders();
 
       const all = listReminders(paths, { all: true });
@@ -914,13 +942,14 @@ describe('FastChecker', () => {
       expect(agent.injectMessage).not.toHaveBeenCalled();
     });
 
-    it('skips future reminders entirely', async () => {
+    it('skips future reminders entirely (even when throttle is open)', async () => {
       const future = new Date(Date.now() + 60_000).toISOString();
       const { createReminder } = await import('../../../src/bus/reminders');
       createReminder(paths, future, 'tomorrow');
 
       const agent = createMockAgent();
       const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
 
       await (checker as any).pollReminders();
       expect(agent.injectMessage).not.toHaveBeenCalled();
@@ -933,6 +962,7 @@ describe('FastChecker', () => {
 
       const agent = createMockAgent();
       const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
       await (checker as any).pollReminders();
 
       expect(agent.injectMessage).toHaveBeenCalledTimes(1);
@@ -951,6 +981,7 @@ describe('FastChecker', () => {
       // Agent rejects this injection.
       agent.injectMessage.mockReturnValueOnce(false);
       const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
 
       await (checker as any).pollReminders();
       expect(agent.injectMessage).toHaveBeenCalledTimes(1);
@@ -971,6 +1002,7 @@ describe('FastChecker', () => {
 
       const agent = createMockAgent();
       const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
 
       await (checker as any).pollReminders();
       expect(agent.injectMessage).toHaveBeenCalledTimes(3);
@@ -988,6 +1020,7 @@ describe('FastChecker', () => {
 
       const agent = createMockAgent();
       const checker = new FastChecker(agent, paths, '/tmp/framework');
+      (checker as any).lastReminderCheck = 0;
 
       await expect((checker as any).pollReminders()).resolves.toBeUndefined();
       expect(agent.injectMessage).not.toHaveBeenCalled();

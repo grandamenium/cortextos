@@ -34,7 +34,15 @@ export class FastChecker {
   // Throttle reminder polling - reminders fire at minute granularity so
   // checking every 60s is plenty. Cheaper than re-reading the
   // pending-reminders.json file on every 1s poll cycle.
-  private lastReminderCheck: number = 0;
+  //
+  // Initialized to Date.now() at construction so the FIRST live poll
+  // fires 60s after session start, not immediately. The boot prompt in
+  // agent-process.ts already delivers any overdue reminders that exist
+  // at session start, but does NOT call markReminderInjected. Without
+  // the 60s grace window, fast-checker would re-inject those same
+  // reminders before the agent had time to ack them. Atlas caught this
+  // duplicate-delivery race during code review (2026-05-19).
+  private lastReminderCheck: number = Date.now();
   private frameworkRoot: string;
   private telegramApi?: TelegramAPI;
   private chatId?: string;
@@ -237,6 +245,15 @@ export class FastChecker {
    *      restart.
    *   3. Agent eventually calls `cortextos bus ack-reminder <id>` which
    *      moves status to 'acked' and removes it from pending entirely.
+   *
+   * Boot-path interaction:
+   *   The boot prompt in agent-process.ts delivers overdue reminders at
+   *   session start but does NOT call markReminderInjected (no change
+   *   to that file in this patch). To avoid duplicate delivery,
+   *   lastReminderCheck is initialized to Date.now() at construction,
+   *   delaying the first live poll to 60s after session start. That
+   *   window is plenty for agents to ack boot-delivered reminders
+   *   before the live poller fires.
    *
    * If a reminder fires while the agent is being restarted (rare race
    * between pollReminders and a --continue cycle), the boot-prompt
