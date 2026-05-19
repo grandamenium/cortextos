@@ -16,6 +16,7 @@
 
 const { execSync, execFileSync } = require('child_process');
 const path = require('path');
+const { checkPR, formatComment, postComment } = require('./memo-conflict-check');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -193,6 +194,23 @@ async function main() {
         continue;
       }
 
+      // Memo-conflict check (skip if body contains 'memo-conflict-ok')
+      if (!/memo-conflict-ok/i.test(body)) {
+        let conflictResult;
+        try {
+          conflictResult = checkPR(repo, number);
+        } catch {
+          conflictResult = { hasConflict: false, conflicts: [] };
+        }
+        if (conflictResult.hasConflict) {
+          const criticalCount = conflictResult.conflicts.filter(c => c.critical).length;
+          console.log(`[auto-merge] SKIP #${number} ${repo} — memo-conflict (${criticalCount} critical, ${conflictResult.conflicts.length - criticalCount} warnings)`);
+          const comment = formatComment(repo, number, conflictResult.conflicts);
+          postComment(repo, number, comment);
+          continue;
+        }
+      }
+
       // Merge
       try {
         console.log(`[auto-merge] MERGING #${number} ${repo} — "${title}"`);
@@ -240,3 +258,4 @@ if (require.main === module) {
 if (typeof module !== 'undefined') {
   module.exports = { shouldSkipBody, isCarvedOut, REPOS, CARVE_OUTS };
 }
+
