@@ -24,7 +24,7 @@ import { resolveEnv } from '../utils/env.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
-import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, ApprovalCategory, ApprovalStatus, OrgContext, CronDefinition } from '../types/index.js';
+import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, ApprovalCategory, ApprovalStatus, OrgContext, CronDefinition, CronSummaryRow } from '../types/index.js';
 
 /**
  * Check if the org requires deliverables and the task has none attached.
@@ -1905,6 +1905,33 @@ function fmtTs(iso: string | undefined): string {
 }
 
 /**
+ * Ask the daemon to compute next-fire timestamps for an agent's crons.
+ * Returns a Map<cronName, ISO> when the daemon is reachable, or `null`
+ * when the daemon is offline. The daemon runs in its own process TZ
+ * (typically UTC), so its computed timestamps are the single source of
+ * truth — the alternative is computing locally with `Date.getHours()`,
+ * which inherits caller-shell TZ and can diverge from actual fire times.
+ */
+async function fetchDaemonNextFires(
+  instanceId: string,
+  agent: string,
+): Promise<Map<string, string> | null> {
+  try {
+    const response = await new IPCClient(instanceId).send({ type: 'list-all-crons' });
+    if (!response.success || !Array.isArray(response.data)) return null;
+    const map = new Map<string, string>();
+    for (const row of response.data as CronSummaryRow[]) {
+      if (row.agent === agent && row.nextFire) {
+        map.set(row.cron.name, row.nextFire);
+      }
+    }
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Send a reload-crons IPC signal to the daemon (non-blocking, best-effort).
  * Silently swallows errors — the daemon will pick up changes on its next tick.
  */
@@ -1984,7 +2011,7 @@ busCommand
   .description('List all persistent crons configured for an agent')
   .argument('<agent>', 'Agent name')
   .option('--json', 'Emit raw JSON instead of a formatted table')
-  .action((agent: string, opts: { json?: boolean }) => {
+  .action(async (agent: string, opts: { json?: boolean }) => {
     try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
 
     const crons = readCrons(agent);
@@ -2006,6 +2033,14 @@ busCommand
       return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
     };
 
+    // BUG 2 fix: ask the daemon for next-fire timestamps instead of computing
+    // locally. `nextFireFromCron` uses `Date.getHours()` which is process-local
+    // TZ — if the CLI runs in a shell with `TZ=Asia/Bangkok` while the daemon
+    // runs in UTC, the local computation diverges from actual fire times by
+    // the TZ offset (mislabelled "UTC" in the table). Daemon-computed values
+    // are the single source of truth.
+    const daemonNextFires = await fetchDaemonNextFires(env.instanceId, agent);
+
     if (opts.json) {
       const enriched = crons.map(c => ({
         ...c,
@@ -2020,18 +2055,29 @@ busCommand
       return;
     }
 
-    // Compute next_fire_at for each cron so the table is informative
+    // Compute next_fire_at for each cron so the table is informative.
+    // Primary path: daemon-computed value via IPC. Fallback (daemon offline):
+    // local compute, which may show TZ-skewed values — printed with a "*"
+    // suffix so the operator knows to restart the daemon for an accurate read.
     const now = Date.now();
     const rows = crons.map(c => {
       const lastFire = mostRecent(c.last_fired_at, fireByName.get(c.name));
       let nextFire = '-';
-      const dms = parseDurationMs(c.schedule);
-      if (!isNaN(dms)) {
-        const refMs = lastFire ? new Date(lastFire).getTime() : now;
-        nextFire = fmtTs(new Date(refMs + dms).toISOString());
+      const daemonNF = daemonNextFires?.get(c.name);
+      if (daemonNF && daemonNF !== 'unknown') {
+        nextFire = fmtTs(daemonNF);
+      } else if (daemonNextFires) {
+        // Daemon reachable but no value for this cron — leave as '-'.
       } else {
-        const nf = nextFireFromCron(c.schedule, now);
-        if (!isNaN(nf)) nextFire = fmtTs(new Date(nf).toISOString());
+        // Daemon unreachable — compute locally and flag the value.
+        const dms = parseDurationMs(c.schedule);
+        if (!isNaN(dms)) {
+          const refMs = lastFire ? new Date(lastFire).getTime() : now;
+          nextFire = fmtTs(new Date(refMs + dms).toISOString()) + '*';
+        } else {
+          const nf = nextFireFromCron(c.schedule, now);
+          if (!isNaN(nf)) nextFire = fmtTs(new Date(nf).toISOString()) + '*';
+        }
       }
       const promptPreview = c.prompt.length > 60 ? c.prompt.slice(0, 57) + '...' : c.prompt;
       return {
@@ -2059,6 +2105,9 @@ busCommand
     console.log(`  ${sep}`);
     for (const r of rows) {
       console.log(`  ${pad(r.name, nameW)}  ${pad(r.schedule, schedW)}  ${pad(r.enabled, enW)}  ${pad(r.last_fire, lastW)}  ${pad(r.next_fire, nextW)}  ${r.prompt}`);
+    }
+    if (!daemonNextFires) {
+      console.log(`\n  * Next Fire computed locally; daemon unreachable, values may be skewed by caller-shell TZ.`);
     }
     console.log('');
   });
