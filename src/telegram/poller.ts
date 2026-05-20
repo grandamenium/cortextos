@@ -73,17 +73,42 @@ export class TelegramPoller {
 
   /**
    * Start the polling loop.
+   *
+   * On repeated failure, applies exponential backoff (capped at 60s) and
+   * suppresses identical error logs after the first 5 — then logs one
+   * summary line every 100 failures. Prevents a network outage from
+   * filling pm2 error logs with 16k duplicate stack traces.
    */
   async start(): Promise<void> {
     this.running = true;
+    let consecutiveErrors = 0;
+    let lastErrSignature = '';
     while (this.running) {
       try {
         await this.pollOnce();
+        if (consecutiveErrors > 0) {
+          console.error(`[telegram-poller] Recovered after ${consecutiveErrors} failed polls.`);
+          consecutiveErrors = 0;
+          lastErrSignature = '';
+        }
+        await sleep(this.pollInterval);
       } catch (err) {
-        // Log error but continue polling
-        console.error('[telegram-poller] Poll error:', err);
+        consecutiveErrors++;
+        const sig = err instanceof Error ? `${err.name}:${err.message}` : String(err);
+        const shouldLog =
+          consecutiveErrors <= 5 ||
+          sig !== lastErrSignature ||
+          consecutiveErrors % 100 === 0;
+        if (shouldLog) {
+          console.error(
+            `[telegram-poller] Poll error (#${consecutiveErrors}):`,
+            err,
+          );
+        }
+        lastErrSignature = sig;
+        const backoff = Math.min(this.pollInterval * 2 ** Math.min(consecutiveErrors, 6), 60000);
+        await sleep(backoff);
       }
-      await sleep(this.pollInterval);
     }
   }
 
