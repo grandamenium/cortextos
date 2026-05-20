@@ -325,6 +325,18 @@
       "dependencies": [],
       "install_path": "community/skills/nighttime-mode",
       "submitted_at": "2026-04-06T00:00:00Z"
+    },
+    {
+      "name": "engineering-workflow-guardrails",
+      "description": "Six hard-learned guardrails for multi-agent engineering teams — tasks before code, PR-only merges, spec-review state machine, adversarial review before implementation, harness coverage gate, and full-deploy staging validation. Each guardrail includes implementation guidance and was extracted from a real incident.",
+      "author": "community",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["engineering", "guardrails", "workflow", "pr", "staging", "spec-review", "multi-agent", "code-quality"],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/skills/engineering-workflow-guardrails",
+      "submitted_at": "2026-05-20T00:00:00Z"
     }
   ]
 }
