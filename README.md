@@ -115,6 +115,7 @@ pm2 start ecosystem.config.js && pm2 save && pm2 startup
 | `analyst` | System health, metrics, theta-wave autoresearch, analytics |
 | `agent` | General-purpose worker — use this as the base for specialist agents |
 | `agent-codex` | Codex-runtime worker, scaffolds with `runtime: codex-app-server` and `model: gpt-5-codex` (see `templates/agent-codex/`) |
+| `project-orchestrator-codex` | Internal bus-only Codex project orchestrator; updates heartbeat silently when idle and only messages the primary orchestrator for dispatch decisions, blockers, approvals, or material completions |
 
 Add a codex agent the same way you add a claude agent:
 
@@ -122,6 +123,9 @@ Add a codex agent the same way you add a claude agent:
 cortextos add-agent reindexer --template agent-codex --org myorg
 # or, equivalently, with the runtime flag on the default template:
 cortextos add-agent reindexer --runtime codex-app-server --org myorg
+
+# Bus-only internal project orchestrator:
+cortextos add-agent agentops-orch --template project-orchestrator-codex --org myorg
 ```
 
 Codex agents share the same bus, crons, and dashboard surfaces as claude agents — they only differ in which model handles each turn.
@@ -136,7 +140,7 @@ Every agent's `config.json` carries an explicit `runtime` field that the daemon 
 | `codex-app-server` | `CodexAppServerPTY` | `gpt-5-codex` | `plugins/cortextos-agent-skills/skills/<skill>/SKILL.md` (linked into `~/.codex/skills/<agent>__<skill>`) |
 | `hermes` | `HermesPTY` (experimental) | model per `config.json` | hermes-specific |
 
-Pass `--runtime <kind>` on `add-agent` to set it at scaffold time, or edit the field in `config.json` and restart the agent. The default is `claude-code`. Today only `--template agent` (and the alias `--template agent-codex`) supports `--runtime codex-app-server` — pairing the codex runtime with `--template orchestrator`/`analyst`/`m2c1-worker`/`hermes` errors with a clean message until codex variants of those templates ship.
+Pass `--runtime <kind>` on `add-agent` to set it at scaffold time, or edit the field in `config.json` and restart the agent. The default is `claude-code`. Today only `--template agent`, `--template agent-codex`, and `--template project-orchestrator-codex` support `codex-app-server` — pairing the codex runtime with `--template orchestrator`/`analyst`/`m2c1-worker`/`hermes` errors with a clean message until codex variants of those templates ship.
 
 ---
 
