@@ -40,6 +40,7 @@ import { generateSkill } from '../bus/generate-skill.js';
 import { syncSkills } from '../bus/sync-skills.js';
 import { runWorkflow } from '../bus/run-workflow.js';
 import { computerUse } from '../bus/computer-use.js';
+import { validateTask } from '../bus/task-validate.js';
 import { checkOrgoLeaseWatchdog, claimOrgoLease, formatLeaseStatus, listOrgoLeaseStatus, releaseOrgoLease } from '../bus/orgo-lease.js';
 import { lastpassCred, LastPassCredApprovalRequiredError, LastPassCredFetchError, LastPassCredRejectedError } from '../bus/lastpass-cred.js';
 import { closeWhisperRoom, readVoiceSettings, sendWhisper, summarizeWhisperRoom, watchWhisperRoom, whisperRoomId } from '../bus/whisper-room.js';
@@ -123,6 +124,7 @@ const MUTATION_COMMANDS: ReadonlySet<string> = new Set([
   'create-task',
   'update-task',
   'complete-task',
+  'validate-task',
   'claim-task',
   'save-output',
   'compact-tasks',
@@ -589,6 +591,10 @@ busCommand
         process.exit(1);
       }
     }
+    if (!opts.successCriteria) {
+      console.error('Error: --success-criteria is required. Provide a machine-checkable condition proving this task is done.');
+      process.exit(1);
+    }
     if ((opts.loopCron && !opts.loopPrompt) || (!opts.loopCron && opts.loopPrompt)) {
       console.error('--loop-cron and --loop-prompt must be specified together');
       process.exit(1);
@@ -747,7 +753,8 @@ busCommand
   .argument('<id>', 'Task ID')
   .argument('[result]', 'Completion result (optional positional form)')
   .option('--result <text>', 'Completion result')
-  .action(async (id: string, resultArg: string | undefined, opts: { result?: string }) => {
+  .option('--override', 'Skip LLM validation gate (emergency use only)')
+  .action(async (id: string, resultArg: string | undefined, opts: { result?: string; override?: boolean }) => {
     // Accept result as either positional arg or --result flag (P1 fix #8)
     const effectiveResult = opts.result ?? resultArg;
     const env = resolveEnv();
@@ -762,6 +769,24 @@ busCommand
       }
     }
 
+    // Guard: LLM validation gate — block until score >= 7 or --override
+    if (!opts.override && process.env.ANTHROPIC_API_KEY) {
+      try {
+        const validation = await validateTask(paths, id);
+        if (validation.score < 7) {
+          console.error(`Validation blocked: score ${validation.score}/10 (${validation.verdict}) — ${validation.reasoning}`);
+          console.error('Use --override to bypass the validation gate.');
+          process.exit(1);
+        }
+        console.log(`Validation passed: ${validation.score}/10 — ${validation.reasoning}`);
+      } catch (err) {
+        // Non-blocking: network errors or missing task criteria warn but don't block
+        console.error(`Warning: validation skipped — ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else if (opts.override) {
+      console.log('[override] Skipping validation gate.');
+    }
+
     completeTask(paths, id, effectiveResult);
     console.log(`Completed ${id}`);
 
@@ -772,6 +797,25 @@ busCommand
     // Exit after local write completes — completeTask fires mirrorTaskToRgos
     // which schedules drainRetryQueue; exit before the drain runs.
     process.exit(0);
+  });
+
+busCommand
+  .command('validate-task')
+  .argument('<id>', 'Task ID')
+  .description('LLM-judge a task against its success_criteria. Exits 0 if score >= 7, exits 1 if score < 7.')
+  .action(async (id: string) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    try {
+      const result = await validateTask(paths, id);
+      const icon = result.verdict === 'pass' ? 'PASS' : result.verdict === 'needs-revision' ? 'NEEDS-REVISION' : 'FAIL';
+      console.log(`${icon} score=${result.score}/10 verdict=${result.verdict}`);
+      console.log(result.reasoning);
+      process.exit(result.score >= 7 ? 0 : 1);
+    } catch (err) {
+      console.error(`validate-task failed: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(2);
+    }
   });
 
 busCommand
