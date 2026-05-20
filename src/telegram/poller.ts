@@ -74,10 +74,13 @@ export class TelegramPoller {
   /**
    * Start the polling loop.
    *
-   * On repeated failure, applies exponential backoff (capped at 60s) and
-   * suppresses identical error logs after the first 5 — then logs one
-   * summary line every 100 failures. Prevents a network outage from
-   * filling pm2 error logs with 16k duplicate stack traces.
+   * Errors are classified as retryable (network/timeout/5xx/429) or fatal
+   * (code bugs, auth failures). Retryable errors get exponential backoff
+   * (capped at 60s, with 50–100% jitter to avoid synchronised retry
+   * spikes) and duplicate-log suppression after the first 5 (then one
+   * summary every 100). Fatal errors are logged on every occurrence
+   * without suppression so real bugs do not hide behind the dedup, and
+   * use a fixed short backoff to avoid a hot loop.
    */
   async start(): Promise<void> {
     this.running = true;
@@ -94,19 +97,28 @@ export class TelegramPoller {
         await sleep(this.pollInterval);
       } catch (err) {
         consecutiveErrors++;
+        const retryable = isRetryableError(err);
         const sig = err instanceof Error ? `${err.name}:${err.message}` : String(err);
         const shouldLog =
+          !retryable ||
           consecutiveErrors <= 5 ||
           sig !== lastErrSignature ||
           consecutiveErrors % 100 === 0;
         if (shouldLog) {
+          const tag = retryable ? 'Poll error' : 'Poll error (non-retryable)';
           console.error(
-            `[telegram-poller] Poll error (#${consecutiveErrors}):`,
+            `[telegram-poller] ${tag} (#${consecutiveErrors}):`,
             err,
           );
         }
         lastErrSignature = sig;
-        const backoff = Math.min(this.pollInterval * 2 ** Math.min(consecutiveErrors, 6), 60000);
+        let backoff: number;
+        if (retryable) {
+          const base = Math.min(this.pollInterval * 2 ** Math.min(consecutiveErrors, 6), 60000);
+          backoff = Math.floor(base * (0.5 + Math.random() * 0.5));
+        } else {
+          backoff = 5000;
+        }
         await sleep(backoff);
       }
     }
@@ -218,4 +230,29 @@ export class TelegramPoller {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Classify a thrown poll error as retryable (network/timeout/transient
+ * server) or fatal (code bug / auth failure). Retryable errors get
+ * exponential backoff + log dedup; fatal errors are logged every time
+ * and get only a short fixed backoff so they surface fast.
+ *
+ * TelegramAPI wraps fetch failures into Error objects with stable
+ * prefixes: see src/telegram/api.ts. We match on those prefixes plus
+ * Telegram's documented retry signals (HTTP 429, 5xx).
+ */
+function isRetryableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'TypeError' || err.name === 'ReferenceError' || err.name === 'SyntaxError') {
+    return false;
+  }
+  const msg = err.message;
+  if (msg.startsWith('Telegram API request timed out')) return true;
+  if (msg.startsWith('Telegram API request failed')) return true;
+  if (msg.startsWith('Failed to download file:')) return true;
+  if (msg.startsWith('Telegram API error:')) {
+    return /\b(429|Too Many Requests|retry after|5\d\d|Bad Gateway|Gateway Timeout|Service Unavailable|Internal Server Error)\b/i.test(msg);
+  }
+  return false;
 }
