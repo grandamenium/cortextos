@@ -205,6 +205,22 @@ function pingOrchestratorChat(
     return Promise.resolve();
   }
 
+  // Dedup guard: if the orchestrator's bot+chat match the activity channel's
+  // bot+chat, postApprovalToActivityChannel already sent a message with
+  // Approve/Deny buttons to this exact chat. Sending again produces the
+  // double-approval-buttons bug Greg reported.
+  const activityEnvPath = join(frameworkRoot, 'orgs', org, 'activity-channel.env');
+  if (existsSync(activityEnvPath)) {
+    try {
+      const activityEnv = parseEnvFile(activityEnvPath);
+      if (activityEnv.ACTIVITY_BOT_TOKEN === botToken && activityEnv.ACTIVITY_CHAT_ID === chatId) {
+        return Promise.resolve();
+      }
+    } catch {
+      // Unreadable activity-channel.env — proceed with orchestrator ping.
+    }
+  }
+
   const lines = [
     `🔔 Approval needed: ${title}`,
     `Category: ${category}`,

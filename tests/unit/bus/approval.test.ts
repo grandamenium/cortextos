@@ -394,6 +394,63 @@ describe('createApproval — agent-bot Telegram ping (closes 50h+ Repo-B-style s
   });
 });
 
+describe('createApproval — orchestrator chat dedup guard (double-approval-buttons bug)', () => {
+  // When the orchestrator's BOT_TOKEN + CHAT_ID match the activity-channel's
+  // ACTIVITY_BOT_TOKEN + ACTIVITY_CHAT_ID, postApprovalToActivityChannel has
+  // already sent a message with Approve/Deny buttons to that chat.
+  // pingOrchestratorChat must skip to avoid a second approval message.
+
+  function writeOrchestratorEnv(root: string, org: string, botToken: string, chatId: string): void {
+    const dir = join(root, 'orgs', org, 'agents', 'orchestrator');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, '.env'), `BOT_TOKEN=${botToken}\nCHAT_ID=${chatId}\n`);
+  }
+
+  function writeActivityChannelEnv(root: string, org: string, botToken: string, chatId: string): void {
+    const dir = join(root, 'orgs', org);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'activity-channel.env'), `ACTIVITY_BOT_TOKEN=${botToken}\nACTIVITY_CHAT_ID=${chatId}\n`);
+  }
+
+  it('DEDUP: skips orchestrator ping when bot+chat match activity channel (same chat, would duplicate buttons)', async () => {
+    writeOrchestratorEnv(frameworkRoot, 'TestOrg', 'shared-bot-token', '111222333');
+    writeActivityChannelEnv(frameworkRoot, 'TestOrg', 'shared-bot-token', '111222333');
+
+    // Creating approval from a different agent so the orchestrator-self guard does not trigger.
+    await createApproval(paths, 'dev', 'TestOrg', 'Dedup test', 'deployment', undefined, frameworkRoot);
+
+    // TelegramAPI must NOT be instantiated for the orchestrator ping —
+    // the activity channel (mocked via postActivitySpy) already covered that chat.
+    // No agentDir passed, so agent-bot ping is also skipped.
+    expect(telegramSendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it('DEDUP: fires orchestrator ping when bot+chat differ from activity channel (separate chats)', async () => {
+    writeOrchestratorEnv(frameworkRoot, 'TestOrg', 'orch-bot-token', '999888777');
+    writeActivityChannelEnv(frameworkRoot, 'TestOrg', 'activity-bot-token', '111222333');
+
+    await createApproval(paths, 'dev', 'TestOrg', 'Separate chats test', 'deployment', undefined, frameworkRoot);
+
+    // Different chats — orchestrator ping should fire exactly once with buttons.
+    expect(telegramSendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(telegramConstructorSpy).toHaveBeenCalledWith('orch-bot-token');
+    const [chatId, , keyboard] = telegramSendMessageSpy.mock.calls[0] as [string, string, { inline_keyboard: unknown[][] }];
+    expect(chatId).toBe('999888777');
+    // Must include Approve/Deny buttons
+    expect(keyboard?.inline_keyboard?.[0]).toHaveLength(2);
+  });
+
+  it('DEDUP: fires orchestrator ping when activity-channel.env is absent (no dedup data available)', async () => {
+    writeOrchestratorEnv(frameworkRoot, 'TestOrg', 'orch-bot-token', '999888777');
+    // No activity-channel.env written — dedup guard should not block.
+
+    await createApproval(paths, 'dev', 'TestOrg', 'No activity env', 'deployment', undefined, frameworkRoot);
+
+    expect(telegramSendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(telegramConstructorSpy).toHaveBeenCalledWith('orch-bot-token');
+  });
+});
+
 describe('updateApproval (regression guard for activity-channel callback path)', () => {
   it('moves the approval file from pending/ to resolved/ with status+note', async () => {
     // The handleActivityCallback path calls updateApproval with an audit
