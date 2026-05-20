@@ -120,13 +120,27 @@ interface CheckResult {
   evidence: string;
 }
 
+type ButtonCounts = Record<string, number>;
+
+async function countButtons(page: Page, labels: Record<string, RegExp>): Promise<ButtonCounts> {
+  const counts: ButtonCounts = {};
+  for (const [key, name] of Object.entries(labels)) {
+    counts[key] = await page.getByRole('button', { name }).count();
+  }
+  return counts;
+}
+
+function sumCounts(counts: ButtonCounts) {
+  return Object.values(counts).reduce((sum, count) => sum + count, 0);
+}
+
 async function shot(page: Page, name: string) {
   const file = path.join(OUTPUT_DIR, `${slug(targetPage)}-${name}.png`);
   // Race screenshot against wall-clock timer — page.screenshot({ timeout }) uses page-internal timer
   // which is gone when page crashes, so the timeout option alone doesn't protect against hangs
   await Promise.race([
-    page.screenshot({ path: file, fullPage: false }).catch(() => {}),
-    new Promise<void>(r => setTimeout(r, 8000)),
+    page.screenshot({ path: file, fullPage: false, timeout: 2500 }).catch(() => {}),
+    new Promise<void>(r => setTimeout(r, 3000)),
   ]);
   return file;
 }
@@ -141,17 +155,21 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
   // Nav buttons have aria-labels in the DOM (confirmed working in run 1)
   const getPrevBtn = () => page.locator('button[aria-label*="previous" i], button[title*="previous" i], button[aria-label*="prev" i]').first();
   const getNextBtn = () => page.locator('button[aria-label*="next" i], button[title*="next" i]').first();
-  // Date range is plain text like "27 Apr – 03 May 2026" — not in h2/h3, use getByText
-  const getDateRange = () => page.getByText(/\d+ \w+ [–\-] \d+ \w+ \d{4}/, { exact: false }).first();
+  // Date range is plain text like "27 Apr – 03 May 2026" — read via evaluate
+  // because locator textContent can hang when /time's live subscriptions get busy.
+  const getDateRangeText = async () => Promise.race([
+    page.evaluate(() => document.body.innerText.match(/\d+ \w+ [–\-] \d+ \w+ \d{4}/)?.[0] ?? ''),
+    new Promise<string>(resolve => setTimeout(() => resolve(''), 2000)),
+  ]);
   // "Select a project…" is a shadcn combobox rendered as a button
   const getProjectBtn = () => page.locator('button:has-text("Select a project"), [role="combobox"]').first();
   // Wait for the week's data to finish loading (dismisses the full-page "Loading..." state)
   const waitForWeekLoad = async () => {
-    await page.waitForSelector('text=Loading...', { state: 'hidden', timeout: 10000 }).catch(() => {});
+    await page.waitForSelector('text=Loading...', { state: 'hidden', timeout: 3000 }).catch(() => {});
     // Also wait for the progress bar / hrs text to appear — ensures data has rendered before hasHoursOnPage check
-    await page.waitForSelector(':text("/ ") :text("hrs"), :text("hrs")', { timeout: 2000 }).catch(async () => {
+    await page.waitForSelector(':text("/ ") :text("hrs"), :text("hrs")', { timeout: 1000 }).catch(async () => {
       // Fallback: wait for page.getByText to resolve — avoids invalid selector issues
-      await page.getByText(/\d+\.\d+ \/ \d+ hrs/).first().waitFor({ timeout: 1500 }).catch(() => {});
+      await page.getByText(/\d+\.\d+ \/ \d+ hrs/).first().waitFor({ timeout: 1000 }).catch(() => {});
     });
     await page.waitForTimeout(300);
   };
@@ -171,7 +189,7 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
 
   // CHECK 1: Page load
   try {
-    await page.waitForSelector('button', { timeout: 15000 });
+    await page.waitForSelector('button', { timeout: 5000 });
     const h = await page.locator('h1, h2, [data-testid="page-title"]').first().textContent().catch(() => '');
     await shot(page, '1-load');
     results.push({ check: 'CHECK 1 Page load', status: 'PASS', evidence: `Page loaded. Heading: "${h?.trim()}". URL: ${page.url()}` });
@@ -193,12 +211,12 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
     if (await hasHoursOnPage()) { foundDataWeek = true; dataWeekLabel = 'current week'; }
     for (let i = 0; i < 6 && !foundDataWeek; i++) {
       if (await prevBtn.count() > 0) {
-        await prevBtn.click();
+        await prevBtn.click({ timeout: 3000 });
         await waitForWeekLoad();
         weeksBack++;
         if (await hasHoursOnPage()) {
           foundDataWeek = true;
-          dataWeekLabel = await getDateRange().textContent().catch(() => `${weeksBack} week(s) back`) ?? `${weeksBack} week(s) back`;
+          dataWeekLabel = await getDateRangeText() || `${weeksBack} week(s) back`;
         }
       } else break;
     }
@@ -219,7 +237,7 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
   try {
     const projectBtn = getProjectBtn();
     if (await projectBtn.count() > 0) {
-      await projectBtn.click();
+      await projectBtn.click({ timeout: 3000 });
       await page.waitForTimeout(800);
       await shot(page, '3-log-project-open');
       const options = await page.locator('[role="option"], [cmdk-item], li[role="option"]').count();
@@ -230,7 +248,7 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
       // Fallback: click a day cell
       const dayCell = page.locator('td, [role="gridcell"]').nth(2);
       if (await dayCell.count() > 0) {
-        await dayCell.click();
+        await dayCell.click({ timeout: 3000 });
         await page.waitForTimeout(600);
         await shot(page, '3-log-cell-click');
         const inputVisible = await page.locator('input[type="number"], input[type="text"]').count() > 0;
@@ -254,15 +272,15 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
     try {
       // If we're in day view, try switching to week view first
       const weekBtn = page.locator('button:has-text("Week")').first();
-      if (await weekBtn.count() > 0) { await weekBtn.click(); await waitForWeekLoad(); }
+      if (await weekBtn.count() > 0) { await weekBtn.click({ timeout: 3000 }); await waitForWeekLoad(); }
       // Navigate by Prev clicks until the data week label appears (up to 4 attempts)
       const target = dataWeekLabel.trim().slice(0, 6); // e.g. "20 Apr"
       for (let i = 0; i < 4; i++) {
-        const currentRange = (await getDateRange().textContent().catch(() => '')) ?? '';
+        const currentRange = await getDateRangeText();
         if (currentRange.includes(target)) break;
         const prevBtn = getPrevBtn();
         if (await prevBtn.count() === 0) break;
-        await prevBtn.click();
+        await prevBtn.click({ timeout: 3000 });
         await waitForWeekLoad();
       }
     } catch { /* ignore — Check 5 will DEFERRED if still on wrong week */ }
@@ -409,7 +427,7 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
         await deleteBtn.hover();
         await shot(page, '5-delete-hover');
         const urlBefore = page.url();
-        await deleteBtn.click();
+        await deleteBtn.click({ timeout: 3000 });
         // Wait up to 2s for confirmation dialog
         const dialogLoc = page.locator('[role="alertdialog"], [role="dialog"]');
         await dialogLoc.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {});
@@ -422,7 +440,7 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
         const dialog = await dialogLoc.count() > 0;
         if (dialog) {
           const cancelBtn = page.locator('[role="dialog"] button:has-text("Cancel"), [role="alertdialog"] button:has-text("Cancel")').first();
-          await cancelBtn.click().catch(() => page.keyboard.press('Escape'));
+          await cancelBtn.click({ timeout: 3000 }).catch(() => page.keyboard.press('Escape'));
           return { check: 'CHECK 5 Delete entry', status: 'PASS', evidence: `Delete button opened confirmation dialog (row had ${rowHoursBeforeClick}h). Clicked Cancel — no deletion.` };
         } else if (rowHoursBeforeClick > 0) {
           // >0h row with no dialog = real regression — AlertDialog should have appeared
@@ -498,7 +516,7 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
           const taggedBtn = page.locator('[data-qa-delete-btn="true"]').first();
           await taggedBtn.hover().catch(() => {});
           const urlBeforeFallback = page.url();
-          await taggedBtn.click();
+          await taggedBtn.click({ timeout: 3000 });
           // Use same 2s wait as primary path — 600ms was too short
           const fallbackDialogLoc = page.locator('[role="alertdialog"], [role="dialog"]');
           await fallbackDialogLoc.waitFor({ state: 'visible', timeout: 2000 }).catch(() => {});
@@ -532,26 +550,32 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
 
   // CHECK 6: Week navigation — navigate from wherever we are, verify date range changes
   try {
-    const prevBtn = getPrevBtn();
-    const nextBtn = getNextBtn();
-    const dateEl = getDateRange();
+    let prevBtn = getPrevBtn();
+    let nextBtn = getNextBtn();
 
     // Wait up to 5s for the prev button to appear — the page may briefly
     // re-render after CHECK 5's dialog interaction.
     await prevBtn.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null);
+    if (await prevBtn.count() === 0) {
+      await page.goto(`${HUB_URL}/time`, { waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+      await waitForWeekLoad();
+      prevBtn = getPrevBtn();
+      nextBtn = getNextBtn();
+      await prevBtn.waitFor({ state: 'visible', timeout: 3000 }).catch(() => null);
+    }
 
-    const before = await dateEl.textContent().catch(() => '');
+    const before = await getDateRangeText();
     await shot(page, '6-nav-before');
 
     if (await prevBtn.count() > 0) {
-      await prevBtn.click();
+      await prevBtn.click({ timeout: 3000 });
       await page.waitForTimeout(1000);
-      const after = await dateEl.textContent().catch(() => '');
+      const after = await getDateRangeText();
       await shot(page, '6-nav-after-prev');
 
       if (before !== after && after) {
         // Also click next to verify it works
-        if (await nextBtn.count() > 0) { await nextBtn.click(); await page.waitForTimeout(800); }
+        if (await nextBtn.count() > 0) { await nextBtn.click({ timeout: 3000 }); await page.waitForTimeout(800); }
         await shot(page, '6-nav-after-next');
         results.push({ check: 'CHECK 6 Week navigation', status: 'PASS', evidence: `Prev changed date range from "${before?.trim()}" to "${after?.trim()}". Next button also present and clicked.` });
       } else {
@@ -1069,18 +1093,47 @@ async function runWorkApprovalsChecks(page: Page): Promise<CheckResult[]> {
 
   // CHECK 2: Pending approvals or empty state
   results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Approval queue',
-    '[class*="approval"], [class*="pending"], [class*="item"], [class*="card"], [role="listitem"]',
-    /no approvals|nothing pending|empty|all done/i));
+    'main button:has-text("Approve"), main button:has-text("Deny"), main [class*="border-caution"], main [class*="bg-caution"]',
+    /no pending approvals|no approvals|nothing pending|empty|all done/i));
 
-  // CHECK 3: Approve/Reject buttons visible (DO NOT CLICK — NO-SEND)
+  // CHECK 3: Approve/Reject buttons visible in list or detail (DO NOT CLICK — NO-SEND)
   try {
-    const approveBtns = await page.locator('button:has-text("Approve"), button:has-text("Accept"), button:has-text("Confirm")').count();
-    const rejectBtns  = await page.locator('button:has-text("Reject"), button:has-text("Deny"), button:has-text("Decline")').count();
-    await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-buttons.png`) });
-    if (approveBtns > 0 || rejectBtns > 0) {
-      results.push({ check: 'CHECK 3 Approve/Reject buttons', status: 'PASS', evidence: `${approveBtns} Approve button(s), ${rejectBtns} Reject button(s) visible. NOT clicked — NO-SEND.` });
+    const actionLabels = {
+      approve: /approve|accept|confirm/i,
+      reject: /reject|deny|decline/i,
+    };
+    let counts = await countButtons(page, actionLabels);
+    let context = 'list';
+    let itemText = '';
+
+    if (sumCounts(counts) === 0) {
+      const approvalItem = page.locator('main [data-testid*="approval"], main [class*="border-caution"], main [class*="bg-caution"], main [role="listitem"]').filter({ hasText: /[a-z]/i }).first();
+      if (await approvalItem.count() > 0) {
+        itemText = (await approvalItem.textContent().catch(() => ''))?.trim().slice(0, 40) ?? '';
+        const urlBefore = page.url();
+        await approvalItem.click();
+        await page.waitForTimeout(900);
+        await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-buttons-detail.png`) });
+        const detailCounts = await countButtons(page, actionLabels);
+        if (sumCounts(detailCounts) > 0) {
+          counts = detailCounts;
+          context = 'detail';
+        }
+        await page.keyboard.press('Escape').catch(() => {});
+        if (page.url() !== urlBefore) {
+          await page.goBack({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => {});
+        }
+        await page.waitForTimeout(300);
+      }
     } else {
-      results.push({ check: 'CHECK 3 Approve/Reject buttons', status: 'DEFERRED', evidence: 'No Approve/Reject buttons found. Queue may be empty.' });
+      await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-buttons.png`) });
+    }
+
+    if (sumCounts(counts) > 0) {
+      const detailNote = itemText ? ` after opening "${itemText.slice(0, 30)}"` : '';
+      results.push({ check: 'CHECK 3 Approve/Reject buttons', status: 'PASS', evidence: `${counts.approve ?? 0} Approve button(s), ${counts.reject ?? 0} Reject button(s) visible in ${context}${detailNote}. NOT clicked — NO-SEND.` });
+    } else {
+      results.push({ check: 'CHECK 3 Approve/Reject buttons', status: 'DEFERRED', evidence: 'No Approve/Reject buttons found in list or first detail view. Queue may be empty or layout changed.' });
     }
   } catch (e) {
     results.push({ check: 'CHECK 3 Approve/Reject buttons', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
@@ -1088,7 +1141,7 @@ async function runWorkApprovalsChecks(page: Page): Promise<CheckResult[]> {
 
   // CHECK 4: Click an approval item to view detail, verify modal/panel, then cancel
   try {
-    const approvalItem = page.locator('[class*="approval"], [class*="item"], [class*="card"]').first();
+    const approvalItem = page.locator('main [data-testid*="approval"], main [class*="border-caution"], main [class*="bg-caution"], main [role="listitem"]').filter({ hasText: /[a-z]/i }).first();
     if (await approvalItem.count() > 0) {
       const itemText = (await approvalItem.textContent().catch(() => ''))?.trim().slice(0, 40);
       await approvalItem.click();
@@ -1876,21 +1929,24 @@ async function runContentReviewChecks(page: Page): Promise<CheckResult[]> {
     results.push({ check: 'CHECK 2 Review items visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
-  // CHECK 3: Review action buttons (Approve/Reject/Request Changes/Comment)
+  // CHECK 3: Current review workflow actions (scan, preset, upload, API key)
   try {
     await shot(page, `${sp}-3-actions`);
-    const approveBtn = await page.getByRole('button', { name: /approve/i }).count();
-    const rejectBtn  = await page.getByRole('button', { name: /reject|decline/i }).count();
-    const commentBtn = await page.getByRole('button', { name: /comment|feedback|request.changes/i }).count();
-    const anyAction  = approveBtn + rejectBtn + commentBtn;
-    const tabCount   = await page.locator('[role="tab"], [class*="tab"]').count();
+    const actionCounts = await countButtons(page, {
+      scan: /deploy review agents|re-scan with agents|agents deploying/i,
+      apiKey: /set api key|api key set/i,
+      preset: /article|blog|case study|whitepaper|landing page|email/i,
+    });
+    const uploadDropzone = await page.getByText(/drop a file|click to upload/i).count();
+    const tabCount = await page.locator('[role="tab"], [class*="tab"]').count();
+    const anyAction = sumCounts(actionCounts) + uploadDropzone;
     if (anyAction > 0) {
-      results.push({ check: 'CHECK 3 Review action buttons present', status: 'PASS', evidence: `Action buttons: approve:${approveBtn}, reject:${rejectBtn}, comment:${commentBtn}.` });
+      results.push({ check: 'CHECK 3 Review workflow actions present', status: 'PASS', evidence: `Actions: scan:${actionCounts.scan ?? 0}, api-key:${actionCounts.apiKey ?? 0}, presets:${actionCounts.preset ?? 0}, upload:${uploadDropzone}.` });
     } else {
-      results.push({ check: 'CHECK 3 Review action buttons present', status: 'DEFERRED', evidence: `No approve/reject/comment buttons found. Tabs: ${tabCount}. May require item selection first.` });
+      results.push({ check: 'CHECK 3 Review workflow actions present', status: 'DEFERRED', evidence: `No scan, preset, upload, or API-key controls found. Tabs: ${tabCount}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Review action buttons present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: 'CHECK 3 Review workflow actions present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first item → content preview with review actions
@@ -2379,12 +2435,6 @@ async function main() {
       try { localStorage.setItem(key, val); } catch {}
     }, { key: storageKey, val: sessionJson });
 
-    const page = await context.newPage();
-
-    // Track page crashes — crashed pages make Playwright calls hang indefinitely
-    let pageCrashed = false;
-    page.on('crash', () => { pageCrashed = true; console.error('[qa] Page crashed!'); });
-
     // Alias → canonical URL map for short-form --page args
     const PAGE_URL_MAP: Record<string, string> = {
       'cortex-theta': '/app/cortex/theta',
@@ -2392,12 +2442,23 @@ async function main() {
     };
     const navPath = PAGE_URL_MAP[targetPage] ?? targetPage;
 
-    // Block Supabase Realtime WebSocket on /companies before page load — live subscriptions
-    // saturate the JS engine and make all subsequent Playwright eval hang indefinitely.
+    // Block Supabase Realtime WebSocket on pages where live subscriptions can
+    // saturate the JS engine and make subsequent Playwright eval hang indefinitely.
     // Initial data loads via REST, so blocking WS doesn't affect rendered content.
-    if (navPath === '/companies') {
-      await page.routeWebSocket(/supabase\.co\/realtime/, ws => ws.close());
+    if (navPath === '/companies' || navPath === '/time') {
+      await context.routeWebSocket(/.*/, ws => {
+        if (/supabase\.co\/realtime|realtime\/v1\/websocket/i.test(ws.url())) {
+          return ws.close();
+        }
+        return ws.connectToServer();
+      });
     }
+
+    const page = await context.newPage();
+
+    // Track page crashes — crashed pages make Playwright calls hang indefinitely
+    let pageCrashed = false;
+    page.on('crash', () => { pageCrashed = true; console.error('[qa] Page crashed!'); });
 
     console.log(`Navigating to ${HUB_URL}${navPath}...`);
     await page.goto(`${HUB_URL}${navPath}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
