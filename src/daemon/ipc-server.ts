@@ -663,11 +663,14 @@ export class IPCServer {
           break;
 
         case 'spawn-worker': {
-          const d = request.data as { name?: string; dir?: string; prompt?: string; parent?: string; model?: string } | undefined;
+          const d = request.data as { name?: string; dir?: string; prompt?: string; parent?: string; model?: string; baseUrl?: string; apiKeyEnv?: string } | undefined;
           if (!d?.name || !d?.dir || !d?.prompt) {
             response = { success: false, error: 'spawn-worker requires: name, dir, prompt' };
           } else if (!WORKER_NAME_REGEX.test(d.name) || d.name.length > 64) {
             response = { success: false, error: 'Invalid worker name' };
+          } else if ((d.baseUrl && !d.apiKeyEnv) || (!d.baseUrl && d.apiKeyEnv)) {
+            // Cheap-LLM lane: --base-url + --api-key-env are paired; reject mismatch.
+            response = { success: false, error: 'spawn-worker requires both --base-url and --api-key-env together for the cheap-LLM lane' };
           } else {
             const resolvedDir = pathResolve(d.dir);
             const ctxRoot = process.env.CTX_ROOT ? pathResolve(process.env.CTX_ROOT) : '';
@@ -677,7 +680,7 @@ export class IPCServer {
             if (!underCtxRoot && !underCwd) {
               response = { success: false, error: 'Invalid worker dir' };
             } else {
-              this.agentManager.spawnWorker(d.name, resolvedDir, d.prompt, d.parent, d.model)
+              this.agentManager.spawnWorker(d.name, resolvedDir, d.prompt, d.parent, d.model, d.baseUrl, d.apiKeyEnv)
                 .catch(err => console.error(`[ipc] spawn-worker failed:`, err));
               response = { success: true, data: `Spawning worker ${d.name}` };
             }

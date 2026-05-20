@@ -136,6 +136,10 @@ export class AgentPTY {
       } catch { /* leave unset if context.json is missing or malformed */ }
     }
 
+    // Cheap-LLM execution lane (see AgentConfig.cheap_lane + spec
+    // agents/analyst/reports/cheap-llm-lanes-spec-2026-05-20.md).
+    AgentPTY.applyCheapLaneEnv(ptyEnv, this.config, this.env.agentName);
+
     // Spawn the agent binary directly (no shell wrapper) — cross-platform, no shell escaping needed.
     // env is passed natively via node-pty options; no bash export commands required.
     // On Windows, npm global installs create .cmd wrappers, not .exe binaries.
@@ -346,5 +350,60 @@ export class AgentPTY {
     }
 
     return env;
+  }
+
+  /**
+   * Apply the cheap-LLM lane env overrides to a PTY env map.
+   *
+   * Static + pure (mutates the passed env in place, returns void) so it
+   * can be exercised in unit tests without spawning a real PTY. spawn()
+   * calls this once after both org secrets.env and agent .env have been
+   * sourced.
+   *
+   * Contract:
+   *   - When `config.cheap_lane?.enabled` is not strictly true, no
+   *     overrides are applied (Anthropic path preserved).
+   *   - When enabled but the env_key value is missing or empty in
+   *     ptyEnv, log a warning + leave ptyEnv untouched (Anthropic
+   *     fallback). A typo in env_key never produces a dead agent.
+   *   - When enabled AND env_key resolves to a non-empty value,
+   *     overrides ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY + CLAUDE_API_KEY
+   *     to point at the alt provider, and sets CTX_AGENT_MODEL for
+   *     downstream telemetry visibility.
+   *
+   * Trailing whitespace on the provider key is trimmed. Other env
+   * values are passed through unmodified.
+   */
+  static applyCheapLaneEnv(
+    ptyEnv: Record<string, string>,
+    config: AgentConfig,
+    agentName: string,
+    warn: (msg: string) => void = (msg) => console.warn(msg),
+  ): void {
+    const cheapLane = config.cheap_lane;
+    if (!cheapLane || cheapLane.enabled !== true) return;
+
+    const providerKey = ptyEnv[cheapLane.env_key];
+    if (!providerKey || !providerKey.trim()) {
+      warn(
+        `[agent-pty] ${agentName}: cheap_lane.enabled=true but env var ` +
+        `'${cheapLane.env_key}' is missing/empty in agent .env + org ` +
+        `secrets.env. Falling back to Anthropic path. Populate ` +
+        `${cheapLane.env_key} or set cheap_lane.enabled=false to silence.`,
+      );
+      return;
+    }
+
+    const trimmed = providerKey.trim();
+    ptyEnv['ANTHROPIC_BASE_URL'] = cheapLane.base_url;
+    ptyEnv['ANTHROPIC_API_KEY'] = trimmed;
+    // Some claude-code runtimes probe both ANTHROPIC_API_KEY and
+    // CLAUDE_API_KEY; setting both avoids the "looks at the wrong one"
+    // surprise after restart.
+    ptyEnv['CLAUDE_API_KEY'] = trimmed;
+    // Observed-only by downstream tooling/dashboards. The claude-code
+    // binary takes its model from --model arg or its own config; this
+    // is for telemetry consistency across alt providers.
+    ptyEnv['CTX_AGENT_MODEL'] = cheapLane.model;
   }
 }

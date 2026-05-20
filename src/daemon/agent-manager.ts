@@ -731,8 +731,23 @@ export class AgentManager {
 
   /**
    * Spawn an ephemeral worker session for a parallelized task.
+   *
+   * Cheap-LLM lane: when `baseUrl` and `apiKeyEnv` are both provided,
+   * the worker config carries a `cheap_lane` block so the PTY env-build
+   * path (AgentPTY.applyCheapLaneEnv) overrides ANTHROPIC_BASE_URL +
+   * ANTHROPIC_API_KEY for that worker only. The parent agent's own
+   * runtime is unaffected. Spec:
+   * agents/analyst/reports/cheap-llm-lanes-spec-2026-05-20.md.
    */
-  async spawnWorker(name: string, dir: string, prompt: string, parent?: string, model?: string): Promise<void> {
+  async spawnWorker(
+    name: string,
+    dir: string,
+    prompt: string,
+    parent?: string,
+    model?: string,
+    baseUrl?: string,
+    apiKeyEnv?: string,
+  ): Promise<void> {
     if (this.workers.has(name)) {
       throw new Error(`Worker "${name}" is already running`);
     }
@@ -753,7 +768,16 @@ export class AgentManager {
       projectRoot: this.frameworkRoot,
     };
 
-    const config = model ? { model } : {};
+    const config: { model?: string; cheap_lane?: { enabled: boolean; base_url: string; model: string; env_key: string } } = {};
+    if (model) config.model = model;
+    if (baseUrl && apiKeyEnv) {
+      config.cheap_lane = {
+        enabled: true,
+        base_url: baseUrl,
+        model: model || 'deepseek-chat',
+        env_key: apiKeyEnv,
+      };
+    }
 
     this.workers.set(name, worker);
 
