@@ -201,6 +201,38 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * Cheap-LLM execution lane. When `enabled: true`, the PTY spawn path
+   * overrides `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` so the
+   * claude-code runtime hits an alternate provider (DeepSeek, OpenRouter,
+   * local Ollama) instead of api.anthropic.com.
+   *
+   * `model` controls the model name the runtime sends in requests. Some
+   * providers (DeepSeek, OpenRouter) ignore the Claude model identifier
+   * and route based on their own model param; in that case the
+   * runtime's model value is still set so downstream telemetry stays
+   * consistent.
+   *
+   * `env_key` names the env var in the agent's .env (or org secrets.env)
+   * that holds the alternate-provider API key. Spawn reads that key
+   * value and writes it into `ANTHROPIC_API_KEY` in the PTY env so the
+   * claude-code runtime sees a single unified credential.
+   *
+   * Spec: agents/analyst/reports/cheap-llm-lanes-spec-2026-05-20.md.
+   * Drop-in-ready: setting `cheap_lane.enabled: true` plus a populated
+   * `env_key` in the agent .env activates the lane on next agent
+   * restart. Leaving `enabled: false` (or absent) keeps the agent on
+   * the Anthropic API path.
+   */
+  cheap_lane?: {
+    enabled: boolean;
+    /** Base URL for the alt provider (e.g. "https://api.deepseek.com/v1"). */
+    base_url: string;
+    /** Model name to send in runtime requests. */
+    model: string;
+    /** Env var name (read from agent .env) holding the alt-provider key. */
+    env_key: string;
+  };
 }
 
 export interface CronEntry {

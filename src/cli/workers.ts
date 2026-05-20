@@ -10,14 +10,31 @@ export const spawnWorkerCommand = new Command('spawn-worker')
   .requiredOption('--prompt <text>', 'Task prompt to inject at session start')
   .option('--parent <agent>', 'Parent agent name (for bus reply routing)')
   .option('--model <model>', 'Claude model to use (defaults to org default)')
-  .action(async (name: string, opts: { dir: string; prompt: string; parent?: string; model?: string }) => {
+  .option('--base-url <url>', 'Override ANTHROPIC_BASE_URL for this worker (cheap-LLM lane: DeepSeek / OpenRouter / Ollama). Requires --api-key-env. Spec: agents/analyst/reports/cheap-llm-lanes-spec-2026-05-20.md')
+  .option('--api-key-env <name>', 'Env var name (read from the calling agent .env or org secrets.env) whose value becomes ANTHROPIC_API_KEY in the worker PTY. Pairs with --base-url.')
+  .action(async (name: string, opts: { dir: string; prompt: string; parent?: string; model?: string; baseUrl?: string; apiKeyEnv?: string }) => {
     const env = resolveEnv();
     const client = new IPCClient(env.instanceId);
     const dir = resolve(opts.dir);
 
+    // Cheap-LLM lane validation: --base-url and --api-key-env are paired.
+    // Either pass both or neither - mismatched usage is almost always a typo.
+    if ((opts.baseUrl && !opts.apiKeyEnv) || (!opts.baseUrl && opts.apiKeyEnv)) {
+      console.error('Error: --base-url and --api-key-env must be passed together (cheap-LLM lane requires both).');
+      process.exit(1);
+    }
+
     const response = await client.send({
       type: 'spawn-worker',
-      data: { name, dir, prompt: opts.prompt, parent: opts.parent, model: opts.model },
+      data: {
+        name,
+        dir,
+        prompt: opts.prompt,
+        parent: opts.parent,
+        model: opts.model,
+        baseUrl: opts.baseUrl,
+        apiKeyEnv: opts.apiKeyEnv,
+      },
     });
 
     if (response.success) {
