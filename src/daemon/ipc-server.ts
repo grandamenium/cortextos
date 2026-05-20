@@ -9,6 +9,7 @@ import type { ExecutionLogStatusFilter } from '../bus/crons.js';
 import { nextFireFromCron } from './cron-scheduler.js';
 import { parseDurationMs } from '../bus/cron-state.js';
 import { computeHealth, aggregateFleetHealth } from '../utils/cron-health.js';
+import { resolveEnv, resolveCronTimezone } from '../utils/env.js';
 
 const WORKER_NAME_REGEX = /^[a-z0-9_-]+$/;
 
@@ -121,11 +122,15 @@ export function handleFireCron(
  * @param schedule    - Interval shorthand or 5-field cron expression.
  * @param lastFiredAt - ISO 8601 of last fire; if absent uses `now`.
  * @param now         - Epoch ms for "now" (injectable for testing).
+ * @param timeZone    - IANA zone for interpreting cron expressions (default
+ *                      "UTC"). MUST match the daemon CronScheduler's zone so
+ *                      the displayed next-fire agrees with the real fire.
  */
 export function computeNextFire(
   schedule: string,
   lastFiredAt: string | undefined,
   now = Date.now(),
+  timeZone: string = 'UTC',
 ): string {
   const referenceMs = lastFiredAt ? new Date(lastFiredAt).getTime() : now;
 
@@ -137,7 +142,7 @@ export function computeNextFire(
   }
 
   // Try as a 5-field cron expression
-  const nextMs = nextFireFromCron(schedule, now);
+  const nextMs = nextFireFromCron(schedule, now, timeZone);
   if (!isNaN(nextMs)) {
     return new Date(nextMs).toISOString();
   }
@@ -166,10 +171,21 @@ function listAllCrons(): CronSummaryRow[] {
   const rows: CronSummaryRow[] = [];
   const now = Date.now();
 
+  // Framework root holds orgs/<org>/context.json; resolve once for the walk.
+  const projectRoot = resolveEnv().projectRoot;
+  // Cache cron-timezone per org so a 30-agent fleet does not re-read the same
+  // context.json once per agent.
+  const cronTzByOrg = new Map<string, string>();
+
   for (const [agentName, entry] of Object.entries(enabledAgents)) {
     if (entry.enabled === false) continue;
 
     const org = entry.org ?? '';
+    let cronTz = cronTzByOrg.get(org);
+    if (cronTz === undefined) {
+      cronTz = resolveCronTimezone(org, projectRoot);
+      cronTzByOrg.set(org, cronTz);
+    }
     const crons = readCrons(agentName);
 
     for (const cron of crons) {
@@ -183,7 +199,7 @@ function listAllCrons(): CronSummaryRow[] {
         cron,
         lastFire: lastEntry?.ts ?? null,
         lastStatus: lastEntry?.status ?? null,
-        nextFire: computeNextFire(cron.schedule, cron.last_fired_at, now),
+        nextFire: computeNextFire(cron.schedule, cron.last_fired_at, now, cronTz),
       });
     }
   }

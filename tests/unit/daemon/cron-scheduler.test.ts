@@ -55,28 +55,27 @@ const TICK = CronScheduler.TICK_INTERVAL_MS; // 30_000 ms
 // ---------------------------------------------------------------------------
 // nextFireFromCron — unit tests for the cron expression parser
 //
-// These tests are timezone-agnostic: rather than hardcoding UTC epoch ms
-// values (which would break on machines not set to UTC), we verify:
-//   (a) the result is a valid number,
-//   (b) the local-time fields (hour, minute, day-of-week) of the result
-//       match what the cron expression requests.
+// nextFireFromCron interprets cron expressions in UTC by default (see the
+// "timezone determinism" block below for the explicit-zone tests). These tests
+// therefore verify the UTC fields of the result — and use UTC setters to build
+// reference times — so they are deterministic on any runner regardless of the
+// machine's local timezone.
 // ---------------------------------------------------------------------------
 
-/** Pull the local-time components out of an epoch-ms value. */
-function localOf(ms: number) {
+/** Pull the UTC components out of an epoch-ms value. */
+function utcOf(ms: number) {
   const d = new Date(ms);
   return {
-    minutes:    d.getMinutes(),
-    hours:      d.getHours(),
-    date:       d.getDate(),
-    month:      d.getMonth() + 1,
-    dayOfWeek:  d.getDay(),
+    minutes:    d.getUTCMinutes(),
+    hours:      d.getUTCHours(),
+    date:       d.getUTCDate(),
+    month:      d.getUTCMonth() + 1,
+    dayOfWeek:  d.getUTCDay(),
   };
 }
 
 describe('nextFireFromCron', () => {
   it('computes correct next fire for "*/5 * * * *" (every 5 minutes)', () => {
-    // Use the current time as the reference so this is always timezone-safe.
     const fromMs = Date.now();
     const next = nextFireFromCron('*/5 * * * *', fromMs);
     expect(next).not.toBeNaN();
@@ -84,69 +83,69 @@ describe('nextFireFromCron', () => {
     expect(next).toBeGreaterThan(fromMs);
     expect(next).toBeLessThanOrEqual(fromMs + 5 * 60_000 + 60_000);
     // The minute must be a multiple of 5
-    expect(localOf(next).minutes % 5).toBe(0);
+    expect(utcOf(next).minutes % 5).toBe(0);
     // Seconds must be zero (whole minute)
     expect(next % 60_000).toBe(0);
   });
 
-  it('computes next fire at local hour 13 for "0 13 * * *" when before 13:00 today', () => {
-    // Construct a "from" time that is in local hour 12 today.
+  it('computes next fire at UTC hour 13 for "0 13 * * *" when before 13:00 today', () => {
+    // Construct a "from" time that is in UTC hour 12 today.
     const ref = new Date();
-    ref.setHours(12, 0, 0, 0);
+    ref.setUTCHours(12, 0, 0, 0);
     const fromMs = ref.getTime();
 
     const next = nextFireFromCron('0 13 * * *', fromMs);
     expect(next).not.toBeNaN();
 
-    const loc = localOf(next);
+    const loc = utcOf(next);
     expect(loc.hours).toBe(13);
     expect(loc.minutes).toBe(0);
-    // Must be the same calendar date (still today)
-    expect(loc.date).toBe(new Date(fromMs).getDate());
+    // Must be the same UTC calendar date (still today)
+    expect(loc.date).toBe(new Date(fromMs).getUTCDate());
   });
 
-  it('wraps to next day when local hour 13 has already passed today', () => {
-    // Construct a "from" time in local hour 14 today.
+  it('wraps to next day when UTC hour 13 has already passed today', () => {
+    // Construct a "from" time in UTC hour 14 today.
     const ref = new Date();
-    ref.setHours(14, 0, 0, 0);
+    ref.setUTCHours(14, 0, 0, 0);
     const fromMs = ref.getTime();
 
     const next = nextFireFromCron('0 13 * * *', fromMs);
     expect(next).not.toBeNaN();
 
-    const loc = localOf(next);
+    const loc = utcOf(next);
     expect(loc.hours).toBe(13);
     expect(loc.minutes).toBe(0);
     // Must be tomorrow (date + 1), accounting for month wrap
     const expectedDate = new Date(fromMs);
-    expectedDate.setDate(expectedDate.getDate() + 1);
-    expect(loc.date).toBe(expectedDate.getDate());
+    expectedDate.setUTCDate(expectedDate.getUTCDate() + 1);
+    expect(loc.date).toBe(expectedDate.getUTCDate());
   });
 
   it('handles comma-list: "0 0,6,12,18 * * *" — picks the next matching hour', () => {
-    // Set from = local 05:00 so next matching hour is 6.
+    // Set from = UTC 05:00 so next matching hour is 6.
     const ref = new Date();
-    ref.setHours(5, 0, 0, 0);
+    ref.setUTCHours(5, 0, 0, 0);
     const fromMs = ref.getTime();
 
     const next = nextFireFromCron('0 0,6,12,18 * * *', fromMs);
     expect(next).not.toBeNaN();
 
-    const loc = localOf(next);
+    const loc = utcOf(next);
     expect([0, 6, 12, 18]).toContain(loc.hours);
     expect(loc.minutes).toBe(0);
     expect(next).toBeGreaterThan(fromMs);
   });
 
-  it('handles ranges: "0 8-10 * * *" — fires within [8,9,10] local hours', () => {
+  it('handles ranges: "0 8-10 * * *" — fires within [8,9,10] UTC hours', () => {
     const ref = new Date();
-    ref.setHours(7, 59, 0, 0);
+    ref.setUTCHours(7, 59, 0, 0);
     const fromMs = ref.getTime();
 
     const next = nextFireFromCron('0 8-10 * * *', fromMs);
     expect(next).not.toBeNaN();
 
-    const loc = localOf(next);
+    const loc = utcOf(next);
     expect(loc.hours).toBeGreaterThanOrEqual(8);
     expect(loc.hours).toBeLessThanOrEqual(10);
     expect(loc.minutes).toBe(0);
@@ -158,7 +157,7 @@ describe('nextFireFromCron', () => {
     expect(next).not.toBeNaN();
     expect(next).toBeGreaterThan(fromMs);
 
-    const loc = localOf(next);
+    const loc = utcOf(next);
     expect(loc.dayOfWeek).toBe(1); // Monday
     expect(loc.hours).toBe(16);
     expect(loc.minutes).toBe(0);
@@ -168,6 +167,61 @@ describe('nextFireFromCron', () => {
 
   it('returns NaN for invalid expression (wrong field count)', () => {
     expect(nextFireFromCron('* * * *', Date.now())).toBeNaN();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nextFireFromCron — timezone determinism
+//
+// A cron expression's hour/day-of-month/day-of-week fields must be matched
+// against an EXPLICIT, caller-supplied timezone — never process-local time.
+// The daemon and the CLI can run in different timezones; if the match used
+// process-local time the same cron would resolve to different instants
+// depending on which process computed it (the daemon's actual firing time vs
+// the CLI's "next fire" display drift apart — observed as a phantom "skipped
+// day"). These tests force process.env.TZ to prove the result is independent
+// of it and depends only on the supplied timeZone argument.
+// ---------------------------------------------------------------------------
+describe('nextFireFromCron — timezone determinism', () => {
+  const origTZ = process.env.TZ;
+  afterEach(() => {
+    if (origTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = origTZ;
+  });
+
+  it('honours the supplied timeZone, not process-local time', () => {
+    process.env.TZ = 'America/New_York'; // process zone deliberately != cron zone
+    const from = Date.UTC(2026, 4, 19, 3, 0, 0); // 2026-05-19 03:00 UTC
+    const next = nextFireFromCron('0 8 * * *', from, 'UTC');
+    expect(next).toBe(Date.UTC(2026, 4, 19, 8, 0, 0)); // 08:00 UTC, not 12:00
+  });
+
+  it('is invariant to process.env.TZ — same timeZone arg yields the same result', () => {
+    const from = Date.UTC(2026, 4, 19, 3, 0, 0);
+    process.env.TZ = 'UTC';
+    const a = nextFireFromCron('0 13 * * *', from, 'UTC');
+    process.env.TZ = 'America/New_York';
+    const b = nextFireFromCron('0 13 * * *', from, 'UTC');
+    process.env.TZ = 'Asia/Tokyo';
+    const c = nextFireFromCron('0 13 * * *', from, 'UTC');
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+    expect(a).toBe(Date.UTC(2026, 4, 19, 13, 0, 0));
+  });
+
+  it('resolves the cron-expr hour in a named zone, DST-aware (America/New_York, EDT)', () => {
+    process.env.TZ = 'UTC'; // process zone deliberately != cron zone
+    const from = Date.UTC(2026, 4, 19, 3, 0, 0);
+    // 2026-05-19 is EDT (UTC-4): "0 8" in America/New_York => 12:00 UTC.
+    const next = nextFireFromCron('0 8 * * *', from, 'America/New_York');
+    expect(next).toBe(Date.UTC(2026, 4, 19, 12, 0, 0));
+  });
+
+  it('defaults to UTC interpretation when no timeZone is supplied', () => {
+    process.env.TZ = 'America/New_York';
+    const from = Date.UTC(2026, 4, 19, 3, 0, 0);
+    const next = nextFireFromCron('0 8 * * *', from);
+    expect(next).toBe(Date.UTC(2026, 4, 19, 8, 0, 0)); // UTC default, not local
   });
 });
 
@@ -236,6 +290,29 @@ describe('CronScheduler', () => {
     await vi.advanceTimersByTimeAsync(5 * 60_000);
 
     expect(fired).toHaveLength(0);
+  });
+
+  it('interprets cron-expression crons in the configured timeZone option', () => {
+    // 2026-05-19 03:00 UTC — before the 08:00 fire in either zone.
+    vi.setSystemTime(new Date(Date.UTC(2026, 4, 19, 3, 0, 0)));
+    mockReadCrons.mockReturnValue([makeCron({ name: 'daily', schedule: '0 8 * * *' })]);
+
+    const utcSched = new CronScheduler({
+      agentName: 'tz-utc', onFire: () => {}, logger: () => {}, timeZone: 'UTC',
+    });
+    const etSched = new CronScheduler({
+      agentName: 'tz-et', onFire: () => {}, logger: () => {}, timeZone: 'America/New_York',
+    });
+    utcSched.start();
+    etSched.start();
+    const utcNext = utcSched.getNextFireTimes()[0].nextFireAt;
+    const etNext  = etSched.getNextFireTimes()[0].nextFireAt;
+    utcSched.stop();
+    etSched.stop();
+
+    // "0 8" resolves to 08:00 in whichever zone the scheduler was given.
+    expect(utcNext).toBe(Date.UTC(2026, 4, 19, 8, 0, 0));  // 08:00 UTC
+    expect(etNext).toBe(Date.UTC(2026, 4, 19, 12, 0, 0));  // 08:00 EDT
   });
 
   it('fires multiple times after multiple intervals', async () => {

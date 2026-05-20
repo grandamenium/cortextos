@@ -2030,7 +2030,10 @@ busCommand
         const refMs = lastFire ? new Date(lastFire).getTime() : now;
         nextFire = fmtTs(new Date(refMs + dms).toISOString());
       } else {
-        const nf = nextFireFromCron(c.schedule, now);
+        // Interpret the cron expression in the org-configured cron timezone —
+        // the SAME zone the daemon's CronScheduler uses — so this displayed
+        // "next fire" agrees with when the daemon will actually fire it.
+        const nf = nextFireFromCron(c.schedule, now, env.cronTimezone);
         if (!isNaN(nf)) nextFire = fmtTs(new Date(nf).toISOString());
       }
       const promptPreview = c.prompt.length > 60 ? c.prompt.slice(0, 57) + '...' : c.prompt;
