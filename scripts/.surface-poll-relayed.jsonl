@@ -1,0 +1,8 @@
+{"ts":"2026-05-20T03:19:29Z","hash":"75ce7a33e8a58c34","event":"phase ship detected"}
+{"ts":"2026-05-20T03:19:58Z","hash":"1372089b961ef15e","event":"phase ship detected"}
+{"ts":"2026-05-20T03:20:31Z","hash":"cc35cb9cff37e383","event":"phase ship detected"}
+{"ts":"2026-05-20T06:35:01Z","hash":"dc32882cf5c7a56f","event":"phase ship detected / agent halt/cap"}
+{"ts":"2026-05-20T11:40:01Z","hash":"2ef67cd782188350","event":"agent halt/cap"}
+{"ts":"2026-05-20T12:10:01Z","hash":"8985be346f55e1e5","event":"NO-GO verdict"}
+{"ts":"2026-05-20T12:35:01Z","hash":"998066ac75f4e6a7","event":"phase ship detected / NO-GO verdict"}
+{"ts":"2026-05-20T12:40:01Z","hash":"1de764629653dce7","event":"phase ship detected / NO-GO verdict / agent halt/cap"}
