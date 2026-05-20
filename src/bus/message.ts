@@ -137,8 +137,12 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
             continue;
           }
         } else if (signingKey && !msg.sig) {
-          // Signing key exists but message has no sig — legacy message, log warning
-          console.warn(`[bus/message] WARNING: Unsigned message ${msg.id} from '${msg.from}' — accepted (legacy)`);
+          // Signing key present but message is unsigned — reject
+          console.error(`[bus/message] SECURITY: Unsigned message ${msg.id} from '${msg.from}' rejected — all messages must be signed when a signing key is configured`);
+          const errDir = join(inbox, '.errors');
+          ensureDir(errDir);
+          try { renameSync(srcPath, join(errDir, file)); } catch { /* ignore */ }
+          continue;
         }
 
         // Move to inflight

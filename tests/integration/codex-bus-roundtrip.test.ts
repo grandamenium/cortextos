@@ -37,6 +37,9 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), 'codex-bus-roundtrip-'));
   ctxRoot = join(testDir, '.cortextos', 'test');
   mkdirSync(ctxRoot, { recursive: true });
+  // Seed signing key so test messages are signed — mirrors production behaviour.
+  mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+  writeFileSync(join(ctxRoot, 'config', 'bus-signing-key'), 'test-signing-key-for-tests');
 });
 
 afterEach(() => {
