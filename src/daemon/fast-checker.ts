@@ -11,6 +11,7 @@ import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars } from '../utils/validate.js';
+import { logEvent } from '../bus/event.js';
 
 type LogFn = (msg: string) => void;
 
@@ -47,6 +48,11 @@ export class FastChecker {
   private telegramApi?: TelegramAPI;
   private chatId?: string;
   private allowedUserId?: number;
+  // Optional org passthrough so reminder/event logging can populate the
+  // `org` column on emitted events. When unset, events still write
+  // (logEvent accepts empty org strings) but won't be filterable by org
+  // in the analytics views. Set by AgentManager at construction.
+  private org: string = '';
 
   // External Telegram handler (set by daemon)
   private telegramMessages: Array<{ formatted: string; ackIds: string[] }> = [];
@@ -76,7 +82,7 @@ export class FastChecker {
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number; org?: string } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
@@ -86,6 +92,7 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+    this.org = options.org ?? '';
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
@@ -291,6 +298,20 @@ export class FastChecker {
         markReminderInjected(this.paths, reminder.id);
       } catch (err) {
         this.log(`markReminderInjected(${reminder.id}) failed: ${(err as Error).message}`);
+      }
+      // Atlas-proposed reminder_received event: emit when reminder
+      // injection landed in the PTY and the pending file was marked. The
+      // existing reminder_fired event is emitted by `bus add-reminder`
+      // logic when a reminder becomes due; reminder_received closes the
+      // loop on actual delivery. The pair lets us detect "fired but
+      // never landed" failures (PTY ready-state delays, dedup races).
+      try {
+        logEvent(this.paths, this.agent.name, this.org, 'action', 'reminder_received', 'info', {
+          reminder_id: reminder.id,
+          fire_at: reminder.fire_at,
+        });
+      } catch (err) {
+        this.log(`logEvent(reminder_received) failed for ${reminder.id}: ${(err as Error).message}`);
       }
       this.log(`Injected reminder ${reminder.id} (fire_at=${reminder.fire_at})`);
       // Small cooldown between reminders so each lands as a distinct

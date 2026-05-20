@@ -13,6 +13,7 @@ import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
+import { logEvent } from '../bus/event.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 
@@ -279,6 +280,7 @@ export class AgentManager {
       telegramApi,
       chatId,
       allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
+      org: this.org,
     });
 
     // Send Telegram notification on crashes and session refreshes
@@ -922,6 +924,23 @@ export class AgentManager {
       const injected = this.injectAgent(agentName, injection);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
+      }
+
+      // Atlas-proposed cron_received event: emit when daemon-side
+      // injection confirmed landed in the PTY. Lets dashboards diff
+      // "cron fired (cron-execution.log status=fired)" against "cron
+      // received (this event)" and detect injection-without-landing
+      // failures. The activity feed already shows the cron_fired
+      // event; cron_received closes the loop on delivery semantics.
+      try {
+        const paths = resolvePaths(agentName, this.instanceId, this.org);
+        logEvent(paths, agentName, this.org, 'action', 'cron_received', 'info', {
+          cron: cron.name,
+          fired_at: firedAt,
+        });
+      } catch (err) {
+        // Event logging failure must not break the cron fire path
+        console.warn(`[daemon] cron_received logEvent failed for "${agentName}/${cron.name}":`, err);
       }
     };
 

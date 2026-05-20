@@ -1013,6 +1013,65 @@ describe('FastChecker', () => {
       expect(prompts[2]).toContain('third');
     });
 
+    it('emits reminder_received event after successful injection + mark', async () => {
+      // Atlas-proposed reminder_received event: closes the loop on
+      // "fired but never landed" failures by emitting only AFTER
+      // injectMessage + markReminderInjected both succeed. The event
+      // lands in {analyticsDir}/events/{agent}/{YYYY-MM-DD}.jsonl.
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      const r = createReminder(paths, past, 'briefing time');
+
+      const agent = createMockAgent('analyst');
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'riles-fleet' });
+      (checker as any).lastReminderCheck = 0;
+      await (checker as any).pollReminders();
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventsPath = join(paths.analyticsDir, 'events', 'analyst', `${today}.jsonl`);
+      expect(existsSync(eventsPath)).toBe(true);
+
+      const lines = readFileSync(eventsPath, 'utf-8').trim().split('\n');
+      const events = lines.map((l) => JSON.parse(l));
+      const reminderEvents = events.filter((e: any) => e.event === 'reminder_received');
+      expect(reminderEvents).toHaveLength(1);
+      expect(reminderEvents[0].agent).toBe('analyst');
+      expect(reminderEvents[0].org).toBe('riles-fleet');
+      expect(reminderEvents[0].category).toBe('action');
+      expect(reminderEvents[0].severity).toBe('info');
+      expect(reminderEvents[0].metadata.reminder_id).toBe(r.id);
+      expect(reminderEvents[0].metadata.fire_at).toBe(past);
+    });
+
+    it('does NOT emit reminder_received when injection is deferred (agent busy)', async () => {
+      // Symmetric counterpart to the event-emit test: if injectMessage
+      // returns false, pollReminders breaks BEFORE markReminderInjected
+      // and BEFORE the event log. Verifies the event never fires for a
+      // reminder that did not land.
+      const past = new Date(Date.now() - 60_000).toISOString();
+      const { createReminder } = await import('../../../src/bus/reminders');
+      createReminder(paths, past, 'will defer');
+
+      const agent = createMockAgent('analyst');
+      agent.injectMessage.mockReturnValueOnce(false);
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'riles-fleet' });
+      (checker as any).lastReminderCheck = 0;
+
+      await (checker as any).pollReminders();
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventsPath = join(paths.analyticsDir, 'events', 'analyst', `${today}.jsonl`);
+      // Either the file does not exist yet, or it exists with no
+      // reminder_received entries.
+      if (existsSync(eventsPath)) {
+        const lines = readFileSync(eventsPath, 'utf-8').trim().split('\n').filter(Boolean);
+        const reminderEvents = lines
+          .map((l) => JSON.parse(l))
+          .filter((e: any) => e.event === 'reminder_received');
+        expect(reminderEvents).toHaveLength(0);
+      }
+    });
+
     it('survives a malformed pending-reminders.json without crashing', async () => {
       // The reminders module swallows JSON errors and returns [];
       // pollReminders just becomes a no-op rather than throwing.
