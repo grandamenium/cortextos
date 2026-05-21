@@ -688,14 +688,12 @@ async function checkSkillNotes(page: Page, _session: SupabaseSession): Promise<C
     });
     const missing: string[] = [];
     for (const agent of agents) {
-      const skillsDir = path.join(AGENTS_ROOT, agent, '.claude', 'skills');
-      if (!fs.existsSync(skillsDir)) {
-        missing.push(`${agent}: no .claude/skills/ directory`);
-        continue;
-      }
+      const claudeSkillsDir = path.join(AGENTS_ROOT, agent, '.claude', 'skills');
+      const pluginSkillsDir = path.join(AGENTS_ROOT, agent, 'plugins', 'cortextos-agent-skills', 'skills');
       for (const skill of REQUIRED_SKILLS) {
-        const skillMd = path.join(skillsDir, skill, 'SKILL.md');
-        if (!fs.existsSync(skillMd)) {
+        const inClaude = fs.existsSync(path.join(claudeSkillsDir, skill, 'SKILL.md'));
+        const inPlugin = fs.existsSync(path.join(pluginSkillsDir, skill, 'SKILL.md'));
+        if (!inClaude && !inPlugin) {
           missing.push(`${agent}: missing skill '${skill}'`);
         }
       }
