@@ -509,6 +509,7 @@ async function checkOrchestratorTabs(page: Page, _session: SupabaseSession): Pro
     const sc = await shot(page, `assert-${String(tab.loadId).padStart(2,'0')}-orchestrator-${tab.slug}`);
     const landedAt = page.url();
     const routeLanded = landedAt.includes(`/app/orchestrator/${tab.slug}`) ||
+                        landedAt.includes(`/orchestrator/${tab.slug}`) ||  // agentops host strips /app prefix
                         landedAt.includes('/app/orchestrator');
 
     // (a) Loads without error
