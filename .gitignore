@@ -54,3 +54,6 @@ BRAINDUMP*.md
 AGENTS.md
 dashboard/screenshots/
 dashboard/test-*.py
+
+# Local git worktrees scratch dir
+.worktrees/

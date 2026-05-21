@@ -15,6 +15,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { spawnSync } from 'child_process';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
+import { resolveAgentDir } from '../utils/agent-dir.js';
 
 function rl(): Interface {
   return createInterface({ input: process.stdin, output: process.stdout });
@@ -319,7 +320,7 @@ export const setupCommand = new Command('setup')
     }
 
     // Write .env
-    const orchDir = join(projectRoot, 'orgs', orgName, 'agents', orchName);
+    const orchDir = resolveAgentDir(projectRoot, orgName, orchName);
     writeAgentEnv(orchDir, orchToken, orchChatId);
     console.log(`  Wrote .env for ${orchName}`);
 
@@ -398,7 +399,7 @@ export const setupCommand = new Command('setup')
       );
 
       if (addOk) {
-        const agentDir = join(projectRoot, 'orgs', orgName, 'agents', agentName);
+        const agentDir = resolveAgentDir(projectRoot, orgName, agentName);
         writeAgentEnv(agentDir, agentToken, agentChatId);
         console.log(`  Wrote .env for ${agentName}`);
 

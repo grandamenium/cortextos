@@ -15,6 +15,7 @@ import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHi
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+import { resolveAgentDir } from '../utils/agent-dir.js';
 
 type LogFn = (msg: string) => void;
 
@@ -169,7 +170,7 @@ export class AgentManager {
 
     // Auto-discover agent directory if not provided (e.g. when started via IPC)
     if (!agentDir || !existsSync(agentDir)) {
-      const discovered = join(this.frameworkRoot, 'orgs', resolvedOrg, 'agents', name);
+      const discovered = resolveAgentDir(this.frameworkRoot, resolvedOrg, name);
       if (existsSync(discovered)) {
         agentDir = discovered;
       } else {

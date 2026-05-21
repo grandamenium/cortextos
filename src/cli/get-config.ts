@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { resolveAgentDir } from '../utils/agent-dir.js';
 
 export const getConfigCommand = new Command('get-config')
   .description('Show resolved operational config for an agent (org defaults + agent overrides)')
@@ -30,7 +31,7 @@ export const getConfigCommand = new Command('get-config')
     // Read agent overrides
     let agentCfg: Record<string, any> = {};
     if (agentName) {
-      const agentCfgPath = join(frameworkRoot, 'orgs', org, 'agents', agentName, 'config.json');
+      const agentCfgPath = join(resolveAgentDir(frameworkRoot, org, agentName), 'config.json');
       if (existsSync(agentCfgPath)) {
         try { agentCfg = JSON.parse(readFileSync(agentCfgPath, 'utf-8')); } catch {}
       } else if (options.agent) {

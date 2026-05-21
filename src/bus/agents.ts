@@ -3,6 +3,7 @@ import { join } from 'path';
 import type { AgentInfo, AgentConfig, BusPaths } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { sendMessage } from './message.js';
+import { resolveAgentDir } from '../utils/agent-dir.js';
 
 /**
  * List all agents in the system.
@@ -148,7 +149,7 @@ function buildAgentInfo(
   const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || process.env.CTX_PROJECT_ROOT || '';
   if (frameworkRoot) {
     const identityPaths = [
-      join(frameworkRoot, 'orgs', org, 'agents', name, 'IDENTITY.md'),
+      join(resolveAgentDir(frameworkRoot, org, name), 'IDENTITY.md'),
       join(frameworkRoot, 'agents', name, 'IDENTITY.md'),
     ];
     for (const idPath of identityPaths) {
@@ -202,7 +203,7 @@ function buildAgentInfo(
   const configFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT || process.env.CTX_PROJECT_ROOT || '';
   if (configFrameworkRoot) {
     const configPaths = [
-      join(configFrameworkRoot, 'orgs', org, 'agents', name, 'config.json'),
+      join(resolveAgentDir(configFrameworkRoot, org, name), 'config.json'),
       join(configFrameworkRoot, 'agents', name, 'config.json'),
     ];
     for (const cfgPath of configPaths) {

@@ -6,6 +6,7 @@ import { spawnSync } from 'child_process';
 import { validateAgentName } from '../utils/validate.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { resolvePaths } from '../utils/paths.js';
+import { resolveAgentDir } from '../utils/agent-dir.js';
 
 interface ExportManifest {
   version: string;
@@ -78,7 +79,7 @@ export const importAgentCommand = new Command('import-agent')
       process.exit(1);
     }
 
-    const targetAgentDir = join(projectRoot, 'orgs', org, 'agents', agentName);
+    const targetAgentDir = resolveAgentDir(projectRoot, org, agentName);
     if (existsSync(targetAgentDir)) {
       console.error(`\n  Agent "${agentName}" already exists in org "${org}".`);
       console.error(`  Use --name <name> to import under a different name.\n`);

@@ -4,6 +4,7 @@ import { homedir } from 'os';
 import type { CtxEnv } from '../types/index.js';
 import { ensureDir } from './atomic.js';
 import { validateAgentName, validateOrgName } from './validate.js';
+import { resolveAgentDir } from './agent-dir.js';
 
 /**
  * Resolve the cortextOS environment context.
@@ -63,7 +64,7 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
     '';
 
   if (!agentDir && org && projectRoot) {
-    agentDir = join(projectRoot, 'orgs', org, 'agents', agentName);
+    agentDir = resolveAgentDir(projectRoot, org, agentName);
   } else if (!agentDir && projectRoot) {
     agentDir = join(projectRoot, 'agents', agentName);
   }

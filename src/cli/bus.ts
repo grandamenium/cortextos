@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { resolveAgentDir } from '../utils/agent-dir.js';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
@@ -427,7 +428,7 @@ busCommand
     const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || process.env.CTX_PROJECT_ROOT || '';
     if (frameworkRoot) {
       const identityPaths = [
-        join(frameworkRoot, 'orgs', env.org, 'agents', env.agentName, 'IDENTITY.md'),
+        join(resolveAgentDir(frameworkRoot, env.org, env.agentName), 'IDENTITY.md'),
         join(frameworkRoot, 'agents', env.agentName, 'IDENTITY.md'),
       ];
       for (const idPath of identityPaths) {
@@ -769,7 +770,7 @@ busCommand
   .action((opts: { agent?: string; status?: string; metric?: string; json?: boolean }) => {
     const env = resolveEnv();
     const agentDir = opts.agent && env.frameworkRoot
-      ? join(env.frameworkRoot, 'orgs', env.org, 'agents', opts.agent)
+      ? resolveAgentDir(env.frameworkRoot, env.org, opts.agent)
       : (env.agentDir || process.cwd());
     const experiments = listExperiments(agentDir, {
       agent: opts.agent,
@@ -788,7 +789,7 @@ busCommand
     const env = resolveEnv();
     const agentName = opts.agent || env.agentName;
     const agentDir = opts.agent && env.frameworkRoot
-      ? join(env.frameworkRoot, 'orgs', env.org, 'agents', opts.agent)
+      ? resolveAgentDir(env.frameworkRoot, env.org, opts.agent)
       : (env.agentDir || process.cwd());
     const context = gatherContext(agentDir, agentName, { format: opts.format as 'json' | 'markdown' });
     console.log(JSON.stringify(context, null, 2));
@@ -1377,7 +1378,7 @@ busCommand
       // Read role from IDENTITY.md
       let role = '';
       const agentDir = info.org
-        ? join(frameworkRoot, 'orgs', info.org, 'agents', name)
+        ? resolveAgentDir(frameworkRoot, info.org, name)
         : join(frameworkRoot, 'agents', name);
       const identityFile = join(agentDir, 'IDENTITY.md');
       if (existsSync(identityFile)) {

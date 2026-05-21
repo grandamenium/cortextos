@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { resolveAgentDir } from '../utils/agent-dir.js';
 
 export const goalsCommand = new Command('goals')
   .description('Manage goals.json and auto-generate GOALS.md for agents');
@@ -19,7 +20,7 @@ goalsCommand
       process.exit(1);
     }
 
-    const agentDir = join(frameworkRoot, 'orgs', options.org, 'agents', options.agent);
+    const agentDir = resolveAgentDir(frameworkRoot, options.org, options.agent);
     const goalsJsonPath = join(agentDir, 'goals.json');
     const goalsMdPath = join(agentDir, 'GOALS.md');
 

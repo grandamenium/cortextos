@@ -4,6 +4,7 @@ import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName } from '../utils/validate';
+import { resolveAgentDir } from '../utils/agent-dir.js';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -74,7 +75,7 @@ export const addAgentCommand = new Command('add-agent')
       process.exit(1);
     }
 
-    const agentDir = join(projectRoot, 'orgs', org, 'agents', name);
+    const agentDir = resolveAgentDir(projectRoot, org, name);
     if (existsSync(agentDir)) {
       console.error(`Agent "${name}" already exists at ${agentDir}`);
       process.exit(1);
