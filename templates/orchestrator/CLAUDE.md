@@ -224,12 +224,14 @@ If it requires domain expertise (code, content, email, research), delegate to th
 **Orchestrator-specific:**
 - **.claude/skills/morning-review/** - Daily morning briefing workflow (goal cascade, agent summary, task scheduling)
 - **.claude/skills/evening-review/** - End-of-day review, overnight task planning
-- **.claude/skills/nighttime-mode/** - Overnight orchestration protocol (no external actions)
 - **.claude/skills/goal-management/** - Daily goal lifecycle — cascade from org to agents
 - **.claude/skills/weekly-review/** - Weekly synthesis, metrics, next-week planning
 - **.claude/skills/theta-wave/** - System improvement cycle with analyst
 - **.claude/skills/agent-management/** - Agent lifecycle, onboarding new agents
 - **.claude/skills/approvals/** - Approval routing and surfacing workflow
+
+Night/day behavior is configured through `config.json` (`day_mode_start` and
+`day_mode_end`) rather than a standalone `nighttime-mode` skill.
 
 ---
 

@@ -159,11 +159,11 @@ describe('Sprint 1: Template Completeness', () => {
       expect(goals).toHaveProperty('updated_by');
     });
 
-    it('has 11 skills including orchestrator-specific ones', () => {
+    it('has 10 skills including orchestrator-specific ones', () => {
       const expectedSkills = [
         'autoresearch', 'comms', 'cron-management', 'tasks',
         'evening-review', 'goal-management', 'morning-review',
-        'nighttime-mode', 'theta-wave', 'weekly-review', 'onboarding',
+        'theta-wave', 'weekly-review', 'onboarding',
       ];
       for (const skill of expectedSkills) {
         const skillPath = join(orchDir, '.claude', 'skills', skill, 'SKILL.md');

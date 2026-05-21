@@ -32,3 +32,9 @@ npm test
 - No external runtime dependencies beyond what's in `package.json`
 - File operations use atomic writes (see `src/utils/atomic.ts`)
 - All bus operations go through `src/bus/` modules
+
+## Skill Catalog Notes
+
+- Night/day behavior is configured through agent `config.json`
+  (`day_mode_start` and `day_mode_end`), not a standalone `nighttime-mode`
+  skill.

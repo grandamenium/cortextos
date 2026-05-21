@@ -313,18 +313,6 @@
       "dependencies": [],
       "install_path": "community/skills/local-version-control",
       "submitted_at": "2026-04-06T00:00:00Z"
-    },
-    {
-      "name": "nighttime-mode",
-      "description": "Night mode behavior — quieter notifications, autonomous work, overnight research execution",
-      "author": "cortextos",
-      "type": "skill",
-      "version": "1.0.0",
-      "tags": ["nighttime", "autonomous", "quiet", "overnight"],
-      "review_status": "approved",
-      "dependencies": [],
-      "install_path": "community/skills/nighttime-mode",
-      "submitted_at": "2026-04-06T00:00:00Z"
     }
   ]
 }
