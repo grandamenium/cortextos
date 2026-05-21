@@ -277,6 +277,9 @@ export function updateTask(
     assignee = task.assigned_to;
     task.status = status;
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    if (status === 'completed' && !task.completed_at) {
+      task.completed_at = task.updated_at;
+    }
     atomicWriteSync(filePath, JSON.stringify(task));
   } catch (err) {
     throw new Error(`Task ${taskId} update failed: ${err}`);
