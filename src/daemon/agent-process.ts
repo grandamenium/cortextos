@@ -12,6 +12,7 @@ import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
 import { readCrashCount, incrementCrashCount } from './crash-counter.js';
+import { ensureWorktree } from './worktree-manager.js';
 
 type LogFn = (msg: string) => void;
 
@@ -101,6 +102,20 @@ export class AgentProcess {
     // Write .cortextos-env for backward compat (D6)
     if (this.env.agentDir) {
       writeCortextosEnv(this.env.agentDir, this.env);
+    }
+
+    // Per-agent git worktree (opt-in via config.worktree_repo).
+    // Eliminates branch-contamination races when several agents share one
+    // working copy of the same repo. When unset, behavior is unchanged.
+    if (this.config.worktree_repo) {
+      const branch = this.config.worktree_branch || `claude/${this.name}`;
+      try {
+        const wt = ensureWorktree(this.config.worktree_repo, this.name, branch);
+        this.config.working_directory = wt.path;
+        this.log(`Worktree ${wt.created ? 'created' : 'attached'}: ${wt.path} (branch ${wt.branch})`);
+      } catch (err) {
+        this.log(`Worktree provisioning failed, falling back to shared repo: ${err}`);
+      }
     }
 
     // Determine start mode
