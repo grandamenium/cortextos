@@ -107,6 +107,23 @@ Reply using: cortextos bus send-message <agent> normal '<reply>' <msg_id>
 
 Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages redeliver after 5 min. For no-reply messages: `cortextos bus ack-inbox <msg_id>`
 
+## Health Probe Acks
+
+The daemon sends periodic health probes via the agent message bus:
+
+```
+=== AGENT MESSAGE from daemon [msg_id: health-probe-...] ===
+ping
+probe_id: health-probe-...
+```
+
+When you receive a message from `daemon` with body starting with `ping` and containing a `probe_id:` line:
+1. Extract the probe_id value from the `probe_id:` line
+2. Run: `cortextos bus ack-health-probe <probe_id>`
+3. No reply to daemon needed — the ack command handles it
+
+Failure to ack within 30 seconds causes the daemon to mark you `degraded` and restart you.
+
 ---
 
 ## Crons

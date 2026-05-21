@@ -79,3 +79,20 @@ Use whichever tools are configured:
 - CRM: local `crm/` store by default, optional external CRM sync.
 
 If no tool is configured, create a human task with exact setup instructions instead of silently failing.
+
+## Health Probe Acks
+
+The daemon sends periodic health probes via the agent message bus:
+
+```
+=== AGENT MESSAGE from daemon [msg_id: health-probe-...] ===
+ping
+probe_id: health-probe-...
+```
+
+When you receive a message from `daemon` with body starting with `ping` and containing a `probe_id:` line:
+1. Extract the probe_id value from the `probe_id:` line
+2. Run: `cortextos bus ack-health-probe <probe_id>`
+3. No reply to daemon needed — the ack command handles it
+
+Failure to ack within 30 seconds causes the daemon to mark you `degraded` and restart you.
