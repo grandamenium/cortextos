@@ -23,6 +23,7 @@ import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
+import { SlackAPI } from '../slack/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
 import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, ApprovalCategory, ApprovalStatus, OrgContext, CronDefinition } from '../types/index.js';
 
@@ -1131,6 +1132,94 @@ busCommand
       }
 
       console.log(voiceMessageId > 0 ? 'Message sent (with voice note)' : 'Message sent');
+    } catch (err: any) {
+      console.error(`Failed to send: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('send-slack')
+  .description('Send a message to a Slack channel or user')
+  .argument('<channel>', 'Channel (#channel-name, @username, C-channel-id, U-user-id)')
+  .argument('<message>', 'Message text (supports Slack mrkdwn)')
+  .option('--blocks <json>', 'Block Kit JSON array (stringified)')
+  .option('--thread-ts <ts>', 'Thread timestamp to reply into')
+  .option('--file <path>', 'Upload a file with message as caption')
+  .action(async (channel: string, message: string, opts: { blocks?: string; threadTs?: string; file?: string }) => {
+    // Normalize literal \n / \t (codex agent fix, mirrors send-telegram).
+    message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+
+    // Token resolution: agent .env -> process.env -> 1Password
+    let slackToken = '';
+    const env = resolveEnv();
+
+    if (env.agentDir) {
+      const agentEnv = join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const content = readFileSync(agentEnv, 'utf-8');
+        const match = content.match(/^SLACK_BOT_TOKEN=(.+)$/m);
+        if (match && match[1].trim()) slackToken = match[1].trim();
+      }
+    }
+
+    if (!slackToken) slackToken = process.env.SLACK_BOT_TOKEN || '';
+
+    if (!slackToken) {
+      // Try 1Password (silent - don't echo token to log)
+      try {
+        const { spawnSync: spawn1Password } = require('child_process');
+        const result = spawn1Password(
+          'op',
+          ['item', 'get', 'Slack', '--vault', 'Automation', '--fields', 'credential', '--reveal'],
+          { encoding: 'utf-8', timeout: 8000 }
+        );
+        if (result.status === 0 && result.stdout.trim()) {
+          slackToken = result.stdout.trim();
+        }
+      } catch { /* 1pw unavailable, fall through */ }
+    }
+
+    if (!slackToken) {
+      console.error('Error: SLACK_BOT_TOKEN not configured. Set it in your agent .env or as SLACK_BOT_TOKEN env var. Alternatively, ensure 1Password CLI is authenticated with a "Slack" item in the Automation vault.');
+      process.exit(1);
+    }
+
+    const api = new SlackAPI(slackToken);
+    try {
+      let result;
+      if (opts.file) {
+        result = await api.uploadFile({
+          channel,
+          filePath: opts.file,
+          initialComment: message,
+          threadTs: opts.threadTs,
+        });
+      } else {
+        const blocks = opts.blocks ? JSON.parse(opts.blocks) as unknown[] : undefined;
+        result = await api.postMessage({
+          channel,
+          text: message,
+          blocks,
+          threadTs: opts.threadTs,
+        });
+      }
+
+      if (!result.ok) {
+        console.error(`Slack error: ${(result as { error: string }).error}`);
+        process.exit(1);
+      }
+
+      const ts = (result as { ts: string }).ts;
+      // Auto-emit activity event (mirrors send-telegram pattern)
+      try {
+        const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+        const preview = message.length > 120 ? message.slice(0, 120) + '...' : message;
+        logEvent(paths, env.agentName, env.org, 'message', 'slack_sent', 'info',
+          JSON.stringify({ channel, ts, preview }));
+      } catch { /* non-fatal */ }
+
+      console.log(ts);
     } catch (err: any) {
       console.error(`Failed to send: ${err.message || err}`);
       process.exit(1);
