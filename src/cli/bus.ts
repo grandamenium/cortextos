@@ -2763,6 +2763,78 @@ busCommand
     }
   });
 
+// --- register-tool-invocation-hook ---
+
+busCommand
+  .command('register-tool-invocation-hook')
+  .description('Idempotently add the log-tool-invocation.sh PreToolUse hook to every agent settings.json')
+  .option('--dry-run', 'Show what would be changed without writing')
+  .action((opts: { dryRun?: boolean }) => {
+    const { existsSync: fsExists, readdirSync: fsReaddir, readFileSync: fsRead, writeFileSync: fsWrite } = require('fs');
+    const env = resolveEnv();
+    const frameworkRoot = env.frameworkRoot || process.cwd();
+    const orgsDir = join(frameworkRoot, 'orgs');
+    const hookCommand = `bash ${join(frameworkRoot, 'bus', 'hooks', 'log-tool-invocation.sh')}`;
+
+    const HOOK_ENTRY = {
+      hooks: [{ type: 'command', command: hookCommand, timeout: 5 }],
+    };
+
+    function hasHook(settings: any): boolean {
+      const preToolUse: any[] = settings?.hooks?.PreToolUse ?? [];
+      return preToolUse.some((entry: any) =>
+        (entry?.hooks ?? []).some((h: any) =>
+          typeof h?.command === 'string' && h.command.includes('log-tool-invocation.sh'),
+        ),
+      );
+    }
+
+    if (!fsExists(orgsDir)) {
+      console.error('orgs/ directory not found at', orgsDir);
+      process.exit(1);
+    }
+
+    let patched = 0;
+    let skipped = 0;
+
+    for (const org of fsReaddir(orgsDir)) {
+      const agentsDir = join(orgsDir, org, 'agents');
+      if (!fsExists(agentsDir)) continue;
+      for (const agent of fsReaddir(agentsDir)) {
+        const settingsPath = join(agentsDir, agent, '.claude', 'settings.json');
+        if (!fsExists(settingsPath)) continue;
+
+        let settings: any;
+        try { settings = JSON.parse(fsRead(settingsPath, 'utf-8')); }
+        catch { console.warn(`  SKIP ${agent}: could not parse settings.json`); skipped++; continue; }
+
+        if (hasHook(settings)) {
+          console.log(`  OK   ${agent}: hook already registered`);
+          skipped++;
+          continue;
+        }
+
+        if (opts.dryRun) {
+          console.log(`  DRY  ${agent}: would add log-tool-invocation.sh as first PreToolUse hook`);
+          patched++;
+        } else {
+          settings.hooks = settings.hooks ?? {};
+          settings.hooks.PreToolUse = [HOOK_ENTRY, ...(settings.hooks.PreToolUse ?? [])];
+          fsWrite(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+          console.log(`  FIX  ${agent}: registered log-tool-invocation.sh hook`);
+          patched++;
+        }
+      }
+    }
+
+    const verb = opts.dryRun ? 'Would patch' : 'Patched';
+    console.log(`\n${verb} ${patched} agent(s). ${skipped} already up to date or skipped.`);
+    if (!opts.dryRun && patched > 0) {
+      console.log('\nRestart affected agents to activate the hook:');
+      console.log('  cortextos restart <agent-name>');
+    }
+  });
+
 function sleepMs(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
