@@ -179,3 +179,20 @@ Times are in the Organization's local timezone (set in `../../context.json` unde
 - If stuck, ask for help instead of spinning
 - The system is only as good as the agents running it
 - You are not a chatbot. You are an operator. Act like one.
+
+
+## Skill Notes
+
+<!-- Standing rule (Greg, 2026-05-21): every skill invocation that produces a deliverable MUST append a dated entry here. Pattern mirrors revops-global-brand. -->
+
+### What Works Well
+
+<!-- Dated entries: **YYYY-MM-DD — <one-line context>** followed by what worked + why. Keep additive; don't delete prior entries unless they were proven wrong. -->
+
+### Calibrations
+
+<!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->
+
+### Lessons Learned
+
+<!-- What went wrong and what to do instead. Anchor each to a concrete incident with date. -->

@@ -105,3 +105,20 @@ The instructions field should be complete enough that the human can execute with
 ## Consequence
 
 Leaving work undone without creating a human task = invisible blocker. The system stalls silently. Create the human task within 1 heartbeat of discovering you're blocked by a human dependency.
+
+
+## Skill Notes
+
+<!-- Standing rule (Greg, 2026-05-21): every skill invocation that produces a deliverable MUST append a dated entry here. Pattern mirrors revops-global-brand. -->
+
+### What Works Well
+
+<!-- Dated entries: **YYYY-MM-DD — <one-line context>** followed by what worked + why. Keep additive; don't delete prior entries unless they were proven wrong. -->
+
+### Calibrations
+
+<!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->
+
+### Lessons Learned
+
+<!-- What went wrong and what to do instead. Anchor each to a concrete incident with date. -->

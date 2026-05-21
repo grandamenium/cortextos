@@ -182,3 +182,20 @@ Drafts older than 14 days with no action: move to `skills/archive/` and log `ski
 2. **Draft means invisible** — agents do NOT load or execute skills from `skills/drafts/`
 3. **No self-modification** — skills never modify other skills (v2 feature)
 4. **No external calls without gates** — any skill step with external side effects must document its own approval requirement
+
+
+## Skill Notes
+
+<!-- Standing rule (Greg, 2026-05-21): every skill invocation that produces a deliverable MUST append a dated entry here. Pattern mirrors revops-global-brand. -->
+
+### What Works Well
+
+<!-- Dated entries: **YYYY-MM-DD — <one-line context>** followed by what worked + why. Keep additive; don't delete prior entries unless they were proven wrong. -->
+
+### Calibrations
+
+<!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->
+
+### Lessons Learned
+
+<!-- What went wrong and what to do instead. Anchor each to a concrete incident with date. -->

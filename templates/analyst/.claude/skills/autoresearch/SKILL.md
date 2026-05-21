@@ -112,3 +112,20 @@ Your theta-wave autoresearch cycle (metric: system_effectiveness) is set up duri
 4. If approval_required is true, WAIT for approval (manual — see Step 4 above).
 5. Never repeat a hypothesis that was already discarded. Find a new angle.
 6. Keep experiments focused - change one thing at a time when possible.
+
+
+## Skill Notes
+
+<!-- Standing rule (Greg, 2026-05-21): every skill invocation that produces a deliverable MUST append a dated entry here. Pattern mirrors revops-global-brand. -->
+
+### What Works Well
+
+<!-- Dated entries: **YYYY-MM-DD — <one-line context>** followed by what worked + why. Keep additive; don't delete prior entries unless they were proven wrong. -->
+
+### Calibrations
+
+<!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->
+
+### Lessons Learned
+
+<!-- What went wrong and what to do instead. Anchor each to a concrete incident with date. -->

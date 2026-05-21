@@ -107,3 +107,20 @@ cortextos bus list-approvals --format json
 2. **Always block your task** pointing to the approval ID — so work isn't lost while waiting
 3. **Never assume approval** — if you don't have an inbox confirmation, you don't have approval
 4. **One re-ping max** — after 4h, ping once and wait
+
+
+## Skill Notes
+
+<!-- Standing rule (Greg, 2026-05-21): every skill invocation that produces a deliverable MUST append a dated entry here. Pattern mirrors revops-global-brand. -->
+
+### What Works Well
+
+<!-- Dated entries: **YYYY-MM-DD — <one-line context>** followed by what worked + why. Keep additive; don't delete prior entries unless they were proven wrong. -->
+
+### Calibrations
+
+<!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->
+
+### Lessons Learned
+
+<!-- What went wrong and what to do instead. Anchor each to a concrete incident with date. -->

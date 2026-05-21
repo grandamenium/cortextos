@@ -139,3 +139,20 @@ Replace `[AGENT_NAME]` and `[ORCHESTRATOR]` with your agent's name and the orche
 - Local main is allowed to run ahead of upstream. `check-upstream` handles this correctly.
 - Never push to upstream as part of this flow. Push is a separate manual operation.
 - Bug fix application authority belongs to the user and should be granted explicitly in your deployment config or MEMORY.md.
+
+
+## Skill Notes
+
+<!-- Standing rule (Greg, 2026-05-21): every skill invocation that produces a deliverable MUST append a dated entry here. Pattern mirrors revops-global-brand. -->
+
+### What Works Well
+
+<!-- Dated entries: **YYYY-MM-DD — <one-line context>** followed by what worked + why. Keep additive; don't delete prior entries unless they were proven wrong. -->
+
+### Calibrations
+
+<!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->
+
+### Lessons Learned
+
+<!-- What went wrong and what to do instead. Anchor each to a concrete incident with date. -->

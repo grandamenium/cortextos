@@ -77,3 +77,20 @@ If a session crash or restart interrupts onboarding mid-way:
 - Do NOT set up crons until IDENTITY.md and GOALS.md are written
 - Do NOT start processing user requests until `.onboarded` is written
 - The user is waiting — be efficient, but do not skip steps
+
+
+## Skill Notes
+
+<!-- Standing rule (Greg, 2026-05-21): every skill invocation that produces a deliverable MUST append a dated entry here. Pattern mirrors revops-global-brand. -->
+
+### What Works Well
+
+<!-- Dated entries: **YYYY-MM-DD — <one-line context>** followed by what worked + why. Keep additive; don't delete prior entries unless they were proven wrong. -->
+
+### Calibrations
+
+<!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->
+
+### Lessons Learned
+
+<!-- What went wrong and what to do instead. Anchor each to a concrete incident with date. -->
