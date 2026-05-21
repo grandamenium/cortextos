@@ -26,16 +26,37 @@ export const ecosystemCommand = new Command('ecosystem')
     // Find all agents
     const agents: Array<{ name: string; dir: string; org?: string }> = [];
 
-    // Scan orgs/*/agents/*
+    // Scan orgs/*/agents/* (shared agents) AND orgs/*/engineers/*/agents/* (namespaced agents)
     const orgsDir = join(projectRoot, 'orgs');
     if (existsSync(orgsDir)) {
       for (const org of readdirSync(orgsDir, { withFileTypes: true })) {
         if (!org.isDirectory()) continue;
+
+        // Shared agents: orgs/<org>/agents/<name>
         const agentsDir = join(orgsDir, org.name, 'agents');
-        if (!existsSync(agentsDir)) continue;
-        for (const agent of readdirSync(agentsDir, { withFileTypes: true })) {
-          if (!agent.isDirectory()) continue;
-          agents.push({ name: agent.name, dir: join(agentsDir, agent.name), org: org.name });
+        if (existsSync(agentsDir)) {
+          for (const agent of readdirSync(agentsDir, { withFileTypes: true })) {
+            if (!agent.isDirectory()) continue;
+            agents.push({ name: agent.name, dir: join(agentsDir, agent.name), org: org.name });
+          }
+        }
+
+        // Namespaced (per-engineer) agents: orgs/<org>/engineers/<eng>/agents/<name>
+        const engineersDir = join(orgsDir, org.name, 'engineers');
+        if (existsSync(engineersDir)) {
+          for (const eng of readdirSync(engineersDir, { withFileTypes: true })) {
+            if (!eng.isDirectory()) continue;
+            const nsAgentsDir = join(engineersDir, eng.name, 'agents');
+            if (!existsSync(nsAgentsDir)) continue;
+            for (const agent of readdirSync(nsAgentsDir, { withFileTypes: true })) {
+              if (!agent.isDirectory()) continue;
+              agents.push({
+                name: `${eng.name}/${agent.name}`,
+                dir: join(nsAgentsDir, agent.name),
+                org: org.name,
+              });
+            }
+          }
         }
       }
     }
@@ -154,3 +175,13 @@ module.exports = {
     console.log(`  pm2 start ${options.output}`);
     console.log('  pm2 save');
   });
+
+/**
+ * PM2 process name for an agent. Namespaced agents ("aaron/dev") have the "/"
+ * replaced with "-" so the name is unique across engineers and shell-safe.
+ * Currently exported for future per-agent PM2 entries; the current ecosystem
+ * generator emits a single `cortextos-daemon` entry that manages all agents.
+ */
+export function pm2ProcessName(org: string, agentName: string): string {
+  return `${org}-${agentName.replace('/', '-')}`;
+}
