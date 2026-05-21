@@ -11,13 +11,13 @@ LOG="$OUTDIR/$(date -u +%Y-%m-%dT%H%M%SZ).md"
 # Get a clean task list once
 TASKS=$(cortextos bus list-tasks 2>/dev/null)
 
-# Pending count overall. Use here-strings instead of echo|awk pipelines:
+# Pending count overall, excluding human-only operational tasks. Use here-strings instead of echo|awk pipelines:
 # awk exits early below, and with pipefail an upstream SIGPIPE can abort the
 # watcher before it writes a useful log.
-PENDING_COUNT=$(awk '/^  ○/' <<< "$TASKS" | wc -l)
+PENDING_COUNT=$(awk '/^  ○/ && $4 != "greg" && $4 != "human" && $5 != "[HUMAN]" && $5 != "[MORNING]"' <<< "$TASKS" | wc -l)
 
 # Find agents with assigned pending tasks
-CANDIDATES=$(awk '/^  ○/ {print $4}' <<< "$TASKS" | sort -u | tr '\n' ' ')
+CANDIDATES=$(awk '/^  ○/ && $4 != "greg" && $4 != "human" && $5 != "[HUMAN]" && $5 != "[MORNING]" {print $4}' <<< "$TASKS" | sort -u | tr '\n' ' ')
 
 {
 echo "# Idle-overlap check v2 — $(date -u)"
@@ -34,9 +34,9 @@ fi
 
 KICKED=0
 for AGENT in $CANDIDATES; do
-    # Skip non-worker pseudo-agents
+    # Skip non-worker pseudo-agents and human operators.
     case "$AGENT" in
-        orchestrator|orgo-1|cortextos|state|human|"") continue ;;
+        orchestrator|orgo-1|cortextos|state|human|greg|"") continue ;;
     esac
 
     # Count in_progress tasks for this agent
@@ -49,9 +49,9 @@ for AGENT in $CANDIDATES; do
     fi
 
     # Pick highest-priority pending task (orange > blue > white)
-    TASK_LINE=$(awk -v a="$AGENT" '/^  ○.*🟠/ && $4 == a {print; exit}' <<< "$TASKS")
+    TASK_LINE=$(awk -v a="$AGENT" '/^  ○.*🟠/ && $4 == a && $5 != "[HUMAN]" && $5 != "[MORNING]" {print; exit}' <<< "$TASKS")
     if [[ -z "$TASK_LINE" ]]; then
-        TASK_LINE=$(awk -v a="$AGENT" '/^  ○/ && $4 == a {print; exit}' <<< "$TASKS")
+        TASK_LINE=$(awk -v a="$AGENT" '/^  ○/ && $4 == a && $5 != "[HUMAN]" && $5 != "[MORNING]" {print; exit}' <<< "$TASKS")
     fi
 
     TASK_ID=$(awk '{print $3}' <<< "$TASK_LINE")
