@@ -26,6 +26,11 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    import requests
+except ModuleNotFoundError:
+    requests = None
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -164,10 +169,15 @@ def load_config():
         print(f"  bash {Path(__file__).parent / 'setup.sh'}")
         sys.exit(1)
     with open(CONFIG_FILE) as f:
-        return json.load(f)
+        config = json.load(f)
+    config.setdefault("embedding_provider", "gemini")
+    config.setdefault("ollama_host", "http://localhost:11434")
+    return config
 
 
 def get_api_key(config):
+    if config.get("embedding_provider", "gemini") == "ollama":
+        return None
     key = os.environ.get("GEMINI_API_KEY") or config.get("gemini_api_key")
     if not key:
         print("ERROR: No Gemini API key. Set GEMINI_API_KEY or run setup.")
@@ -177,7 +187,7 @@ def get_api_key(config):
 # ---------------------------------------------------------------------------
 # Gemini clients
 # ---------------------------------------------------------------------------
-def _load_factory(dotted_path):
+def _load_factory(dotted_path, env_var="MMRAG_GEMINI_CLIENT_FACTORY"):
     """Resolve a dotted import path to a callable.
 
     Accepts 'pkg.mod.attr' or 'pkg.mod:attr'. The colon form is unambiguous when
@@ -189,7 +199,7 @@ def _load_factory(dotted_path):
         module_path, _, attr_path = dotted_path.rpartition(".")
     if not module_path or not attr_path:
         raise ValueError(
-            f"MMRAG_GEMINI_CLIENT_FACTORY {dotted_path!r} must be 'module.attr' or 'module:attr'"
+            f"{env_var} {dotted_path!r} must be 'module.attr' or 'module:attr'"
         )
     import importlib
     obj = importlib.import_module(module_path)
@@ -197,7 +207,7 @@ def _load_factory(dotted_path):
         obj = getattr(obj, part)
     if not callable(obj):
         raise TypeError(
-            f"MMRAG_GEMINI_CLIENT_FACTORY {dotted_path!r} resolved to non-callable {type(obj).__name__}"
+            f"{env_var} {dotted_path!r} resolved to non-callable {type(obj).__name__}"
         )
     return obj
 
@@ -212,6 +222,11 @@ def get_genai_client(api_key):
     with .models.generate_content / .models.embed_content compatible shape.
     See knowledge-base/scripts/_test_clients/fault_injection.py for a reference.
     """
+    if api_key is None:
+        factory_path = os.environ.get("MMRAG_OLLAMA_CLIENT_FACTORY")
+        if factory_path:
+            return _load_factory(factory_path, "MMRAG_OLLAMA_CLIENT_FACTORY")()
+        return None
     factory_path = os.environ.get("MMRAG_GEMINI_CLIENT_FACTORY")
     if factory_path:
         return _load_factory(factory_path)(api_key)
@@ -247,8 +262,35 @@ def _retry_generate_content(client, *, model, contents, backoffs=(5, 15, 45)):
     raise last_err if last_err else RuntimeError("retry loop completed without response or error")
 
 
+def _ollama_embed(client, config, content):
+    if not isinstance(content, str):
+        raise ValueError("Ollama provider only supports text embeddings.")
+    host = config.get("ollama_host", "http://localhost:11434")
+    requester = client or requests
+    if requester is None:
+        raise RuntimeError("requests package is required for Ollama embeddings unless MMRAG_OLLAMA_CLIENT_FACTORY is set")
+    resp = requester.post(
+        f"{host}/api/embeddings",
+        json={"model": config["embedding_model"], "prompt": content},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    embedding = resp.json()["embedding"]
+    expected_dim = config["embedding_dimensions"]
+    if len(embedding) != expected_dim:
+        raise ValueError(f"Ollama returned {len(embedding)}-dim embedding but config expects {expected_dim}")
+    if _tracker:
+        _tracker.track_embedding(content)
+    return embedding
+
+
 def embed_content(client, config, content, task_type="RETRIEVAL_DOCUMENT"):
     """Embed content using Gemini Embedding 2. Content can be text string or list of Parts."""
+    provider = config.get("embedding_provider", "gemini")
+    if provider == "ollama":
+        return _ollama_embed(client, config, content)
+    if provider != "gemini":
+        raise ValueError(f"Unsupported embedding_provider: {provider}")
     from google.genai import types
     result = client.models.embed_content(
         model=config.get("embedding_model", "gemini-embedding-2-preview"),
@@ -268,6 +310,8 @@ def embed_multimodal(client, config, description_text, media_bytes, mime_type):
     Option B embedding: combine text description + raw media into one embedding.
     This captures both semantic text meaning AND visual/audio content.
     """
+    if config.get("embedding_provider", "gemini") == "ollama":
+        raise ValueError("Ollama provider does not support multimodal embed. Use gemini for collections that need image/audio embedding.")
     from google.genai import types
     contents = [
         description_text,
@@ -278,6 +322,8 @@ def embed_multimodal(client, config, description_text, media_bytes, mime_type):
 
 def embed_query(client, config, query_text):
     """Embed a query string for retrieval."""
+    if config.get("embedding_provider", "gemini") == "ollama":
+        return _ollama_embed(client, config, query_text)
     return embed_content(client, config, query_text, task_type="RETRIEVAL_QUERY")
 
 
@@ -331,12 +377,52 @@ def describe_media(client, config, file_path, media_type="video"):
 # ---------------------------------------------------------------------------
 # ChromaDB
 # ---------------------------------------------------------------------------
-def get_chroma_collection(collection_name="default"):
+def _collection_metadata(config):
+    metadata = {"hnsw:space": "cosine"}
+    metadata["embedding_provider"] = config.get("embedding_provider", "gemini")
+    metadata["embedding_dimensions"] = config.get("embedding_dimensions", DEFAULT_EMBEDDING_DIMENSIONS)
+    return metadata
+
+
+def _metadata_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _validate_collection_metadata(collection_name, metadata, config):
+    metadata = metadata or {}
+    existing_provider = metadata.get("embedding_provider")
+    existing_dim = metadata.get("embedding_dimensions")
+    current_provider = config.get("embedding_provider", "gemini")
+    current_dim = config.get("embedding_dimensions", DEFAULT_EMBEDDING_DIMENSIONS)
+
+    provider_mismatch = existing_provider is not None and existing_provider != current_provider
+    dim_mismatch = existing_dim is not None and _metadata_int(existing_dim) != _metadata_int(current_dim)
+    if provider_mismatch or dim_mismatch:
+        raise ValueError(
+            f"Collection '{collection_name}' was created with provider={existing_provider} "
+            f"dim={existing_dim} but current config uses provider={current_provider} dim={current_dim}. "
+            "Use a matching config or create a new collection."
+        )
+
+
+def get_chroma_collection(collection_name="default", config=None):
     import chromadb
+    config = config or {}
     client = chromadb.PersistentClient(path=str(CHROMADB_DIR))
-    return client.get_or_create_collection(
+    collection_names = {
+        c.name if hasattr(c, 'name') else c
+        for c in client.list_collections()
+    }
+    if collection_name in collection_names:
+        collection = client.get_collection(name=collection_name)
+        _validate_collection_metadata(collection_name, collection.metadata, config)
+        return collection
+    return client.create_collection(
         name=collection_name,
-        metadata={"hnsw:space": "cosine"},
+        metadata=_collection_metadata(config),
     )
 
 
@@ -1075,7 +1161,7 @@ def cmd_ingest(args):
     config = load_config()
     client = get_genai_client(get_api_key(config))
     collection_name = args.collection or config.get("default_collection", "default")
-    collection = get_chroma_collection(collection_name)
+    collection = get_chroma_collection(collection_name, config)
 
     if args_force:
         print(f"Force mode: will re-ingest existing files")
@@ -1157,7 +1243,7 @@ def cmd_query(args):
     config = load_config()
     client = get_genai_client(get_api_key(config))
     collection_name = args.collection or config.get("default_collection", "default")
-    collection = get_chroma_collection(collection_name)
+    collection = get_chroma_collection(collection_name, config)
 
     if collection.count() == 0:
         print("Knowledge base is empty. Ingest some files first.")
@@ -1382,8 +1468,10 @@ def cmd_status(args):
     collection_name = args.collection or config.get("default_collection", "default")
 
     try:
-        collection = get_chroma_collection(collection_name)
+        collection = get_chroma_collection(collection_name, config)
         count = collection.count()
+    except ValueError:
+        raise
     except Exception:
         count = 0
 
@@ -1420,7 +1508,9 @@ def cmd_list(args):
     collection_name = args.collection or config.get("default_collection", "default")
 
     try:
-        collection = get_chroma_collection(collection_name)
+        collection = get_chroma_collection(collection_name, config)
+    except ValueError:
+        raise
     except Exception:
         print("No data found.")
         return
@@ -1448,6 +1538,7 @@ def cmd_list(args):
 
 
 def cmd_collections(args):
+    config = load_config()
     chroma = get_chroma_client()
     collections = chroma.list_collections()
     if not collections:
@@ -1456,15 +1547,16 @@ def cmd_collections(args):
     print(f"{'Collection':<30} {'Documents':<12}")
     print("-" * 44)
     for c in collections:
-        col = chroma.get_collection(c.name if hasattr(c, 'name') else c)
         name = c.name if hasattr(c, 'name') else c
+        col = chroma.get_collection(name)
+        _validate_collection_metadata(name, col.metadata, config)
         print(f"{name:<30} {col.count():<12}")
 
 
 def cmd_delete(args):
     config = load_config()
     collection_name = args.collection or config.get("default_collection", "default")
-    collection = get_chroma_collection(collection_name)
+    collection = get_chroma_collection(collection_name, config)
 
     source_path = str(Path(args.path).resolve())
     all_data = collection.get(include=["metadatas"])
