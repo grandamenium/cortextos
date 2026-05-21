@@ -269,11 +269,24 @@ def _ollama_embed(client, config, content):
     requester = client or requests
     if requester is None:
         raise RuntimeError("requests package is required for Ollama embeddings unless MMRAG_OLLAMA_CLIENT_FACTORY is set")
-    resp = requester.post(
-        f"{host}/api/embeddings",
-        json={"model": config["embedding_model"], "prompt": content},
-        timeout=30,
-    )
+    try:
+        resp = requester.post(
+            f"{host}/api/embeddings",
+            json={"model": config["embedding_model"], "prompt": content},
+            timeout=30,
+        )
+    except requests.exceptions.ConnectionError as e:
+        raise RuntimeError(
+            f"Ollama daemon not reachable at {host}. "
+            f"Start it with: ollama serve  (or: brew services start ollama). "
+            f"Underlying: {e}"
+        ) from e
+    except requests.exceptions.Timeout as e:
+        raise RuntimeError(
+            f"Ollama embed request to {host} timed out after 30s. "
+            f"Check daemon health: ollama list. "
+            f"Underlying: {e}"
+        ) from e
     resp.raise_for_status()
     embedding = resp.json()["embedding"]
     expected_dim = config["embedding_dimensions"]
