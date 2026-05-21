@@ -207,7 +207,7 @@ async function checkTaskDrawer(page: Page, session: SupabaseSession): Promise<Ch
   const text = await pageText(page);
 
   // Check if fixture task exists
-  const fixturePresent = text.includes('qa-full-brief-1') || text.includes('Brief Contract') || text.includes('Success Criteria');
+  const fixturePresent = text.includes('qa-full-brief-1');
   if (!fixturePresent) {
     const sc = await shot(page, 'assert-01-04-no-fixture');
     const msg = 'Seed fixture qa-full-brief-1 not found — task drawer seeded assertions DEFERRED pending fixture deployment';

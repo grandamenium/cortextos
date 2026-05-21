@@ -20,17 +20,17 @@
         "/app/fleet/tasks",
         "/app/cortex/theta"
       ],
-      "currentStatus": "ok",
+      "currentStatus": "warn",
       "freshnessTarget": "20h auth age max; 2h route smoke cadence",
       "warnWhen": "auth age >= 20h, one sentinel route times out, or session age is unknown for 3 runs",
       "failWhen": "auth redirect, login wall, 401/403, blank shell, or both sentinel routes fail",
       "renewalPath": "Drive Hub-QA VM Chrome through Hub magic-link auth using Greg .com Gmail when needed",
       "proofRequired": "Latest probe event, route screenshots on warn/fail, auth age if available",
-      "lastCheckedAt": "2026-05-20T07:36:43.370Z",
+      "lastCheckedAt": "2026-05-21T22:31:23.388Z",
       "lastAuthority": "hub.revopsglobal.com (magic-link auth)",
-      "observed": "/app/fleet/tasks=308, /app/cortex/theta=308",
-      "proof": "Sentinels: /app/fleet/tasks=308, /app/cortex/theta=308",
-      "lastEventName": "capability_check_passed"
+      "observed": "28 pass, 2 fail, 5 deferred",
+      "proof": "AgentOps deep dogfood: FAIL. Report: /home/cortextos/cortextos/orgs/revops-global/agents/hub-dogfood/output/hub-dogfood/2026-05-21-2230/report.md",
+      "lastEventName": "capability_check_warn"
     },
     {
       "id": "linkedin_session",
