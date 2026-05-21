@@ -17,6 +17,7 @@ import { createReminder, listReminders, ackReminder, pruneReminders } from '../b
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { checkRoutingHealth } from '../bus/routing-health.js';
+import { runFleetHealthCheck, formatSlackAlert } from '../bus/fleet-health.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
@@ -3042,6 +3043,90 @@ busCommand
     if (report.status === 'drift_critical') {
       process.exit(1);
     }
+  });
+
+busCommand
+  .command('fleet-health-check')
+  .description('Check all agent heartbeats for staleness and cron injection gaps. Posts Slack alert to #fleet-alerts when unhealthy.')
+  .option('--slack-channel <channel>', 'Slack channel to post alerts (default: #fleet-alerts)', '#fleet-alerts')
+  .option('--alert-on-healthy', 'Post to Slack even when all agents are healthy (for cron confirmation)', false)
+  .option('--json', 'Output report as JSON', false)
+  .action(async (opts: { slackChannel: string; alertOnHealthy: boolean; json: boolean }) => {
+    const env = resolveEnv();
+    if (!env.ctxRoot) {
+      console.error('Error: CTX_ROOT not set');
+      process.exit(1);
+    }
+
+    const analyticsDir = join(env.ctxRoot, env.instanceId ?? '');
+    const paths = {
+      ...resolvePaths(env.agentName, env.instanceId, env.org),
+      ctxRoot: env.ctxRoot,
+    };
+
+    const report = runFleetHealthCheck(paths, analyticsDir);
+
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(report.summary);
+    if (!report.healthy) {
+      for (const agent of report.staleAgents) {
+        console.log(`  STALE: ${agent.agentName} (${agent.minutesSinceHeartbeat}m ago)`);
+      }
+      for (const gap of report.cronGaps) {
+        console.log(`  CRON GAP: ${gap.agentName}/${gap.cronName} (${gap.minutesSinceFire}m ago)`);
+      }
+    }
+
+    if (!report.healthy || opts.alertOnHealthy) {
+      const message = formatSlackAlert(report);
+      let slackToken = '';
+
+      if (env.agentDir) {
+        const agentEnv = join(env.agentDir, '.env');
+        if (existsSync(agentEnv)) {
+          const content = readFileSync(agentEnv, 'utf-8');
+          const match = content.match(/^SLACK_BOT_TOKEN=(.+)$/m);
+          if (match?.[1]?.trim()) slackToken = match[1].trim();
+        }
+      }
+
+      if (!slackToken) slackToken = process.env.SLACK_BOT_TOKEN ?? '';
+
+      if (!slackToken) {
+        try {
+          const result = spawnSync(
+            'op',
+            ['item', 'get', 'Slack', '--vault', 'Automation', '--fields', 'credential', '--reveal'],
+            { encoding: 'utf-8', timeout: 8000 },
+          );
+          if (result.status === 0 && result.stdout.trim()) {
+            slackToken = result.stdout.trim();
+          }
+        } catch { /* 1Password unavailable */ }
+      }
+
+      if (slackToken) {
+        try {
+          const api = new SlackAPI(slackToken);
+          const result = await api.postMessage({ channel: opts.slackChannel, text: message });
+          if (result.ok) {
+            console.log(`Alert posted to ${opts.slackChannel} (ts: ${(result as { ts: string }).ts})`);
+          } else {
+            console.warn(`Slack post failed: ${(result as { error: string }).error}`);
+          }
+        } catch (err) {
+          console.warn(`Slack error: ${err}`);
+        }
+      } else {
+        console.warn('SLACK_BOT_TOKEN not configured - alert not posted to Slack');
+      }
+    }
+
+    if (!report.healthy) process.exit(1);
   });
 
 function sleepMs(ms: number): Promise<void> {
