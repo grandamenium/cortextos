@@ -9,6 +9,50 @@ import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
 
 // ---------------------------------------------------------------------------
+// Security (H2): Payload sanitization
+// ---------------------------------------------------------------------------
+
+const MAX_TEXT_BYTES = 32_768; // 32 KB hard cap on message body
+const CONTROL_CHAR_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/; // disallow control chars except \t \n \r
+
+/** Validate and sanitize an inbox message payload. Returns a reason string on failure, null on success. */
+function validateMessagePayload(raw: unknown): string | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return 'payload is not an object';
+  }
+  const m = raw as Record<string, unknown>;
+
+  const requiredStrings = ['id', 'from', 'to', 'priority', 'timestamp', 'text'] as const;
+  for (const field of requiredStrings) {
+    if (typeof m[field] !== 'string') return `field '${field}' missing or not a string`;
+  }
+
+  const priority = m['priority'] as string;
+  if (!['urgent', 'high', 'normal', 'low'].includes(priority)) {
+    return `invalid priority '${priority}'`;
+  }
+
+  const text = m['text'] as string;
+  if (Buffer.byteLength(text, 'utf-8') > MAX_TEXT_BYTES) {
+    return `text exceeds ${MAX_TEXT_BYTES} byte limit`;
+  }
+  if (CONTROL_CHAR_RE.test(text)) {
+    return 'text contains disallowed control characters';
+  }
+
+  const id = m['id'] as string;
+  if (CONTROL_CHAR_RE.test(id) || id.length > 256) {
+    return 'id is malformed';
+  }
+
+  if (m['reply_to'] !== null && m['reply_to'] !== undefined && typeof m['reply_to'] !== 'string') {
+    return "field 'reply_to' must be a string or null";
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Security (H10): HMAC-SHA256 message signing
 // ---------------------------------------------------------------------------
 
@@ -124,7 +168,18 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
       const srcPath = join(inbox, file);
       try {
         const content = readFileSync(srcPath, 'utf-8');
-        const msg: InboxMessage = JSON.parse(content);
+        const parsed: unknown = JSON.parse(content);
+
+        // Security (H2): Validate payload schema before any further processing.
+        const payloadError = validateMessagePayload(parsed);
+        if (payloadError) {
+          console.error(`[bus/message] SECURITY: Rejecting malformed message in '${file}': ${payloadError}`);
+          const errDir = join(inbox, '.errors');
+          ensureDir(errDir);
+          try { renameSync(srcPath, join(errDir, file)); } catch { /* ignore */ }
+          continue;
+        }
+        const msg = parsed as InboxMessage;
 
         // Security (H10): Verify HMAC signature if key is available and message has sig.
         if (signingKey && msg.sig) {

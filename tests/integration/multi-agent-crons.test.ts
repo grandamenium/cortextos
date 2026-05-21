@@ -215,6 +215,9 @@ beforeEach(async () => {
   tmpCtxRoot      = mkdtempSync(join(tmpdir(), 'multi-agent-ctx-'));
   tmpFrameworkRoot = mkdtempSync(join(tmpdir(), 'multi-agent-fw-'));
   process.env.CTX_ROOT = tmpCtxRoot;
+  // Seed signing key so test messages are signed — mirrors production behaviour.
+  mkdirSync(join(tmpCtxRoot, 'config'), { recursive: true });
+  writeFileSync(join(tmpCtxRoot, 'config', 'bus-signing-key'), 'test-signing-key-for-tests');
   vi.useFakeTimers();
   await reloadModules();
 });
