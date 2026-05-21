@@ -12,7 +12,8 @@ export const spawnWorkerCommand = new Command('spawn-worker')
   .option('--model <model>', 'Claude model to use (defaults to org default)')
   .option('--base-url <url>', 'Override ANTHROPIC_BASE_URL for this worker (cheap-LLM lane: DeepSeek / OpenRouter / Ollama). Requires --api-key-env. Spec: agents/analyst/reports/cheap-llm-lanes-spec-2026-05-20.md')
   .option('--api-key-env <name>', 'Env var name (read from the calling agent .env or org secrets.env) whose value becomes ANTHROPIC_API_KEY in the worker PTY. Pairs with --base-url.')
-  .action(async (name: string, opts: { dir: string; prompt: string; parent?: string; model?: string; baseUrl?: string; apiKeyEnv?: string }) => {
+  .option('--effort <level>', 'Effort level for the worker session (low|medium|high|xhigh|max). Passed to the PTY via CLAUDE_EFFORT env var.')
+  .action(async (name: string, opts: { dir: string; prompt: string; parent?: string; model?: string; baseUrl?: string; apiKeyEnv?: string; effort?: string }) => {
     const env = resolveEnv();
     const client = new IPCClient(env.instanceId);
     const dir = resolve(opts.dir);
@@ -34,6 +35,7 @@ export const spawnWorkerCommand = new Command('spawn-worker')
         model: opts.model,
         baseUrl: opts.baseUrl,
         apiKeyEnv: opts.apiKeyEnv,
+        effort: opts.effort,
       },
     });
 

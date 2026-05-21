@@ -233,6 +233,15 @@ export interface AgentConfig {
     /** Env var name (read from agent .env) holding the alt-provider key. */
     env_key: string;
   };
+  /**
+   * Per-cron effort hints injected into the cron fire text at daemon dispatch.
+   * Keys are cron names (matching CronDefinition.name in crons.json).
+   * Values: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+   * When a cron fires, its name is looked up here and the effort level is
+   * prepended to the injection as [EFFORT:<level>] for the agent to read.
+   * Spec: agents/analyst/reports/cheap-llm-lanes-spec-2026-05-20.md
+   */
+  cron_effort_overrides?: Record<string, 'low' | 'medium' | 'high' | 'xhigh' | 'max'>;
 }
 
 export interface CronEntry {

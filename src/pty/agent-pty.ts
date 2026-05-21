@@ -140,6 +140,11 @@ export class AgentPTY {
     // agents/analyst/reports/cheap-llm-lanes-spec-2026-05-20.md).
     AgentPTY.applyCheapLaneEnv(ptyEnv, this.config, this.env.agentName);
 
+    const effort = (this.config as AgentConfig & { effort?: string }).effort;
+    if (effort?.trim()) {
+      ptyEnv['CLAUDE_EFFORT'] = effort.trim();
+    }
+
     // Spawn the agent binary directly (no shell wrapper) — cross-platform, no shell escaping needed.
     // env is passed natively via node-pty options; no bash export commands required.
     // On Windows, npm global installs create .cmd wrappers, not .exe binaries.

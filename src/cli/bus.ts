@@ -16,6 +16,7 @@ import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
+import { checkRoutingHealth } from '../bus/routing-health.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
@@ -3001,6 +3002,45 @@ busCommand
     if (!opts.dryRun && patched > 0) {
       console.log('\nRestart affected agents to apply the new settings:');
       console.log('  cortextos restart <agent-name>');
+    }
+  });
+
+busCommand
+  .command('check-routing-health')
+  .description('Check Codex:Claude event ratio to detect architectural drift (work leaking to Claude that should go to Codex)')
+  .option('--window-hours <n>', 'Hours of event history to analyze (default: 24)', '24')
+  .option('--json', 'Output as JSON instead of human-readable text', false)
+  .action((opts: { windowHours: string; json: boolean }) => {
+    const env = resolveEnv();
+    if (!env.ctxRoot) {
+      console.error('Error: CTX_ROOT not set');
+      process.exit(1);
+    }
+    const analyticsDir = join(env.ctxRoot, env.instanceId ?? '');
+    const windowHours = parseInt(opts.windowHours, 10) || 24;
+    const report = checkRoutingHealth(analyticsDir, windowHours);
+
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    const statusEmoji = {
+      healthy: '✓',
+      drift_warning: '⚠',
+      drift_critical: '✗',
+      insufficient_data: '?',
+    }[report.status];
+
+    console.log(`Routing Health: ${statusEmoji} ${report.status.toUpperCase()}`);
+    console.log(`Window: last ${report.windowHours}h`);
+    console.log(`Claude message events: ${report.claudeMessageEvents}`);
+    console.log(`Codex task completions: ${report.codexTaskCompletions}`);
+    console.log(`Codex:Claude ratio: ${report.ratio !== null ? report.ratio.toFixed(2) : 'N/A'}`);
+    console.log(`Recommendation: ${report.recommendation}`);
+
+    if (report.status === 'drift_critical') {
+      process.exit(1);
     }
   });
 

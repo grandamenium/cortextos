@@ -23,7 +23,7 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
+  private agents: Map<string, { process: AgentProcess; checker: FastChecker; config: AgentConfig; dir: string; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
@@ -301,7 +301,7 @@ export class AgentManager {
       });
     }
 
-    this.agents.set(name, { process: agentProcess, checker });
+    this.agents.set(name, { process: agentProcess, checker, config, dir: agentDir });
 
     // Start agent
     await agentProcess.start();
@@ -749,6 +749,7 @@ export class AgentManager {
     model?: string,
     baseUrl?: string,
     apiKeyEnv?: string,
+    effort?: string,
   ): Promise<void> {
     if (this.workers.has(name)) {
       throw new Error(`Worker "${name}" is already running`);
@@ -770,8 +771,9 @@ export class AgentManager {
       projectRoot: this.frameworkRoot,
     };
 
-    const config: { model?: string; cheap_lane?: { enabled: boolean; base_url: string; model: string; env_key: string } } = {};
+    const config: { model?: string; effort?: string; cheap_lane?: { enabled: boolean; base_url: string; model: string; env_key: string } } = {};
     if (model) config.model = model;
+    if (effort) config.effort = effort;
     if (baseUrl && apiKeyEnv) {
       config.cheap_lane = {
         enabled: true,
@@ -872,7 +874,8 @@ export class AgentManager {
     // Hermes manages its own crons natively — no daemon scheduler exists by
     // design. The reload IS a no-op; report success so the caller does not
     // retry forever.
-    if (entry.process['config']?.runtime === 'hermes') {
+    const entryConfig = entry.config ?? (entry.process['config'] as AgentConfig | undefined) ?? {};
+    if (entryConfig.runtime === 'hermes') {
       return true;
     }
 
@@ -908,7 +911,9 @@ export class AgentManager {
     if (!entry) return;
 
     // Hermes manages its own cron scheduling — don't double-schedule
-    if (entry.process['config']?.runtime === 'hermes') {
+    const agentConfig = entry.config ?? (entry.process['config'] as AgentConfig | undefined) ?? {};
+
+    if (agentConfig.runtime === 'hermes') {
       console.log(`[daemon] Skipping external cron scheduler for Hermes agent "${agentName}"`);
       return;
     }
@@ -920,7 +925,14 @@ export class AgentManager {
       // Without the salt, every recurring cron after its first fire would be
       // dedup-rejected and treated as a dispatch failure.
       const firedAt = new Date().toISOString();
-      const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
+      let injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
+
+      // Effort override: prepend [EFFORT:<level>] if configured for this cron.
+      const effortOverride = agentConfig?.cron_effort_overrides?.[cron.name];
+      if (effortOverride) {
+        injection = `[EFFORT:${effortOverride}] ${injection}`;
+      }
+
       const injected = this.injectAgent(agentName, injection);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
