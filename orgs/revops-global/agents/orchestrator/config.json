@@ -79,6 +79,12 @@
       "type": "recurring",
       "cron": "30 6 * * *",
       "prompt": "Run: cortextos bus human-blockers-digest $CTX_TELEGRAM_CHAT_ID"
+    },
+    {
+      "name": "wip-enforcer",
+      "type": "recurring",
+      "interval": "15m",
+      "prompt": "Run: cortextos bus wip-enforcer"
     }
   ],
   "ctx_handoff_threshold": 88,

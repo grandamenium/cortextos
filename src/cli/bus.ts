@@ -11,6 +11,7 @@ import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { pollWatchdog } from '../bus/watchdog.js';
 import { runPrStuckWatcher } from '../bus/pr-stuck-watcher.js';
+import { runWipEnforcer } from '../bus/wip-enforcer.js';
 import { runDocDriftChecker } from '../bus/doc-drift-checker.js';
 import { runGoalProgressProbe } from '../bus/goal-progress-probe.js';
 import { runHeartbeatHealthWatch, inferRunningFromHeartbeats } from '../bus/heartbeat-health-watch.js';
@@ -1695,6 +1696,52 @@ busCommand
       for (const failure of result.failedRepos.slice(0, 10)) {
         console.log(`- ${failure.repo}: ${failure.error.split('\n')[0]}`);
       }
+    }
+  });
+
+busCommand
+  .command('wip-enforcer')
+  .description('Enforce per-agent WIP targets: ping under-target agents and Telegram-alert on persistent shortfall')
+  .option('--telegram-chat-id <id>', 'Telegram chat ID for persistent-shortfall alerts (defaults to $CTX_TELEGRAM_CHAT_ID)')
+  .option('--dry-run', 'Compute counters but do not send agent messages or Telegram alerts')
+  .option('--format <fmt>', 'Output format: json or text', 'text')
+  .action(async (opts: { telegramChatId?: string; dryRun?: boolean; format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+
+    // Resolve BOT_TOKEN: agent .env first (most specific), then process env.
+    // Same precedence as the send-telegram command — keeps a single source of
+    // truth for which token a cron tick uses to alert Greg.
+    let botToken = '';
+    if (env.agentDir) {
+      const agentEnv = join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const match = readFileSync(agentEnv, 'utf-8').match(/^BOT_TOKEN=(.+)$/m);
+        if (match && match[1].trim()) botToken = match[1].trim();
+      }
+    }
+    if (!botToken) botToken = process.env.BOT_TOKEN || '';
+
+    const result = await runWipEnforcer(paths, env.agentName, env.org, {
+      telegramChatId: opts.telegramChatId,
+      botToken,
+      dryRun: !!opts.dryRun,
+    });
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    const underTarget = result.agents.filter(a => a.under_target);
+    console.log(`Agents checked: ${result.agents.length}`);
+    console.log(`Under target: ${underTarget.length}`);
+    for (const a of underTarget) {
+      const flags: string[] = [];
+      if (a.message_sent) flags.push('msg');
+      if (a.telegram_alerted) flags.push('tg');
+      const suffix = flags.length ? ` [${flags.join(',')}]` : '';
+      console.log(`- ${a.agent}: ${a.in_progress}/${a.wip_target} (ticks=${a.ticks_under_target})${suffix}`);
     }
   });
 
