@@ -197,6 +197,40 @@ describe('digestHumanBlockers', () => {
     const result = digestHumanBlockers({ instanceId: 'default', chatId: '123' });
     expect(result).toContain('2 items');
   });
+
+  it('includes task description as step-by-step details block', () => {
+    const taskDir = join(ctxRoot, 'orgs', 'revops-global', 'tasks');
+    writeTask(taskDir, {
+      title: '[HUMAN] Top up Google AI Studio credits',
+      assigned_to: 'orchestrator',
+      priority: 'high',
+      description: '1. Go to https://ai.studio/projects\n2. Click "Billing" in left nav\n3. Click "Add credits" and enter $20\n4. Paste confirmation number back here',
+    });
+
+    const result = digestHumanBlockers({ instanceId: 'default', chatId: '123' });
+    expect(result).toContain('Top up Google AI Studio credits');
+    expect(result).toContain('https://ai.studio/projects');
+    expect(result).toContain('Add credits');
+    expect(result).toContain('Paste confirmation number back here');
+  });
+
+  it('truncates very long details to 600 chars', () => {
+    const taskDir = join(ctxRoot, 'orgs', 'revops-global', 'tasks');
+    const longDesc = 'step '.repeat(200); // 1000 chars
+    writeTask(taskDir, {
+      title: '[HUMAN] Long description task',
+      assigned_to: 'dev',
+      priority: 'normal',
+      description: longDesc,
+    });
+
+    const result = digestHumanBlockers({ instanceId: 'default', chatId: '123' });
+    expect(result).toContain('…');
+    // Details block should not exceed 600 chars + overhead
+    const detailsStart = result.indexOf('step ');
+    const detailsChunk = result.slice(detailsStart);
+    expect(detailsChunk.length).toBeLessThan(700);
+  });
 });
 
 describe('sendHumanBlockersDigest --dry-run', () => {

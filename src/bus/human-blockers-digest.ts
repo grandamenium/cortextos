@@ -39,6 +39,8 @@ interface BlockerEntry {
   priority: Priority;
   summary: string;
   createdAt: string;
+  /** Step-by-step copy-pastable details (exact URLs, buttons, fields, paste-back format). */
+  details?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +82,7 @@ function scanTaskDir(taskDir: string, since?: Date): BlockerEntry[] {
         priority: task.priority,
         summary: `[task] ${summary}`,
         createdAt: task.created_at,
+        details: task.description?.trim() || undefined,
       });
     } catch {
       // Skip corrupt files
@@ -164,6 +167,7 @@ function scanPendingApprovals(ctxRoot: string, since?: Date): BlockerEntry[] {
           priority: 'high', // approvals are always treated as high-priority blockers
           summary: `[approval] ${approval.title}`,
           createdAt: approval.created_at,
+          details: (approval as unknown as Record<string, unknown>).description as string | undefined,
         });
       } catch {
         // Skip corrupt
@@ -179,11 +183,27 @@ function scanPendingApprovals(ctxRoot: string, since?: Date): BlockerEntry[] {
 // ---------------------------------------------------------------------------
 
 const PRIORITY_ORDER: Priority[] = ['urgent', 'high', 'normal', 'low'];
+void PRIORITY_ORDER;
+
+const DETAILS_MAX_CHARS = 600;
+
+/**
+ * Truncate details to a readable length and indent each line for Telegram.
+ */
+function formatDetails(details: string): string {
+  const trimmed = details.length > DETAILS_MAX_CHARS
+    ? details.slice(0, DETAILS_MAX_CHARS) + '…'
+    : details;
+  return trimmed
+    .split('\n')
+    .map((l) => `    ${l}`)
+    .join('\n');
+}
 
 /**
  * Group entries by priority then by agent, sort within each group by
  * created_at ASC (oldest blocker first = most urgent to resolve), and
- * format a compact Telegram-compatible message.
+ * format a Telegram-compatible message with step-by-step details per entry.
  */
 function formatDigest(entries: BlockerEntry[]): string {
   if (entries.length === 0) {
@@ -206,8 +226,12 @@ function formatDigest(entries: BlockerEntry[]): string {
       const label = currentPriority.toUpperCase();
       lines.push(`\n[${label}]`);
     }
-    // One line per blocker: agent: summary
+    // Header line: agent: summary
     lines.push(`  ${entry.agent}: ${entry.summary}`);
+    // Step-by-step details block (exact URL, buttons, fields, paste-back format)
+    if (entry.details) {
+      lines.push(formatDetails(entry.details));
+    }
   }
 
   return lines.join('\n');
