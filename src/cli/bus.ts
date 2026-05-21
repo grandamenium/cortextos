@@ -1418,7 +1418,8 @@ busCommand
   .option('--agent <name>', 'Agent name (for private scope)')
   .option('--scope <s>', 'Scope: shared or private', 'shared')
   .option('--force', 'Re-ingest even if already indexed')
-  .action((paths: string[], opts: { org?: string; agent?: string; scope?: string; force?: boolean }) => {
+  .option('--timeout <ms>', 'Ingest subprocess timeout in milliseconds. 0 = no timeout (recommended for large corpora >100 MB). Default: 600000 (10 min) or KB_INGEST_TIMEOUT_MS env var.')
+  .action((paths: string[], opts: { org?: string; agent?: string; scope?: string; force?: boolean; timeout?: string }) => {
     const env = resolveEnv();
     const org = opts.org || env.org;
     if (!org) {
@@ -1428,6 +1429,8 @@ busCommand
 
     ensureKBDirs(env.instanceId, env.frameworkRoot, org);
 
+    const timeoutMs = opts.timeout !== undefined ? Number(opts.timeout) : undefined;
+
     ingestKnowledgeBase(paths, {
       org,
       agent: opts.agent || env.agentName,
@@ -1435,6 +1438,7 @@ busCommand
       force: opts.force,
       frameworkRoot: env.frameworkRoot || process.cwd(),
       instanceId: env.instanceId,
+      timeoutMs,
     });
   });
 

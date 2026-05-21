@@ -250,6 +250,10 @@ export function ingestKnowledgeBase(
     force?: boolean;
     frameworkRoot: string;
     instanceId: string;
+    /** Timeout in ms for the ingest subprocess. 0 = no timeout (recommended
+     *  for large corpora). Defaults to KB_INGEST_TIMEOUT_MS env var or
+     *  600_000 (10 min). Pass 0 explicitly to disable entirely. */
+    timeoutMs?: number;
   },
 ): void {
   const { agent, scope = 'shared', force, frameworkRoot, instanceId } = options;
@@ -306,15 +310,26 @@ export function ingestKnowledgeBase(
   // produced ETIMEDOUT mid-Gemini-call. Default 10 min, override via env,
   // floored at 60s so nobody accidentally sets it to 0 or a value smaller
   // than a single Gemini call needs.
+  // Timeout resolution order:
+  //   1. options.timeoutMs (CLI --timeout flag) — explicit caller wins
+  //   2. KB_INGEST_TIMEOUT_MS env var — operator override
+  //   3. Default 600_000 (10 min)
+  // 0 = no timeout (pass directly to execFileSync; recommended for large corpora).
   const KB_INGEST_TIMEOUT_FLOOR_MS = 60_000;
   const KB_INGEST_TIMEOUT_DEFAULT_MS = 600_000;
-  const requestedTimeout = Number(process.env.KB_INGEST_TIMEOUT_MS);
-  const ingestTimeoutMs = Math.max(
-    KB_INGEST_TIMEOUT_FLOOR_MS,
-    Number.isFinite(requestedTimeout) && requestedTimeout > 0
+  let ingestTimeoutMs: number;
+  if (options.timeoutMs !== undefined) {
+    ingestTimeoutMs = options.timeoutMs; // 0 = no timeout; respected as-is
+  } else {
+    const requestedTimeout = Number(process.env.KB_INGEST_TIMEOUT_MS);
+    ingestTimeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout >= 0
       ? requestedTimeout
-      : KB_INGEST_TIMEOUT_DEFAULT_MS,
-  );
+      : KB_INGEST_TIMEOUT_DEFAULT_MS;
+  }
+  // Only apply floor when timeout is non-zero (don't convert 0→60000).
+  if (ingestTimeoutMs > 0) {
+    ingestTimeoutMs = Math.max(KB_INGEST_TIMEOUT_FLOOR_MS, ingestTimeoutMs);
+  }
 
   execFileSync(pythonPath, args, {
     encoding: 'utf-8',
