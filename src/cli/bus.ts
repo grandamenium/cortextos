@@ -602,41 +602,6 @@ busCommand
   });
 
 busCommand
-  .command('ack-health-probe')
-  .argument('<probe_id>', 'Probe ID to acknowledge (from the ping message)')
-  .description('Acknowledge a daemon health probe, writing acked status to state/health-probe.json')
-  .action((probeId: string) => {
-    const env = resolveEnv();
-    const agentName = env.agentName;
-    if (!agentName) {
-      console.error('[ack-health-probe] CTX_AGENT_NAME is not set');
-      process.exit(1);
-    }
-    const ctxRoot = process.env.CTX_ROOT ?? join(homedir(), '.cortextos', env.instanceId || 'default');
-    const stateDir = join(ctxRoot, 'state', agentName);
-    const probeFile = join(stateDir, 'health-probe.json');
-
-    // Validate that probe_id matches what's pending (best-effort — if the file
-    // is missing we still write the ack so the daemon sees it on next check).
-    try {
-      mkdirSync(stateDir, { recursive: true });
-      if (existsSync(probeFile)) {
-        const state = JSON.parse(readFileSync(probeFile, 'utf-8'));
-        if (state.probe_id && state.probe_id !== probeId) {
-          console.error(`[ack-health-probe] probe_id mismatch: expected ${state.probe_id}, got ${probeId}`);
-          process.exit(1);
-        }
-      }
-      writeFileSync(probeFile, JSON.stringify({ status: 'acked', probe_id: probeId, acked_at: new Date().toISOString() }));
-      console.log(`[ack-health-probe] Acked probe ${probeId} for ${agentName}`);
-    } catch (err) {
-      console.error(`[ack-health-probe] Failed to write ack: ${err}`);
-      process.exit(1);
-    }
-    process.exit(0);
-  });
-
-busCommand
   .command('create-task')
   .argument('<title>', 'Task title')
   .option('--desc <description>', 'Task description')
