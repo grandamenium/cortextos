@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [Unreleased]
+
+### Added
+- Per-engineer agent namespaces: personal agents live under
+  `orgs/<org>/engineers/<engineer>/agents/<name>`, addressed as `<engineer>/<name>`.
+- `cortextos add-engineer <name>` command to scaffold a namespace.
+- `templates/engineer` namespace template.
+- Centralized agent-directory resolution (`src/utils/agent-dir.ts`).
+- `pm2ProcessName` helper for future per-agent PM2 entries.
+
+### Changed
+- `listAgents` also discovers namespaced agents.
+- `cortextos ecosystem` agent count now includes namespaced agents.
+- `AGENT_NAME_REGEX` exported from `src/utils/validate.ts` for reuse.
+- Forked to `wyre-technology/cortextos`; `CONTRIBUTING.md` documents upstream sync.
+
 ## [0.2.0] — 2026-05-04 — External Persistent Crons
 
 Crons move from session-local (`/loop`, `CronCreate`) to daemon-managed `crons.json` files under `${CTX_ROOT}/state/{agent}/`. Auto-migrates from existing `config.json` on first daemon boot. Fully backward-compatible additive feature.

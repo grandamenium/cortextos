@@ -4,6 +4,11 @@
 
 **Persistent 24/7 Claude Code agents you control from Telegram or your phone.**
 
+> **WYRE fork.** This is `wyre-technology/cortextos`, WYRE's hard fork of
+> [grandamenium/cortextos](https://github.com/grandamenium/cortextos). It adds
+> per-engineer namespaces so a shared agent fleet and personal specialist agents
+> run together on one host. See `CONTRIBUTING.md` for the upstream-sync process.
+
 ---
 
 ```
