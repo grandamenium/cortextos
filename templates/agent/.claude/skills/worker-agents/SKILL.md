@@ -2,6 +2,7 @@
 name: worker-agents
 description: "You have a task that would benefit from running in a separate isolated Claude Code session — either because it is long-running and you do not want it to consume your context window, or because you want multiple pieces of work running in parallel that each require a full Claude Code session with its own tools, memory, and context (not just a subagent call). You will spawn one or more ephemeral worker sessions, give each a focused task, monitor their progress via the bus, and collect their outputs when done."
 triggers: ["worker", "parallelize", "spawn worker", "spin up", "parallel work", "background task", "isolated session", "separate session", "long running task", "run in background", "parallel research", "multiple workers", "worker session", "spawn session", "full claude code session", "context window", "parallel tasks", "run simultaneously", "independent sessions"]
+external_calls: []
 ---
 
 # Worker Agents
@@ -116,6 +117,56 @@ cortextos terminate-worker <worker-name>
 cortextos bus log-event action worker_completed info \
   --meta '{"worker":"<worker-name>","deliverables":"<summary>"}'
 ```
+
+---
+
+## Blocked-Task Auto-Rotate Protocol (MANDATORY)
+
+When the task you are currently working on hits a blocker, you **MUST NOT** simply mark it blocked and idle. Idling on blockers is the single largest cause of fleet underutilization. Greg explicitly flagged this as a P0 architectural fix on 2026-05-21.
+
+Blockers include — but are not limited to:
+- Approval pending (`cortextos bus create-approval ...` filed, awaiting decision)
+- Missing credential / OAuth re-auth needed
+- Stuck CI run (waiting on a job that has been queued >15 min)
+- Dependency on another agent's in-flight task
+- External service degradation (Supabase 522, GitHub API rate limit, etc.)
+- Any condition where forward progress on the current task is paused for >5 minutes
+
+### The protocol — execute these steps IN ORDER, never skip
+
+1. **Identify the next backlog task** before pausing. Query in priority order:
+   - `cortextos bus list-tasks --agent $CTX_AGENT_NAME --status pending`
+   - RGOS approved queue (mcp__rgos__cortex_list_tasks if available, PostgREST fallback otherwise)
+   - Your goals.json (any goal without a corresponding in-flight task)
+
+2. **Spawn a worker for that next task** — do not just switch your main session to it, because the worker keeps the new work in an isolated context window while your main session retains the blocker's context for fast resumption when it unblocks.
+   ```bash
+   cortextos spawn-worker <agent>-<task-slug> \
+     --dir <task working dir> \
+     --prompt "Read AGENTS.md. Task: <one-line scope>. Deliverables: <list>. Report back via cortextos bus send-message $CTX_AGENT_NAME normal 'Done: <summary>'" \
+     --parent $CTX_AGENT_NAME
+   ```
+
+3. **Mark the original task blocked** AFTER the worker spawn confirms — never before, or you create a dead-air window:
+   ```bash
+   cortextos bus update-task <original_task_id> blocked
+   cortextos bus log-event task task_blocked info --meta '{"task_id":"<id>","blocked_by":"<reason>","auto_rotated_to":"<worker-name>"}'
+   ```
+
+4. **Track both** — your main session monitors the blocker's resolution (inbox messages, approval webhooks, etc.); the worker drives forward progress on the backlog task in parallel.
+
+5. **When the blocker clears**, terminate or finish the worker, resume the original task. If the worker is still mid-flight, let it complete first, then resume original.
+
+### Hard rules
+
+- NEVER mark a task blocked without auto-rotating to the next backlog task first. The fleet idling on blockers is not acceptable.
+- NEVER idle the main session waiting on a blocker — the daemon counts idle sessions as low utilization.
+- If the backlog is genuinely empty (zero pending tasks across all queues + zero open goals), surface to the orchestrator via `cortextos bus send-message $CTX_ORCHESTRATOR_AGENT normal 'Backlog empty after blocker on task <id>; standing by for dispatch'` — do not silently idle.
+- If the blocker is short (<5 min, e.g. a CI run nearly complete), it is fine to wait rather than rotate. The rotate threshold is "this will block me >5 minutes."
+
+### Enforcement
+
+A post_tool hook will enforce this (codex/dev tracked separately): any `bus update-task <id> blocked` call without a preceding `spawn-worker` or `bus update-task <other_id> in_progress` within the same session-tick will trigger an auto-warning to the agent. This is an architectural backstop; the protocol above is the primary behavioral expectation.
 
 ---
 
