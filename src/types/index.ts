@@ -1053,6 +1053,7 @@ export interface AgentStatus {
   sessionStart?: string;
   crashCount?: number;
   model?: string;
+  healthStatus?: 'healthy' | 'degraded' | 'unknown';
 }
 
 export type { Workflow, WorkflowStep } from './workflow.js';
