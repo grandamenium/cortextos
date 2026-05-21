@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'fs';
+import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
@@ -112,6 +113,7 @@ const MUTATION_COMMANDS: ReadonlySet<string> = new Set([
   // Inbox / messaging
   'send-message',
   'ack-inbox',
+  'ack-health-probe',
   'send-telegram',
   'react-telegram',
   'send-telegram-voice',
@@ -560,6 +562,41 @@ busCommand
     console.log(`ACK'd ${id}`);
     // Exit after local writes complete — logEvent schedules a drain via setImmediate
     // that can hold the process alive for tens of minutes (same hazard as send-telegram).
+    process.exit(0);
+  });
+
+busCommand
+  .command('ack-health-probe')
+  .argument('<probe_id>', 'Probe ID to acknowledge (from the ping message)')
+  .description('Acknowledge a daemon health probe, writing acked status to state/health-probe.json')
+  .action((probeId: string) => {
+    const env = resolveEnv();
+    const agentName = env.agentName;
+    if (!agentName) {
+      console.error('[ack-health-probe] CTX_AGENT_NAME is not set');
+      process.exit(1);
+    }
+    const ctxRoot = process.env.CTX_ROOT ?? join(homedir(), '.cortextos', env.instanceId || 'default');
+    const stateDir = join(ctxRoot, 'state', agentName);
+    const probeFile = join(stateDir, 'health-probe.json');
+
+    // Validate that probe_id matches what's pending (best-effort — if the file
+    // is missing we still write the ack so the daemon sees it on next check).
+    try {
+      mkdirSync(stateDir, { recursive: true });
+      if (existsSync(probeFile)) {
+        const state = JSON.parse(readFileSync(probeFile, 'utf-8'));
+        if (state.probe_id && state.probe_id !== probeId) {
+          console.error(`[ack-health-probe] probe_id mismatch: expected ${state.probe_id}, got ${probeId}`);
+          process.exit(1);
+        }
+      }
+      writeFileSync(probeFile, JSON.stringify({ status: 'acked', probe_id: probeId, acked_at: new Date().toISOString() }));
+      console.log(`[ack-health-probe] Acked probe ${probeId} for ${agentName}`);
+    } catch (err) {
+      console.error(`[ack-health-probe] Failed to write ack: ${err}`);
+      process.exit(1);
+    }
     process.exit(0);
   });
 
@@ -5542,5 +5579,85 @@ busCommand
     } catch (err) {
       console.error(`human-blockers-digest failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// External health monitor status
+// ---------------------------------------------------------------------------
+
+busCommand
+  .command('health-monitor-status')
+  .description('Read the external health monitor recovery log and return the last N events as JSON')
+  .option('--limit <n>', 'Number of recent events to return', '10')
+  .option('--format <fmt>', 'Output format: json|text', 'json')
+  .action((opts: { limit?: string; format?: string }) => {
+    const { existsSync: fsExistsSync, readFileSync: fsReadFileSync } = require('fs');
+    const { join: pathJoin } = require('path');
+    const { homedir: osHomedir } = require('os');
+    const env = resolveEnv();
+    const ctxRoot = process.env.CTX_ROOT || pathJoin(osHomedir(), '.cortextos', env.instanceId);
+    const recoveryLog = pathJoin(ctxRoot, 'logs', 'external-health-monitor', 'recovery.log');
+    const limit = Math.max(1, parseInt(opts.limit ?? '10', 10) || 10);
+
+    if (!fsExistsSync(recoveryLog)) {
+      const result = { status: 'no_log', path: recoveryLog, events: [] };
+      if (opts.format === 'text') {
+        console.log('No recovery log found at: ' + recoveryLog);
+      } else {
+        console.log(JSON.stringify(result, null, 2));
+      }
+      return;
+    }
+
+    let lines: string[];
+    try {
+      lines = (fsReadFileSync(recoveryLog, 'utf-8') as string)
+        .split('\n')
+        .filter((l: string) => l.trim().length > 0);
+    } catch (err) {
+      console.error(`health-monitor-status: failed to read log: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+      return;
+    }
+
+    const recent = lines.slice(-limit);
+
+    // Parse each log line into a structured event.
+    // Format: [external-health-monitor] <iso-ts> <LEVEL> [agent=<name>] <message>
+    const events = recent.map((line: string) => {
+      const m = line.match(
+        /^\[external-health-monitor\]\s+(\S+)\s+(INFO|WARN|ERROR)(?:\s+agent=(\S+))?\s+(.+)$/,
+      );
+      if (!m) return { raw: line };
+      return {
+        timestamp: m[1],
+        level: m[2],
+        agent: m[3] ?? null,
+        message: m[4],
+      };
+    });
+
+    const result = {
+      status: 'ok',
+      path: recoveryLog,
+      total_lines: lines.length,
+      returned: events.length,
+      events,
+    };
+
+    if (opts.format === 'text') {
+      console.log(`Recovery log: ${recoveryLog} (${lines.length} total lines)`);
+      console.log(`Last ${events.length} events:`);
+      for (const ev of events) {
+        if ('raw' in ev) {
+          console.log('  ' + ev.raw);
+        } else {
+          const agent = (ev as { agent?: string | null }).agent ? ` [${(ev as { agent?: string | null }).agent}]` : '';
+          console.log(`  ${(ev as { timestamp: string }).timestamp} ${(ev as { level: string }).level}${agent}: ${(ev as { message: string }).message}`);
+        }
+      }
+    } else {
+      console.log(JSON.stringify(result, null, 2));
     }
   });

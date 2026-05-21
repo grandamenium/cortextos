@@ -84,5 +84,23 @@ module.exports = {
       restart_delay: 10000,
       autorestart: true,
     },
+    {
+      // External health monitor — runs OUTSIDE the daemon so it survives
+      // daemon crashes and can restart the daemon itself.
+      // Polls every 60 s for stale heartbeats, degraded health-probes, and
+      // a dead daemon PID.  Recovery actions: `cortextos start <agent>` and
+      // `pm2 restart cortextos-daemon`.
+      name: 'cortextos-health-monitor',
+      script: path.join(FRAMEWORK_ROOT, 'dist', 'scripts', 'external-health-monitor.js'),
+      cwd: FRAMEWORK_ROOT,
+      env: {
+        CTX_INSTANCE_ID: INSTANCE_ID,
+        CTX_ROOT: CTX_ROOT,
+        CTX_FRAMEWORK_ROOT: FRAMEWORK_ROOT,
+      },
+      restart_delay: 5000,
+      max_restarts: 100,
+      autorestart: true,
+    },
   ],
 };
