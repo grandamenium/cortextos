@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * hub-agentops-dogfood.ts
- * AgentOps deep dogfood pass — 33 assertions from agentops-deep-dogfood-checklist-2026-05-21.md
- * (1-25: original surfaces; 26-33: hub /app/orchestrator tab health/agents/analytics/activity)
+ * AgentOps deep dogfood pass — 35 assertions
+ * (1-25: original surfaces; 26-33: hub /app/orchestrator tabs; 34-35: Skill Notes UI + filesystem)
  *
  * Usage:
  *   cd /home/cortextos/cortextos && npx tsx scripts/hub-agentops-dogfood.ts
@@ -247,7 +247,7 @@ async function checkTaskLifecycle(page: Page, session: SupabaseSession): Promise
   await navigate(page, `${HUB_URL}/app/fleet/tasks?task=qa-pending-1`);
   await page.waitForTimeout(1500);
   const text5 = await pageText(page);
-  const fixture5 = text5.includes('qa-pending-1') || text5.includes('Pending');
+  const fixture5 = text5.includes('qa-pending-1');
   const sc5 = await shot(page, 'assert-05-pending-task');
   if (!fixture5) {
     results.push({ id: 5, surface: 'Tasks lifecycle', check: 'Assert 5 — Start action on qa-pending-1', status: 'DEFERRED', evidence: 'Fixture qa-pending-1 not found', screenshot: sc5 });
@@ -284,7 +284,7 @@ async function checkTaskLifecycle(page: Page, session: SupabaseSession): Promise
   await page.waitForTimeout(1500);
   const text8 = await pageText(page);
   const sc8 = await shot(page, 'assert-08-blocked-task');
-  const fixture8 = text8.includes('qa-blocked-1') || text8.includes('Blocked');
+  const fixture8 = text8.includes('qa-blocked-1');
   if (!fixture8) {
     results.push({ id: 8, surface: 'Tasks drilldown', check: 'Assert 8 — Blocked task drilldown + Unblock action', status: 'DEFERRED', evidence: 'Fixture qa-blocked-1 not found', screenshot: sc8 });
   } else {
@@ -648,6 +648,71 @@ ${all.filter(r => r.screenshot).map(r => `- assert-${String(r.id).padStart(2,'0'
 }
 
 // ---------------------------------------------------------------------------
+// Assert 34-35: Skill Notes — UI page + filesystem scan
+// ---------------------------------------------------------------------------
+async function checkSkillNotes(page: Page, _session: SupabaseSession): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
+  const AGENTS_ROOT = path.resolve(REPO_ROOT, 'orgs/revops-global/agents');
+  const REQUIRED_SKILLS = ['heartbeat', 'comms', 'tasks'];
+
+  // Assert 34: /app/cortex/skills UI loads and shows skill data
+  const shot34 = 'assert-34-skill-notes-ui.png';
+  try {
+    await page.goto(`${HUB_URL}/app/cortex/skills`, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
+    await page.waitForTimeout(2000);
+    await page.screenshot({ path: path.join(OUTPUT_DIR, shot34) });
+    const url = page.url();
+    const text = await page.textContent('body') ?? '';
+    const redirectedToAuth = url.includes('/auth') || url.includes('/login');
+    const hasSkillData = /skill|invocation|last.used|last.run|agent/i.test(text);
+    const hasEmptyState = /no skills|no data|nothing here|no records/i.test(text);
+    const is404 = text.includes('404') || text.includes('Page Not Found');
+    if (redirectedToAuth || is404) {
+      results.push({ id: 34, surface: 'Skill Notes UI', check: 'Assert 34 — /app/cortex/skills loads and shows skill data', status: 'FAIL', evidence: `Auth redirect or 404. url=${url}`, screenshot: shot34 });
+    } else if (hasSkillData && !hasEmptyState) {
+      results.push({ id: 34, surface: 'Skill Notes UI', check: 'Assert 34 — /app/cortex/skills loads and shows skill data', status: 'PASS', evidence: `Page loaded with skill data at ${url}`, screenshot: shot34 });
+    } else if (hasEmptyState) {
+      results.push({ id: 34, surface: 'Skill Notes UI', check: 'Assert 34 — /app/cortex/skills loads and shows skill data', status: 'FAIL', evidence: `Empty state shown — no skill entries rendered. url=${url}`, screenshot: shot34 });
+    } else {
+      results.push({ id: 34, surface: 'Skill Notes UI', check: 'Assert 34 — /app/cortex/skills loads and shows skill data', status: 'DEFERRED', evidence: `Page loaded but could not confirm skill data presence. url=${url}`, screenshot: shot34 });
+    }
+  } catch (e) {
+    results.push({ id: 34, surface: 'Skill Notes UI', check: 'Assert 34 — /app/cortex/skills loads and shows skill data', status: 'FAIL', evidence: String(e), screenshot: shot34 });
+  }
+
+  // Assert 35: Filesystem scan — each active agent has required skills installed
+  try {
+    const agents = fs.readdirSync(AGENTS_ROOT).filter(name => {
+      const agentDir = path.join(AGENTS_ROOT, name);
+      return fs.statSync(agentDir).isDirectory() && fs.existsSync(path.join(agentDir, 'config.json'));
+    });
+    const missing: string[] = [];
+    for (const agent of agents) {
+      const skillsDir = path.join(AGENTS_ROOT, agent, '.claude', 'skills');
+      if (!fs.existsSync(skillsDir)) {
+        missing.push(`${agent}: no .claude/skills/ directory`);
+        continue;
+      }
+      for (const skill of REQUIRED_SKILLS) {
+        const skillMd = path.join(skillsDir, skill, 'SKILL.md');
+        if (!fs.existsSync(skillMd)) {
+          missing.push(`${agent}: missing skill '${skill}'`);
+        }
+      }
+    }
+    if (missing.length === 0) {
+      results.push({ id: 35, surface: 'Skill Notes filesystem', check: `Assert 35 — All ${agents.length} agents have required skills (${REQUIRED_SKILLS.join(', ')})`, status: 'PASS', evidence: `${agents.length} agents checked, all have required skills` });
+    } else {
+      results.push({ id: 35, surface: 'Skill Notes filesystem', check: `Assert 35 — All agents have required skills (${REQUIRED_SKILLS.join(', ')})`, status: 'FAIL', evidence: `Missing: ${missing.slice(0, 5).join('; ')}${missing.length > 5 ? ` (+${missing.length - 5} more)` : ''}` });
+    }
+  } catch (e) {
+    results.push({ id: 35, surface: 'Skill Notes filesystem', check: 'Assert 35 — Agent skill filesystem scan', status: 'FAIL', evidence: String(e) });
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
@@ -678,6 +743,7 @@ async function main() {
     all.push(...await checkActivityFeed(page, session));
     all.push(...await checkVoiceCard(page, session));
     all.push(...await checkOrchestratorTabs(page, session));
+    all.push(...await checkSkillNotes(page, session));
   } finally {
     await browser.close();
   }
@@ -689,7 +755,7 @@ async function main() {
   // Framework/bus/cortextos → dev
   // Voice/Orca → codex (with orca-orch review)
   // Cross-surface unclear → orchestrator
-  const agentopsAssertIds = new Set([10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33]);
+  const agentopsAssertIds = new Set([10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35]);
   const failures = all.filter(r => r.status === 'FAIL');
   const { execSync } = await import('child_process');
   for (const f of failures) {
@@ -701,6 +767,11 @@ async function main() {
         `cortextos bus create-task "${title.replace(/"/g, "'")}" ` +
         `--desc "${desc.replace(/"/g, "'")}" ` +
         `--assignee ${assignee} ` +
+        `--source-hierarchy "orchestrator" ` +
+        `--required-capabilities "agentops.revopsglobal.com access, dashboard codebase" ` +
+        `--fallback-proof "re-run hub-agentops-dogfood.ts assert ${f.id} and check report.md" ` +
+        `--artifact-expectations "PR fixing assert ${f.id} surface gap" ` +
+        `--goal-ancestry "fleet observability -> AgentOps surface quality -> dogfood coverage" ` +
         `--success-criteria "assertion ${f.id} passes on next agentops-deep cron run" ` +
         `--out-of-scope "root cause investigation by hub-dogfood" ` +
         `--escalation-triggers "fails 3+ consecutive passes"`,
