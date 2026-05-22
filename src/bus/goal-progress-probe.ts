@@ -26,6 +26,7 @@ export interface GoalProgressProbeResult {
   generatedAt: string;
   agentsChecked: number;
   stalledAgents: GoalProbeAgentResult[];
+  stampStaleAgents: GoalProbeAgentResult[];
   agents: GoalProbeAgentResult[];
   reportPath?: string;
   memoryPath?: string;
@@ -156,6 +157,7 @@ function renderReport(result: GoalProgressProbeResult): string {
     `Generated: ${result.generatedAt}`,
     `Agents checked: ${result.agentsChecked}`,
     `Stalled agents: ${result.stalledAgents.length}`,
+    `Stamp-stale agents: ${result.stampStaleAgents.length}`,
     '',
   ];
 
@@ -167,6 +169,14 @@ function renderReport(result: GoalProgressProbeResult): string {
         !agent.mentioned ? 'no goal keywords found in last 24h memory' : '',
       ].filter(Boolean).join('; ');
       lines.push(`- ${agent.agent}: ${agent.goalCount} goals, ${reasons}. Bottleneck: ${agent.bottleneck || 'none'}`);
+    }
+    lines.push('');
+  }
+
+  if (result.stampStaleAgents.length > 0) {
+    lines.push('## Stamp-stale (goals.json needs re-stamp, agent is active)', '');
+    for (const agent of result.stampStaleAgents) {
+      lines.push(`- ${agent.agent}: goals.json age ${agent.goalsAgeHours === null ? 'unknown' : `${agent.goalsAgeHours.toFixed(1)}h`}, mentioned=yes (${agent.matchedTerms.join(', ') || '-'})`);
     }
     lines.push('');
   }
@@ -235,17 +245,22 @@ export function runGoalProgressProbe(
   }
 
   agents.sort((a, b) => a.agent.localeCompare(b.agent));
-  // Only flag as stalled if no recent memory activity in the last 4h — avoids false positives
-  // for agents that are working but haven't yet updated their goals keywords.
+  // Stamp-stale: goals.json file is old but agent IS mentioning goal terms in memory —
+  // the file just needs re-stamping, the agent isn't truly blocked.
+  const stampStaleAgents = agents.filter(
+    agent => agent.staleGoalsFile && agent.mentioned,
+  );
+  // Truly stalled: not mentioning goals AND either no recent memory in 4h or stale goals file.
   const stalledAgents = agents.filter(
     agent =>
-      (agent.staleGoalsFile || !agent.mentioned) &&
-      !hasRecentMemoryActivity(join(agentsDir, agent.agent), 4, nowMs),
+      !agent.mentioned &&
+      (!hasRecentMemoryActivity(join(agentsDir, agent.agent), 4, nowMs) || agent.staleGoalsFile),
   );
   const result: GoalProgressProbeResult = {
     generatedAt,
     agentsChecked: agents.length,
     stalledAgents,
+    stampStaleAgents,
     agents,
   };
 
@@ -260,12 +275,13 @@ export function runGoalProgressProbe(
   if (existsSync(memoryDir)) {
     const memoryPath = join(memoryDir, `${generatedAt.slice(0, 10)}.md`);
     result.memoryPath = memoryPath;
-    appendFileSync(memoryPath, `\n## Goal Progress Probe - ${generatedAt.slice(11, 19)} UTC\n- Agents checked: ${agents.length}\n- Stalled agents: ${stalledAgents.map(a => a.agent).join(', ') || 'none'}\n- Report: ${result.reportPath || 'not written'}\n`, 'utf-8');
+    appendFileSync(memoryPath, `\n## Goal Progress Probe - ${generatedAt.slice(11, 19)} UTC\n- Agents checked: ${agents.length}\n- Stalled agents: ${stalledAgents.map(a => a.agent).join(', ') || 'none'}\n- Stamp-stale agents: ${stampStaleAgents.map(a => a.agent).join(', ') || 'none'}\n- Report: ${result.reportPath || 'not written'}\n`, 'utf-8');
   }
 
   logEvent(paths, agentName, org, 'action', 'goal_progress_probe_completed', 'info', {
     agents_checked: agents.length,
     stalled_agents: stalledAgents.map(a => a.agent),
+    stamp_stale_agents: stampStaleAgents.map(a => a.agent),
     report_path: result.reportPath || null,
   });
 
