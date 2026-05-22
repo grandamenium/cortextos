@@ -63,6 +63,22 @@ function bus(args) {
   }
 }
 
+/**
+ * Infer the owning agent from the PR branch name.
+ * Branch conventions: "codex/...", "codex-2/...", "dev/...", "analyst/..."
+ * Falls back to the current agent (dev) for non-prefixed branches.
+ */
+const KNOWN_AGENTS = ['codex', 'codex-2', 'codex-3', 'dev', 'analyst', 'orchestrator'];
+function inferOwnerAgent(headRefName) {
+  if (!headRefName) return CTX_AGENT_NAME;
+  for (const agent of KNOWN_AGENTS) {
+    if (headRefName.startsWith(agent + '/') || headRefName.startsWith(agent + '-')) {
+      return agent;
+    }
+  }
+  return CTX_AGENT_NAME;
+}
+
 function shouldSkipBody(body) {
   if (!body) return false;
   return SKIP_BODY_PATTERNS.some(p => p.test(body));
@@ -86,6 +102,7 @@ function fetchPRs(repo) {
             title
             body
             isDraft
+            headRefName
             mergeable
             mergeStateStatus
             autoMergeRequest { mergeMethod }
@@ -138,6 +155,7 @@ function fetchPRs(repo) {
       title: pr.title,
       body: pr.body ?? '',
       isDraft: pr.isDraft ?? false,
+      headRefName: pr.headRefName ?? '',
       mergeable: pr.mergeable,
       mergeStateStatus: pr.mergeStateStatus,
       ciPassed: !hasFailure && allPassed,
@@ -215,9 +233,18 @@ async function main() {
       try {
         console.log(`[auto-merge] MERGING #${number} ${repo} — "${title}"`);
         gh(['pr', 'merge', String(number), '-R', repo, '--squash', '--delete-branch']);
-        merged.push({ repo, number, title });
+        merged.push({ repo, number, title, headRefName });
         bus(['log-event', 'action', 'pr_auto_merged', 'info',
           '--meta', JSON.stringify({ pr: number, repo, title, agent: CTX_AGENT_NAME })]);
+
+        // Post-merge verification gate: notify the owning agent that they must
+        // verify the merged change is working before marking the related task complete.
+        const ownerAgent = inferOwnerAgent(headRefName);
+        const verifyMsg = `[verify-required] PR #${number} ${repo.split('/')[1]} merged ("${title}"). ` +
+          `Before marking any related task complete: confirm the change works in prod ` +
+          `(CI green + smoke test or screenshot). Reply with verification evidence.`;
+        bus(['send-message', ownerAgent, 'normal', verifyMsg]);
+        console.log(`[auto-merge] Sent verify-required message to ${ownerAgent} for #${number}`);
       } catch (err) {
         console.error(`[auto-merge] ERROR merging #${number} ${repo}: ${err.message}`);
         errors.push({ repo, pr: number, error: err.message });

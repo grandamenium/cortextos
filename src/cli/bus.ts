@@ -623,6 +623,7 @@ busCommand
   .option('--loop-cron <expr>', 'Cron expression for a linked polling loop (e.g. "*/15 * * * *"). Requires --loop-prompt.')
   .option('--loop-prompt <text>', 'Prompt that fires on each loop iteration when --loop-cron is set.')
   .option('--skip-brief-validation', 'Skip brief contract field validation (for backward-compatible scripts and tests).', false)
+  .option('--skip-dedup', 'Skip duplicate-title similarity check (use when intentionally creating a follow-on or variant task).', false)
   .action(async (title: string, opts: {
     desc?: string;
     assignee?: string;
@@ -643,6 +644,7 @@ busCommand
     loopCron?: string;
     loopPrompt?: string;
     skipBriefValidation?: boolean;
+    skipDedup?: boolean;
   }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
@@ -683,6 +685,27 @@ busCommand
       console.error('--loop-cron and --loop-prompt must be specified together');
       process.exit(1);
     }
+    // Pre-dispatch dedup gate: warn if an open task has a similar title.
+    // Catches the "FIFO-drift" pattern where stale inbox re-dispatches produce
+    // near-duplicate tasks. Similarity = >40% keyword overlap (after stripping
+    // stop words). Warns but does not block — use --skip-dedup to suppress.
+    if (!opts.skipDedup) {
+      const stopWords = new Set(['the', 'a', 'an', 'and', 'or', 'in', 'on', 'for', 'to', 'of', 'is', 'are', 'was', 'be', 'fix', 'add', 'update', 'with', 'from', 'at', 'by']);
+      const tokenize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+      const newTokens = new Set(tokenize(title));
+      if (newTokens.size > 0) {
+        const openTasks = listTasks(paths, { status: 'pending' }).concat(listTasks(paths, { status: 'in_progress' }));
+        for (const existing of openTasks) {
+          const existingTokens = new Set(tokenize(existing.title));
+          const overlap = [...newTokens].filter(t => existingTokens.has(t)).length;
+          const similarity = overlap / Math.max(newTokens.size, existingTokens.size);
+          if (similarity >= 0.4) {
+            console.warn(`[dedup-warn] Similar open task: "${existing.title}" (id: ${existing.id}, status: ${existing.status}) — overlap: ${Math.round(similarity * 100)}%. Use --skip-dedup to suppress.`);
+          }
+        }
+      }
+    }
+
     // Pre-generate trace_id so it's stored with the task from creation.
     // The task ID itself serves as the trace root — agents use it as `--trace-id $TASK_ID`
     // on downstream send-message calls to correlate the full workflow chain.
