@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const allowedDevOrigins = (process.env.DASHBOARD_ALLOWED_DEV_ORIGINS ?? '')
   .split(',')
@@ -34,19 +35,11 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Confine NFT file tracing to dashboard/ — prevents it from tracing into
+  // the cortextOS monorepo root (skills/, templates/, etc.) which don't exist
+  // in the Vercel build environment and cause deploy-time ENOENT errors.
+  outputFileTracingRoot: path.join(__dirname),
   ...(allowedDevOrigins.length > 0 && { allowedDevOrigins }),
-  outputFileTracingExcludes: {
-    '*': [
-      '../../.claude/**',
-      '../.claude/**',
-      '.claude/**',
-      '../../skills/**',
-      '../skills/**',
-      'skills/**',
-      '../../templates/**',
-      '../../community/**',
-    ],
-  },
   async headers() {
     return [
       {
