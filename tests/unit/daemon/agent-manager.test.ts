@@ -348,3 +348,101 @@ describe('buildReplyContext - Telegram reply context (BUG fix: media replies los
     expect(result).not.toContain('\x00');
   });
 });
+
+describe('AgentManager.reloadCrons - silent-success bug fix (iter 7)', () => {
+  // Regression: reloadCrons() previously returned `true` when the agent was
+  // registered in `this.agents` but no scheduler existed in `this.cronSchedulers`.
+  // This silently dropped reload requests during the start-window gap between
+  // `this.agents.set(name, ...)` (agent-manager.ts line 271) and
+  // `startAgentCronScheduler(name)` (line 288), across the
+  // `await agentProcess.start()` yield. A `bus add-cron` IPC landing in that
+  // window would write crons.json, ask the daemon to reload, get a TRUE back,
+  // and the cron would never fire — until the next daemon boot.
+  //
+  // Fix: lazy-create the scheduler when missing for non-Hermes agents so the
+  // newly-written crons.json is read immediately. Hermes agents intentionally
+  // have no daemon scheduler (they manage crons natively), so for them the
+  // reload remains a no-op that returns true.
+
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+  let prevCtxRoot: string | undefined;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-reloadcrons-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+    // CronScheduler.start() reads crons.json via cronsFilePath which honors
+    // CTX_ROOT — point it at the sandbox so the scheduler doesn't touch
+    // production state.
+    prevCtxRoot = process.env.CTX_ROOT;
+    process.env.CTX_ROOT = ctxRoot;
+  });
+
+  afterEach(() => {
+    if (prevCtxRoot === undefined) {
+      delete process.env.CTX_ROOT;
+    } else {
+      process.env.CTX_ROOT = prevCtxRoot;
+    }
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('lazy-creates scheduler when non-Hermes agent has no scheduler wired', () => {
+    // Simulate the start-window gap: agent registered, no scheduler yet.
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const fakeProcess = { config: { runtime: undefined } } as any;
+    (am as any).agents.set('alice', { process: fakeProcess, checker: {} });
+
+    expect((am as any).cronSchedulers.has('alice')).toBe(false);
+
+    const result = am.reloadCrons('alice');
+
+    // After fix: scheduler is wired up so the just-added cron is picked up.
+    expect(result).toBe(true);
+    expect((am as any).cronSchedulers.has('alice')).toBe(true);
+
+    // Cleanup: stop the scheduler so its setInterval doesn't keep the test
+    // process alive
+    (am as any).cronSchedulers.get('alice').stop();
+  });
+
+  it('returns true without creating a scheduler for Hermes agents (no-op preserved)', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const fakeProcess = { config: { runtime: 'hermes' } } as any;
+    (am as any).agents.set('alice', { process: fakeProcess, checker: {} });
+
+    const result = am.reloadCrons('alice');
+
+    expect(result).toBe(true);
+    expect((am as any).cronSchedulers.has('alice')).toBe(false);
+  });
+
+  it('reuses existing scheduler when one is already wired', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const fakeProcess = { config: { runtime: undefined } } as any;
+    (am as any).agents.set('alice', { process: fakeProcess, checker: {} });
+
+    // Pre-wire a scheduler with a spy on reload()
+    const reloadSpy = vi.fn();
+    const stopSpy = vi.fn();
+    (am as any).cronSchedulers.set('alice', { reload: reloadSpy, stop: stopSpy });
+
+    const result = am.reloadCrons('alice');
+
+    expect(result).toBe(true);
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+    // Did not replace the existing scheduler
+    expect((am as any).cronSchedulers.get('alice').reload).toBe(reloadSpy);
+  });
+
+  it('returns false when the agent is not running at all', () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const result = am.reloadCrons('ghost');
+    expect(result).toBe(false);
+    expect((am as any).cronSchedulers.has('ghost')).toBe(false);
+  });
+});

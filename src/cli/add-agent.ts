@@ -1,17 +1,37 @@
 import { Command } from 'commander';
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName } from '../utils/validate';
 
+const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
+type RuntimeKind = typeof VALID_RUNTIMES[number];
+
+// Templates that don't have a codex variant yet. Pairing any of these with
+// --runtime codex-app-server used to silently scaffold claude-only bootstrap
+// (`.claude/skills/`, `CLAUDE_CODE_OAUTH_TOKEN`, `/loop` references) into a
+// codex agent — degrading on first boot. Reject the combo until codex
+// variants exist (PR 11+).
+const NON_CODEX_TEMPLATES = ['orchestrator', 'analyst', 'm2c1-worker', 'hermes'] as const;
+
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
-  .option('--template <type>', 'Agent template (orchestrator, analyst, agent)', 'agent')
+  .option('--template <type>', 'Agent template (orchestrator, analyst, agent, agent-codex)', 'agent')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
+  .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+    if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
+      console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
+      process.exit(1);
+    }
+
+    if (options.runtime === 'codex-app-server' && (NON_CODEX_TEMPLATES as readonly string[]).includes(options.template)) {
+      console.error(`Error: no codex variant of "${options.template}" yet. Use --template agent for a codex agent (or file an issue to track adding a codex-${options.template} variant).`);
+      process.exit(1);
+    }
     // BUG-041 fix: validate the agent name BEFORE creating anything on disk.
     // Without this, mixed-case names like 'CortextDesigner' pass through
     // add-agent, get written to disk, and THEN fail every `cortextos bus *`
@@ -68,17 +88,43 @@ export const addAgentCommand = new Command('add-agent')
     // Create agent directory
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(join(agentDir, 'memory'), { recursive: true });
-    mkdirSync(join(agentDir, '.claude', 'skills'), { recursive: true });
+
+    // For codex-app-server, skills live under plugins/cortextos-agent-skills/skills
+    // and are copied in by the template; .claude/skills is Claude-Code-only.
+    const isCodexAppServer = options.runtime === 'codex-app-server';
+    if (!isCodexAppServer) {
+      mkdirSync(join(agentDir, '.claude', 'skills'), { recursive: true });
+    }
+
+    // Resolve template name. Codex agents created with the default --template agent
+    // get the codex-specific bootstrap in templates/agent-codex/. Any explicit
+    // --template choice is honored as-is so orchestrator/analyst/etc still work.
+    const effectiveTemplate = (isCodexAppServer && options.template === 'agent')
+      ? 'agent-codex'
+      : options.template;
 
     // Copy template files
-    const templateDir = findTemplateDir(projectRoot, options.template);
+    const templateDir = findTemplateDir(projectRoot, effectiveTemplate);
     if (templateDir) {
       copyTemplateFiles(templateDir, agentDir, name, org);
-      console.log(`  Copied template files from ${options.template}`);
+      console.log(`  Copied template files from ${effectiveTemplate}`);
     } else {
       // Create minimal files
       createMinimalAgent(agentDir, name, org, options.template);
       console.log('  Created minimal agent files');
+    }
+
+    // Codex agents: link each local skill into ~/.codex/skills/<agent>__<skill>
+    // so codex-app-server's host-wide skill discovery sees the per-agent set.
+    if (isCodexAppServer) {
+      try {
+        const linksCreated = installCodexSkillSymlinks(agentDir, name);
+        if (linksCreated > 0) {
+          console.log(`  Linked ${linksCreated} skill(s) into ~/.codex/skills/`);
+        }
+      } catch (err) {
+        console.error(`Warning: failed to install codex skill symlinks: ${(err as Error).message}`);
+      }
     }
 
     // Create goals.json (empty — orchestrator will populate on morning cascade)
@@ -105,6 +151,20 @@ export const addAgentCommand = new Command('add-agent')
       }, null, 2) + '\n', 'utf-8');
     }
 
+    // Persist non-default runtime into config.json regardless of whether the
+    // file came from a template or was created above. The template-supplied
+    // config.json wins file existence, so we read-merge-write to inject the
+    // runtime field that agent-process.ts branches on.
+    if (options.runtime !== 'claude-code' && existsSync(configPath)) {
+      try {
+        const existingCfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+        existingCfg.runtime = options.runtime;
+        writeFileSync(configPath, JSON.stringify(existingCfg, null, 2) + '\n', 'utf-8');
+      } catch (err) {
+        console.error(`Warning: failed to set runtime field in config.json: ${(err as Error).message}`);
+      }
+    }
+
     // Create .env placeholder with helpful comments
     const envPath = join(agentDir, '.env');
     if (!existsSync(envPath)) {
@@ -119,10 +179,12 @@ export const addAgentCommand = new Command('add-agent')
         'CHAT_ID=',
         '',
         '# Claude Code v2.1.111+ gives Sonnet 4.6 a 1M context window by default.',
-        '# Without "extra usage" billing enabled, compaction fails at 100% ctx.',
-        '# Keep this for Sonnet and Haiku agents. Remove it for Opus agents on Max/Team/Enterprise',
-        '# (Opus 1M context is included in those plans and does not need the billing gate).',
-        'CLAUDE_CODE_DISABLE_1M_CONTEXT=true',
+        '# On plans WITHOUT "extra usage" billing, compaction fails at 100% ctx with:',
+        '#   "Extra usage is required for 1M context"',
+        '# If you see that error on a Sonnet or Haiku agent, uncomment the line below',
+        '# to revert to the standard 200K window.',
+        '# (Opus on Max / Team / Enterprise includes 1M natively — leave this commented.)',
+        '# CLAUDE_CODE_DISABLE_1M_CONTEXT=true',
         '',
       ].join('\n'), 'utf-8');
       chmodSync(envPath, 0o600); // credentials — owner read/write only
@@ -177,6 +239,7 @@ export const addAgentCommand = new Command('add-agent')
             '',
             '- Agent-to-agent: `cortextos bus send-message <agent> <priority> "<text>"`',
             '- Telegram to user: `cortextos bus send-telegram <chat_id> "<text>"`',
+            '- React to a Telegram message (single emoji ack, no verbal noise): `cortextos bus react-telegram <chat_id> <message_id> 👍`',
             '- Check inbox: `cortextos bus check-inbox`',
             '',
           ].join('\n');
@@ -252,6 +315,54 @@ export const addAgentCommand = new Command('add-agent')
     console.log(`    2. Customize identity files (IDENTITY.md, SOUL.md, GOALS.md)`);
     console.log(`    3. Start: cortextos start ${name}\n`);
   });
+
+/**
+ * Walk an agent's plugins/cortextos-agent-skills/skills tree and create one
+ * symlink per skill in ~/.codex/skills/<agent_name>__<skill_name>.
+ *
+ * The agent-name prefix prevents collisions when multiple codex agents share
+ * the host's ~/.codex/skills directory (codex's default skill discovery
+ * location). Existing symlinks pointing at the same target are replaced;
+ * non-symlink entries with the same name are left alone (we don't clobber
+ * unknown files the user may have placed there).
+ *
+ * Returns the number of symlinks successfully created or refreshed.
+ */
+function installCodexSkillSymlinks(agentDir: string, agentName: string): number {
+  const skillsRoot = join(agentDir, 'plugins', 'cortextos-agent-skills', 'skills');
+  if (!existsSync(skillsRoot)) return 0;
+
+  const codexSkillsDir = join(homedir(), '.codex', 'skills');
+  mkdirSync(codexSkillsDir, { recursive: true });
+
+  let linked = 0;
+  const entries = readdirSync(skillsRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillSrc = join(skillsRoot, entry.name);
+    const linkPath = join(codexSkillsDir, `${agentName}__${entry.name}`);
+    try {
+      // Replace an existing symlink — but never an actual file/dir owned by the user.
+      if (existsSync(linkPath) || lstatSync(linkPath, { throwIfNoEntry: false } as any)) {
+        try {
+          const st = lstatSync(linkPath);
+          if (st.isSymbolicLink()) {
+            unlinkSync(linkPath);
+          } else {
+            // Skip — something else is here, leave it.
+            continue;
+          }
+        } catch { /* path likely doesn't exist; continue to symlink */ }
+      }
+      symlinkSync(skillSrc, linkPath, 'dir');
+      linked++;
+    } catch (err) {
+      // Don't abort the whole scaffold for one bad symlink.
+      console.error(`    Warning: failed to symlink ${linkPath}: ${(err as Error).message}`);
+    }
+  }
+  return linked;
+}
 
 function findTemplateDir(projectRoot: string, template: string): string | null {
   const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || projectRoot;
@@ -337,5 +448,6 @@ Complete tasks: \`cortextos bus complete-task <id> --result "<text>"\`
 Log events: \`cortextos bus log-event <category> <event> <severity>\`
 Update heartbeat: \`cortextos bus update-heartbeat "<status>"\`
 Send Telegram: \`cortextos bus send-telegram <chat_id> "<text>"\`
+React to Telegram message (single emoji ack): \`cortextos bus react-telegram <chat_id> <message_id> 👍\`
 `;
 }

@@ -93,3 +93,28 @@ export function parseDurationMs(interval: string): number {
   };
   return n * multipliers[unit];
 }
+
+/**
+ * Estimate the minimum expected firing interval for a 5-field cron expression.
+ * Handles common patterns (every-N-minutes, every-N-hours, daily) without an
+ * external library. Returns a conservative 48h fallback for anything else.
+ */
+export function cronExpressionMinIntervalMs(expr: string): number {
+  const FALLBACK_MS = 48 * 3_600_000;
+  const parts = expr.trim().split(/\s+/);
+  if (parts.length !== 5) return FALLBACK_MS;
+  const [minute, hour] = parts;
+
+  // Every N minutes: */N * * * *
+  const everyMin = /^\*\/(\d+)$/.exec(minute);
+  if (everyMin && hour === '*') return parseInt(everyMin[1], 10) * 60_000;
+
+  // Every N hours: <fixed-minute> */N * * *
+  const everyHour = /^\*\/(\d+)$/.exec(hour);
+  if (everyHour) return parseInt(everyHour[1], 10) * 3_600_000;
+
+  // Fixed hour — fires daily (or on restricted days; 24h is the minimum gap)
+  if (/^\d+$/.test(hour)) return 24 * 3_600_000;
+
+  return FALLBACK_MS;
+}

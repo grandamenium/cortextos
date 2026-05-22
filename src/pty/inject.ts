@@ -79,8 +79,23 @@ export function injectMessage(
     write(PASTE_END);
   }
 
-  // Send Enter after a short delay to submit the pasted content
-  setTimeout(() => write(KEYS.ENTER), enterDelay);
+  // Send Enter after a short delay to submit the pasted content.
+  // Why the try/catch: the write callback captures `this.pty` (or similar
+  // nullable PTY handle) via closure in callers. If the PTY is torn down
+  // during the enterDelay window — e.g. hard-restart IPC kills the child —
+  // the callback will read `null.write` and throw. Swallowing here keeps
+  // the daemon process alive; the dropped Enter is the acceptable cost.
+  // Root cause: PR #196 fixed three this.pty! callers in agent-process.ts
+  // but missed worker-process.ts:93. This try/catch is the structural fix
+  // that covers every present and future caller.
+  setTimeout(() => {
+    try {
+      write(KEYS.ENTER);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[inject] deferred Enter failed (pty likely torn down): ${msg}`);
+    }
+  }, enterDelay);
 }
 
 /**

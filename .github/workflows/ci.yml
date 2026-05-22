@@ -56,6 +56,9 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Run codex parity tests
+        run: npm run test:codex
+
   dashboard-build:
     name: Dashboard Build
     runs-on: ubuntu-latest

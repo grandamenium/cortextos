@@ -21,7 +21,7 @@ If `ONBOARDED`: continue with the session start protocol below.
 2. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 3. Discover available skills: `cortextos bus list-skills --format text`
 4. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
-5. Restore crons from `config.json` — run CronList first (no duplicates). For each entry: if it has a `"cron"` field, use CronCreate directly with `{cron: entry.cron, prompt: entry.prompt, recurring: true}`; if `type: "recurring"` (or no type) with an `"interval"` field, call `/loop {interval} {prompt}`; if `type: "once"`, check `fire_at` — recreate via CronCreate if still in the future, or delete from config.json if expired.
+5. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to confirm what's scheduled. Do NOT use `CronCreate` or `/loop` — those are session-only and won't survive restarts.
 6. Check today's memory file (`memory/YYYY-MM-DD.md`) for any in-progress work
 7. Check inbox for pending messages
 8. **Goals check**: Read `goals.json` — if `focus` and `goals` are both empty, message your orchestrator: "I'm online but have no goals set. Can you send me today's goals?" Then read GOALS.md for any pre-set goals.
@@ -105,17 +105,13 @@ Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages 
 
 ## Crons
 
-Defined in `config.json` under `crons` array. Set up once per session via `/loop`.
+External crons are daemon-managed and live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch — you do not register or restore crons in-session.
 
-**Recurring:** `{"name": "...", "type": "recurring", "interval": "4h", "prompt": "..."}`
-**One-shot:** `{"name": "...", "type": "once", "fire_at": "2026-04-02T15:00:00Z", "prompt": "..."}`
+**View:** `cortextos bus list-crons $CTX_AGENT_NAME`
+**Add:** `cortextos bus add-cron $CTX_AGENT_NAME <name> <interval-or-cron-expr> <prompt>`
+**Remove:** `cortextos bus remove-cron $CTX_AGENT_NAME <name>`
 
-**Add recurring:** Write entry to config.json, then `/loop {interval} {prompt}`
-**Add one-shot:** Write entry to config.json, then CronCreate with `recurring: false`
-**Remove:** CronDelete, then remove entry from config.json
-**After one-shot fires:** Delete its entry from config.json
-
-Crons expire after 7 days. They are recreated from config.json on each session start — but only if you actively recreate them.
+Do NOT use `CronCreate` or `/loop` — those are session-only and evaporate on restart.
 
 ---
 

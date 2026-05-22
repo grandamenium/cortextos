@@ -23,6 +23,7 @@ export default async function AgentsPage({
     health: a.health,
     currentTask: a.currentTask,
     tasksToday: (a as unknown as Record<string, number>).tasksToday ?? 0,
+    runtime: a.runtime,
   }));
 
   return (

@@ -178,6 +178,7 @@ export const initCommand = new Command('init')
               '',
               '- Agent-to-agent: `cortextos bus send-message <agent> <priority> "<text>"`',
               '- Telegram to user: `cortextos bus send-telegram <chat_id> "<text>"`',
+              '- React to a Telegram message (single emoji ack, no verbal noise): `cortextos bus react-telegram <chat_id> <message_id> 👍`',
               '- Check inbox: `cortextos bus check-inbox`',
               '',
             ].join('\n');

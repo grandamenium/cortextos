@@ -10,7 +10,7 @@ Discover new skills, agent templates, and org templates from the community catal
 
 ## When to Run
 
-- Weekly cron (configured in config.json)
+- Weekly cron (configured via `cortextos bus add-cron`)
 - When user asks about available skills
 - When an agent needs a capability that might exist in the catalog
 

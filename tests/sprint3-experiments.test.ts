@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, readFileSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -62,6 +62,112 @@ describe('Sprint 3: Experiment Framework', () => {
       expect(exp.surface).toBe('experiments/surfaces/bounce/current.md');
       expect(exp.direction).toBe('lower');
       expect(exp.window).toBe('48h');
+    });
+
+    it('inherits measurement/direction/window/surface from a matching cycle in config.json', () => {
+      // Write an experiments/config.json with a cycle for this metric.
+      mkdirSync(join(testDir, 'experiments'), { recursive: true });
+      writeFileSync(
+        join(testDir, 'experiments', 'config.json'),
+        JSON.stringify({
+          cycles: [
+            {
+              name: 'retention-cycle',
+              agent: 'testbot',
+              metric: 'retention',
+              metric_type: 'quantitative',
+              surface: 'experiments/surfaces/retention/current.md',
+              direction: 'higher',
+              window: '7d',
+              measurement: 'count(distinct users_returning_in_7d) / count(distinct signups)',
+              loop_interval: '7d',
+              enabled: true,
+              created_by: 'testbot',
+              created_at: '2026-04-01T00:00:00Z',
+            },
+          ],
+        }),
+      );
+
+      const id = createExperiment(testDir, 'testbot', 'retention', 'Better onboarding improves retention');
+
+      const exp = JSON.parse(
+        readFileSync(join(testDir, 'experiments', 'history', `${id}.json`), 'utf-8').trim(),
+      );
+      expect(exp.measurement).toBe('count(distinct users_returning_in_7d) / count(distinct signups)');
+      expect(exp.surface).toBe('experiments/surfaces/retention/current.md');
+      expect(exp.window).toBe('7d');
+      expect(exp.direction).toBe('higher');
+    });
+
+    it('explicit options win over matching-cycle defaults', () => {
+      mkdirSync(join(testDir, 'experiments'), { recursive: true });
+      writeFileSync(
+        join(testDir, 'experiments', 'config.json'),
+        JSON.stringify({
+          cycles: [
+            {
+              name: 'ctr-cycle',
+              agent: 'testbot',
+              metric: 'ctr',
+              direction: 'higher',
+              window: '24h',
+              measurement: 'clicks / impressions',
+              surface: 'default-surface.md',
+              enabled: true,
+              created_by: 'testbot',
+              created_at: '2026-04-01T00:00:00Z',
+              metric_type: 'quantitative',
+              loop_interval: '24h',
+            },
+          ],
+        }),
+      );
+
+      const id = createExperiment(testDir, 'testbot', 'ctr', 'test', {
+        direction: 'lower',
+        measurement: 'custom-override',
+      });
+      const exp = JSON.parse(
+        readFileSync(join(testDir, 'experiments', 'history', `${id}.json`), 'utf-8').trim(),
+      );
+      expect(exp.direction).toBe('lower'); // overrode cycle
+      expect(exp.measurement).toBe('custom-override'); // overrode cycle
+      expect(exp.window).toBe('24h'); // inherited from cycle
+      expect(exp.surface).toBe('default-surface.md'); // inherited from cycle
+    });
+
+    it('falls through to static defaults when no matching cycle exists', () => {
+      mkdirSync(join(testDir, 'experiments'), { recursive: true });
+      writeFileSync(
+        join(testDir, 'experiments', 'config.json'),
+        JSON.stringify({
+          cycles: [
+            {
+              name: 'other-metric-cycle',
+              agent: 'testbot',
+              metric: 'different_metric',
+              direction: 'higher',
+              window: '7d',
+              measurement: 'irrelevant',
+              surface: '',
+              enabled: true,
+              created_by: 'testbot',
+              created_at: '2026-04-01T00:00:00Z',
+              metric_type: 'quantitative',
+              loop_interval: '7d',
+            },
+          ],
+        }),
+      );
+
+      const id = createExperiment(testDir, 'testbot', 'unrelated_metric', 'test');
+      const exp = JSON.parse(
+        readFileSync(join(testDir, 'experiments', 'history', `${id}.json`), 'utf-8').trim(),
+      );
+      expect(exp.measurement).toBe('');
+      expect(exp.direction).toBe('higher'); // static default
+      expect(exp.window).toBe('24h'); // static default
     });
   });
 
