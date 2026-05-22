@@ -1,0 +1,18 @@
+[Unit]
+Description=cortextOS daemon (PM2)
+After=network-online.target cortextos-bootstrap.service
+Wants=network-online.target
+Requires=cortextos-bootstrap.service
+
+[Service]
+Type=simple
+User=cortextos
+Group=cortextos
+EnvironmentFile=/etc/cortextos.env
+WorkingDirectory=/opt/cortextos
+ExecStart=/usr/bin/pm2-runtime start /opt/cortextos/ecosystem.config.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

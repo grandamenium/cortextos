@@ -1,0 +1,14 @@
+[Unit]
+Description=cortextOS first-boot bootstrap (format disk, create user, clone, build)
+After=network-online.target cloud-init.service
+Wants=network-online.target
+ConditionPathExists=!/var/lib/cortextos/.bootstrap-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cortextos-bootstrap.sh
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target

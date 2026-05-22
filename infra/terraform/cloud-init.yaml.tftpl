@@ -1,0 +1,211 @@
+#cloud-config
+# WYRE cortextOS — first-boot bootstrap (SP2b)
+# Rendered from cloud-init.yaml.tftpl. Variables in $${...} are templatefile() substitutions.
+
+package_update: true
+package_upgrade: false
+package_reboot_if_required: false
+
+packages:
+  - git
+  - jq
+  - build-essential
+  - ca-certificates
+  - curl
+  - python3   # Some npm deps still need it for node-gyp on first install
+  - e2fsprogs # mkfs.ext4
+
+write_files:
+
+  # ── 1. Environment file consumed by both systemd units ─────────
+  - path: /etc/cortextos.env
+    permissions: "0644"
+    owner: root:root
+    content: |
+      CTX_INSTANCE_ID=${cortextos_instance}
+      CTX_FRAMEWORK_ROOT=/opt/cortextos
+      CTX_PROJECT_ROOT=/opt/cortextos
+      CTX_ORG=${cortextos_org}
+      NODE_ENV=production
+      HOME=/var/lib/cortextos
+
+  # ── 2. The slow-bootstrap script run by cortextos-bootstrap.service ──
+  - path: /usr/local/sbin/cortextos-bootstrap.sh
+    permissions: "0755"
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      # Slow, one-shot first-boot bootstrap. Idempotent on every step;
+      # the systemd unit also guards with /var/lib/cortextos/.bootstrap-done.
+      set -euo pipefail
+
+      log() { printf '[bootstrap] %s\n' "$*"; }
+
+      DATA_DEV="/dev/disk/azure/scsi1/lun10"
+      DATA_LABEL="cortextos-data"
+      DATA_MOUNT="/var/lib/cortextos"
+      REPO_URL="${cortextos_repo_url}"
+      REPO_BRANCH="${cortextos_branch}"
+      INSTANCE="${cortextos_instance}"
+      ORG="${cortextos_org}"
+
+      # ── format the data disk if blank ───────────────────────────
+      log "checking data disk at $DATA_DEV"
+      if ! blkid "$DATA_DEV" >/dev/null 2>&1; then
+        log "formatting $DATA_DEV as ext4 (label=$DATA_LABEL)"
+        mkfs.ext4 -L "$DATA_LABEL" "$DATA_DEV"
+      else
+        log "data disk already has a filesystem; skipping mkfs"
+      fi
+
+      mkdir -p "$DATA_MOUNT"
+      if ! grep -q "^LABEL=$DATA_LABEL" /etc/fstab; then
+        log "adding fstab entry"
+        echo "LABEL=$DATA_LABEL $DATA_MOUNT ext4 defaults,nofail,x-systemd.device-timeout=10 0 2" >> /etc/fstab
+      fi
+      if ! mountpoint -q "$DATA_MOUNT"; then
+        log "mounting $DATA_MOUNT"
+        mount "$DATA_MOUNT"
+      fi
+
+      # ── create cortextos user with data-disk HOME ──────────────
+      if ! id cortextos >/dev/null 2>&1; then
+        log "creating cortextos system user (HOME=$DATA_MOUNT)"
+        useradd --system --home-dir "$DATA_MOUNT" --shell /bin/bash cortextos
+      fi
+      chown -R cortextos:cortextos "$DATA_MOUNT"
+
+      # ── install Node.js LTS via NodeSource ─────────────────────
+      if ! command -v node >/dev/null 2>&1 || [ "$(node -v | sed 's/^v//;s/\..*//')" -lt "${node_major_version}" ]; then
+        log "installing Node.js ${node_major_version}.x"
+        curl -fsSL "https://deb.nodesource.com/setup_${node_major_version}.x" | bash -
+        apt-get install -y nodejs
+      fi
+
+      # ── install pm2 globally ───────────────────────────────────
+      if ! command -v pm2-runtime >/dev/null 2>&1; then
+        log "installing pm2"
+        npm install -g pm2
+      fi
+
+      # ── clone repo ─────────────────────────────────────────────
+      if [ ! -d /opt/cortextos/.git ]; then
+        log "cloning $REPO_URL (branch $REPO_BRANCH) to /opt/cortextos"
+        git clone --branch "$REPO_BRANCH" "$REPO_URL" /opt/cortextos
+      else
+        log "/opt/cortextos already a git clone; pulling"
+        git -C /opt/cortextos fetch --all --quiet
+        git -C /opt/cortextos checkout --quiet "$REPO_BRANCH"
+        git -C /opt/cortextos pull --ff-only --quiet
+      fi
+      chown -R cortextos:cortextos /opt/cortextos
+
+      # ── data-disk-backed orgs/ symlink ─────────────────────────
+      # cortextOS gitignores orgs/, so the cloned repo doesn't ship one. The
+      # data disk is the source of truth. Create the data-disk dir, point a
+      # symlink from /opt/cortextos/orgs at it, and let `cortextos init`
+      # populate the org structure via the symlink.
+      if [ ! -d "$DATA_MOUNT/orgs" ]; then
+        log "creating empty $DATA_MOUNT/orgs on data disk"
+        mkdir -p "$DATA_MOUNT/orgs"
+      fi
+      chown -R cortextos:cortextos "$DATA_MOUNT/orgs"
+
+      # Replace any stale /opt/cortextos/orgs (file, dir, broken symlink) with
+      # a fresh symlink to the data-disk dir.
+      if [ -e /opt/cortextos/orgs ] || [ -L /opt/cortextos/orgs ]; then
+        rm -rf /opt/cortextos/orgs
+      fi
+      ln -s "$DATA_MOUNT/orgs" /opt/cortextos/orgs
+      chown -h cortextos:cortextos /opt/cortextos/orgs
+
+      # ── npm ci + build (root project) ──────────────────────────
+      log "npm ci (root)"
+      sudo -u cortextos --preserve-env=HOME bash -lc 'cd /opt/cortextos && npm ci --no-audit --no-fund'
+      log "npm run build (root)"
+      sudo -u cortextos --preserve-env=HOME bash -lc 'cd /opt/cortextos && npm run build'
+
+      # ── dashboard install + build ──────────────────────────────
+      if [ -d /opt/cortextos/dashboard ]; then
+        log "npm ci (dashboard)"
+        sudo -u cortextos --preserve-env=HOME bash -lc 'cd /opt/cortextos/dashboard && npm ci --no-audit --no-fund'
+        log "npm run build (dashboard)"
+        sudo -u cortextos --preserve-env=HOME bash -lc 'cd /opt/cortextos/dashboard && npm run build'
+      fi
+
+      # ── initialise the org skeleton on the data disk ──────────
+      if [ ! -d "$DATA_MOUNT/orgs/$ORG" ]; then
+        log "initialising org $ORG via cortextos init"
+        sudo -u cortextos --preserve-env=HOME,CTX_INSTANCE_ID,CTX_FRAMEWORK_ROOT,CTX_PROJECT_ROOT,CTX_ORG bash -lc "cd /opt/cortextos && CTX_FRAMEWORK_ROOT=/opt/cortextos node dist/cli.js init $ORG"
+      else
+        log "org $ORG already initialised on data disk"
+      fi
+
+      # ── generate ecosystem.config.js ───────────────────────────
+      # Fail loudly if the build didn't produce the CLI artifact.
+      [ -f /opt/cortextos/dist/cli.js ] || { log "FATAL: /opt/cortextos/dist/cli.js missing; build step must have failed"; exit 1; }
+
+      log "running cortextos install/ecosystem"
+      sudo -u cortextos --preserve-env=HOME,CTX_INSTANCE_ID,CTX_FRAMEWORK_ROOT,CTX_PROJECT_ROOT,CTX_ORG bash -lc "cd /opt/cortextos && CTX_FRAMEWORK_ROOT=/opt/cortextos node dist/cli.js install --instance $INSTANCE || true"
+      sudo -u cortextos --preserve-env=HOME,CTX_INSTANCE_ID,CTX_FRAMEWORK_ROOT,CTX_PROJECT_ROOT,CTX_ORG bash -lc "cd /opt/cortextos && CTX_FRAMEWORK_ROOT=/opt/cortextos node dist/cli.js ecosystem --instance $INSTANCE --org $ORG --output /opt/cortextos/ecosystem.config.js"
+
+      # ── sentinel ───────────────────────────────────────────────
+      touch "$DATA_MOUNT/.bootstrap-done"
+      chown cortextos:cortextos "$DATA_MOUNT/.bootstrap-done"
+      log "bootstrap complete"
+
+  # ── 3. cortextos-bootstrap.service (oneshot, gated by sentinel) ──
+  - path: /etc/systemd/system/cortextos-bootstrap.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=cortextOS first-boot bootstrap (format disk, create user, clone, build)
+      After=network-online.target cloud-init.service
+      Wants=network-online.target
+      ConditionPathExists=!/var/lib/cortextos/.bootstrap-done
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/cortextos-bootstrap.sh
+      TimeoutStartSec=1800
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ── 4. cortextos.service (the daemon + dashboard via pm2-runtime) ──
+  - path: /etc/systemd/system/cortextos.service
+    permissions: "0644"
+    owner: root:root
+    content: |
+      [Unit]
+      Description=cortextOS daemon (PM2)
+      After=network-online.target cortextos-bootstrap.service
+      Wants=network-online.target
+      Requires=cortextos-bootstrap.service
+
+      [Service]
+      Type=simple
+      User=cortextos
+      Group=cortextos
+      EnvironmentFile=/etc/cortextos.env
+      WorkingDirectory=/opt/cortextos
+      ExecStart=/usr/bin/pm2-runtime start /opt/cortextos/ecosystem.config.js
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable cortextos-bootstrap.service
+  - systemctl enable cortextos.service
+  # Start cortextos.service explicitly; systemd resolves the
+  # Requires=cortextos-bootstrap.service dependency and runs the bootstrap
+  # oneshot first, then activates the daemon. Without this, `Requires=`
+  # only cascades failures — it does NOT trigger auto-start when the bootstrap
+  # eventually finishes. `--no-block` lets cloud-init's runcmd finish promptly
+  # while the dependency chain runs asynchronously.
+  - systemctl start --no-block cortextos.service

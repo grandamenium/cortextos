@@ -24,19 +24,14 @@ resource "azurerm_managed_disk" "data" {
   })
 }
 
-# Cloud-init payload is intentionally minimal in SP2a — just enough to confirm
-# the data disk shows up. SP2b replaces this with the real bootstrap (Node,
-# clone, systemd units, etc.) rendered from a templatefile().
 locals {
-  cloud_init_placeholder = <<-EOT
-    #cloud-config
-    package_update: true
-    package_upgrade: false
-    write_files:
-      - path: /etc/cortextos-stage
-        permissions: "0644"
-        content: "sp2a\n"
-  EOT
+  cloud_init_rendered = templatefile("${path.module}/cloud-init.yaml.tftpl", {
+    cortextos_instance = var.cortextos_instance
+    cortextos_org      = var.cortextos_org
+    cortextos_repo_url = var.cortextos_repo_url
+    cortextos_branch   = var.cortextos_branch
+    node_major_version = var.node_major_version
+  })
 }
 
 resource "azurerm_linux_virtual_machine" "main" {
@@ -71,7 +66,7 @@ resource "azurerm_linux_virtual_machine" "main" {
     version   = "latest"
   }
 
-  custom_data = base64encode(local.cloud_init_placeholder)
+  custom_data = base64encode(local.cloud_init_rendered)
 
   identity {
     type = "SystemAssigned"

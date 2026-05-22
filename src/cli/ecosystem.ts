@@ -62,8 +62,9 @@ export const ecosystemCommand = new Command('ecosystem')
     }
 
     if (agents.length === 0) {
-      console.log('No agents found. Add agents first: cortextos add-agent <name>');
-      return;
+      console.warn(
+        'Warning: no agents found in any org. Generating ecosystem.config.js with only the daemon entry; the daemon will pick up agents added later via `cortextos add-agent`.',
+      );
     }
 
     // Determine org: use --org flag, or auto-detect from first agent found

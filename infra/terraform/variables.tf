@@ -48,3 +48,43 @@ variable "data_disk_size_gb" {
   description = "Size of the premium SSD data disk attached to the VM."
   default     = 64
 }
+
+variable "cortextos_repo_url" {
+  type        = string
+  description = "Git URL the bootstrap clones into /opt/cortextos."
+  default     = "https://github.com/wyre-technology/cortextos.git"
+}
+
+variable "cortextos_branch" {
+  type        = string
+  description = "Branch (or tag) the bootstrap checks out. Pin to a tag once SP2b is verified in prod."
+  default     = "main"
+}
+
+variable "cortextos_instance" {
+  type        = string
+  description = "cortextOS instance id (the directory name under ~/.cortextos/)."
+  default     = "prod"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9_-]{1,15}$", var.cortextos_instance))
+    error_message = "cortextos_instance must match /^[a-z][a-z0-9_-]{1,15}$/."
+  }
+}
+
+variable "cortextos_org" {
+  type        = string
+  description = "Default org passed to `cortextos ecosystem --org`."
+  default     = "wyre"
+}
+
+variable "node_major_version" {
+  type        = number
+  description = "Node.js major version installed via NodeSource."
+  default     = 20
+
+  validation {
+    condition     = contains([18, 20, 22], var.node_major_version)
+    error_message = "node_major_version must be a current LTS line: 18, 20, or 22."
+  }
+}

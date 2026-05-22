@@ -9,10 +9,23 @@
 - `templates/engineer` namespace template.
 - Centralized agent-directory resolution (`src/utils/agent-dir.ts`).
 - `pm2ProcessName` helper for future per-agent PM2 entries.
+- SP2b — first-boot bootstrap and steady-state systemd units. A freshly
+  provisioned VM (via `infra/terraform/`) boots into a working cortextOS
+  install: data disk formatted and mounted at `/var/lib/cortextos`,
+  `cortextos` system user, repo cloned to `/opt/cortextos` with `orgs/`
+  symlinked into the data disk, `cortextos init` scaffolding the org,
+  and `cortextos.service` running the daemon + dashboard under
+  `pm2-runtime`.
+- `infra/bin/check-systemd-drift.sh` keeps the embedded and standalone
+  systemd unit definitions in `cloud-init.yaml.tftpl` and `infra/systemd/`
+  in sync (Python+YAML based).
 
 ### Changed
 - `listAgents` also discovers namespaced agents.
 - `cortextos ecosystem` agent count now includes namespaced agents.
+- `cortextos ecosystem` now emits the daemon entry even when zero agents
+  are configured, with a warning. Previously refused to generate the file,
+  which broke the first-boot bootstrap path.
 - `AGENT_NAME_REGEX` exported from `src/utils/validate.ts` for reuse.
 - Forked to `wyre-technology/cortextos`; `CONTRIBUTING.md` documents upstream sync.
 
