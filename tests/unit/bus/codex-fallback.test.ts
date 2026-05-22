@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { BusPaths } from '../../../src/types/index';
-import type { SpawnCodexResult } from '../../../src/bus/spawn-codex';
+import type { CodexFallbackInput } from '../../../src/bus/codex-fallback';
 
 vi.mock('../../../src/bus/rgos-mirror.js', () => ({
   mirrorEventToRgos: vi.fn().mockResolvedValue(undefined),
@@ -38,20 +38,8 @@ function makePaths(root: string): BusPaths {
   };
 }
 
-function makeResult(overrides: Partial<SpawnCodexResult> = {}): SpawnCodexResult {
-  return {
-    ok: false,
-    status: 'failed',
-    outputPath: '/tmp/out.md',
-    sidecarPath: '/tmp/out.json',
-    output: '',
-    stderr: '',
-    exitCode: 1,
-    timedOut: false,
-    durationMs: 1000,
-    metadata: {} as SpawnCodexResult['metadata'],
-    ...overrides,
-  };
+function makeInput(overrides: Partial<CodexFallbackInput> = {}): CodexFallbackInput {
+  return { stderr: '', exitCode: 1, ...overrides };
 }
 
 function readEventLines(root: string, agentName: string): Record<string, unknown>[] {
@@ -151,18 +139,20 @@ describe('handleCodexFallback', () => {
   });
 
   it('does nothing when limit class is none (exit 0)', async () => {
-    const result = makeResult({ exitCode: 0, stderr: '' });
-    await handleCodexFallback(
+    const result = makeInput({ exitCode: 0, stderr: '' });
+    const r = await handleCodexFallback(
       result,
       { prompt: 'do work', dir: '/tmp', parentAgent: 'orchestrator' },
       paths, 'dev', 'revops-global',
     );
     expect(mockSpawnSync).not.toHaveBeenCalled();
     expect(readEventLines(tmpDir, 'dev')).toHaveLength(0);
+    expect(r.dispatched).toBe(false);
+    expect(r.limitClass).toBe('none');
   });
 
   it('emits codex_limit_hit on short_throttle', async () => {
-    const result = makeResult({ exitCode: 1, stderr: 'exceeded retry limit\n429\nRetry-After: 900' });
+    const result = makeInput({ exitCode: 1, stderr: 'exceeded retry limit\n429\nRetry-After: 900' });
     await handleCodexFallback(
       result,
       { prompt: 'do work', dir: '/tmp', parentAgent: 'orchestrator', autoFallback: false },
@@ -176,7 +166,7 @@ describe('handleCodexFallback', () => {
   });
 
   it('does not spawn-worker when autoFallback is false on long_lock', async () => {
-    const result = makeResult({ exitCode: 1, stderr: '429 rate limit exceeded' });
+    const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
     await handleCodexFallback(
       result,
       { prompt: 'do work', dir: '/tmp', parentAgent: 'orchestrator', autoFallback: false },
@@ -186,7 +176,7 @@ describe('handleCodexFallback', () => {
   });
 
   it('does not spawn-worker for short_throttle even with autoFallback true', async () => {
-    const result = makeResult({ exitCode: 1, stderr: '429\nRetry-After: 900' });
+    const result = makeInput({ exitCode: 1, stderr: '429\nRetry-After: 900' });
     await handleCodexFallback(
       result,
       { prompt: 'do work', dir: '/tmp', parentAgent: 'orchestrator', autoFallback: true },
@@ -196,12 +186,16 @@ describe('handleCodexFallback', () => {
   });
 
   it('spawns worker and emits codex_failover_dispatched on long_lock + autoFallback', async () => {
-    const result = makeResult({ exitCode: 1, stderr: '429 rate limit exceeded' });
-    await handleCodexFallback(
+    const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
+    const r = await handleCodexFallback(
       result,
       { prompt: 'do work', dir: '/tmp/workdir', parentAgent: 'orchestrator', autoFallback: true, taskId: 'task-123' },
       paths, 'dev', 'revops-global',
     );
+
+    expect(r.dispatched).toBe(true);
+    expect(r.workerName).toMatch(/^codex-spillover-\d+$/);
+    expect(r.limitClass).toBe('long_lock');
 
     expect(mockSpawnSync).toHaveBeenCalledOnce();
     const [cmd, args] = mockSpawnSync.mock.calls[0] as [string, string[]];
@@ -223,10 +217,11 @@ describe('handleCodexFallback', () => {
     const meta = dispatched.metadata as Record<string, unknown>;
     expect(meta.task_id).toBe('task-123');
     expect(meta.parent_agent).toBe('orchestrator');
+    expect(meta.worker_name).toBe(r.workerName);
   });
 
   it('worker prompt includes terminate-worker and send-message instructions', async () => {
-    const result = makeResult({ exitCode: 1, stderr: '429 exceeded retry limit' });
+    const result = makeInput({ exitCode: 1, stderr: '429 exceeded retry limit' });
     await handleCodexFallback(
       result,
       { prompt: 'build the feature', dir: '/tmp', parentAgent: 'orchestrator', autoFallback: true },
