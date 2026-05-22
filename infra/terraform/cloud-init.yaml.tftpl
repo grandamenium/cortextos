@@ -129,6 +129,9 @@ write_files:
       fi
 
       # ── generate ecosystem.config.js ───────────────────────────
+      # Fail loudly if the build didn't produce the CLI artifact.
+      [ -f /opt/cortextos/dist/cli.js ] || { log "FATAL: /opt/cortextos/dist/cli.js missing; build step must have failed"; exit 1; }
+
       log "running cortextos install/ecosystem"
       sudo -u cortextos --preserve-env=HOME bash -lc "cd /opt/cortextos && node dist/cli.js install --instance $INSTANCE || true"
       sudo -u cortextos --preserve-env=HOME bash -lc "cd /opt/cortextos && node dist/cli.js ecosystem --instance $INSTANCE --org $ORG --output /opt/cortextos/ecosystem.config.js"
