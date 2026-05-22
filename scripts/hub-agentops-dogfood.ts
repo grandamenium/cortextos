@@ -188,6 +188,14 @@ async function elCount(page: Page, selector: string): Promise<number> {
   return page.evaluate((sel) => document.querySelectorAll(sel).length, selector).catch(() => 0);
 }
 
+async function hasNotFoundPage(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const text = document.body?.innerText ?? '';
+    const heading = document.querySelector('h1')?.textContent?.trim() ?? '';
+    return heading === '404' && /page not found|return to home/i.test(text);
+  }).catch(() => false);
+}
+
 // ---------------------------------------------------------------------------
 // Surface checks
 // ---------------------------------------------------------------------------
@@ -514,7 +522,7 @@ async function checkOrchestratorTabs(page: Page, _session: SupabaseSession): Pro
 
     // (a) Loads without error
     const hasErrorBanner = await elCount(page, SELECTORS.errorBanner) > 0;
-    const has404         = /404|page not found|not_found/i.test(text);
+    const has404         = await hasNotFoundPage(page) || /page not found|not_found/i.test(text);
     const has500         = /500|internal server error|something went wrong/i.test(text);
     const loadOk         = navOk && routeLanded && !hasErrorBanner && !has404 && !has500;
     results.push({
