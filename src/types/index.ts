@@ -344,6 +344,8 @@ export interface AgentConfig {
    */
   crash_window?: { seconds: number; max_crashes?: number };
   model?: string;
+  /** Override the HOME path so claude reads credentials from $home/.claude/ instead of ~/.claude/ */
+  home?: string;
   /**
    * Cost tier for model routing: 'haiku' | 'sonnet' | 'opus'.
    * Ignored when `model` is set (explicit model takes precedence).
