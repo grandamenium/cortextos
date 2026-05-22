@@ -1006,6 +1006,33 @@ describe('FastChecker.rescanPendingApprovals', () => {
     // Both were attempted — error on first did not abort the second
     expect(telegramApi.sendMessage).toHaveBeenCalledTimes(2);
   });
+
+  it('skips approvals that exist in resolved/ even if pending file is still present (race-fix guard)', async () => {
+    const telegramApi = createMockTelegramApi();
+    const checker = createFastChecker(telegramApi, '12345');
+
+    // Write one genuinely-pending approval (should be re-notified)
+    writePendingApproval('approval_aaa_11111', 'Genuinely pending');
+
+    // Write an approval to pending/ AND resolved/ — simulates the race window
+    // where Greg approved via the original card while the daemon was restarting,
+    // leaving a stale pending file before the unlink could complete.
+    writePendingApproval('approval_bbb_22222', 'Already resolved — stale pending copy');
+    const resolvedDir = join(paths.approvalDir, 'resolved');
+    mkdirSync(resolvedDir, { recursive: true });
+    writeFileSync(
+      join(resolvedDir, 'approval_bbb_22222.json'),
+      JSON.stringify({ id: 'approval_bbb_22222', status: 'approved', title: 'Already resolved' }),
+    );
+
+    await (checker as any).rescanPendingApprovals();
+
+    // Only the genuinely-pending approval should have been re-notified
+    expect(telegramApi.sendMessage).toHaveBeenCalledTimes(1);
+    const [, msg] = telegramApi.sendMessage.mock.calls[0];
+    expect(msg).toContain('Genuinely pending');
+    expect(msg).not.toContain('Already resolved');
+  });
 });
 
 describe('FastChecker.backfillInProgressTasks', () => {

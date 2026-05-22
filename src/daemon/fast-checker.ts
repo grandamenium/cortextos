@@ -1036,7 +1036,17 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     if (pending.length === 0) return;
     this.log(`rescanPendingApprovals: ${pending.length} pending approval(s) found — re-notifying`);
 
+    const resolvedDir = join(this.paths.approvalDir, 'resolved');
     for (const approval of pending) {
+      // Belt-and-suspenders: listPendingApprovals() already filters orphaned
+      // entries (file in both pending/ and resolved/), but we re-verify here to
+      // guard against the race window where an approval is resolved between the
+      // scan and this notification loop (e.g. Greg approved via the original
+      // Telegram card while the daemon was restarting).
+      if (existsSync(join(resolvedDir, `${approval.id}.json`))) {
+        this.log(`rescanPendingApprovals: skipping ${approval.id} — already in resolved/`);
+        continue;
+      }
       try {
         const lines = [
           `⏳ Pending approval (restart re-notify): ${approval.title}`,
