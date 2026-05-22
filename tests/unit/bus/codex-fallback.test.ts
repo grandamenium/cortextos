@@ -194,7 +194,7 @@ describe('handleCodexFallback', () => {
     );
 
     expect(r.dispatched).toBe(true);
-    expect(r.workerName).toMatch(/^codex-spillover-\d+$/);
+    expect(r.workerName).toMatch(/^codex-spillover-1-\d+$/);
     expect(r.limitClass).toBe('long_lock');
 
     expect(mockSpawnSync).toHaveBeenCalledOnce();
@@ -233,5 +233,58 @@ describe('handleCodexFallback', () => {
     expect(promptArg).toContain('build the feature');
     expect(promptArg).toContain('terminate-worker');
     expect(promptArg).toContain('send-message orchestrator');
+  });
+
+  it('dispatches spillover-2 with --home flag when claudeTeamHome is set', async () => {
+    const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
+    const r = await handleCodexFallback(
+      result,
+      { prompt: 'do work', dir: '/tmp/workdir', parentAgent: 'orchestrator', autoFallback: true, claudeTeamHome: '/home/user/.claude-team' },
+      paths, 'dev', 'revops-global',
+    );
+
+    expect(r.dispatched).toBe(true);
+    expect(mockSpawnSync).toHaveBeenCalledTimes(2);
+
+    const calls = mockSpawnSync.mock.calls as [string, string[]][];
+    const spillover1Args = calls[0][1];
+    const spillover2Args = calls[1][1];
+
+    // spillover-1: no --home flag
+    expect(spillover1Args[2]).toMatch(/^codex-spillover-1-\d+$/);
+    expect(spillover1Args).not.toContain('--home');
+
+    // spillover-2: has --home flag pointing to team home
+    expect(spillover2Args[2]).toMatch(/^codex-spillover-2-\d+$/);
+    expect(spillover2Args).toContain('--home');
+    expect(spillover2Args[spillover2Args.indexOf('--home') + 1]).toBe('/home/user/.claude-team');
+  });
+
+  it('spillover-2 emits codex_failover_dispatched with tier=spillover-2', async () => {
+    const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
+    await handleCodexFallback(
+      result,
+      { prompt: 'do work', dir: '/tmp', parentAgent: 'orchestrator', autoFallback: true, claudeTeamHome: '/home/user/.claude-team' },
+      paths, 'dev', 'revops-global',
+    );
+
+    const events = readEventLines(tmpDir, 'dev');
+    const dispatches = events.filter(e => e.event === 'codex_failover_dispatched');
+    expect(dispatches).toHaveLength(2);
+    expect(dispatches.some(e => (e.metadata as Record<string, unknown>).tier === 'spillover-1')).toBe(true);
+    expect(dispatches.some(e => (e.metadata as Record<string, unknown>).tier === 'spillover-2')).toBe(true);
+
+    const s2 = dispatches.find(e => (e.metadata as Record<string, unknown>).tier === 'spillover-2')!;
+    expect((s2.metadata as Record<string, unknown>).claude_team_home).toBe('/home/user/.claude-team');
+  });
+
+  it('does not dispatch spillover-2 when claudeTeamHome is not set', async () => {
+    const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
+    await handleCodexFallback(
+      result,
+      { prompt: 'do work', dir: '/tmp', parentAgent: 'orchestrator', autoFallback: true },
+      paths, 'dev', 'revops-global',
+    );
+    expect(mockSpawnSync).toHaveBeenCalledOnce();
   });
 });

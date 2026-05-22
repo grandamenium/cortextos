@@ -1154,7 +1154,7 @@ export class AgentManager {
   /**
    * Spawn an ephemeral worker session for a parallelized task.
    */
-  async spawnWorker(name: string, dir: string, prompt: string, parent?: string, model?: string): Promise<void> {
+  async spawnWorker(name: string, dir: string, prompt: string, parent?: string, model?: string, home?: string): Promise<void> {
     if (this.workers.has(name)) {
       throw new Error(`Worker "${name}" is already running`);
     }
@@ -1175,7 +1175,9 @@ export class AgentManager {
       projectRoot: this.frameworkRoot,
     };
 
-    const config = model ? { model } : {};
+    const config: { model?: string; home?: string } = {};
+    if (model) config.model = model;
+    if (home) config.home = home;
 
     this.workers.set(name, worker);
 

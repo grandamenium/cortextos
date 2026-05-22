@@ -5438,7 +5438,7 @@ busCommand
       if (opts.autoFallback) {
         const fallback = await handleCodexFallback(
           { stderr: result.error ?? '', exitCode: 1 },
-          { prompt, dir: opts.workdir ?? process.cwd(), parentAgent: env.agentName, autoFallback: true },
+          { prompt, dir: opts.workdir ?? process.cwd(), parentAgent: env.agentName, autoFallback: true, claudeTeamHome: process.env.CLAUDE_TEAM_HOME },
           paths, env.agentName, env.org,
         );
         if (fallback.dispatched && fallback.workerName) {
@@ -5595,7 +5595,7 @@ busCommand
     if (!result.ok && opts.autoFallback) {
       const fallback = await handleCodexFallback(
         { stderr: result.stderr, exitCode: result.exitCode },
-        { prompt: promptFile, dir: opts.workdir ?? process.cwd(), parentAgent: agentName, taskId: opts.taskId, autoFallback: true },
+        { prompt: promptFile, dir: opts.workdir ?? process.cwd(), parentAgent: agentName, taskId: opts.taskId, autoFallback: true, claudeTeamHome: process.env.CLAUDE_TEAM_HOME },
         paths, env.agentName, env.org,
       );
       if (fallback.dispatched && fallback.workerName) {

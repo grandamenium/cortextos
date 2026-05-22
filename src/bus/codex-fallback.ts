@@ -15,6 +15,14 @@ export interface CodexFallbackOptions {
   parentAgent: string;
   taskId?: string;
   autoFallback?: boolean;
+  /**
+   * When set, enables spillover-2: a second worker dispatched with HOME overridden to
+   * this path so it authenticates against the Team workspace OAuth at
+   * <claudeTeamHome>/.claude/.credentials.json — distinct account from spillover-1's Max OAuth.
+   * Only dispatched on long_lock when autoFallback is true and this path is configured.
+   * Convention: set CLAUDE_TEAM_HOME=~/.claude-team in secrets.env and pass it here.
+   */
+  claudeTeamHome?: string;
 }
 
 const SHORT_THROTTLE_MAX_SECS = 1800; // 30 minutes
@@ -102,7 +110,8 @@ export async function handleCodexFallback(
     return { dispatched: false, limitClass: limitResult.limitClass };
   }
 
-  const workerName = `codex-spillover-${Date.now()}`;
+  // Spillover-1: Max OAuth (default HOME, local ~/.claude/.credentials.json)
+  const workerName = `codex-spillover-1-${Date.now()}`;
   const workerPrompt = [
     opts.prompt,
     '',
@@ -123,12 +132,49 @@ export async function handleCodexFallback(
 
   logEvent(paths, agentName, org, 'action', 'codex_failover_dispatched', 'info', {
     worker_name: workerName,
+    tier: 'spillover-1',
     limit_class: limitResult.limitClass,
     retry_after_secs: limitResult.retryAfterSecs,
     task_id: opts.taskId ?? null,
     parent_agent: opts.parentAgent,
     dir: opts.dir,
   });
+
+  // Spillover-2: Team OAuth (override HOME to claudeTeamHome so claude reads Team workspace creds)
+  // Dispatched in parallel when CLAUDE_TEAM_HOME is configured — provides a second auth context
+  // so if the Max account is also saturated, the Team workspace absorbs the load.
+  if (opts.claudeTeamHome) {
+    const worker2Name = `codex-spillover-2-${Date.now()}`;
+    const worker2Prompt = [
+      opts.prompt,
+      '',
+      `cortextos bus send-message ${opts.parentAgent} normal "done: ${worker2Name} completed" && cortextos terminate-worker ${worker2Name}`,
+    ].join('\n');
+
+    spawnSync(
+      'cortextos',
+      [
+        'bus', 'spawn-worker', worker2Name,
+        '--dir', opts.dir,
+        '--prompt', worker2Prompt,
+        '--parent', opts.parentAgent,
+        '--model', 'claude-opus-4-7',
+        '--home', opts.claudeTeamHome,
+      ],
+      { stdio: 'pipe' },
+    );
+
+    logEvent(paths, agentName, org, 'action', 'codex_failover_dispatched', 'info', {
+      worker_name: worker2Name,
+      tier: 'spillover-2',
+      limit_class: limitResult.limitClass,
+      retry_after_secs: limitResult.retryAfterSecs,
+      task_id: opts.taskId ?? null,
+      parent_agent: opts.parentAgent,
+      dir: opts.dir,
+      claude_team_home: opts.claudeTeamHome,
+    });
+  }
 
   return { dispatched: true, workerName, limitClass: limitResult.limitClass };
 }

@@ -91,6 +91,12 @@ export class AgentPTY {
       CRM_TEMPLATE_ROOT: this.env.frameworkRoot,
     };
 
+    // CLAUDE_HOME: override HOME so claude reads credentials from an alternative directory.
+    // Mirrors the CODEX_HOME pattern for parallel-account workers (e.g. codex-spillover-2).
+    if (this.config.home) {
+      ptyEnv['HOME'] = this.config.home;
+    }
+
     // Source org-level shared secrets (orgs/{org}/secrets.env).
     // These are shared across all agents in the org: OPENAI_KEY, APIFY_TOKEN, GEMINI_API_KEY, etc.
     // Agent .env is loaded after and overrides org values — agent-specific keys win.
