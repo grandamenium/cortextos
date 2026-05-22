@@ -1,0 +1,16 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is git-ignored.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"
+tenant_id       = "00000000-0000-0000-0000-000000000000"
+
+location    = "eastus"
+environment = "prod"
+
+# Paste the public key (single line). Generate with:
+#   ssh-keygen -t ed25519 -C "ops@cortextos" -f ~/.ssh/cortextos_ops
+vm_ssh_public_key = "ssh-ed25519 AAAA... ops@cortextos"
+
+# Optional overrides — defaults are usually fine.
+# vm_size           = "Standard_D2s_v3"
+# data_disk_size_gb = 64

@@ -1,0 +1,13 @@
+# Terraform local state — never commit.
+.terraform/
+*.tfstate
+*.tfstate.backup
+crash.log
+crash.*.log
+
+# Real variable values — copy from terraform.tfvars.example.
+terraform.tfvars
+*.auto.tfvars
+
+# Plan output binaries.
+*.tfplan

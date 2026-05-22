@@ -57,3 +57,7 @@ dashboard/test-*.py
 
 # Local git worktrees scratch dir
 .worktrees/
+
+# Defense in depth — never commit real Terraform secrets from anywhere.
+**/terraform.tfvars
+**/*.tfplan
