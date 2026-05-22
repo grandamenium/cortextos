@@ -1,0 +1,38 @@
+{
+  "agent_name": "design-agent",
+  "enabled": true,
+  "runtime": "claude-code",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "tier": "sonnet",
+  "working_directory": "",
+  "timezone": "America/Los_Angeles",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+    }
+  ],
+  "codex_auto_fallback": true,
+  "codex_auto_fallback_note": "Enabled 2026-05-22 as part of Codex pivot v2 task #4 48h selective-enable window. Low-traffic agent (4h heartbeat-only cron cadence). Revert: set to false. Widening to all Codex-runtime agents requires separate orch approval after 48h monitor window.",
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    }
+  },
+  "day_mode_start": "07:00",
+  "day_mode_end": "20:00",
+  "communication_style": "technical",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  }
+}

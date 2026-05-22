@@ -1,0 +1,41 @@
+{
+  "agent_name": "agentops-orch",
+  "enabled": true,
+  "runtime": "codex-app-server",
+  "model": "gpt-5.5",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "/home/cortextos/cortextos/orgs/revops-global/agents/agentops-orch",
+  "timezone": "America/Los_Angeles",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "30m",
+      "prompt": "Read HEARTBEAT.md and follow its instructions, but if there is no actionable inbox item or assigned task, only run: cortextos bus update-heartbeat \"idle\". Do not send-message orchestrator for idle/status updates. Message orchestrator only for a dispatch decision, blocker, approval routing, or material completion."
+    },
+    {
+      "name": "project-task-poll",
+      "type": "recurring",
+      "interval": "5m",
+      "prompt": "Check for bus/RGOS tasks assigned to agentops-orch. Claim approved AgentOps work, decompose it into project slices, dispatch codex-3/dev with explicit success criteria, and validate evidence before completion. If no tasks, run only: cortextos bus update-heartbeat \"idle\". Do not send-message orchestrator unless a dispatch decision, blocker, approval routing, or material completion needs attention."
+    }
+  ],
+  "codex_auto_fallback": true,
+  "codex_auto_fallback_note": "Enabled 2026-05-22 as part of Codex pivot v2 task #4 48h selective-enable window. Revert: set to false and remove from spawn-codex/computer-use call sites in prompts. Widening to all Codex-runtime agents requires separate orch approval after 48h monitor window.",
+  "ctx_handoff_threshold": 88,
+  "telegram_polling": false,
+  "day_mode_start": "07:00",
+  "day_mode_end": "20:00",
+  "communication_style": "technical",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  }
+}

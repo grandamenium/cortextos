@@ -15,7 +15,9 @@ import { GoalProgress } from '@/components/analytics/goal-progress';
 import { FleetHealth } from '@/components/analytics/fleet-health';
 import { UvdMetricCard } from '@/components/analytics/uvd-metric-card';
 import { BudgetPane } from '@/components/analytics/budget-pane';
+import { CodexHealthPane } from '@/components/analytics/codex-health-pane';
 import { getFleetHealth, getPlanUsage, getUsageHistory, getUvdMetrics, getBudgetSummary } from '@/lib/data/reports';
+import { getCodexHealthData } from '@/lib/data/codex-health';
 
 export default async function AnalyticsPage({
   searchParams,
@@ -31,7 +33,7 @@ export default async function AnalyticsPage({
   syncCostsLazy();
 
   // Fetch all data in parallel
-  const [taskData, agentStats, dailyCosts, dailyCostByModel, monthCost, goalsData, fleetHealth, planUsage, usageHistory, uvdData, budgetSummary] =
+  const [taskData, agentStats, dailyCosts, dailyCostByModel, monthCost, goalsData, fleetHealth, planUsage, usageHistory, uvdData, budgetSummary, codexHealth] =
     await Promise.all([
       Promise.resolve(getTaskThroughput(30, org || undefined)),
       Promise.resolve(getAgentEffectiveness(org || undefined)),
@@ -44,6 +46,7 @@ export default async function AnalyticsPage({
       Promise.resolve(getUsageHistory(7)),
       Promise.resolve(getUvdMetrics(org || 'revops-global', 14)),
       Promise.resolve(getBudgetSummary()),
+      Promise.resolve((() => { try { return getCodexHealthData(); } catch { return null; } })()),
     ]);
 
   // Project monthly cost: (month-to-date / days elapsed) * days in month
@@ -86,6 +89,9 @@ export default async function AnalyticsPage({
 
       {/* Per-Agent Budget Pane */}
       <BudgetPane data={budgetSummary} />
+
+      {/* Codex Account Health + Spillover Monitor */}
+      <CodexHealthPane data={codexHealth} />
 
       {/* Goal Progress - only show when specific org selected */}
       {org && <GoalProgress goals={goalsData.goals} />}
