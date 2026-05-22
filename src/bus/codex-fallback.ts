@@ -1,7 +1,6 @@
 import { spawnSync } from 'child_process';
 import type { BusPaths } from '../types/index.js';
 import { logEvent } from './event.js';
-import type { SpawnCodexResult } from './spawn-codex.js';
 
 export type CodexLimitClass = 'short_throttle' | 'long_lock' | 'auth_expired' | 'none';
 
@@ -68,16 +67,29 @@ export function parseCodexLimit(stderr: string, exitCode: number | null): CodexL
   return { limitClass: 'long_lock', retryAfterSecs: null };
 }
 
+export interface CodexFallbackInput {
+  stderr: string;
+  exitCode: number | null;
+}
+
+export interface CodexFallbackDispatchResult {
+  dispatched: boolean;
+  workerName?: string;
+  limitClass: CodexLimitClass;
+}
+
 export async function handleCodexFallback(
-  result: SpawnCodexResult,
+  result: CodexFallbackInput,
   opts: CodexFallbackOptions,
   paths: BusPaths,
   agentName: string,
   org: string,
-): Promise<void> {
+): Promise<CodexFallbackDispatchResult> {
   const limitResult = parseCodexLimit(result.stderr, result.exitCode);
 
-  if (limitResult.limitClass === 'none') return;
+  if (limitResult.limitClass === 'none') {
+    return { dispatched: false, limitClass: 'none' };
+  }
 
   logEvent(paths, agentName, org, 'action', 'codex_limit_hit', 'warning', {
     limit_class: limitResult.limitClass,
@@ -86,7 +98,9 @@ export async function handleCodexFallback(
     dir: opts.dir,
   });
 
-  if (limitResult.limitClass !== 'long_lock' || !opts.autoFallback) return;
+  if (limitResult.limitClass !== 'long_lock' || !opts.autoFallback) {
+    return { dispatched: false, limitClass: limitResult.limitClass };
+  }
 
   const workerName = `codex-spillover-${Date.now()}`;
   const workerPrompt = [
@@ -115,4 +129,6 @@ export async function handleCodexFallback(
     parent_agent: opts.parentAgent,
     dir: opts.dir,
   });
+
+  return { dispatched: true, workerName, limitClass: limitResult.limitClass };
 }

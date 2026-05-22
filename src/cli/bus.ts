@@ -29,6 +29,7 @@ import { createReminder, listReminders, ackReminder, pruneReminders } from '../b
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { spawnCodex } from '../bus/spawn-codex.js';
+import { handleCodexFallback } from '../bus/codex-fallback.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
@@ -5405,6 +5406,7 @@ busCommand
   .option('--dispatch-script <path>', 'Path to codex-dispatch.sh on the Mac', '/Users/gregharned/work/team-brain/scripts/codex-dispatch.sh')
   .option('--orgo-failure-artifact <path>', 'Recent failed Orgo lease attempt artifact required before Mac SSH fallback')
   .option('--disable-fallback', 'Disable localhost codex exec fallback when Mac SSH is unreachable')
+  .option('--auto-fallback', 'On Codex long_lock (weekly cap), automatically spawn a claude-opus-4-7 spillover worker. Default OFF — do not enable globally.', false)
   .action(async (
     prompt: string,
     opts: {
@@ -5416,6 +5418,7 @@ busCommand
       dispatchScript?: string;
       orgoFailureArtifact?: string;
       disableFallback?: boolean;
+      autoFallback?: boolean;
     },
   ) => {
     const result = await computerUse(prompt, {
@@ -5428,14 +5431,28 @@ busCommand
       noFallback: opts.disableFallback,
     });
 
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+
     if (!result.ok) {
+      if (opts.autoFallback) {
+        const fallback = await handleCodexFallback(
+          { stderr: result.error ?? '', exitCode: 1 },
+          { prompt, dir: opts.workdir ?? process.cwd(), parentAgent: env.agentName, autoFallback: true },
+          paths, env.agentName, env.org,
+        );
+        if (fallback.dispatched && fallback.workerName) {
+          console.log(`codex-fallback: long_lock detected — spillover worker dispatched: ${fallback.workerName}`);
+          process.exit(0);
+        } else if (fallback.limitClass !== 'none') {
+          console.log(`codex-fallback: ${fallback.limitClass} detected — no auto-dispatch (short throttle or auth issue)`);
+        }
+      }
       console.error(`computer-use failed: ${result.error}`);
       process.exit(1);
     }
 
     // Log the event
-    const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     logEvent(paths, env.agentName, env.org, 'action', 'computer_use_task', 'info', { prompt: prompt.slice(0, 200), duration_ms: result.durationMs, used_fallback: result.usedFallback ?? false });
 
     if (result.usedFallback) {
@@ -5498,6 +5515,7 @@ busCommand
   .option('--mcp-config <path>', 'MCP config file path — passed as --mcp-config')
   .option('--sandbox <mode>', 'Codex sandbox mode (read-only, workspace-write, danger-full-access)')
   .option('--json-output', 'Print the run metadata JSON instead of only the artifact path')
+  .option('--auto-fallback', 'On Codex long_lock (weekly cap), automatically spawn a claude-opus-4-7 spillover worker. Default OFF — do not enable globally.', false)
   .action(async (
     promptFile: string,
     opts: {
@@ -5515,6 +5533,7 @@ busCommand
       mcpConfig?: string;
       sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access';
       jsonOutput?: boolean;
+      autoFallback?: boolean;
     },
   ) => {
     const env = resolveEnv();
@@ -5570,6 +5589,19 @@ busCommand
         });
       } catch (err) {
         routeTelegramFallback(paths, env, opts.telegram, result.outputPath, err);
+      }
+    }
+
+    if (!result.ok && opts.autoFallback) {
+      const fallback = await handleCodexFallback(
+        { stderr: result.stderr, exitCode: result.exitCode },
+        { prompt: promptFile, dir: opts.workdir ?? process.cwd(), parentAgent: agentName, taskId: opts.taskId, autoFallback: true },
+        paths, env.agentName, env.org,
+      );
+      if (fallback.dispatched && fallback.workerName) {
+        console.log(`codex-fallback: long_lock detected — spillover worker dispatched: ${fallback.workerName}`);
+      } else if (fallback.limitClass !== 'none') {
+        console.log(`codex-fallback: ${fallback.limitClass} detected — no auto-dispatch (short throttle or auth issue)`);
       }
     }
 
