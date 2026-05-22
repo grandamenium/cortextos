@@ -113,4 +113,44 @@ describe('OutputBuffer redaction', () => {
     expect(written).toContain(shortTokenLike);
     expect(written).not.toContain('[REDACTED_JWT]');
   });
+
+  // HuggingFace hf_* token redaction tests
+  it('HuggingFace hf_* token: redacted in disk log and in-memory ring buffer', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    // Real HF tokens are hf_ + 34 alphanumeric chars (37 total). Use a
+    // 34-char body that's unambiguously above the 32-char floor.
+    const FAKE_HF = 'hf_' + 'A'.repeat(34);
+    buf.push(`Authorization: Bearer ${FAKE_HF}\n`);
+
+    const writtenData = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(writtenData).toContain('[REDACTED_HF_TOKEN]');
+    expect(writtenData).not.toContain(FAKE_HF);
+
+    const recent = buf.getRecent();
+    expect(recent).toContain('[REDACTED_HF_TOKEN]');
+    expect(recent).not.toContain(FAKE_HF);
+  });
+
+  it('HuggingFace token body < 32 chars is NOT redacted (length floor guard)', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    // 31-char body is one short of the minimum — must not match.
+    const shortHF = 'hf_' + 'A'.repeat(31);
+    buf.push(`token=${shortHF}\n`);
+
+    const written = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(written).toContain(shortHF);
+    expect(written).not.toContain('[REDACTED_HF_TOKEN]');
+  });
+
+  it('JWT and HuggingFace token in the same chunk: both redacted independently', () => {
+    const buf = new OutputBuffer(1000, '/tmp/fake-stdout.log');
+    const FAKE_HF = 'hf_' + 'B'.repeat(34);
+    buf.push(`jwt=${FAKE_JWT} hf=${FAKE_HF}`);
+
+    const written = String(appendFileSyncMock.mock.calls[0][1]);
+    expect(written).toContain('[REDACTED_JWT]');
+    expect(written).toContain('[REDACTED_HF_TOKEN]');
+    expect(written).not.toContain(FAKE_JWT);
+    expect(written).not.toContain(FAKE_HF);
+  });
 });

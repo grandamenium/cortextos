@@ -40,13 +40,30 @@
 const JWT_PATTERN = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
 
 /**
- * Redact JWT-shaped tokens from a PTY output chunk.
+ * HuggingFace access-token shape: literal `hf_` prefix followed by 32+
+ * alphanumeric characters. Real tokens are 37 chars total (`hf_` + 34
+ * char body) but the pattern accepts {32,} as a defensive lower bound
+ * matching the canonical gitleaks rule. Origin: 2026-05-06 baseline
+ * gitleaks drift caught 27 hf_ token instances persisted to boss agent
+ * logs (1 inbound-messages.jsonl + 26 stdout.log) — scrubbed in-place
+ * via sed; this closes the hole at the source so future leaks redact at
+ * the PTY layer instead of needing another scrub pass.
+ */
+const HF_TOKEN_PATTERN = /hf_[A-Za-z0-9]{32,}/g;
+
+/**
+ * Redact secret-shaped tokens from a PTY output chunk.
  *
- * Replaces each JWT with the literal string `[REDACTED_JWT]` in-place.
+ * Replaces each match with a literal `[REDACTED_*]` marker in-place:
+ *   - JWT-shaped tokens → `[REDACTED_JWT]`
+ *   - HuggingFace `hf_*` tokens → `[REDACTED_HF_TOKEN]`
+ *
  * Non-token content (TUI ANSI escapes, regular stdout, shell prompts,
  * etc.) passes through unchanged. Safe to call on every PTY chunk — the
- * regex is stateless and scales linearly with input length.
+ * regexes are stateless and scale linearly with input length.
  */
 export function redactSecrets(data: string): string {
-  return data.replace(JWT_PATTERN, '[REDACTED_JWT]');
+  return data
+    .replace(JWT_PATTERN, '[REDACTED_JWT]')
+    .replace(HF_TOKEN_PATTERN, '[REDACTED_HF_TOKEN]');
 }
