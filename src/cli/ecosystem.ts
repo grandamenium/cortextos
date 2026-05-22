@@ -84,18 +84,36 @@ export const ecosystemCommand = new Command('ecosystem')
     // via `pm2 startup`/`pm2 save`. The dashboard PM2 entry is only added
     // if dashboard/package.json exists (to keep the generator working in
     // minimal/test installs).
+    // PM2 on Windows can't execute `npm` directly — `npm.cmd` is a Windows
+    // .cmd shim that PM2's node-based loader tries to interpret as JS, which
+    // fails immediately ("Unexpected token ':'"). Bypass the shim by pointing
+    // PM2 at the local Next.js binary that `npm run dev` would run anyway.
+    // The `next` entry resolves under dashboard/node_modules/next/dist/bin/next
+    // and is just a Node script, so PM2 spawns it cleanly on every platform.
+    const isWindows = process.platform === 'win32';
+    const nextBin = join(dashboardDir, 'node_modules', 'next', 'dist', 'bin', 'next');
+    const dashboardScript = isWindows && existsSync(nextBin) ? nextBin : 'npm';
+    const dashboardArgs = isWindows && existsSync(nextBin) ? 'dev' : 'run dev';
+
+    // windowsHide: stops PM2 from attaching a visible "next-server" console
+    // window to the dashboard process at boot on Windows. PM2's default
+    // CreateProcess flags include the parent console; on Linux/macOS the
+    // process is already daemonized so this is invisible. Harmless if true
+    // on non-Windows (PM2 ignores the flag). Surfaces as a stray terminal
+    // titled "next-server (vX.Y.Z)" after `pm2 resurrect` post-reboot.
     const dashboardAppBlock = hasDashboard
       ? `,
     {
       name: 'cortextos-dashboard',
-      script: 'npm',
-      args: 'run dev',
+      script: ${JSON.stringify(dashboardScript)},
+      args: ${JSON.stringify(dashboardArgs)},
       cwd: ${JSON.stringify(dashboardDir)},
       env: {
         PORT: process.env.PORT || '3000',
       },
       // Dashboard reads its real config from dashboard/.env.local — populated
-      // by /onboarding Phase 7. PM2 just supervises the npm process.
+      // by /onboarding Phase 7. PM2 just supervises the dashboard process.
+      windowsHide: true,
       max_restarts: 50,
       restart_delay: 5000,
       autorestart: true,

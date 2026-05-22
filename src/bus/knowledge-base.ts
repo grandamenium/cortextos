@@ -301,9 +301,24 @@ export function ingestKnowledgeBase(
   const args = [mmragPath, 'ingest', ...paths, '--collection', collection];
   if (force) args.push('--force');
 
+  // Multimodal PDF ingestion via Gemini Flash routinely takes 2–5 min for
+  // documents over ~10 pages with images/tables. Two minutes was too low and
+  // produced ETIMEDOUT mid-Gemini-call. Default 10 min, override via env,
+  // floored at 60s so nobody accidentally sets it to 0 or a value smaller
+  // than a single Gemini call needs.
+  const KB_INGEST_TIMEOUT_FLOOR_MS = 60_000;
+  const KB_INGEST_TIMEOUT_DEFAULT_MS = 600_000;
+  const requestedTimeout = Number(process.env.KB_INGEST_TIMEOUT_MS);
+  const ingestTimeoutMs = Math.max(
+    KB_INGEST_TIMEOUT_FLOOR_MS,
+    Number.isFinite(requestedTimeout) && requestedTimeout > 0
+      ? requestedTimeout
+      : KB_INGEST_TIMEOUT_DEFAULT_MS,
+  );
+
   execFileSync(pythonPath, args, {
     encoding: 'utf-8',
-    timeout: 120000,
+    timeout: ingestTimeoutMs,
     env,
     stdio: 'inherit',
   });

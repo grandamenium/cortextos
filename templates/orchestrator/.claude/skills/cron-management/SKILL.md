@@ -1,81 +1,117 @@
 ---
 name: cron-management
-description: "The user wants something to happen on a recurring schedule, or you just restarted and need to verify your crons are still running. You need to create a new scheduled task, restore crons that were lost on restart, add or remove a cron from config.json so it persists across sessions, or troubleshoot why a scheduled workflow stopped firing. Crons die on restart — this skill is how you ensure scheduled work survives."
-triggers: ["remind me", "every day", "every hour", "every week", "schedule", "recurring", "daily", "weekly", "cron", "loop", "check regularly", "monitor", "keep an eye on", "set up a reminder", "repeat every", "run every", "automate", "schedule task", "restore crons", "crons missing", "cron not firing", "session start crons", "recreate crons", "persist cron", "add to config.json"]
+description: "Manage scheduled tasks (crons). Crons are daemon-managed and stored in crons.json — they survive restarts automatically. Use when: verifying crons on session start, creating new recurring tasks, updating or removing crons, troubleshooting scheduled tasks, or using the dashboard test-fire button."
+triggers: ["remind me", "every day", "every hour", "every week", "schedule", "recurring", "daily", "weekly", "cron", "loop", "check regularly", "monitor", "keep an eye on", "set up a reminder", "repeat every", "run every", "automate", "schedule task", "restore crons", "crons missing", "cron not firing", "session start crons", "persist cron"]
 ---
 
 # Cron Management
 
-`config.json` under the `crons` array is the single source of truth for ALL scheduled tasks — recurring AND one-shot reminders. Every cron you create must be written to config.json first so it survives restarts.
+Crons are **daemon-managed**. They are stored in `${CTX_ROOT}/state/$CTX_AGENT_NAME/crons.json`
+and dispatched by the cortextOS daemon. Crons survive agent restarts, context compactions,
+and daemon restarts automatically. You do NOT need to recreate them on session start.
 
-## Two cron types
-
-**Recurring** — fires on a repeating interval forever.
-```json
-{ "name": "heartbeat", "type": "recurring", "interval": "4h", "prompt": "Read HEARTBEAT.md and follow its instructions." }
-```
-
-**Once** — fires at a specific datetime, then is deleted.
-```json
-{ "name": "remind-user-3pm", "type": "once", "fire_at": "2026-04-02T15:00:00Z", "prompt": "Remind the user about the 3pm call." }
-```
-
-`type` defaults to `"recurring"` if omitted (backward compatible with existing config.json files).
+**Never use `/loop` or CronCreate for persistent recurring work** — those are session-local
+and die on agent restart.
 
 ---
 
 ## On Session Start
 
-Restore all crons from config.json:
+Check that your crons are registered. Do not recreate them unless they are missing.
 
-1. Run CronList — note which crons are already active (avoid duplicates)
-2. For each entry in `config.json` crons:
-   - **type: recurring** (or no type): call `/loop {interval} {prompt}` if not already active
-   - **type: once**: check if `fire_at` is in the future
-     - Yes: recreate with CronCreate (set `recurring: false`, compute cron expression from fire_at)
-     - No (already past): delete this entry from config.json — it expired while you were offline
+```bash
+cortextos bus list-crons $CTX_AGENT_NAME
+```
 
----
+If a cron is missing from the list, add it:
 
-## Creating a Recurring Cron
-
-1. Write to `config.json` first:
-   ```json
-   { "name": "descriptive-name", "type": "recurring", "interval": "1h", "prompt": "What to do each cycle" }
-   ```
-2. Create the live cron: `/loop 1h What to do each cycle`
-3. Confirm to the user that the cron is active and persisted
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME <name> <interval|cron-expr> "<prompt>"
+```
 
 ---
 
-## Creating a One-Shot Reminder
+## Adding a Recurring Cron
 
-When a user asks for a one-time reminder (e.g. "remind me at 3pm"):
+**Interval shorthand** (s/m/h/d/w):
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h "Read HEARTBEAT.md and follow its instructions."
+cortextos bus add-cron $CTX_AGENT_NAME health-check 30m "Check system health and report anomalies."
+```
 
-1. Write to `config.json` first:
-   ```json
-   { "name": "remind-user-3pm", "type": "once", "fire_at": "2026-04-02T15:00:00Z", "prompt": "Remind the user about the 3pm call." }
-   ```
-2. Create the live cron via CronCreate with `recurring: false` and the cron expression for that time
-3. After the reminder fires, delete the entry from config.json
+**5-field cron expression** (minute hour dom month dow):
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME morning-report "0 9 * * 1-5" "Generate and send the daily analytics report."
+cortextos bus add-cron $CTX_AGENT_NAME weekly-summary "0 17 * * 5" "Compile and deliver the weekly summary."
+```
+
+The daemon reloads automatically after `add-cron`. Confirm with `list-crons`.
+
+---
+
+## Updating a Cron
+
+```bash
+# Change the schedule
+cortextos bus update-cron $CTX_AGENT_NAME heartbeat --interval 4h
+
+# Update the prompt
+cortextos bus update-cron $CTX_AGENT_NAME heartbeat --prompt "New prompt text."
+
+# Disable (stops firing without removing it)
+cortextos bus update-cron $CTX_AGENT_NAME heartbeat --enabled false
+
+# Re-enable
+cortextos bus update-cron $CTX_AGENT_NAME heartbeat --enabled true
+```
 
 ---
 
 ## Removing a Cron
 
-1. Cancel the active cron via CronDelete
-2. Remove the entry from `config.json`
+```bash
+cortextos bus remove-cron $CTX_AGENT_NAME <name>
+```
 
 ---
 
-## Cron Expiry
+## Testing a Cron Immediately
 
-Built-in crons expire after 7 days. Since your session restarts via the daemon, this is not an issue — crons are recreated from config.json on each fresh start. The 7-day window covers any normal restart cycle.
+From the dashboard (`/workflows/$CTX_AGENT_NAME/<name>`), click **Test Fire** to inject the
+cron's prompt immediately. A 30-second cooldown prevents accidental rapid-fires.
+
+Set `manualFireDisabled: true` on a cron definition to block dashboard test-fires (e.g. for
+crons that must only fire on schedule).
+
+---
+
+## Checking Execution History
+
+```bash
+# All crons for this agent
+cortextos bus get-cron-log $CTX_AGENT_NAME
+
+# Filter to a specific cron
+cortextos bus get-cron-log $CTX_AGENT_NAME <name>
+```
+
+Each log entry: `ts`, `cron`, `status` (fired/retried/failed), `attempt`, `duration_ms`, `error`.
 
 ---
 
 ## Troubleshooting
 
-- Cron not firing after restart: check config.json — the entry may be missing or have an expired fire_at
-- Duplicate crons: always run CronList before recreating; if a cron is already active, skip it
-- One-shot that already fired: if fire_at is in the past and the entry is still in config.json, the reminder was likely missed during a restart — delete the entry, notify the user
+**Cron not firing:**
+1. `cortextos bus list-crons $CTX_AGENT_NAME` — confirm it is registered and not disabled.
+2. `cortextos bus get-cron-log $CTX_AGENT_NAME <name>` — check for `status: failed` entries.
+3. Check daemon log: `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/`
+
+**`crons.json` corrupted:**
+- `readCrons` automatically falls back to `crons.json.bak` on parse failure. Usually self-healing.
+- If both files are bad, re-add crons via `add-cron` or force re-migration:
+  `cortextos bus migrate-crons $CTX_AGENT_NAME --force`
+
+**Scheduler retained stale schedule after reload:**
+- If a reload produces an empty schedule (transient corruption), the daemon keeps the last-good
+  schedule in memory (`lastGoodSchedule`). Crons keep firing. Repair `crons.json` and the
+  scheduler recovers automatically on the next reload.

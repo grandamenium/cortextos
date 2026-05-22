@@ -10,7 +10,22 @@ vi.mock('../../../src/bus/message', () => ({
   sendMessage: vi.fn(),
 }));
 
-import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync } from 'fs';
+// Mock TelegramAPI so the agent-bot ping is observable without hitting the
+// network. Constructor records the bot token; sendMessage records its call.
+const telegramSendMessageSpy = vi.fn().mockResolvedValue({ result: { message_id: 1 } });
+const telegramConstructorSpy = vi.fn();
+vi.mock('../../../src/telegram/api', () => ({
+  TelegramAPI: class {
+    constructor(token: string) {
+      telegramConstructorSpy(token);
+    }
+    sendMessage(...args: unknown[]) {
+      return telegramSendMessageSpy(...args);
+    }
+  },
+}));
+
+import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createApproval, updateApproval, listPendingApprovals } from '../../../src/bus/approval';
@@ -46,6 +61,9 @@ beforeEach(() => {
   paths = mkPaths(testDir);
   postActivitySpy.mockClear();
   postActivitySpy.mockResolvedValue(true);
+  telegramSendMessageSpy.mockClear();
+  telegramSendMessageSpy.mockResolvedValue({ result: { message_id: 1 } });
+  telegramConstructorSpy.mockClear();
   delete process.env.CTX_FRAMEWORK_ROOT;
 });
 
@@ -229,6 +247,149 @@ describe('createApproval', () => {
     const id = await createApprovalPromise;
     expect(createApprovalResolved).toBe(true);
     expect(id).toMatch(/^approval_\d+_[a-zA-Z0-9]+$/);
+  });
+});
+
+describe('createApproval — agent-bot Telegram ping (closes 50h+ Repo-B-style stall)', () => {
+  // The activity-channel post handles the operator-via-orchestrator UX
+  // (Approve/Deny inline buttons), but operators on a per-agent bot would
+  // otherwise miss approvals entirely. createApproval also pings the
+  // requesting agent's own .env BOT_TOKEN+CHAT_ID so those operators see
+  // it on the bot they're actually watching.
+  function writeAgentEnv(agentDir: string, vars: Record<string, string>): void {
+    mkdirSync(agentDir, { recursive: true });
+    const lines = Object.entries(vars).map(([k, v]) => `${k}=${v}`);
+    writeFileSync(join(agentDir, '.env'), lines.join('\n') + '\n');
+  }
+
+  it('pings the agent bot when agentDir/.env/BOT_TOKEN/CHAT_ID are all present', async () => {
+    const agentDir = join(testDir, 'agent-with-bot');
+    writeAgentEnv(agentDir, { BOT_TOKEN: 'test-token-123', CHAT_ID: '987654321' });
+
+    const id = await createApproval(
+      paths,
+      'alice',
+      'TestOrg',
+      'Deploy to prod',
+      'deployment',
+      'rationale here',
+      frameworkRoot,
+      agentDir,
+    );
+
+    expect(telegramConstructorSpy).toHaveBeenCalledWith('test-token-123');
+    expect(telegramSendMessageSpy).toHaveBeenCalledTimes(1);
+    const [chatId, message, , opts] = telegramSendMessageSpy.mock.calls[0] as [
+      string,
+      string,
+      unknown,
+      { parseMode: string | null },
+    ];
+    expect(chatId).toBe('987654321');
+    expect(String(message)).toContain('Deploy to prod');
+    expect(String(message)).toContain('deployment');
+    expect(String(message)).toContain('alice');
+    expect(String(message)).toContain(id);
+    expect(String(message)).toContain('rationale here');
+    // Plain text — must NOT trip Telegram's HTML/Markdown parser on
+    // arbitrary approval titles. parseMode: null sends as plain text.
+    expect(opts.parseMode).toBeNull();
+  });
+
+  it('skips with a warn when agentDir is not provided', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const id = await createApproval(paths, 'alice', 'TestOrg', 'No agentDir', 'deployment', undefined, frameworkRoot);
+
+    expect(telegramSendMessageSpy).not.toHaveBeenCalled();
+    const warnCalls = warnSpy.mock.calls.map((c) => c.join(' '));
+    expect(warnCalls.some((w) => w.includes('[approval]') && w.includes('No agentDir') && w.includes(id))).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('skips silently when the agent .env file is missing (bot-less agent)', async () => {
+    // A hermes runtime or pre-onboarding agent has no .env yet. Approval
+    // creation must still succeed without a noisy warn — this is the
+    // expected steady state, not a misconfiguration.
+    const agentDir = join(testDir, 'bot-less-agent');
+    mkdirSync(agentDir, { recursive: true });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await createApproval(paths, 'alice', 'TestOrg', 'No env', 'deployment', undefined, frameworkRoot, agentDir);
+
+    expect(telegramSendMessageSpy).not.toHaveBeenCalled();
+    // No agent-bot warn for this case (the missing-keys case below DOES warn).
+    const warnCalls = warnSpy.mock.calls.map((c) => c.join(' '));
+    expect(warnCalls.some((w) => w.includes('agent-bot Telegram ping') || w.includes('BOT_TOKEN or CHAT_ID missing'))).toBe(
+      false,
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('skips with a warn when BOT_TOKEN is missing from .env', async () => {
+    const agentDir = join(testDir, 'agent-missing-token');
+    writeAgentEnv(agentDir, { CHAT_ID: '987654321' });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const id = await createApproval(paths, 'alice', 'TestOrg', 'Missing token', 'deployment', undefined, frameworkRoot, agentDir);
+
+    expect(telegramSendMessageSpy).not.toHaveBeenCalled();
+    const warnCalls = warnSpy.mock.calls.map((c) => c.join(' '));
+    expect(warnCalls.some((w) => w.includes('BOT_TOKEN or CHAT_ID missing') && w.includes(id))).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('skips with a warn when CHAT_ID is missing from .env', async () => {
+    const agentDir = join(testDir, 'agent-missing-chat');
+    writeAgentEnv(agentDir, { BOT_TOKEN: 'test-token-123' });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const id = await createApproval(paths, 'alice', 'TestOrg', 'Missing chat', 'deployment', undefined, frameworkRoot, agentDir);
+
+    expect(telegramSendMessageSpy).not.toHaveBeenCalled();
+    const warnCalls = warnSpy.mock.calls.map((c) => c.join(' '));
+    expect(warnCalls.some((w) => w.includes('BOT_TOKEN or CHAT_ID missing') && w.includes(id))).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('approval creation succeeds even when the Telegram ping rejects (errors suppressed)', async () => {
+    // Telegram outage must NEVER block approval creation. The activity
+    // channel is best-effort, so is the agent-bot ping.
+    const agentDir = join(testDir, 'agent-tg-down');
+    writeAgentEnv(agentDir, { BOT_TOKEN: 'test-token-123', CHAT_ID: '987654321' });
+    telegramSendMessageSpy.mockRejectedValueOnce(new Error('telegram unreachable'));
+
+    const id = await createApproval(paths, 'alice', 'TestOrg', 'Telegram down', 'deployment', undefined, frameworkRoot, agentDir);
+
+    const pendingFile = join(paths.approvalDir, 'pending', `${id}.json`);
+    expect(existsSync(pendingFile)).toBe(true);
+  });
+
+  it('message body includes title, category, agent, id, context, and the orchestrator-chat hint', async () => {
+    const agentDir = join(testDir, 'agent-body-test');
+    writeAgentEnv(agentDir, { BOT_TOKEN: 'test-token-123', CHAT_ID: '987654321' });
+
+    const id = await createApproval(
+      paths,
+      'bob',
+      'TestOrg',
+      'Body shape test',
+      'other',
+      'detailed context paragraph',
+      frameworkRoot,
+      agentDir,
+    );
+
+    const [, message] = telegramSendMessageSpy.mock.calls[0] as [string, string, unknown, unknown];
+    const text = String(message);
+    expect(text).toContain('Body shape test');
+    expect(text).toContain('other');
+    expect(text).toContain('bob');
+    expect(text).toContain(id);
+    expect(text).toContain('detailed context paragraph');
+    // The ping must point operators at the action surface — they cannot
+    // act from the per-agent bot, so the body tells them where to go.
+    expect(text).toMatch(/orchestrator|dashboard/i);
   });
 });
 

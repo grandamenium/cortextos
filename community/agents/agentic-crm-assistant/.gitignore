@@ -1,0 +1,6 @@
+.env
+.cortextos-env
+memory/*.tmp
+telegram-images/
+.playwright-mcp/
+*.log

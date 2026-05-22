@@ -216,7 +216,16 @@ export async function checkUsageApi(
     throw new Error(`Usage API returned ${response.status}: ${await response.text()}`);
   }
 
+  // The Anthropic OAuth usage API returns NESTED objects:
+  //   { five_hour: { utilization, resets_at }, seven_day: {...}, ... }
+  // The earlier flat-only parsing always returned undefined → normalize → 0
+  // → "100% remaining" regardless of real usage. That made the watchdog
+  // blind to real burn (it tripped only on ccusage's heuristic) and
+  // hid Sondre's actual quota in the dashboard. Keep flat fallbacks in
+  // case the API ever returns either shape.
   const data = await response.json() as {
+    five_hour?: { utilization?: number };
+    seven_day?: { utilization?: number };
     five_hour_utilization?: number;
     seven_day_utilization?: number;
     fiveHourUtilization?: number;
@@ -229,8 +238,12 @@ export async function checkUsageApi(
     return v > 1 ? v / 100 : v;
   };
 
-  const fiveHour = normalize(data.five_hour_utilization ?? data.fiveHourUtilization);
-  const sevenDay = normalize(data.seven_day_utilization ?? data.sevenDayUtilization);
+  const fiveHour = normalize(
+    data.five_hour?.utilization ?? data.five_hour_utilization ?? data.fiveHourUtilization,
+  );
+  const sevenDay = normalize(
+    data.seven_day?.utilization ?? data.seven_day_utilization ?? data.sevenDayUtilization,
+  );
   const fetchedAt = new Date().toISOString();
 
   const snapshot: UsageSnapshot = {

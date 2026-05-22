@@ -19,11 +19,31 @@ import type {
   AgentDetail,
   AgentIdentity,
   AgentPaths,
+  AgentRuntime,
   HealthStatus,
   Heartbeat,
   MemoryFile,
   LogFile,
 } from '@/lib/types';
+
+/**
+ * Read agent config.json and extract runtime ("claude-code" | "codex-app-server"
+ * | "hermes"). Defaults to "claude-code" for legacy agents that pre-date the
+ * runtime field, matching what the daemon does on agent boot.
+ */
+async function getAgentRuntime(name: string, org?: string): Promise<AgentRuntime> {
+  const agentDir = getAgentDir(name, org);
+  try {
+    const raw = await fs.readFile(path.join(agentDir, 'config.json'), 'utf-8');
+    const cfg = JSON.parse(raw) as { runtime?: string };
+    if (cfg.runtime === 'codex-app-server' || cfg.runtime === 'hermes' || cfg.runtime === 'claude-code') {
+      return cfg.runtime;
+    }
+  } catch {
+    // missing/malformed config — fall through to default
+  }
+  return 'claude-code';
+}
 
 // ---------------------------------------------------------------------------
 // Path resolution
@@ -110,8 +130,11 @@ export async function discoverAgents(org?: string): Promise<AgentSummary[]> {
 
   const summaries = await Promise.all(
     agents.map(async (agent) => {
-      const identity = await getAgentIdentity(agent.name, agent.org);
-      const hb = await getHeartbeat(agent.name);
+      const [identity, hb, runtime] = await Promise.all([
+        getAgentIdentity(agent.name, agent.org),
+        getHeartbeat(agent.name),
+        getAgentRuntime(agent.name, agent.org),
+      ]);
 
       let health: HealthStatus = 'down';
       if (hb) {
@@ -152,6 +175,7 @@ export async function discoverAgents(org?: string): Promise<AgentSummary[]> {
         emoji: identity.emoji,
         role: identity.role,
         tasksToday,
+        runtime,
       };
 
       return summary;
@@ -174,7 +198,7 @@ export async function getAgentDetail(
 ): Promise<AgentDetail> {
   const paths = getAgentPaths(name, org);
 
-  const [identity, soulRaw, goalsRaw, memoryRaw, hb, memoryFiles, logFiles] =
+  const [identity, soulRaw, goalsRaw, memoryRaw, hb, memoryFiles, logFiles, runtime] =
     await Promise.all([
       getAgentIdentity(name, org),
       readFileOrEmpty(paths.soulMd),
@@ -183,6 +207,7 @@ export async function getAgentDetail(
       getHeartbeat(name),
       getAgentMemoryFiles(name, org),
       getAgentLogFiles(name, org),
+      getAgentRuntime(name, org),
     ]);
 
   let health: HealthStatus = 'down';
@@ -202,6 +227,7 @@ export async function getAgentDetail(
     health,
     logFiles,
     agentDir: paths.agentDir,
+    runtime,
   };
 }
 

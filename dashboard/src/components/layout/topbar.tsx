@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { OrgSelector } from './org-selector';
+import { QuotaIndicator } from './quota-indicator';
 
 interface TopbarProps {
   orgs: string[];
@@ -51,8 +52,9 @@ export function Topbar({ orgs, currentOrg, onOrgChange, onMenuClick }: TopbarPro
         <OrgSelector orgs={orgs} currentOrg={currentOrg} onOrgChange={onOrgChange} />
       </div>
 
-      {/* Right: Dark mode toggle + User menu */}
+      {/* Right: Quota + Dark mode toggle + User menu */}
       <div className="flex items-center gap-1">
+        <QuotaIndicator />
         <Button
           variant="ghost"
           size="icon"

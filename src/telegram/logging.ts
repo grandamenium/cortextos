@@ -6,24 +6,20 @@
 
 import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
+import { logEvent } from '../bus/event.js';
+import type { BusPaths, TelegramMessage } from '../types/index.js';
 
 /**
  * Optional metadata attached to an outbound Telegram message log entry.
  * Fields are all optional so existing callers that pass nothing still
  * produce the same JSONL shape as before this extension.
  *
- * - `parseMode`: which parse_mode the first send attempt used. "markdown"
- *   for the default path, "none" when the caller used --plain-text.
- * - `parseFallback`: true iff the first attempt failed with a Telegram
- *   parse-entities error and sendMessage retried with parse_mode omitted.
- * - `parseFallbackReason`: the Telegram error description that triggered
- *   the fallback, when present. Useful for auditing which agents keep
- *   generating bad markdown so we can target them for hardening.
+ * - `parseMode`: which parse_mode the first send attempt used. "html"
+ *   for the default path (Markdown-to-HTML conversion), "none" when the
+ *   caller used --plain-text.
  */
 export interface OutboundLogMetadata {
-  parseMode?: 'markdown' | 'none';
-  parseFallback?: boolean;
-  parseFallbackReason?: string;
+  parseMode?: 'html' | 'none';
 }
 
 /**
@@ -45,9 +41,6 @@ export function logOutboundMessage(
   // stays unchanged for callers that pass nothing (backwards compat).
   const meta: Record<string, unknown> = {};
   if (metadata?.parseMode !== undefined) meta.parse_mode = metadata.parseMode;
-  if (metadata?.parseFallback !== undefined) meta.parse_fallback = metadata.parseFallback;
-  if (metadata?.parseFallbackReason !== undefined)
-    meta.parse_fallback_reason = metadata.parseFallbackReason;
 
   const entry = JSON.stringify({
     timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
@@ -80,6 +73,50 @@ export function logInboundMessage(
   });
 
   appendFileSync(join(logDir, 'inbound-messages.jsonl'), entry + '\n', 'utf-8');
+}
+
+/**
+ * Persist an inbound Telegram message to the daemon's JSONL archive AND
+ * emit a `message/telegram_received` bus event so dashboards and
+ * experiment cycles can count fleet-wide inbound traffic. Symmetric with
+ * `telegram_sent` emitted from the outbound path in `cortextos bus
+ * send-telegram`.
+ *
+ * Wrapped: a logEvent failure (e.g. unwritable analytics dir) must not
+ * break message processing — the logged inbound JSONL still goes through.
+ */
+export function recordInboundTelegram(
+  paths: BusPaths,
+  ctxRoot: string,
+  agentName: string,
+  org: string,
+  fromName: string,
+  msg: TelegramMessage,
+  log?: (m: string) => void,
+): void {
+  const text = (msg.text || msg.caption || '').toString();
+  logInboundMessage(ctxRoot, agentName, {
+    message_id: msg.message_id,
+    from: msg.from?.id,
+    from_name: fromName,
+    chat_id: msg.chat?.id,
+    text,
+    timestamp: new Date().toISOString(),
+  });
+
+  const hasMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
+  try {
+    logEvent(paths, agentName, org, 'message', 'telegram_received', 'info', {
+      chat_id: String(msg.chat?.id ?? ''),
+      message_id: msg.message_id,
+      from_id: msg.from?.id,
+      from_name: fromName,
+      has_media: hasMedia,
+      text_chars: text.length,
+    });
+  } catch (err) {
+    log?.(`logEvent(telegram_received) failed: ${err}`);
+  }
 }
 
 /**

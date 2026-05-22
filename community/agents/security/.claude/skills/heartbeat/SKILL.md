@@ -43,7 +43,7 @@ Call this:
 - When starting a new significant task
 - Before going into a long-running operation
 
-**Never claim a status you haven't verified.** If your crons were reset on restart, check CronList before saying "crons running."
+**Never claim a status you haven't verified.** If your crons were reset on restart, check `cortextos bus list-crons $CTX_AGENT_NAME` before saying "crons running."
 
 ---
 

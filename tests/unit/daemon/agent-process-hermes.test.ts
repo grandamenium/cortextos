@@ -128,34 +128,6 @@ describe('AgentProcess - Hermes runtime: shouldContinue', () => {
   });
 });
 
-describe('AgentProcess - Hermes runtime: scheduleCronVerification', () => {
-  it('returns early without scheduling cron verification for hermes runtime', async () => {
-    const ap = new AgentProcess('hermes-agent', mockEnv, {
-      runtime: 'hermes',
-      crons: [{ name: 'heartbeat', interval: '4h', prompt: 'ping' }],
-    });
-    await ap.start();
-
-    // Simulate the agent idling — cron verification would normally inject a message
-    // after detecting an idle state. For hermes, it should never inject.
-    await new Promise(r => setTimeout(r, 50));
-    expect(mockInjectMessage).not.toHaveBeenCalled();
-  });
-
-  it('scheduleCronVerification() is a no-op for hermes even with crons configured', () => {
-    const ap = new AgentProcess('hermes-agent', mockEnv, {
-      runtime: 'hermes',
-      crons: [
-        { name: 'heartbeat', interval: '4h', prompt: 'ping' },
-        { name: 'daily', interval: '24h', prompt: 'daily task' },
-      ],
-    });
-    // Should not throw and should not schedule anything
-    expect(() => ap.scheduleCronVerification()).not.toThrow();
-    expect(mockInjectMessage).not.toHaveBeenCalled();
-  });
-});
-
 describe('AgentProcess - Hermes runtime: stop uses Ctrl+D', () => {
   it('sends Ctrl+D (not /exit) when stopping a hermes agent', async () => {
     const ap = new AgentProcess('hermes-agent', mockEnv, { runtime: 'hermes' });
