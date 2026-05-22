@@ -14,9 +14,74 @@ LOG_FILE="$SCRIPT_DIR/.surface-poll.log"
 RELAYED_FILE="$SCRIPT_DIR/.surface-poll-relayed.jsonl"
 CHAT_ID="8788724873"
 NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+INBOX_DIR="/c/Users/Sebas/.cortextos/default/inbox/seb_boss"
+PROCESSED_DIR="/c/Users/Sebas/.cortextos/default/processed/seb_boss"
+BRIDGE_DIR="$SCRIPT_DIR/.bus-to-chat-bridge"
+BRIDGE_STATE="$BRIDGE_DIR/last-scan.txt"
 
 # Append run-marker to log (always — used by hourly-pulse staleness audit)
 echo "$NOW_UTC fire" >> "$LOG_FILE"
+
+# STEP A — SELF-HEAL stale .lock.d on inbox (2026-05-21 fix: 6-day stuck lock caused 577 unread msgs)
+# Stuck pattern: .lock.d exists but pid file empty/missing → acquireLock returns false silently
+if [ -d "$INBOX_DIR/.lock.d" ]; then
+  LOCK_MTIME=$(stat -c %Y "$INBOX_DIR/.lock.d" 2>/dev/null || echo 0)
+  NOW_EPOCH=$(date +%s)
+  LOCK_AGE=$(( NOW_EPOCH - LOCK_MTIME ))
+  PID_FILE_SIZE=0
+  if [ -f "$INBOX_DIR/.lock.d/pid" ]; then
+    PID_FILE_SIZE=$(stat -c %s "$INBOX_DIR/.lock.d/pid" 2>/dev/null || echo 0)
+  fi
+  # If lock dir >1h old AND pid file empty/missing → clear it
+  if [ "$LOCK_AGE" -gt 3600 ] && [ "$PID_FILE_SIZE" -eq 0 ]; then
+    TRASH="/c/Users/Sebas/OneDrive/Documentos/07_Archive/claude-trash/$(date -u +%Y-%m-%d)/surface-poll-stale-lock-$NOW_UTC"
+    mkdir -p "$TRASH"
+    mv -f "$INBOX_DIR/.lock.d" "$TRASH/" 2>/dev/null && \
+      echo "$NOW_UTC self_heal_stale_lock age=${LOCK_AGE}s -> trash" >> "$LOG_FILE"
+  fi
+fi
+
+# STEP B — BUS-TO-CHAT BRIDGE (2026-05-21 fix: transient sessions consume bus messages, main CC never sees them)
+# Scan processed/seb_boss/ for new HIGH-VALUE messages since last bridge run.
+# Surface them to bridge dir so main-CC seb_boss reads them on cron-fire.
+mkdir -p "$BRIDGE_DIR"
+LAST_SCAN_TS=0
+if [ -f "$BRIDGE_STATE" ]; then
+  LAST_SCAN_TS=$(cat "$BRIDGE_STATE" 2>/dev/null || echo 0)
+fi
+SCAN_NOW=$(date +%s)
+# Find processed messages newer than last scan
+if [ -d "$PROCESSED_DIR" ]; then
+  while IFS= read -r FILE; do
+    [ -z "$FILE" ] && continue
+    # Extract msg content; flag if HIGH/URGENT priority OR contains FINDING/IDEA/BLOCKED keywords
+    PRIORITY=$(grep -oE '"priority":"[^"]+"' "$FILE" 2>/dev/null | head -1 | cut -d'"' -f4)
+    FROM=$(grep -oE '"from":"[^"]+"' "$FILE" 2>/dev/null | head -1 | cut -d'"' -f4)
+    TEXT_PREVIEW=$(grep -oE '"text":"[^"]{0,300}' "$FILE" 2>/dev/null | head -1 | sed 's/^"text":"//')
+    # Surface conditions
+    SURFACE=""
+    if [ "$PRIORITY" = "urgent" ] || [ "$PRIORITY" = "high" ]; then
+      SURFACE="priority=$PRIORITY"
+    elif echo "$TEXT_PREVIEW" | grep -qiE "FINDING (high|med)|BLOCKED|NO-GO|capped|crashed|halt"; then
+      SURFACE="content-pattern"
+    fi
+    if [ -n "$SURFACE" ]; then
+      BRIDGE_OUT="$BRIDGE_DIR/$(date -u +%Y-%m-%dT%H-%M-%SZ)-${FROM}-$(basename "$FILE" .json).md"
+      {
+        echo "# Bus message from $FROM"
+        echo "Surface reason: $SURFACE"
+        echo "Source file: $FILE"
+        echo "Scanned: $NOW_UTC"
+        echo ""
+        echo "## Content preview (first 300 chars)"
+        echo "$TEXT_PREVIEW"
+      } > "$BRIDGE_OUT"
+    fi
+  done < <(find "$PROCESSED_DIR" -name "*.json" -newer "$BRIDGE_STATE" 2>/dev/null | head -50)
+fi
+echo "$SCAN_NOW" > "$BRIDGE_STATE"
+# Prune bridge dir entries older than 24h (main CC seb_boss reads + ACKs)
+find "$BRIDGE_DIR" -name "*.md" -mmin +1440 -delete 2>/dev/null
 
 # Trim log if >1000 lines
 if [ -f "$LOG_FILE" ]; then
