@@ -127,4 +127,84 @@ describe('TelegramPoller — Guard #2 comms-liveness', () => {
       expect(existsSync(join(stateDir, '.comms-degraded'))).toBe(false);
     },
   );
+
+  it(
+    'Hole A: window-based detection fires even when consecutiveFailures resets on each flap',
+    { timeout: 20_000 },
+    async () => {
+      // Alternating fail → empty-success → fail → empty-success ...
+      // consecutiveFailures resets to 0 on every empty-success, so it never
+      // exceeds 1. The sliding window accumulates all failures regardless.
+      let callCount = 0;
+      const api = {
+        getUpdates: vi.fn(async () => {
+          callCount++;
+          if (callCount % 2 === 1) {
+            throw new Error('Telegram API request failed: fetch failed');
+          }
+          return { result: [] }; // empty success — resets consecutiveFailures
+        }),
+      } as unknown as TelegramAPI;
+
+      const degraded: Array<Record<string, unknown>> = [];
+      const poller = new TelegramPoller(api, stateDir, 1_000, undefined, {
+        onCommsDegraded: (i) => degraded.push(i as unknown as Record<string, unknown>),
+      });
+
+      const runP = poller.start();
+      // Each alternating pair takes ~2s (1s backoff + 1s success sleep).
+      // 5 failures need 9 calls ≈ 9s. Advance 15s for headroom.
+      await vi.advanceTimersByTimeAsync(15_000);
+      poller.stop();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await runP;
+
+      // DEGRADED must fire exactly once — window accumulated 5 failures even
+      // though consecutiveFailures never exceeded 1.
+      expect(degraded.length).toBe(1);
+      expect(degraded[0].consecutiveFailures).toBe(1); // always 1 (flapping reset)
+      expect(degraded[0].windowFailures).toBeGreaterThanOrEqual(5);
+    },
+  );
+
+  it(
+    'Hole B: watchdog fires degraded marker when the poll loop stalls',
+    { timeout: 20_000 },
+    async () => {
+      // getUpdates hangs for 5s (fake time) — longer than the watchdog stall
+      // threshold so the watchdog fires before the poll resolves.
+      const api = {
+        getUpdates: vi.fn(
+          () => new Promise<{ result: unknown[] }>(resolve => {
+            setTimeout(() => resolve({ result: [] }), 5_000);
+          }),
+        ),
+      } as unknown as TelegramAPI;
+
+      const degraded: Array<Record<string, unknown>> = [];
+      const marker = join(stateDir, '.comms-degraded');
+      const poller = new TelegramPoller(api, stateDir, 1_000, undefined, {
+        onCommsDegraded: (i) => degraded.push(i as unknown as Record<string, unknown>),
+        // Small values so the test completes quickly under fake timers.
+        watchdog: { checkMs: 200, stallMs: 500 },
+      });
+
+      const runP = poller.start();
+
+      // Advance far enough for the watchdog to tick past the stall threshold
+      // (checkMs=200 → checks at 200, 400, 600 ms; stall fires at 600ms)
+      // but NOT past the getUpdates sleep (5000ms) so the marker is still there.
+      await vi.advanceTimersByTimeAsync(800);
+
+      expect(existsSync(marker)).toBe(true);
+      expect(degraded.length).toBe(1);
+      expect(degraded[0].lastError).toMatch(/stall/i);
+
+      // Cleanup: advance past the getUpdates sleep, then stop.
+      await vi.advanceTimersByTimeAsync(5_000);
+      poller.stop();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await runP;
+    },
+  );
 });

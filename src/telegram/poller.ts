@@ -24,7 +24,8 @@ export type CommsErrorClass = 'rate_limit' | 'timeout' | 'network' | 'unknown';
 /** Stable, machine-consumable payload handed to the comms-liveness callbacks. */
 export interface CommsDegradedInfo {
   since: string;                 // ISO ts: first failure of this degraded run
-  consecutiveFailures: number;
+  consecutiveFailures: number;   // strict consecutive failures at trigger time
+  windowFailures: number;        // failures within the sliding window (the authoritative signal)
   lastError: string;
   lastErrorClass: CommsErrorClass;
   lastSuccessAt: string | null;  // ISO ts of last successful poll, or null
@@ -58,6 +59,19 @@ export interface TelegramPollerOptions {
   onCommsDegraded?: (info: CommsDegradedInfo) => void;
   /** Fired once when a degraded poller recovers. */
   onCommsRecovered?: (info: CommsRecoveredInfo) => void;
+  /**
+   * Hole B — out-of-loop watchdog timing overrides. The watchdog runs on a
+   * separate setInterval (outside the poll loop) and detects a frozen loop by
+   * checking whether the loop timestamp has advanced recently. Defaults are
+   * appropriate for production; override in tests to use small values.
+   * Only active when comms-managed (any Guard #2 option present).
+   */
+  watchdog?: {
+    /** How often to run the staleness check. Default: 30 000 ms. */
+    checkMs?: number;
+    /** Flag the loop as stalled if no tick in this long. Default: 120 000 ms. */
+    stallMs?: number;
+  };
 }
 
 /**
@@ -102,20 +116,44 @@ export class TelegramPoller {
   private onCommsDegraded?: (info: CommsDegradedInfo) => void;
   private onCommsRecovered?: (info: CommsRecoveredInfo) => void;
 
+  // Hole A — sliding failure window (immune to flapping).
+  // failureTimestamps holds the wall-clock time of each recent failure.
+  // Entries outside FAILURE_WINDOW_MS are trimmed on each failure; the window
+  // is cleared entirely on confirmed recovery.
+  private failureTimestamps: number[] = [];
+  private lastRestartAt = 0;
+
+  // Hole B — out-of-loop loop-liveness watchdog.
+  // lastPollLoopAliveAt is updated at the TOP of every while-loop tick (before
+  // the pollOnce await). A separate setInterval checks it; if the loop has not
+  // advanced within watchdogStallMs, the watchdog writes the degraded marker
+  // and calls onCommsDegraded — covering the case where pollOnce is frozen and
+  // handlePollFailure never runs.
+  private lastPollLoopAliveAt = 0;
+  private loopWatchdog?: ReturnType<typeof setInterval>;
+  private readonly watchdogCheckMs: number;
+  private readonly watchdogStallMs: number;
+
   // Backoff doubles per consecutive failure, capped. Cumulative sleep reaches
   // ≈123s by the 7th failure (1+2+4+8+16+32+60) — head-room under the
   // analyst-measured ~11.5min self-recovery margin and the basis for the
   // ≤2min restart SLA.
   private static readonly BACKOFF_MAX_MS = 60_000;
-  // Sustained-failure → out-of-band alert. ~31s of solid failure (1+2+4+8+16):
-  // long enough not to fire on a single transient blip, fast enough that Dan
-  // is not silently blind.
-  private static readonly DEGRADED_AFTER_FAILS = 5;
-  // In-process poller restart (stop/start equivalent) — ≈123s cumulative ⇒
-  // ≤2min SLA per analyst §4 (NOT the 50min agent watchdog).
-  private static readonly RESTART_AFTER_FAILS = 7;
-  // Re-attempt the restart periodically while still wedged (~every 5min at cap).
-  private static readonly RESTART_RETRY_EVERY = 5;
+
+  // Hole A thresholds — window-based, replaces strict-consecutive DEGRADED_AFTER_FAILS
+  // and RESTART_AFTER_FAILS which are defeated by flapping (a brief empty-success
+  // between two failures resets consecutiveFailures to 0, preventing the threshold
+  // from ever being reached). The window is immune to this: old failure timestamps
+  // expire naturally; a flapping empty-success does NOT clear the window.
+  private static readonly FAILURE_WINDOW_MS = 120_000;       // 2-min sliding window
+  private static readonly DEGRADED_FAILURES_IN_WINDOW = 5;   // window failures → alert
+  private static readonly RESTART_FAILURES_IN_WINDOW = 7;    // window failures → restart
+  private static readonly RESTART_COOLDOWN_MS = 300_000;     // min gap between restarts
+
+  // Hole B defaults (overridable via TelegramPollerOptions.watchdog for tests).
+  private static readonly WATCHDOG_CHECK_MS = 30_000;        // check interval
+  private static readonly WATCHDOG_STALL_MS = 120_000;       // stall threshold
+
   // Stable contract for an external relay (Guard #2 last-mile — out of scope
   // here; analyst §4 assigns it to an external watchdog).
   private static readonly DEGRADED_MARKER = '.comms-degraded';
@@ -156,6 +194,8 @@ export class TelegramPoller {
     // Opt-in as the comms-liveness-managed poller (degraded marker + restart +
     // recovery callbacks). Backoff stays always-on regardless.
     this.commsManaged = !!(opts && (opts.recreateApi || opts.onCommsDegraded || opts.onCommsRecovered));
+    this.watchdogCheckMs = opts?.watchdog?.checkMs ?? TelegramPoller.WATCHDOG_CHECK_MS;
+    this.watchdogStallMs = opts?.watchdog?.stallMs ?? TelegramPoller.WATCHDOG_STALL_MS;
     this.loadOffset();
   }
 
@@ -193,17 +233,59 @@ export class TelegramPoller {
    */
   async start(): Promise<void> {
     this.running = true;
-    while (this.running) {
-      let failed = false;
-      try {
-        await this.pollOnce();
-      } catch (err) {
-        failed = true;
-        this.handlePollFailure(err);
+    this.lastPollLoopAliveAt = Date.now();
+
+    // Hole B: out-of-loop watchdog. Runs on a separate timer, entirely outside
+    // the poll-loop await chain. If pollOnce() ever hangs (e.g. AbortSignal
+    // does not fire, or the loop exits unexpectedly), this timer still fires
+    // and writes the degraded marker / calls onCommsDegraded so external systems
+    // can act. Only active for comms-managed pollers.
+    if (this.commsManaged) {
+      this.loopWatchdog = setInterval(() => {
+        if (!this.running) return;
+        if (Date.now() - this.lastPollLoopAliveAt > this.watchdogStallMs) {
+          console.error(
+            `[telegram-poller] Watchdog: loop stall detected — no tick in ` +
+            `${Math.round(this.watchdogStallMs / 1000)}s`,
+          );
+          if (!this.degraded) {
+            this.degraded = true;
+            this.degradedSince = new Date().toISOString();
+            this.writeDegradedMarker();
+            try {
+              this.onCommsDegraded?.({
+                since: this.degradedSince,
+                consecutiveFailures: this.consecutiveFailures,
+                windowFailures: this.failureTimestamps.length,
+                lastError: 'Loop stall: watchdog detected no poll tick',
+                lastErrorClass: 'unknown',
+                lastSuccessAt: this.lastSuccessAt,
+              });
+            } catch { /* sink must never break */ }
+          }
+        }
+      }, this.watchdogCheckMs);
+    }
+
+    try {
+      while (this.running) {
+        this.lastPollLoopAliveAt = Date.now(); // proof-of-life for the watchdog
+        let failed = false;
+        try {
+          await this.pollOnce();
+        } catch (err) {
+          failed = true;
+          this.handlePollFailure(err);
+        }
+        if (!failed) this.handlePollSuccess();
+        if (!this.running) break;
+        await sleep(this.computeSleepMs(failed));
       }
-      if (!failed) this.handlePollSuccess();
-      if (!this.running) break;
-      await sleep(this.computeSleepMs(failed));
+    } finally {
+      if (this.loopWatchdog !== undefined) {
+        clearInterval(this.loopWatchdog);
+        this.loopWatchdog = undefined;
+      }
     }
   }
 
@@ -311,6 +393,9 @@ export class TelegramPoller {
     if (wasDegraded) {
       this.degraded = false;
       this.degradedSince = null;
+      // Clear the failure window on confirmed recovery so the next isolated
+      // failure does not immediately re-trigger the window threshold.
+      this.failureTimestamps = [];
       const downSeconds = since
         ? Math.max(0, Math.round((Date.now() - new Date(since).getTime()) / 1000))
         : 0;
@@ -339,19 +424,35 @@ export class TelegramPoller {
 
     if (!this.commsManaged) return;
 
+    // Hole A — window-based failure detection.
+    // Trim and update the sliding window. Unlike consecutiveFailures (which
+    // resets to 0 on any non-throwing poll, including empty-result polls during
+    // a flapping outage), the window accumulates all failures within
+    // FAILURE_WINDOW_MS regardless of intervening empty-success resets.
+    const now = Date.now();
+    this.failureTimestamps.push(now);
+    const cutoff = now - TelegramPoller.FAILURE_WINDOW_MS;
+    this.failureTimestamps = this.failureTimestamps.filter(t => t >= cutoff);
+    const windowFailures = this.failureTimestamps.length;
+
     // (iii) Out-of-band signal on sustained failure — durable, filesystem-
-    // local, survives the very outage it signals.
-    if (this.consecutiveFailures === TelegramPoller.DEGRADED_AFTER_FAILS) {
+    // local, survives the very outage it signals. Fires once on window threshold
+    // crossing (wasDegraded gate), then refreshes the marker on every subsequent
+    // failure while degraded.
+    const wasAlreadyDegraded = this.degraded;
+    if (!this.degraded && windowFailures >= TelegramPoller.DEGRADED_FAILURES_IN_WINDOW) {
       this.degraded = true;
       this.degradedSince = new Date().toISOString();
     }
     if (this.degraded) {
       this.writeDegradedMarker();
-      if (this.consecutiveFailures === TelegramPoller.DEGRADED_AFTER_FAILS) {
+      if (!wasAlreadyDegraded) {
+        // First time crossing the threshold — fire the one-shot callback.
         try {
           this.onCommsDegraded?.({
             since: this.degradedSince as string,
             consecutiveFailures: this.consecutiveFailures,
+            windowFailures,
             lastError: this.lastError,
             lastErrorClass: this.lastErrorClass,
             lastSuccessAt: this.lastSuccessAt,
@@ -362,10 +463,14 @@ export class TelegramPoller {
       }
     }
 
-    // (ii) In-process poller restart (stop/start equivalent), ≤2min SLA, then
-    // periodically re-attempted while still wedged.
-    const over = this.consecutiveFailures - TelegramPoller.RESTART_AFTER_FAILS;
-    if (over >= 0 && over % TelegramPoller.RESTART_RETRY_EVERY === 0) {
+    // (ii) In-process poller restart when window failures cross threshold,
+    // with a cooldown so restarts are not re-attempted faster than every
+    // RESTART_COOLDOWN_MS while the outage persists.
+    if (
+      windowFailures >= TelegramPoller.RESTART_FAILURES_IN_WINDOW &&
+      now - this.lastRestartAt > TelegramPoller.RESTART_COOLDOWN_MS
+    ) {
+      this.lastRestartAt = now;
       this.restartPollerInProcess();
     }
   }
@@ -412,6 +517,7 @@ export class TelegramPoller {
         state: 'degraded',
         since: this.degradedSince,
         consecutive_failures: this.consecutiveFailures,
+        window_failures: this.failureTimestamps.length,
         last_ok: this.lastSuccessAt,
         updated: new Date().toISOString(),
         last_error: this.lastError,
