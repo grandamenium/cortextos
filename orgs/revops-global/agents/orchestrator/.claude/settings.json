@@ -1,5 +1,8 @@
 {
-  "enabledMcpjsonServers": ["agentmemory", "qmd"],
+  "enabledMcpjsonServers": [
+    "agentmemory",
+    "qmd"
+  ],
   "permissions": {
     "allow": [
       "Bash",
@@ -124,6 +127,15 @@
       }
     ],
     "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortextos bus hook-agent-task-event",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "(Skill|Read)",
         "hooks": [

@@ -4831,6 +4831,11 @@ busCommand
   .action(() => runHook('hook-env-write-guard'));
 
 busCommand
+  .command('hook-agent-task-event')
+  .description('PostToolUse hook: emits STACK-17 task events and appends live-state log entries for Agent Cockpit')
+  .action(() => runHook('hook-agent-task-event'));
+
+busCommand
   .command('create-skill-pr')
   .description('Background worker: commits and draft-PRs a community skill (called by hook-skill-autopr)')
   .argument('<skill-name>', 'Skill directory name under community/skills/')

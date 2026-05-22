@@ -1,5 +1,7 @@
 /**
- * PostToolUse hook: emit a STACK-17 task event for the active task.
+ * PostToolUse hook: emit a STACK-17 task event for the active task and append
+ * a live-state log entry so the Agent Cockpit panel shows real-time progress
+ * for direct (non-Codex) agent sessions.
  *
  * The hook intentionally no-ops when CTX_TASK_ID is missing so it can be
  * installed globally without generating unscoped noise.
@@ -9,9 +11,10 @@
  * causes every tool call to emit two events for the same task, doubling the
  * event stream. Canonical location: cortextos agent settings.json PostToolUse.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { emitAgentTaskEvent } from '../bus/agent-task-events.js';
+import { appendAgentLiveLog, createAgentLiveStateHandle, mirrorAgentLiveState } from '../bus/agent-live-state.js';
 import { resolveEnv } from '../utils/env.js';
 import { formatToolSummary, parseHookInput, readStdin } from './index.js';
 
@@ -60,6 +63,20 @@ async function emitSubagentStartIfNeeded(env = resolveEnv(), taskId: string): Pr
   writeFileSync(markerPath, new Date().toISOString(), 'utf-8');
 }
 
+// Mirror throttle: max one Supabase upload per 15 seconds per task.
+// Uses a small timestamp file in the live-state dir so separate hook processes share state.
+function shouldMirrorNow(dir: string): boolean {
+  const markerPath = join(dir, 'last-live-mirror.txt');
+  try {
+    const ts = parseInt(readFileSync(markerPath, 'utf-8').trim(), 10);
+    if (!isNaN(ts) && Date.now() - ts < 15_000) return false;
+  } catch {
+    // File doesn't exist yet — first mirror
+  }
+  writeFileSync(markerPath, String(Date.now()), 'utf-8');
+  return true;
+}
+
 async function main(): Promise<void> {
   const taskId = process.env.CTX_TASK_ID;
   if (!taskId) return;
@@ -70,12 +87,25 @@ async function main(): Promise<void> {
   const env = resolveEnv();
 
   await emitSubagentStartIfNeeded(env, taskId);
+  const outputPreview = resultPreview(hookJson) || formatToolSummary(tool_name, tool_input);
   await emitAgentTaskEvent(env, taskId, 'tool_call_result', {
     call_id: String(hookJson.tool_use_id || hookJson.call_id || `${tool_name}:${Date.now()}`),
     tool: tool_name,
-    output_preview: resultPreview(hookJson) || formatToolSummary(tool_name, tool_input),
+    output_preview: outputPreview,
     is_error: Boolean(hookJson.is_error || hookJson.error),
   });
+
+  // Append to agent live log so Agent Cockpit shows progress for direct sessions.
+  const liveState = createAgentLiveStateHandle({ ctxRoot: env.ctxRoot, org: env.org, agent: env.agentName, taskId });
+  if (liveState) {
+    const isError = Boolean(hookJson.is_error || hookJson.error);
+    const prefix = isError ? '[ERR]' : '[ ok]';
+    const line = `${new Date().toISOString()} ${prefix} ${tool_name}: ${outputPreview.slice(0, 200)}\n`;
+    appendAgentLiveLog(liveState, line);
+    if (shouldMirrorNow(liveState.dir)) {
+      await mirrorAgentLiveState(liveState);
+    }
+  }
 }
 
 main().catch((err) => {
