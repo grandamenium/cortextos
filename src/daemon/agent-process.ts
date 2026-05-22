@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFi
 import { atomicWriteSync } from '../utils/atomic.js';
 import { join, sep } from 'path';
 import { homedir } from 'os';
+import { detectDayNightMode } from '../bus/heartbeat.js';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
@@ -236,6 +237,30 @@ export class AgentProcess implements ManagedAgent {
       this.sessionStart = new Date();
       this.lastInjectedAt = 0;
       this.log(`Running (pid: ${this.pty.getPid()})`);
+
+      // Write an initial heartbeat.json at process-start so the stale-heartbeat
+      // watcher sees a fresh timestamp immediately. Without this, an agent whose
+      // heartbeat cron fired shortly before restart won't write a new heartbeat
+      // until `interval - elapsed` minutes later, causing false stale alarms and
+      // premature restart loops. We write only the file (no Supabase upsert) to
+      // keep the hot path synchronous and non-blocking.
+      try {
+        const stateDir = join(this.env.ctxRoot, 'state', this.name);
+        ensureDir(stateDir);
+        const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+        atomicWriteSync(join(stateDir, 'heartbeat.json'), JSON.stringify({
+          agent: this.name,
+          org: this.env.org ?? '',
+          status: 'starting',
+          current_task: '',
+          mode: detectDayNightMode(this.config.timezone ?? 'UTC'),
+          last_heartbeat: ts,
+          loop_interval: '',
+        }));
+        this.log(`Boot heartbeat written (${ts})`);
+      } catch (err) {
+        this.log(`Boot heartbeat write failed (non-fatal): ${err}`);
+      }
 
       // Start session timer
       this.startSessionTimer();
