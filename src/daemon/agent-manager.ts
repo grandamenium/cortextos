@@ -523,16 +523,6 @@ export class AgentManager {
     // external cron system — agents no longer need to call CronCreate on boot.
     this.startAgentCronScheduler(name);
 
-    // Start health probe loop for this agent (non-blocking — fires PROBE_INTERVAL_MS
-    // from now, not immediately, so the agent has time to finish booting).
-    // Wrapped in setTimeout(0) to ensure it does not block the startAgent return.
-    setTimeout(() => this.startHealthProber(name), 0);
-
-    // Start stale-heartbeat watcher. First check deferred by one cycle (60s) so
-    // the agent has time to write its initial heartbeat before we evaluate staleness.
-    setTimeout(() => this.startStaleHeartbeatWatcher(name, config), 0);
-
-
     // Start fast checker in background
     checker.start().catch(err => {
       console.error(`[${name}] Fast checker error:`, err);
@@ -971,15 +961,6 @@ export class AgentManager {
       scheduler.stop();
       this.cronSchedulers.delete(name);
     }
-
-    // Stop health probe loop synchronously (before any await).
-    this.stopHealthProber(name);
-
-    // Stop stale-heartbeat watcher synchronously.
-    this.stopStaleHeartbeatWatcher(name);
-    // Clear health-restart flag in case stopAgent is called mid-restart.
-    this.healthRestartInProgress.delete(name);
-
 
     if (entry.poller) {
       entry.poller.stop();

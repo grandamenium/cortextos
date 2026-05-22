@@ -21,7 +21,6 @@ export default defineConfig({
     'hooks/hook-env-write-guard': 'src/hooks/hook-env-write-guard.ts',
     'hooks/hook-agent-task-event': 'src/hooks/hook-agent-task-event.ts',
     'hooks/hook-blocked-auto-rotate': 'src/hooks/hook-blocked-auto-rotate.ts',
-    'scripts/external-health-monitor': 'scripts/external-health-monitor.ts',
   },
   format: ['cjs'],
   target: 'node20',
