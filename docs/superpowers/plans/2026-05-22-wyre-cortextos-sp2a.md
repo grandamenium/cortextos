@@ -584,7 +584,10 @@ az login
 az account set --subscription <subscription-id>
 
 # Generate an SSH key for the ops user (separate from your normal key).
-ssh-keygen -t ed25519 -C "ops@cortextos-prod" -f ~/.ssh/cortextos_ops -N ""
+# IMPORTANT: use RSA, not ed25519. The azurerm Terraform provider's
+# admin_ssh_key validator rejects ed25519 keys with "Only RSA SSH keys
+# are supported by Azure" — outdated, but enforced as of provider v3.117.
+ssh-keygen -t rsa -b 4096 -C "ops@cortextos-prod" -f ~/.ssh/cortextos_ops -N ""
 
 # Populate terraform.tfvars from the example.
 cd infra/terraform
