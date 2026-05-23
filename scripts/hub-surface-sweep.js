@@ -72,8 +72,8 @@ const KNOWN_QA_ROUTES = new Set([
   '/skill-churn-prevention', '/skill-cowork-best-practices', '/skill-cowork-debrief',
   '/skill-hub-spot-migration', '/skill-multi-instance-orchestration',
   '/skill-skill-creator', '/skill-supreme-optimization-brand', '/skill-tech-stack-audit',
-  '/skill-salesforce-data-cleanup', '/skill-salesforce-data-model-relationships',
-  '/skill-salesforce-dashboard-strategy', '/skill-salesforce-cpq-configuration',
+  '/skill-salesforce-data-cleanup', '/skill-salesforce-data-model',
+  '/skill-sf-dashboard-strategy', '/skill-sf-cpq',
   '/skill-sf-admin-daily-dashboard', '/skill-sf-data-completeness-score',
   '/skill-sf-duplicate-management', '/skill-sf-dynamic-forms-migration',
 ]);
