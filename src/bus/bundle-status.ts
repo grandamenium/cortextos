@@ -227,6 +227,55 @@ function renderBar(percent: number, width: number): string {
 }
 
 /**
+ * Compact Telegram-friendly one-line-per-bundle summary. Keeps under Telegram's
+ * 4096-char limit even with 20+ bundles. Uses emoji status icons so the message
+ * renders well in mobile clients.
+ */
+export function renderBundleTelegram(progress: BundleProgress[]): string {
+  if (progress.length === 0) return '📦 No bundles found in sprint-plan.';
+
+  const lines: string[] = [`📊 *Bundle-Status* — ${new Date().toISOString().slice(0, 16)}Z`, ''];
+
+  for (const b of progress) {
+    const pct = `${b.percentDone}%`.padStart(4);
+    const inProg = b.totals.inProgress > 0 ? ` · ${b.totals.inProgress}🟡` : '';
+    const blocked = b.totals.blocked > 0 ? ` · ${b.totals.blocked}🔴` : '';
+    const missing = b.totals.missing > 0 ? ` · ${b.totals.missing}❓` : '';
+    const title = b.title.slice(0, 36);
+    lines.push(`*B${b.number}* ${pct} ${b.totals.done}/${b.totals.total} — ${title}${inProg}${blocked}${missing}`);
+  }
+
+  const total = progress.reduce((acc, b) => acc + b.totals.total, 0);
+  const done = progress.reduce((acc, b) => acc + b.totals.done, 0);
+  const inProg = progress.reduce((acc, b) => acc + b.totals.inProgress, 0);
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  lines.push('');
+  lines.push(`*TOTAL* ${pct}% (${done}/${total}) · ${inProg} in_progress`);
+  return lines.join('\n');
+}
+
+/**
+ * Diff two snapshots — used by watch mode to highlight what changed since last poll.
+ * Returns null-when-equal so the caller can suppress no-op redraws.
+ */
+export function diffBundleSnapshots(
+  prev: BundleProgress[],
+  next: BundleProgress[]
+): { bundle: number; field: 'done' | 'inProgress' | 'pending'; delta: number; title: string }[] {
+  const changes: { bundle: number; field: 'done' | 'inProgress' | 'pending'; delta: number; title: string }[] = [];
+  for (const n of next) {
+    const p = prev.find((x) => x.number === n.number);
+    if (!p) continue;
+    const fields: Array<'done' | 'inProgress' | 'pending'> = ['done', 'inProgress', 'pending'];
+    for (const f of fields) {
+      const delta = n.totals[f] - p.totals[f];
+      if (delta !== 0) changes.push({ bundle: n.number, field: f, delta, title: n.title });
+    }
+  }
+  return changes;
+}
+
+/**
  * Load + parse the sprint-plan from a file path. Returns empty list on missing file.
  */
 export function loadBundlePlan(path: string): Omit<BundleProgress, 'totals' | 'percentDone'>[] {
