@@ -1,0 +1,20 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "codex-app-server",
+  "model": "gpt-5.5",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "",
+  "communication_style": "technical",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Update your heartbeat silently: cortextos bus update-heartbeat \"idle\" && cortextos bus update-cron-fire heartbeat --interval 4h. Check inbox. If tasks are assigned, work them. Do not send status messages to the orchestrator unless blocked, at a decision point, or a task is complete."
+    }
+  ]
+}

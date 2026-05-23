@@ -40,14 +40,14 @@ Boss:    Done. "morning-inbox" cron set — runs daily at 08:00.
 
 ```mermaid
 flowchart TD
-    U["User (Telegram / iOS)"] --> CLI["cortextOS Daemon (Node.js)"]
+    U["User (Telegram)"] --> CLI["cortextOS Daemon (Node.js)"]
     CLI --> O["Orchestrator agent"]
     CLI --> A["Analyst agent"]
     CLI --> W["Specialist agents"]
     O <-->|file bus| A
     O <-->|file bus| W
     CLI --> D["Web Dashboard (Next.js)"]
-    D --> U2["Browser / iOS App"]
+    D --> U2["Browser"]
 ```
 
 ---
@@ -114,7 +114,7 @@ pm2 start ecosystem.config.js && pm2 save && pm2 startup
 | `orchestrator` | Coordinates agents, manages goals, handles morning/evening reviews, approves actions |
 | `analyst` | System health, metrics, theta-wave autoresearch, analytics |
 | `agent` | General-purpose worker — use this as the base for specialist agents |
-| `agent-codex` | Codex-runtime worker, scaffolds with `runtime: codex-app-server` and `model: gpt-5-codex` (see `templates/agent-codex/`) |
+| `agent-codex` | Codex-runtime worker, scaffolds with `runtime: codex-app-server` and `model: gpt-5.5` (see `templates/agent-codex/`) |
 | `project-orchestrator-codex` | Internal bus-only Codex project orchestrator; updates heartbeat silently when idle and only messages the primary orchestrator for dispatch decisions, blockers, approvals, or material completions |
 
 Add a codex agent the same way you add a claude agent:
@@ -137,7 +137,7 @@ Every agent's `config.json` carries an explicit `runtime` field that the daemon 
 | Runtime | Adapter | Default model | Skills location |
 |---|---|---|---|
 | `claude-code` | `ClaudePTY` (default) | claude-sonnet-4-6 | `.claude/skills/<skill>/SKILL.md` |
-| `codex-app-server` | `CodexAppServerPTY` | `gpt-5-codex` | `plugins/cortextos-agent-skills/skills/<skill>/SKILL.md` (linked into `~/.codex/skills/<agent>__<skill>`) |
+| `codex-app-server` | `CodexAppServerPTY` | `gpt-5.5` | `plugins/cortextos-agent-skills/skills/<skill>/SKILL.md` (linked into `~/.codex/skills/<agent>__<skill>`) |
 | `hermes` | `HermesPTY` (experimental) | model per `config.json` | hermes-specific |
 
 Pass `--runtime <kind>` on `add-agent` to set it at scaffold time, or edit the field in `config.json` and restart the agent. The default is `claude-code`. Today only `--template agent`, `--template agent-codex`, and `--template project-orchestrator-codex` support `codex-app-server` — pairing the codex runtime with `--template orchestrator`/`analyst`/`m2c1-worker`/`hermes` errors with a clean message until codex variants of those templates ship.
