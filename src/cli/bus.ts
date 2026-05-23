@@ -18,7 +18,7 @@ import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-stat
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
-import { loadBundlePlan, computeBundleProgress, renderBundleSummary, renderBundleDetail } from '../bus/bundle-status.js';
+import { loadBundlePlan, computeBundleProgress, renderBundleSummary, renderBundleDetail, renderBundleTelegram, diffBundleSnapshots, type BundleProgress } from '../bus/bundle-status.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -395,11 +395,12 @@ busCommand
   .description('Show feature-bundle progress from a sprint-plan markdown file')
   .option('--plan <path>', 'Path to sprint-plan markdown', 'obsidian-vault/agent-shared/sprint-plans/2026-05-22-feature-bundle-plan.md')
   .option('--bundle <n>', 'Show detailed view for one specific bundle number')
-  .option('--format <fmt>', 'Output format: text or json', 'text')
-  .action((opts: { plan: string; bundle?: string; format?: string }) => {
+  .option('--format <fmt>', 'Output format: text, json, or telegram', 'text')
+  .option('--watch', 'Refresh every N seconds and highlight diffs vs last snapshot')
+  .option('--interval <s>', 'Watch refresh interval in seconds', '30')
+  .action((opts: { plan: string; bundle?: string; format?: string; watch?: boolean; interval?: string }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const tasks = listTasks(paths, {});
 
     // Try the provided plan path, also try a phytomedic-saas-relative fallback if not absolute.
     const candidatePaths = [
@@ -418,20 +419,47 @@ busCommand
       process.exit(1);
     }
 
-    const bundles = loadBundlePlan(planPath);
-    const progress = computeBundleProgress(bundles, tasks);
+    const renderOnce = (): BundleProgress[] => {
+      const tasks = listTasks(paths, {});
+      const bundles = loadBundlePlan(planPath!);
+      return computeBundleProgress(bundles, tasks);
+    };
 
-    if (opts.format === 'json') {
-      console.log(JSON.stringify(progress, null, 2));
+    const render = (progress: BundleProgress[]): string => {
+      if (opts.format === 'json') return JSON.stringify(progress, null, 2);
+      if (opts.format === 'telegram') return renderBundleTelegram(progress);
+      if (opts.bundle != null) return renderBundleDetail(progress, parseInt(opts.bundle, 10));
+      return renderBundleSummary(progress);
+    };
+
+    if (!opts.watch) {
+      console.log(render(renderOnce()));
       return;
     }
 
-    if (opts.bundle != null) {
-      const n = parseInt(opts.bundle, 10);
-      console.log(renderBundleDetail(progress, n));
-    } else {
-      console.log(renderBundleSummary(progress));
-    }
+    // Watch mode — clear screen + repaint each tick, show diff banner when something moved.
+    const intervalMs = Math.max(5, parseInt(opts.interval ?? '30', 10)) * 1000;
+    let prev = renderOnce();
+    const paint = (progress: BundleProgress[], changes: ReturnType<typeof diffBundleSnapshots>) => {
+      process.stdout.write('\x1b[2J\x1b[H'); // ANSI clear + home
+      console.log(`  Watching bundle-status — refresh every ${intervalMs / 1000}s — Ctrl+C to exit\n`);
+      console.log(render(progress));
+      if (changes.length > 0) {
+        console.log('  Changes since last snapshot:');
+        for (const c of changes) {
+          const sign = c.delta > 0 ? '+' : '';
+          console.log(`    B${c.bundle} ${c.field}: ${sign}${c.delta}  (${c.title})`);
+        }
+        console.log('');
+      }
+    };
+    paint(prev, []);
+    setInterval(() => {
+      const next = renderOnce();
+      const changes = diffBundleSnapshots(prev, next);
+      paint(next, changes);
+      prev = next;
+    }, intervalMs);
   });
 
 busCommand
@@ -2759,6 +2787,212 @@ busCommand
       console.log('  cortextos restart <agent-name>');
     }
   });
+
+// ─── SO Tooling Commands ────────────────────────────────────────────────────
+
+busCommand
+  .command('diagnose')
+  .description('Show agent environment context: CWD, worktree state, task counts, last heartbeat')
+  .option('--format <fmt>', 'Output format: text or json', 'text')
+  .action((opts: { format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+
+    // Worktree detection: .git is a file with "gitdir:" when inside a worktree
+    const gitPath = join(process.cwd(), '.git');
+    let isWorktree = false;
+    let gitBranch = '';
+    let gitMainWorktree = '';
+    try {
+      const gitStat = readFileSync(gitPath, 'utf-8');
+      if (gitStat.startsWith('gitdir:')) {
+        isWorktree = true;
+        const gitdirTarget = gitStat.replace('gitdir:', '').trim();
+        // e.g. ../.git/worktrees/<name>
+        gitMainWorktree = gitdirTarget.replace(/\.git\/worktrees\/.*/, '.git').replace(/\/$/, '');
+      }
+    } catch {
+      // .git directory (not a file) = main worktree
+    }
+    try {
+      const headPath = isWorktree
+        ? join(process.cwd(), '.git').replace(/\/.git$/, '') + '/.git'
+        : join(process.cwd(), '.git');
+      const headFile = join(process.cwd(), '.git').endsWith('.git')
+        ? join(process.cwd(), '.git')
+        : join(process.cwd(), '.git');
+      // Read HEAD from cwd
+      const head = readFileSync(join(process.cwd(), '.git') + '/HEAD', 'utf-8').trim();
+      gitBranch = head.startsWith('ref:') ? head.replace('ref: refs/heads/', '') : head.substring(0, 8);
+    } catch {
+      try {
+        const result = spawnSync('git', ['branch', '--show-current'], { cwd: process.cwd(), encoding: 'utf-8' });
+        gitBranch = result.stdout?.trim() || '(unknown)';
+      } catch { gitBranch = '(unknown)'; }
+    }
+
+    // Task counts
+    const allTasks = listTasks(paths, {});
+    const myTasks = listTasks(paths, { assignedTo: env.agentName });
+    const myPending = myTasks.filter(t => t.status === 'pending').length;
+    const myInProgress = myTasks.filter(t => t.status === 'in_progress').length;
+
+    // Last heartbeat
+    let lastHeartbeat = '(none)';
+    let heartbeatAge = '';
+    try {
+      const hb = JSON.parse(readFileSync(join(paths.stateDir, 'heartbeat.json'), 'utf-8'));
+      const ts = hb.last_heartbeat || hb.updated_at || hb.timestamp;
+      if (ts) {
+        const age = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+        lastHeartbeat = new Date(ts).toISOString();
+        heartbeatAge = `${age}min ago`;
+      }
+    } catch { /* no heartbeat file */ }
+
+    const info = {
+      agent: env.agentName,
+      org: env.org,
+      cwd: process.cwd(),
+      framework_root: env.frameworkRoot || '(not set)',
+      is_worktree: isWorktree,
+      git_branch: gitBranch || '(not a git repo)',
+      tasks_total: allTasks.length,
+      tasks_mine: myTasks.length,
+      tasks_pending: myPending,
+      tasks_in_progress: myInProgress,
+      last_heartbeat: lastHeartbeat,
+      heartbeat_age: heartbeatAge,
+      ctx_root: paths.ctxRoot,
+    };
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(info, null, 2));
+      return;
+    }
+
+    console.log('\n🔍 cortextos diagnose\n');
+    console.log(`  Agent:           ${info.agent}`);
+    console.log(`  Org:             ${info.org}`);
+    console.log(`  CWD:             ${info.cwd}`);
+    console.log(`  Framework root:  ${info.framework_root}`);
+    console.log(`  Worktree:        ${info.is_worktree ? '✓ yes' : '✗ no (main worktree)'}`);
+    console.log(`  Git branch:      ${info.git_branch}`);
+    console.log(`  Tasks (total):   ${info.tasks_total}`);
+    console.log(`  Tasks (mine):    ${info.tasks_mine} (${info.tasks_pending} pending, ${info.tasks_in_progress} in-progress)`);
+    console.log(`  Last heartbeat:  ${info.last_heartbeat} ${info.heartbeat_age}`);
+    console.log(`  CTX_ROOT:        ${info.ctx_root}`);
+    console.log('');
+  });
+
+busCommand
+  .command('founder-search')
+  .argument('<topic>', 'Topic or keyword to search for in founder decisions')
+  .option('--vault <path>', 'Override vault root path')
+  .option('--context <n>', 'Lines of context around each match', '2')
+  .action((topic: string, opts: { vault?: string; context?: string }) => {
+    const env = resolveEnv();
+    const contextLines = parseInt(opts.context || '2', 10);
+
+    // Resolve vault root: explicit > framework_root/obsidian-vault > CWD search
+    const candidateVaults = [
+      opts.vault,
+      env.frameworkRoot ? join(env.frameworkRoot, 'obsidian-vault') : null,
+      join(process.cwd(), 'obsidian-vault'),
+      join(process.cwd(), '..', '..', '..', '..', 'obsidian-vault'),
+      join('/Users/arndt/cortextos', 'obsidian-vault'),
+    ].filter(Boolean) as string[];
+
+    let vaultRoot: string | null = null;
+    for (const v of candidateVaults) {
+      if (existsSync(join(v, 'agent-shared')) || existsSync(v)) {
+        vaultRoot = v;
+        break;
+      }
+    }
+    if (!vaultRoot) {
+      console.error('Cannot locate obsidian-vault. Set CTX_FRAMEWORK_ROOT or use --vault <path>.');
+      process.exit(1);
+    }
+
+    const founderDir = join(vaultRoot, 'founder-decisions');
+    if (!existsSync(founderDir)) {
+      console.log(`No founder-decisions directory found at ${founderDir}`);
+      console.log('(No decisions logged yet or vault path mismatch — use --vault to override)');
+      return;
+    }
+
+    // Use ripgrep if available, fall back to grep
+    const rg = spawnSync('rg', ['--version'], { encoding: 'utf-8' });
+    const useRg = rg.status === 0;
+
+    const args = useRg
+      ? ['--color=never', '-i', `-C${contextLines}`, '--heading', topic, founderDir]
+      : ['-r', '-i', `-C${contextLines}`, '--include=*.md', topic, founderDir];
+    const tool = useRg ? 'rg' : 'grep';
+    const result = spawnSync(tool, args, { encoding: 'utf-8' });
+
+    if (!result.stdout?.trim()) {
+      console.log(`No matches for "${topic}" in ${founderDir}`);
+      return;
+    }
+
+    console.log(`\n📋 founder-search: "${topic}"\n`);
+    console.log(result.stdout);
+  });
+
+busCommand
+  .command('founder-decision-log')
+  .argument('<topic>', 'Short topic title for the decision')
+  .argument('<decision>', 'The decision or learning to record')
+  .option('--vault <path>', 'Override vault root path')
+  .option('--context <ctx>', 'Additional context about the decision')
+  .option('--owner <owner>', 'Decision owner (default: user)', 'user')
+  .action((topic: string, decision: string, opts: { vault?: string; context?: string; owner?: string }) => {
+    const env = resolveEnv();
+    const { mkdirSync, appendFileSync } = require('fs');
+
+    const candidateVaults = [
+      opts.vault,
+      env.frameworkRoot ? join(env.frameworkRoot, 'obsidian-vault') : null,
+      join(process.cwd(), 'obsidian-vault'),
+      join(process.cwd(), '..', '..', '..', '..', 'obsidian-vault'),
+      join('/Users/arndt/cortextos', 'obsidian-vault'),
+    ].filter(Boolean) as string[];
+
+    let vaultRoot: string | null = null;
+    for (const v of candidateVaults) {
+      if (existsSync(join(v, 'agent-shared')) || existsSync(v)) {
+        vaultRoot = v;
+        break;
+      }
+    }
+    if (!vaultRoot) {
+      console.error('Cannot locate obsidian-vault. Set CTX_FRAMEWORK_ROOT or use --vault <path>.');
+      process.exit(1);
+    }
+
+    const founderDir = join(vaultRoot, 'founder-decisions');
+    mkdirSync(founderDir, { recursive: true });
+
+    const logPath = join(founderDir, 'decisions-log.md');
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const entry = [
+      `\n## ${now} — ${topic}`,
+      `**Decision:** ${decision}`,
+      opts.context ? `**Context:** ${opts.context}` : null,
+      `**Owner:** ${opts.owner || 'user'}`,
+      `**Tags:** #FOUNDER-LEARNED`,
+      `---`,
+    ].filter(Boolean).join('\n') + '\n';
+
+    appendFileSync(logPath, entry, 'utf-8');
+    console.log(`✓ Logged to ${logPath}`);
+    console.log(`  Topic: ${topic}`);
+    console.log(`  Decision: ${decision}`);
+  });
+
+// ────────────────────────────────────────────────────────────────────────────
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
