@@ -910,7 +910,7 @@ describe('FastChecker.rescanPendingApprovals', () => {
   }
 
   function createFastChecker(telegramApi: ReturnType<typeof createMockTelegramApi> | null, chatId: string | null) {
-    const agent = createMockAgent();
+    const agent = createMockAgent('orchestrator');
     return new FastChecker(agent, paths, '/tmp/framework', {
       telegramApi: telegramApi ?? undefined,
       chatId: chatId ?? undefined,

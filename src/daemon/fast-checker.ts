@@ -1025,6 +1025,12 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    */
   private async rescanPendingApprovals(): Promise<void> {
     if (!this.telegramApi || !this.chatId) return;
+    // Only the orchestrator re-broadcasts pending approvals on restart.
+    // Approvals are stored org-level (shared across all agents), so without
+    // this guard every restarting agent would ping Greg via its own bot —
+    // the direct cause of the multi-bot approval spam reported 2026-05-23.
+    const orchName = process.env.CTX_ORCHESTRATOR || 'orchestrator';
+    if (this.agent.name !== orchName) return;
 
     let pending;
     try {
