@@ -41,7 +41,8 @@ const KNOWN_QA_ROUTES = new Set([
   '/attribution-deployer', '/content-attribution', '/content-review', '/app/wiki', '/app/cortex/theta', '/app/presence',
   '/app/signals', '/app/supreme-outstanding',
   '/assessment-detail', '/assessment-rubric', '/assessments',
-  '/clients', '/company-detail', '/contact-detail', '/contacts', '/invoices', '/settings', '/financials', '/workflow-deployer',
+  '/clients', '/company-detail', '/contact-detail', '/contacts', '/deal-room', '/deal-rooms',
+  '/invoice-detail', '/invoices', '/settings', '/financials', '/workflow-deployer',
   '/outreach', '/outreach-preview', '/outreach-upload',
   '/pipeline-guide', '/sales-materials', '/territory-planning',
 ]);
