@@ -18,6 +18,7 @@ import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-stat
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
+import { loadBundlePlan, computeBundleProgress, renderBundleSummary, renderBundleDetail } from '../bus/bundle-status.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -387,6 +388,50 @@ busCommand
       console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
     }
     console.log('');
+  });
+
+busCommand
+  .command('bundle-status')
+  .description('Show feature-bundle progress from a sprint-plan markdown file')
+  .option('--plan <path>', 'Path to sprint-plan markdown', 'obsidian-vault/agent-shared/sprint-plans/2026-05-22-feature-bundle-plan.md')
+  .option('--bundle <n>', 'Show detailed view for one specific bundle number')
+  .option('--format <fmt>', 'Output format: text or json', 'text')
+  .action((opts: { plan: string; bundle?: string; format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const tasks = listTasks(paths, {});
+
+    // Try the provided plan path, also try a phytomedic-saas-relative fallback if not absolute.
+    const candidatePaths = [
+      opts.plan,
+      join(process.cwd(), opts.plan),
+      join(process.cwd(), '..', '..', '..', 'phytomedic-saas', opts.plan),
+      join('/Users/arndt/phytomedic-saas', opts.plan),
+    ];
+    let planPath: string | null = null;
+    for (const p of candidatePaths) {
+      if (existsSync(p)) { planPath = p; break; }
+    }
+    if (!planPath) {
+      console.error(`Sprint-plan not found. Tried:`);
+      for (const p of candidatePaths) console.error(`  - ${p}`);
+      process.exit(1);
+    }
+
+    const bundles = loadBundlePlan(planPath);
+    const progress = computeBundleProgress(bundles, tasks);
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(progress, null, 2));
+      return;
+    }
+
+    if (opts.bundle != null) {
+      const n = parseInt(opts.bundle, 10);
+      console.log(renderBundleDetail(progress, n));
+    } else {
+      console.log(renderBundleSummary(progress));
+    }
   });
 
 busCommand
