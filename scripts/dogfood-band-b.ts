@@ -8,11 +8,17 @@
  *   - deterministic vignette/alert prose critic
  *   - design image request ledger schema
  *
- * Live gate runs when DOGFOOD_BAND_B_BASE_URL is provided:
+ * Additional incident gates:
+ *   - B7 bot-icon identity manifest contract
+ *   - B8 real-device smoke plan contract
+ *   - M-Framework 1 dad-account smoke plan contract
+ *
+ * Live gates run when DOGFOOD_BAND_B_BASE_URL or --live inputs are provided:
  *   - bottom padding vs fixed bottom nav height
+ *   - PWA manifest icon and browser-presence smoke checks
  */
 
-import { chromium, type Page } from 'playwright';
+import { chromium, type Browser, type Page } from 'playwright';
 import { createHash } from 'crypto';
 import { execFileSync, execSync } from 'child_process';
 import * as fs from 'fs';
@@ -24,6 +30,36 @@ interface TokenContract { canonical_doc?: string; surfaces?: TokenSurface[]; }
 interface IdentitySurface { surface: string; path: string; expectedMd5: string; sourceId?: string; }
 interface IdentityContract { surfaces?: IdentitySurface[]; }
 interface LedgerEntry { id: string; source_path: string; received_at: string; owner: string; status: string; tracking_id?: string; notes?: string; }
+type SmokeMode = 'browser-flow' | 'browser-presence' | 'pwa-manifest';
+interface BotIconEntry {
+  id: string;
+  kind: 'telegram_bot' | 'pwa_app';
+  display_name: string;
+  username?: string;
+  app_url?: string;
+  expected_asset_label: string;
+  expected_sha256: string;
+  local_asset_path?: string;
+  token_env?: string;
+  live_verification?: { type: 'telegram_avatar' | 'pwa_manifest'; required_env?: string[]; manifest_url?: string; };
+}
+interface RealDeviceSmoke {
+  id: string;
+  surface: string;
+  owner_account?: string;
+  mode: SmokeMode;
+  url?: string;
+  manifest_url?: string;
+  required_env?: string[];
+  assertions: string[];
+  selectors?: Record<string, string>;
+}
+interface BandBIdentityManifest {
+  version: number;
+  updated_at: string;
+  bot_icons: BotIconEntry[];
+  real_device_smokes: RealDeviceSmoke[];
+}
 interface VoicePersonaContract {
   required_personas?: string[];
   personas?: VoicePersona[];
@@ -47,8 +83,12 @@ const RUN_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
 const OUTPUT_DIR = process.env.DOGFOOD_OUTPUT_DIR
   ? path.resolve(process.env.DOGFOOD_OUTPUT_DIR)
   : path.resolve(REPO_ROOT, 'orgs/revops-global/agents/hub-dogfood/output/band-b', RUN_STAMP);
+const IDENTITY_MANIFEST_PATH = process.env.DOGFOOD_BAND_B_IDENTITY_MANIFEST
+  ? path.resolve(process.env.DOGFOOD_BAND_B_IDENTITY_MANIFEST)
+  : path.resolve(REPO_ROOT, 'scripts/dogfood-band-b-identities.json');
 const args = new Set(process.argv.slice(2));
 const staticOnly = args.has('--static');
+const liveIdentityChecks = args.has('--live') && !staticOnly;
 const results: CheckResult[] = [];
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -89,6 +129,27 @@ function globToRegExp(pattern: string): RegExp {
 
 function md5File(filePath: string): string {
   return createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function sha256File(filePath: string): string {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function sha256Bytes(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function isSha256(value: string): boolean {
+  return /^[a-f0-9]{64}$/i.test(value);
+}
+
+function isInsideRepo(filePath: string): boolean {
+  const rel = path.relative(REPO_ROOT, path.resolve(filePath));
+  return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function missingEnv(names: string[] | undefined): string[] {
+  return (names ?? []).filter(name => !process.env[name]);
 }
 
 function runDesignTokenCompliance(): void {
@@ -222,6 +283,259 @@ function runDesignImageLedger(): void {
     check_label: 'Design system image request tracking ledger',
     evidence: `${ledger.entries?.length ?? 0} entries checked; malformed=${malformed.length}; stale-unassigned=${stale.length}${malformed.length ? ` (${malformed.join(', ')})` : ''}${stale.length ? ` (${stale.join(', ')})` : ''}`,
   });
+}
+
+function validateUniqueIds(kind: string, ids: string[]): string[] {
+  const seen = new Set<string>();
+  const failures: string[] = [];
+  for (const id of ids) {
+    if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(id)) failures.push(`${kind} id ${id} is not slug-safe`);
+    if (seen.has(id)) failures.push(`${kind} id ${id} is duplicated`);
+    seen.add(id);
+  }
+  return failures;
+}
+
+function runBotIconManifestContract(): void {
+  const manifest = readJson<BandBIdentityManifest | null>(IDENTITY_MANIFEST_PATH, null);
+  if (!manifest) {
+    record({
+      id: 'b7-bot-icon-manifest',
+      surface: 'dogfood-band-b',
+      route: 'bot-icon-manifest',
+      status: 'FAIL',
+      severity: 'P0',
+      check_label: 'B7 bot-icon manifest single source of truth',
+      evidence: `Missing identity manifest at ${IDENTITY_MANIFEST_PATH}`,
+    });
+    return;
+  }
+
+  const idFailures = validateUniqueIds('bot icon', manifest.bot_icons.map(entry => entry.id));
+  for (const entry of manifest.bot_icons) {
+    const failures = idFailures.filter(failure => failure.includes(entry.id));
+    const notes: string[] = [];
+    if (!entry.display_name) failures.push('missing display_name');
+    if (!entry.expected_asset_label) failures.push('missing expected_asset_label');
+    if (!entry.expected_sha256) failures.push('missing expected_sha256');
+    if (entry.expected_sha256 === 'pending-live-verification') {
+      notes.push('sha pending live capture');
+    } else if (!isSha256(entry.expected_sha256)) {
+      failures.push(`expected_sha256 must be 64 hex chars or pending-live-verification, got ${entry.expected_sha256}`);
+    }
+    if (entry.kind === 'telegram_bot' && !entry.token_env) failures.push('telegram bot entries require token_env');
+    if (entry.kind === 'pwa_app' && !entry.app_url) failures.push('pwa app entries require app_url');
+    if (!entry.live_verification?.type) failures.push('missing live_verification.type');
+    if (entry.local_asset_path) {
+      const filePath = path.resolve(REPO_ROOT, entry.local_asset_path);
+      if (!isInsideRepo(filePath) || !fs.existsSync(filePath)) {
+        failures.push(`local asset missing or outside repo: ${entry.local_asset_path}`);
+      } else {
+        const sha = sha256File(filePath);
+        notes.push(`local sha256=${sha}`);
+        if (isSha256(entry.expected_sha256) && sha !== entry.expected_sha256) failures.push(`local asset sha mismatch: expected ${entry.expected_sha256}, got ${sha}`);
+      }
+    }
+
+    record({
+      id: `b7-${entry.id}`,
+      surface: 'dogfood-band-b',
+      route: `bot-icon-manifest/${entry.id}`,
+      status: failures.length ? 'FAIL' : 'PASS',
+      severity: 'P0',
+      check_label: 'B7 bot-icon manifest single source of truth',
+      evidence: failures.length
+        ? failures.join('; ')
+        : `${entry.kind} ${entry.display_name} pinned to ${entry.expected_asset_label}; ${notes.join('; ') || 'sha contract present'}`,
+    });
+  }
+}
+
+function runRealDeviceSmokePlanContract(): void {
+  const manifest = readJson<BandBIdentityManifest | null>(IDENTITY_MANIFEST_PATH, null);
+  if (!manifest) return;
+  const idFailures = validateUniqueIds('real device smoke', manifest.real_device_smokes.map(entry => entry.id));
+  for (const smoke of manifest.real_device_smokes) {
+    const failures = idFailures.filter(failure => failure.includes(smoke.id));
+    if (!smoke.surface) failures.push('missing surface');
+    if (!smoke.mode) failures.push('missing mode');
+    if (!Array.isArray(smoke.assertions) || smoke.assertions.length === 0) failures.push('missing assertions');
+    if (smoke.mode === 'pwa-manifest' && !smoke.manifest_url) failures.push('pwa-manifest smoke requires manifest_url');
+    if (smoke.mode !== 'pwa-manifest' && !smoke.url) failures.push(`${smoke.mode} smoke requires url`);
+
+    const isDadAccount = smoke.id === 'mandoland-dad-account';
+    if (isDadAccount) {
+      for (const key of ['login_email', 'login_password', 'login_submit', 'success_text']) {
+        if (!smoke.selectors?.[key]) failures.push(`M-Framework 1 requires selector ${key}`);
+      }
+      for (const assertion of ['login persists', 'custom chord', 'request with photo', 'tuner reference pitch']) {
+        if (!smoke.assertions.some(item => item.toLowerCase().includes(assertion))) failures.push(`M-Framework 1 missing assertion containing "${assertion}"`);
+      }
+    }
+
+    record({
+      id: `${isDadAccount ? 'm-framework-1' : 'b8'}-${smoke.id}`,
+      surface: smoke.surface,
+      route: smoke.url ? new URL(smoke.url).pathname || '/' : `manifest/${smoke.id}`,
+      status: failures.length ? 'FAIL' : 'PASS',
+      severity: 'P0',
+      check_label: isDadAccount ? 'M-Framework 1 dad-account smoke plan' : 'B8 real-device smoke gate plan',
+      evidence: failures.length
+        ? failures.join('; ')
+        : `${smoke.mode} plan covers ${smoke.assertions.length} assertions; required env=${(smoke.required_env ?? []).join(', ') || 'none'}`,
+    });
+  }
+}
+
+async function runIdentityManifestLiveChecks(): Promise<void> {
+  if (!liveIdentityChecks) return;
+  const manifest = readJson<BandBIdentityManifest | null>(IDENTITY_MANIFEST_PATH, null);
+  if (!manifest) return;
+  let browser: Browser | null = null;
+  try {
+    for (const smoke of manifest.real_device_smokes) {
+      if (smoke.mode === 'pwa-manifest' && smoke.manifest_url) {
+        await runPwaManifestSmoke(smoke, manifest.bot_icons);
+        continue;
+      }
+      browser ??= await chromium.launch({ headless: true });
+      if (smoke.id === 'mandoland-dad-account') await runDadAccountSmoke(browser, smoke);
+      else await runBrowserPresenceSmoke(browser, smoke);
+    }
+  } finally {
+    await browser?.close();
+  }
+}
+
+async function runPwaManifestSmoke(smoke: RealDeviceSmoke, botIcons: BotIconEntry[]): Promise<void> {
+  if (!smoke.manifest_url) return;
+  try {
+    const manifestUrl = new URL(smoke.manifest_url);
+    const response = await fetch(smoke.manifest_url, { redirect: 'follow' });
+    if (!response.ok) throw new Error(`manifest returned HTTP ${response.status}`);
+    const manifest = await response.json() as { icons?: Array<{ src?: string }> };
+    const icons = (manifest.icons ?? []).filter(icon => icon.src);
+    if (icons.length === 0) throw new Error('manifest has no icons');
+    const iconUrl = new URL(icons[0].src ?? '', manifestUrl).toString();
+    const iconResponse = await fetch(iconUrl, { redirect: 'follow' });
+    if (!iconResponse.ok) throw new Error(`icon returned HTTP ${iconResponse.status}`);
+    const observedSha = sha256Bytes(Buffer.from(await iconResponse.arrayBuffer()));
+    const expected = botIcons.find(entry => entry.live_verification?.manifest_url === smoke.manifest_url)?.expected_sha256;
+    const status = expected && isSha256(expected) && expected !== observedSha ? 'FAIL' : 'PASS';
+    record({
+      id: `b8-live-${smoke.id}`,
+      surface: smoke.surface,
+      route: `manifest/${smoke.id}`,
+      status,
+      severity: 'P0',
+      check_label: 'B8 live PWA manifest icon smoke',
+      evidence: `manifest icons=${icons.length}; first_icon=${iconUrl}; sha256=${observedSha}${expected ? `; expected=${expected}` : ''}`,
+    });
+  } catch (err) {
+    record({
+      id: `b8-live-${smoke.id}`,
+      surface: smoke.surface,
+      route: `manifest/${smoke.id}`,
+      status: 'FAIL',
+      severity: 'P0',
+      check_label: 'B8 live PWA manifest icon smoke',
+      evidence: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function visibleAny(page: Page, selectorList: string): Promise<number> {
+  let visible = 0;
+  for (const selector of selectorList.split(',').map(item => item.trim()).filter(Boolean)) {
+    const count = await page.locator(selector).count().catch(() => 0);
+    if (count > 0) visible += count;
+  }
+  return visible;
+}
+
+async function runBrowserPresenceSmoke(browser: Browser, smoke: RealDeviceSmoke): Promise<void> {
+  if (!smoke.url) return;
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await page.goto(smoke.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    const selectorText = smoke.selectors?.success_text ?? 'main, body';
+    const count = await visibleAny(page, selectorText);
+    const screenshot = path.join(OUTPUT_DIR, `b8-${smoke.id}.png`);
+    await page.screenshot({ path: screenshot, fullPage: false });
+    record({
+      id: `b8-live-${smoke.id}`,
+      surface: smoke.surface,
+      route: new URL(smoke.url).pathname || '/',
+      status: count > 0 ? 'PASS' : 'FAIL',
+      severity: 'P0',
+      check_label: 'B8 live browser presence smoke',
+      evidence: `selector matches=${count}; selector=${selectorText}`,
+      screenshot,
+    });
+  } catch (err) {
+    record({
+      id: `b8-live-${smoke.id}`,
+      surface: smoke.surface,
+      route: new URL(smoke.url).pathname || '/',
+      status: 'FAIL',
+      severity: 'P0',
+      check_label: 'B8 live browser presence smoke',
+      evidence: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    await page.close();
+  }
+}
+
+async function runDadAccountSmoke(browser: Browser, smoke: RealDeviceSmoke): Promise<void> {
+  const missing = missingEnv(smoke.required_env);
+  if (missing.length > 0) {
+    record({
+      id: 'm-framework-1-live-mandoland-dad-account',
+      surface: smoke.surface,
+      route: smoke.url ? new URL(smoke.url).pathname || '/' : 'dad-account',
+      status: 'SKIP',
+      severity: 'P0',
+      check_label: 'M-Framework 1 live dad-account smoke',
+      evidence: `Missing env for dad-account smoke: ${missing.join(', ')}`,
+    });
+    return;
+  }
+  if (!smoke.url || !smoke.selectors) return;
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await page.goto(smoke.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.locator(smoke.selectors.login_email).fill(process.env.MANDOLAND_DAD_EMAIL ?? '');
+    await page.locator(smoke.selectors.login_password).fill(process.env.MANDOLAND_DAD_PASSWORD ?? '');
+    await page.locator(smoke.selectors.login_submit).click();
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+    const successCount = await visibleAny(page, smoke.selectors.success_text);
+    const screenshot = path.join(OUTPUT_DIR, 'm-framework-1-mandoland-dad-account.png');
+    await page.screenshot({ path: screenshot, fullPage: false });
+    record({
+      id: 'm-framework-1-live-mandoland-dad-account',
+      surface: smoke.surface,
+      route: new URL(smoke.url).pathname || '/',
+      status: successCount > 0 ? 'PASS' : 'FAIL',
+      severity: 'P0',
+      check_label: 'M-Framework 1 live dad-account smoke',
+      evidence: `login success selector matches=${successCount}; downstream assertions ready: ${smoke.assertions.join('; ')}`,
+      screenshot,
+    });
+  } catch (err) {
+    record({
+      id: 'm-framework-1-live-mandoland-dad-account',
+      surface: smoke.surface,
+      route: new URL(smoke.url).pathname || '/',
+      status: 'FAIL',
+      severity: 'P0',
+      check_label: 'M-Framework 1 live dad-account smoke',
+      evidence: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    await page.close();
+  }
 }
 
 function runVoicePersonaContract(): void {
@@ -394,7 +708,10 @@ async function main(): Promise<void> {
   runOrcaIdentityContract();
   runVignetteCopyCritic();
   runDesignImageLedger();
+  runBotIconManifestContract();
+  runRealDeviceSmokePlanContract();
   runVoicePersonaContract();
+  await runIdentityManifestLiveChecks();
   await runBottomPaddingVsNav();
   writeReport();
   const failed = results.filter(r => r.status === 'FAIL');

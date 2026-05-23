@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "updated_at": "2026-05-23",
+  "bot_icons": [
+    {
+      "id": "orca-voice-bot",
+      "kind": "telegram_bot",
+      "display_name": "Orca Voice",
+      "username": "orca_voice_bot",
+      "token_env": "ORCA_TELEGRAM_BOT_TOKEN",
+      "expected_asset_label": "baby-pink Orca whale",
+      "expected_sha256": "pending-live-verification",
+      "live_verification": {
+        "type": "telegram_avatar",
+        "required_env": ["ORCA_TELEGRAM_BOT_TOKEN"]
+      }
+    },
+    {
+      "id": "orca-voice-pwa",
+      "kind": "pwa_app",
+      "display_name": "Orca Voice PWA",
+      "app_url": "https://orca.revopsglobal.com",
+      "expected_asset_label": "baby-pink Orca whale",
+      "expected_sha256": "pending-live-verification",
+      "live_verification": {
+        "type": "pwa_manifest",
+        "manifest_url": "https://orca.revopsglobal.com/manifest.json"
+      }
+    },
+    {
+      "id": "mandoland-bot",
+      "kind": "telegram_bot",
+      "display_name": "Mandoland",
+      "username": "mandoland_bot",
+      "token_env": "MANDOLAND_TELEGRAM_BOT_TOKEN",
+      "expected_asset_label": "Mandoland app icon",
+      "expected_sha256": "pending-live-verification",
+      "live_verification": {
+        "type": "telegram_avatar",
+        "required_env": ["MANDOLAND_TELEGRAM_BOT_TOKEN"]
+      }
+    },
+    {
+      "id": "mandoland-two-bot",
+      "kind": "telegram_bot",
+      "display_name": "Mandoland 2",
+      "username": "mandoland_two_bot",
+      "token_env": "MANDOLAND_TWO_TELEGRAM_BOT_TOKEN",
+      "expected_asset_label": "Mandoland 2 app icon",
+      "expected_sha256": "pending-live-verification",
+      "live_verification": {
+        "type": "telegram_avatar",
+        "required_env": ["MANDOLAND_TWO_TELEGRAM_BOT_TOKEN"]
+      }
+    }
+  ],
+  "real_device_smokes": [
+    {
+      "id": "mandoland-dad-account",
+      "surface": "mandoland",
+      "app": "Mandoland 2",
+      "url": "https://mandoland.revopsglobal.com",
+      "mode": "browser-flow",
+      "required_env": ["MANDOLAND_DAD_EMAIL", "MANDOLAND_DAD_PASSWORD"],
+      "assertions": [
+        "dad login persists across page transitions",
+        "custom chord entered by dad is visible after refresh",
+        "request with photo lands in admin panel",
+        "tuner reference pitch is visible and stable"
+      ],
+      "selectors": {
+        "login_email": "input[type=\"email\"]",
+        "login_password": "input[type=\"password\"]",
+        "login_submit": "button[type=\"submit\"]",
+        "success_text": "text=/request|chord|library/i"
+      }
+    },
+    {
+      "id": "orca-pwa-icon",
+      "surface": "orca",
+      "app": "Orca Voice PWA",
+      "url": "https://orca.revopsglobal.com",
+      "mode": "pwa-manifest",
+      "manifest_url": "https://orca.revopsglobal.com/manifest.json",
+      "assertions": [
+        "manifest is reachable after deploy",
+        "each icon URL resolves non-empty",
+        "icon SHA can be compared to B7 manifest once expected SHA is captured"
+      ]
+    },
+    {
+      "id": "orca-voice-audio",
+      "surface": "orca",
+      "app": "Orca Voice",
+      "url": "https://orca.revopsglobal.com",
+      "mode": "browser-presence",
+      "assertions": [
+        "voice UI loads",
+        "audio or voice controls are present"
+      ],
+      "selectors": {
+        "success_text": "audio, button[aria-label*=\"voice\" i], [data-testid*=\"voice\" i]"
+      }
+    },
+    {
+      "id": "estate-home-vignette",
+      "surface": "estate",
+      "app": "Estate App",
+      "url": "https://ob1-parents.vercel.app",
+      "mode": "browser-presence",
+      "assertions": [
+        "home surface loads",
+        "vignette media or insight card is present"
+      ],
+      "selectors": {
+        "success_text": "video, img, text=/vignette|insight|estate/i"
+      }
+    }
+  ]
+}
