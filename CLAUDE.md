@@ -2,8 +2,13 @@
 
 ## Development Setup
 
+> **READ-ONLY UPSTREAM — `grandamenium/cortextos` is the public framework mirror.**
+> Never push to it. Never open PRs against it. Pull upstream changes into your org fork
+> (`RevOps-Global-GIT/cortextos`) via rebase, then propose upstream PRs only if Greg
+> explicitly approves. See `[feedback_git_push_target]` in MEMORY.md.
+
 ```bash
-git clone https://github.com/grandamenium/cortextos.git
+git clone https://github.com/grandamenium/cortextos.git  # read-only reference clone
 cd cortextos
 npm install
 npm run build
