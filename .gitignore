@@ -54,3 +54,9 @@ BRAINDUMP*.md
 AGENTS.md
 dashboard/screenshots/
 dashboard/test-*.py
+# Surface-poll runtime state (added 2026-05-22 pre-rebase)
+scripts/.bus-to-chat-bridge/
+scripts/.surface-poll-state.json
+scripts/.surface-poll-relayed.jsonl
+scripts/.surface-poll.log
+scripts/.codex-health-restart.log
