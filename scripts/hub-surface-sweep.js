@@ -55,6 +55,9 @@ const KNOWN_QA_ROUTES = new Set([
   '/skill-open-brain-to-kb', '/skill-rev-ops-global-brand', '/skill-subagent-driven-development',
   '/skill-database-hygiene', '/skill-salesforce-audit', '/skill-salesforce-campaigns',
   '/skill-salesforce-cli', '/skill-sf-integration-arch', '/skill-sf-pipeline-snapshot',
+  '/skill-buying-group', '/skill-eloqua-audit', '/skill-flow-builder',
+  '/skill-hub-spot-audit', '/skill-lead-scoring', '/skill-marketo-audit',
+  '/skill-martech-audit', '/skill-renewal-playbooks',
 ]);
 
 // Routes to skip — auth/redirects/portals/guides not worth QA-scanning
