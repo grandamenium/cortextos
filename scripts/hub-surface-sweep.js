@@ -53,6 +53,8 @@ const KNOWN_QA_ROUTES = new Set([
   '/linked-in-presence', '/poc/linked-in-presence-poc', '/review-aa-frd', '/slack-link',
   '/skill-claude-code-best-practices', '/skill-dispatching-agents', '/skill-library',
   '/skill-open-brain-to-kb', '/skill-rev-ops-global-brand', '/skill-subagent-driven-development',
+  '/skill-database-hygiene', '/skill-salesforce-audit', '/skill-salesforce-campaigns',
+  '/skill-salesforce-cli', '/skill-sf-integration-arch', '/skill-sf-pipeline-snapshot',
 ]);
 
 // Routes to skip — auth/redirects/portals/guides not worth QA-scanning
