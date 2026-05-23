@@ -26,6 +26,10 @@ const OUTPUT_DIR = path.join(REPO_ROOT, 'orgs/revops-global/agents/dev/output');
 const TODAY      = new Date().toISOString().slice(0, 10);
 const REPORT     = path.join(OUTPUT_DIR, `${TODAY}-surface-sweep.md`);
 
+const HISTORY_FILE = path.join(OUTPUT_DIR, 'surface-sweep-history.json');
+const ESCALATION_THRESHOLD  = 2;                      // flags in window → escalate
+const ESCALATION_WINDOW_MS  = 7 * 24 * 3600 * 1000;  // 7-day rolling window
+
 const SCAN_REPOS = [
   'RevOps-Global-GIT/rgos',
   'RevOps-Global-GIT/ob1-parents',
@@ -346,9 +350,59 @@ function scanZombieCrons() {
 }
 
 // ---------------------------------------------------------------------------
+// Category C: Repeat-Regression Escalator (B6)
+// Tracks surfaces flagged across sweeps; auto-escalates at ≥2 flags in 7d.
+// ---------------------------------------------------------------------------
+function loadHistory() {
+  try { return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')); }
+  catch { return { flags: [] }; }
+}
+
+function runRepeatRegressionEscalator(webResult, cronResult) {
+  const history = loadHistory();
+  const cutoff  = Date.now() - ESCALATION_WINDOW_MS;
+
+  // Prune stale entries outside the 7d window
+  history.flags = history.flags.filter(f => new Date(f.date + 'T00:00:00Z').getTime() >= cutoff);
+
+  // Build today's flag set from current results
+  const todayFlags = [];
+  for (const { route, repo } of webResult.blindSpots) {
+    todayFlags.push({ key: `route:${route}`, type: 'blind-spot', date: TODAY, surface: `${route} (${repo.split('/')[1]})` });
+  }
+  for (const z of cronResult.zombies) {
+    todayFlags.push({ key: `cron:${z.agent}/${z.name}`, type: 'zombie', date: TODAY, surface: `${z.agent}/${z.name}` });
+  }
+
+  // Append today's flags (dedup: one entry per key per day)
+  for (const flag of todayFlags) {
+    if (!history.flags.some(f => f.key === flag.key && f.date === TODAY)) {
+      history.flags.push(flag);
+    }
+  }
+
+  // Persist updated history
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+
+  // Find surfaces at or above threshold
+  const byKey = {};
+  for (const f of history.flags) {
+    if (!byKey[f.key]) byKey[f.key] = { count: 0, surface: f.surface, type: f.type, dates: [] };
+    byKey[f.key].count++;
+    byKey[f.key].dates.push(f.date);
+  }
+
+  return Object.entries(byKey)
+    .filter(([, v]) => v.count >= ESCALATION_THRESHOLD)
+    .map(([key, v]) => ({ key, ...v }))
+    .sort((a, b) => b.count - a.count);
+}
+
+// ---------------------------------------------------------------------------
 // Report
 // ---------------------------------------------------------------------------
-function buildReport(webResult, cronResult) {
+function buildReport(webResult, cronResult, escalations) {
   const lines = [];
   const ts = new Date().toISOString();
   lines.push(`# Hub Surface Sweep — ${TODAY}`);
@@ -418,14 +472,32 @@ function buildReport(webResult, cronResult) {
     lines.push('');
   }
 
+  // ── Category C: Repeat Regressions ──
+  if (escalations.length > 0) {
+    lines.push('## Category C: Repeat Regressions — MERGE-BLOCKER');
+    lines.push('');
+    lines.push(`> ${escalations.length} surface(s) flagged ≥${ESCALATION_THRESHOLD}× in the last 7 days. Auto-escalated to merge-blocker severity.`);
+    lines.push('');
+    lines.push('| Surface | Type | Flags (7d) | Dates |');
+    lines.push('|---------|------|-----------|-------|');
+    for (const e of escalations) {
+      lines.push(`| \`${e.surface}\` | ${e.type} | ${e.count} | ${e.dates.join(', ')} |`);
+    }
+    lines.push('');
+  }
+
   // Summary
   const issueCount = webResult.blindSpots.length + cronResult.zombies.length;
   lines.push('## Summary');
   lines.push('');
-  if (issueCount === 0) {
+  if (issueCount === 0 && escalations.length === 0) {
     lines.push('No issues found. All surfaces covered, all crons healthy.');
   } else {
-    lines.push(`**${issueCount} issue(s) found:** ${webResult.blindSpots.length} uncovered route(s), ${cronResult.zombies.length} zombie cron(s).`);
+    const parts = [];
+    if (webResult.blindSpots.length > 0) parts.push(`${webResult.blindSpots.length} uncovered route(s)`);
+    if (cronResult.zombies.length > 0)   parts.push(`${cronResult.zombies.length} zombie cron(s)`);
+    if (escalations.length > 0)          parts.push(`${escalations.length} repeat-regression MERGE-BLOCKER(s)`);
+    lines.push(`**${parts.join(', ')}.**`);
   }
   lines.push('');
 
@@ -446,17 +518,32 @@ function buildReport(webResult, cronResult) {
   const cronResult = scanZombieCrons();
   console.log(`[surface-sweep] ${cronResult.zombies.length} zombies, ${cronResult.healthy.length} healthy, ${cronResult.noData.length} no-data`);
 
-  const report = buildReport(webResult, cronResult);
+  console.log('[surface-sweep] Running repeat-regression escalator...');
+  const escalations = runRepeatRegressionEscalator(webResult, cronResult);
+  console.log(`[surface-sweep] ${escalations.length} surface(s) escalated to merge-blocker`);
+
+  const report = buildReport(webResult, cronResult, escalations);
   fs.writeFileSync(REPORT, report, 'utf8');
   console.log(`[surface-sweep] Report written: ${REPORT}`);
 
   // Log event
-  run(`cortextos bus log-event action surface_sweep info --meta '{"blind_spots":${webResult.blindSpots.length},"zombies":${cronResult.zombies.length}}'`, { silent: true });
+  run(`cortextos bus log-event action surface_sweep info --meta '{"blind_spots":${webResult.blindSpots.length},"zombies":${cronResult.zombies.length},"escalations":${escalations.length}}'`, { silent: true });
+
+  // Spawn RGOS tasks for newly-escalated surfaces
+  for (const e of escalations) {
+    const title = `[MERGE-BLOCKER] Repeat regression: ${e.surface} (${e.count}x in 7d)`;
+    const desc  = `Surface flagged ${e.count} times in the last 7 days by hub-surface-sweep. Type: ${e.type}. Dates: ${e.dates.join(', ')}. Auto-escalated by B6 repeat-regression escalator. Fix and verify before next merge to affected surface.`;
+    run(`cortextos bus create-task ${JSON.stringify(title)} --desc ${JSON.stringify(desc)} --priority high 2>/dev/null`, { silent: true });
+  }
 
   // Notify orchestrator if issues found
-  const issueCount = webResult.blindSpots.length + cronResult.zombies.length;
+  const issueCount = webResult.blindSpots.length + cronResult.zombies.length + escalations.length;
   if (issueCount > 0) {
-    const summary = `Surface sweep: ${webResult.blindSpots.length} uncovered route(s), ${cronResult.zombies.length} zombie cron(s). Report: ${REPORT}`;
+    const parts = [];
+    if (webResult.blindSpots.length > 0) parts.push(`${webResult.blindSpots.length} blind spot(s)`);
+    if (cronResult.zombies.length > 0)   parts.push(`${cronResult.zombies.length} zombie cron(s)`);
+    if (escalations.length > 0)          parts.push(`${escalations.length} MERGE-BLOCKER repeat regression(s)`);
+    const summary = `Surface sweep: ${parts.join(', ')}. Report: ${REPORT}`;
     run(`cortextos bus send-message orchestrator normal '${summary.replace(/'/g, "\\'")}' `, { silent: true });
   }
 
