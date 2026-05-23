@@ -2914,7 +2914,7 @@ busCommand
 
     // Task counts
     const allTasks = listTasks(paths, {});
-    const myTasks = listTasks(paths, { assignedTo: env.agentName });
+    const myTasks = listTasks(paths, { agent: env.agentName });
     const myPending = myTasks.filter(t => t.status === 'pending').length;
     const myInProgress = myTasks.filter(t => t.status === 'in_progress').length;
 

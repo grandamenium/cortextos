@@ -137,7 +137,7 @@ export function flushQueue(stateDir: string, defaultChatId: string): FlushResult
 
     // Build batched message
     const maxSeverity = events.reduce((max, ev) => {
-      const order = { info: 0, warning: 1, urgent: 2, critical: 3 };
+      const order: Record<string, number> = { info: 0, warning: 1, urgent: 2, critical: 3 };
       return (order[ev.severity] || 0) > (order[max] || 0) ? ev.severity : max;
     }, 'info' as string);
 
