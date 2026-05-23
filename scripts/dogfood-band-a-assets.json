@@ -1,0 +1,28 @@
+{
+  "assets": [
+    {
+      "surface": "agentops",
+      "path": "dashboard/src/app/icon.svg",
+      "expectedMd5": "74a12adf502ee0de52c68d67327b41e1",
+      "sourceId": "dashboard-app-icon"
+    },
+    {
+      "surface": "agentops",
+      "path": "dashboard/src/app/favicon.ico",
+      "expectedMd5": "c30c7d42707a47a3f4591831641e50dc",
+      "sourceId": "dashboard-app-icon"
+    },
+    {
+      "surface": "agentops",
+      "path": "dashboard/public/next.svg",
+      "expectedMd5": "8e061864f388b47f33a1c3780831193e",
+      "sourceId": "dashboard-public-static"
+    },
+    {
+      "surface": "agentops",
+      "path": "dashboard/public/vercel.svg",
+      "expectedMd5": "c0af2f507b369b085b35ef4bbe3bcf1e",
+      "sourceId": "dashboard-public-static"
+    }
+  ]
+}

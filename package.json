@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "test:playwright": "npx playwright test",
-    "test:e2e:hooks": "vitest run tests/e2e/hooks"
+    "test:e2e:hooks": "vitest run tests/e2e/hooks",
+    "dogfood:band-a": "tsx scripts/dogfood-band-a.ts"
   },
   "keywords": [
     "claude",
