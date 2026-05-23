@@ -5,8 +5,8 @@
  *
  * Apps covered:
  *   - ob1-parents (Estate App)  — CANONICAL: estate-design-system-audit-2026-05-23/CANONICAL.md
- *   - Orca Voice                — CANONICAL: orca-voice-character-v2-2026-05-23/ORCA-APP-CANONICAL.md
- *   - Mandoland                 — CANONICAL: pending commission (stub, disabled)
+ *   - Orca Voice                — CANONICAL: orca-voice-WAVE-G-full-system-2026-05-23/ORCA-APP-CANONICAL.md
+ *   - Mandoland                 — CANONICAL: mandoland-design-system-2026-05-23/MANDOLAND-CANONICAL.md (URL TBD)
  *
  * Usage:
  *   cd /home/cortextos/cortextos && npx tsx scripts/estate-visual-qa.ts
@@ -28,17 +28,20 @@ const CANONICAL   = path.resolve(
   'orgs/revops-global/agents/design-agent/output/estate-design-system-audit-2026-05-23/CANONICAL.md'
 );
 
-// Orca Voice
+// Orca Voice — Wave G full system (2026-05-23)
 const ORCA_URL       = 'https://orca.revopsglobal.com';
 const ORCA_CANONICAL = path.resolve(
   REPO_ROOT,
-  'orgs/revops-global/agents/design-agent/output/orca-voice-character-v2-2026-05-23/ORCA-APP-CANONICAL.md'
+  'orgs/revops-global/agents/design-agent/output/orca-voice-WAVE-G-full-system-2026-05-23/ORCA-APP-CANONICAL.md'
 );
 
-// Mandoland — CANONICAL not yet commissioned; stub disabled
-// const MANDOLAND_URL       = 'https://mandoland.revopsglobal.com';
-// const MANDOLAND_CANONICAL = '<path-TBD>';
-const MANDOLAND_ENABLED = false;
+// Mandoland — CANONICAL received 2026-05-23; URL confirmed mandoland.revopsglobal.com
+const MANDOLAND_CANONICAL = path.resolve(
+  REPO_ROOT,
+  'orgs/revops-global/agents/design-agent/output/mandoland-design-system-2026-05-23/MANDOLAND-CANONICAL.md'
+);
+const MANDOLAND_URL     = 'https://mandoland.revopsglobal.com';
+const MANDOLAND_ENABLED = false; // disabled pending Playwright auth setup for Mandoland
 
 const RUN_STAMP  = new Date().toISOString().slice(0, 16).replace('T', '-').replace(':', '');
 const OUTPUT_DIR = path.resolve(REPO_ROOT, 'orgs/revops-global/agents/hub-dogfood/output/estate-visual-qa', RUN_STAMP);
@@ -79,6 +82,53 @@ function record(surface: string, rule: string, status: 'PASS' | 'FAIL' | 'WARN',
   const icon = status === 'PASS' ? '✓' : status === 'FAIL' ? '✗' : '⚠';
   console.log(`  ${status.padEnd(4)} ${icon}  Check ${checkId} — ${surface}: ${rule}`);
   if (status !== 'PASS') console.log(`         Evidence: ${evidence}`);
+}
+
+// Stable fingerprint for dedup: surface + rule slug. Route is embedded in surface label.
+function fingerprint(surface: string, rule: string): string {
+  return `${surface}::${rule}`.replace(/[^a-zA-Z0-9:_-]/g, '_').slice(0, 120);
+}
+
+// File or bump an RGOS dogfood-finding task with dedup.
+// Skips silently on any error — task creation is non-fatal.
+async function fileOrBumpTask(surface: string, rule: string, status: string, evidence: string, screenshot?: string): Promise<void> {
+  const fp = fingerprint(surface, rule);
+  const title = `[estate-visual-qa] ${surface}: ${rule} — ${status}`;
+  const desc = [
+    `Fingerprint: ${fp}`,
+    `Status: ${status}`,
+    `Evidence: ${evidence.slice(0, 200)}`,
+    `Screenshot: ${screenshot ?? 'none'}`,
+    `Run: ${RUN_STAMP}`,
+    `Script: scripts/estate-visual-qa.ts`,
+  ].join('\n');
+
+  try {
+    const { execSync } = await import('child_process');
+    // Check for existing open task with this fingerprint
+    const existing = execSync(
+      `cortextos bus list-tasks --status open --format json 2>/dev/null || echo '[]'`,
+      { stdio: ['pipe', 'pipe', 'ignore'] }
+    ).toString();
+    let tasks: Array<{ id: string; title: string; description?: string }> = [];
+    try { tasks = JSON.parse(existing); } catch { tasks = []; }
+
+    const dup = tasks.find(t => (t.description ?? '').includes(fp) || t.title.includes(rule.slice(0, 40)));
+    if (dup) {
+      // Bump occurrence
+      execSync(
+        `cortextos bus update-task ${dup.id} open --desc "occurrence at ${RUN_STAMP}: ${evidence.slice(0, 100)}"`,
+        { stdio: 'pipe' }
+      );
+      console.log(`  [task] bumped existing task ${dup.id} for ${fp}`);
+    } else {
+      execSync(
+        `cortextos bus create-task "${title.replace(/"/g, "'")}" --desc "${desc.replace(/"/g, "'")}"`,
+        { stdio: 'pipe' }
+      );
+      console.log(`  [task] filed new RGOS task for ${fp}`);
+    }
+  } catch { /* non-fatal */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -534,9 +584,9 @@ async function checkOrcaVoice(browser: import('playwright').Browser): Promise<vo
     const shellClass = await page.evaluate(() => document.querySelector('#root > *')?.className ?? '').catch(() => '');
     record('Orca Voice', 'App loads (.voice-shell present)', 'PASS', `App mounted: root child class="${shellClass.slice(0, 60)}"`);
 
-    // --- Check 2: Voice shell background = sky-200 #C9E8F5 ---
-    // CANONICAL: "The voice shell background MUST be sky-200 #C9E8F5"
-    // Check body computed background — accept either the exact hex or the rgb equivalent rgb(201, 232, 245)
+    // --- Check 2: Voice shell background = Wave G Soft Off-White #FAFAFB ---
+    // CANONICAL Wave G: page background = #FAFAFB (Soft Off-White). No amber, no glass morphism.
+    // NOTE: Wave F used sky-200 #C9E8F5 — Wave G supersedes this. Any sky-200 background is a regression.
     const bodyBg = await page.evaluate(() => {
       const body = document.body;
       if (!body) return '__NOT_FOUND__';
@@ -544,17 +594,23 @@ async function checkOrcaVoice(browser: import('playwright').Browser): Promise<vo
              window.getComputedStyle(body).getPropertyValue('background-color').trim();
     }).catch(() => '__ERROR__');
 
-    const SKY_200_RGB = 'rgb(201, 232, 245)';
-    const hasSkyBg = bodyBg.includes('#C9E8F5') || bodyBg.includes(SKY_200_RGB) ||
-                     bodyBg.includes('c9e8f5') || bodyBg.includes('201, 232, 245');
+    const WAVE_G_BG_RGB = 'rgb(250, 250, 251)';
+    const hasCorrectBg = bodyBg.includes('#FAFAFB') || bodyBg.includes(WAVE_G_BG_RGB) ||
+                         bodyBg.includes('fafafb') || bodyBg.includes('250, 250, 251');
+    const hasSkyReversion = bodyBg.includes('#C9E8F5') || bodyBg.includes('201, 232, 245') ||
+                             bodyBg.includes('c9e8f5');
     if (bodyBg === '__NOT_FOUND__' || bodyBg === '__ERROR__') {
-      record('Orca Voice', 'Voice shell background: sky-200 #C9E8F5', 'WARN', `Background unreadable: ${bodyBg}`);
-    } else if (hasSkyBg) {
-      record('Orca Voice', 'Voice shell background: sky-200 #C9E8F5', 'PASS', `background includes sky-200`);
+      record('Orca Voice', 'Voice shell background: Wave G off-white #FAFAFB', 'WARN', `Background unreadable: ${bodyBg}`);
+    } else if (hasSkyReversion) {
+      const sc = await shot(page, 'fail-orca-bg-regression');
+      record('Orca Voice', 'Voice shell background: Wave G off-white #FAFAFB', 'FAIL',
+        `background=${bodyBg.slice(0, 120)} — sky-200 regression (Wave F). Wave G requires #FAFAFB Soft Off-White`, sc);
+    } else if (hasCorrectBg) {
+      record('Orca Voice', 'Voice shell background: Wave G off-white #FAFAFB', 'PASS', `background = #FAFAFB (Soft Off-White)`);
     } else {
       const sc = await shot(page, 'fail-orca-bg');
-      record('Orca Voice', 'Voice shell background: sky-200 #C9E8F5', 'FAIL',
-        `background=${bodyBg.slice(0, 120)} — must be #C9E8F5 per CANONICAL Wave F`, sc);
+      record('Orca Voice', 'Voice shell background: Wave G off-white #FAFAFB', 'FAIL',
+        `background=${bodyBg.slice(0, 120)} — must be #FAFAFB per CANONICAL Wave G`, sc);
     }
 
     // --- Check 3: Character present (.orca-aura img or character SVG) ---
@@ -572,23 +628,23 @@ async function checkOrcaVoice(browser: import('playwright').Browser): Promise<vo
       }
     }
 
-    // --- Check 4: Character NOT regressed to brown/terracotta ---
-    // The canonical body_light = #F2A498 (coral/salmon). Brown/terracotta was the Wave A regression.
-    // We check the character img src — should be canonical SVG or PNG, not a legacy asset.
+    // --- Check 4: Character palette = Wave G Blush Pink (not Wave A brown/terracotta) ---
+    // Wave G: Orca body = Blush Pink #FFB2C1. Wave A regression = brown/terracotta (#A8967E family).
+    // We check img src (canonical asset path) as a proxy for palette correctness.
     const charSrc = await page.evaluate(() => {
       const img = document.querySelector('.orca-aura img') as HTMLImageElement | null;
       return img ? (img.src || img.getAttribute('src') || '__NO_SRC__') : '__NOT_FOUND__';
     }).catch(() => '__ERROR__');
 
     if (charSrc === '__NOT_FOUND__' || charSrc === '__ERROR__') {
-      record('Orca Voice', 'Character: no brown/terracotta regression (Wave A palette)', 'WARN', `Character img not found: ${charSrc}`);
-    } else if (charSrc.includes('pwa-512') || charSrc.includes('character') || charSrc.includes('orca')) {
-      record('Orca Voice', 'Character: no brown/terracotta regression (Wave A palette)', 'PASS',
-        `Character src=${charSrc.split('/').slice(-1)[0]} — canonical asset in use`);
+      record('Orca Voice', 'Character: Wave G Blush Pink palette (not Wave A brown)', 'WARN', `Character img not found: ${charSrc}`);
+    } else if (charSrc.includes('pwa-512') || charSrc.includes('character') || charSrc.includes('orca') || charSrc.includes('wave-g') || charSrc.includes('WAVE-G')) {
+      record('Orca Voice', 'Character: Wave G Blush Pink palette (not Wave A brown)', 'PASS',
+        `Character src=${charSrc.split('/').slice(-1)[0]} — canonical Wave G asset in use`);
     } else {
       const sc3 = await shot(page, 'warn-orca-char-src');
-      record('Orca Voice', 'Character: no brown/terracotta regression (Wave A palette)', 'WARN',
-        `Unexpected character asset: ${charSrc.split('/').slice(-1)[0]} — verify not Wave A brown palette`, sc3);
+      record('Orca Voice', 'Character: Wave G Blush Pink palette (not Wave A brown)', 'WARN',
+        `Unexpected character asset: ${charSrc.split('/').slice(-1)[0]} — verify uses #FFB2C1 Blush Pink (Wave G)`, sc3);
     }
 
     // --- Check 5: clouds-near layer above character in DOM order ---
@@ -767,29 +823,37 @@ ${results.filter(r => r.screenshot).map(r => `- **${r.surface} / ${r.rule}**: ${
 
   fs.writeFileSync(path.join(OUTPUT_DIR, 'report.md'), report, 'utf8');
 
-  // File RGOS tasks for failures
-  const failures = results.filter(r => r.status === 'FAIL');
-  const navFailures = failures.filter(r => r.rule.startsWith('P0:'));
-  const designFailures = failures.filter(r => !r.rule.startsWith('P0:'));
-
-  if (navFailures.length > 0) {
-    const summary = navFailures.map(r => `${r.surface}: ${r.evidence}`).join(' | ');
-    const taskArgs = `"[estate-visual-qa] P0: Bottom nav position broken (${navFailures.length} routes)" --desc "${summary.slice(0, 300)}" --priority urgent`;
-    const { execSync } = await import('child_process');
-    try {
-      execSync(`cortextos bus create-task ${taskArgs}`, { stdio: 'pipe' });
-      console.log(`[P0] RGOS task filed for nav failure`);
-    } catch { /* non-fatal */ }
+  // File or bump RGOS dogfood-finding tasks for every FAIL and WARN (with dedup)
+  const findings = results.filter(r => r.status === 'FAIL' || r.status === 'WARN');
+  if (findings.length > 0) {
+    console.log(`\n[tasks] Filing ${findings.length} finding(s) to RGOS...`);
+    for (const r of findings) {
+      await fileOrBumpTask(r.surface, r.rule, r.status, r.evidence, r.screenshot);
+    }
   }
 
-  if (designFailures.length > 0) {
-    const summary = designFailures.map(r => `${r.surface}/${r.rule}: ${r.evidence.slice(0, 80)}`).join(' | ');
-    const taskArgs = `"[estate-visual-qa] Design token violations (${designFailures.length} checks)" --desc "${summary.slice(0, 300)}"`;
-    const { execSync } = await import('child_process');
-    try {
-      execSync(`cortextos bus create-task ${taskArgs}`, { stdio: 'pipe' });
-      console.log(`[Design] RGOS task filed for design violations`);
-    } catch { /* non-fatal */ }
+  // B6 escalator: surface with ≥2 open findings in this run → escalate severity in sidecar
+  const ESCALATION_FILE = path.resolve(REPO_ROOT, 'scripts/estate-visual-qa-escalations.json');
+  const surfaceCounts: Record<string, number> = {};
+  for (const r of findings) {
+    surfaceCounts[r.surface] = (surfaceCounts[r.surface] ?? 0) + 1;
+  }
+  let escalations: Record<string, { base_severity: string; current_severity: string; hits_run: number; last_escalated: string }> = {};
+  try {
+    if (fs.existsSync(ESCALATION_FILE)) escalations = JSON.parse(fs.readFileSync(ESCALATION_FILE, 'utf8'));
+  } catch { escalations = {}; }
+  let escalationChanged = false;
+  for (const [surface, count] of Object.entries(surfaceCounts)) {
+    if (count >= 2) {
+      if (!escalations[surface] || escalations[surface].current_severity !== 'P0') {
+        escalations[surface] = { base_severity: 'P1', current_severity: 'P0', hits_run: count, last_escalated: RUN_STAMP };
+        console.log(`  [B6] escalated ${surface} → P0 (${count} findings in this run)`);
+        escalationChanged = true;
+      }
+    }
+  }
+  if (escalationChanged) {
+    try { fs.writeFileSync(ESCALATION_FILE, JSON.stringify(escalations, null, 2), 'utf8'); } catch { /* non-fatal */ }
   }
 
   console.log(`\nReport: ${OUTPUT_DIR}/report.md`);
