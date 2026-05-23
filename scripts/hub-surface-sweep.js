@@ -51,6 +51,8 @@ const KNOWN_QA_ROUTES = new Set([
   '/beta-autopilot', '/engine-adoption', '/scoring-review', '/scoring-snapshot',
   '/deduplication-queue', '/hygiene-report', '/inbox-triage', '/lifecycle-builder',
   '/linked-in-presence', '/poc/linked-in-presence-poc', '/review-aa-frd', '/slack-link',
+  '/skill-claude-code-best-practices', '/skill-dispatching-agents', '/skill-library',
+  '/skill-open-brain-to-kb', '/skill-rev-ops-global-brand', '/skill-subagent-driven-development',
 ]);
 
 // Routes to skip — auth/redirects/portals/guides not worth QA-scanning
