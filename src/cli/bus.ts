@@ -2789,6 +2789,87 @@ busCommand
   });
 
 // ─── SO Tooling Commands ────────────────────────────────────────────────────
+import { enqueueEscalation, flushQueue, getCadenceStatus } from '../bus/cadence.js';
+
+busCommand
+  .command('cadence-queue')
+  .argument('<topic>', 'Topic identifier (e.g. "CI fail", "Yousign blocked")')
+  .argument('<message>', 'Message to queue for escalation to Founder')
+  .option('--severity <sev>', 'Severity: info|warning|urgent|critical', 'warning')
+  .option('--agent <name>', 'Agent queueing this (defaults to CTX_AGENT_NAME)')
+  .option('--chat-id <id>', 'Override Telegram chat ID (defaults to CTX_TELEGRAM_CHAT_ID)')
+  .action((topic: string, message: string, opts: { severity?: string; agent?: string; chatId?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const valid = ['info', 'warning', 'urgent', 'critical'];
+    const severity = (opts.severity || 'warning') as 'info' | 'warning' | 'urgent' | 'critical';
+    if (!valid.includes(severity)) {
+      console.error(`Invalid severity. Must be one of: ${valid.join(', ')}`);
+      process.exit(1);
+    }
+    enqueueEscalation(paths.stateDir, {
+      topic,
+      message,
+      agent: opts.agent || env.agentName,
+      severity,
+      chat_id: opts.chatId || process.env.CTX_TELEGRAM_CHAT_ID,
+    });
+    console.log(`Queued [${severity}] "${topic}" — flush via cadence-flush`);
+  });
+
+busCommand
+  .command('cadence-flush')
+  .description('Apply 5min aggregation + 30min debounce rules and output messages to send')
+  .option('--chat-id <id>', 'Default Telegram chat ID if event has none')
+  .option('--format <fmt>', 'Output format: text or json', 'text')
+  .action((opts: { chatId?: string; format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const defaultChatId = opts.chatId || process.env.CTX_TELEGRAM_CHAT_ID || '';
+    const result = flushQueue(paths.stateDir, defaultChatId);
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    if (result.messages.length === 0 && result.suppressed.length === 0) {
+      console.log('cadence-flush: queue empty');
+      return;
+    }
+    for (const msg of result.messages) {
+      console.log(`SEND chat_id=${msg.chat_id}`);
+      console.log(msg.text);
+      console.log('');
+    }
+    if (result.suppressed.length > 0) {
+      console.log(`Suppressed ${result.suppressed.length} event(s):`);
+      for (const s of result.suppressed) {
+        console.log(`  [${s.event.topic}] ${s.reason}`);
+      }
+    }
+  });
+
+busCommand
+  .command('cadence-status')
+  .description('Show cadence engine queue and debounce state')
+  .action(() => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const status = getCadenceStatus(paths.stateDir);
+    console.log(`Queue length:  ${status.queueLength}`);
+    console.log(`Topics:        ${status.topics.join(', ') || '(none)'}`);
+    console.log(`Last flush:    ${status.lastFlush || '(never)'}`);
+    if (Object.keys(status.debounceState).length > 0) {
+      console.log('\nDebounce state:');
+      for (const [topic, db] of Object.entries(status.debounceState)) {
+        const age = db.last_sent
+          ? `${Math.round((Date.now() - new Date(db.last_sent).getTime()) / 60000)}min ago`
+          : 'never';
+        console.log(`  ${topic}: last_sent=${age}, consecutive=${db.consecutive_count}`);
+      }
+    }
+  });
 
 busCommand
   .command('diagnose')
