@@ -291,7 +291,12 @@ function scanZombieCrons() {
       } catch { continue; }
 
       const ageMs = Date.now() - lastFireMs;
-      const intervalMs = interval ? intervalToMs(interval) : cronExprToMs(cronExpr);
+      // Prefer daemon-reported schedule as authoritative interval; config.json may
+      // differ from what the daemon actually runs (e.g. heartbeat config=10m daemon=30m).
+      const liveIntervalMs = live.schedule
+        ? (intervalToMs(live.schedule) || cronExprToMs(live.schedule))
+        : null;
+      const intervalMs = liveIntervalMs || (interval ? intervalToMs(interval) : cronExprToMs(cronExpr));
 
       if (!intervalMs) {
         healthy.push({ agent, name, lastFire: lastFireStr });
