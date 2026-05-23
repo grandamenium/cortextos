@@ -107,12 +107,12 @@ export default async function OverviewPage({
         />
       )}
 
-      {/* Agent Status Grid + Live Activity - two columns */}
+      {/* Agent Fleet Grid + Live Activity - two columns */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        <div className="xl:col-span-1">
+        <div className="xl:col-span-2">
           <AgentStatusGrid agents={agents} heartbeats={heartbeats} />
         </div>
-        <div className="xl:col-span-2">
+        <div className="xl:col-span-1">
           <LiveActivity initialEvents={recentEvents} />
         </div>
       </div>
