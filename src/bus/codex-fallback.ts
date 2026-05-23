@@ -1,4 +1,6 @@
 import { spawnSync } from 'child_process';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import type { BusPaths } from '../types/index.js';
 import { logEvent } from './event.js';
 
@@ -71,7 +73,9 @@ export function parseCodexLimit(stderr: string, exitCode: number | null): CodexL
     };
   }
 
-  // 429 with no Retry-After → treat as weekly cap
+  // 429 with no Retry-After — Anthropic omits this header on weekly/monthly caps
+  // (they don't know when the cap lifts). Treat as long_lock for fallback dispatch.
+  // Transient rate limits always include Retry-After; if it's absent, assume cap.
   return { limitClass: 'long_lock', retryAfterSecs: null };
 }
 
@@ -84,6 +88,25 @@ export interface CodexFallbackDispatchResult {
   dispatched: boolean;
   workerName?: string;
   limitClass: CodexLimitClass;
+}
+
+/**
+ * Dedup guard: write a marker under state/{agent}/spillover-dedup/{taskId} so
+ * that repeated calls for the same task (e.g. cron fires again mid-spillover)
+ * do not spawn a second worker. Marker is session-scoped — it lives in the
+ * daemon's state dir and is cleared when the state dir is wiped on agent restart.
+ */
+function checkAndMarkSpilloverDedup(
+  paths: BusPaths,
+  agentName: string,
+  taskId: string,
+): boolean {
+  const dedupDir = join(paths.stateDir, agentName, 'spillover-dedup');
+  const dedupFile = join(dedupDir, taskId.replace(/[^a-zA-Z0-9_-]/g, '_'));
+  if (existsSync(dedupFile)) return true; // already dispatched
+  mkdirSync(dedupDir, { recursive: true });
+  writeFileSync(dedupFile, new Date().toISOString());
+  return false;
 }
 
 export async function handleCodexFallback(
@@ -117,6 +140,18 @@ export async function handleCodexFallback(
 
   if (limitResult.limitClass !== 'long_lock' || !opts.autoFallback) {
     return { dispatched: false, limitClass: limitResult.limitClass };
+  }
+
+  // Dedup: skip if a spillover worker was already dispatched for this task.
+  if (opts.taskId) {
+    const alreadyDispatched = checkAndMarkSpilloverDedup(paths, agentName, opts.taskId);
+    if (alreadyDispatched) {
+      logEvent(paths, agentName, org, 'action', 'codex_failover_dedup_skip', 'info', {
+        task_id: opts.taskId,
+        reason: 'spillover already dispatched for this task in current session',
+      });
+      return { dispatched: false, limitClass: limitResult.limitClass };
+    }
   }
 
   // Spillover-1: Max OAuth (default HOME, local ~/.claude/.credentials.json)
@@ -191,16 +226,16 @@ export async function handleCodexFallback(
         task_id: opts.taskId ?? null,
       });
     } else {
-    logEvent(paths, agentName, org, 'action', 'codex_failover_dispatched', 'info', {
-      worker_name: worker2Name,
-      tier: 'spillover-2',
-      limit_class: limitResult.limitClass,
-      retry_after_secs: limitResult.retryAfterSecs,
-      task_id: opts.taskId ?? null,
-      parent_agent: opts.parentAgent,
-      dir: opts.dir,
-      claude_team_home: opts.claudeTeamHome,
-    });
+      logEvent(paths, agentName, org, 'action', 'codex_failover_dispatched', 'info', {
+        worker_name: worker2Name,
+        tier: 'spillover-2',
+        limit_class: limitResult.limitClass,
+        retry_after_secs: limitResult.retryAfterSecs,
+        task_id: opts.taskId ?? null,
+        parent_agent: opts.parentAgent,
+        dir: opts.dir,
+        claude_team_home: opts.claudeTeamHome,
+      });
     }
   }
 

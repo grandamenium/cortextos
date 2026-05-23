@@ -317,6 +317,42 @@ describe('handleCodexFallback', () => {
     expect(mockSpawnSync).toHaveBeenCalledOnce();
   });
 
+  it('dedup guard: second call with same taskId skips dispatch and emits codex_failover_dedup_skip', async () => {
+    const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
+    const opts = { prompt: 'do work', dir: '/tmp', parentAgent: 'orchestrator', autoFallback: true, taskId: 'task-dedup' };
+
+    const r1 = await handleCodexFallback(result, opts, paths, 'dev', 'revops-global');
+    expect(r1.dispatched).toBe(true);
+    expect(mockSpawnSync).toHaveBeenCalledOnce();
+
+    mockSpawnSync.mockClear();
+    const r2 = await handleCodexFallback(result, opts, paths, 'dev', 'revops-global');
+    expect(r2.dispatched).toBe(false);
+    expect(mockSpawnSync).not.toHaveBeenCalled();
+
+    const events = readEventLines(tmpDir, 'dev');
+    expect(events.some(e => e.event === 'codex_failover_dedup_skip')).toBe(true);
+  });
+
+  it('dedup guard: different taskIds each get their own worker', async () => {
+    const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
+
+    await handleCodexFallback(result, { prompt: 'p', dir: '/tmp', parentAgent: 'orch', autoFallback: true, taskId: 'task-a' }, paths, 'dev', 'revops-global');
+    await handleCodexFallback(result, { prompt: 'p', dir: '/tmp', parentAgent: 'orch', autoFallback: true, taskId: 'task-b' }, paths, 'dev', 'revops-global');
+
+    expect(mockSpawnSync).toHaveBeenCalledTimes(2);
+  });
+
+  it('dedup guard: calls without taskId are not deduplicated', async () => {
+    const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
+    const opts = { prompt: 'do work', dir: '/tmp', parentAgent: 'orchestrator', autoFallback: true };
+
+    await handleCodexFallback(result, opts, paths, 'dev', 'revops-global');
+    await handleCodexFallback(result, opts, paths, 'dev', 'revops-global');
+
+    expect(mockSpawnSync).toHaveBeenCalledTimes(2);
+  });
+
   it('returns dispatched=false and emits dispatch_failed when spawn-worker exits non-zero', async () => {
     mockSpawnSync.mockReturnValueOnce({ status: 1 } as ReturnType<typeof import('child_process').spawnSync>);
     const result = makeInput({ exitCode: 1, stderr: '429 rate limit exceeded' });
