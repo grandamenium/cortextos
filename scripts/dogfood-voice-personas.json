@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "updated_at": "2026-05-23",
+  "description": "O-Framework 1 voice persona contract. Voice PRs must keep these IDs, cadence, confirmation behavior, and interruption targets stable or update this file intentionally with reviewer context.",
+  "required_personas": ["orca", "ivy", "obi-wan", "reva"],
+  "personas": [
+    {
+      "id": "orca",
+      "display_name": "Orca",
+      "app_surface": "orca",
+      "voice_id": "deepgram:aura-2-juno-en",
+      "speaking_rate": 1.0,
+      "confirmation_behavior": "brief-operational",
+      "barge_in_latency_target_ms": 350,
+      "delta_test": {
+        "fixture": "Greg asks what needs attention before the morning briefing.",
+        "assertions": [
+          "voice_id remains deepgram:aura-2-juno-en unless the PR explicitly migrates Orca TTS",
+          "speaking_rate remains 1.0x for production Orca turns",
+          "confirmation_behavior stays brief-operational: answer the operational ask without warm-up chatter",
+          "barge_in_latency_target_ms remains <=350 for Orca interruption proof"
+        ]
+      }
+    },
+    {
+      "id": "ivy",
+      "display_name": "Ivy",
+      "app_surface": "ob1-app",
+      "voice_id": "deepgram:aura-2-juno-en",
+      "speaking_rate": 1.18,
+      "confirmation_behavior": "explicit-action-summary",
+      "barge_in_latency_target_ms": 500,
+      "delta_test": {
+        "fixture": "Greg asks Ivy to add a garden note and stop talking mid-reply.",
+        "assertions": [
+          "voice_id remains deepgram:aura-2-juno-en for Ivy relay turns",
+          "speaking_rate remains 1.18x so Ivy keeps the faster estate-assistant cadence",
+          "confirmation_behavior stays explicit-action-summary for mutations and logs",
+          "barge_in_latency_target_ms remains <=500 for Ivy stop/barge-in controls"
+        ]
+      }
+    },
+    {
+      "id": "obi-wan",
+      "display_name": "Obi-Wan",
+      "app_surface": "ob1-parents",
+      "voice_id": "deepgram:aura-2-thalia-en",
+      "speaking_rate": 1.0,
+      "confirmation_behavior": "silent-unless-action",
+      "barge_in_latency_target_ms": 500,
+      "delta_test": {
+        "fixture": "Parent asks Obi-Wan for a short family-plan check-in.",
+        "assertions": [
+          "voice_id remains deepgram:aura-2-thalia-en until ob1-parents migrates its relay",
+          "speaking_rate remains 1.0x for calm parent-facing replies",
+          "confirmation_behavior stays silent-unless-action to avoid unnecessary confirmations",
+          "barge_in_latency_target_ms remains <=500 for parent voice interruption"
+        ]
+      }
+    },
+    {
+      "id": "reva",
+      "display_name": "REVA",
+      "app_surface": "agentops",
+      "voice_id": "openai:alloy",
+      "speaking_rate": 1.0,
+      "confirmation_behavior": "brief-operational",
+      "barge_in_latency_target_ms": 650,
+      "delta_test": {
+        "fixture": "Greg asks the AgentOps voice bridge to summarize blocked work.",
+        "assertions": [
+          "voice_id remains openai:alloy for OpenAI Realtime unless the PR updates the bridge env contract",
+          "speaking_rate remains 1.0x for orchestrator voice bridge replies",
+          "confirmation_behavior stays brief-operational and routes operational work through orchestrator_request",
+          "barge_in_latency_target_ms remains <=650 for server_vad interrupt_response"
+        ]
+      }
+    }
+  ]
+}

@@ -24,6 +24,23 @@ interface TokenContract { canonical_doc?: string; surfaces?: TokenSurface[]; }
 interface IdentitySurface { surface: string; path: string; expectedMd5: string; sourceId?: string; }
 interface IdentityContract { surfaces?: IdentitySurface[]; }
 interface LedgerEntry { id: string; source_path: string; received_at: string; owner: string; status: string; tracking_id?: string; notes?: string; }
+interface VoicePersonaContract {
+  required_personas?: string[];
+  personas?: VoicePersona[];
+}
+interface VoicePersona {
+  id: string;
+  display_name: string;
+  app_surface: string;
+  voice_id: string;
+  speaking_rate: number;
+  confirmation_behavior: 'brief-operational' | 'explicit-action-summary' | 'silent-unless-action';
+  barge_in_latency_target_ms: number;
+  delta_test: {
+    fixture: string;
+    assertions: string[];
+  };
+}
 
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 const RUN_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
@@ -207,6 +224,57 @@ function runDesignImageLedger(): void {
   });
 }
 
+function runVoicePersonaContract(): void {
+  const contractPath = path.resolve(process.env.DOGFOOD_VOICE_PERSONA_CONTRACT ?? path.join(REPO_ROOT, 'scripts/dogfood-voice-personas.json'));
+  const contract = readJson<VoicePersonaContract>(contractPath, { required_personas: [], personas: [] });
+  const personas = contract.personas ?? [];
+  const personaIds = new Set(personas.map(persona => persona.id));
+  const missingRequired = (contract.required_personas ?? []).filter(id => !personaIds.has(id));
+  const duplicateIds = personas
+    .map(persona => persona.id)
+    .filter((id, index, ids) => ids.indexOf(id) !== index);
+
+  for (const persona of personas) {
+    const failures: string[] = [];
+    if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(persona.id)) failures.push(`id is not slug-safe: ${persona.id}`);
+    if (duplicateIds.includes(persona.id)) failures.push(`duplicate persona id: ${persona.id}`);
+    if (!persona.display_name) failures.push('missing display_name');
+    if (!persona.app_surface) failures.push('missing app_surface');
+    if (!persona.voice_id || /^(default|pending|tbd)$/i.test(persona.voice_id)) failures.push(`voice_id must be explicit, got ${persona.voice_id || '<empty>'}`);
+    if (!Number.isFinite(persona.speaking_rate) || persona.speaking_rate < 0.7 || persona.speaking_rate > 2) failures.push(`speaking_rate out of 0.7-2.0 range: ${persona.speaking_rate}`);
+    if (!['brief-operational', 'explicit-action-summary', 'silent-unless-action'].includes(persona.confirmation_behavior)) failures.push(`invalid confirmation_behavior: ${persona.confirmation_behavior}`);
+    if (!Number.isFinite(persona.barge_in_latency_target_ms) || persona.barge_in_latency_target_ms < 150 || persona.barge_in_latency_target_ms > 750) failures.push(`barge_in_latency_target_ms out of 150-750 range: ${persona.barge_in_latency_target_ms}`);
+    if (!persona.delta_test?.fixture) failures.push('missing delta_test.fixture');
+    for (const required of ['voice_id', 'speaking_rate', 'confirmation_behavior', 'barge_in_latency_target_ms']) {
+      if (!persona.delta_test?.assertions?.some(assertion => assertion.includes(required))) failures.push(`delta_test missing ${required} assertion`);
+    }
+
+    record({
+      id: `o-framework-1-${persona.id}`,
+      surface: persona.app_surface,
+      route: `voice-persona/${persona.id}`,
+      status: failures.length ? 'FAIL' : 'PASS',
+      severity: 'P0',
+      check_label: 'O-Framework 1 voice persona contract',
+      evidence: failures.length
+        ? failures.join('; ')
+        : `${persona.display_name} pinned to ${persona.voice_id} at ${persona.speaking_rate}x; ${persona.confirmation_behavior}; barge-in<=${persona.barge_in_latency_target_ms}ms`,
+    });
+  }
+
+  if (missingRequired.length || personas.length === 0) {
+    record({
+      id: 'o-framework-1-required-personas',
+      surface: 'voice',
+      route: 'voice-persona/required',
+      status: 'FAIL',
+      severity: 'P0',
+      check_label: 'O-Framework 1 required voice personas',
+      evidence: personas.length === 0 ? `No personas configured in ${contractPath}` : `Missing required personas: ${missingRequired.join(', ')}`,
+    });
+  }
+}
+
 async function runBottomPaddingVsNav(): Promise<void> {
   const baseUrl = process.env.DOGFOOD_BAND_B_BASE_URL;
   if (!baseUrl || staticOnly) {
@@ -326,6 +394,7 @@ async function main(): Promise<void> {
   runOrcaIdentityContract();
   runVignetteCopyCritic();
   runDesignImageLedger();
+  runVoicePersonaContract();
   await runBottomPaddingVsNav();
   writeReport();
   const failed = results.filter(r => r.status === 'FAIL');
