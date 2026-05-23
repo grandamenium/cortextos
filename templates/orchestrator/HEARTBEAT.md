@@ -124,7 +124,7 @@ Also read your own GOALS.md for any manual overrides or notes you left yourself.
 
 ## Step 6.5: Decomposable research check
 
-**Before dispatching any decomposable research task** (or answering one yourself), invoke `Skill: dispatching-parallel-agents` to fan out parallel `Agent` subagents. 3+ independent sub-questions = parallel by default, never serial. See AGENTS.md → "Default Behaviors" for the standing rule.
+**Before dispatching any decomposable research task** (or answering one yourself), use the native `Agent` tool to fan out parallel subagents. Per the standing concurrent-work-default rule, 3+ independent sub-questions = parallel by default, never serial. See AGENTS.md → "Default Behaviors" for the fleet directive.
 
 ## Step 7: Resume work
 

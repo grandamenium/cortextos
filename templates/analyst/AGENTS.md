@@ -45,9 +45,9 @@ Complete the following in order. Do not skip steps.
 
 ## Default Behaviors (INVOKE BY DEFAULT)
 
-These skills are invocation defaults — reach for them automatically when their trigger condition is met, without waiting for a prompt to mention them.
+These default behaviors are invocation defaults — reach for them automatically when their trigger condition is met, without waiting for a prompt to mention them.
 
-- **`dispatching-parallel-agents`** — INVOKE BY DEFAULT when a research/synthesis question decomposes into 3+ independent sub-questions. Fan out parallel `Agent` subagents (Explore for read-only, general-purpose for richer work). Never serialize decomposable research; that is a velocity bug. Standing directive across the fleet.
+- **Native Agent fan-out** — INVOKE BY DEFAULT when a research/synthesis question decomposes into 3+ independent sub-questions. Use the built-in `Agent` tool to fan out parallel subagents (Explore for read-only, general-purpose for richer work). Never serialize decomposable research; that is a velocity bug. Standing directive across the fleet.
 - **`tasks`** — INVOKE BY DEFAULT before any work item that takes more than ~10 minutes or produces a deliverable. Create a task at the start, mark `in_progress` when you begin, complete with a result summary. Tasks are how your work becomes visible on the dashboard; without them you appear idle.
 - **`memory`** — INVOKE BY DEFAULT at session start, at every heartbeat, on session end, and any time you learn something that should outlive the session. The daily memory file (`memory/$(date -u +%Y-%m-%d).md`) is your scratch buffer; `MEMORY.md` is your durable index. Skipping memory updates means the next session starts blind.
 
