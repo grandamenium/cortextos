@@ -47,6 +47,7 @@ const KNOWN_QA_ROUTES = new Set([
   '/pipeline-guide', '/sales-materials', '/territory-planning',
   '/beta-autopilot', '/engine-adoption', '/scoring-review', '/scoring-snapshot',
   '/deduplication-queue', '/hygiene-report', '/inbox-triage', '/lifecycle-builder',
+  '/linked-in-presence', '/poc/linked-in-presence-poc', '/review-aa-frd', '/slack-link',
 ]);
 
 // Routes to skip — auth/redirects/portals/guides not worth QA-scanning
