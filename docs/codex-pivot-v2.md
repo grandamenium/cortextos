@@ -1,6 +1,6 @@
 # Codex Pivot v2 — Status
 
-**Last updated:** 2026-05-22  
+**Last updated:** 2026-05-23  
 **Spec:** `orgs/revops-global/agents/analyst/output/codex-limit-pivot-plan-2026-05-22.md`  
 **Greg directive:** Claude Code is the failover for Codex degradation. No always-on agent on a weekly-capped tier. Full OpenAI-API-direct pivot rejected.
 
@@ -14,7 +14,7 @@
 | 2 | `src/bus/codex-fallback.ts` (parseCodexLimit + handleCodexFallback) | ✅ Complete | #414 |
 | 3 | `--auto-fallback` flag in spawn-codex + computer-use CLI | ✅ Complete | #415 |
 | 4 | Dashboard panel + selective enable + 48h monitor | ✅ Complete | This PR |
-| 5 | Spillover-2 via Team workspace OAuth (CLAUDE_HOME + `--home` flag) | 🔄 In progress | — |
+| 5 | Spillover-2 via Team workspace OAuth (CLAUDE_HOME + `--home` flag) | 🔄 Provisioning OAuth | — |
 | 6 | First production failover dry-run | ⏳ After #5 | — |
 
 ---
@@ -101,13 +101,15 @@ Greg decision (2026-05-22): use Team-user OAuth instead of API key. `greg@revops
 - `CLAUDE_TEAM_HOME=~/.claude-team` in `secrets.env` enables spillover-2 tier
 - `codex-fallback.ts` reads `CLAUDE_TEAM_HOME` from env and dispatches spillover-2 in parallel with spillover-1 on every long_lock
 
-**Provisioning needed (blocking):**
-1. Greg: run `HOME=~/.claude-team claude auth login` on Mac, log into greg@revopsglobal.com Team workspace
-2. SCP `~/.claude-team/.credentials.json` from Mac to this VM at `~/.claude-team/.credentials.json`
-3. Dev: add `CLAUDE_TEAM_HOME=/home/cortextos/.claude-team` to `secrets.env`
-4. Dev: verify spillover-2 worker boots under Team subscription
+**Provisioning (2026-05-23, in progress):**
+- `CLAUDE_TEAM_HOME=/home/cortextos/.claude-team` added to `orgs/revops-global/secrets.env`
+- `~/.claude-team/.claude/` directory created on this VM
+- OAuth flow (PKCE code flow, redirect via platform.claude.com): `claude auth login --claudeai --email greg@revopsglobal.com` with `HOME=~/.claude-team` prints auth URL, waits for code paste
+- Linux VM has no browser — auth URL relayed to Greg's Mac browser via orchestrator/mac-codex
+- Auth code fed back into waiting tmux session → credentials written to `~/.claude-team/.claude/.credentials.json`
+- After provisioning: verify with `HOME=~/.claude-team claude auth status` (expect subscriptionType=team)
 
 ## Open Items
 
-- **Task #5:** Awaiting Greg's Team workspace OAuth credentials on this VM (see provisioning steps above)
-- **Task #6:** First production failover dry-run (analyst + dev) after #5 + 48h window closes (~2026-05-24T23:18Z)
+- **Task #5:** OAuth provisioning in progress — tmux session live on VM, waiting for auth code from mac-codex. CLAUDE_TEAM_HOME wired. After code: verify auth status + run dry-run verify.
+- **Task #6:** First production failover dry-run after #5 completes + 48h window closes (~2026-05-24T23:18Z)
