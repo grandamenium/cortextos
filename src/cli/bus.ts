@@ -5600,6 +5600,7 @@ busCommand
       );
       if (fallback.dispatched && fallback.workerName) {
         console.log(`codex-fallback: long_lock detected — spillover worker dispatched: ${fallback.workerName}`);
+        process.exit(0); // handoff succeeded; don't propagate exit(1) to daemon
       } else if (fallback.limitClass !== 'none') {
         console.log(`codex-fallback: ${fallback.limitClass} detected — no auto-dispatch (short throttle or auth issue)`);
       }
