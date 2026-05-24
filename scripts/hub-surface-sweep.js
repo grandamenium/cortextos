@@ -118,6 +118,27 @@ const KNOWN_QA_ROUTES = new Set([
   '/app/marketplace', '/app/model-settings', '/app/nl-query',
   '/app/onboarding', '/app/play-builder', '/app/plays', '/app/rules',
   '/app/settings',
+  // rgos fleet / orchestrator / play / work / wiki / signal pages (2026-05-24 sweep)
+  '/app/content-queue', '/app/data-ops-monitor',
+  '/app/fleet-activity', '/app/fleet-agents', '/app/fleet-health', '/app/fleet-orgo',
+  '/app/fleet-schedules', '/app/fleet-strategy', '/app/fleet-tasks', '/app/fleet-wip',
+  '/app/insights', '/app/linked-in-presence-engine', '/app/linked-in-presence-setup',
+  '/app/orchestrator-agent-detail', '/app/orchestrator-agents',
+  '/app/orchestrator-analytics', '/app/orchestrator-briefing',
+  '/app/play-history', '/app/play-output', '/app/play-runner', '/app/play-running',
+  '/app/signal-triggers', '/app/signal-watchers', '/app/skills', '/app/strategy', '/app/voice',
+  '/app/wiki-concepts-page', '/app/wiki-health', '/app/wiki-page',
+  '/app/work-approvals', '/app/work-comms', '/app/work-inbox', '/app/work-reviews',
+  '/app/workflow-execution-history', '/app/workflow-health',
+  // ob1-parents routes (2026-05-24 sweep)
+  '/activity', '/beer', '/casita', '/estate-map', '/family', '/garden',
+  '/history', '/household', '/insights', '/maintenance', '/meals', '/media',
+  '/more', '/offline', '/onboarding', '/search', '/settings/household',
+  '/shared', '/unlock', '/veo', '/weather', '/widget', '/wine',
+  // ob1-app routes (2026-05-24 sweep)
+  '/beehives', '/beehives/langstroth', '/beehives/warre',
+  '/cottage', '/farm', '/field', '/grounds', '/mushrooms', '/music', '/orchard',
+  '/talk',
 ]);
 
 // Routes to skip — auth/redirects/portals/guides not worth QA-scanning
@@ -144,8 +165,11 @@ function ghApiTree(repo) {
 
 /** Convert App Router path (app/foo/bar/page.tsx) → /foo/bar */
 function appRouterToRoute(filePath) {
-  // Strip leading app/ and trailing /page.tsx
-  return '/' + filePath.replace(/^app\//, '').replace(/\/page\.tsx$/, '').replace(/\/+$/, '') || '/';
+  const stripped = filePath
+    .replace(/^app\//, '')
+    .replace(/(^|\/)page\.tsx$/, '')  // handles both root page.tsx and nested /page.tsx
+    .replace(/\/+$/, '');
+  return '/' + stripped;
 }
 
 /** Convert Pages Router path (src/pages/Foo/Bar.tsx) → /foo/bar */
@@ -212,8 +236,8 @@ async function scanWebSurfaces() {
   for (const repo of SCAN_REPOS) {
     const files = ghApiTree(repo);
     const pages = files.filter(f =>
-      (f.startsWith('app/') && f.endsWith('/page.tsx')) ||
-      (f.startsWith('src/pages/') && f.endsWith('.tsx') && !f.includes('/_'))
+      (f.startsWith('app/') && (f.endsWith('/page.tsx') || f === 'app/page.tsx')) ||
+      (f.startsWith('src/pages/') && f.endsWith('.tsx') && !f.includes('/_') && !f.endsWith('.test.tsx'))
     );
 
     const routes = [];
