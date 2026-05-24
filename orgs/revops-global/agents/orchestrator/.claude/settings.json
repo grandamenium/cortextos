@@ -1,4 +1,7 @@
 {
+  "enabledPlugins": {
+    "claude-code-setup@claude-plugins-official": true
+  },
   "enabledMcpjsonServers": [
     "agentmemory",
     "qmd"

@@ -102,13 +102,13 @@
       "name": "ai-tooling-watch-daily",
       "type": "recurring",
       "cron": "3 9 * * *",
-      "prompt": "AI Tooling Watch — daily light scan (~5-10 min). RGOS task 945f065f.\n\nScan these sources for new releases, changes, or announcements from the last 24h:\n1. Claude Code release notes (web search: \"Claude Code release notes site:docs.anthropic.com OR site:github.com/anthropics\")\n2. Anthropic blog/news (web search: \"site:anthropic.com/news OR site:anthropic.com/blog\" last 24h)\n3. OpenAI Codex changelog (web search: \"OpenAI Codex changelog OR codex release notes\")\n4. claude_agent_sdk commits: curl -s 'https://api.github.com/repos/anthropics/claude-code/commits?since=YESTERDAY_ISO&per_page=20'\n5. OpenAI cookbook commits: curl -s 'https://api.github.com/repos/openai/openai-cookbook/commits?since=YESTERDAY_ISO&per_page=20'\n6. Relevant MCP server releases (web search: \"MCP server release 2026\" last 24h)\n\nFor every item found, tag bake-in applicability against our stack:\n- cortextos wrapper (src/pty/codex-app-server-pty.ts, src/bus/, dashboard/)\n- hub.revopsglobal.com (RGOS platform)\n- team-brain wiki pipeline\n- recipe app (ob1-parents)\n- charlie-holstine site\n\nIf actionable: create RGOS task via mcp__rgos__cortex_create_task assigned to codex (or dev for bus internals) with description including tag 'ai-tooling-bake-in'.\n\nWrite summary memo to analyst/output/YYYY-MM-DD-ai-tooling-watch.md. Ingest to shared-revops-global KB.\n\nIf nothing new found, write a one-line 'no new items' memo and skip KB ingest."
+      "prompt": "AI Tooling Watch \u2014 daily light scan (~5-10 min). RGOS task 945f065f.\n\nScan these sources for new releases, changes, or announcements from the last 24h:\n1. Claude Code release notes (web search: \"Claude Code release notes site:docs.anthropic.com OR site:github.com/anthropics\")\n2. Anthropic blog/news (web search: \"site:anthropic.com/news OR site:anthropic.com/blog\" last 24h)\n3. OpenAI Codex changelog (web search: \"OpenAI Codex changelog OR codex release notes\")\n4. claude_agent_sdk commits: curl -s 'https://api.github.com/repos/anthropics/claude-code/commits?since=YESTERDAY_ISO&per_page=20'\n5. OpenAI cookbook commits: curl -s 'https://api.github.com/repos/openai/openai-cookbook/commits?since=YESTERDAY_ISO&per_page=20'\n6. Relevant MCP server releases (web search: \"MCP server release 2026\" last 24h)\n\nFor every item found, tag bake-in applicability against our stack:\n- cortextos wrapper (src/pty/codex-app-server-pty.ts, src/bus/, dashboard/)\n- hub.revopsglobal.com (RGOS platform)\n- team-brain wiki pipeline\n- recipe app (ob1-parents)\n- charlie-holstine site\n\nIf actionable: create RGOS task via mcp__rgos__cortex_create_task assigned to codex (or dev for bus internals) with description including tag 'ai-tooling-bake-in'.\n\nWrite summary memo to analyst/output/YYYY-MM-DD-ai-tooling-watch.md. Ingest to shared-revops-global KB.\n\nIf nothing new found, write a one-line 'no new items' memo and skip KB ingest."
     },
     {
       "name": "ai-tooling-watch-weekly",
       "type": "recurring",
       "cron": "7 9 * * 1",
-      "prompt": "AI Tooling Watch — weekly Monday synthesis. RGOS task 945f065f.\n\nConsolidate the past 7 days of daily AI Tooling Watch memos (analyst/output/*-ai-tooling-watch.md) into a single weekly summary.\n\nStructure:\n- What shipped (new releases/features across Claude Code, Codex, Agent SDK, MCP servers)\n- What we ported (items that became RGOS tasks and were completed)\n- What we deferred and why (items tagged but not yet acted on)\n\nWrite to analyst/output/YYYY-MM-DD-ai-tooling-weekly-synth.md.\nSend the synthesis to orchestrator via cortextos bus send-message orchestrator normal '<summary>' for distribution.\nIngest to shared-revops-global KB."
+      "prompt": "AI Tooling Watch \u2014 weekly Monday synthesis. RGOS task 945f065f.\n\nConsolidate the past 7 days of daily AI Tooling Watch memos (analyst/output/*-ai-tooling-watch.md) into a single weekly summary.\n\nStructure:\n- What shipped (new releases/features across Claude Code, Codex, Agent SDK, MCP servers)\n- What we ported (items that became RGOS tasks and were completed)\n- What we deferred and why (items tagged but not yet acted on)\n\nWrite to analyst/output/YYYY-MM-DD-ai-tooling-weekly-synth.md.\nSend the synthesis to orchestrator via cortextos bus send-message orchestrator normal '<summary>' for distribution.\nIngest to shared-revops-global KB."
     },
     {
       "name": "brief-watchdog",
@@ -126,7 +126,7 @@
       "name": "doc-drift-checker",
       "type": "recurring",
       "cron": "0 6 * * 6",
-      "prompt": "Doc drift checker. Compare key documentation files against actual codebase state. Check: (1) CLAUDE.md references to file paths — verify each path exists. (2) AGENTS.md role descriptions — verify against current enabled-agents.json. (3) knowledge.md tool/command references — verify commands exist in bus/. (4) README or SYSTEM.md references to architecture — verify against actual directory structure. Write results to analyst/output/YYYY-MM-DD-doc-drift.md. For each drift found: file, line, claim, actual state. If >3 drifts found, create one RGOS task to fix them. If 0 drifts, write one-line 'no drift detected' and skip task creation."
+      "prompt": "Doc drift checker. Compare key documentation files against actual codebase state. Check: (1) CLAUDE.md references to file paths \u2014 verify each path exists. (2) AGENTS.md role descriptions \u2014 verify against current enabled-agents.json. (3) knowledge.md tool/command references \u2014 verify commands exist in bus/. (4) README or SYSTEM.md references to architecture \u2014 verify against actual directory structure. Write results to analyst/output/YYYY-MM-DD-doc-drift.md. For each drift found: file, line, claim, actual state. If >3 drifts found, create one RGOS task to fix them. If 0 drifts, write one-line 'no drift detected' and skip task creation."
     },
     {
       "name": "heartbeat-health-watch",
@@ -163,6 +163,12 @@
       "type": "recurring",
       "cron": "15 10 * * 1",
       "prompt": "Read prompts/cron-skill-progression-map-team-brain.md and execute exactly one bounded team-brain skill progression pass; write the artifact and exit."
+    },
+    {
+      "name": "detection-shadow-monitor",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Run detection-shadow monitor: python3 /home/cortextos/cortextos/orgs/revops-global/agents/analyst/scripts/detection-shadow-monitor.py. Detects three classes of detection-shadow failures: red-main (any of 5 RevOps repos failing CI on main), stale-lock-d (>15min .lock.d in agent inbox), ack-loop (3+ generic acks in 10min without artifact). Alerts orchestrator on each new incident (6h dedup). Per theta-2026-05-24 Phase 7."
     }
   ],
   "ctx_autoreset_threshold": 45,

@@ -78,6 +78,8 @@ Requires `ecosystem.local_version_control.enabled: true` in config.json.
 
 <!-- Dated entries: **YYYY-MM-DD — <one-line context>** followed by what worked + why. Keep additive; don't delete prior entries unless they were proven wrong. -->
 
+**2026-05-24 — Daily manual snapshot after session-lock block.** The staged-diff review caught untracked credential-bearing verification scripts before commit, so the safety checklist still worked when `cortextos bus auto-commit` could not run under the active analyst session lock.
+
 ### Calibrations
 
 <!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->
