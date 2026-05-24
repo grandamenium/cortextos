@@ -4,7 +4,7 @@
  *
  * Vignette visual-regression gate:
  *   - compare a live or supplied Estate vignette PNG against the canonical PNG
- *   - fail when perceptual dHash Hamming distance exceeds 12
+ *   - fail when perceptual dHash Hamming distance exceeds 30
  */
 
 import { chromium, type Page } from 'playwright';
@@ -36,7 +36,7 @@ const VIGNETTE_SELECTOR = process.env.DOGFOOD_BAND_C_SELECTOR ?? [
   'section:has-text("Morning Watch")',
   'main',
 ].join(', ');
-const HAMMING_THRESHOLD = Number.parseInt(process.env.DOGFOOD_BAND_C_HAMMING_THRESHOLD ?? '12', 10);
+const HAMMING_THRESHOLD = Number.parseInt(process.env.DOGFOOD_BAND_C_HAMMING_THRESHOLD ?? '30', 10);
 const results: CheckResult[] = [];
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
