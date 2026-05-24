@@ -13,6 +13,7 @@ import {
 } from '@/lib/config';
 import { getHeartbeat, getHealthStatus } from '@/lib/data/heartbeats';
 import { getTasksByAgent } from '@/lib/data/tasks';
+import { sql } from '@/lib/db';
 import { parseIdentityMd } from '@/lib/markdown-parser';
 import type {
   AgentSummary,
@@ -126,6 +127,38 @@ export async function getAgentIdentity(
  */
 export async function discoverAgents(org?: string): Promise<AgentSummary[]> {
   const allAgents = getAllAgents();
+
+  // On Vercel (no CTX_ROOT filesystem), fall back to heartbeats table.
+  if (allAgents.length === 0) {
+    try {
+      const rows = await sql<{
+        agent: string; org: string; status: string | null;
+        current_task: string | null; last_heartbeat: string | null;
+      }[]>`SELECT agent, org, status, current_task, last_heartbeat FROM heartbeats
+           ${org ? sql`WHERE org = ${org}` : sql``} ORDER BY agent`;
+      return rows.map((row) => {
+        const hb = row.last_heartbeat
+          ? { last_heartbeat: row.last_heartbeat, status: row.status ?? undefined, current_task: row.current_task ?? undefined }
+          : null;
+        const health = hb ? getHealthStatus(hb as Parameters<typeof getHealthStatus>[0]) : 'down';
+        return {
+          name: row.agent,
+          systemName: row.agent,
+          org: row.org,
+          health,
+          lastHeartbeat: row.last_heartbeat ?? undefined,
+          currentTask: row.current_task ?? undefined,
+          emoji: '',
+          role: '',
+          tasksToday: 0,
+          runtime: 'claude-code' as const,
+        } as AgentSummary & { systemName: string; emoji: string; role: string; tasksToday: number };
+      });
+    } catch {
+      return [];
+    }
+  }
+
   const agents = org ? allAgents.filter((a) => a.org === org) : allAgents;
 
   const summaries = await Promise.all(
