@@ -13,35 +13,57 @@ Daily stop-motion scene for the Estate App home page hero.
 
 ---
 
-## Style Contract
+## Engine: Primary — generate-daily-vignette.mjs
 
-Canonical style is defined in `team-brain/.claude/skills/artisan-stopmotion/SKILL.md`. Read that skill before generating any Flow prompt. The STYLE LOCK from that skill is the mandatory prompt prefix for both Step 1 and Step 2.
+`ob1-app/scripts/generate-daily-vignette.mjs` is the daily image generator. Runs at ~02:00 PT.
 
+**Pipeline:**
+1. Fetches weather signals from Open-Meteo for the Estate (lat 45.8153, lon -122.741)
+2. Fetches estate context from Supabase: top insight, priority tasks, egg count, harvests, hive inspections, orchard events, mushroom batches, cottage stays
+3. `pickCharacter(signals)` selects chunk / petunia / chunkita based on weather + weekday fallback
+4. `composeBeat()` + `composeTitle()` write the prose from character + signals + estate context
+5. `composePrompt()` assembles the Wes Anderson Isle of Dogs stop-motion prompt (already contains all style constraints — no external STYLE LOCK needed)
+6. Calls `nano-banana-generate.py` via `uv run` with `-i reference/<character>-canonical.png` as character lock
+7. Output: `public/vignettes/YYYY-MM-DD-{character}.jpg` + `YYYY-MM-DD.json` sidecar
+
+**Character refs** (canonical PNGs — identity locked):
+
+| Key | File |
+|-----|------|
+| chunk | `reference/chunk-canonical.png` |
+| petunia | `reference/petunia-canonical.png` |
+| chunkita | `reference/chunkita-canonical.png` |
+
+Additional canonical PNGs in `/home/cortextos/ob1-app/reference/`: greg, tiffany, dad, mom, alejandro, winston, maple, littlebit, minbit, percy, ducks, chickens.
+
+**Usage:**
+```bash
+node scripts/generate-daily-vignette.mjs            # today
+node scripts/generate-daily-vignette.mjs 2026-05-19 # specific date
+node scripts/generate-daily-vignette.mjs --force    # rerender even if present
 ```
-STYLE LOCK:
-"Stop-motion animation film still, Wes Anderson Isle of Dogs aesthetic. Miniature diorama quality.
-HANDS: Matte ochre-yellow sculpted resin hands, solid uniform skin tone approximately #C7A446, simplified blocky fingers, no pores no wrinkles, tiny scattered black speckles visible on skin surface, mannequin-like smooth finish — NOT realistic human skin, NOT claymation, NOT marionette.
-CAMERA: Overhead 90-degree birds-eye locked flat-lay, no perspective tilt, clean graphic framing.
-LIGHTING: Soft flat overhead studio light, even diffused illumination, gentle shadows, controlled like product photography — NOT dramatic side lighting.
-SURFACE: Light ash or oak wood, straight prominent vertical grain, warm neutral tone, matte finish — NOT dark walnut, NOT glossy.
-CUTTING BOARD (if present): Pale maple or birch, rectangular, slightly worn matte finish, sits on top of main surface.
-MATTE EVERYTHING: No specular reflections, no shine, no gloss anywhere except lacquerware props. Every surface is matte.
-FOOD/OBJECTS: Stylized and simplified like sculpted models — NOT photorealistic. Graphic, clean forms.
-COLOR: Warm neutral palette dominated by ochre, tan, pale wood. One saturated accent color as pop.
-SHARPNESS: Ultra-sharp, every frame a perfect photograph, no motion blur, no depth-of-field bokeh."
-```
+
+**Env required**: `GEMINI_API_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_OB1_USER_ID`
 
 ---
 
-## 2-Step Generation Contract (Greg directive 2026-05-23T02:35Z)
+## Engine: Secondary — mac-codex Flow path (video)
 
-Flow generation uses a 2-step character continuity process:
+Uses Greg's 20K Vertex/AI Studio browser credits via labs.google/flow on Greg's Mac.
 
-1. **Step 1 — Still (Imagen):** Generate reference still photo via Flow Imagen using STYLE LOCK + scene prompt. Establishes character pose, lighting, environment.
-2. **Step 2 — Video (Flow stitch):** Generate MP4 using Flow stitch with Step 1 still as **both start and end frame**. Provide only a motion prompt. Character and environment are pinned by the still — ensures visual continuity day-over-day.
-3. **Save both:** `"image"` = JPG filename (still), `"video"` = MP4 filename (video loop).
+**2-step video generation:**
+1. **Step 1 — Still**: Use JPG from primary engine, or generate via Flow with the character's Flow Characters library entry (`-p <character>`, same canonical PNG) + composePrompt-style scene description
+2. **Step 2 — Video**: Flow stitch mode with Step 1 still as **both start frame and end frame** + short motion-only prompt. Character and environment are pinned by the still.
 
-**Why:** Stitch mode with identical start/end frames = seamless loop + locked character appearance without re-specifying appearance in every video prompt.
+Result: `public/vignettes/YYYY-MM-DD-<scene>.mp4` committed with `git add -f`; `"video"` field added to JSON sidecar.
+
+---
+
+## Character Continuity Rule (Greg directive 2026-05-23)
+
+- Animals and people **MUST** come from canonical PNG: `-i` flag for nano-banana, `-p` (Flow Characters) for Flow
+- Poses, activities, and estate context vary daily — **identity never varies**
+- No fresh generic characters without the canonical reference — this is what caused the "generic chicken" incident
 
 ---
 
@@ -68,10 +90,10 @@ Flow generation uses a 2-step character continuity process:
 
 **Fields**:
 - `image` (required): JPG filename. Used as `<img>` and as `<video poster>` when video is present.
-- `video` (optional): MP4 filename. When present, component renders `<video autoPlay muted loop playsInline>` instead of image. Image becomes poster frame.
+- `video` (optional): MP4 filename. When present, component renders `<video autoPlay muted loop playsInline>` instead of image.
 - `title` + `image` both required — if either absent, falls back to static hero card.
 
-**iOS Safari**: `playsInline` is required for inline autoplay; without it iOS forces fullscreen. `muted` is required for autoplay without user gesture.
+**iOS Safari**: `playsInline` required for inline autoplay; `muted` required for autoplay without user gesture.
 
 **Git note**: `public/vignettes/` is in `.gitignore` but files are tracked. Use `git add -f` for both JSON and MP4 files.
 
@@ -136,4 +158,4 @@ Run against `hubauzvpxuparrvqjytt` (ob1-app prod). If count > 0, dismiss + inser
 
 ## Contamination Risk
 
-The vignette generator uses the live `estate_insights` primary row as narrative context at generation time. If a broken-pattern insight is live during the daily generation window (~02:00 UTC), its copy will appear in the vignette `title` and `beat`. Path A critic gate (PR #135) prevents new broken rows from landing; run Path B cleanup to dismiss any pre-Path-A legacy rows.
+The generator uses the live `estate_insights` primary row as narrative context. If a broken-pattern row is live at generation time (~02:00 PT), its copy contaminates the vignette `title` and `beat`. Path A critic gate (PR #135) prevents new broken rows; run Path B cleanup to dismiss any pre-Path-A legacy rows.
