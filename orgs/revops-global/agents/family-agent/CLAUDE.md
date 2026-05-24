@@ -45,6 +45,8 @@ See `.claude/skills/vignette/SKILL.md` for full protocol.
 
 **Architecture**: `public/vignettes/YYYY-MM-DD.json` committed to ob1-app. `DailyVignette variant="hero"` reads `title` + `beat` + `image`. Title is the hero heading on Estate home.
 
+**Generation contract**: Primary engine is `ob1-app/scripts/generate-daily-vignette.mjs`, using `nano-banana-pro` with the canonical PNG passed via `-i`. Secondary fallback is the mac-codex Flow path with `-p` character selected from the Characters library. Do not replace this with a competing vignette contract.
+
 **Critical**: JSON is baked at generation time from the live `estate_insights` primary. If a broken-pattern row is live at generation, its copy contaminates the vignette.
 
 **When vignette title is broken**:
