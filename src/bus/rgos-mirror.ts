@@ -230,6 +230,8 @@ export async function drainRetryQueue(): Promise<void> {
   migrateRetryQueueIds();
   // Remap raw bus constraint values (priority=normal, status=pending, etc.)
   migrateRetryQueueConstraints();
+  // Convert raw bus task dependencies to UUIDv5 for RGOS UUID[] columns.
+  migrateRetryQueueBlockedBy();
   // Convert raw bus IDs in reply_to_id to UUIDv5
   migrateRetryQueueReplyToId();
   const entries = readRetryQueue(qPath);
@@ -432,6 +434,45 @@ export function migrateRetryQueueReplyToId(): void {
   } catch { /* best-effort */ }
 }
 
+/**
+ * Migrates orch_tasks retry entries whose blocked_by array still contains raw
+ * bus task IDs. RGOS stores blocked_by as UUID[], while the bus ledger keeps
+ * task_... IDs; metadata.blocked_by preserves the raw IDs for operators.
+ */
+export function migrateRetryQueueBlockedBy(): void {
+  const qPath = retryQueuePath();
+  if (!qPath) return;
+  const entries = readRetryQueue(qPath);
+  if (entries.length === 0) return;
+
+  let changed = false;
+  const migrated = entries.map(entry => {
+    if (entry.table !== 'orch_tasks') return entry;
+    const blockedBy = entry.row.blocked_by;
+    if (!Array.isArray(blockedBy)) return entry;
+
+    const mapped = blockedBy
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+      .map(id => isUuid(id) ? id : uuidv5(id));
+
+    const nextBlockedBy = mapped.length > 0 ? mapped : null;
+    if (JSON.stringify(blockedBy) === JSON.stringify(nextBlockedBy)) return entry;
+
+    changed = true;
+    return { ...entry, row: { ...entry.row, blocked_by: nextBlockedBy } };
+  });
+
+  if (!changed) return;
+
+  try {
+    writeFileSync(
+      qPath,
+      migrated.map(e => JSON.stringify(e)).join('\n') + '\n',
+      { encoding: 'utf-8', mode: 0o600 },
+    );
+  } catch { /* best-effort */ }
+}
+
 // ---------------------------------------------------------------------------
 // Constraint maps — translate bus values to RGOS enum values
 // ---------------------------------------------------------------------------
@@ -464,6 +505,13 @@ export function mapStatus(s: string): string {
   return STATUS_MAP[s] ?? 'approved';
 }
 
+export function mapBlockedBy(blockedBy: string[] | undefined): string[] | null {
+  if (!blockedBy || blockedBy.length === 0) return null;
+  return blockedBy
+    .filter(id => typeof id === 'string' && id.length > 0)
+    .map(id => isUuid(id) ? id : uuidv5(id));
+}
+
 // ---------------------------------------------------------------------------
 // Payload builders
 // ---------------------------------------------------------------------------
@@ -482,7 +530,7 @@ export function buildTaskRow(task: Task): Record<string, unknown> {
     result: task.result ?? null,
     result_links: null,
     goal_ancestry: null,
-    blocked_by: task.blocked_by && task.blocked_by.length > 0 ? task.blocked_by : null,
+    blocked_by: mapBlockedBy(task.blocked_by),
     tokens_cost: null,
     created_at: task.created_at,
     updated_at: task.updated_at,

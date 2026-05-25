@@ -77,7 +77,8 @@ async function main(): Promise<void> {
   const agentRole = process.env.CTX_AGENT_NAME ?? undefined;
 
   try {
-    // Look up skill_id from orch_skills by slug (nullable — graceful if skill not in catalog)
+    // Look up skill_id. Production orch_skill_invocations.skill_id is NOT NULL,
+    // so unknown slugs must be skipped instead of inserted.
     let skillId: string | null = null;
     const skillRes = await fetch(
       `${sbUrl}/rest/v1/orch_skills?slug=eq.${encodeURIComponent(slug)}&select=id&limit=1`,
@@ -87,6 +88,7 @@ async function main(): Promise<void> {
       const skillRows = (await skillRes.json()) as Array<{ id: string }>;
       skillId = skillRows[0]?.id ?? null;
     }
+    if (!skillId) return;
 
     // Look up agent UUID from orch_agents by role_id or title
     let agentId: string | null = null;
@@ -107,7 +109,7 @@ async function main(): Promise<void> {
       source,
       succeeded: true,
     };
-    if (skillId) body.skill_id = skillId;
+    body.skill_id = skillId;
     if (agentId) body.agent_id = agentId;
     if (agentRole) body.agent_role = agentRole;
 

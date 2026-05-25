@@ -74,7 +74,8 @@ export async function logImplicitInvocation(
 
     const headers = { apikey: sbKey, Authorization: `Bearer ${sbKey}` };
 
-    // Resolve skill_id (nullable — ok if skill not in catalog yet)
+    // Resolve skill_id. Production orch_skill_invocations.skill_id is NOT NULL,
+    // so unknown or falsely extracted slugs must be skipped instead of inserted.
     let skillId: string | null = null;
     const skillRes = await fetch(
       `${sbUrl}/rest/v1/orch_skills?slug=eq.${encodeURIComponent(skillSlug)}&select=id&limit=1`,
@@ -86,6 +87,7 @@ export async function logImplicitInvocation(
     } else {
       warn(`skill lookup failed for "${skillSlug}" (${skillRes.status}): ${await responseText(skillRes)}`);
     }
+    if (!skillId) return;
 
     // Resolve agent_id (nullable)
     let agentId: string | null = null;
@@ -107,7 +109,7 @@ export async function logImplicitInvocation(
       source: options.source ?? 'bus_implicit',
       succeeded: true,
     };
-    if (skillId) body.skill_id = skillId;
+    body.skill_id = skillId;
     if (agentId) body.agent_id = agentId;
     if (agentRole) body.agent_role = agentRole;
 
