@@ -8,6 +8,7 @@ import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTa
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
+import { setWrdrobeBranch } from '../bus/wrdrobe-branch.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
@@ -2760,6 +2761,40 @@ busCommand
     if (!opts.dryRun && patched > 0) {
       console.log('\nRestart affected agents to apply the new settings:');
       console.log('  cortextos restart <agent-name>');
+    }
+  });
+
+// --- set-wrdrobe-branch ---
+//
+// Telegram → Mini metro branch swap. Validates the branch exists on the
+// WRDROBE remote, then writes it to the autopull config file the Mini
+// reads on its next cycle. Typically invoked by cardinal's session
+// handler when an instruction like "switch metro to <branch>" arrives.
+
+busCommand
+  .command('set-wrdrobe-branch')
+  .description('Set the active WRDROBE branch for the Mini autopull config')
+  .argument('<branch>', 'Branch name on the WRDROBE remote (e.g. main, agent/wrdrobe-dev/foo)')
+  .option('--repo-url <url>', 'Override the WRDROBE remote URL (default: env CTX_WRDROBE_REPO_URL or git@github.com:Wrdrobe/wrdrobe.git)')
+  .option('--conf-path <path>', 'Override the autopull config file path (default: env CTX_WRDROBE_BRANCH_CONF or ~/wrdrobe-branch.conf)')
+  .action((branch: string, opts: { repoUrl?: string; confPath?: string }) => {
+    const repoUrl = opts.repoUrl ?? process.env.CTX_WRDROBE_REPO_URL;
+    const confPath = opts.confPath ?? process.env.CTX_WRDROBE_BRANCH_CONF;
+    try {
+      const result = setWrdrobeBranch(branch, {
+        ...(repoUrl ? { repoUrl } : {}),
+        ...(confPath ? { confPath } : {}),
+      });
+      if (result.kind === 'noop') {
+        console.log(`Mini already on '${result.branch}'. No change.`);
+      } else {
+        const fromLabel = result.from ?? '(unset)';
+        console.log(`Mini branch: ${fromLabel} → ${result.to}. Autopull picks this up on the next cycle (~15s).`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(msg);
+      process.exitCode = 1;
     }
   });
 
