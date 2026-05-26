@@ -75,9 +75,29 @@ describe('runHeartbeatHealthWatch', () => {
 
     expect(fast?.thresholdMinutes).toBe(45);
     expect(fast?.stale).toBe(true);
-    expect(hourly?.thresholdMinutes).toBe(90);
-    expect(hourly?.stale).toBe(false);
-    expect(report.staleRunningAgents.map(agent => agent.agent)).toEqual(['fast']);
+    expect(hourly?.thresholdMinutes).toBe(45);
+    expect(hourly?.stale).toBe(true);
+    expect(report.staleRunningAgents.map(agent => agent.agent)).toEqual(['fast', 'hourly']);
+  });
+
+  it('caps long heartbeat intervals to the explicit watch threshold', () => {
+    const projectRoot = join(root, 'project');
+    writeAgentConfig(projectRoot, 'day-agent', '4h');
+    writeHeartbeat('day-agent', 247);
+
+    const report = runHeartbeatHealthWatch(
+      paths(),
+      'watcher',
+      'test-org',
+      projectRoot,
+      new Set(['day-agent']),
+      { thresholdMinutes: 120 },
+    );
+
+    const dayAgent = report.agents.find(agent => agent.agent === 'day-agent');
+    expect(dayAgent?.thresholdMinutes).toBe(120);
+    expect(dayAgent?.stale).toBe(true);
+    expect(report.staleRunningAgents.map(agent => agent.agent)).toEqual(['day-agent']);
   });
 
   it('falls back to the CLI threshold when no heartbeat cron interval is available', () => {

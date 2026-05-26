@@ -114,7 +114,7 @@ function staleThresholdMinutes(
 ): number {
   const heartbeatMinutes = heartbeatCronIntervalMinutes(ctxRoot, projectRoot, org, agent);
   if (heartbeatMinutes === null) return fallbackThresholdMinutes;
-  return Math.max(1, Math.ceil(heartbeatMinutes * 1.5));
+  return Math.max(1, Math.min(fallbackThresholdMinutes, Math.ceil(heartbeatMinutes * 1.5)));
 }
 
 function renderReport(report: HeartbeatHealthReport): string {

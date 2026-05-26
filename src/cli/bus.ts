@@ -3775,12 +3775,12 @@ busCommand
       // Daemon not running — no running agent data available
     }
 
+    const runningHeartbeatThresholdMinutes = 120;
     const results = [];
     for (const [name, info] of Object.entries(agentMap)) {
       if (opts.org && info.org !== opts.org) continue;
 
-      const running = runningAgents.has(name);
-      if (opts.status === 'running' && !running) continue;
+      const daemonRunning = runningAgents.has(name);
 
       // Read role from IDENTITY.md
       let role = '';
@@ -3797,23 +3797,56 @@ busCommand
       // Read heartbeat
       const hbFile = join(ctxRoot, 'state', name, 'heartbeat.json');
       let lastHeartbeat = '', currentTask = '', mode = '';
+      let heartbeatAgeMinutes: number | null = null;
       if (existsSync(hbFile)) {
         try {
           const hb = JSON.parse(readFileSync(hbFile, 'utf-8'));
           lastHeartbeat = hb.last_heartbeat ?? '';
           currentTask = hb.current_task ?? '';
           mode = hb.mode ?? '';
+          if (lastHeartbeat) {
+            const parsed = Date.parse(lastHeartbeat);
+            if (Number.isFinite(parsed)) heartbeatAgeMinutes = Math.max(0, (Date.now() - parsed) / 60_000);
+          }
         } catch { /* skip */ }
       }
 
-      results.push({ name, org: info.org, role, enabled: info.enabled, running, last_heartbeat: lastHeartbeat, current_task: currentTask, mode });
+      const heartbeatFresh = heartbeatAgeMinutes !== null && heartbeatAgeMinutes <= runningHeartbeatThresholdMinutes;
+      const recoveryState = daemonRunning && !heartbeatFresh
+        ? 'stale_heartbeat_action_required'
+        : daemonRunning
+          ? 'running'
+          : 'stopped';
+      const running = daemonRunning && heartbeatFresh;
+      if (opts.status === 'running' && !running) continue;
+
+      results.push({
+        name,
+        org: info.org,
+        role,
+        enabled: info.enabled,
+        running,
+        daemon_running: daemonRunning,
+        recovery_state: recoveryState,
+        heartbeat_age_minutes: heartbeatAgeMinutes,
+        last_heartbeat: lastHeartbeat,
+        current_task: currentTask,
+        mode,
+      });
     }
 
     if (opts.format === 'text') {
       console.log(`Agents in system:\n`);
       for (const a of results) {
-        const status = a.running ? 'RUNNING' : 'stopped';
+        const status = a.recovery_state === 'stale_heartbeat_action_required'
+          ? 'STALE heartbeat'
+          : a.running
+            ? 'RUNNING'
+            : 'stopped';
         console.log(`  ${a.name} (${a.org || 'root'}) [${status}]`);
+        if (a.recovery_state === 'stale_heartbeat_action_required') {
+          console.log(`    Recovery: daemon reports running but heartbeat is ${Math.round(a.heartbeat_age_minutes ?? 0)}m old; restart/action required`);
+        }
         if (a.role) console.log(`    Role: ${a.role}`);
         if (a.current_task) console.log(`    Working on: ${a.current_task}`);
         console.log('');

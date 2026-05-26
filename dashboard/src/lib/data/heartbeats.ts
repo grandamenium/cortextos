@@ -7,7 +7,7 @@ import { CTX_ROOT, getHeartbeatPath } from '@/lib/config';
 import type { Heartbeat, HealthStatus, HealthSummary } from '@/lib/types';
 
 // Default staleness thresholds (minutes)
-const STALE_THRESHOLD_MIN = 300; // 5 hours
+const STALE_THRESHOLD_MIN = 120; // 2 hours: day-mode running agents need actionable recovery before a 4h+ gap
 const DOWN_THRESHOLD_MIN = 1440; // 24 hours
 
 /**
