@@ -14,3 +14,17 @@ vm_ssh_public_key = "ssh-ed25519 AAAA... ops@cortextos"
 # Optional overrides — defaults are usually fine.
 # vm_size           = "Standard_D2s_v3"
 # data_disk_size_gb = 64
+
+# ── Cloudflare (SP2c-2: Tunnel + Access) ──────────────────────────
+# Required before `terraform apply` of the tunnel resources.
+# Also export the API token (never put it in this file):
+#   export CLOUDFLARE_API_TOKEN=...   (scopes: Zone:DNS:Edit on wyre.ai,
+#   Account:Cloudflare Tunnel:Edit, Account:Access Apps and Policies:Edit)
+cloudflare_account_id    = ""  # Cloudflare dashboard → account id
+cloudflare_zone_id       = ""  # wyre.ai zone → zone id
+cloudflare_access_idp_id = ""  # Entra IdP id from CF Zero Trust → Authentication (see runbook)
+# Optional overrides (sensible defaults exist):
+# cloudflare_zone_name = "wyre.ai"
+# dashboard_hostname   = "agents.internal.wyre.ai"
+# ssh_hostname         = "agents-ssh.internal.wyre.ai"
+# access_email_domain  = "wyretechnology.com"
