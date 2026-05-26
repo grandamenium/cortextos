@@ -82,6 +82,8 @@ Requires `ecosystem.local_version_control.enabled: true` in config.json.
 
 **2026-05-25 — Daily manual snapshot after session-lock block.** `cortextos bus auto-commit` was blocked by the active analyst session lock, so the manual review path was used again. The scan excluded generated backups/cache and an untracked credential-bearing verification script before staging the safe source, config, report, and memory changes.
 
+**2026-05-26 — Daily manual snapshot after session-lock block.** `cortextos bus auto-commit` was again blocked by the active analyst session lock, so the manual review path staged only reviewed source, config, test, and safe policy-check changes. Generated backups/cache and an untracked credential-bearing workflow verification script were intentionally left unstaged.
+
 ### Calibrations
 
 <!-- Subtle preferences Greg consistently nudges — pre-apply these next time. -->

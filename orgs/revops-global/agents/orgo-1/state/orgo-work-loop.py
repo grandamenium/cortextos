@@ -79,7 +79,7 @@ VM_MAP = {
     'codex-cu':    ('3ec3d7f3-a5da-4678-8b25-ce28b7aed829', 'orgo-codex-computeruse'),
     'hub-qa':      ('4229f370-7593-4a57-8442-70a912e83131', 'orgo-hub-qa'),
     'telegram-web':('cf8cb3d9-d2e5-4a3a-a59c-00a4a62898e5', 'orgo-telegram-web'),
-    'wiki':        ('e0848ad0-70d9-409e-9384-baca933f281a', 'orgo-wiki-ingestion-worker'),
+    'wiki':        ('289e5608-2110-4802-9339-ceec92c38e71', 'orgo-wiki-ingestion-worker'),
     'linkedin':    ('cf79bc43-07b6-4c7c-8714-eb53c5861c73', 'orgo-linkedin-session'),
 }
 
@@ -366,7 +366,9 @@ def ws_drain_find(s, req_id, timeout=6):
 
 tabs = json.loads(urllib.request.urlopen('http://localhost:9335/json', timeout=5).read())
 hub_tab = next((t for t in tabs if 'hub.revopsglobal.com' in t.get('url','')), None)
-if not hub_tab: print('ERROR:no hub tab'); raise SystemExit(1)
+if not hub_tab:
+    hub_tab = next((t for t in tabs if t.get('type') == 'page' and t.get('webSocketDebuggerUrl')), None)
+if not hub_tab: print('ERROR:no controllable page tab'); raise SystemExit(1)
 path = hub_tab['webSocketDebuggerUrl'].split('localhost:9335',1)[1]
 s = ws_connect(9335, path)
 

@@ -135,6 +135,117 @@ describe('CodexAppServerPTY endpoint policy', () => {
   });
 });
 
+describe('CodexAppServerPTY account pool', () => {
+  const poolConfig = {
+    codex_account_pool: [
+      {
+        label: 'primary personal',
+        codex_home: '/tmp/codex-primary',
+        email: 'gregharned@gmail.com',
+        workspace: 'personal',
+        priority: 1,
+      },
+      {
+        label: 'backup work',
+        codex_home: '/tmp/codex-work',
+        email: 'greg@revopsglobal.com',
+        workspace: 'work',
+        priority: 2,
+      },
+    ],
+  };
+
+  it('exports the selected labeled CODEX_HOME into the app-server environment', () => {
+    const pty = new CodexAppServerPTY(mockEnv, poolConfig);
+    const env = (pty as unknown as { buildEnv: () => Record<string, string> }).buildEnv();
+
+    expect(env.CODEX_HOME).toBe('/tmp/codex-primary');
+    expect(env.CTX_CODEX_ACCOUNT_LABEL).toBe('primary personal');
+    expect(env.CTX_CODEX_ACCOUNT_EMAIL).toBe('gregharned@gmail.com');
+    expect(env.CTX_CODEX_ACCOUNT_WORKSPACE).toBe('personal');
+  });
+
+  it('lets the configured account pool override a stale agent env CODEX_HOME', () => {
+    fsMocks.existsSync.mockImplementation((path: string) => path.endsWith('/.env'));
+    fsMocks.readFileSync.mockImplementation((path: string) => {
+      if (path.endsWith('/.env')) return 'CODEX_HOME=/tmp/stale-codex-home\nCHAT_ID=7940429114\n';
+      return '';
+    });
+
+    const pty = new CodexAppServerPTY(mockEnv, poolConfig);
+    const env = (pty as unknown as { buildEnv: () => Record<string, string> }).buildEnv();
+
+    expect(env.CODEX_HOME).toBe('/tmp/codex-primary');
+    expect(env.CTX_CODEX_ACCOUNT_LABEL).toBe('primary personal');
+    expect(env.CTX_TELEGRAM_CHAT_ID).toBe('7940429114');
+  });
+
+  it('skips an unhealthy primary account at startup', () => {
+    fsMocks.existsSync.mockImplementation((path: string) => path.endsWith('codex-account-pool-state.json'));
+    fsMocks.readFileSync.mockImplementation((path: string) => {
+      if (path.endsWith('codex-account-pool-state.json')) {
+        return JSON.stringify({
+          activeLabel: 'primary personal',
+          updatedAt: new Date().toISOString(),
+          accounts: [{
+            label: 'primary personal',
+            unhealthyUntil: new Date(Date.now() + 60_000).toISOString(),
+            failureClass: 'quota',
+            reason: 'rate limit',
+            updatedAt: new Date().toISOString(),
+          }],
+        });
+      }
+      return '';
+    });
+
+    const pty = new CodexAppServerPTY(mockEnv, poolConfig);
+    const env = (pty as unknown as { buildEnv: () => Record<string, string> }).buildEnv();
+
+    expect(env.CODEX_HOME).toBe('/tmp/codex-work');
+    expect(env.CTX_CODEX_ACCOUNT_LABEL).toBe('backup work');
+  });
+
+  it('rotates on auth failure, sends degraded Telegram ACK, and replays the turn once', async () => {
+    const pty = new CodexAppServerPTY(mockEnv, poolConfig);
+    (pty as unknown as { _alive: boolean })._alive = true;
+    (pty as unknown as { _threadId: string })._threadId = 'thread-1';
+    const restart = vi.fn().mockResolvedValue(undefined);
+    (pty as unknown as { restartAppServerForAccount: typeof restart }).restartAppServerForAccount = restart;
+
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    pty.setTelegramHandle({ sendMessage } as unknown as Parameters<typeof pty.setTelegramHandle>[0], '7940429114');
+
+    let turnStartCalls = 0;
+    const request = vi.fn().mockImplementation(async (method: string) => {
+      if (method === 'turn/start') {
+        turnStartCalls += 1;
+        if (turnStartCalls === 1) {
+          throw new Error('token_revoked');
+        }
+        setTimeout(() => {
+          (pty as unknown as { resolveTurnCompletion: () => void }).resolveTurnCompletion();
+        }, 0);
+      }
+      return { result: {} };
+    });
+    (pty as unknown as { request: typeof request }).request = request;
+
+    await (pty as unknown as { startTurn: (input: unknown[]) => Promise<void> }).startTurn([
+      { type: 'text', text: 'preserved inbound', text_elements: [] },
+    ]);
+
+    expect(turnStartCalls).toBe(2);
+    expect(restart).toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      '7940429114',
+      expect.stringContaining('switching to backup work'),
+      undefined,
+      { parseMode: null },
+    );
+  });
+});
+
 describe('CodexAppServerPTY command mapping', () => {
   function makeReadyPty() {
     const pty = new CodexAppServerPTY(mockEnv, {});

@@ -43,6 +43,9 @@ Persistent 24/7 code-execution specialist for RevOps Global. Codex owns routed i
 ## Canonical Pointers
 
 - Bus/comms/tasks/crons/memory/approvals: follow AGENTS.md and the relevant `.claude/skills/<name>/SKILL.md`.
+- Codex-specific recent operating corrections: follow `CODEX.md` in this
+  directory before claiming browser-routing, source-of-truth, product-boundary,
+  Flow/media, or patch-ready/deployed conclusions.
 - KB query/ingestion: follow AGENTS.md `Knowledge Base` and `reference_kb_ingestion`.
 - Git discipline: follow org-level `../../CLAUDE.md` when present, repo-root `../../../../CLAUDE.md`, and MEMORY.md feedback rules.
 - Team-brain wiki: query org memory/KB and wiki/repo guidance before web search for people, companies, calls, project history, or decisions.

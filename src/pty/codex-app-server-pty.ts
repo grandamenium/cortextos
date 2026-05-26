@@ -51,6 +51,28 @@ interface AppServerEndpoint {
   port?: number;
 }
 
+interface CodexAccountPoolEntry {
+  label: string;
+  codexHome: string;
+  email?: string;
+  workspace?: string;
+  priority: number;
+}
+
+interface CodexAccountHealth {
+  label: string;
+  unhealthyUntil?: string;
+  reason?: string;
+  failureClass?: 'auth' | 'quota';
+  updatedAt: string;
+}
+
+interface CodexAccountPoolState {
+  activeLabel?: string;
+  accounts: CodexAccountHealth[];
+  updatedAt: string;
+}
+
 interface ThreadResponse {
   thread: {
     id: string;
@@ -91,6 +113,9 @@ const SOCKET_BASENAME = 'codex.sock';
 const SOCKET_PATH_WARN_BYTES = 100;
 const BOOTSTRAP_PATTERN = '[codex-app-server] ready';
 const DEFAULT_WS_HOST = '127.0.0.1';
+const CODEX_ACCOUNT_POOL_STATE = 'codex-account-pool-state.json';
+const QUOTA_UNHEALTHY_MS = 4 * 60 * 60 * 1000;
+const AUTH_UNHEALTHY_MS = 24 * 60 * 60 * 1000;
 
 const SLASH_REWRITE_RE = /^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i;
 const LOCAL_SLASH_COMMANDS = new Set(['goal']);
@@ -126,10 +151,12 @@ export class CodexAppServerPTY {
   private _endpoint: AppServerEndpoint;
   private _threadStatePath: string;
   private _socketPointerPath: string;
+  private _accountPoolStatePath: string;
   private _threadId: string | null = null;
   private _telegramApi: TelegramAPI | null = null;
   private _chatId: string | null = null;
   private _typingLastSent = 0;
+  private _activeAccount: CodexAccountPoolEntry | null = null;
 
   constructor(env: CtxEnv, config: AgentConfig, logPath?: string) {
     this._env = env;
@@ -142,8 +169,10 @@ export class CodexAppServerPTY {
     this._stateDir = join(env.ctxRoot, 'state', env.agentName);
     this._threadStatePath = join(this._stateDir, 'codex-app-server-thread.json');
     this._socketPointerPath = join(this._stateDir, 'codex-app-server-socket.json');
+    this._accountPoolStatePath = join(this._stateDir, CODEX_ACCOUNT_POOL_STATE);
     this._endpoint = this.resolveEndpoint();
     this._outputBuffer = new OutputBuffer(1000, logPath, BOOTSTRAP_PATTERN);
+    this._activeAccount = this.selectHealthyAccount();
   }
 
   async spawn(mode: 'fresh' | 'continue', prompt: string): Promise<void> {
@@ -155,6 +184,7 @@ export class CodexAppServerPTY {
     this._alive = true;
 
     try {
+      this._activeAccount = this.selectHealthyAccount();
       await this.startAppServerWithRetry();
       await this.connectRpc();
       await this.initializeRpc();
@@ -571,11 +601,20 @@ export class CodexAppServerPTY {
     }
   }
 
-  private async startTurn(input: unknown[]): Promise<void> {
+  private async startTurn(input: unknown[], replayAttempt = 0): Promise<void> {
     if (!this._threadId) throw new Error('No Codex app-server thread is active');
     const completion = this.createTurnCompletion();
-    await this.request('turn/start', { threadId: this._threadId, input, ...TURN_PERMISSION_OVERRIDES });
-    await completion;
+    try {
+      await this.request('turn/start', { threadId: this._threadId, input, ...TURN_PERMISSION_OVERRIDES });
+      await completion;
+    } catch (err) {
+      this.clearTurnCompletion();
+      if (await this.rotateAccountForFailure(err, input, replayAttempt)) {
+        await this.startTurn(input, replayAttempt + 1);
+        return;
+      }
+      throw err;
+    }
   }
 
   /**
@@ -762,6 +801,13 @@ export class CodexAppServerPTY {
     pending.reject(err);
   }
 
+  private clearTurnCompletion(): void {
+    if (!this._turnCompletion) return;
+    const pending = this._turnCompletion;
+    this._turnCompletion = null;
+    clearTimeout(pending.timer);
+  }
+
   private emitUnsupportedRequestEvent(method: string): void {
     try {
       const paths = resolvePaths(this._env.agentName, this._env.instanceId, this._env.org);
@@ -876,6 +922,175 @@ export class CodexAppServerPTY {
       appendFileSync(join(logDir, 'codex-tokens.jsonl'), `${JSON.stringify(entry)}\n`);
     } catch {
       // Non-fatal: cost reporting is observability only.
+    }
+  }
+
+  private normalizeAccountPool(): CodexAccountPoolEntry[] {
+    const configured = Array.isArray(this._config.codex_account_pool)
+      ? this._config.codex_account_pool
+      : [];
+
+    return configured
+      .map<CodexAccountPoolEntry | null>((entry, index) => {
+        const label = typeof entry.label === 'string' ? entry.label.trim() : '';
+        const codexHome = typeof entry.codex_home === 'string' ? entry.codex_home.trim() : '';
+        if (!label || !codexHome) return null;
+        return {
+          label,
+          codexHome: expandHome(codexHome),
+          email: entry.email,
+          workspace: entry.workspace,
+          priority: Number.isFinite(entry.priority) ? Number(entry.priority) : index + 1,
+        };
+      })
+      .filter((entry): entry is CodexAccountPoolEntry => entry !== null)
+      .sort((a, b) => a.priority - b.priority);
+  }
+
+  private readAccountPoolState(): CodexAccountPoolState {
+    if (!existsSync(this._accountPoolStatePath)) {
+      return { accounts: [], updatedAt: new Date().toISOString() };
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(this._accountPoolStatePath, 'utf-8')) as CodexAccountPoolState;
+      return {
+        activeLabel: parsed.activeLabel,
+        accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
+        updatedAt: parsed.updatedAt || new Date().toISOString(),
+      };
+    } catch {
+      return { accounts: [], updatedAt: new Date().toISOString() };
+    }
+  }
+
+  private writeAccountPoolState(state: CodexAccountPoolState): void {
+    try {
+      ensureDir(this._stateDir);
+      atomicWriteSync(this._accountPoolStatePath, `${JSON.stringify(state, null, 2)}\n`);
+    } catch {
+      // Non-fatal; account failover still proceeds in memory.
+    }
+  }
+
+  private selectHealthyAccount(excludeLabel?: string): CodexAccountPoolEntry | null {
+    const pool = this.normalizeAccountPool();
+    if (pool.length === 0) return null;
+
+    const state = this.readAccountPoolState();
+    const now = Date.now();
+    const unhealthy = new Map(
+      state.accounts
+        .filter((account) => account.unhealthyUntil && new Date(account.unhealthyUntil).getTime() > now)
+        .map((account) => [account.label, account]),
+    );
+
+    const selected = pool.find((entry) => entry.label !== excludeLabel && !unhealthy.has(entry.label))
+      ?? pool.find((entry) => entry.label !== excludeLabel)
+      ?? null;
+    if (selected) {
+      state.activeLabel = selected.label;
+      state.updatedAt = new Date().toISOString();
+      this.writeAccountPoolState(state);
+    }
+    return selected;
+  }
+
+  private markAccountUnhealthy(
+    account: CodexAccountPoolEntry,
+    reason: string,
+    failureClass: 'auth' | 'quota',
+  ): void {
+    const state = this.readAccountPoolState();
+    const now = new Date();
+    const unhealthyForMs = failureClass === 'auth' ? AUTH_UNHEALTHY_MS : QUOTA_UNHEALTHY_MS;
+    const health: CodexAccountHealth = {
+      label: account.label,
+      unhealthyUntil: new Date(now.getTime() + unhealthyForMs).toISOString(),
+      reason: sanitizeForLog(reason),
+      failureClass,
+      updatedAt: now.toISOString(),
+    };
+    state.accounts = [
+      health,
+      ...state.accounts.filter((entry) => entry.label !== account.label),
+    ];
+    state.updatedAt = now.toISOString();
+    this.writeAccountPoolState(state);
+  }
+
+  private classifyAccountFailure(err: unknown): { failureClass: 'auth' | 'quota'; reason: string } | null {
+    const text = String(err instanceof Error ? err.message : err);
+    if (/(token_revoked|401|unauthori[sz]ed|authentication\s+failed|auth[_ -]?expired|invalid[_ -]?api[_ -]?key)/i.test(text)) {
+      return { failureClass: 'auth', reason: text };
+    }
+    if (/(429|quota|rate.?limit|usage\s+limit|exceeded.*limit|too\s+many\s+requests|insufficient_quota)/i.test(text)) {
+      return { failureClass: 'quota', reason: text };
+    }
+    return null;
+  }
+
+  private async rotateAccountForFailure(err: unknown, input: unknown[], replayAttempt: number): Promise<boolean> {
+    if (replayAttempt > 0) return false;
+    const failure = this.classifyAccountFailure(err);
+    if (!failure || !this._activeAccount) return false;
+
+    const previous = this._activeAccount;
+    this.markAccountUnhealthy(previous, failure.reason, failure.failureClass);
+    const next = this.selectHealthyAccount(previous.label);
+    if (!next || next.label === previous.label) {
+      this.emitAccountFailoverEvent('codex_account_failover_unavailable', previous, null, failure);
+      return false;
+    }
+
+    this._activeAccount = next;
+    this.emitAccountFailoverEvent('codex_account_failover_rotate', previous, next, failure);
+    this.sendDegradedAck(previous, next, failure.failureClass);
+    await this.restartAppServerForAccount();
+    if (input.length > 0) {
+      this._outputBuffer.push(`[codex-account-pool] replaying preserved turn on ${next.label}\n`);
+    }
+    return true;
+  }
+
+  private async restartAppServerForAccount(): Promise<void> {
+    this._rpc?.close();
+    this._rpc = null;
+    this.cleanupSpawnAttempt();
+    await sleep(500);
+    await this.startAppServerWithRetry();
+    await this.connectRpc();
+    await this.initializeRpc();
+    await this.startOrResumeThread('continue');
+  }
+
+  private sendDegradedAck(
+    previous: CodexAccountPoolEntry,
+    next: CodexAccountPoolEntry,
+    failureClass: 'auth' | 'quota',
+  ): void {
+    if (!this._telegramApi || !this._chatId) return;
+    const text = `Codex runtime degraded (${failureClass}) on ${previous.label}; switching to ${next.label} and replaying your message.`;
+    this._telegramApi.sendMessage(this._chatId, text, undefined, { parseMode: null }).catch(() => {});
+  }
+
+  private emitAccountFailoverEvent(
+    event: string,
+    previous: CodexAccountPoolEntry,
+    next: CodexAccountPoolEntry | null,
+    failure: { failureClass: 'auth' | 'quota'; reason: string },
+  ): void {
+    try {
+      const paths = resolvePaths(this._env.agentName, this._env.instanceId, this._env.org);
+      logEvent(paths, this._env.agentName, this._env.org, 'action', event, next ? 'warning' : 'error', {
+        runtime: 'codex-app-server',
+        previous_label: previous.label,
+        next_label: next?.label ?? null,
+        failure_class: failure.failureClass,
+        reason: sanitizeForLog(failure.reason),
+        thread_id: this._threadId,
+      });
+    } catch {
+      // Non-fatal; OutputBuffer still records the rotation.
     }
   }
 
@@ -1034,10 +1249,25 @@ export class CodexAppServerPTY {
     // See agent-pty.ts for full rationale.
     env['CTX_SESSION_OWNER_PID'] = String(process.pid);
 
+    if (this._config.home) {
+      env['HOME'] = expandHome(this._config.home);
+    }
+
     if (this._env.org && this._env.projectRoot) {
       this.loadEnvFile(join(this._env.projectRoot, 'orgs', this._env.org, 'secrets.env'), env);
     }
     this.loadEnvFile(join(this._env.agentDir, '.env'), env);
+
+    const activeAccount = this._activeAccount ?? this.selectHealthyAccount();
+    if (activeAccount) {
+      env['CODEX_HOME'] = activeAccount.codexHome;
+      env['CTX_CODEX_ACCOUNT_LABEL'] = activeAccount.label;
+      if (activeAccount.email) env['CTX_CODEX_ACCOUNT_EMAIL'] = activeAccount.email;
+      if (activeAccount.workspace) env['CTX_CODEX_ACCOUNT_WORKSPACE'] = activeAccount.workspace;
+      this._outputBuffer.push(`[codex-account-pool] using ${activeAccount.label}\n`);
+    } else if (this._config.codex_home) {
+      env['CODEX_HOME'] = expandHome(this._config.codex_home);
+    }
 
     if (env['CHAT_ID']) env['CTX_TELEGRAM_CHAT_ID'] = env['CHAT_ID'];
     if (this._config.timezone) {
@@ -1076,6 +1306,19 @@ export class CodexAppServerPTY {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function expandHome(path: string): string {
+  if (path === '~') return homedir();
+  if (path.startsWith('~/')) return join(homedir(), path.slice(2));
+  return path;
+}
+
+function sanitizeForLog(text: string): string {
+  return text
+    .replace(/[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g, '<redacted-token>')
+    .replace(/sk-[A-Za-z0-9_-]{20,}/g, '<redacted-key>')
+    .slice(0, 500);
 }
 
 function sleep(ms: number): Promise<void> {

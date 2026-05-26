@@ -48,7 +48,6 @@ function blockCall(policy: string, reason: string): void {
  */
 function checkP1(command: string, agent: string): void {
   if (!agent || agent === 'unknown' || agent === 'orchestrator') return;
-  if (agent === 'orca-orch' && command.includes('send-telegram') && command.includes('$CTX_TELEGRAM_CHAT_ID')) return;
 
   // Match: send-telegram followed by a numeric chat ID (8+ digits)
   if (/send-telegram[^|&\n]*[0-9]{8,}/.test(command)) {

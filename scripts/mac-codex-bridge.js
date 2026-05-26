@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
  * mac-codex-bridge — thin daemon that forwards bus messages to Greg's Mac
- * Codex.app via SSH + AppleScript. A new chat appears in the Codex.app sidebar
- * for each dispatched prompt — Greg sees and watches the work run live.
+ * Codex.app via SSH + AppleScript. New tasks create a Codex.app sidebar chat;
+ * follow-ups carrying the same task_id resume that task's existing thread.
  *
  * Architecture:
  *   Any agent sends:  cortextos bus send-message mac-codex normal '<prompt>'
  *   Bridge receives:  inbox message via two channels:
  *     1. PTY stdin   — daemon fast-checker injects messages here (primary path)
  *     2. poll        — check-inbox fallback for any messages fast-checker missed
- *   Bridge executes:  ssh gregs-mac → osascript (File > New Chat → keystroke → Return)
+ *   Bridge executes:  ssh gregs-mac -> Codex.app new chat or `codex exec resume`
  *   Bridge replies:   cortextos bus send-message <from> normal '<thread_id>' <msg_id>
  *                     (fire-and-forget: returns thread ID immediately, Greg watches live)
  *
@@ -20,6 +20,8 @@
 'use strict';
 
 const { execFileSync, spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const AGENT_NAME = process.env.CTX_AGENT_NAME || 'mac-codex';
 const POLL_INTERVAL_MS = 2_000;
@@ -27,6 +29,12 @@ const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
 const SSH_HOST = 'gregs-mac';
 // Polling loop waits up to 30s for new thread — give SSH 45s headroom
 const SSH_TIMEOUT_MS = 45_000;
+const CODEX_BIN = '/Applications/Codex.app/Contents/Resources/codex';
+const CODEX_DB = '/Users/gregharned/.codex/state_5.sqlite';
+const TASK_ID_RE = /\btask_\d+_\d+\b/g;
+const STATE_ROOT = process.env.CTX_ROOT || process.cwd();
+const TASK_THREAD_MAP_PATH = path.join(STATE_ROOT, 'state', AGENT_NAME, 'task-thread-map.json');
+const DEFAULT_MAC_CWD = '/Users/gregharned/work/team-brain';
 
 // SSH connection failure patterns — used to distinguish offline vs execution errors
 const SSH_CONN_ERROR_PATTERNS = [
@@ -97,9 +105,162 @@ const processed = new Set();
 // State for status-check read-path replies (fix b)
 const lastDispatch = { threadId: null, at: 0, from: null, durationMs: 0 };
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function sqlStringLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function extractTaskId(text) {
+  const ids = extractTaskIds(text);
+  return ids[0] || null;
+}
+
+function extractTaskIds(text) {
+  const matches = String(text || '').match(TASK_ID_RE) || [];
+  return [...new Set(matches)];
+}
+
+function inferMacProjectCwd(text) {
+  const t = String(text || '').toLowerCase();
+  if (t.includes('/users/gregharned/work/ob1-app') || /\bob1\b|\bob-1\b|daily vignette|vignette|hero loop|flow/.test(t)) {
+    return '/Users/gregharned/work/ob1-app';
+  }
+  if (t.includes('/users/gregharned/work/ob1-parents') || t.includes('ob1-parents') || t.includes('family app')) {
+    return '/Users/gregharned/work/ob1-parents';
+  }
+  if (t.includes('/users/gregharned/work/rgos') || t.includes('agentops') || t.includes('rgos') || t.includes('dashboard')) {
+    return '/Users/gregharned/work/rgos';
+  }
+  if (t.includes('orca voice') || t.includes('voice relay') || t.includes('aquarium') || t.includes('read-aloud')) {
+    return '/Users/gregharned/work/team-brain-voice-client-hotfix';
+  }
+  if (t.includes('/users/gregharned/cortextos') || t.includes('cortextos') || t.includes('mac-codex') || t.includes('bridge')) {
+    return '/Users/gregharned/cortextos';
+  }
+  if (t.includes('/users/gregharned/work/team-brain') || t.includes('team brain') || t.includes('wiki') || t.includes('obsidian')) {
+    return '/Users/gregharned/work/team-brain';
+  }
+  return null;
+}
+
+function loadTaskThreadMap() {
+  try {
+    const raw = fs.readFileSync(TASK_THREAD_MAP_PATH, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.tasks && typeof parsed.tasks === 'object') {
+      return parsed;
+    }
+  } catch { /* missing/corrupt map starts empty */ }
+  return { version: 1, tasks: {} };
+}
+
+function saveTaskThreadMap(map) {
+  fs.mkdirSync(path.dirname(TASK_THREAD_MAP_PATH), { recursive: true });
+  const tmp = `${TASK_THREAD_MAP_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify(map, null, 2)}\n`);
+  fs.renameSync(tmp, TASK_THREAD_MAP_PATH);
+}
+
+async function macSql(query, timeout = 10_000) {
+  const queryB64 = Buffer.from(query, 'utf-8').toString('base64');
+  const remoteCmd = `printf %s ${queryB64} | base64 -d | sqlite3 ${shellQuote(CODEX_DB)}`;
+  return spawnAsync('ssh', [
+    '-n',
+    '-o', 'ConnectTimeout=5',
+    '-o', 'StrictHostKeyChecking=accept-new',
+    SSH_HOST,
+    remoteCmd,
+  ], { timeout });
+}
+
+async function threadExists(threadId) {
+  try {
+    const out = await macSql(`SELECT COUNT(*) FROM threads WHERE id=${sqlStringLiteral(threadId)};`);
+    return parseInt(out.trim(), 10) > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveThreadForTask(taskId) {
+  if (!taskId) return null;
+
+  const map = loadTaskThreadMap();
+  const mapped = map.tasks[taskId]?.threadId;
+  if (mapped && await threadExists(mapped)) return mapped;
+
+  try {
+    const like = `%${taskId}%`;
+    const out = await macSql(`
+      SELECT id
+      FROM threads
+      WHERE title LIKE ${sqlStringLiteral(like)}
+         OR first_user_message LIKE ${sqlStringLiteral(like)}
+         OR preview LIKE ${sqlStringLiteral(like)}
+      ORDER BY created_at ASC
+      LIMIT 1;
+    `);
+    const resolved = out.trim();
+    if (resolved) {
+      map.tasks[taskId] = {
+        threadId: resolved,
+        updatedAt: new Date().toISOString(),
+        source: 'mac-db-backfill',
+      };
+      saveTaskThreadMap(map);
+      return resolved;
+    }
+  } catch (e) {
+    log(`task thread backfill failed for ${taskId}: ${e.message.slice(0, 160)}`);
+  }
+
+  return null;
+}
+
+async function getThreadCwd(threadId) {
+  if (!threadId) return null;
+  try {
+    const out = await macSql(`SELECT cwd FROM threads WHERE id=${sqlStringLiteral(threadId)} LIMIT 1;`);
+    return out.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function projectMatches(expectedCwd, actualCwd) {
+  if (!expectedCwd || !actualCwd) return true;
+  return actualCwd === expectedCwd || actualCwd.startsWith(`${expectedCwd}/`);
+}
+
+function rememberThreadForTask(taskId, threadId, sourceMsgId) {
+  if (!taskId || !threadId) return;
+  const map = loadTaskThreadMap();
+  map.tasks[taskId] = {
+    threadId,
+    updatedAt: new Date().toISOString(),
+    sourceMsgId,
+  };
+  try {
+    saveTaskThreadMap(map);
+  } catch (e) {
+    log(`task thread map write failed for ${taskId}: ${e.message.slice(0, 160)}`);
+  }
+}
+
 function isStatusCheck(text) {
   const t = (text || '').trim().toLowerCase();
-  return t === 'status' || t === 'ping' || t === 'health' || t === 'status?' || t === 'status check';
+  return t === 'status'
+    || t === 'ping'
+    || t === 'health'
+    || t === 'status?'
+    || t === 'status check'
+    || t.startsWith('status check ')
+    || t.startsWith('status check:')
+    || t.includes('status check only')
+    || t.includes('do not open codex.app thread');
 }
 
 // Liveness probe: returns thread count from Mac SQLite, or null on error (fix c)
@@ -107,7 +268,7 @@ async function probeDbThreadCount() {
   try {
     const out = await spawnAsync('ssh', [
       '-n', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=accept-new', SSH_HOST,
-      "sqlite3 /Users/gregharned/.codex/state_5.sqlite 'SELECT COUNT(*) FROM threads;'",
+      `sqlite3 ${shellQuote(CODEX_DB)} 'SELECT COUNT(*) FROM threads;'`,
     ], { timeout: 10_000 });
     return parseInt(out.trim(), 10);
   } catch {
@@ -152,7 +313,7 @@ function checkInbox() {
  * Writes the AppleScript to a temp file on the Mac to avoid all shell-quoting
  * issues with special characters in the prompt.
  */
-function execOnMac(prompt) {
+function execOnMac(prompt, cwd = DEFAULT_MAC_CWD) {
   const nonce = Date.now();
   const tmpScript = `/tmp/codex-dispatch-${nonce}.applescript`;
   const tmpPrompt = `/tmp/codex-prompt-${nonce}.txt`;
@@ -165,7 +326,7 @@ function execOnMac(prompt) {
     `do shell script "pbcopy < ${tmpPrompt}"`,
     // Snapshot MAX(created_at) BEFORE triggering new chat — race-fix anchor (fix a).
     // Any thread with created_at strictly greater is guaranteed to be the new one.
-    `set snapshotTs to do shell script "sqlite3 /Users/gregharned/.codex/state_5.sqlite \\"SELECT COALESCE(MAX(created_at), '1970-01-01 00:00:00') FROM threads;\\""`,
+    `set snapshotTs to do shell script "sqlite3 ${CODEX_DB} \\"SELECT COALESCE(MAX(created_at), '1970-01-01 00:00:00') FROM threads;\\""`,
     'tell application "Codex" to activate',
     'delay 0.6',
     'tell application "System Events"',
@@ -181,7 +342,7 @@ function execOnMac(prompt) {
     // Replaces the old fixed delay-2 + DESC LIMIT 1 that raced against Codex.app writes.
     'set threadId to ""',
     'repeat 60 times',
-    `  set threadId to do shell script "sqlite3 /Users/gregharned/.codex/state_5.sqlite \\"SELECT id FROM threads WHERE created_at > '" & snapshotTs & "' ORDER BY created_at ASC LIMIT 1;\\""`,
+    `  set threadId to do shell script "sqlite3 ${CODEX_DB} \\"SELECT id FROM threads WHERE created_at > '" & snapshotTs & "' ORDER BY created_at ASC LIMIT 1;\\""`,
     '  if threadId is not "" then exit repeat',
     '  delay 0.5',
     'end repeat',
@@ -193,11 +354,14 @@ function execOnMac(prompt) {
   // Base64-encode both files so they survive SSH quoting untouched.
   const scriptB64 = Buffer.from(scriptBody).toString('base64');
   const promptB64 = Buffer.from(prompt).toString('base64');
+  const cwdB64 = Buffer.from(cwd || DEFAULT_MAC_CWD).toString('base64');
 
   const remoteCmd = [
+    `TARGET_CWD=$(echo ${cwdB64} | base64 -d)`,
+    'mkdir -p "$TARGET_CWD"',
     `echo ${scriptB64} | base64 -d > ${tmpScript}`,
     `echo ${promptB64} | base64 -d > ${tmpPrompt}`,
-    `osascript ${tmpScript}`,
+    `cd "$TARGET_CWD" && osascript ${tmpScript}`,
   ].join(' && ');
 
   return spawnAsync('ssh', [
@@ -209,6 +373,34 @@ function execOnMac(prompt) {
     SSH_HOST,
     remoteCmd,
   ], { timeout: SSH_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
+}
+
+async function execOnMacExistingThread(prompt, threadId) {
+  const nonce = Date.now();
+  const tmpPrompt = `/tmp/codex-followup-${nonce}.txt`;
+  const tmpResult = `/tmp/codex-followup-${nonce}.out`;
+  const promptB64 = Buffer.from(prompt).toString('base64');
+
+  // Use the real Codex home so resume targets the same Codex.app thread DB.
+  // This appends to the existing task thread instead of creating another sidebar chat.
+  const remoteCmd = [
+    `printf %s ${promptB64} | base64 -d > ${tmpPrompt}`,
+    `${shellQuote(CODEX_BIN)} exec resume --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -m gpt-5.5 -o ${tmpResult} ${shellQuote(threadId)} - < ${tmpPrompt} >/dev/null`,
+    `cat ${tmpResult} 2>/dev/null || true`,
+    `rm -f ${tmpPrompt} ${tmpResult}`,
+  ].join(' && ');
+
+  await spawnAsync('ssh', [
+    '-n',
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'ConnectTimeout=10',
+    '-o', 'ServerAliveInterval=15',
+    '-o', 'ServerAliveCountMax=2',
+    SSH_HOST,
+    remoteCmd,
+  ], { timeout: SSH_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
+
+  return threadId;
 }
 
 async function processMessage(msg) {
@@ -243,18 +435,42 @@ async function processMessage(msg) {
   const start = Date.now();
   let result;
   let ok = false;
+  let reused = false;
 
   try {
-    const threadId = await execOnMac(text || '');
+    const taskIds = extractTaskIds(text);
+    const expectedCwd = inferMacProjectCwd(text);
+    let taskId = taskIds[0] || null;
+    let existingThreadId = null;
+    for (const id of taskIds) {
+      const resolved = await resolveThreadForTask(id);
+      const resolvedCwd = resolved ? await getThreadCwd(resolved) : null;
+      if (resolved && projectMatches(expectedCwd, resolvedCwd)) {
+        taskId = id;
+        existingThreadId = resolved;
+        break;
+      } else if (resolved && expectedCwd) {
+        log(`mapped thread ${resolved} for ${id} has cwd=${resolvedCwd || 'unknown'}, expected ${expectedCwd}; refusing reuse`);
+      }
+    }
+    const threadId = existingThreadId
+      ? await execOnMacExistingThread(text || '', existingThreadId)
+      : await execOnMac(text || '', expectedCwd || DEFAULT_MAC_CWD);
     const tid = threadId.trim();
     const durationMs = Date.now() - start;
-    result = `dispatched — new chat in Codex.app (thread ${tid})`;
+    reused = Boolean(existingThreadId);
+    if (taskIds.length) {
+      taskIds.forEach((foundTaskId) => rememberThreadForTask(foundTaskId, tid, id));
+    }
+    result = reused
+      ? `dispatched — appended to existing Codex.app thread for ${taskId} (thread ${tid})`
+      : `dispatched — new chat in Codex.app (thread ${tid})`;
     ok = true;
     lastDispatch.threadId = tid;
     lastDispatch.at = Date.now();
     lastDispatch.from = from;
     lastDispatch.durationMs = durationMs;
-    log(`Dispatched in ${(durationMs / 1000).toFixed(1)}s — thread ${tid}`);
+    log(`Dispatched in ${(durationMs / 1000).toFixed(1)}s — ${reused ? 'reused' : 'new'} thread ${tid}`);
   } catch (e) {
     result = `mac-codex error: ${e.message.slice(0, 500)}`;
     log(`Error: ${result}`);
@@ -284,7 +500,7 @@ async function processMessage(msg) {
   // Log telemetry event
   try {
     bus('log-event', 'action', 'mac_codex_dispatch', ok ? 'info' : 'warning',
-      '--meta', JSON.stringify({ from, durationMs: Date.now() - start, ok, msgId: id }));
+      '--meta', JSON.stringify({ from, durationMs: Date.now() - start, ok, msgId: id, reusedThread: reused }));
   } catch { /* non-fatal */ }
 }
 

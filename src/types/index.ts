@@ -418,6 +418,22 @@ export interface AgentConfig {
   codex_app_server_transport?: 'ws' | 'unix';
   /** Optional fixed localhost port for codex-app-server when using ws transport. */
   codex_app_server_port?: number;
+  /**
+   * Labeled Codex auth homes for codex-app-server runtime failover.
+   *
+   * Each entry points at a distinct CODEX_HOME directory. Labels are deliberately
+   * operator-facing and non-secret so incidents can distinguish personal/work
+   * accounts without exposing auth.json contents.
+   */
+  codex_account_pool?: Array<{
+    label: string;
+    codex_home: string;
+    email?: string;
+    workspace?: string;
+    priority?: number;
+  }>;
+  /** Legacy/single-account CODEX_HOME override for codex-app-server. */
+  codex_home?: string;
   /** Suppress user-visible Telegram narration for internal boot/handoff/continue restarts. */
   suppress_restart_telegram?: boolean;
   /**

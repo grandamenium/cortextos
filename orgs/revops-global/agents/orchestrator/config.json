@@ -91,21 +91,51 @@
       "type": "recurring",
       "interval": "15m",
       "prompt": "bash /home/cortextos/cortextos/scripts/idle-overlap-watcher.sh"
+    },
+    {
+      "name": "agentops-hourly-dogfood",
+      "type": "recurring",
+      "interval": "1h",
+      "prompt": "Read prompts/cron-agentops-hourly-dogfood.md and execute one bounded AgentOps product/operator dogfood pass using Codex/Chrome-capable routes while Claude is constrained. Do not deploy, merge, post externally, or create duplicate tasks. Route/update scoped defects only, log results, and Telegram Greg only for P0/P1 or human-action blockers."
     }
   ],
   "ctx_warning_threshold": 0,
   "ctx_handoff_threshold": 0,
-  "ctx_autoreset_threshold": 70,
+  "ctx_autoreset_threshold": 0,
   "ecosystem": {
     "local_version_control": {
       "enabled": true
     }
   },
   "model": "gpt-5.5",
-  "telegram_polling": false,
+  "telegram_polling": true,
   "suppress_restart_telegram": true,
   "runtime": "codex-app-server",
   "codex_app_server_transport": "ws",
+  "codex_account_pool": [
+    {
+      "label": "gregharned@gmail personal primary",
+      "codex_home": "/home/cortextos/.codex-orchestrator-primary",
+      "email": "gregharned@gmail.com",
+      "workspace": "personal",
+      "priority": 1
+    },
+    {
+      "label": "greg@revopsglobal.com personal backup",
+      "codex_home": "/home/cortextos/.codex-greg",
+      "email": "greg@revopsglobal.com",
+      "workspace": "personal",
+      "priority": 2
+    },
+    {
+      "label": "greg@revopsglobal.com work backup",
+      "codex_home": "/home/cortextos/.codex-work",
+      "email": "greg@revopsglobal.com",
+      "workspace": "work",
+      "priority": 3
+    }
+  ],
   "codex_runtime_note": "P0 2026-05-24: Claude Code session hit org monthly usage limit while receiving Telegram; switched orchestrator Telegram owner to Codex app-server runtime so inbound Telegram can respond.",
-  "telegram_owner_note": "P0 2026-05-24: revops_director_bot polling moved to orca-orch Codex runtime because Claude/orchestrator lane was quota-blocked/too slow."
+  "telegram_owner_note": "2026-05-25 recovery: orchestrator restored as sole @revops_director_bot / Orca front-door Telegram polling owner. Codex app-server runtime uses codex_account_pool with /home/cortextos/.codex-orchestrator-primary primary and labeled backups. orca-orch is voice-project-only and polling disabled.",
+  "ctx_autoreset_note": "Disabled temporarily during 2026-05-25 Orca front-door recovery because Codex app-server tokenUsage reported 100% immediately after fresh start and caused restart churn. Restore after account-pool failover/context metric fix."
 }

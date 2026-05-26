@@ -120,20 +120,6 @@ export async function enforceControlPolicy(req: ControlPolicyEnforcement): Promi
   const agent = env.agentName || process.env.CTX_AGENT_NAME || '';
   if (req.exemptOrchestrator && agent === 'orchestrator') return;
 
-  // P0 Telegram recovery 2026-05-24: orca-orch is the explicit owner of
-  // Greg's Telegram poller. Let it reply only to its configured chat while
-  // keeping the external-comms gate closed for all other targets/actions.
-  if (
-    req.exemptOrchestrator &&
-    agent === 'orca-orch' &&
-    req.action.startsWith('send-telegram') &&
-    req.target &&
-    process.env.CTX_TELEGRAM_CHAT_ID &&
-    req.target === process.env.CTX_TELEGRAM_CHAT_ID
-  ) {
-    return;
-  }
-
   let value: string | null = null;
   try {
     value = await fetchGateValue(req.gate);
