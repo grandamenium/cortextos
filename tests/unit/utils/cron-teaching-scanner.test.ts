@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, basename, relative } from 'path';
 import { tmpdir } from 'os';
 import {
   scanFile,
@@ -134,7 +134,7 @@ describe('listAgentFiles', () => {
     write('AGENTS.md', 'b\n');
     write('ONBOARDING.md', 'c\n');
     const files = listAgentFiles(workDir);
-    expect(files.map((f) => f.split('/').pop())).toEqual(
+    expect(files.map((f) => basename(f))).toEqual(
       expect.arrayContaining(['CLAUDE.md', 'AGENTS.md', 'ONBOARDING.md']),
     );
   });
@@ -144,7 +144,7 @@ describe('listAgentFiles', () => {
     write('.claude/skills/agent-management/SKILL.md', 'am\n');
     write('.claude/skills/agent-management/notes.md', 'ignored\n'); // not SKILL.md
     const files = listAgentFiles(workDir);
-    const basenames = files.map((f) => f.replace(workDir + '/', ''));
+    const basenames = files.map((f) => relative(workDir, f).split(/[\\/]/).join('/'));
     expect(basenames).toContain('.claude/skills/cron-management/SKILL.md');
     expect(basenames).toContain('.claude/skills/agent-management/SKILL.md');
     expect(basenames).not.toContain('.claude/skills/agent-management/notes.md');

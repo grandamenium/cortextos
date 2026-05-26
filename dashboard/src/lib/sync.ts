@@ -357,22 +357,29 @@ export function syncCostsLazy(): void {
 // Single-file sync (called by file watcher)
 // ---------------------------------------------------------------------------
 
+// Normalize Windows backslashes to forward slashes so a single set of path
+// matchers and regexes works on both POSIX and Windows.
+function normSep(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
 export function syncFile(filePath: string): void {
-  if (filePath.includes('/tasks/') && filePath.endsWith('.json')) {
+  const fp = normSep(filePath);
+  if (fp.includes('/tasks/') && fp.endsWith('.json')) {
     const org = extractOrgFromPath(filePath);
     if (org) syncTasks(org);
-  } else if (filePath.includes('/approvals/') && filePath.endsWith('.json')) {
+  } else if (fp.includes('/approvals/') && fp.endsWith('.json')) {
     const org = extractOrgFromPath(filePath);
     if (org) syncApprovals(org);
   } else if (
-    filePath.includes('/analytics/events/') &&
-    filePath.endsWith('.jsonl')
+    fp.includes('/analytics/events/') &&
+    fp.endsWith('.jsonl')
   ) {
     const { org, agent } = extractOrgAndAgentFromEventPath(filePath);
     if (org && agent) syncEvents(org, agent);
   } else if (
-    filePath.includes('/state/') &&
-    filePath.endsWith('heartbeat.json')
+    fp.includes('/state/') &&
+    fp.endsWith('heartbeat.json')
   ) {
     const agent = extractAgentFromStatePath(filePath);
     if (agent) syncHeartbeat(agent);
@@ -384,20 +391,20 @@ export function syncFile(filePath: string): void {
 // ---------------------------------------------------------------------------
 
 export function extractOrgFromPath(filePath: string): string | null {
-  const match = filePath.match(/\/orgs\/([^/]+)\//);
+  const match = normSep(filePath).match(/\/orgs\/([^/]+)\//);
   return match ? match[1] : null;
 }
 
 export function extractOrgAndAgentFromEventPath(
   filePath: string,
 ): { org: string | null; agent: string | null } {
-  const match = filePath.match(
+  const match = normSep(filePath).match(
     /\/orgs\/([^/]+)\/analytics\/events\/([^/]+)\//,
   );
   return { org: match?.[1] ?? null, agent: match?.[2] ?? null };
 }
 
 export function extractAgentFromStatePath(filePath: string): string | null {
-  const match = filePath.match(/\/state\/([^/]+)\//);
+  const match = normSep(filePath).match(/\/state\/([^/]+)\//);
   return match ? match[1] : null;
 }

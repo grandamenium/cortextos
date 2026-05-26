@@ -94,8 +94,9 @@ export function injectRuntimeField(cfg: Record<string, unknown>): Record<string,
 
 export function migrateConfig(path: string, root: string): MigrationResult {
   // org / agent are derived from the path so the dry-run output is human-scannable.
+  // Split on both POSIX and Windows separators so this works on either platform.
   const rel = path.startsWith(root) ? path.slice(root.length + 1) : path;
-  const parts = rel.split('/');
+  const parts = rel.split(/[\\/]/);
   const org = parts[1] ?? '?';
   const agent = parts[3] ?? '?';
 

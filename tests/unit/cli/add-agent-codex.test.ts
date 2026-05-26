@@ -24,7 +24,10 @@ import { join } from 'path';
 import { tmpdir, homedir } from 'os';
 import { addAgentCommand } from '../../../src/cli/add-agent';
 
-describe('PR-02: add-agent --runtime codex-app-server', () => {
+// These tests create symlinks (templates/, ~/.codex/skills/*). On Windows,
+// symlink creation requires either an Administrator shell or Developer Mode,
+// which is not the default. Skip the whole suite there.
+describe.skipIf(process.platform === 'win32')('PR-02: add-agent --runtime codex-app-server', () => {
   let tempRoot: string;
   let tempHome: string;
   let originalHome: string | undefined;
@@ -221,7 +224,7 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
  * (`.claude/skills/`, `CLAUDE_CODE_OAUTH_TOKEN`, `/loop`) — silently broken
  * on first boot. Surface a clean error instead.
  */
-describe('PR-10: add-agent rejects codex+claude-only-template combos', () => {
+describe.skipIf(process.platform === 'win32')('PR-10: add-agent rejects codex+claude-only-template combos', () => {
   let tempRoot: string;
   let tempHome: string;
   let originalHome: string | undefined;

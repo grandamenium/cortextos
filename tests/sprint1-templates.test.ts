@@ -116,7 +116,7 @@ describe('Sprint 1: Template Completeness', () => {
 
     it('skill files have YAML frontmatter', () => {
       const skillPath = join(agentDir, '.claude', 'skills', 'autoresearch', 'SKILL.md');
-      const content = readFileSync(skillPath, 'utf-8');
+      const content = readFileSync(skillPath, 'utf-8').replace(/\r\n/g, '\n');
       expect(content).toMatch(/^---\n/);
       expect(content).toContain('name: autoresearch');
       expect(content).toContain('description:');

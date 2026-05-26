@@ -8,7 +8,9 @@ const CANONICAL_PATH = join(ROOT, 'community', 'skills', 'cron-management', 'SKI
 const SECURITY_PATH = join(ROOT, 'community', 'agents', 'security', '.claude', 'skills', 'cron-management', 'SKILL.md');
 
 function readSkill(p: string): string {
-  return readFileSync(p, 'utf8');
+  // Normalize CRLF -> LF so the regex-based frontmatter parser works on
+  // checkouts that auto-convert line endings (Windows + core.autocrlf).
+  return readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 }
 
 function parseFrontmatter(content: string): Record<string, unknown> | null {
