@@ -221,6 +221,20 @@ export interface AgentConfig {
   schedule_end?: string;
   /** Agent role — determines which skill pack is auto-installed. */
   role?: AgentRole;
+  /**
+   * Absolute path to a git repository the agent should work inside via an
+   * isolated worktree. When set, the daemon provisions a per-agent worktree
+   * (under `<worktree_repo>/.cortextos-worktrees/<agent>`) before spawning
+   * the PTY and uses it as the agent's working directory. When unset,
+   * behavior falls back to `working_directory`/`agentDir`/cwd as before.
+   */
+  worktree_repo?: string;
+  /**
+   * Branch checked out in the per-agent worktree. Created from current HEAD
+   * if it doesn't exist. Defaults to `claude/<agentName>` if unset but
+   * `worktree_repo` is set.
+   */
+  worktree_branch?: string;
 }
 
 export interface CronEntry {
