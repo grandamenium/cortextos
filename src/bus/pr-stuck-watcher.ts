@@ -95,6 +95,7 @@ function discoverRepos(explicitRepos?: string[]): string[] {
   if (explicitRepos && explicitRepos.length > 0) return unique(explicitRepos);
 
   return [
+    'grandamenium/cortextos',
     'RevOps-Global-GIT/cortextos',
     'RevOps-Global-GIT/rgos',
     'RevOps-Global-GIT/team-brain',
@@ -154,6 +155,11 @@ function hasAwaitingGregMarker(pr: GhPullRequest): boolean {
   ];
 
   return haystacks.some(value => /\bawaiting\s+greg\b/i.test(value));
+}
+
+function canAutoMergeFromWatcher(repo: string, checksPassing: boolean, mergeState: string): boolean {
+  if (repo === 'grandamenium/cortextos') return false;
+  return checksPassing && mergeState === 'CLEAN';
 }
 
 function formatHours(hours: number): string {
@@ -256,6 +262,7 @@ export function runPrStuckWatcher(
       const checks = summarizeChecks(pr.statusCheckRollup);
       const mergeState = pr.mergeStateStatus || 'unknown';
       const awaitingGreg = hasAwaitingGregMarker(pr);
+      const autoMergeEligible = canAutoMergeFromWatcher(repo, checks.passing, mergeState);
       stuckPrs.push({
         repo,
         number: pr.number,
@@ -266,7 +273,7 @@ export function runPrStuckWatcher(
         ciState: checks.summary,
         ciPassing: checks.passing,
         mergeState,
-        autoMergeEligible: checks.passing && mergeState === 'CLEAN',
+        autoMergeEligible,
         reviewDecision: pr.reviewDecision || 'none',
         lastReview: lastReview(pr.reviews),
         author: pr.author?.login || 'unknown',

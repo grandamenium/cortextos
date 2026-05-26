@@ -42,6 +42,53 @@ describe('pr-stuck-watcher', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('watches upstream grandamenium cortextos by default', () => {
+    vi.mocked(execFileSync).mockReturnValue('[]');
+
+    const result = runPrStuckWatcher(makePaths(root), 'codex', 'revops-global', {
+      stuckHours: 1,
+      alertHours: 1,
+    });
+
+    expect(result.watchedRepos).toContain('grandamenium/cortextos');
+    expect(vi.mocked(execFileSync)).toHaveBeenCalledWith(
+      'gh',
+      expect.arrayContaining(['--repo', 'grandamenium/cortextos']),
+      expect.any(Object),
+    );
+  });
+
+  it('reports upstream grandamenium PRs without marking them auto-merge eligible', () => {
+    vi.mocked(execFileSync).mockReturnValue(JSON.stringify([
+      {
+        number: 540,
+        title: 'fix(agentops): artifact-back theta wave cron',
+        url: 'https://github.com/grandamenium/cortextos/pull/540',
+        createdAt: '2026-05-01T00:00:00Z',
+        updatedAt: '2026-05-01T00:00:00Z',
+        author: { login: 'revopsglobal' },
+        reviewDecision: null,
+        mergeStateStatus: 'CLEAN',
+        statusCheckRollup: [{ conclusion: 'SUCCESS' }],
+        labels: [],
+        reviews: [],
+      },
+    ]));
+
+    const result = runPrStuckWatcher(makePaths(root), 'codex', 'revops-global', {
+      repos: ['grandamenium/cortextos'],
+      stuckHours: 1,
+      alertHours: 1,
+    });
+
+    expect(result.stuckPrs).toHaveLength(1);
+    expect(result.stuckPrs[0]).toMatchObject({
+      repo: 'grandamenium/cortextos',
+      number: 540,
+      autoMergeEligible: false,
+    });
+  });
+
   it('keeps awaiting-Greg PRs in the report but suppresses alerts', () => {
     vi.mocked(execFileSync).mockReturnValue(JSON.stringify([
       {
