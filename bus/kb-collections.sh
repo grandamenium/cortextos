@@ -36,6 +36,15 @@ CHROMADB_DIR="$KB_ROOT/chromadb"
 VENV_DIR="$FRAMEWORK_ROOT/knowledge-base/venv"
 MMRAG_PY="$FRAMEWORK_ROOT/knowledge-base/scripts/mmrag.py"
 
+# Resolve platform-specific venv paths (Windows uses Scripts/python.exe, Unix uses bin/python3)
+if [[ -x "$VENV_DIR/Scripts/python.exe" ]]; then
+  VENV_PY="$VENV_DIR/Scripts/python.exe"
+elif [[ -x "$VENV_DIR/bin/python3" ]]; then
+  VENV_PY="$VENV_DIR/bin/python3"
+elif [[ -x "$VENV_DIR/bin/python" ]]; then
+  VENV_PY="$VENV_DIR/bin/python"
+fi
+
 # Source org secrets
 SECRETS_FILE="$FRAMEWORK_ROOT/orgs/$ORG/secrets.env"
 if [[ -f "$SECRETS_FILE" ]]; then
@@ -57,4 +66,4 @@ export MMRAG_CHROMADB_DIR="$CHROMADB_DIR"
 export MMRAG_CONFIG="$KB_ROOT/config.json"
 export GEMINI_API_KEY="${GEMINI_API_KEY:-}"
 
-"$VENV_DIR/bin/python3" "$MMRAG_PY" collections
+"$VENV_PY" "$MMRAG_PY" collections
