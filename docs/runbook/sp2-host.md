@@ -51,3 +51,33 @@ Poll the job:
 - On-demand backup job (first snapshot of a 64 GB disk): **193 s** to `Completed`.
 - Snapshot lands in `cortextos-prod-snapshots-rg` named
   `AzureBackup_<instance-guid>_<timestamp>`.
+
+### Tearing down (`terraform destroy`) — two Azure Backup traps
+
+`terraform destroy` does **not** cleanly remove the backup stack on its own.
+Two manual steps are required, in this order, before/around the destroy:
+
+**1. Sweep out-of-band snapshots first.** Azure Backup creates snapshots that
+are **not** in Terraform state (e.g. anything from an on-demand backup or a
+fired daily job). They block the snapshot RG deletion. Before `destroy`:
+
+    for s in $(az snapshot list -g cortextos-prod-snapshots-rg --query "[].name" -o tsv); do
+      az snapshot delete -g cortextos-prod-snapshots-rg -n "$s"
+    done
+
+**2. Purge soft-deleted backup instances.** Data Protection vaults default to
+soft-delete **On** (14-day retention). When `destroy` removes the backup
+instance it goes to a soft-deleted state, and the policy/vault then refuse to
+delete with `UserErrorPolicyAssociatedWithSoftDeletedItems`. Turning soft-delete
+off does **not** retroactively purge already-soft-deleted items — you must
+undelete then hard-delete:
+
+    VAULT=cortextos-prod-bvault; INST=cortextos-prod-data-backup
+    az dataprotection backup-vault update -g cortextos-prod-rg --vault-name "$VAULT" --soft-delete-state Off
+    az dataprotection backup-instance deleted-backup-instance undelete -g cortextos-prod-rg --vault-name "$VAULT" --backup-instance-name "$INST"
+    az dataprotection backup-instance delete -g cortextos-prod-rg --vault-name "$VAULT" --backup-instance-name "$INST" --yes
+    # then re-run: terraform destroy -auto-approve
+
+In production you generally do **not** destroy this stack — these notes are for
+test/iteration cycles. The `deleted-backup-instance` CLI has no direct purge;
+undelete→delete (with soft-delete off) is the supported path.
