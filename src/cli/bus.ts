@@ -2450,6 +2450,15 @@ busCommand
   .description('Stop hook: writes last_idle.flag timestamp so fast-checker knows agent finished its turn')
   .action(() => runHook('hook-idle-flag'));
 
+busCommand
+  .command('hook-session-start')
+  .description('SessionStart hook: heartbeat update + memory entry + inbox check + event log')
+  .action(() => runHook('hook-session-start'));
+
+busCommand
+  .command('hook-session-end')
+  .description('SessionEnd hook: memory capture + event log for session persistence')
+  .action(() => runHook('hook-session-end'));
 // --- OAuth token rotation commands ---
 
 busCommand
