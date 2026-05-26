@@ -26,3 +26,18 @@ output "backup_vault_name" {
 output "backup_instance_id" {
   value = azurerm_data_protection_backup_instance_disk.data.id
 }
+
+output "tunnel_id" {
+  value       = cloudflare_zero_trust_tunnel_cloudflared.cortextos.id
+  description = "Cloudflare Tunnel id."
+}
+
+output "dashboard_url" {
+  value       = "https://${var.dashboard_hostname}"
+  description = "Access-gated dashboard URL."
+}
+
+output "ssh_hostname" {
+  value       = var.ssh_hostname
+  description = "Ops SSH hostname (reach via cloudflared access ssh ProxyCommand)."
+}

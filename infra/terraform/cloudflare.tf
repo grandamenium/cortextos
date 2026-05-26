@@ -131,3 +131,25 @@ resource "cloudflare_zero_trust_access_application" "ssh" {
     },
   ]
 }
+
+# ── Tunnel token → Key Vault ──────────────────────────────────────────────────
+
+# Schema note (v5.19.1): the tunnel resource does NOT expose a `.token`
+# attribute directly. The token is retrieved via this data source, which has
+# required `tunnel_id` and optional `account_id`; the exported `token`
+# attribute is sensitive and computed.
+data "cloudflare_zero_trust_tunnel_cloudflared_token" "cortextos" {
+  account_id = var.cloudflare_account_id
+  tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.cortextos.id
+}
+
+# The tunnel's run token, stored in Key Vault. cloud-init fetches it at first
+# boot via the VM's managed identity and hands it to cloudflared.service.
+resource "azurerm_key_vault_secret" "cloudflared_token" {
+  name         = "cloudflared-token"
+  value        = data.cloudflare_zero_trust_tunnel_cloudflared_token.cortextos.token
+  key_vault_id = azurerm_key_vault.main.id
+
+  # The operator access policy must exist before we can write secrets.
+  depends_on = [azurerm_key_vault_access_policy.operator]
+}
