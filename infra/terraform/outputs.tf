@@ -18,3 +18,11 @@ output "key_vault_uri" {
 output "data_disk_id" {
   value = azurerm_managed_disk.data.id
 }
+
+output "backup_vault_name" {
+  value = azurerm_data_protection_backup_vault.main.name
+}
+
+output "backup_instance_id" {
+  value = azurerm_data_protection_backup_instance_disk.data.id
+}
