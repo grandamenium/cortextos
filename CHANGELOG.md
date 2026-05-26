@@ -19,6 +19,11 @@
 - `infra/bin/check-systemd-drift.sh` keeps the embedded and standalone
   systemd unit definitions in `cloud-init.yaml.tftpl` and `infra/systemd/`
   in sync (Python+YAML based).
+- SP2c-1 — daily data-disk backups via Azure Backup (Data Protection): backup
+  vault, daily disk-snapshot policy (14-day retention), and a backup instance
+  protecting the data disk, with snapshots in a dedicated snapshot resource
+  group. Verified end-to-end (on-demand backup job + snapshot).
+- `docs/runbook/sp2-host.md` — operations runbook (backup section).
 
 ### Changed
 - `listAgents` also discovers namespaced agents.

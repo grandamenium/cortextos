@@ -88,3 +88,20 @@ variable "node_major_version" {
     error_message = "node_major_version must be a current LTS line: 18, 20, or 22."
   }
 }
+
+variable "backup_retention_days" {
+  type        = number
+  description = "Daily disk-snapshot retention in days."
+  default     = 14
+
+  validation {
+    condition     = var.backup_retention_days >= 1 && var.backup_retention_days <= 365
+    error_message = "backup_retention_days must be between 1 and 365."
+  }
+}
+
+variable "backup_time_utc" {
+  type        = string
+  description = "Daily backup time, ISO 8601 UTC (e.g. 02:00 → 2026-01-01T02:00:00Z; only the time-of-day is used)."
+  default     = "2026-01-01T07:00:00Z"
+}
