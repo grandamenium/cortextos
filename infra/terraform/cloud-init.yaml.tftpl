@@ -176,7 +176,8 @@ write_files:
       fi
       umask 077
       printf 'TUNNEL_TOKEN=%s\n' "$CF_TOKEN" > /etc/cloudflared.env
-      chmod 600 /etc/cloudflared.env
+      chown root:cloudflared /etc/cloudflared.env
+      chmod 640 /etc/cloudflared.env
 
       # ── sentinel ───────────────────────────────────────────────
       touch "$DATA_MOUNT/.bootstrap-done"
@@ -234,7 +235,8 @@ write_files:
     content: |
       [Unit]
       Description=cloudflared tunnel (WYRE Agents)
-      After=network-online.target cortextos.service
+      After=network-online.target cortextos-bootstrap.service
+      Requires=cortextos-bootstrap.service
       Wants=network-online.target
 
       [Service]

@@ -1,6 +1,7 @@
 [Unit]
 Description=cloudflared tunnel (WYRE Agents)
-After=network-online.target cortextos.service
+After=network-online.target cortextos-bootstrap.service
+Requires=cortextos-bootstrap.service
 Wants=network-online.target
 
 [Service]
