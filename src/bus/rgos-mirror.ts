@@ -328,13 +328,15 @@ export function migrateRetryQueueConstraints(): void {
 
     const needsPriority = priority !== undefined && !RGOS_VALID_PRIORITIES.has(priority);
     const needsStatus = status !== undefined && !RGOS_VALID_STATUSES.has(status);
+    const needsBlockerStatus = status !== 'blocked' && status !== 'completed' && status !== 'cancelled' && isRowBlockerLike(entry.row);
 
-    if (!needsPriority && !needsStatus) return entry;
+    if (!needsPriority && !needsStatus && !needsBlockerStatus) return entry;
 
     changed = true;
     const newRow = { ...entry.row };
     if (needsPriority) newRow.priority = mapPriority(priority!);
     if (needsStatus) newRow.status = mapStatus(status!);
+    if (needsBlockerStatus) newRow.status = 'blocked';
     return { ...entry, row: newRow };
   });
 
@@ -449,6 +451,7 @@ const PRIORITY_MAP: Record<string, string> = {
 // tasks from explicitly approved ones. Reverse sync maps `proposed` → `pending` in bus.
 const STATUS_MAP: Record<string, string> = {
   pending: 'proposed',
+  approved: 'approved',
   in_progress: 'in_progress',
   completed: 'completed',
   cancelled: 'cancelled',
@@ -461,7 +464,44 @@ export function mapPriority(p: string): string {
 }
 
 export function mapStatus(s: string): string {
-  return STATUS_MAP[s] ?? 'approved';
+  return STATUS_MAP[s] ?? 'proposed';
+}
+
+function isTaskBlockerLike(task: Task): boolean {
+  const assignedTo = task.assigned_to ?? '';
+  return task.project === 'human-tasks'
+    || assignedTo === 'human'
+    || assignedTo === 'user'
+    || task.title.startsWith('[HUMAN]')
+    || (Array.isArray(task.blocked_by) && task.blocked_by.length > 0);
+}
+
+function rowValue(row: Record<string, unknown>, key: string): unknown {
+  return row[key];
+}
+
+function isRowBlockerLike(row: Record<string, unknown>): boolean {
+  const metadata = rowValue(row, 'metadata') as Record<string, unknown> | undefined;
+  const title = String(rowValue(row, 'title') ?? '');
+  const assignedTo = String(rowValue(row, 'assigned_to') ?? '');
+  const project = String(metadata?.project ?? '');
+  const blockedBy = rowValue(row, 'blocked_by') ?? metadata?.blocked_by;
+  return project === 'human-tasks'
+    || assignedTo === 'human'
+    || assignedTo === 'user'
+    || title.startsWith('[HUMAN]')
+    || (Array.isArray(blockedBy) && blockedBy.length > 0);
+}
+
+function mapTaskStatus(task: Task): string {
+  if (
+    isTaskBlockerLike(task)
+    && task.status !== 'completed'
+    && task.status !== 'cancelled'
+  ) {
+    return 'blocked';
+  }
+  return mapStatus(task.status);
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +514,7 @@ export function buildTaskRow(task: Task): Record<string, unknown> {
     org_id: ORG_ID,
     title: task.title,
     description: task.description || null,
-    status: mapStatus(task.status),
+    status: mapTaskStatus(task),
     priority: mapPriority(task.priority),
     assigned_to: task.assigned_to,
     created_by: task.created_by,

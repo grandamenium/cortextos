@@ -976,7 +976,8 @@ describe('rgos-mirror — mapStatus()', () => {
   it('cancelled → cancelled', () => { expect(mapStatus('cancelled')).toBe('cancelled'); });
   it('blocked → blocked', () => { expect(mapStatus('blocked')).toBe('blocked'); });
   it('review → review', () => { expect(mapStatus('review')).toBe('review'); });
-  it('unknown falls back to approved', () => { expect(mapStatus('whatever')).toBe('approved'); });
+  it('approved → approved', () => { expect(mapStatus('approved')).toBe('approved'); });
+  it('unknown falls back to proposed instead of approved', () => { expect(mapStatus('whatever')).toBe('proposed'); });
 
   it('all bus statuses map to a valid RGOS status value', () => {
     for (const s of ['pending', 'in_progress', 'completed', 'cancelled', 'blocked', 'review']) {
@@ -1004,6 +1005,22 @@ describe('rgos-mirror — buildTaskRow() constraint smoke tests', () => {
     const row = buildTaskRow(makeTask({ status: 'pending', priority: 'normal' }));
     expect(row.status).toBe('proposed');
     expect(row.priority).toBe('medium');
+  });
+
+  it('buildTaskRow preserves human/provider blockers as blocked instead of queue-ready', () => {
+    const humanTask = buildTaskRow(makeTask({
+      title: '[HUMAN] Complete provider auth session',
+      project: 'human-tasks',
+      status: 'pending',
+      assigned_to: 'codex',
+    }));
+    expect(humanTask.status).toBe('blocked');
+
+    const dependencyBlocked = buildTaskRow(makeTask({
+      status: 'pending',
+      blocked_by: ['approval_123'],
+    }));
+    expect(dependencyBlocked.status).toBe('blocked');
   });
 });
 
@@ -1040,6 +1057,30 @@ describe('rgos-mirror — migrateRetryQueueConstraints()', () => {
     expect(entries[0].row.status).toBe('proposed');
     // Other fields preserved
     expect(entries[0].row.title).toBe('Old task');
+  });
+
+  it('remaps queued human/provider blocker task rows back to blocked', () => {
+    const qPath = join(tmpDir, 'state', 'dev', 'mirror-retry.jsonl');
+    const entry = {
+      table: 'orch_tasks' as const,
+      row: {
+        id: uuidv5('task_human_blocker'),
+        priority: 'normal',
+        status: 'approved',
+        title: '[HUMAN] Complete provider auth',
+        assigned_to: 'codex',
+        metadata: { project: 'human-tasks', blocked_by: [] },
+      },
+      ts: '2026-05-26T21:19:00.000Z',
+    };
+    writeFileSync(qPath, JSON.stringify(entry) + '\n', { encoding: 'utf-8', mode: 0o600 });
+
+    migrateRetryQueueConstraints();
+
+    const entries = readRetryQueue(qPath);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].row.priority).toBe('medium');
+    expect(entries[0].row.status).toBe('blocked');
   });
 
   it('remaps priority=urgent to high', () => {
