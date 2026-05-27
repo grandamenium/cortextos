@@ -591,6 +591,34 @@ describe('Task audit log (append-only JSONL)', () => {
     expect(log[2].to).toBe('pending');
   });
 
+  it('clears completion-only fields when a completed task is reopened', () => {
+    const id = createTask(paths, 'alice', 'acme', 'Reopened task', {
+      assignee: 'bob',
+      skipBriefValidation: true,
+    });
+    const filePath = join(paths.taskDir, `${id}.json`);
+    const beforeComplete = JSON.parse(readFileSync(filePath, 'utf-8'));
+    beforeComplete.linked_goal = { status: 'active', created_at: beforeComplete.created_at };
+    writeFileSync(filePath, JSON.stringify(beforeComplete));
+
+    completeTask(paths, id, 'done with proof');
+    const completed = JSON.parse(readFileSync(filePath, 'utf-8'));
+    expect(completed.status).toBe('completed');
+    expect(completed.completed_at).toBeTruthy();
+    expect(completed.result).toBe('done with proof');
+    expect(completed.linked_goal.status).toBe('met');
+
+    updateTask(paths, id, 'pending');
+
+    const reopened = JSON.parse(readFileSync(filePath, 'utf-8'));
+    expect(reopened.status).toBe('pending');
+    expect(reopened.completed_at).toBeNull();
+    expect(reopened.result).toBeUndefined();
+    expect(reopened.linked_goal.status).toBe('active');
+    expect(reopened.meta.reopened_from_completed).toBe(true);
+    expect(reopened.meta.reopened_at).toBe(reopened.updated_at);
+  });
+
   it('audit log is append-only — existing entries are never overwritten', () => {
     const id = createTask(paths, 'alice', 'acme', 'Append proof', { skipBriefValidation: true });
     const path = join(paths.taskDir, 'audit', `${id}.jsonl`);

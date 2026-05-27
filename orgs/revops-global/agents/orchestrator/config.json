@@ -48,13 +48,13 @@
       "name": "fleet-tick",
       "type": "recurring",
       "interval": "2h",
-      "prompt": "Fleet-tick: light coordination pass — (1) cortextos bus list-tasks; (2) check heartbeats; (3) scan inbox; (4) update heartbeat. Silent unless action needed."
+      "prompt": "Fleet-tick: light coordination pass \u2014 (1) cortextos bus list-tasks; (2) check heartbeats; (3) scan inbox; (4) update heartbeat. Silent unless action needed."
     },
     {
       "name": "kanban-sync",
       "type": "recurring",
       "cron": "0 8,17 * * *",
-      "prompt": "Kanban hygiene sweep: (1) cortextos bus list-tasks --agent orchestrator status filters; (2) mcp__rgos__cortex_list_tasks for tasks created_by orchestrator and tasks assigned_to orchestrator — compare to current dispatches in today's memory file. (3) For any RGOS task stuck in approved/in_progress that's actually done, complete it via mcp__rgos__cortex_complete_task. (4) For any in-flight work without an RGOS task, create one. (5) update-heartbeat. Silent unless something requires action."
+      "prompt": "Kanban hygiene sweep: (1) cortextos bus list-tasks --agent orchestrator status filters; (2) mcp__rgos__cortex_list_tasks for tasks created_by orchestrator and tasks assigned_to orchestrator \u2014 compare to current dispatches in today's memory file. (3) For any RGOS task stuck in approved/in_progress that's actually done, complete it via mcp__rgos__cortex_complete_task. (4) For any in-flight work without an RGOS task, create one. (5) update-heartbeat. Silent unless something requires action."
     },
     {
       "name": "blocked-uat-escalator",
@@ -91,15 +91,77 @@
       "type": "recurring",
       "interval": "15m",
       "prompt": "bash /home/cortextos/cortextos/scripts/idle-overlap-watcher.sh"
+    },
+    {
+      "name": "agentops-hourly-dogfood",
+      "type": "recurring",
+      "interval": "1h",
+      "prompt": "Read prompts/cron-agentops-hourly-dogfood.md and execute one bounded AgentOps product/operator dogfood pass using Codex/Chrome-capable routes while Claude is constrained. Do not deploy, merge, post externally, or create duplicate tasks. Route/update scoped defects only, log results, and Telegram Greg only for P0/P1 or human-action blockers."
     }
   ],
-  "ctx_handoff_threshold": 88,
-  "ctx_autoreset_threshold": 92,
+  "ctx_warning_threshold": 0,
+  "ctx_handoff_threshold": 0,
+  "ctx_autoreset_threshold": 0,
   "ecosystem": {
     "local_version_control": {
       "enabled": true
     }
   },
-  "model": "claude-opus-4-7",
-  "telegram_polling": true
+  "telegram_polling": true,
+  "suppress_restart_telegram": true,
+  "codex_account_pool": [
+    {
+      "priority": 1,
+      "label": "greg@revopsglobal.com personal primary",
+      "email_or_workspace_label": "greg@revopsglobal.com",
+      "product_surface": "Codex Desktop",
+      "tier": "Pro 20x / funded credits",
+      "codex_home": "/home/cortextos/.codex-greg",
+      "status": "active",
+      "intended_lanes": [
+        "primary-interface",
+        "telegram",
+        "standard-work"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "priority": 2,
+      "label": "gregharned@gmail personal backup",
+      "email_or_workspace_label": "gregharned@gmail.com",
+      "product_surface": "Codex Desktop",
+      "tier": "Pro 20x",
+      "codex_home": "/home/cortextos/.codex-orchestrator-primary",
+      "status": "standby",
+      "intended_lanes": [
+        "backup-interface",
+        "standard-work"
+      ],
+      "requires_human_approval": false
+    },
+    {
+      "priority": 3,
+      "label": "greg@revopsglobal.com work backup",
+      "email_or_workspace_label": "greg@revopsglobal.com",
+      "product_surface": "Codex Desktop",
+      "tier": "work/shared",
+      "codex_home": "/home/cortextos/.codex-work",
+      "status": "standby",
+      "intended_lanes": [
+        "work-runtime",
+        "backup-interface"
+      ],
+      "requires_human_approval": false
+    }
+  ],
+  "codex_runtime_note": "P0 2026-05-24: Claude Code session hit org monthly usage limit while receiving Telegram; switched orchestrator Telegram owner to Codex app-server runtime so inbound Telegram can respond.",
+  "telegram_owner_note": "2026-05-25 recovery: orchestrator restored as sole @revops_director_bot / Orca front-door Telegram polling owner. Codex app-server runtime uses codex_account_pool with /home/cortextos/.codex-orchestrator-primary primary and labeled backups. orca-orch is voice-project-only and polling disabled.",
+  "ctx_autoreset_note": "Disabled temporarily during 2026-05-25 Orca front-door recovery because Codex app-server tokenUsage reported 100% immediately after fresh start and caused restart churn. Restore after account-pool failover/context metric fix.",
+  "codex_runtime_reenabled_note": "2026-05-26T23:54:33Z re-enabled Codex app-server front-door after all three CODEX_HOME lanes reported ChatGPT login status.",
+  "codex_frontdoor_restore_note": "2026-05-27T17:00:41.016Z: heartbeat recovery restored runtime=codex-app-server after config drift removed runtime and Telegram update triggered Claude crash loop.",
+  "home": "/home/cortextos",
+  "tier": "sonnet",
+  "runtime": "claude-code",
+  "codex_app_server_transport": "ws",
+  "claude_handback_note": "2026-05-27T19:22Z: Claude work credits/session restored; orchestrator control plane returned to claude-code. Codex lanes remain execution-only."
 }

@@ -45,5 +45,9 @@
     ],
     "never_ask": []
   },
-  "telegram_polling": false
+  "telegram_polling": false,
+  "home": "/home/cortextos/.claude-team",
+  "provider_account_note": "2026-05-27: route RevOps Claude Code work through greg@revopsglobal.com work/team profile; personal Max resets 2026-05-27 11:00 Pacific and should not be the default autonomous lane while depleted.",
+  "suppress_restart_telegram": true,
+  "suppress_restart_telegram_note": "2026-05-27T15:47:52.674Z: Future restarts must not send boot/back-online Telegram messages; Telegram text is reserved for substantive user replies, blockers, decisions, or material status."
 }

@@ -200,35 +200,54 @@ export function getAgentsForOrg(org: string): string[] {
   return Array.from(agents);
 }
 
+interface EnabledAgentRegistryEntry {
+  enabled?: boolean;
+  org?: string;
+  status?: string;
+}
+
+function readEnabledAgentRegistry(): Record<string, EnabledAgentRegistryEntry> {
+  const enabledFile = path.join(CTX_ROOT, 'config', 'enabled-agents.json');
+  if (!fs.existsSync(enabledFile)) return {};
+
+  try {
+    return JSON.parse(fs.readFileSync(enabledFile, 'utf-8')) as Record<string, EnabledAgentRegistryEntry>;
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Returns all agents by merging enabled-agents.json with filesystem scan.
  * Filesystem scan ensures CLI-created agents are always visible.
  */
 export function getAllAgents(): Array<{ name: string; org: string }> {
   const seen = new Set<string>();
+  const disabled = new Set<string>();
   const agents: Array<{ name: string; org: string }> = [];
 
   // 1. Read enabled-agents.json for explicitly registered agents
-  const enabledFile = path.join(CTX_ROOT, 'config', 'enabled-agents.json');
-  if (fs.existsSync(enabledFile)) {
-    try {
-      const data = JSON.parse(fs.readFileSync(enabledFile, 'utf-8'));
-      for (const [name, config] of Object.entries(data)) {
-        const cfg = config as { enabled?: boolean; org?: string };
-        if (cfg.enabled !== false) {
-          agents.push({ name, org: cfg.org ?? '' });
-          seen.add(name);
-        }
-      }
-    } catch {
-      // Skip corrupt file
+  const registry = readEnabledAgentRegistry();
+  for (const [name, config] of Object.entries(registry)) {
+    if (isDeletedRegistryEntry(name, config) || config.enabled === false) {
+      disabled.add(name);
+    } else {
+      agents.push({ name, org: config.org ?? '' });
+      seen.add(name);
     }
   }
 
-  // 2. Always scan org directories to pick up CLI-created agents
+  for (const name of Object.keys(registry)) {
+    if (isDeletedRegistryEntry(name, registry[name]) || registry[name]?.enabled === false) {
+      disabled.add(name);
+    }
+  }
+
+  // 2. Scan org directories to pick up CLI-created agents, but do not resurrect
+  // agents that the registry explicitly disabled or retired.
   for (const org of getOrgs()) {
     for (const name of getAgentsForOrg(org)) {
-      if (!seen.has(name)) {
+      if (!seen.has(name) && !disabled.has(name)) {
         agents.push({ name, org });
         seen.add(name);
       }
@@ -236,6 +255,10 @@ export function getAllAgents(): Array<{ name: string; org: string }> {
   }
 
   return agents;
+}
+
+function isDeletedRegistryEntry(name: string, config?: EnabledAgentRegistryEntry): boolean {
+  return name === 'deleted_agents' || config?.status === 'deleted';
 }
 
 export function getAllowedRootsConfigPath(): string {

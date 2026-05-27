@@ -82,6 +82,22 @@ function inferPollingCron(text: string): string | null {
   return '*/15 * * * *'; // default
 }
 
+function resetCompletionFieldsForReopen(task: Task): void {
+  task.completed_at = null;
+  delete task.result;
+  if (task.linked_goal?.status === 'met') {
+    task.linked_goal = { ...task.linked_goal, status: 'active' };
+  }
+  if (task.linked_loop?.status === 'completed') {
+    task.linked_loop = { ...task.linked_loop, status: 'active' };
+  }
+  task.meta = {
+    ...(task.meta ?? {}),
+    reopened_at: task.updated_at,
+    reopened_from_completed: true,
+  };
+}
+
 /**
  * Create a new task. Identical JSON format to bash create-task.sh.
  */
@@ -507,6 +523,9 @@ export function updateTask(
 
       task.status = status;
       task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      if (prevStatus === 'completed' && status !== 'completed') {
+        resetCompletionFieldsForReopen(task);
+      }
       atomicWriteSync(filePath, JSON.stringify(task));
       // Mirror to Supabase (fire-and-forget)
       if (!process.env.VITEST && process.env.NODE_ENV !== 'test') {

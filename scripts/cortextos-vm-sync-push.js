@@ -24,6 +24,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { execFileSync } = require("child_process");
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -378,13 +379,45 @@ function listAgentNames() {
 }
 
 /** Read heartbeat for an agent */
-function readHeartbeat(agentName) {
+function readDaemonAgentStatuses() {
+  try {
+    const raw = execFileSync("cortextos", ["bus", "list-agents", "--format", "json"], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const rows = JSON.parse(raw);
+    if (!Array.isArray(rows)) return new Map();
+    return new Map(rows
+      .filter((row) => row && typeof row.name === "string")
+      .map((row) => [row.name, { enabled: row.enabled !== false, running: row.running === true }]));
+  } catch (err) {
+    console.warn(`[vm-sync-push] daemon status unavailable; falling back to heartbeat files: ${err.message}`);
+    return new Map();
+  }
+}
+
+function readHeartbeat(agentName, daemonStatuses = new Map()) {
   const hb = safeReadJson(
     path.join(STATE_DIR, agentName, "heartbeat.json"),
   );
+  const daemonStatus = daemonStatuses.get(agentName);
+  if (!hb && daemonStatus?.enabled && daemonStatus.running === false) {
+    return {
+      status: "offline",
+      last_seen: null,
+    };
+  }
   if (!hb) return null;
+
+  let status = hb.status || "unknown";
+  if (daemonStatus?.enabled && daemonStatus.running === false) {
+    status = "offline";
+  }
+
   return {
-    status: hb.status || "unknown",
+    status,
     last_seen: hb.last_heartbeat || hb.updated_at || null,
   };
 }
@@ -548,6 +581,7 @@ function buildPayload(watermark) {
   const sinceTs = watermark.last_synced;
 
   const agentNames = listAgentNames();
+  const daemonStatuses = readDaemonAgentStatuses();
   const taskTransitions = readTaskTransitions(sinceTs);
   const taskCounts = readTaskCountsToday();
   const activityEvents = readEventsSince(sinceTs);
@@ -556,6 +590,7 @@ function buildPayload(watermark) {
   // Collect all unique agent names that have any data
   const allAgents = new Set([
     ...agentNames,
+    ...daemonStatuses.keys(),
     ...Object.keys(taskTransitions),
     ...Object.keys(activityEvents),
     ...Object.keys(crashEvents),
@@ -564,7 +599,7 @@ function buildPayload(watermark) {
   const agents = [];
 
   for (const agentName of allAgents) {
-    const hb = agentNames.includes(agentName) ? readHeartbeat(agentName) : null;
+    const hb = readHeartbeat(agentName, daemonStatuses);
 
     // Merge activity + crash events
     const events = [

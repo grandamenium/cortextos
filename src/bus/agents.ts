@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import type { AgentInfo, AgentConfig, BusPaths } from '../types/index.js';
+import type { AgentInfo, AgentConfig, BusPaths, Task } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { sendMessage } from './message.js';
 import { fetchRemoteHeartbeats } from './heartbeat.js';
@@ -30,7 +30,7 @@ export async function listAgents(ctxRoot: string, org?: string): Promise<AgentIn
   // 1. Read enabled-agents.json for explicit enable/disable state.
   // This is treated as metadata, not as the list of agents to display.
   const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
-  let enabledAgents: Record<string, { org?: string; enabled?: boolean }> = {};
+  let enabledAgents: Record<string, { org?: string; enabled?: boolean; status?: string }> = {};
   if (existsSync(enabledFile)) {
     try {
       enabledAgents = JSON.parse(readFileSync(enabledFile, 'utf-8'));
@@ -92,6 +92,7 @@ export async function listAgents(ctxRoot: string, org?: string): Promise<AgentIn
         // otherwise default to enabled (matches the daemon's discoverAndStart
         // default-on behavior).
         const explicitEntry = enabledAgents[agentName];
+        if (isDeletedRegistryEntry(agentName, explicitEntry)) continue;
         const isEnabled = explicitEntry ? explicitEntry.enabled !== false : true;
 
         agents.push(buildAgentInfo(agentName, orgName, isEnabled, ctxRoot));
@@ -104,6 +105,7 @@ export async function listAgents(ctxRoot: string, org?: string): Promise<AgentIn
   // or never existed). These are surfaced so users can clean them up.
   for (const [name, cfg] of Object.entries(enabledAgents)) {
     if (!/^[a-z0-9_-]+$/.test(name)) continue;
+    if (isDeletedRegistryEntry(name, cfg)) continue;
     if (seen.has(name)) continue;
     const agentOrg = cfg.org || '';
     if (org && agentOrg !== org) continue;
@@ -146,6 +148,13 @@ export async function listAgents(ctxRoot: string, org?: string): Promise<AgentIn
   return agents;
 }
 
+function isDeletedRegistryEntry(
+  name: string,
+  cfg?: { status?: string },
+): boolean {
+  return name === 'deleted_agents' || cfg?.status === 'deleted';
+}
+
 /**
  * Build an AgentInfo object by reading heartbeat, IDENTITY.md, and config.
  */
@@ -177,6 +186,8 @@ function buildAgentInfo(
       // Skip corrupt
     }
   }
+
+  currentTask = currentTask || readCurrentTaskFromTaskStore(ctxRoot, org, name);
 
   // Get display name and role from IDENTITY.md
   let role = '';
@@ -265,6 +276,45 @@ function buildAgentInfo(
     current_task: currentTask,
     mode,
   };
+}
+
+function readCurrentTaskFromTaskStore(ctxRoot: string, org: string, agentName: string): string | null {
+  const taskDirs = [
+    org ? join(ctxRoot, 'orgs', org, 'tasks') : '',
+    join(ctxRoot, 'tasks'),
+  ].filter(Boolean);
+  const tasks: Task[] = [];
+
+  for (const taskDir of taskDirs) {
+    if (!existsSync(taskDir)) continue;
+    let files: string[];
+    try {
+      files = readdirSync(taskDir).filter(file => file.startsWith('task_') && file.endsWith('.json'));
+    } catch {
+      continue;
+    }
+
+    for (const file of files) {
+      try {
+        const task = JSON.parse(readFileSync(join(taskDir, file), 'utf-8')) as Task;
+        if (task.archived) continue;
+        if (task.status !== 'in_progress') continue;
+        if (task.assigned_to !== agentName) continue;
+        tasks.push(task);
+      } catch {
+        // Skip corrupt task files.
+      }
+    }
+  }
+
+  tasks.sort((a, b) => {
+    const bTime = new Date(b.updated_at || b.created_at).getTime();
+    const aTime = new Date(a.updated_at || a.created_at).getTime();
+    return bTime - aTime;
+  });
+
+  const task = tasks[0];
+  return task ? `${task.id}: ${task.title}` : null;
 }
 
 /**

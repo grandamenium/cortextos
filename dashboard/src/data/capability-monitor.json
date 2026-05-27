@@ -26,7 +26,7 @@
       "failWhen": "auth redirect, login wall, 401/403, blank shell, or both sentinel routes fail",
       "renewalPath": "Drive Hub-QA VM Chrome through Hub magic-link auth using Greg .com Gmail when needed",
       "proofRequired": "Latest probe event, route screenshots on warn/fail, auth age if available",
-      "lastCheckedAt": "2026-05-24T07:48:10.061Z",
+      "lastCheckedAt": "2026-05-27T19:34:06.748Z",
       "lastAuthority": "hub.revopsglobal.com (magic-link auth)",
       "observed": "/app/fleet/tasks=308, /app/cortex/theta=308",
       "proof": "Sentinels: /app/fleet/tasks=308, /app/cortex/theta=308",
@@ -47,7 +47,7 @@
       "failWhen": "login wall, checkpoint, captcha, 999, account restriction, or upstream invalid result",
       "renewalPath": "Human or approved browser-auth lane; never account recovery from monitor",
       "proofRequired": "Non-posting validation result and observed auth surface classification",
-      "lastCheckedAt": "2026-05-24T07:48:13.181Z",
+      "lastCheckedAt": "2026-05-27T19:34:08.542Z",
       "lastAuthority": "LinkedIn-Session browser/cookie jar or a Hub presence route that performs real upstream validation",
       "observed": "No linkedin-cookies.json found — session not provisioned on this VM",
       "lastEventName": "capability_check_passed"
@@ -71,7 +71,7 @@
       "lastAuthority": "@revops_director_bot",
       "observed": "getMe ok, @revops_director_bot; getUpdates ok",
       "lastEventName": "capability_check_passed",
-      "lastCheckedAt": "2026-05-24T07:48:05.334Z",
+      "lastCheckedAt": "2026-05-27T19:34:04.037Z",
       "proof": "getMe ok=true username=revops_director_bot"
     },
     {
@@ -89,9 +89,9 @@
       "failWhen": "invalid_grant, 401/403, refresh failure, or profile cannot be read",
       "renewalPath": "OAuth re-consent for the required account; do not send from fallback account",
       "proofRequired": "Expected emailAddress, token probe timestamp, and thread/message id after approved sends",
-      "lastCheckedAt": "2026-05-24T07:48:08.537Z",
+      "lastCheckedAt": "2026-05-27T19:34:05.761Z",
       "lastAuthority": "greg@revopsglobal.ai",
-      "observed": "Gmail token valid; emailAddress=greg@revopsglobal.ai; messagesTotal=92",
+      "observed": "Gmail token valid; emailAddress=greg@revopsglobal.ai; messagesTotal=94",
       "proof": "users.getProfile ok; emailAddress=greg@revopsglobal.ai",
       "lastEventName": "capability_check_passed"
     },
@@ -105,17 +105,17 @@
         "no-op exec/health endpoint",
         "lane identity match"
       ],
-      "currentStatus": "ok",
+      "currentStatus": "fail",
       "freshnessTarget": "daily plus before VM-dependent dispatch",
       "warnWhen": "one transient 5xx, stale lease metadata, VM listed but slow/unready, or lane mismatch",
       "failWhen": "401/403, endpoint unreachable, VM stuck/deleted while marked active, or repeated 5xx",
       "renewalPath": "Vendor support or VM recreation workflow; preserve lane authority in VM ledger",
       "proofRequired": "Per-lane inventory id, exec status, and blocker class when vendor/human action is required",
-      "lastCheckedAt": "2026-05-26T15:20:14.725Z",
+      "lastCheckedAt": "2026-05-27T19:34:07.693Z",
       "lastAuthority": "cortextos bus orgo-lease-status",
-      "observed": "5/5 exec-capable Orgo lanes healthy",
-      "lastEventName": "capability_check_passed",
-      "proof": "healthy=[orgo-codex-computeruse: last_exec_ok=true status=running; orgo-hub-qa: last_exec_ok=standby-complete status=idle; orgo-linkedin-session: last_exec_ok=true status=running; orgo-telegram-web: last_exec_ok=true status=running; orgo-wiki-ingestion-worker: last_exec_ok=true status=running]"
+      "observed": "0/5 exec-capable Orgo lanes healthy; 5 stale",
+      "lastEventName": "capability_check_failed",
+      "proof": "healthy=[] stale=[orgo-codex-computeruse: last_check=2026-05-27T14:38:05.258132+00:00 age=296m; orgo-hub-qa: last_check=2026-05-27T14:38:05.258132+00:00 age=296m; orgo-linkedin-session: last_check=2026-05-27T14:38:05.258132+00:00 age=296m; orgo-telegram-web: last_check=2026-05-27T14:38:05.258132+00:00 age=296m; orgo-wiki-ingestion-worker: last_check=2026-05-27T14:38:05.258132+00:00 age=296m]"
     },
     {
       "id": "github_token",
@@ -132,7 +132,7 @@
       "failWhen": "401/403, SSO authorization missing, target repo inaccessible, or critical bucket exhausted",
       "renewalPath": "Token refresh or SSO authorization by token owner",
       "proofRequired": "Rate-limit headers, target repo access result, and reset time",
-      "lastCheckedAt": "2026-05-24T07:48:07.395Z",
+      "lastCheckedAt": "2026-05-27T19:34:05.129Z",
       "lastAuthority": "github.com/revopsglobal",
       "observed": "Authenticated as revopsglobal; scopes=admin:org, admin:org_hook, admin:public_key, admin:repo_hook, admin:ssh_signing_key, notifications, project, repo, user, workflow, write:discussion",
       "proof": "GET /user ok; login=revopsglobal",
