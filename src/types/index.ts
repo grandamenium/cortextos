@@ -373,6 +373,16 @@ export interface CronDefinition {
   description?: string;
 
   /**
+   * Execution engine for this cron.
+   * Only 'claude' (PTY injection) is supported. 'ollama' and 'shell' were
+   * removed in 2026-05-17; the daemon logs a warning and skips crons with
+   * those values. Defaults to 'claude' when absent.
+   *
+   * @example "claude"
+   */
+  engine?: string;
+
+  /**
    * Arbitrary key-value pairs for agent-specific context.
    * Not interpreted by the daemon; surfaced in dashboard + execution logs.
    *
