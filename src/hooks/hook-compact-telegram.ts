@@ -11,14 +11,27 @@
  * Telegram call must never abort compaction.
  */
 
+import { mkdirSync, appendFileSync } from 'fs';
 import { loadEnv } from './index.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
 
-  if (!env.botToken || !env.chatId) return;
-
   const agentName = env.agentName || 'agent';
+
+  // F15: record this compaction event so the daemon can detect compaction loops.
+  // Written before the Telegram call so it lands even if the network is slow.
+  try {
+    mkdirSync(env.stateDir, { recursive: true });
+    appendFileSync(
+      `${env.stateDir}/compaction-events.jsonl`,
+      JSON.stringify({ ts: Date.now() }) + '\n',
+    );
+  } catch {
+    // Never block compaction on a failed write
+  }
+
+  if (!env.botToken || !env.chatId) return;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
