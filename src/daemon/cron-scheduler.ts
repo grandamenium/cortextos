@@ -394,7 +394,14 @@ export class CronScheduler {
       if (def.last_fired_at) candidates.push(new Date(def.last_fired_at).getTime());
       if (def.last_fire_attempted_at) candidates.push(new Date(def.last_fire_attempted_at).getTime());
       if (stateFire) candidates.push(new Date(stateFire).getTime());
-      const referenceMs = candidates.length > 0 ? Math.max(...candidates) : now;
+      // F11 fix: fall back to created_at instead of now when no fire timestamps
+      // exist. Using now as fallback caused the interval to reset on every
+      // daemon restart (max_session < interval), so the cron never accumulated
+      // enough uptime to fire. created_at lets the catch-up policy (line 411)
+      // fire once immediately on the next tick if the interval has elapsed.
+      const createdAtMs = def.created_at ? new Date(def.created_at).getTime() : NaN;
+      const fallbackMs = !isNaN(createdAtMs) ? createdAtMs : now;
+      const referenceMs = candidates.length > 0 ? Math.max(...candidates) : fallbackMs;
 
       let nextFireAt = computeNextFireAt(def, referenceMs);
 
