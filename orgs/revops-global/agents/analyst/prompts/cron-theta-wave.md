@@ -16,8 +16,9 @@ Required workflow:
 3. Create or update a `theta_sessions` placeholder row before deep work begins:
    - `session_id = SESSION_ID`
    - `ran_at = current UTC timestamp`
-   - `status = in_progress`
-   - `synthesis_summary` must say the artifact-backed cron started.
+   - `status = error`
+   - `synthesis_summary` must say the artifact-backed cron started and is not yet complete.
+   - This intentional placeholder uses the current `theta_sessions` contract (`complete`, `error`, or `partial`) and must be patched to `complete` after the cycle succeeds.
 4. Write a markdown session artifact under `output/YYYY-MM-DD-theta-wave-session.md`.
 5. Execute the theta-wave cycle from the skill, including the orchestrator challenge step.
 6. Patch the same `theta_sessions` row at completion:

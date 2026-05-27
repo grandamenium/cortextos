@@ -116,6 +116,13 @@ function spawnEnv(opts: SpawnCodexOptions): NodeJS.ProcessEnv {
 
   if (opts.agentName) {
     env.CTX_AGENT_NAME = opts.agentName;
+    // Daemon-fired spawn-codex jobs run as a bounded child process, not as the
+    // long-lived agent PTY. When the daemon is the caller, process.pid is the
+    // same PID recorded in state/{agent}/session.lock, so forwarding it lets the
+    // child perform normal bus mutations without weakening manual dup-session
+    // rejection. Manual spawn-codex invocations still fail the lock check
+    // because their process.pid will not match the daemon-owned lock.
+    env.CTX_SESSION_OWNER_PID = process.env.CTX_SESSION_OWNER_PID ?? String(process.pid);
   }
   if (opts.agentsRoot && opts.agentName) {
     env.CTX_AGENT_DIR = join(opts.agentsRoot, 'agents', opts.agentName);

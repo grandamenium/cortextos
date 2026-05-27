@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawnCodex } from '../../../src/bus/spawn-codex.js';
 
 const previousCodexBin = process.env.CODEX_BIN;
+const previousSessionOwnerPid = process.env.CTX_SESSION_OWNER_PID;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -12,6 +13,11 @@ afterEach(() => {
     delete process.env.CODEX_BIN;
   } else {
     process.env.CODEX_BIN = previousCodexBin;
+  }
+  if (previousSessionOwnerPid === undefined) {
+    delete process.env.CTX_SESSION_OWNER_PID;
+  } else {
+    process.env.CTX_SESSION_OWNER_PID = previousSessionOwnerPid;
   }
 });
 
@@ -84,6 +90,40 @@ printf 'org=%s\\n' "$CTX_ORG"
     expect(result.output).toContain('agent=dev');
     expect(result.output).toContain(`dir=${join(agentsRoot, 'agents', 'dev')}`);
     expect(result.output).toContain(`org=${basename(agentsRoot)}`);
+  });
+
+  it('forwards session ownership proof for daemon-spawned target agents', () => {
+    delete process.env.CTX_SESSION_OWNER_PID;
+    makeFakeCodex(`#!/usr/bin/env bash
+printf 'owner=%s\\n' "$CTX_SESSION_OWNER_PID"
+`);
+    const { prompt, agentsRoot } = makePrompt();
+
+    const result = spawnCodex(prompt, {
+      agentsRoot,
+      agentName: 'analyst',
+      timeout: 5,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain(`owner=${process.pid}`);
+  });
+
+  it('preserves an inherited session ownership proof from an agent PTY', () => {
+    process.env.CTX_SESSION_OWNER_PID = '424242';
+    makeFakeCodex(`#!/usr/bin/env bash
+printf 'owner=%s\\n' "$CTX_SESSION_OWNER_PID"
+`);
+    const { prompt, agentsRoot } = makePrompt();
+
+    const result = spawnCodex(prompt, {
+      agentsRoot,
+      agentName: 'analyst',
+      timeout: 5,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain('owner=424242');
   });
 
   it('writes failure metadata when codex exits non-zero', () => {
