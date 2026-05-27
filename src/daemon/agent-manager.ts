@@ -28,7 +28,7 @@ export class AgentManager {
   private cronSchedulers: Map<string, CronScheduler> = new Map();
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
-  private pendingRestarts: Set<string> = new Set();
+  // pendingRestarts removed: idempotent skip in startAgent() makes the queue unnecessary
   private instanceId: string;
   private ctxRoot: string;
   private frameworkRoot: string;
@@ -54,22 +54,26 @@ export class AgentManager {
     // re-discover and re-start any agent dir on disk regardless of user intent.
     const instanceEnabled = this.readInstanceEnableList();
 
-    for (const { name, dir, org, config } of agentDirs) {
-      // Per-agent config.json `enabled: false` (existing behavior, unchanged)
+    const toStart = agentDirs.filter(({ name, config }) => {
       if (config.enabled === false) {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (per-agent config.json)`);
-        continue;
+        return false;
       }
-      // Instance-level enabled-agents.json `enabled: false` (BUG-028 fix)
       const entry = instanceEnabled[name];
       if (entry && entry.enabled === false) {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
-        continue;
+        return false;
       }
-      // BUG-043 fix: pass the per-agent org so startAgent can use it instead
-      // of falling back to `this.org` (the daemon's startup org).
-      await this.startAgent(name, dir, config, org);
-    }
+      return true;
+    });
+
+    // Parallel startup: eliminates the sequential blocking window that caused
+    // external IPC start-agent calls to race with discoverAndStart and trigger
+    // the BUG-011 pendingRestarts cascade. Each agent's startup_delay now runs
+    // concurrently instead of blocking the whole queue.
+    await Promise.allSettled(
+      toStart.map(({ name, dir, config, org }) => this.startAgent(name, dir, config, org)),
+    );
   }
 
   /**
@@ -171,21 +175,10 @@ export class AgentManager {
 
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
     if (this.agents.has(name)) {
-      // BUG-031: this branch was the workaround for the BUG-011 PTY race
-      // (restart-all could send stop+start simultaneously, and the new
-      // start would arrive while the old stop's PTY exit was still in
-      // flight). PR #11 closed BUG-011 by making `AgentProcess.stop()`
-      // await the actual PTY exit before resolving — which means this
-      // branch should NEVER fire under normal restart paths.
-      //
-      // We log a regression warning here instead of deleting the branch
-      // entirely, so we'll know IMMEDIATELY if BUG-011 ever regresses
-      // (a future change accidentally breaks the exit-await). Phase 4 of
-      // the core stability test plan + cycle 2 of PR #13 both confirmed
-      // this branch is dormant. Once we have weeks of zero-warning
-      // production data, we can delete the queue mechanism entirely.
-      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
-      this.pendingRestarts.add(name);
+      // Idempotent: a second start() for an already-running agent is a no-op.
+      // This replaces the old pendingRestarts cascade that turned IPC/startup
+      // races into silent restart loops (root cause of the 3-agent dropout bug).
+      console.log(`[agent-manager] start(${name}) skipped — already in registry (idempotent; no restart queued)`);
       return;
     }
 
@@ -610,19 +603,6 @@ export class AgentManager {
       this.cronSchedulers.delete(name);
     }
 
-    // BUG-031: honor any restart that was queued while we were stopping.
-    // After PR #11 (BUG-011 fix) this branch should never fire — see the
-    // matching warning comment in startAgent(). The honor logic is preserved
-    // as a safety net in case BUG-011 regresses; the warn line tells us
-    // immediately if it ever does.
-    if (this.pendingRestarts.has(name)) {
-      console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: pendingRestarts fired for ${name} — race condition leaked through. Honoring queued restart as safety net.`);
-      this.pendingRestarts.delete(name);
-      console.log(`[agent-manager] Honoring queued restart for ${name}`);
-      this.startAgent(name, '').catch(err =>
-        console.error(`[agent-manager] Queued restart failed for ${name}:`, err),
-      );
-    }
   }
 
   /**
@@ -634,7 +614,6 @@ export class AgentManager {
    * credentials are re-read from {agentDir}/.env on each restart.
    *
    * agentDir is auto-discovered by startAgent() from frameworkRoot/orgs/{org}/agents/{name}.
-   * Participates in the pendingRestarts race protection used by restart-all.
    */
   async restartAgent(name: string): Promise<void> {
     if (!this.agents.has(name)) {
