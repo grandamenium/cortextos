@@ -3811,6 +3811,14 @@ busCommand
           }
         } catch { /* skip */ }
       }
+      if (!currentTask) {
+        try {
+          const taskPaths = resolvePaths(name, env.instanceId, info.org || env.org);
+          const activeTasks = listTasks(taskPaths, { agent: name, status: 'in_progress' });
+          const activeTask = activeTasks[0];
+          if (activeTask) currentTask = `${activeTask.id}: ${activeTask.title}`;
+        } catch { /* task store unavailable */ }
+      }
 
       const heartbeatFresh = heartbeatAgeMinutes !== null && heartbeatAgeMinutes <= runningHeartbeatThresholdMinutes;
       const recoveryState = daemonRunning && !heartbeatFresh
