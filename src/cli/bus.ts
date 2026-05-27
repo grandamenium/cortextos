@@ -2019,13 +2019,12 @@ busCommand
   .option('--prompt <p>', 'New prompt text')
   .option('--enabled <bool>', 'Enable (true) or disable (false) the cron')
   .option('--desc <d>', 'New description')
-  .option('--engine <e>', 'Execution engine (only "claude" is supported; "ollama"/"shell" are deprecated)')
-  .action(async (agent: string, name: string, opts: { interval?: string; cronExpr?: string; prompt?: string; enabled?: string; desc?: string; engine?: string }) => {
+  .action(async (agent: string, name: string, opts: { interval?: string; cronExpr?: string; prompt?: string; enabled?: string; desc?: string }) => {
     try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
 
     const rawSchedule = opts.interval ?? opts.cronExpr;
-    if (!rawSchedule && opts.prompt === undefined && opts.enabled === undefined && opts.desc === undefined && opts.engine === undefined) {
-      console.error('Error: at least one of --interval, --cron-expr, --prompt, --enabled, --desc, or --engine is required.');
+    if (!rawSchedule && opts.prompt === undefined && opts.enabled === undefined && opts.desc === undefined) {
+      console.error('Error: at least one of --interval, --cron-expr, --prompt, --enabled, or --desc is required.');
       process.exit(1);
     }
 
@@ -2046,9 +2045,6 @@ busCommand
     }
     if (opts.desc !== undefined) {
       patch.description = opts.desc;
-    }
-    if (opts.engine !== undefined) {
-      patch.engine = opts.engine;
     }
 
     const ok = updateCronDef(agent, name, patch);
