@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -274,12 +274,89 @@ export class AgentProcess {
    * AFTER the NEW pty was set up, nulling out the wrong reference.
    * `start()` will pick up `continue` mode automatically because the
    * conversation directory still has .jsonl files (shouldContinue() is true).
+   *
+   * F15: if 3+ compaction events occurred in the last 30 minutes, the agent
+   * is in a compaction loop (--continue reloads saturated context → immediate
+   * re-compaction). In that case, archive the conversation history so
+   * shouldContinue() returns false and start() uses a fresh session.
    */
   async sessionRefresh(): Promise<void> {
     this.log('Session refresh (--continue restart)');
+
+    if (this.isCompactionLoop()) {
+      this.log('[F15] Compaction loop detected (3+ compactions in 30min) — archiving conversation, restarting fresh');
+      this.archiveConversationHistory();
+    }
+
     await this.stop();
     await this.start();
     this.log('Session refreshed');
+  }
+
+  /**
+   * F15: detect if the agent is in a compaction loop.
+   * Returns true if there are 3+ compaction events in the last 30 minutes.
+   * Events are written by hook-compact-telegram.ts on every PreCompact fire.
+   */
+  private isCompactionLoop(): boolean {
+    const eventsFile = join(this.env.ctxRoot, 'state', this.name, 'compaction-events.jsonl');
+    if (!existsSync(eventsFile)) return false;
+
+    try {
+      const lines = readFileSync(eventsFile, 'utf-8').trim().split('\n').filter(Boolean);
+      const now = Date.now();
+      const windowMs = 30 * 60 * 1000; // 30-minute detection window
+      const threshold = 3;
+
+      const recentCount = lines.reduce((count, line) => {
+        try {
+          const { ts } = JSON.parse(line);
+          return (typeof ts === 'number' && now - ts < windowMs) ? count + 1 : count;
+        } catch {
+          return count;
+        }
+      }, 0);
+
+      return recentCount >= threshold;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * F15: archive .jsonl conversation files to <convDir>/.archived/<timestamp>/
+   * so shouldContinue() returns false and the next start() is a fresh session.
+   * Reversible — files are moved, not deleted.
+   */
+  private archiveConversationHistory(): void {
+    const launchDir = this.config.working_directory || this.env.agentDir;
+    if (!launchDir) return;
+
+    const convDir = join(homedir(), '.claude', 'projects', launchDir.split(sep).join('-'));
+
+    try {
+      const files = readdirSync(convDir).filter(f => f.endsWith('.jsonl'));
+      if (files.length === 0) return;
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const archivedDir = join(convDir, '.archived', timestamp);
+      mkdirSync(archivedDir, { recursive: true });
+
+      for (const file of files) {
+        renameSync(join(convDir, file), join(archivedDir, file));
+      }
+
+      this.log(`[F15] Archived ${files.length} conversation file(s) to ${archivedDir}`);
+
+      // Append an escalation marker to compaction-events.jsonl so future
+      // sessions can see this happened (e.g. for reporting).
+      try {
+        const eventsFile = join(this.env.ctxRoot, 'state', this.name, 'compaction-events.jsonl');
+        appendFileSync(eventsFile, JSON.stringify({ ts: Date.now(), escalated: true, archived_dir: archivedDir }) + '\n');
+      } catch { /* best-effort */ }
+    } catch (err) {
+      this.log(`[F15] Failed to archive conversation: ${err}`);
+    }
   }
 
   /**
