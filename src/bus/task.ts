@@ -6,7 +6,7 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { acquireLock, releaseLock } from '../utils/lock.js';
 import { randomDigits } from '../utils/random.js';
 import { validatePriority } from '../utils/validate.js';
-import { mirrorTaskToRgos } from './rgos-mirror.js';
+import { mirrorTaskToRgos, mirrorTaskRunToRgos, uuidv5, isUuid } from './rgos-mirror.js';
 import { logEvent } from './event.js';
 import { snapshotSessionCost } from './task-cost.js';
 import { autoEmitStatusUpdate } from './agent-task-events.js';
@@ -711,6 +711,15 @@ export function claimTask(
   // so this safely inserts the row if the createTask mirror previously failed.
   if (!process.env.VITEST && process.env.NODE_ENV !== 'test') {
     mirrorTaskToRgos(task, 'update').catch(() => undefined);
+    // Insert an execution run row so the Execution Log page has data.
+    const taskUuid = isUuid(taskId) ? taskId : uuidv5(taskId);
+    mirrorTaskRunToRgos({
+      runId: uuidv5(`task_run:${taskId}`),
+      taskId: taskUuid,
+      agentName: agent,
+      status: 'running',
+      startedAt: now,
+    }).catch(() => undefined);
   }
   autoEmitStatusUpdate(taskId, task.title ?? taskId, prevStatus, 'in_progress');
   return task;
@@ -745,6 +754,8 @@ export function completeTask(
   let assignee: string | undefined;
   let taskOrg: string = '';
   let taskTitle: string = taskId;
+  let completedAt: string | undefined;
+  let sessionCostUsd: number | undefined;
   try {
     withTaskLock(actualTaskDir, taskId, () => {
       const content = readFileSync(filePath, 'utf-8');
@@ -756,6 +767,7 @@ export function completeTask(
       task.status = 'completed';
       task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
       task.completed_at = task.updated_at;
+      completedAt = task.completed_at;
       if (result) {
         task.result = result;
       }
@@ -764,7 +776,8 @@ export function completeTask(
         ? task.meta.cost_snapshot_start
         : undefined;
       if (startCost !== undefined) {
-        task.meta = { ...(task.meta ?? {}), session_cost_usd: Math.max(0, endCost - startCost) };
+        sessionCostUsd = Math.max(0, endCost - startCost);
+        task.meta = { ...(task.meta ?? {}), session_cost_usd: sessionCostUsd };
       }
       // Lifecycle binding: close linked goal and loop when task completes.
       if (task.linked_goal?.status === 'active') {
@@ -783,6 +796,19 @@ export function completeTask(
     throw new Error(`Task ${taskId} complete failed: ${err}`);
   }
   appendTaskAudit(paths, taskId, { event: 'complete', agent: assignee || 'unknown', from: prevStatus, to: 'completed', note: result }, actualTaskDir);
+  // Update the execution run row with completion data.
+  if (!process.env.VITEST && process.env.NODE_ENV !== 'test') {
+    const taskUuid = isUuid(taskId) ? taskId : uuidv5(taskId);
+    mirrorTaskRunToRgos({
+      runId: uuidv5(`task_run:${taskId}`),
+      taskId: taskUuid,
+      agentName: assignee ?? null,
+      status: 'completed',
+      startedAt: completedAt ?? new Date().toISOString(), // fallback; real start is in the INSERT
+      completedAt: completedAt ?? null,
+      costUsd: sessionCostUsd,
+    }).catch(() => undefined);
+  }
   autoEmitStatusUpdate(taskId, taskTitle, prevStatus, 'completed', result);
 
   // Activity-feed event. Best-effort — the task is already persisted.

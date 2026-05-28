@@ -72,7 +72,7 @@ export function isEnabled(): boolean {
 // ---------------------------------------------------------------------------
 
 export interface RetryEntry {
-  table: 'orch_tasks' | 'cortex_messages' | 'orch_events' | 'orch_reviews';
+  table: 'orch_tasks' | 'cortex_messages' | 'orch_events' | 'orch_reviews' | 'orch_task_runs';
   row: Record<string, unknown>;
   ts: string;
   retries_remaining?: number;
@@ -850,6 +850,67 @@ export async function mirrorReviewToRgos(review: ReviewMirrorInput): Promise<voi
     } else {
       console.warn(`[bus-mirror] orch_reviews upsert failed — queuing for retry: ${err instanceof Error ? err.message : String(err)}`);
       enqueueRetry({ table: 'orch_reviews', row, ts: new Date().toISOString(), retries_remaining: EVENT_RETRY_MAX });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// orch_task_runs — execution run lifecycle writes
+// ---------------------------------------------------------------------------
+
+export interface TaskRunInput {
+  /** Deterministic run ID: uuidv5 of 'task_run:<busTaskId>') */
+  runId: string;
+  /** The mirrored RGOS task UUID (uuidv5 of bus task ID) */
+  taskId: string;
+  /** Agent name — will be converted to uuidv5 for the agent_id FK */
+  agentName: string | null;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  startedAt: string;
+  completedAt?: string | null;
+  tokensInput?: number;
+  tokensOutput?: number;
+  costUsd?: number;
+  errorMessage?: string | null;
+  traceId?: string | null;
+}
+
+export function buildTaskRunRow(input: TaskRunInput): Record<string, unknown> {
+  return {
+    id: input.runId,
+    task_id: input.taskId,
+    agent_id: input.agentName ? uuidv5(input.agentName) : null,
+    trace_id: input.traceId ?? null,
+    status: input.status,
+    started_at: input.startedAt,
+    completed_at: input.completedAt ?? null,
+    tokens_input: input.tokensInput ?? 0,
+    tokens_output: input.tokensOutput ?? 0,
+    cost_usd: input.costUsd ?? 0,
+    error_message: input.errorMessage ?? null,
+  };
+}
+
+/**
+ * Mirror a task run start or completion to Supabase orch_task_runs.
+ * Fire-and-forget — never throws. Failures are queued for retry.
+ *
+ * On task claim/start: INSERT with status='running', started_at=now().
+ * On task complete: UPDATE (upsert) with status='completed', completed_at,
+ *   tokens_input/output/cost_usd when available from session cost snapshot.
+ */
+export async function mirrorTaskRunToRgos(input: TaskRunInput): Promise<void> {
+  if (!isEnabled()) return;
+  const row = buildTaskRunRow(input);
+  try {
+    await postgrestUpsert('orch_task_runs', row);
+    setImmediate(() => drainRetryQueue().catch(err => escalateCritical('bus-mirror drain loop (task_run)', err, { queue: 'task_runs' })));
+  } catch (err) {
+    if (err instanceof PostgRESTError && err.isPermanent) {
+      console.error(`[bus-mirror] orch_task_runs upsert permanent error (HTTP ${err.status}) — discarding: ${err.message}`);
+    } else {
+      console.warn(`[bus-mirror] orch_task_runs upsert failed — queuing for retry: ${err instanceof Error ? err.message : String(err)}`);
+      enqueueRetry({ table: 'orch_task_runs', row, ts: new Date().toISOString() });
     }
   }
 }
