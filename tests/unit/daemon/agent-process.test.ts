@@ -489,3 +489,180 @@ describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', ()
     expect(ap.getStatus().status).not.toBe('halted');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Premature-voluntary-exit guard
+// ---------------------------------------------------------------------------
+//
+// Symptom (Greg, 2026-05-28): orchestrator agent restart-looping for an hour.
+// Inside the claude session, a prompt or handoff doc contained `/exit`, which
+// exits cleanly (code 0, no signal). The daemon classified the clean exit as
+// a crash, restarted with 5s→10s→20s→40s→80s exponential backoff, and
+// re-injected the same prompt each time — re-triggering the same /exit. The
+// watchdog circuit-breaker tripped within minutes.
+//
+// Fix: detect clean exits with uptime < threshold + no markers as "premature
+// voluntary exits." Back off LONGER (default 5 min), do NOT increment the
+// crash counter, and HALT after N premature exits inside a sliding window
+// (rapid restart will just re-trigger the same prompt path).
+describe('AgentProcess — premature voluntary exit guard', () => {
+  it('classifies a clean code-0 exit with short uptime as premature (does not crash-count)', async () => {
+    vi.useFakeTimers();
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {
+        // Tight window to keep the test fast: 2 premature exits in 60s halts.
+        premature_exit_window: { seconds: 60, max_exits: 2, threshold_seconds: 30, backoff_seconds: 60 },
+      });
+      await ap.start();
+      expect(ap.getStatus().status).toBe('running');
+      const before = ap.getStatus().crashCount ?? 0;
+
+      // Simulate `/exit` inside the claude session: clean exit, no signal,
+      // uptime well under the 30s threshold.
+      capturedOnExit!(0, 0);
+
+      // Status flips to 'crashed' so the dashboard's existing restart UI works,
+      // but the underlying classification is premature-exit (not a real crash).
+      expect(ap.getStatus().status).toBe('crashed');
+      // crashCount MUST NOT have been incremented — premature exits live in
+      // their own counter. Otherwise rapid `/exit` events would exhaust
+      // max_crashes_per_day in minutes and HALT the agent for the wrong reason.
+      expect(ap.getStatus().crashCount).toBe(before);
+
+      // The classification line landed in restarts.log with the
+      // PREMATURE_EXIT kind, not CRASH.
+      expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+      const [logPath, logLine] = fsMocks.appendFileSync.mock.calls[0];
+      expect(String(logPath)).toContain('/logs/alice/restarts.log');
+      expect(String(logLine)).toMatch(/\] PREMATURE_EXIT: exit_code=0 premature_exits=1\b/);
+      expect(String(logLine)).toMatch(/backoff_s=60\b/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the configured longer backoff for premature exits (not exponential 5s)', async () => {
+    vi.useFakeTimers();
+    try {
+      const startSpy = vi.fn().mockResolvedValue(undefined);
+      const ap = new AgentProcess('alice', mockEnv, {
+        premature_exit_window: { seconds: 600, max_exits: 3, threshold_seconds: 60, backoff_seconds: 300 },
+      });
+      await ap.start();
+
+      // Spy AFTER initial start so the restart-scheduled start() is observable
+      vi.spyOn(ap, 'start').mockImplementation(startSpy);
+
+      capturedOnExit!(0, 0);
+      expect(ap.getStatus().status).toBe('crashed');
+
+      // Normal crash backoff for crash #1 is 5s. Advance 30s — start() must
+      // NOT have been called yet (premature backoff is 5 min).
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(startSpy).not.toHaveBeenCalled();
+
+      // Advance to just past 5 min — restart fires.
+      await vi.advanceTimersByTimeAsync(280_000);
+      expect(startSpy).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('halts the agent after max_exits premature exits in the sliding window', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      premature_exit_window: { seconds: 600, max_exits: 3, threshold_seconds: 30, backoff_seconds: 60 },
+    });
+    await ap.start();
+
+    // Premature exit #1 — should keep us in crashed, schedule a restart
+    capturedOnExit!(0, 0);
+    expect(ap.getStatus().status).toBe('crashed');
+
+    // Restart and fire premature exit #2
+    mockPty.spawn.mockClear();
+    mockPty.onExit.mockClear();
+    capturedOnExit = null;
+    await ap.start();
+    capturedOnExit!(0, 0);
+    expect(ap.getStatus().status).toBe('crashed');
+
+    // Restart and fire premature exit #3 — halts (manual intervention required)
+    mockPty.spawn.mockClear();
+    mockPty.onExit.mockClear();
+    capturedOnExit = null;
+    await ap.start();
+    capturedOnExit!(0, 0);
+    expect(ap.getStatus().status).toBe('halted');
+
+    // The HALT line landed in restarts.log as PREMATURE_EXIT_LOOP
+    const lastCall = fsMocks.appendFileSync.mock.calls.at(-1);
+    expect(String(lastCall?.[1])).toMatch(/\] PREMATURE_EXIT_LOOP: /);
+  });
+
+  it('a non-zero exit code is NOT treated as premature (real crashes still crash)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      premature_exit_window: { seconds: 600, max_exits: 3 },
+    });
+    await ap.start();
+    const beforeCrash = ap.getStatus().crashCount ?? 0;
+
+    // exit_code=1 (real failure), uptime well below threshold — must NOT
+    // be classified as premature even though the timing matches.
+    capturedOnExit!(1, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    // crashCount went up by 1 — this is a real crash, not a premature exit.
+    expect(ap.getStatus().crashCount).toBe(beforeCrash + 1);
+
+    // restarts.log got a CRASH line, not PREMATURE_EXIT
+    const lastCall = fsMocks.appendFileSync.mock.calls.at(-1);
+    expect(String(lastCall?.[1])).toMatch(/\] CRASH: exit_code=1\b/);
+  });
+
+  it('a signal-terminated exit (signal != 0) is NOT premature', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      premature_exit_window: { seconds: 600, max_exits: 3 },
+    });
+    await ap.start();
+    const beforeCrash = ap.getStatus().crashCount ?? 0;
+
+    // exit_code=0 but signal=15 (SIGTERM) — process was killed, not a
+    // voluntary /exit. Falls through to the normal crash branch.
+    capturedOnExit!(0, 15);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(beforeCrash + 1);
+  });
+
+  it('seconds:0 disables the guard entirely (clean exit treated as crash)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      premature_exit_window: { seconds: 0 },
+    });
+    await ap.start();
+    const beforeCrash = ap.getStatus().crashCount ?? 0;
+
+    capturedOnExit!(0, 0);
+
+    // With the guard disabled, a clean exit is just a code-0 crash again.
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getStatus().crashCount).toBe(beforeCrash + 1);
+    const lastCall = fsMocks.appendFileSync.mock.calls.at(-1);
+    expect(String(lastCall?.[1])).toMatch(/\] CRASH: /);
+  });
+
+  it('default configuration (no premature_exit_window) still activates the guard with defaults', async () => {
+    // No premature_exit_window in config = guard ON with built-in defaults
+    // (10 min window, 3 max exits, 60s threshold, 5 min backoff). This keeps
+    // the fleet-wide footgun guarded without operators needing to opt in.
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    capturedOnExit!(0, 0);
+
+    // Classified as premature, not as a real crash
+    expect(ap.getStatus().status).toBe('crashed');
+    const lastCall = fsMocks.appendFileSync.mock.calls.at(-1);
+    expect(String(lastCall?.[1])).toMatch(/\] PREMATURE_EXIT: /);
+  });
+});

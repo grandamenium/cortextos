@@ -37,6 +37,18 @@ export class AgentProcess implements ManagedAgent {
   private crashTimestamps: number[] = [];
   private crashWindowMs: number = 0;
   private crashWindowMax: number = 0;
+  // Premature-voluntary-exit guard. When a claude session exits cleanly
+  // (code 0, no signal) within `prematureExitThresholdMs` of starting and
+  // no planned-exit markers were written, treat it as a "premature voluntary
+  // exit." Almost always caused by `/exit` appearing inside a prompt or
+  // handoff doc. We back off LONGER than a normal crash (rapid restart will
+  // just re-trigger the same prompt path) and halt if too many fire in a
+  // sliding window. See AgentConfig.premature_exit_window.
+  private prematureExitTimestamps: number[] = [];
+  private prematureExitWindowMs: number = 600_000;        // 10 min
+  private prematureExitMax: number = 3;
+  private prematureExitThresholdMs: number = 60_000;      // 60 s uptime
+  private prematureExitBackoffMs: number = 300_000;       // 5 min
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
@@ -85,6 +97,22 @@ export class AgentProcess implements ManagedAgent {
     if (config.crash_window?.seconds) {
       this.crashWindowMs = config.crash_window.seconds * 1000;
       this.crashWindowMax = config.crash_window.max_crashes ?? 3;
+    }
+    // Premature-voluntary-exit guard. `seconds: 0` disables entirely.
+    if (config.premature_exit_window !== undefined) {
+      const pew = config.premature_exit_window;
+      if (pew.seconds === 0) {
+        this.prematureExitWindowMs = 0; // disabled
+      } else {
+        if (pew.seconds !== undefined) this.prematureExitWindowMs = pew.seconds * 1000;
+        if (pew.max_exits !== undefined) this.prematureExitMax = pew.max_exits;
+        if (pew.threshold_seconds !== undefined) {
+          this.prematureExitThresholdMs = pew.threshold_seconds * 1000;
+        }
+        if (pew.backoff_seconds !== undefined) {
+          this.prematureExitBackoffMs = pew.backoff_seconds * 1000;
+        }
+      }
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
@@ -215,7 +243,7 @@ export class AgentProcess implements ManagedAgent {
         return;
       }
       this.log(`Exited with code ${exitCode} signal ${signal}`);
-      this.handleExit(exitCode);
+      this.handleExit(exitCode, signal);
       // Signal anyone awaiting this PTY's exit (e.g. stop() — BUG-011 fix)
       this.resolveExit?.();
       this.resolveExit = null;
@@ -543,7 +571,14 @@ export class AgentProcess implements ManagedAgent {
 
   // --- Private methods ---
 
-  private handleExit(exitCode: number): void {
+  private handleExit(exitCode: number, signal?: number): void {
+    // Snapshot uptime BEFORE we null this.pty / clear the session timer below.
+    // The premature-voluntary-exit check needs to know how long the session
+    // actually ran for.
+    const sessionUptimeMs = this.sessionStart
+      ? Date.now() - this.sessionStart.getTime()
+      : 0;
+
     // Capture rate-limit state from the output buffer BEFORE nulling the PTY.
     // Once this.pty = null, we lose access to the buffer.
     const isRateLimited = this.pty?.getOutputBuffer()?.hasRateLimitSignature() ?? false;
@@ -680,6 +715,105 @@ export class AgentProcess implements ManagedAgent {
     const silentRestartPath = join(this.env.ctxRoot, 'state', this.name, '.silent-restart');
     if (existsSync(silentRestartPath)) {
       this.log('ctx_autoreset (.silent-restart) — skipping crash count, sessionRefresh handles restart');
+      return;
+    }
+
+    // Premature-voluntary-exit guard.
+    //
+    // Symptom: a claude session exits with code 0 (no signal) within a short
+    // window of starting. By the time we get here, every "planned" exit path
+    // above has already returned — so this is not a daemon-initiated stop,
+    // not a planned restart, not a silent ctx-autoreset, not a rate-limit
+    // pause, not a daemon shutdown. The remaining cause is the agent itself
+    // calling `/exit` from inside its session: a prompt, handoff doc, or
+    // AGENTS.md fragment fed `/exit` into the REPL.
+    //
+    // Treating this as a normal crash is counterproductive: exponential
+    // backoff starts at 5s, so within minutes the daemon has restarted the
+    // session 5+ times and re-fed the same prompt path each time. The
+    // watchdog circuit-breaker then trips and we have a hard outage.
+    //
+    // Instead:
+    //   - Do NOT increment crashCount.
+    //   - Back off LONGER (default 5 min) so the operator has time to notice
+    //     and the next restart isn't a guaranteed re-trigger.
+    //   - Track premature exits in their own sliding window; halt the agent
+    //     after `prematureExitMax` of them inside `prematureExitWindowMs`.
+    //     Manual intervention is required to bring it back — auto-restart at
+    //     that point is just a tighter loop.
+    //
+    // Detection: exit code 0, no terminating signal, and uptime below the
+    // configured threshold (default 60s). The window check is gated on a
+    // non-zero `prematureExitWindowMs` so an operator can disable this guard
+    // entirely via `premature_exit_window: { seconds: 0 }`.
+    const isVoluntaryCleanExit =
+      exitCode === 0 && (signal === undefined || signal === 0 || signal === null);
+    // Only claude-code runtime (AgentPTY) is exposed to the /exit footgun.
+    // Codex is exec-per-turn and exits cleanly by design; script bridges own
+    // their own lifecycle; hermes uses Ctrl+D. Restricting the guard to
+    // claude-code avoids false halts on the other runtimes. `runtime` is the
+    // `AgentConfig['runtime']` enum: `'claude-code' | 'hermes' |
+    // 'codex-app-server' | 'script'`, defaulting to 'claude-code' when absent.
+    const isClaudeRuntime =
+      this.config.runtime === undefined || this.config.runtime === 'claude-code';
+    // sessionStart is set inside start() after pty.spawn() resolves. If the
+    // PTY managed to fire onExit before that line ran, sessionStart is still
+    // null and sessionUptimeMs is 0 — we have no signal here, fall through
+    // to normal crash recovery. Use `>= 0` plus the sessionStart guard so
+    // a same-tick exit (uptime 0 with sessionStart set) is still classified
+    // as premature.
+    const isPrematureExit =
+      isClaudeRuntime &&
+      isVoluntaryCleanExit &&
+      this.prematureExitWindowMs > 0 &&
+      this.sessionStart !== null &&
+      sessionUptimeMs >= 0 &&
+      sessionUptimeMs < this.prematureExitThresholdMs;
+
+    if (isPrematureExit) {
+      const now = Date.now();
+      this.prematureExitTimestamps.push(now);
+      this.prematureExitTimestamps = this.prematureExitTimestamps.filter(
+        (ts) => now - ts <= this.prematureExitWindowMs,
+      );
+
+      const uptimeS = Math.round(sessionUptimeMs / 1000);
+      const windowS = this.prematureExitWindowMs / 1000;
+
+      if (this.prematureExitTimestamps.length >= this.prematureExitMax) {
+        this.log(
+          `PREMATURE_EXIT_LOOP: ${this.prematureExitTimestamps.length} ` +
+            `clean exits with uptime<${this.prematureExitThresholdMs / 1000}s in ${windowS}s window — ` +
+            `halting (likely '/exit' in a prompt or handoff doc; manual intervention required)`,
+        );
+        this.appendCrashToRestartsLog(exitCode, 0, 'PREMATURE_EXIT_LOOP');
+        this.status = 'halted';
+        this.notifyStatusChange();
+        return;
+      }
+
+      this.log(
+        `Premature voluntary exit detected (uptime=${uptimeS}s, code=0, signal=${signal ?? 0}). ` +
+          `Likely '/exit' fired from inside the session. ` +
+          `Backing off ${this.prematureExitBackoffMs / 1000}s before restart ` +
+          `(${this.prematureExitTimestamps.length}/${this.prematureExitMax} in ${windowS}s).`,
+      );
+      this.appendCrashToRestartsLog(exitCode, this.prematureExitBackoffMs, 'PREMATURE_EXIT');
+      this.writeRotationEvent('premature_exit', `exit_code=${exitCode} uptime_s=${uptimeS}`).catch(() => {});
+      // We use status='crashed' so the existing dashboard / restart guard
+      // semantics still apply (the restart setTimeout below checks for this).
+      // We deliberately do NOT add a new status to AgentStatus — the
+      // distinction lives in restarts.log and the daemon log line above.
+      this.status = 'crashed';
+      this.notifyStatusChange();
+
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start()
+            .then(() => this.updateRotationResumeSuccess().catch(() => {}))
+            .catch((err) => this.log(`Premature-exit restart failed: ${err}`));
+        }
+      }, this.prematureExitBackoffMs);
       return;
     }
 
@@ -1219,16 +1353,25 @@ export class AgentProcess implements ManagedAgent {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'PREMATURE_EXIT' | 'PREMATURE_EXIT_LOOP',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
       ensureDir(logDir);
       const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-      const details =
-        kind === 'HALTED'
-          ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
-          : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+      let details: string;
+      if (kind === 'HALTED') {
+        details = `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`;
+      } else if (kind === 'PREMATURE_EXIT' || kind === 'PREMATURE_EXIT_LOOP') {
+        // Premature exits are tracked in their own counter and do NOT touch
+        // crashCount. Log the premature-exit counter instead so the file
+        // tells a coherent story.
+        details =
+          `exit_code=${exitCode} premature_exits=${this.prematureExitTimestamps.length}` +
+          ` window_s=${this.prematureExitWindowMs / 1000} backoff_s=${backoffMs / 1000}`;
+      } else {
+        details = `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+      }
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {

@@ -360,6 +360,35 @@ export interface AgentConfig {
    * daily counter only.
    */
   crash_window?: { seconds: number; max_crashes?: number };
+  /**
+   * Premature-voluntary-exit guard. Detects the footgun where a prompt or
+   * handoff doc contains `/exit` and the claude session walks out cleanly
+   * (exit code 0, no signal) within `threshold_seconds` of starting. These
+   * exits look like normal shutdowns but the agent is supposed to be always-on,
+   * so the daemon's exponential-backoff restart re-injects the same prompt
+   * and restarts the loop in seconds.
+   *
+   * Behavior:
+   * - A premature voluntary exit does NOT increment the crash counter.
+   * - The daemon waits `backoff_seconds` (default 300s = 5 min) before
+   *   restarting, instead of the usual exponential 5s→10s→20s.
+   * - If `max_exits` (default 3) premature exits happen within `seconds`
+   *   (default 600s = 10 min), the agent is halted and requires manual
+   *   intervention. The thinking: rapid restart will just re-trigger the
+   *   same prompt path.
+   *
+   * Set `seconds: 0` to disable entirely.
+   */
+  premature_exit_window?: {
+    /** Sliding window length in seconds. Default: 600 (10 min). */
+    seconds?: number;
+    /** Halt after this many premature exits inside the window. Default: 3. */
+    max_exits?: number;
+    /** Uptime below this counts as "premature." Default: 60. */
+    threshold_seconds?: number;
+    /** How long to wait before auto-restarting. Default: 300 (5 min). */
+    backoff_seconds?: number;
+  };
   model?: string;
   /** Override the HOME path so claude reads credentials from $home/.claude/ instead of ~/.claude/ */
   home?: string;
