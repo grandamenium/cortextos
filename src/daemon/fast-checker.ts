@@ -13,6 +13,15 @@ import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars } from '../utils/validate.js';
+import {
+  formatTelegramTextMessage,
+  formatTelegramReaction,
+  formatTelegramPhotoMessage,
+  formatTelegramDocumentMessage,
+  formatTelegramVoiceMessage,
+  formatTelegramVideoMessage,
+  readLastSent,
+} from './fast-checker-formatters.js';
 
 type LogFn = (msg: string) => void;
 
@@ -762,42 +771,8 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
    * Format a Telegram text message for injection.
    * Matches bash fast-checker.sh format.
    */
-  static formatTelegramTextMessage(
-    from: string,
-    chatId: string | number,
-    text: string,
-    frameworkRoot: string,
-    replyToText?: string,
-    lastSentText?: string,
-    recentHistory?: string,
-  ): string {
-    let replyCx = '';
-    if (replyToText) {
-      replyCx = `[Replying to: "${replyToText.slice(0, 500)}"]\n`;
-    }
-
-    let lastSentCtx = '';
-    if (lastSentText) {
-      lastSentCtx = `[Your last message: "${lastSentText.slice(0, 500)}"]\n`;
-    }
-
-    let historyCx = '';
-    if (recentHistory) {
-      historyCx = `[Recent conversation:]\n${recentHistory}\n`;
-    }
-
-    // Use [USER: ...] wrapper to prevent prompt injection via crafted display names
-    // Slash commands (text starting with /) are NOT wrapped in backticks so Claude Code
-    // can recognize and invoke them via the Skill tool (e.g. /loop, /commit, /restart).
-    const isSlashCommand = /^\/[a-zA-Z]/.test(text.trim());
-    const body = isSlashCommand
-      ? text.trim()
-      : `\`\`\`\n${text}\n\`\`\``;
-    return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}) ===
-${replyCx}${historyCx}${body}
-${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
-
-`;
+  static formatTelegramTextMessage(...args: Parameters<typeof formatTelegramTextMessage>): string {
+    return formatTelegramTextMessage(...args);
   }
 
   /**
@@ -811,68 +786,24 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * distinguish "added X" from "removed Y". Custom emoji (type=custom_emoji)
    * render as [custom_emoji] since we don't resolve the custom_emoji_id.
    */
-  static formatTelegramReaction(
-    from: string,
-    chatId: string | number,
-    messageId: number,
-    oldReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
-    newReaction: Array<{ type: 'emoji'; emoji: string } | { type: 'custom_emoji'; custom_emoji_id: string }>,
-  ): string {
-    const render = (list: typeof newReaction): string =>
-      list.length === 0
-        ? '(none)'
-        : list.map((r) => (r.type === 'emoji' ? r.emoji : '[custom_emoji]')).join(' ');
-
-    const removed = newReaction.length === 0 && oldReaction.length > 0;
-    const label = removed ? `removed ${render(oldReaction)}` : render(newReaction);
-
-    return `=== REACTION from [USER: ${from}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
-
-`;
+  static formatTelegramReaction(...args: Parameters<typeof formatTelegramReaction>): string {
+    return formatTelegramReaction(...args);
   }
 
   /**
    * Format a Telegram photo message for injection.
    * Matches bash fast-checker.sh format.
    */
-  static formatTelegramPhotoMessage(
-    from: string,
-    chatId: string | number,
-    caption: string,
-    imagePath: string,
-  ): string {
-    return `=== TELEGRAM PHOTO from ${from} (chat_id:${chatId}) ===
-caption:
-\`\`\`
-${caption}
-\`\`\`
-local_file: ${imagePath}
-Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
-
-`;
+  static formatTelegramPhotoMessage(...args: Parameters<typeof formatTelegramPhotoMessage>): string {
+    return formatTelegramPhotoMessage(...args);
   }
 
   /**
    * Format a Telegram document message for injection.
    * Matches bash fast-checker.sh format.
    */
-  static formatTelegramDocumentMessage(
-    from: string,
-    chatId: string | number,
-    caption: string,
-    filePath: string,
-    fileName: string,
-  ): string {
-    return `=== TELEGRAM DOCUMENT from ${from} (chat_id:${chatId}) ===
-caption:
-\`\`\`
-${caption}
-\`\`\`
-local_file: ${filePath}
-file_name: ${fileName}
-Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
-
-`;
+  static formatTelegramDocumentMessage(...args: Parameters<typeof formatTelegramDocumentMessage>): string {
+    return formatTelegramDocumentMessage(...args);
   }
 
   /**
@@ -884,49 +815,16 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * agent receives only the .ogg path. The codex extractor surfaces the
    * transcript block when present.
    */
-  static formatTelegramVoiceMessage(
-    from: string,
-    chatId: string | number,
-    filePath: string,
-    duration: number | undefined,
-    transcript?: string,
-  ): string {
-    const dur = duration !== undefined ? duration : 'unknown';
-    const transcriptBlock = transcript && transcript.trim()
-      ? `transcript:\n\`\`\`\n${transcript.trim()}\n\`\`\`\n`
-      : '';
-    return `=== TELEGRAM VOICE from ${from} (chat_id:${chatId}) ===
-duration: ${dur}s
-local_file: ${filePath}
-${transcriptBlock}Reply using: cortextos bus send-telegram-voice ${chatId} '<your reply>'
-
-`;
+  static formatTelegramVoiceMessage(...args: Parameters<typeof formatTelegramVoiceMessage>): string {
+    return formatTelegramVoiceMessage(...args);
   }
 
   /**
    * Format a Telegram video/video_note message for injection.
    * Matches bash fast-checker.sh format.
    */
-  static formatTelegramVideoMessage(
-    from: string,
-    chatId: string | number,
-    caption: string,
-    filePath: string,
-    fileName: string,
-    duration: number | undefined,
-  ): string {
-    const dur = duration !== undefined ? duration : 'unknown';
-    return `=== TELEGRAM VIDEO from ${from} (chat_id:${chatId}) ===
-caption:
-\`\`\`
-${caption}
-\`\`\`
-duration: ${dur}s
-local_file: ${filePath}
-file_name: ${fileName}
-Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
-
-`;
+  static formatTelegramVideoMessage(...args: Parameters<typeof formatTelegramVideoMessage>): string {
+    return formatTelegramVideoMessage(...args);
   }
 
   /**
@@ -962,16 +860,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * Read the last-sent message file for conversation context.
    * Returns the content (up to 500 chars) or null if not available.
    */
-  static readLastSent(stateDir: string, chatId: string | number): string | null {
-    const filePath = join(stateDir, `last-telegram-${chatId}.txt`);
-    try {
-      if (!existsSync(filePath)) return null;
-      const content = readFileSync(filePath, 'utf-8');
-      if (!content) return null;
-      return content.slice(0, 500);
-    } catch {
-      return null;
-    }
+  static readLastSent(...args: Parameters<typeof readLastSent>): string | null {
+    return readLastSent(...args);
   }
 
   /**
