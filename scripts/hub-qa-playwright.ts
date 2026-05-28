@@ -2244,20 +2244,22 @@ async function runCortexThetaChecks(page: Page): Promise<CheckResult[]> {
   }
 
   // CHECK 4: challenger_notes + synthesis_summary + consolidated_memories_count
-  // Sessions are accordion cards — click first session button to expand before checking fields.
+  // The hub /app/cortex/theta route redirects to /app/skills?tab=theta (Capabilities page).
+  // That page has Radix TabsTrigger buttons (role="tab") before the session cards.
+  // Must skip role="tab" buttons or btns[0] clicks the Skills tab, navigating away.
   try {
-    // Sessions use accordion cards — expand first session to reveal detail fields.
-    // Strategy: click via JS evaluate to bypass any Playwright interception issues.
-    const btnCount = await page.locator('main button').count();
-    if (btnCount > 0) {
-      // Use JS click to ensure it fires even if element is partially out of viewport
-      await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('main button'));
-        if (btns.length > 0) (btns[0] as HTMLButtonElement).click();
-      });
-      // Wait for accordion content DOM insertion (poll for new text)
-      await page.waitForFunction(() => document.body.innerText.length > 1500, { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(500);
+    const expandClicked = await page.evaluate(() => {
+      const btns = Array.from(document.querySelectorAll('main button'));
+      const cardBtn = btns.find(b => b.getAttribute('role') !== 'tab') as HTMLButtonElement | undefined;
+      if (cardBtn) { cardBtn.click(); return true; }
+      return false;
+    });
+    if (expandClicked) {
+      await page.waitForFunction(
+        () => /challenger|synthesis|consolidat/i.test(document.body.innerText),
+        { timeout: 5000 },
+      ).catch(() => {});
+      await page.waitForTimeout(300);
     }
     const challengerHit = await page.getByText(/challenger/i, { exact: false }).count();
     const synthHit      = await page.getByText(/synthesis/i, { exact: false }).count();
