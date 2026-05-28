@@ -1,0 +1,28 @@
+{
+  "captured_at": "2026-05-27T22:10:00Z",
+  "captured_at_local": "2026-05-27T18:10:00-04:00",
+  "source": "Claude mobile app — Usage page",
+  "plan": "Max 20x",
+  "session_5h": {
+    "used_pct": 11,
+    "resets_in_minutes": 50,
+    "resets_at_utc": "2026-05-27T23:00:00Z"
+  },
+  "weekly": {
+    "all_models_pct": 54,
+    "resets_in_hours": 19.83,
+    "resets_at_utc_approx": "2026-05-28T18:00:00Z"
+  },
+  "delta_from_previous": {
+    "previous_captured_at": "2026-05-27T20:24:00Z",
+    "interval_hours": 1.77,
+    "session_5h_delta_pct": 3,
+    "weekly_delta_pct": 1
+  },
+  "burn_rate_estimate": {
+    "session_pct_per_hour": 1.7,
+    "weekly_pct_per_hour": 0.56,
+    "projected_session_at_reset": "~12-13% (no cap risk)",
+    "projected_weekly_by_thu_reset": "~65-70% (no cap risk)"
+  }
+}
