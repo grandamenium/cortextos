@@ -2443,56 +2443,55 @@ async function runSupremeOutstandingChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
 
-  // CHECK 2: Filter tabs present (Unanswered / Mentioned / Action items / All)
+  // CHECK 2: "Mentions Triage" heading visible (replaces old filter-tabs check after PR #1209 rebuild)
   try {
-    const filterCount = await wallClock(
-      page.evaluate(() =>
-        ['Unanswered', 'Mentioned', 'Action items', 'All'].filter(label =>
-          document.body.textContent?.includes(label)
-        ).length
-      ),
+    const hasMentionsTriage = await wallClock(
+      page.evaluate(() => /mentions triage/i.test(document.body.textContent ?? '')),
       5000,
-      0,
+      false,
     );
     results.push({
-      check: 'CHECK 2 Filter tabs present',
-      status: filterCount >= 2 ? 'PASS' : 'FAIL',
-      evidence: filterCount >= 2
-        ? `${filterCount}/4 filter labels found (Unanswered/Mentioned/Action items/All).`
-        : `Only ${filterCount}/4 filter labels found — page shell likely broken.`,
+      check: 'CHECK 2 Mentions Triage heading',
+      status: hasMentionsTriage ? 'PASS' : 'FAIL',
+      evidence: hasMentionsTriage
+        ? '"Mentions Triage" heading found — page shell correct.'
+        : '"Mentions Triage" heading missing — page may have reverted or failed to render.',
     });
   } catch (e) {
-    results.push({ check: 'CHECK 2 Filter tabs present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: 'CHECK 2 Mentions Triage heading', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
-  // CHECK 3: Items loaded or empty state (auth gate breakage shows error/spinner stuck)
+  // CHECK 3: Priority buckets rendered or valid triage state shown
   try {
     const state = await wallClock(
       page.evaluate(() => {
         const body = document.body.textContent ?? '';
-        const items = document.querySelectorAll('[class*="card"], [class*="item"], [role="listitem"]').length;
+        const bucketLabels = ['Urgent', 'High', 'Normal', 'Low'];
+        const bucketsFound = bucketLabels.filter(l => body.includes(l)).length;
+        const hasRunBtn = /run triage now/i.test(body);
         const hasError = /failed to load|error loading|unauthorized|403|401|something went wrong/i.test(body);
-        const hasEmpty = /no items|all clear|nothing outstanding|no messages|empty/i.test(body);
-        return { items, hasError, hasEmpty };
+        const hasEmpty = /no items|all clear|nothing outstanding|no triage|all caught up/i.test(body);
+        const hasFreshness = /fresh|stale|missing/i.test(body);
+        return { bucketsFound, hasRunBtn, hasError, hasEmpty, hasFreshness };
       }),
       6000,
-      { items: 0, hasError: false, hasEmpty: false },
+      { bucketsFound: 0, hasRunBtn: false, hasError: false, hasEmpty: false, hasFreshness: false },
     );
     if (state.hasError) {
-      results.push({ check: 'CHECK 3 Items or empty state', status: 'FAIL',
-        evidence: `Page contains error message — API likely failing auth gate. items=${state.items}` });
-    } else if (state.items > 0) {
-      results.push({ check: 'CHECK 3 Items or empty state', status: 'PASS',
-        evidence: `${state.items} item(s) visible.` });
-    } else if (state.hasEmpty) {
-      results.push({ check: 'CHECK 3 Items or empty state', status: 'PASS',
-        evidence: 'Empty state shown — valid state, renders correctly.' });
+      results.push({ check: 'CHECK 3 Triage content or state', status: 'FAIL',
+        evidence: `Page contains error message — API likely failing auth gate.` });
+    } else if (state.bucketsFound >= 2) {
+      results.push({ check: 'CHECK 3 Triage content or state', status: 'PASS',
+        evidence: `${state.bucketsFound}/4 priority bucket labels visible (Urgent/High/Normal/Low).` });
+    } else if (state.hasEmpty || state.hasFreshness || state.hasRunBtn) {
+      results.push({ check: 'CHECK 3 Triage content or state', status: 'PASS',
+        evidence: `Triage UI rendered (empty/freshness/run-button present). bucketsFound=${state.bucketsFound}` });
     } else {
-      results.push({ check: 'CHECK 3 Items or empty state', status: 'DEFERRED',
-        evidence: 'Neither items, empty state, nor error message detected — page may still be loading.' });
+      results.push({ check: 'CHECK 3 Triage content or state', status: 'DEFERRED',
+        evidence: `No buckets, empty state, or freshness banner detected — page may still be loading. bucketsFound=${state.bucketsFound}` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Items or empty state', status: 'FAIL',
+    results.push({ check: 'CHECK 3 Triage content or state', status: 'FAIL',
       evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
