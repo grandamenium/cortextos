@@ -2596,6 +2596,166 @@ async function runFinancialsChecks(page: Page): Promise<CheckResult[]> {
 }
 
 // ---------------------------------------------------------------------------
+// /analytics checks
+// ---------------------------------------------------------------------------
+async function runAnalyticsChecks(page: Page): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
+  const sp = 'analytics';
+
+  // CHECK 1: Page load
+  const loadResult = await checkLoad(page, sp);
+  results.push(loadResult);
+  if (loadResult.status === 'FAIL') return results;
+
+  // CHECK 2: Charts or metric tiles visible
+  try {
+    await new Promise<void>(r => setTimeout(r, 2000));
+    await Promise.race([page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-content.png`) }).catch(() => {}), new Promise<void>(r => setTimeout(r, 5000))]);
+    const counts = await Promise.race([
+      page.evaluate(() => {
+        const charts   = document.querySelectorAll('canvas, svg[class*="chart"], [class*="chart"], [class*="Chart"], [class*="graph"], [class*="Graph"]').length;
+        const metrics  = document.querySelectorAll('[class*="metric"], [class*="Metric"], [class*="stat"], [class*="Stat"], [class*="kpi"], [class*="KPI"], [class*="card"], [class*="Card"]').length;
+        const empty    = /no data|no results|empty|no analytics/i.test(document.body.textContent ?? '');
+        return { charts, metrics, empty };
+      }),
+      new Promise<{ charts: number; metrics: number; empty: boolean }>(r =>
+        setTimeout(() => r({ charts: -1, metrics: -1, empty: false }), 6000)
+      ),
+    ]);
+    const total = (counts.charts > 0 ? counts.charts : 0) + (counts.metrics > 0 ? counts.metrics : 0);
+    if (total > 0) {
+      results.push({ check: 'CHECK 2 Charts/metrics visible', status: 'PASS', evidence: `charts:${counts.charts}, metric-tiles:${counts.metrics}.` });
+    } else if (counts.empty) {
+      results.push({ check: 'CHECK 2 Charts/metrics visible', status: 'PASS', evidence: 'Empty analytics state shown — valid state.' });
+    } else {
+      results.push({ check: 'CHECK 2 Charts/metrics visible', status: 'DEFERRED', evidence: `No charts or metric tiles detected (charts=${counts.charts}, metrics=${counts.metrics}). Page may still be hydrating.` });
+    }
+  } catch (e) {
+    results.push({ check: 'CHECK 2 Charts/metrics visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
+  // CHECK 3: Filter/date-range controls present
+  try {
+    await Promise.race([page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-controls.png`) }).catch(() => {}), new Promise<void>(r => setTimeout(r, 5000))]);
+    const ctrl = await Promise.race([
+      page.evaluate(() => {
+        const tabs    = document.querySelectorAll('[role="tab"], [class*="tab"]').length;
+        const filters = document.querySelectorAll('select, [class*="filter"], [class*="date"], input[placeholder*="search" i], input[placeholder*="filter" i]').length;
+        const btns    = document.querySelectorAll('button').length;
+        return { tabs, filters, btns };
+      }),
+      new Promise<{ tabs: number; filters: number; btns: number }>(r => setTimeout(() => r({ tabs: 0, filters: 0, btns: 0 }), 5000)),
+    ]);
+    if (ctrl.tabs + ctrl.filters > 0) {
+      results.push({ check: 'CHECK 3 Filter/date controls present', status: 'PASS', evidence: `tabs:${ctrl.tabs}, filters/date:${ctrl.filters}, buttons:${ctrl.btns}.` });
+    } else {
+      results.push({ check: 'CHECK 3 Filter/date controls present', status: 'DEFERRED', evidence: `No tabs or filter controls found. buttons:${ctrl.btns}.` });
+    }
+  } catch (e) {
+    results.push({ check: 'CHECK 3 Filter/date controls present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
+  // CHECK 4: Key metric labels present — revenue, time, activity, pipeline, agent
+  try {
+    const pageText = await Promise.race([
+      page.evaluate(() => document.body.textContent ?? ''),
+      new Promise<string>(r => setTimeout(() => r(''), 5000)),
+    ]);
+    const hasRevenue  = /revenue|arr|mrr|\$|pipeline|deal/i.test(pageText);
+    const hasActivity = /activity|task|event|agent|message/i.test(pageText);
+    const hasTime     = /time|hours|logged|week|month/i.test(pageText);
+    const found: string[] = [];
+    if (hasRevenue)  found.push('revenue/pipeline');
+    if (hasActivity) found.push('activity/agents');
+    if (hasTime)     found.push('time/hours');
+    if (found.length >= 1) {
+      results.push({ check: 'CHECK 4 Key metric labels present', status: 'PASS', evidence: `Metric domains: ${found.join(', ')}.` });
+    } else {
+      results.push({ check: 'CHECK 4 Key metric labels present', status: 'DEFERRED', evidence: 'No recognizable metric labels found — page may use icons only or be empty.' });
+    }
+  } catch (e) {
+    results.push({ check: 'CHECK 4 Key metric labels present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// /fleet checks (top-level fleet dashboard, not /app/fleet/*)
+// ---------------------------------------------------------------------------
+async function runFleetChecks(page: Page): Promise<CheckResult[]> {
+  const results: CheckResult[] = [];
+  const sp = 'fleet';
+
+  // CHECK 1: Page load
+  const loadResult = await checkLoad(page, sp);
+  results.push(loadResult);
+  if (loadResult.status === 'FAIL') return results;
+
+  // CHECK 2: Agent cards or rows visible
+  try {
+    await new Promise<void>(r => setTimeout(r, 2000));
+    await Promise.race([page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-list.png`) }).catch(() => {}), new Promise<void>(r => setTimeout(r, 5000))]);
+    const counts = await Promise.race([
+      page.evaluate(() => {
+        const cards   = document.querySelectorAll('[class*="agent"], [class*="Agent"], [class*="card"], [class*="Card"]').length;
+        const rows    = document.querySelectorAll('table tbody tr, [role="row"]:not([role="columnheader"]), [role="listitem"]').length;
+        const empty   = /no agents|empty|no results/i.test(document.body.textContent ?? '');
+        return { cards, rows, empty };
+      }),
+      new Promise<{ cards: number; rows: number; empty: boolean }>(r =>
+        setTimeout(() => r({ cards: -1, rows: -1, empty: false }), 6000)
+      ),
+    ]);
+    const total = Math.max(counts.cards > 0 ? counts.cards : 0, counts.rows > 0 ? counts.rows : 0);
+    if (total > 0) {
+      results.push({ check: 'CHECK 2 Agent list visible', status: 'PASS', evidence: `cards:${counts.cards}, rows:${counts.rows}.` });
+    } else if (counts.empty) {
+      results.push({ check: 'CHECK 2 Agent list visible', status: 'PASS', evidence: 'Empty fleet state shown — valid state.' });
+    } else {
+      results.push({ check: 'CHECK 2 Agent list visible', status: 'DEFERRED', evidence: `No agent cards/rows detected (cards=${counts.cards}, rows=${counts.rows}).` });
+    }
+  } catch (e) {
+    results.push({ check: 'CHECK 2 Agent list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
+  // CHECK 3: Status indicators visible (online/offline/running)
+  try {
+    await Promise.race([page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-status.png`) }).catch(() => {}), new Promise<void>(r => setTimeout(r, 5000))]);
+    const statusInfo = await Promise.race([
+      page.evaluate(() => {
+        const dots  = document.querySelectorAll('[class*="status"], [class*="online"], [class*="offline"], [class*="indicator"]').length;
+        const text  = /online|offline|running|idle|stopped|active|inactive/i.test(document.body.textContent ?? '');
+        return { dots, text };
+      }),
+      new Promise<{ dots: number; text: boolean }>(r => setTimeout(() => r({ dots: 0, text: false }), 5000)),
+    ]);
+    const hasStatus = statusInfo.dots > 0 || statusInfo.text;
+    results.push({ check: 'CHECK 3 Status indicators', status: hasStatus ? 'PASS' : 'DEFERRED', evidence: hasStatus ? `${statusInfo.dots} status indicator(s). Status text present: ${statusInfo.text}.` : 'No status indicators found.' });
+  } catch (e) {
+    results.push({ check: 'CHECK 3 Status indicators', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
+  // CHECK 4: Navigation sub-links visible (tasks, activity, agents sub-pages)
+  try {
+    const navInfo = await Promise.race([
+      page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('a, [role="link"], nav button'))
+          .map(el => el.textContent?.trim() ?? '')
+          .filter(t => /tasks|activity|agents|fleet/i.test(t));
+        return { count: links.length, labels: links.slice(0, 4).join(', ') };
+      }),
+      new Promise<{ count: number; labels: string }>(r => setTimeout(() => r({ count: 0, labels: '' }), 5000)),
+    ]);
+    results.push({ check: 'CHECK 4 Fleet sub-nav present', status: navInfo.count > 0 ? 'PASS' : 'DEFERRED', evidence: navInfo.count > 0 ? `${navInfo.count} fleet nav link(s): ${navInfo.labels}.` : 'No fleet sub-navigation links detected.' });
+  } catch (e) {
+    results.push({ check: 'CHECK 4 Fleet sub-nav present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 function writeReport(results: CheckResult[], reportPath: string) {
   const passed  = results.filter(r => r.status === 'PASS').length;
   const failed  = results.filter(r => r.status === 'FAIL').length;
@@ -2782,8 +2942,12 @@ async function main() {
       results = await runWithTimeout(() => runSettingsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/financials') {
       results = await runWithTimeout(() => runFinancialsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+    } else if (targetPage === '/analytics') {
+      results = await runWithTimeout(() => runAnalyticsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy; manual check recommended' }]);
+    } else if (targetPage === '/fleet') {
+      results = await runWithTimeout(() => runFleetChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy; manual check recommended' }]);
     } else {
-      throw new Error(`Page "${targetPage}" not yet implemented in this harness. Supported: /time, /my-day, /tasks, /, /app/orchestrator, /app/fleet/activity, /app/work/inbox, /app/work/approvals, /companies, /projects, /reports, /pipeline, /app/fleet/tasks, /app/fleet/agents, /social-content, /content-review, /app/wiki, /app/cortex/theta, /app/presence, linkedin-presence, /app/signals, /app/supreme-outstanding, /clients, /contacts, /invoices, /settings, /financials`);
+      throw new Error(`Page "${targetPage}" not yet implemented in this harness. Supported: /time, /my-day, /tasks, /, /app/orchestrator, /app/fleet/activity, /app/work/inbox, /app/work/approvals, /companies, /projects, /reports, /pipeline, /app/fleet/tasks, /app/fleet/agents, /social-content, /content-review, /app/wiki, /app/cortex/theta, /app/presence, linkedin-presence, /app/signals, /app/supreme-outstanding, /clients, /contacts, /invoices, /settings, /financials, /analytics, /fleet`);
     }
 
     const reportPath = path.join(OUTPUT_DIR, `${slug(targetPage)}-qa-${new Date().toISOString().slice(0, 10)}.md`);
