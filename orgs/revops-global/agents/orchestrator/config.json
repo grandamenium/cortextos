@@ -108,6 +108,7 @@
     }
   },
   "telegram_polling": true,
+  "strict_mcp": true,
   "suppress_restart_telegram": true,
   "codex_account_pool": [
     {
@@ -160,7 +161,7 @@
   "codex_runtime_reenabled_note": "2026-05-26T23:54:33Z re-enabled Codex app-server front-door after all three CODEX_HOME lanes reported ChatGPT login status.",
   "codex_frontdoor_restore_note": "2026-05-27T17:00:41.016Z: heartbeat recovery restored runtime=codex-app-server after config drift removed runtime and Telegram update triggered Claude crash loop.",
   "home": "/home/cortextos",
-  "tier": "sonnet",
+  "tier": "opus",
   "runtime": "claude-code",
   "codex_app_server_transport": "ws",
   "claude_handback_note": "2026-05-27T19:22Z: Claude work credits/session restored; orchestrator control plane returned to claude-code. Codex lanes remain execution-only."

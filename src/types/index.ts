@@ -484,6 +484,12 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * When true, pass --strict-mcp-config to Claude Code so only MCP servers
+   * from user settings and the project .mcp.json are loaded — blocking
+   * account-level Claude.ai integrations that bloat the context window.
+   */
+  strict_mcp?: boolean;
 }
 
 export interface CronEntry {

@@ -1,6 +1,6 @@
 import { join } from 'path';
-import { existsSync, readFileSync, readdirSync } from 'fs';
-import { platform } from 'os';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { platform, homedir } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { resolveModel } from '../utils/model-tiers.js';
 import { resolveAgentCwd } from '../utils/paths.js';
@@ -255,6 +255,14 @@ export class AgentPTY {
       args.push('--model', model);
     }
 
+    if (this.config.strict_mcp) {
+      args.push('--strict-mcp-config');
+      const mcpPath = this.writeMergedMcpConfig();
+      if (mcpPath) {
+        args.push('--mcp-config', mcpPath);
+      }
+    }
+
     // Local override pattern (feat #20): concatenate {agentDir}/local/*.md files
     // and append as system prompt. The local/ dir is gitignored so users can customize
     // agent behavior without merge conflicts on framework updates.
@@ -281,6 +289,39 @@ export class AgentPTY {
     args.push(prompt);
 
     return args;
+  }
+
+  private writeMergedMcpConfig(): string | null {
+    const servers: Record<string, unknown> = {};
+
+    try {
+      const userSettingsPath = join(homedir(), '.claude', 'settings.json');
+      const settings = JSON.parse(readFileSync(userSettingsPath, 'utf-8'));
+      if (settings.mcpServers) Object.assign(servers, settings.mcpServers);
+    } catch { /* no user MCP servers */ }
+
+    const agentDir = this.env.agentDir;
+    if (agentDir) {
+      try {
+        const mcp = JSON.parse(readFileSync(join(agentDir, '.mcp.json'), 'utf-8'));
+        if (mcp.mcpServers) {
+          let allowed: string[] | null = null;
+          try {
+            const ps = JSON.parse(readFileSync(join(agentDir, '.claude', 'settings.json'), 'utf-8'));
+            if (Array.isArray(ps.enabledMcpjsonServers)) allowed = ps.enabledMcpjsonServers;
+          } catch { /* no filter */ }
+          for (const [name, cfg] of Object.entries(mcp.mcpServers)) {
+            if (!allowed || allowed.includes(name)) servers[name] = cfg;
+          }
+        }
+      } catch { /* no project MCP */ }
+    }
+
+    if (Object.keys(servers).length === 0) return null;
+
+    const outPath = join(agentDir || '.', '.mcp-strict.json');
+    writeFileSync(outPath, JSON.stringify({ mcpServers: servers }, null, 2));
+    return outPath;
   }
 
   /**
