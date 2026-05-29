@@ -286,12 +286,12 @@ export function updateTask(
 
 /**
  * One audit entry written to a task's append-only JSONL log. Every
- * status transition, claim, and completion emits one of these so the
- * full lifecycle can be replayed from disk.
+ * status transition, claim, completion, and comment emits one of these
+ * so the full lifecycle can be replayed from disk.
  */
 export interface TaskAuditEntry {
   ts: string; // ISO 8601
-  event: 'create' | 'claim' | 'update' | 'complete';
+  event: 'create' | 'claim' | 'update' | 'complete' | 'comment';
   agent: string; // who caused the event
   from?: TaskStatus;
   to?: TaskStatus;
@@ -508,6 +508,44 @@ export function completeTask(
       // Never let observability break task completion.
     }
   }
+}
+
+/**
+ * Append a free-form comment to a task's audit log without touching the
+ * task's status. The intent is mid-task visibility: an agent can drop a
+ * progress note every ~30 min, on a milestone, on a blocker, or whenever
+ * a watcher would want to see "still alive, here's where I am" — and the
+ * comment shows up in the task's history feed next to status transitions.
+ *
+ * The task file itself is not rewritten: comments are observability, not
+ * state. That keeps update-task / claim-task / complete-task ordering
+ * unchanged and makes it safe for a watcher (dashboard, oncall) to drop
+ * notes on someone else's task without racing the owning agent's writes.
+ *
+ * Rejects empty / whitespace-only text — an audit line with no content is
+ * pure noise. Rejects a missing task id with the same cross-org error
+ * message updateTask uses, so callers get a single recognisable shape.
+ */
+export function commentTask(
+  paths: BusPaths,
+  taskId: string,
+  agent: string,
+  text: string,
+): void {
+  const trimmed = text?.trim() ?? '';
+  if (!trimmed) {
+    throw new Error('Comment text is required');
+  }
+  if (!agent) {
+    throw new Error('Comment agent is required');
+  }
+  const filePath = findTaskFile(paths, taskId);
+  if (!filePath) {
+    throw new Error(
+      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+    );
+  }
+  appendTaskAudit(paths, taskId, { event: 'comment', agent, note: trimmed });
 }
 
 /**
