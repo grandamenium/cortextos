@@ -5,6 +5,21 @@
 > this section covers backups (SP2c-1). Tunnel / ops / restore-swap sections
 > are added in SP2c-2 and SP2c-3.
 
+## Contents
+
+- [Backups](#backups)
+- [SP2c-2 apply prerequisites (Cloudflare Tunnel + Access)](#sp2c-2-apply-prerequisites-cloudflare-tunnel-+-access)
+- [SP2c-2 verification notes (2026-05-29)](#sp2c-2-verification-notes-2026-05-29)
+- [Day-to-day operations](#day-to-day-operations)
+- [Disk growth](#disk-growth)
+- [Tunnel re-auth (token rotation)](#tunnel-re-auth-token-rotation)
+- [Restore from snapshot](#restore-from-snapshot)
+- [Rollback](#rollback)
+- [Break-glass](#break-glass)
+- [SSO troubleshooting](#sso-troubleshooting)
+
+---
+
 ## Backups
 
 - **What is backed up:** the data disk (`cortextos-prod-data`) only. The OS
@@ -125,3 +140,149 @@ infra and now documented for the next operator:
    write the cloudflared token secret. Set via the new `operator_ip_cidrs`
    variable (default `[]`). Leave empty in steady state; set to your `/32` only
    while applying changes that touch KV secrets.
+
+## Day-to-day operations
+
+### Start / stop / restart
+
+The VM runs two systemd units that own everything:
+
+- `cortextos.service` — the daemon + dashboard (PM2 supervised).
+- `cloudflared.service` — the tunnel that exposes the dashboard and SSH.
+
+Standard control (over Cloudflare-tunnelled SSH):
+
+    ssh wyre-agents-ssh.wyre.ai
+    sudo systemctl status cortextos cloudflared
+    sudo systemctl restart cortextos        # restarts daemon + dashboard
+    sudo systemctl restart cloudflared      # rotates the tunnel connection
+
+If SSH is unreachable, use the Azure RunCommand fallback:
+
+    az vm run-command invoke -g cortextos-prod-rg -n cortextos-prod-vm \
+      --command-id RunShellScript \
+      --scripts 'sudo systemctl restart cortextos'
+
+### Logs
+
+| What | Where |
+|---|---|
+| Bootstrap (first boot) | `journalctl -u cortextos-bootstrap.service` |
+| Daemon + dashboard (PM2) | `journalctl -u cortextos.service` and `sudo -u cortextos pm2 logs` |
+| Tunnel | `journalctl -u cloudflared.service` |
+| Per-agent | `/var/lib/cortextos/.cortextos/prod/logs/<agent>/` |
+
+### Updating code on the VM
+
+Code lives at `/opt/cortextos` (git clone). To pull a new tag/commit:
+
+    ssh wyre-agents-ssh.wyre.ai
+    sudo -u cortextos git -C /opt/cortextos fetch --tags origin
+    sudo -u cortextos git -C /opt/cortextos checkout <tag>
+    sudo -u cortextos bash -lc 'cd /opt/cortextos && npm ci --no-audit --no-fund && npm run build'
+    sudo systemctl restart cortextos
+
+For dashboard changes also re-run `npm ci && npm run build` in `/opt/cortextos/dashboard`.
+
+## Disk growth
+
+The data disk holds all per-engineer agent state. To grow it:
+
+1. Grow in Terraform — edit `data_disk_size_gb` in `terraform.tfvars`, `terraform apply`. Azure resizes the disk online.
+2. Resize the filesystem on the VM:
+
+       ssh wyre-agents-ssh.wyre.ai
+       lsblk                                          # confirm new size on sdc
+       sudo resize2fs /dev/disk/azure/scsi1/lun10     # ext4 online resize
+
+The data disk's filesystem label is `cortextos-data`; the mount point is `/var/lib/cortextos`.
+
+## Tunnel re-auth (token rotation)
+
+The tunnel runs from a token stored in Key Vault (`cloudflared-token`). To rotate:
+
+1. In CF Zero Trust → Networks → Tunnels → `cortextos` → **Refresh token**, OR  
+   `cloudflared tunnel token <tunnel-id>` after re-authenticating locally.
+2. Update Key Vault:
+
+       az keyvault secret set --vault-name cortextos-prod-kv-d1fd92 \
+         --name cloudflared-token --value '<new-token>' \
+         --output none
+   (Operator IP must be allowed on the vault — set `operator_ip_cidrs` first.)
+3. Restart the tunnel:
+
+       ssh wyre-agents-ssh.wyre.ai
+       sudo systemctl restart cloudflared
+
+## Restore from snapshot
+
+> Documented procedure; a measured drill against a fresh VM is **open work** for the next iteration cycle.
+
+Recover the data disk from a daily snapshot:
+
+1. List recovery points:
+
+       VAULT=cortextos-prod-bvault
+       INSTANCE=$(az dataprotection backup-instance list -g cortextos-prod-rg \
+         --vault-name "$VAULT" --query "[0].name" -o tsv)
+       az dataprotection recovery-point list -g cortextos-prod-rg \
+         --vault-name "$VAULT" --backup-instance-name "$INSTANCE" -o table
+
+2. Restore the chosen point to a new disk in `cortextos-prod-snapshots-rg` (the disk lands as `cortextos-prod-data-restored-<timestamp>`):
+
+       az dataprotection backup-instance restore initialize-for-data-recovery \
+         --datasource-type AzureDisk \
+         --restore-location eastus \
+         --source-datastore VaultStore \
+         --target-resource-id "<chosen-recovery-point>" \
+         --rehydration-priority Standard ...
+
+3. Stop `cortextos.service`, detach the live data disk via `az vm disk detach`, attach the restored disk at LUN 10, mount it (the fstab entry already uses `LABEL=cortextos-data` so it just works), reconcile Terraform state with `terraform import` if needed.
+4. Start `cortextos.service` and confirm agents come back:
+
+       sudo -u cortextos /opt/cortextos/dist/cli.js list-agents
+
+5. Record the wall-clock time in this runbook the first time you run it for real.
+
+## Rollback
+
+If a code deploy breaks the daemon:
+
+    ssh wyre-agents-ssh.wyre.ai
+    sudo -u cortextos git -C /opt/cortextos checkout <previous-tag>
+    sudo -u cortextos bash -lc 'cd /opt/cortextos && npm ci && npm run build'
+    sudo systemctl restart cortextos
+
+If a Terraform change breaks ingress (DNS, tunnel config, Access policy):
+
+    cd infra/terraform
+    terraform plan -refresh-only
+    git checkout HEAD~1 -- infra/terraform/<changed-file>
+    terraform apply -auto-approve
+
+For irreversible-on-Cloudflare-side changes (e.g. the tunnel config resource is create-only — see SP2c spec), revert via the Cloudflare API directly:
+
+    curl -X PUT -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+      "https://api.cloudflare.com/client/v4/accounts/<acct>/cfd_tunnel/<tunnel-id>/configurations" \
+      -d '<previous-config-json>'
+
+## Break-glass
+
+If both Cloudflare Tunnel and the dashboard SSO break (CF outage, expired token, IdP misconfiguration), the VM has no public ingress. To recover:
+
+- **Azure RunCommand** (lowest-level — sends a shell script to the VM via Azure Resource Manager, no VM-side service needed): `az vm run-command invoke ...` as shown in the start/stop section.
+- **Azure Bastion** — not provisioned by default to keep cost down. Add temporarily:
+
+      az network bastion create -g cortextos-prod-rg -n cortextos-bastion \
+        --vnet-name cortextos-prod-vnet --location eastus
+
+  Then connect via the Azure portal → VM → Connect → Bastion. Delete when done.
+
+## SSO troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Browser shows CF Access page → click "WYRE Entra ID" → blank or "needs admin consent" | Entra app needs admin consent for `openid`/`profile` scopes | Grant in Entra portal → App registrations → (the Cloudflare Access app) → API permissions → "Grant admin consent for `wyretechnology.com`" |
+| `AADSTS50011: redirect URI does not match` | Entra app's redirect URI differs from CF team domain | Ensure web redirect URI is `https://jolly-bar-cdb4.cloudflareaccess.com/cdn-cgi/access/callback`. CF team domain visible at `https://one.dash.cloudflare.com → Settings → Custom Pages` |
+| `https://wyre-agents.wyre.ai` returns 502/503 | `cortextos.service` is down, OR tunnel ingress unhealthy | `sudo systemctl status cortextos cloudflared` on the VM; restart whichever is failed |
+| TLS handshake failure on a new hostname | Universal SSL doesn't cover sub-sub-domains | Use one-level hostnames (e.g. `wyre-agents.wyre.ai`) OR pay for Advanced Certificate Manager — see the "SP2c-2 verification notes" above |

@@ -23,7 +23,7 @@
   vault, daily disk-snapshot policy (14-day retention), and a backup instance
   protecting the data disk, with snapshots in a dedicated snapshot resource
   group. Verified end-to-end (on-demand backup job + snapshot).
-- `docs/runbook/sp2-host.md` — operations runbook (backup section).
+- `docs/runbook/sp2-host.md` — operations runbook (SP2c-3: backup, teardown, day-to-day ops, disk growth, tunnel re-auth, restore drill, rollback, break-glass, SSO troubleshooting).
 - SP2c-2 — Cloudflare Tunnel + Zero-Trust Access. The dashboard is reachable at
   `https://wyre-agents.wyre.ai` and ops SSH at `wyre-agents-ssh.wyre.ai`
   through a Cloudflare Tunnel (no public IP), gated by Entra-SSO Access limited
