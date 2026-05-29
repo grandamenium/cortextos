@@ -36,7 +36,7 @@ function BudgetBar({ agent, spent, budget, pct_used, paused }: {
       </div>
       <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
         <div
-          className={`h-full rounded-full ${color} transition-all`}
+          className={`h-full rounded-full ${color} transition-[width] duration-300`}
           style={{ width: `${pct}%` }}
         />
       </div>

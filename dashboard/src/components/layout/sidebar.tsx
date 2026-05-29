@@ -152,7 +152,7 @@ export function Sidebar({
                     href={orgHref(item.href)}
                     onClick={onNavigate}
                     className={cn(
-                      'group flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-all',
+                      'group flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-colors duration-150',
                       active
                         ? 'bg-primary/10 text-primary font-medium'
                         : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
@@ -190,7 +190,7 @@ export function Sidebar({
           href={orgHref('/settings')}
           onClick={onNavigate}
           className={cn(
-            'flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-all',
+            'flex items-center gap-2.5 rounded-md px-3 py-1.5 text-[13px] transition-colors duration-150',
             isActive('/settings')
               ? 'bg-primary/10 text-primary font-medium'
               : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'

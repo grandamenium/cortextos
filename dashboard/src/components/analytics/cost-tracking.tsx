@@ -37,7 +37,7 @@ function UsageBar({ pct, label, sublabel }: { pct: number; label: string; sublab
         <span className="tabular-nums">{pct}%</span>
       </div>
       <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden">
-        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
+        <div className={`h-full rounded-full ${color} transition-[width] duration-300`} style={{ width: `${pct}%` }} />
       </div>
       {sublabel && <p className="text-[10px] text-muted-foreground">{sublabel}</p>}
     </div>

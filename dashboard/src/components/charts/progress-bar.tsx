@@ -38,7 +38,7 @@ export function ProgressBar({
       >
         <div
           className={cn(
-            'h-full rounded-full transition-all duration-500 ease-out',
+            'h-full rounded-full transition-[width] duration-500 ease-out',
             animated && 'animate-pulse',
           )}
           style={{

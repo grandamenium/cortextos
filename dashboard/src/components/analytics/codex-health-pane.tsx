@@ -26,7 +26,7 @@ function UtilBar({ label, usedPct, alert }: { label: string; usedPct: number; al
         </span>
       </div>
       <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
+        <div className={`h-full rounded-full ${color} transition-[width] duration-300`} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
@@ -118,7 +118,7 @@ export function CodexHealthPane({ data }: CodexHealthPaneProps) {
           </div>
           <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${spendPct >= 80 ? 'bg-red-500' : spendPct >= 50 ? 'bg-amber-500' : 'bg-green-500'}`}
+              className={`h-full rounded-full transition-[width] duration-300 ${spendPct >= 80 ? 'bg-red-500' : spendPct >= 50 ? 'bg-amber-500' : 'bg-green-500'}`}
               style={{ width: `${spendPct}%` }}
             />
           </div>
