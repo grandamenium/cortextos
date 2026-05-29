@@ -67,6 +67,23 @@ export class AgentManager {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
         continue;
       }
+      // BUG-061 fix (multi-instance roster bleed): a NON-default instance owns
+      // exactly one org and must start only that org's agents. discoverAgents()
+      // scans every org under the shared frameworkRoot, and the enabled-agents
+      // list is disable-only (absence => enabled, BUG-028), so without this
+      // guard a second instance (e.g. CTX_ORG=wyre-gateway) re-discovers and
+      // starts the default instance's agents (another org) — the wrong roster.
+      // The DEFAULT instance is deliberately exempt: it preserves the legacy
+      // discover-all-orgs behavior (multi-org / single-install catch-all), so
+      // this changes only the currently-broken non-default path — zero
+      // regression to the running default fleet.
+      if (this.instanceId !== 'default') {
+        const agentOrg = this.resolveAgentOrg(name, org);
+        if (agentOrg !== this.org) {
+          console.log(`[agent-manager] Skipping ${name}: org '${agentOrg}' != instance org '${this.org}' (instance '${this.instanceId}' is org-scoped)`);
+          continue;
+        }
+      }
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead
       // of falling back to `this.org` (the daemon's startup org).
       await this.startAgent(name, dir, config, org);

@@ -102,11 +102,26 @@ Before `terraform apply` with the Cloudflare resources:
    Copy the resulting IdP id into `terraform.tfvars` as `cloudflare_access_idp_id`.
 
 4. `terraform apply`. Then verify:
-   - `https://agents.internal.wyre.ai` → Cloudflare Access login → WYRE SSO → dashboard.
+   - `https://wyre-agents.wyre.ai` → Cloudflare Access login → WYRE SSO → dashboard.
    - Local `~/.ssh/config`:
      ```
-     Host agents-ssh.internal.wyre.ai
+     Host wyre-agents-ssh.wyre.ai
        ProxyCommand cloudflared access ssh --hostname %h
        User ops
      ```
-     then `ssh agents-ssh.internal.wyre.ai`.
+     then `ssh wyre-agents-ssh.wyre.ai`.
+
+## SP2c-2 verification notes (2026-05-29)
+
+Two gotchas surfaced during the first end-to-end apply, both reflected in the
+infra and now documented for the next operator:
+
+1. **Universal SSL doesn't cover third-level subdomains.** The original plan used
+   `agents.internal.wyre.ai` (third level). Cloudflare's free Universal SSL only
+   covers `*.zone.tld` (single level), so TLS handshake failed at the edge.
+   Final hostname is `wyre-agents.wyre.ai` (single level → covered). Adding
+   Advanced Certificate Manager (~$10/mo) would re-enable arbitrary depth.
+2. **Operator IP must be on Key Vault's network ACL** for `terraform apply` to
+   write the cloudflared token secret. Set via the new `operator_ip_cidrs`
+   variable (default `[]`). Leave empty in steady state; set to your `/32` only
+   while applying changes that touch KV secrets.

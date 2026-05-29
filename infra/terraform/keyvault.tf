@@ -19,7 +19,7 @@ resource "azurerm_key_vault" "main" {
     default_action             = "Deny"
     bypass                     = "AzureServices"
     virtual_network_subnet_ids = [azurerm_subnet.vm.id]
-    ip_rules                   = [] # SP2b/c may add the operator's IP here for break-glass.
+    ip_rules                   = var.operator_ip_cidrs # operator/break-glass; default empty.
   }
 
   tags = local.common_tags

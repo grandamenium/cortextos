@@ -162,3 +162,9 @@ variable "access_email_domain" {
   description = "Email domain allowed through Cloudflare Access."
   default     = "wyretechnology.com"
 }
+
+variable "operator_ip_cidrs" {
+  type        = list(string)
+  description = "IP CIDRs allowed to reach Key Vault from outside the VM subnet (operator break-glass). Empty in steady state."
+  default     = []
+}

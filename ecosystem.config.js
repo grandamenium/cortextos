@@ -11,10 +11,16 @@ const INSTANCE_ID = process.env.CTX_INSTANCE_ID || 'default';
 const CTX_ROOT = process.env.CTX_ROOT || path.join(os.homedir(), '.cortextos', INSTANCE_ID);
 const CTX_ORG = process.env.CTX_ORG || '';
 
+// Instance-suffix the pm2 process name for non-default instances so multiple
+// instances run side-by-side. Default stays 'cortextos-daemon' (unchanged) so a
+// second instance start never renames/restarts the running default fleet.
+const DAEMON_PM2_NAME =
+  INSTANCE_ID === 'default' ? 'cortextos-daemon' : `cortextos-daemon-${INSTANCE_ID}`;
+
 module.exports = {
   apps: [
     {
-      name: 'cortextos-daemon',
+      name: DAEMON_PM2_NAME,
       script: path.join(FRAMEWORK_ROOT, 'dist', 'daemon.js'),
       args: `--instance ${INSTANCE_ID}`,
       cwd: FRAMEWORK_ROOT,

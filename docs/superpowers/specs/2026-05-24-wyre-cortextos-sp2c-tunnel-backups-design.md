@@ -18,9 +18,9 @@ the team.
 Decisions already locked (SP2 parent brainstorm + SP2c review 2026-05-26;
 routing revised 2026-05-24 — see below):
 - **Reachability:** Cloudflare Tunnel only (no public IP).
-- **Dashboard URL:** `agents.internal.wyre.ai` (subdomain, host-based). The
+- **Dashboard URL:** `wyre-agents.wyre.ai` (subdomain, host-based). The
   team-facing surface drops the upstream "cortextos" name — see the rename note.
-  **Revised from the earlier `internal.wyre.ai/agents` path-based plan**: the
+  **Revised from the earlier `wyre-agents.wyre.ai` path-based plan**: the
   dashboard has 54 client-side `fetch('/api/...')` calls that a Next.js
   `basePath` does not rewrite (basePath only prefixes `next/link`/`next/router`/
   `_next` assets, not raw `fetch`), so path-based routing would require
@@ -34,8 +34,8 @@ routing revised 2026-05-24 — see below):
 
 This is a hard fork; the team-facing surface is branded **WYRE Agents**, not
 "cortextos". SP2c renames only what the team sees:
-- Hostname: `agents.internal.wyre.ai` (subdomain, serves the dashboard at `/`).
-- Ops SSH host: `agents-ssh.internal.wyre.ai`.
+- Hostname: `wyre-agents.wyre.ai` (subdomain, serves the dashboard at `/`).
+- Ops SSH host: `wyre-agents-ssh.wyre.ai`.
 - Access app names: "WYRE Agents". (A dashboard page-title rebrand is an
   optional one-string nicety, not load-bearing.)
 
@@ -59,9 +59,9 @@ command is left untouched.
 ## Goal (SP2c)
 
 After SP2c:
-- The dashboard is reachable at `https://agents.internal.wyre.ai`, gated by
+- The dashboard is reachable at `https://wyre-agents.wyre.ai`, gated by
   Cloudflare Access (WYRE identity only).
-- Ops SSH reaches the VM at `agents-ssh.internal.wyre.ai` through the same
+- Ops SSH reaches the VM at `wyre-agents-ssh.wyre.ai` through the same
   tunnel (no public :22).
 - The data disk is snapshotted daily with 14-day retention; a restore drill
   has been run and documented.
@@ -77,7 +77,7 @@ After SP2c:
    Terraform-managed.
 
 2. **Host-based routing on a subdomain — no dashboard code change.**
-   The dashboard is served at `https://agents.internal.wyre.ai/` (root).
+   The dashboard is served at `https://wyre-agents.wyre.ai/` (root).
    Cloudflare Tunnel ingress matches the hostname and proxies to
    `localhost:3000` unchanged, so the dashboard runs exactly as in local dev.
    This replaces the earlier path-based `/agents` plan, which would have
@@ -104,16 +104,16 @@ After SP2c:
 ## Architecture (additions to SP2a/b)
 
 ```
-Engineers ── browser ──▶ https://agents.internal.wyre.ai
-Ops      ── ssh ───────▶ agents-ssh.internal.wyre.ai
+Engineers ── browser ──▶ https://wyre-agents.wyre.ai
+Ops      ── ssh ───────▶ wyre-agents-ssh.wyre.ai
                               │  Cloudflare edge (TLS terminated)
                               │  Access policy: Entra SSO, @wyretechnology.com
                               ▼  Cloudflare Tunnel (outbound from VM)
 ┌── Azure VM (unchanged NSG: deny all inbound) ───────────────┐
 │  cloudflared.service (systemd) — tunnel run --token <kv>    │
 │     ingress:                                                │
-│       agents.internal.wyre.ai             → localhost:3000  │
-│       agents-ssh.internal.wyre.ai         → ssh://localhost:22│
+│       wyre-agents.wyre.ai             → localhost:3000  │
+│       wyre-agents-ssh.wyre.ai         → ssh://localhost:22│
 │  cortextos.service — daemon + dashboard (served at /)       │
 │  data disk /var/lib/cortextos ── Azure Backup (daily, 14d)  │
 └──────────────────────────────────────────────────────────────┘
@@ -159,8 +159,8 @@ Ops      ── ssh ───────▶ agents-ssh.internal.wyre.ai
 
 6. **`infra/terraform/variables.tf`** — new variables:
    `cloudflare_account_id`, `cloudflare_zone_id`, `cloudflare_zone_name`
-   (default `wyre.ai`), `dashboard_hostname` (default `agents.internal.wyre.ai`),
-   `ssh_hostname` (default `agents-ssh.internal.wyre.ai`),
+   (default `wyre.ai`), `dashboard_hostname` (default `wyre-agents.wyre.ai`),
+   `ssh_hostname` (default `wyre-agents-ssh.wyre.ai`),
    `cloudflare_access_idp_id` (Entra IdP id — required for the Access policy),
    `access_email_domain` (default `wyretechnology.com`). (No `dashboard_base_path` —
    host-based routing needs none.)
@@ -183,10 +183,10 @@ with no backups is the scariest state). SP2c-2 is the headline. SP2c-3 closes ou
 - `terraform apply` (with `CLOUDFLARE_API_TOKEN` set) provisions the tunnel,
   DNS, Access apps/policies, and backup vault cleanly; `terraform destroy`
   tears them down without orphan DNS records or stuck tunnels.
-- `https://agents.internal.wyre.ai` loads the dashboard at `/`, gated by Access
+- `https://wyre-agents.wyre.ai` loads the dashboard at `/`, gated by Access
   (an un-authenticated request gets the Cloudflare Access login; a
   `@wyretechnology.com` identity gets in).
-- `ssh -o ProxyCommand="cloudflared access ssh --hostname agents-ssh.internal.wyre.ai" ops@agents-ssh.internal.wyre.ai` works for the ops user.
+- `ssh -o ProxyCommand="cloudflared access ssh --hostname wyre-agents-ssh.wyre.ai" ops@wyre-agents-ssh.wyre.ai` works for the ops user.
 - A daily snapshot has fired; one snapshot has been restored into a fresh VM
   and the daemon comes up with `smoke/foo` (or equivalent) intact. Timed and
   recorded in the runbook.
@@ -209,7 +209,7 @@ with no backups is the scariest state). SP2c-2 is the headline. SP2c-3 closes ou
   path-based `/agents` plan was abandoned: the dashboard has 54 client-side
   `fetch('/api/...')` calls that a Next.js `basePath` does not rewrite, so the
   refactor risk was high. Host-based subdomain routing
-  (`agents.internal.wyre.ai`) serves the dashboard at `/` and needs no code
+  (`wyre-agents.wyre.ai`) serves the dashboard at `/` and needs no code
   change. Decided 2026-05-24.
 - **Access + SSH UX.** Engineers need `cloudflared` installed locally and an
   `~/.ssh/config` ProxyCommand entry. The runbook provides the snippet; this
