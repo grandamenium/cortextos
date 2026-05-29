@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>cortextOS — Architecture Map</title>
+<style>
+  :root {
+    --bg: #0F0F0F;
+    --panel: #161616;
+    --panel-2: #1c1c1c;
+    --border: #2a2a2a;
+    --text: #e8e8e8;
+    --muted: #8a8a8a;
+    --entry: #4ea1ff;
+    --bus: #7bd389;
+    --daemon: #c792ea;
+    --pty: #ffb86b;
+    --hooks: #f5b942;
+    --dashboard: #4ea1ff;
+    --telegram: #4ea1ff;
+    --storage: #ffb86b;
+    --templates: #c792ea;
+    --skills: #c792ea;
+    --tests: #8a8a8a;
+    --critical: #ff3860;
+    --api: #ff7a45;
+    --db: #ffb86b;
+    --mount: #4ea1ff;
+    --normal: #6b6b6b;
+    --accent: #f5b942;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    overflow: hidden;
+  }
+  header {
+    position: fixed; top: 0; left: 0; right: 0; height: 56px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 16px;
+    gap: 12px; z-index: 10;
+  }
+  .title { font-weight: 600; letter-spacing: 0.2px; }
+  .subtitle { color: var(--muted); font-size: 12px; }
+  .chips { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+  .chip {
+    padding: 4px 10px; border-radius: 12px;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border);
+    font-size: 11px; cursor: pointer; user-select: none;
+  }
+  .chip.active { background: var(--accent); color: #111; border-color: var(--accent); }
+  .chip:hover:not(.active) { border-color: var(--muted); }
+  main {
+    position: fixed; top: 56px; left: 0; right: 360px; bottom: 0;
+    overflow: hidden;
+  }
+  #stage {
+    width: 100%; height: 100%;
+    cursor: grab;
+    background:
+      radial-gradient(circle at 20% 20%, rgba(78,161,255,0.04) 0%, transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(199,146,234,0.04) 0%, transparent 50%),
+      var(--bg);
+  }
+  #stage.dragging { cursor: grabbing; }
+  aside {
+    position: fixed; top: 56px; right: 0; bottom: 0; width: 360px;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 16px;
+  }
+  aside h2 { font-size: 14px; margin: 0 0 8px; color: var(--text); }
+  aside h3 { font-size: 12px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  aside .role { color: var(--text); margin: 6px 0; }
+  aside .plain { color: var(--muted); font-style: italic; margin: 6px 0; }
+  aside .path { font-family: "SF Mono", Menlo, monospace; font-size: 11px; color: var(--accent); word-break: break-all; }
+  aside ul { margin: 4px 0; padding-left: 16px; }
+  aside li { margin: 2px 0; color: var(--muted); }
+  aside .edge-list { font-size: 11px; }
+  aside .edge-list .ed { padding: 3px 0; }
+  aside .edge-list .from-to { color: var(--text); }
+  aside .edge-list .lbl { color: var(--muted); }
+  .controls { position: fixed; bottom: 16px; left: 16px; display: flex; gap: 6px; z-index: 10; }
+  .btn {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 10px; border-radius: 6px; font-size: 11px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--muted); }
+  .legend { position: fixed; bottom: 16px; right: 376px; display: flex; gap: 12px; z-index: 10; font-size: 11px; color: var(--muted); }
+  .legend .item { display: flex; align-items: center; gap: 4px; }
+  .legend .sw { width: 18px; height: 3px; border-radius: 2px; }
+  svg { width: 100%; height: 100%; display: block; }
+  .cluster-rect { stroke-width: 1; fill-opacity: 0.05; stroke-opacity: 0.3; }
+  .cluster-label {
+    font-size: 11px; fill: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
+  }
+  .node { cursor: pointer; }
+  .node rect { stroke-width: 1.4; fill: var(--panel); }
+  .node.critical rect { stroke-width: 2.4; }
+  .node.dimmed { opacity: 0.18; }
+  .node.selected rect { stroke: var(--accent); stroke-width: 2.6; }
+  .node .label { font-size: 12px; fill: var(--text); font-weight: 600; }
+  .node .sub { font-size: 10px; fill: var(--muted); }
+  .edge { fill: none; stroke-width: 1.4; opacity: 0.7; }
+  .edge.critical { stroke: var(--critical); stroke-width: 2.0; opacity: 0.9; }
+  .edge.api { stroke: var(--api); }
+  .edge.db { stroke: var(--db); }
+  .edge.mount { stroke: var(--mount); }
+  .edge.normal { stroke: var(--normal); }
+  .edge.dimmed { opacity: 0.08; }
+  .edge-label { font-size: 9.5px; fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 3; stroke-linejoin: round; }
+  .edge-label.dimmed { opacity: 0.1; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="title">cortextOS — Architecture Map</div>
+    <div class="subtitle">47 nodes · 37 edges · critical path highlighted in red</div>
+  </div>
+  <div class="chips" id="chips"></div>
+</header>
+
+<main>
+  <div id="stage">
+    <svg id="svg" viewBox="0 0 2400 1500" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <marker id="arrow-critical" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--critical)"/>
+        </marker>
+        <marker id="arrow-api" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--api)"/>
+        </marker>
+        <marker id="arrow-db" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--db)"/>
+        </marker>
+        <marker id="arrow-mount" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--mount)"/>
+        </marker>
+        <marker id="arrow-normal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--normal)"/>
+        </marker>
+      </defs>
+      <g id="viewport"></g>
+    </svg>
+  </div>
+</main>
+
+<aside id="sidebar">
+  <h2>Notable findings</h2>
+  <p class="plain">Click any node for details. Use filter chips above to focus on a feature surface.</p>
+
+  <h3>Critical path (the seam)</h3>
+  <p>CLI (<code>cortextos start | bus &lt;verb&gt;</code>) → daemon (AgentManager spins up AgentProcess + FastChecker per agent) → daemon injects Telegram + inbox messages into Claude Code PTY via TTY keystrokes → Claude Code calls bus modules → atomic writes to <code>~/.cortextos/state/</code> (file locks per op). The file bus IS the central nervous system.</p>
+
+  <h3>Top 3 surprises</h3>
+  <ul>
+    <li><strong>Context-rotation circuit breaker</strong> — fast-checker.ts has a 71-hour context monitor; 3 restarts in 15 min triggers a cooldown to prevent restart loops.</li>
+    <li><strong>Defense-in-depth on bus inputs</strong> — agent-name regex validation (path-traversal guard), HMAC-SHA256 message signing (optional, per-instance key), credential pattern scrub before any append to events.jsonl.</li>
+    <li><strong>30-second manual-fire cooldown</strong> — IPC handleFireCron blocks dashboard cron-spam per (agent, cron) tuple, so the dashboard can't accidentally hammer a flaky agent.</li>
+  </ul>
+
+  <h3>Dead code</h3>
+  <p class="plain">None surfaced by archaeology pass.</p>
+</aside>
+
+<div class="controls">
+  <button class="btn" onclick="fit()">Fit</button>
+  <button class="btn" onclick="zoom(1.2)">+</button>
+  <button class="btn" onclick="zoom(0.8)">−</button>
+  <button class="btn" onclick="reset()">Reset</button>
+</div>
+
+<div class="legend">
+  <div class="item"><div class="sw" style="background:var(--critical)"></div>critical</div>
+  <div class="item"><div class="sw" style="background:var(--api)"></div>api</div>
+  <div class="item"><div class="sw" style="background:var(--db)"></div>db</div>
+  <div class="item"><div class="sw" style="background:var(--mount)"></div>mount</div>
+  <div class="item"><div class="sw" style="background:var(--normal)"></div>normal</div>
+</div>
+
+<script>
+const clusters = [
+  { id: 'Entry',     label: 'CLI Entry',         x: 60,   y: 80,   w: 260, h: 360, color: 'entry'     },
+  { id: 'Daemon',    label: 'Daemon',            x: 360,  y: 80,   w: 320, h: 800, color: 'daemon'    },
+  { id: 'Bus',       label: 'File Bus',          x: 720,  y: 80,   w: 360, h: 1300, color: 'bus'      },
+  { id: 'PTY',       label: 'PTY layer',         x: 1120, y: 80,   w: 280, h: 480, color: 'pty'       },
+  { id: 'Telegram',  label: 'Telegram',          x: 1120, y: 600,  w: 280, h: 360, color: 'telegram'  },
+  { id: 'Storage',   label: 'Storage / Utils',   x: 1440, y: 80,   w: 280, h: 560, color: 'storage'   },
+  { id: 'Dashboard', label: 'Dashboard',         x: 1440, y: 680,  w: 280, h: 280, color: 'dashboard' },
+  { id: 'Templates', label: 'Templates',         x: 1760, y: 80,   w: 260, h: 320, color: 'templates' },
+  { id: 'Skills',    label: 'Community Skills',  x: 1760, y: 440,  w: 260, h: 160, color: 'skills'    },
+  { id: 'Tests',     label: 'Tests',             x: 1760, y: 640,  w: 260, h: 160, color: 'tests'     }
+];
+
+const N = (id, cluster, label, sub, x, y, w, h, color, opts = {}) => ({
+  id, cluster, label, sub, x, y, w, h, color, ...opts
+});
+
+const nodes = [
+  // Entry
+  N('cli-index', 'Entry', 'cli/index.ts',   'Commander.js router', 80, 120, 220, 70, 'entry', {
+    role: 'Commander.js CLI router that dispatches to 27 subcommands (init, add-agent, start, status, dashboard, bus verbs).',
+    plain: 'The main command-line interface. Users run cortextos <command> and this routes to the handler.',
+    path: 'src/cli/index.ts',
+    notes: ['Lines 1-74: 27 subcommand registrations', 'Lines 64-72: crash-alert hook spawn on SessionEnd', 'No exports; entry point per package.json bin.cortextos'],
+    tag: ['all', 'cli'], critical: true
+  }),
+  N('cli-start', 'Entry', 'cli/start.ts', 'spawn daemon', 80, 210, 220, 70, 'entry', {
+    role: 'Spawns or resumes the daemon via PM2 or direct Node (foreground mode for debugging).',
+    plain: 'Starts the background daemon that runs agents.',
+    path: 'src/cli/start.ts',
+    notes: ['Lines 23-85: action handler spawns daemon.js with CTX_* env', 'Falls back from PM2 to direct spawn', 'Uses IPCClient to detect daemon already running'],
+    tag: ['all', 'cli'], critical: true
+  }),
+  N('cli-bus', 'Entry', 'cli/bus.ts', '20+ bus verbs', 80, 300, 220, 70, 'entry', {
+    role: 'Command dispatcher for 20+ bus operations (send-message, create-task, list-tasks, approvals, crons).',
+    plain: 'Handles all agent-to-agent messaging, tasks, events, and bus operations.',
+    path: 'src/cli/bus.ts',
+    notes: ['Lines 1-27: imports all bus modules', 'Lines 33-63: checkDeliverableRequirement gates work', 'Lines 65+: 20+ subcommand registrations'],
+    tag: ['all', 'cli', 'bus'], critical: true
+  }),
+
+  // Daemon
+  N('daemon-index', 'Daemon', 'daemon/index.ts', 'crash + restart loop guard', 380, 120, 280, 70, 'daemon', {
+    role: 'Daemon entry: crash handling (history tracking, loop detection, Telegram alerts), marker writing for diagnostics.',
+    plain: 'The long-running background process. Detects crashes, tracks restart history, alerts on too many restarts.',
+    path: 'src/daemon/index.ts',
+    notes: ['Lines 9-28: writes .daemon-crashed marker + crash-history.json per agent', 'Lines 74-84: 3 crashes / 15 min triggers alert, 30 min cooldown', 'Exports CrashEvent, CrashHistory, recordCrash'],
+    tag: ['all', 'daemon'], critical: true
+  }),
+  N('daemon-agent-manager', 'Daemon', 'agent-manager.ts', 'central orchestrator', 380, 220, 280, 80, 'daemon', {
+    role: 'Central orchestrator: discovers agents, starts/stops them, manages cron schedulers, Telegram pollers.',
+    plain: 'Manages all running agents in an instance.',
+    path: 'src/daemon/agent-manager.ts',
+    notes: ['Lines 24-42: agents Map<name, {process, checker, poller}>', 'Lines 47-73: discoverAndStart reads enabled-agents.json (BUG-028 fix)', 'Each agent: AgentProcess + FastChecker + optional TelegramPoller + CronScheduler'],
+    tag: ['all', 'daemon'], critical: true
+  }),
+  N('daemon-agent-process', 'Daemon', 'agent-process.ts', 'per-agent wrapper', 380, 330, 280, 70, 'daemon', {
+    role: 'Wraps a single Claude Code or Codex PTY session; manages startup, context rotation, restarts.',
+    plain: 'Represents one running agent. Spawns Claude Code, handles 71-hour rotation, reads logs.',
+    path: 'src/daemon/agent-process.ts',
+    notes: ['Spawns AgentPTY or CodexAppServerPTY based on config.runtime', 'Manages: fresh spawn, continue mode, context rotation', 'Log: state/<agent>/stdout.log'],
+    tag: ['all', 'daemon'], critical: true
+  }),
+  N('daemon-fast-checker', 'Daemon', 'fast-checker.ts', 'inbox + telegram poll', 380, 430, 280, 80, 'daemon', {
+    role: 'Poll loop per agent: Telegram inbox + file bus, dedupe, inject into PTY, idle heartbeat watchdog.',
+    plain: 'Monitors new messages and approvals for an agent. Sends them into the agent PTY.',
+    path: 'src/daemon/fast-checker.ts',
+    notes: ['Lines 20-79: constructor sets poll interval, dedup state', 'Lines 102+: polls inbox + Telegram with per-agent cooldown', 'Injects via KEYS.send (Ctrl+U clear + text + Enter)', 'Context monitor: detects 71h session, fires handoff, force-restart on deadline'],
+    tag: ['all', 'daemon'], critical: true
+  }),
+  N('daemon-ipc-server', 'Daemon', 'ipc-server.ts', 'unix socket RPC', 380, 540, 280, 70, 'daemon', {
+    role: 'Unix socket IPC: CLI talks to daemon via JSON (fire-cron, get-status). Exposes health aggregation.',
+    plain: 'Communication channel between CLI and running daemon.',
+    path: 'src/daemon/ipc-server.ts',
+    notes: ['Lines 13-47: 30s cooldown per (agent, cron) on manual fire', 'Lines 67-80: handleFireCron validates + injects', 'Socket path: /tmp/cortextos-<instance>.sock'],
+    tag: ['all', 'daemon'], critical: true
+  }),
+  N('daemon-cron-scheduler', 'Daemon', 'cron-scheduler.ts', 'per-agent scheduler', 380, 640, 280, 70, 'daemon', {
+    role: 'Per-agent cron engine: reads crons.json, computes next fire, injects prompt, logs execution.',
+    plain: 'Runs scheduled tasks (crons) for each agent at the right time.',
+    path: 'src/daemon/cron-scheduler.ts',
+    notes: ['nextFireFromCron: parses cron expression for next run', 'Calls agentManager.injectAgent', 'Logs to state/<agent>/cron-execution.log (JSONL, 1000-line rotation)'],
+    tag: ['all', 'daemon'], critical: true
+  }),
+
+  // Bus
+  N('bus-index', 'Bus', 'bus/index.ts', 'barrel export', 740, 120, 320, 60, 'bus', {
+    role: 'Public API barrel: re-exports all bus modules for CLI, daemon, dashboard, agents.',
+    plain: 'The bus module’s public interface. Everything the bus does is exported from here.',
+    path: 'src/bus/index.ts',
+    notes: ['Lines 1-60: re-exports from message, task, event, heartbeat, approval, system, experiment, catalog, metrics', 'Pure barrel, no runtime logic'],
+    tag: ['all', 'bus'], critical: true
+  }),
+  N('bus-message', 'Bus', 'bus/message.ts', 'agent inbox + HMAC', 740, 200, 320, 80, 'bus', {
+    role: 'Agent-to-agent inbox: sendMessage (atomic + HMAC-SHA256 signing), checkInbox, ackInbox.',
+    plain: 'The message queue between agents. One agent sends, another reads from inbox.',
+    path: 'src/bus/message.ts',
+    notes: ['Lines 15-44: HMAC signing (H10), loads bus-signing-key from config/', 'Lines 50+: filenames {pnum}-{epochMs}-from-{sender}-{rand5}.json', 'checkInbox sorts by priority, ackInbox deletes the file'],
+    tag: ['all', 'bus'], critical: true
+  }),
+  N('bus-task', 'Bus', 'bus/task.ts', 'task CRUD + DAG', 740, 310, 320, 80, 'bus', {
+    role: 'Task CRUD: createTask (8-digit IDs), updateTask, completeTask, listTasks, dependency DAG validation.',
+    plain: 'Persistent task management. Each task is a JSON file with status, blockers, deliverables.',
+    path: 'src/bus/task.ts',
+    notes: ['Lines 12-50: randomDigits(8) for collision safety (CI bug fix)', 'detectCycleOrThrow validates blocked_by DAG', 'outputs[] linked via save-output'],
+    tag: ['all', 'bus'], critical: true
+  }),
+  N('bus-event', 'Bus', 'bus/event.ts', 'append-only JSONL', 740, 420, 320, 70, 'bus', {
+    role: 'Event log (JSONL): appends to state/<org>/events.log for audit, metrics, dashboard replay.',
+    plain: 'Append-only log of everything that happens. Used for metrics and debugging.',
+    path: 'src/bus/event.ts',
+    notes: ['Categories: action, error, metric, milestone, heartbeat, message, task, approval, agent_activity', 'Severities: info, warning, error, critical'],
+    tag: ['all', 'bus'], critical: true
+  }),
+  N('bus-approval', 'Bus', 'bus/approval.ts', 'HITL gate', 740, 520, 320, 70, 'bus', {
+    role: 'Approval gate: createApproval (external-comms, financial, deployment, data-deletion), updateApproval.',
+    plain: 'Human approval workflow. Agents request, humans review in dashboard or Telegram.',
+    path: 'src/bus/approval.ts',
+    notes: ['Types: external-comms, financial, deployment, data-deletion, other', 'createApproval notifies system agent + Telegram', 'updateApproval sends callback to requesting_agent'],
+    tag: ['all', 'bus'], critical: false
+  }),
+  N('bus-heartbeat', 'Bus', 'bus/heartbeat.ts', 'fleet status', 740, 620, 320, 70, 'bus', {
+    role: 'Agent status snapshot: updateHeartbeat per-org, readAllHeartbeats aggregates fleet for dashboard.',
+    plain: 'Each agent reports its status. Dashboard reads this to show health.',
+    path: 'src/bus/heartbeat.ts',
+    notes: ['updateHeartbeat: state/orgs/<org>/heartbeats/<agent>.json', 'Fields: status, current_task, mode, last_heartbeat, loop_interval'],
+    tag: ['all', 'bus'], critical: false
+  }),
+  N('bus-crons', 'Bus', 'bus/crons.ts', 'cron CRUD + history', 740, 720, 320, 80, 'bus', {
+    role: 'Cron CRUD + execution log: addCron, readCrons, updateCron, removeCron, getExecutionLogPage (paginated).',
+    plain: 'Manages scheduled tasks per agent. Stores definitions and execution history.',
+    path: 'src/bus/crons.ts',
+    notes: ['File: state/agents/<agent>/crons.json', 'Log: state/agents/<agent>/cron-execution.log (JSONL, 1000-line rotation)', 'getExecutionLogPage: offset + limit pagination'],
+    tag: ['all', 'bus'], critical: true
+  }),
+  N('bus-system', 'Bus', 'bus/system.ts', 'restart + autocommit', 740, 830, 320, 80, 'bus', {
+    role: 'System ops: selfRestart, hardRestart (context rotation), autoCommit (git stage+commit), checkGoalStaleness.',
+    plain: 'Agent lifecycle and system operations. Restart, git commits, goal staleness checks.',
+    path: 'src/bus/system.ts',
+    notes: ['selfRestart: sends restart prompt (context-preserving)', 'hardRestart: fresh context (71h rotation)', 'autoCommit: execSync git, credential filter, 10MB script cap', 'checkGoalStaleness audits GOALS.md age'],
+    tag: ['all', 'bus'], critical: true
+  }),
+  N('bus-cron-state', 'Bus', 'bus/cron-state.ts', 'fire tracker', 740, 940, 320, 60, 'bus', {
+    role: 'Cron state utilities: updateCronFire (last/next), parseDurationMs, readCronState.',
+    plain: 'Helper functions for cron scheduling. Tracks when crons fired and will fire next.',
+    path: 'src/bus/cron-state.ts',
+    notes: ['updateCronFire updates lastFiredAt + nextFireAt atomically', 'parseDurationMs: 5m → ms', 'readCronState aggregates across agents'],
+    tag: ['all', 'bus'], critical: false
+  }),
+  N('bus-save-output', 'Bus', 'bus/save-output.ts', 'deliverables', 740, 1020, 320, 60, 'bus', {
+    role: 'Deliverable management: saveOutput copies file, dedupes filenames, links to task.outputs[].',
+    plain: 'Agents save files (reports, data) as task deliverables. Auto-dedupes names.',
+    path: 'src/bus/save-output.ts',
+    notes: ['Lines 53-60: copies to orgs/<org>/deliverables/<agent>/<task_id>/', 'Filename collision: appends -1, -2, ...'],
+    tag: ['all', 'bus'], critical: false
+  }),
+  N('bus-knowledge-base', 'Bus', 'bus/knowledge-base.ts', 'KB I/O', 740, 1100, 320, 60, 'bus', {
+    role: 'KB I/O: queryKnowledgeBase (semantic search), ingestKnowledgeBase, ensureKBDirs.',
+    plain: 'Shared knowledge repository. Agents store facts, retrieve by semantic search.',
+    path: 'src/bus/knowledge-base.ts',
+    notes: ['Storage: state/orgs/<org>/knowledge-base/', 'queryKnowledgeBase: BM25 or semantic search', 'ingestKnowledgeBase: JSONL append'],
+    tag: ['all', 'bus'], critical: false
+  }),
+  N('bus-metrics', 'Bus', 'bus/metrics.ts', 'BQ usage upload', 740, 1180, 320, 70, 'bus', {
+    role: 'System metrics: collectMetrics, storeUsageData (BigQuery upload), checkUpstream, collectTelegramCommands.',
+    plain: 'Analytics. Agents report usage, metrics flow to BigQuery for dashboard.',
+    path: 'src/bus/metrics.ts',
+    notes: ['collectMetrics parses Claude API usage, calculates cost', 'storeUsageData posts to dashboard /api/metrics', 'ALERT_5H, ALERT_7D: credential rotation thresholds'],
+    tag: ['all', 'bus'], critical: false
+  }),
+  N('bus-oauth', 'Bus', 'bus/oauth.ts', '3rd-party tokens', 740, 1280, 320, 60, 'bus', {
+    role: 'OAuth token management: refreshOAuthToken, rotateOAuth, loadAccounts, checkUsageApi.',
+    plain: 'Manages third-party credentials (Twitter, TikTok). Tracks expiry, auto-rotates.',
+    path: 'src/bus/oauth.ts',
+    notes: ['Storage: .cortextos/state/<org>/accounts.json', 'Types: twitter_oauth, tiktok_oauth', 'ALERT_5H/ALERT_7D expiry warnings'],
+    tag: ['all', 'bus'], critical: false
+  }),
+  N('bus-catalog', 'Bus', 'bus/catalog.ts', 'community skills', 740, 1350, 320, 50, 'bus', {
+    role: 'Community skill/agent browsing: browseCatalog, installCommunityItem, submitCommunityItem.',
+    plain: 'Agents discover and install skills from the community library.',
+    path: 'src/bus/catalog.ts',
+    notes: ['Catalog: community/skills/, community/agents/', 'installCommunityItem copies into agent .claude/skills/'],
+    tag: ['all', 'bus', 'skills'], critical: false
+  }),
+  N('bus-hooks', 'Bus', 'bus/hooks.ts', 'Claude Code hooks', 1140, 540, 240, 70, 'hooks', {
+    role: 'Claude Code hook utilities: parse hook input, Telegram decisions, permission keyboards, question formatting.',
+    plain: 'Helper functions for Claude Code hook scripts running inside agent PTY sessions.',
+    path: 'src/bus/hooks.ts',
+    notes: ['Lines 14-36: readStdin, parseHookInput, loadEnv', 'Lines 94-107: outputDecision, waitForResponseFile', 'Lines 233-253: buildPermissionKeyboard / buildPlanKeyboard / buildAskSingleSelectKeyboard'],
+    tag: ['all', 'hooks'], critical: false
+  }),
+
+  // PTY
+  N('pty-agent-pty', 'PTY', 'pty/agent-pty.ts', 'Claude Code wrapper', 1140, 120, 240, 80, 'pty', {
+    role: 'Claude Code PTY wrapper: spawn (fresh/continue), write, read, kill, resize.',
+    plain: 'Manages the Claude Code process. Spawns with env, reads output, sends input.',
+    path: 'src/pty/agent-pty.ts',
+    notes: ['Lines 31-44: constructor with OutputBuffer, CtxEnv, AgentConfig', 'Lines 52-80: spawn(mode, prompt) lazily loads node-pty, sets CTX_* env, sources secrets.env', 'OutputBuffer tracks stdout for bootstrap pattern detection'],
+    tag: ['all', 'daemon'], critical: true
+  }),
+  N('pty-codex-app-server-pty', 'PTY', 'codex-app-server-pty.ts', 'OpenAI Codex', 1140, 220, 240, 80, 'pty', {
+    role: 'Codex (OpenAI gpt-5-codex) runtime adapter: wraps codex-app-server binary, WebSocket, Telegram forwarding.',
+    plain: 'Alternative to Claude Code. Lets agents run on OpenAI Codex instead.',
+    path: 'src/pty/codex-app-server-pty.ts',
+    notes: ['Spawns codex-app-server + WebSocket listener', 'Agent lifecycle: start, send message, read response', 'Forwards messages to Telegram via TelegramAPI'],
+    tag: ['all', 'daemon'], critical: false
+  }),
+  N('pty-inject', 'PTY', 'pty/inject.ts', 'TTY keystrokes', 1140, 320, 240, 70, 'pty', {
+    role: 'TTY input injection: key sequences (Ctrl+U, Enter, Ctrl+C) to send text/signals safely.',
+    plain: 'Sends keypresses and text into the Claude Code PTY.',
+    path: 'src/pty/inject.ts',
+    notes: ['KEYS.send: Ctrl+U (clear) + typed text + Enter', 'KEYS exports interrupt, kill, quit, eof', 'Called by FastChecker for Telegram/cron injection'],
+    tag: ['all', 'daemon'], critical: true
+  }),
+  N('pty-output-buffer', 'PTY', 'pty/output-buffer.ts', 'rolling stdout', 1140, 410, 240, 70, 'pty', {
+    role: 'Rolling stdout buffer: tracks last N lines, detects bootstrap pattern (agent ready), persists to log.',
+    plain: 'Reads Claude Code output and buffers it. Detects when the agent is ready.',
+    path: 'src/pty/output-buffer.ts',
+    notes: ['lineLimit 1000, logPath, bootstrapPattern', 'onData appends to circular buffer + log file', 'isBootstrapped checks pattern (ready state)'],
+    tag: ['all', 'daemon'], critical: false
+  }),
+
+  // Telegram
+  N('telegram-api', 'Telegram', 'telegram/api.ts', 'Bot API client', 1140, 640, 240, 80, 'telegram', {
+    role: 'Telegram Bot API client (native fetch, no deps): sendMessage, getMe, getChat, validateCredentials.',
+    plain: 'Talks to Telegram servers. Sends messages, validates credentials.',
+    path: 'src/telegram/api.ts',
+    notes: ['Lines 28-46: ValidateCredentialsResult tagged union', 'validateCredentials: getMe + getChat', 'formatValidateError never leaks BOT_TOKEN'],
+    tag: ['all', 'telegram'], critical: false
+  }),
+  N('telegram-poller', 'Telegram', 'telegram/poller.ts', 'long-poll updates', 1140, 740, 240, 80, 'telegram', {
+    role: 'Telegram polling loop: long-poll updates, parse inline button callbacks, inject via FastChecker.',
+    plain: 'Listens for messages in Telegram chat. Forwards them to the agent.',
+    path: 'src/telegram/poller.ts',
+    notes: ['getUpdates with long-poll timeout', 'Parses callback_query (button presses) + text', 'Dedupes via update_id'],
+    tag: ['all', 'telegram'], critical: false
+  }),
+  N('telegram-media', 'Telegram', 'telegram/media.ts', 'photo/voice/file', 1140, 840, 240, 60, 'telegram', {
+    role: 'Media handling: download photo/document/video/voice, save to deliverables, transcription hook.',
+    plain: 'Agents receive files and voice from Telegram. Downloads and saves them.',
+    path: 'src/telegram/media.ts',
+    notes: ['Handles photo, document, video, voice', 'Downloads to deliverables tree', 'Voice transcription via transcribe.ts'],
+    tag: ['all', 'telegram'], critical: false
+  }),
+  N('telegram-logging', 'Telegram', 'telegram/logging.ts', 'message audit', 1140, 910, 240, 50, 'telegram', {
+    role: 'Telegram audit: recordInboundTelegram, logOutboundMessage, cacheLastSent, buildRecentHistory.',
+    plain: 'Records Telegram history for debugging and audit.',
+    path: 'src/telegram/logging.ts',
+    notes: ['Writes state/<agent>/telegram-messages.jsonl', 'buildRecentHistory returns last N (for agent context)'],
+    tag: ['all', 'telegram'], critical: false
+  }),
+
+  // Storage / Utils
+  N('types-index', 'Storage', 'types/index.ts', 'shared types', 1460, 120, 240, 80, 'storage', {
+    role: 'Core types: Priority, InboxMessage, Task, Event, Heartbeat, Approval, AgentConfig, CronDefinition.',
+    plain: 'Shared data structures used throughout cortextOS.',
+    path: 'src/types/index.ts',
+    notes: ['Lines 1-13: Priority + PRIORITY_MAP for sorting', 'Lines 15-26: InboxMessage with optional sig', 'Lines 28-71: Task with blocked_by DAG, outputs[]', 'Lines 99-137: Heartbeat, Approval, AgentConfig, CronDefinition'],
+    tag: ['all', 'storage'], critical: true
+  }),
+  N('utils-atomic', 'Storage', 'utils/atomic.ts', 'safe writes', 1460, 220, 240, 70, 'storage', {
+    role: 'Atomic file ops: atomicWriteSync (write + rename), ensureDir.',
+    plain: 'Safely writes files so agents never see partial data. Used everywhere in bus/.',
+    path: 'src/utils/atomic.ts',
+    notes: ['atomicWriteSync: write to temp, rename to target (POSIX atomic)', 'Prevents corruption from concurrent bus ops'],
+    tag: ['all', 'storage'], critical: true
+  }),
+  N('utils-lock', 'Storage', 'utils/lock.ts', 'lock files', 1460, 310, 240, 70, 'storage', {
+    role: 'File-based locking: acquireLock + releaseLock for serializing concurrent bus operations.',
+    plain: 'Prevents two agents from modifying the same file at once.',
+    path: 'src/utils/lock.ts',
+    notes: ['acquireLock: lock file + exponential backoff retry', 'releaseLock: deletes lock file', 'Used in message, task, approval, cron ops'],
+    tag: ['all', 'storage'], critical: true
+  }),
+  N('utils-paths', 'Storage', 'utils/paths.ts', 'BusPaths resolver', 1460, 400, 240, 70, 'storage', {
+    role: 'Path resolution: resolvePaths (computes BusPaths per agent), getIpcPath.',
+    plain: 'Figures out where agent state/config/inbox lives.',
+    path: 'src/utils/paths.ts',
+    notes: ['resolvePaths returns BusPaths { inboxDir, taskDir, stateDir, ... }', 'getIpcPath: /tmp/cortextos-{instanceId}.sock'],
+    tag: ['all', 'storage'], critical: true
+  }),
+  N('utils-env', 'Storage', 'utils/env.ts', 'CTX_* resolver', 1460, 490, 240, 60, 'storage', {
+    role: 'Environment resolution: resolveEnv assembles CtxEnv from CTX_* vars.',
+    plain: 'Reads env vars that tell cortextOS where it’s running and who the agent is.',
+    path: 'src/utils/env.ts',
+    notes: ['Returns CtxEnv { ctxRoot, agentName, org, instanceId, agentDir, projectRoot, frameworkRoot }', 'Defaults: CTX_INSTANCE_ID=default, CTX_ROOT=~/.cortextos/default'],
+    tag: ['all', 'storage'], critical: true
+  }),
+  N('utils-validate', 'Storage', 'utils/validate.ts', 'H9 input guards', 1460, 560, 240, 70, 'storage', {
+    role: 'Security (H9): validateAgentName, validatePriority, stripControlChars, credential pattern matching.',
+    plain: 'Input validation and security checks. Prevents path traversal, strips dangerous chars.',
+    path: 'src/utils/validate.ts',
+    notes: ['validateAgentName: /^[a-z0-9_-]+$/ (path-traversal guard)', 'stripControlChars removes control sequences from log data', 'CREDENTIAL_PATTERNS scrubs secrets before logging'],
+    tag: ['all', 'storage'], critical: true
+  }),
+
+  // Dashboard
+  N('dashboard-middleware', 'Dashboard', 'dashboard middleware.ts', 'JWT + CORS', 1460, 720, 240, 70, 'dashboard', {
+    role: 'Next.js auth middleware: JWT verification (jose), CORS origin validation, session checking.',
+    plain: 'Protects dashboard routes. Verifies user is logged in.',
+    path: 'dashboard/src/middleware.ts',
+    notes: ['Lines 13-43: buildAllowedOrigins from env', 'JWT via jose.jwtVerify', 'Rejects wildcard CORS, validates URL format'],
+    tag: ['all', 'dashboard'], critical: false
+  }),
+  N('dashboard-layout', 'Dashboard', 'app/layout.tsx', 'root layout', 1460, 810, 240, 60, 'dashboard', {
+    role: 'Next.js root layout: theme provider, session provider, Sora/JetBrains fonts.',
+    plain: 'Sets up the web dashboard. Every page inherits this.',
+    path: 'dashboard/src/app/layout.tsx',
+    notes: ['Lines 1-50: metadata, viewport, fonts', 'SessionProvider + ThemeProvider + TooltipProvider wrapping', 'suppressHydrationWarning for theme detection'],
+    tag: ['all', 'dashboard'], critical: false
+  }),
+  N('dashboard-ipc-client', 'Dashboard', 'lib/ipc-client.ts', 'daemon RPC', 1460, 880, 240, 60, 'dashboard', {
+    role: 'IPC client for dashboard: talks to daemon via Unix socket (fire-cron, get-status, update-cron).',
+    plain: 'Dashboard API library. Lets dashboard control the daemon.',
+    path: 'dashboard/src/lib/ipc-client.ts',
+    notes: ['Socket: /tmp/cortextos-{instanceId}.sock', 'Methods: fireCron, getStatus, updateCron', 'Error handling for daemon-down'],
+    tag: ['all', 'dashboard'], critical: false
+  }),
+
+  // Templates
+  N('templates-agent', 'Templates', 'templates/agent/', 'default scaffold', 1780, 120, 220, 80, 'templates', {
+    role: 'Default agent scaffold: config.json, IDENTITY.md, working_directory, .claude/skills symlink.',
+    plain: 'Starting point for new agents. Default config + example skills.',
+    path: 'templates/agent/',
+    notes: ['config.json: runtime, model, working_directory, enabled', 'IDENTITY.md: agent persona', 'Skills via .claude/skills symlink for Claude Code discovery'],
+    tag: ['all', 'templates'], critical: false
+  }),
+  N('templates-orchestrator', 'Templates', 'templates/orchestrator/', 'coordinator', 1780, 220, 220, 80, 'templates', {
+    role: 'Orchestrator template: coordinates other agents, daily goals/approvals, morning/evening reviews.',
+    plain: 'A special agent that runs the team. Assigns tasks, approves actions.',
+    path: 'templates/orchestrator/',
+    notes: ['Orchestration-specific IDENTITY.md', 'Skills: goal-management, approvals, activity-channel', 'Morning/evening review hooks'],
+    tag: ['all', 'templates'], critical: false
+  }),
+  N('templates-analyst', 'Templates', 'templates/analyst/', 'theta-wave', 1780, 320, 220, 70, 'templates', {
+    role: 'Analyst template: metrics, theta-wave autoresearch, fleet health, overnight experiments.',
+    plain: 'A data-focused agent. Runs research cycles overnight, collects metrics.',
+    path: 'templates/analyst/',
+    notes: ['Skills: theta-wave, metrics, system-diagnostics, autoresearch', 'Experiment lifecycle management', 'Overnight research coordination'],
+    tag: ['all', 'templates'], critical: false
+  }),
+
+  // Skills + Tests
+  N('community-skills', 'Skills', 'community/skills/', '20+ skills', 1780, 480, 220, 100, 'skills', {
+    role: 'Skill library: human-tasks, morning-review, theta-wave, agent-management, red-team, knowledge-base, etc.',
+    plain: 'Ready-made tools agents can use.',
+    path: 'community/skills/',
+    notes: ['20+ skills with SKILL.md + metadata', 'Installed via cortextos bus install-community-item', 'Includes: red-team, brand-guide, architecture-map (newly added)'],
+    tag: ['all', 'skills'], critical: false
+  }),
+  N('tests-suite', 'Tests', 'tests/', '98 test files', 1780, 680, 220, 100, 'tests', {
+    role: 'Test suite: unit (bus, cron, PTY), integration (multi-agent, codex), E2E (lifecycle).',
+    plain: 'Automated tests ensure the system works.',
+    path: 'tests/',
+    notes: ['98 test files across unit/integration/e2e', 'test:codex target runs Codex-specific tests', 'test:playwright runs Next.js dashboard tests'],
+    tag: ['all', 'tests'], critical: false
+  })
+];
+
+const edges = [
+  { from: 'cli-index', to: 'cli-start', kind: 'api', label: 'startCommand', tag: ['all','cli'] },
+  { from: 'cli-index', to: 'cli-bus', kind: 'api', label: 'busCommand', tag: ['all','cli'] },
+  { from: 'cli-start', to: 'daemon-index', kind: 'critical', label: 'spawn daemon.js', tag: ['all','cli'] },
+  { from: 'cli-bus', to: 'bus-index', kind: 'critical', label: 'import bus modules', tag: ['all','cli','bus'] },
+  { from: 'bus-index', to: 'bus-message', kind: 'critical', label: 're-export', tag: ['all','bus'] },
+  { from: 'bus-index', to: 'bus-task', kind: 'critical', label: 're-export', tag: ['all','bus'] },
+  { from: 'bus-index', to: 'bus-event', kind: 'normal', label: 're-export', tag: ['all','bus'] },
+  { from: 'bus-index', to: 'bus-crons', kind: 'normal', label: 're-export', tag: ['all','bus'] },
+  { from: 'bus-index', to: 'bus-system', kind: 'normal', label: 're-export', tag: ['all','bus'] },
+  { from: 'daemon-index', to: 'daemon-agent-manager', kind: 'critical', label: 'instantiate', tag: ['all','daemon'] },
+  { from: 'daemon-agent-manager', to: 'daemon-agent-process', kind: 'critical', label: 'spawn per agent', tag: ['all','daemon'] },
+  { from: 'daemon-agent-manager', to: 'daemon-fast-checker', kind: 'critical', label: 'create per agent', tag: ['all','daemon'] },
+  { from: 'daemon-agent-manager', to: 'daemon-cron-scheduler', kind: 'api', label: 'manage per agent', tag: ['all','daemon'] },
+  { from: 'daemon-fast-checker', to: 'bus-message', kind: 'critical', label: 'checkInbox/ack', tag: ['all','daemon','bus'] },
+  { from: 'daemon-fast-checker', to: 'pty-inject', kind: 'critical', label: 'KEYS.send', tag: ['all','daemon'] },
+  { from: 'daemon-cron-scheduler', to: 'daemon-agent-manager', kind: 'api', label: 'injectAgent', tag: ['all','daemon'] },
+  { from: 'daemon-ipc-server', to: 'daemon-agent-manager', kind: 'api', label: 'fire-cron', tag: ['all','daemon'] },
+  { from: 'daemon-agent-process', to: 'pty-agent-pty', kind: 'critical', label: 'spawn PTY', tag: ['all','daemon'] },
+  { from: 'daemon-agent-process', to: 'pty-codex-app-server-pty', kind: 'normal', label: 'codex runtime', tag: ['all','daemon'] },
+  { from: 'pty-agent-pty', to: 'pty-output-buffer', kind: 'normal', label: 'buffer stdout', tag: ['all','daemon'] },
+  { from: 'daemon-agent-manager', to: 'telegram-poller', kind: 'api', label: 'per-agent poller', tag: ['all','daemon','telegram'] },
+  { from: 'telegram-poller', to: 'daemon-fast-checker', kind: 'api', label: 'inject formatted msg', tag: ['all','telegram'] },
+  { from: 'telegram-poller', to: 'telegram-api', kind: 'api', label: 'getUpdates', tag: ['all','telegram'] },
+  { from: 'telegram-poller', to: 'telegram-media', kind: 'normal', label: 'process media', tag: ['all','telegram'] },
+  { from: 'daemon-agent-manager', to: 'telegram-logging', kind: 'normal', label: 'audit', tag: ['all','daemon','telegram'] },
+  { from: 'bus-message', to: 'utils-atomic', kind: 'normal', label: 'atomicWriteSync', tag: ['all','bus','storage'] },
+  { from: 'bus-task', to: 'utils-atomic', kind: 'normal', label: 'atomicWriteSync', tag: ['all','bus','storage'] },
+  { from: 'bus-message', to: 'utils-lock', kind: 'normal', label: 'acquireLock', tag: ['all','bus','storage'] },
+  { from: 'bus-task', to: 'utils-lock', kind: 'normal', label: 'acquireLock', tag: ['all','bus','storage'] },
+  { from: 'cli-bus', to: 'utils-paths', kind: 'normal', label: 'resolvePaths', tag: ['all','cli','storage'] },
+  { from: 'cli-bus', to: 'utils-env', kind: 'normal', label: 'resolveEnv', tag: ['all','cli','storage'] },
+  { from: 'bus-message', to: 'utils-validate', kind: 'normal', label: 'validateAgentName', tag: ['all','bus','storage'] },
+  { from: 'dashboard-ipc-client', to: 'daemon-ipc-server', kind: 'api', label: 'unix socket RPC', tag: ['all','dashboard','daemon'] },
+  { from: 'bus-approval', to: 'bus-message', kind: 'api', label: 'notify via inbox', tag: ['all','bus'] },
+  { from: 'bus-system', to: 'bus-message', kind: 'api', label: 'restart prompt', tag: ['all','bus'] },
+  { from: 'daemon-fast-checker', to: 'bus-approval', kind: 'api', label: 'updateApproval', tag: ['all','daemon','bus'] },
+  { from: 'bus-approval', to: 'telegram-api', kind: 'api', label: 'sendMessage', tag: ['all','bus','telegram'] }
+];
+
+// ---------- Renderer ----------
+const viewport = document.getElementById('viewport');
+const svg = document.getElementById('svg');
+
+const clusterColorMap = {
+  Entry: '#4ea1ff', Daemon: '#c792ea', Bus: '#7bd389', PTY: '#ffb86b',
+  Telegram: '#4ea1ff', Storage: '#ffb86b', Dashboard: '#4ea1ff',
+  Templates: '#c792ea', Skills: '#c792ea', Tests: '#8a8a8a'
+};
+const nodeColorMap = {
+  entry: '#4ea1ff', daemon: '#c792ea', bus: '#7bd389', pty: '#ffb86b',
+  telegram: '#4ea1ff', storage: '#ffb86b', dashboard: '#4ea1ff',
+  templates: '#c792ea', skills: '#c792ea', tests: '#8a8a8a', hooks: '#f5b942'
+};
+
+function darken(hex, amt = 0.12) {
+  const h = hex.replace('#','');
+  const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+  const f = c => Math.max(0, Math.round(c * amt));
+  return `rgba(${f(r)},${f(g)},${f(b)},0.5)`;
+}
+
+// Draw clusters
+clusters.forEach(c => {
+  const color = clusterColorMap[c.id] || '#666';
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', c.x); rect.setAttribute('y', c.y);
+  rect.setAttribute('width', c.w); rect.setAttribute('height', c.h);
+  rect.setAttribute('rx', 10);
+  rect.setAttribute('class', 'cluster-rect');
+  rect.setAttribute('stroke', color);
+  rect.setAttribute('fill', color);
+  viewport.appendChild(rect);
+
+  const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  txt.setAttribute('x', c.x + 12); txt.setAttribute('y', c.y + 20);
+  txt.setAttribute('class', 'cluster-label');
+  txt.textContent = c.label;
+  viewport.appendChild(txt);
+});
+
+// Draw edges
+const edgeEls = {};
+edges.forEach((e, i) => {
+  const from = nodes.find(n => n.id === e.from);
+  const to = nodes.find(n => n.id === e.to);
+  if (!from || !to) return;
+  const fx = from.x + from.w, fy = from.y + from.h / 2;
+  const tx = to.x, ty = to.y + to.h / 2;
+  const dx = Math.abs(tx - fx);
+  const cx1 = fx + Math.min(dx * 0.45, 140);
+  const cx2 = tx - Math.min(dx * 0.45, 140);
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M ${fx} ${fy} C ${cx1} ${fy}, ${cx2} ${ty}, ${tx} ${ty}`);
+  path.setAttribute('class', 'edge ' + e.kind);
+  path.setAttribute('marker-end', `url(#arrow-${e.kind})`);
+  path.dataset.eid = i;
+  viewport.appendChild(path);
+  edgeEls[i] = { path, edge: e };
+
+  if (e.label) {
+    const mx = (fx + tx) / 2;
+    const my = (fy + ty) / 2 - 4;
+    const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    lbl.setAttribute('x', mx); lbl.setAttribute('y', my);
+    lbl.setAttribute('text-anchor', 'middle');
+    lbl.setAttribute('class', 'edge-label');
+    lbl.dataset.eid = i;
+    lbl.textContent = e.label;
+    viewport.appendChild(lbl);
+    edgeEls[i].label = lbl;
+  }
+});
+
+// Draw nodes
+const nodeEls = {};
+nodes.forEach(n => {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  g.setAttribute('class', 'node' + (n.critical ? ' critical' : ''));
+  g.dataset.nid = n.id;
+
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', n.x); rect.setAttribute('y', n.y);
+  rect.setAttribute('width', n.w); rect.setAttribute('height', n.h);
+  rect.setAttribute('rx', 8);
+  rect.setAttribute('stroke', nodeColorMap[n.color] || '#888');
+  g.appendChild(rect);
+
+  const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  lbl.setAttribute('x', n.x + 12); lbl.setAttribute('y', n.y + 22);
+  lbl.setAttribute('class', 'label');
+  lbl.textContent = n.label;
+  g.appendChild(lbl);
+
+  const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  sub.setAttribute('x', n.x + 12); sub.setAttribute('y', n.y + 40);
+  sub.setAttribute('class', 'sub');
+  sub.textContent = n.sub || '';
+  g.appendChild(sub);
+
+  g.addEventListener('click', e => { e.stopPropagation(); selectNode(n.id); });
+  g.addEventListener('mouseenter', () => hoverNode(n.id));
+  g.addEventListener('mouseleave', () => hoverNode(null));
+  viewport.appendChild(g);
+  nodeEls[n.id] = g;
+});
+
+// ---------- Filters ----------
+const chips = ['overview','all','cli','bus','daemon','hooks','dashboard','telegram','storage','skills','tests'];
+const chipsEl = document.getElementById('chips');
+let activeFilter = 'overview';
+chips.forEach(c => {
+  const el = document.createElement('div');
+  el.className = 'chip' + (c === activeFilter ? ' active' : '');
+  el.textContent = c;
+  el.onclick = () => setFilter(c);
+  chipsEl.appendChild(el);
+});
+
+function setFilter(f) {
+  activeFilter = f;
+  [...chipsEl.children].forEach(c => c.classList.toggle('active', c.textContent === f));
+  Object.entries(nodeEls).forEach(([nid, g]) => {
+    const n = nodes.find(x => x.id === nid);
+    let visible = true;
+    if (f === 'overview') visible = !!n.critical;
+    else if (f !== 'all') visible = (n.tag || []).includes(f);
+    g.classList.toggle('dimmed', !visible);
+  });
+  Object.entries(edgeEls).forEach(([eid, obj]) => {
+    const e = obj.edge;
+    let visible = true;
+    if (f === 'overview') visible = e.kind === 'critical';
+    else if (f !== 'all') visible = (e.tag || []).includes(f);
+    obj.path.classList.toggle('dimmed', !visible);
+    if (obj.label) obj.label.classList.toggle('dimmed', !visible);
+  });
+}
+setFilter('overview');
+
+// ---------- Selection / sidebar ----------
+const sidebar = document.getElementById('sidebar');
+let selectedId = null;
+function selectNode(nid) {
+  selectedId = nid;
+  Object.entries(nodeEls).forEach(([id, g]) => g.classList.toggle('selected', id === nid));
+  renderSidebar(nid);
+}
+function hoverNode(nid) {
+  if (selectedId) return;
+  if (nid) renderSidebar(nid); else renderDefaultSidebar();
+}
+
+function renderSidebar(nid) {
+  const n = nodes.find(x => x.id === nid); if (!n) return;
+  const inc = edges.filter(e => e.to === nid);
+  const out = edges.filter(e => e.from === nid);
+  sidebar.innerHTML = `
+    <h2>${n.label}</h2>
+    <p class="role">${n.role}</p>
+    <p class="plain">${n.plain}</p>
+    <h3>Path</h3>
+    <p class="path">${n.path}</p>
+    ${n.notes && n.notes.length ? `<h3>Notes</h3><ul>${n.notes.map(x => `<li>${x}</li>`).join('')}</ul>` : ''}
+    ${inc.length ? `<h3>Incoming (${inc.length})</h3><div class="edge-list">${inc.map(e => `<div class="ed"><span class="from-to">${e.from}</span> → ${nid} <span class="lbl">· ${e.label || ''}</span></div>`).join('')}</div>` : ''}
+    ${out.length ? `<h3>Outgoing (${out.length})</h3><div class="edge-list">${out.map(e => `<div class="ed">${nid} → <span class="from-to">${e.to}</span> <span class="lbl">· ${e.label || ''}</span></div>`).join('')}</div>` : ''}
+  `;
+}
+
+function renderDefaultSidebar() {
+  sidebar.innerHTML = `
+    <h2>Notable findings</h2>
+    <p class="plain">Click any node for details. Use filter chips above to focus on a feature surface.</p>
+    <h3>Critical path (the seam)</h3>
+    <p>CLI (cortextos start | bus &lt;verb&gt;) → daemon (AgentManager spins up AgentProcess + FastChecker per agent) → daemon injects Telegram + inbox messages into Claude Code PTY via TTY keystrokes → Claude Code calls bus modules → atomic writes to ~/.cortextos/state/ (file locks per op). The file bus IS the central nervous system.</p>
+    <h3>Top 3 surprises</h3>
+    <ul>
+      <li><strong>Context-rotation circuit breaker</strong> — fast-checker.ts has a 71-hour context monitor; 3 restarts in 15 min triggers a cooldown to prevent restart loops.</li>
+      <li><strong>Defense-in-depth on bus inputs</strong> — agent-name regex validation (path-traversal guard), HMAC-SHA256 message signing (optional, per-instance key), credential pattern scrub before any append to events.jsonl.</li>
+      <li><strong>30-second manual-fire cooldown</strong> — IPC handleFireCron blocks dashboard cron-spam per (agent, cron) tuple.</li>
+    </ul>
+    <h3>Dead code</h3>
+    <p class="plain">None surfaced by archaeology pass (limited to bus/ and utils/ exports).</p>
+  `;
+}
+
+svg.addEventListener('click', () => { selectedId = null; Object.values(nodeEls).forEach(g => g.classList.remove('selected')); renderDefaultSidebar(); });
+
+// ---------- Pan + zoom ----------
+let viewBox = { x: 0, y: 0, w: 2400, h: 1500 };
+function applyViewBox() { svg.setAttribute('viewBox', `${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`); }
+function fit() { viewBox = { x: 0, y: 0, w: 2400, h: 1500 }; applyViewBox(); }
+function reset() { fit(); }
+function zoom(factor) {
+  const cx = viewBox.x + viewBox.w / 2, cy = viewBox.y + viewBox.h / 2;
+  viewBox.w /= factor; viewBox.h /= factor;
+  viewBox.x = cx - viewBox.w / 2; viewBox.y = cy - viewBox.h / 2;
+  applyViewBox();
+}
+fit();
+
+svg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.1 : 0.91;
+  const pt = svg.createSVGPoint();
+  pt.x = e.clientX; pt.y = e.clientY;
+  const ctm = svg.getScreenCTM().inverse();
+  const sp = pt.matrixTransform(ctm);
+  const nx = sp.x - (sp.x - viewBox.x) / factor;
+  const ny = sp.y - (sp.y - viewBox.y) / factor;
+  viewBox.w /= factor; viewBox.h /= factor;
+  viewBox.x = nx; viewBox.y = ny;
+  applyViewBox();
+}, { passive: false });
+
+let dragging = false, dragStart = null, viewStart = null;
+const stage = document.getElementById('stage');
+svg.addEventListener('mousedown', e => {
+  if (e.target.closest('.node')) return;
+  dragging = true; dragStart = { x: e.clientX, y: e.clientY };
+  viewStart = { x: viewBox.x, y: viewBox.y };
+  stage.classList.add('dragging');
+});
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  const ctm = svg.getScreenCTM().inverse();
+  const dx = (dragStart.x - e.clientX) * ctm.a;
+  const dy = (dragStart.y - e.clientY) * ctm.a;
+  viewBox.x = viewStart.x + dx; viewBox.y = viewStart.y + dy;
+  applyViewBox();
+});
+window.addEventListener('mouseup', () => { dragging = false; stage.classList.remove('dragging'); });
+</script>
+</body>
+</html>
