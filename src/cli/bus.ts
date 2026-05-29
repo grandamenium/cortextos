@@ -1359,6 +1359,41 @@ busCommand
     }
   });
 
+busCommand
+  .command('react-telegram')
+  .description("Set the bot's reaction on a Telegram message (single emoji ack)")
+  .argument('<chat-id>', 'Telegram chat ID')
+  .argument('<message-id>', 'ID of the message to react to')
+  .argument('[emoji]', 'Reaction emoji (default: 👍). Pass an empty string to clear.', '👍')
+  .action(async (chatId: string, messageId: string, emoji: string) => {
+    const env = resolveEnv();
+    let botToken = '';
+    if (env.agentDir) {
+      const { readFileSync, existsSync } = require('fs');
+      const agentEnv = require('path').join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const match = readFileSync(agentEnv, 'utf-8').match(/^BOT_TOKEN=(.+)$/m);
+        if (match?.[1]?.trim()) botToken = match[1].trim();
+      }
+    }
+    if (!botToken) botToken = process.env.BOT_TOKEN || '';
+    if (!botToken) {
+      console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
+      process.exit(1);
+    }
+
+    const api = new TelegramAPI(botToken);
+    try {
+      // Empty string -> clear reaction; otherwise set the supplied emoji.
+      const value = emoji === '' ? null : emoji;
+      await api.setMessageReaction(parseInt(chatId, 10), parseInt(messageId, 10), value);
+      console.log(value ? `Reacted ${value}` : 'Reaction cleared');
+    } catch (err: any) {
+      console.error(`Failed to set reaction: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
 // ---------------------------------------------------------------------------
 // Agent discovery and skill discovery
 // ---------------------------------------------------------------------------

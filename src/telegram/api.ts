@@ -572,6 +572,28 @@ export class TelegramAPI {
   }
 
   /**
+   * Set the bot's reaction on an existing message. Single emoji per call;
+   * pass `null` (or omit) to clear. Telegram's setMessageReaction endpoint
+   * accepts a ReactionType list (`emoji` or `custom_emoji`); this wrapper
+   * covers the `emoji` case since bots can't currently send custom emoji
+   * as reactions.
+   */
+  async setMessageReaction(
+    chatId: string | number,
+    messageId: number,
+    emoji: string | null,
+  ): Promise<any> {
+    const reaction = emoji
+      ? [{ type: 'emoji', emoji }]
+      : [];
+    return this.post('setMessageReaction', {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction,
+    });
+  }
+
+  /**
    * Send typing indicator.
    */
   async sendChatAction(chatId: string | number, action: string = 'typing'): Promise<any> {
