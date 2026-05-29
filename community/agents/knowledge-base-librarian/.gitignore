@@ -1,0 +1,8 @@
+.env
+memory/*.md
+kb/raw/*
+!kb/raw/.gitkeep
+kb/normalized/*
+!kb/normalized/.gitkeep
+kb/reports/*.md
+tmp/

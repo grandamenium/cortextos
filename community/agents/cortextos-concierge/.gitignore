@@ -1,0 +1,4 @@
+.env
+memory/*.md
+concierge/*.md
+tmp/

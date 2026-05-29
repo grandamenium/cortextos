@@ -1,0 +1,5 @@
+.env
+memory/*.md
+learning/reviews/*.md
+learning/progress.jsonl
+tmp/

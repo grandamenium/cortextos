@@ -1,7 +1,91 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-04-06T00:00:00Z",
+  "updated_at": "2026-05-13T00:00:00Z",
   "items": [
+    {
+      "name": "cortextos-concierge",
+      "description": "First-install cortextOS concierge — interactive /setup, tool discovery, starter template recommendations, first-week rollout, human tasks, and first useful workflow guidance",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["onboarding", "first-install", "concierge", "setup", "templates", "tools"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/cortextos-concierge",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "knowledge-base-librarian",
+      "description": "Knowledge base librarian — interactive /setup, source registry, privacy-aware ingestion, metadata/citation hygiene, stale-doc reviews, and specialist handoffs",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["knowledge-base", "docs", "ingestion", "rag", "search", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/knowledge-base-librarian",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "project-manager-agent",
+      "description": "Project manager agent — interactive /setup, project registry, task hygiene, blocker tracking, specialist handoffs, operating reviews, and stakeholder status drafts",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["project-management", "tasks", "blockers", "status", "handoffs", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/project-manager-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "sales-followup-agent",
+      "description": "Sales follow-up agent — interactive /setup, pipeline hygiene, CRM source-of-truth, lead follow-up cadences, truthful drafts, approvals, and sales handoffs",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["sales", "crm", "pipeline", "follow-up", "leads", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/sales-followup-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "customer-support-agent",
+      "description": "Customer support agent — interactive /setup, ticket triage, source-grounded reply drafts, escalation routing, FAQ gaps, and support intelligence",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["support", "tickets", "customer-success", "triage", "kb", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/customer-support-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "learning-coach-agent",
+      "description": "Learning coach agent — interactive /setup, curriculum building, study reviews, resource organization, active recall, progress tracking, and learning handoffs",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["learning", "coach", "curriculum", "study", "knowledge", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/learning-coach-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
+    {
+      "name": "automation-builder-agent",
+      "description": "Automation builder agent — interactive /setup, workflow discovery, automation scoring, runbooks, safety gates, dry-runs, and implementation handoffs",
+      "author": "cortextos",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": ["automation", "workflows", "runbooks", "no-code", "scripts", "setup"],
+      "review_status": "community",
+      "dependencies": [],
+      "install_path": "community/agents/automation-builder-agent",
+      "submitted_at": "2026-05-13T00:00:00Z"
+    },
     {
       "name": "agentic-crm-assistant",
       "description": "Agentic CRM personal assistant — reusable executive/personal assistant template with structured relationship memory, inbox/calendar/meeting workflows, full interactive setup, tool-agnostic connectors, CRM skills, and recurring assistant crons",

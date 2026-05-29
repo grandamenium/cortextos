@@ -1,0 +1,5 @@
+.env
+memory/*.md
+sales/reports/*.md
+sales/*.jsonl
+tmp/

@@ -1,0 +1,3 @@
+# Onboarding
+
+Run `/setup` first.
