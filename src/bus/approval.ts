@@ -346,6 +346,86 @@ export function listPendingApprovals(paths: BusPaths): Approval[] {
 }
 
 /**
+ * Reconcile local pending approvals against orch_approvals in Supabase.
+ *
+ * For each pending approval with a linked_orch_approval_id, queries the
+ * orch_approvals table. Any row whose status is no longer 'pending'
+ * (i.e. resolved via the dashboard) is written to the local resolved/
+ * directory so that listPendingApprovals stops surfacing it as pending.
+ *
+ * This fixes the approval state drift where dashboard-resolved approvals
+ * remain visible as pending in `cortextos bus list-approvals`.
+ *
+ * No-ops gracefully if Supabase credentials are unavailable or the network
+ * call fails — local state is left unchanged.
+ */
+export async function reconcileOrchApprovals(
+  paths: BusPaths,
+  opts?: { supabaseUrl?: string; supabaseKey?: string },
+): Promise<void> {
+  const url = opts?.supabaseUrl
+    || process.env.SUPABASE_RGOS_URL
+    || process.env.SUPABASE_URL
+    || '';
+  const key = opts?.supabaseKey
+    || process.env.SUPABASE_RGOS_SERVICE_KEY
+    || process.env.SUPABASE_SERVICE_ROLE_KEY
+    || '';
+  if (!url || !key) return;
+
+  const pending = listPendingApprovals(paths);
+  const linked = pending.filter(a => a.linked_orch_approval_id);
+  if (linked.length === 0) return;
+
+  // Batch GET: fetch statuses for all linked IDs in one request
+  const ids = linked.map(a => a.linked_orch_approval_id!);
+  const orFilter = ids.map(id => `id.eq.${id}`).join(',');
+
+  let rows: Array<{ id: string; status: string }>;
+  try {
+    const res = await fetch(
+      `${url}/rest/v1/orch_approvals?or=(${encodeURIComponent(orFilter)})&select=id,status`,
+      {
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (!res.ok) return;
+    rows = await res.json() as Array<{ id: string; status: string }>;
+  } catch {
+    return; // Network failure — leave local state unchanged
+  }
+
+  // Identify rows resolved in Supabase (status != 'pending')
+  const resolvedInTable = new Map(
+    rows.filter(r => r.status !== 'pending').map(r => [r.id, r.status]),
+  );
+  if (resolvedInTable.size === 0) return;
+
+  const resolvedDir = join(paths.approvalDir, 'resolved');
+  ensureDir(resolvedDir);
+
+  for (const approval of linked) {
+    const orchStatus = resolvedInTable.get(approval.linked_orch_approval_id!);
+    if (!orchStatus) continue;
+    // Write to resolved/ — listPendingApprovals already filters pending entries
+    // that also exist in resolved/, so this suppresses the phantom pending without
+    // re-sending an inbox notification (the dashboard already handled delivery).
+    const resolvedPath = join(resolvedDir, `${approval.id}.json`);
+    if (!existsSync(resolvedPath)) {
+      const now = new Date().toISOString();
+      atomicWriteSync(resolvedPath, JSON.stringify({
+        ...approval,
+        status: orchStatus as ApprovalStatus,
+        resolved_at: now,
+        resolved_by: 'dashboard',
+        updated_at: now,
+      }));
+    }
+  }
+}
+
+/**
  * Read a single approval by id. Searches resolved/ first, then pending/.
  * Returns null if not found.
  */

@@ -4142,8 +4142,8 @@ busCommand
   .description('List pending approval requests')
   .option('--format <fmt>', 'Output format: json|text', 'json')
   .option('--all-orgs', 'Scan all orgs under CTX_ROOT (matches dashboard view)', false)
-  .action((opts: { format?: string; allOrgs?: boolean }) => {
-    const { listPendingApprovals } = require('../bus/approval.js');
+  .action(async (opts: { format?: string; allOrgs?: boolean }) => {
+    const { listPendingApprovals, reconcileOrchApprovals } = require('../bus/approval.js');
     const { readdirSync, existsSync } = require('fs');
     const { join, homedir: _homedir } = require('path');
     const { homedir } = require('os');
@@ -4162,10 +4162,14 @@ busCommand
         : [];
       for (const org of orgs) {
         const orgPaths = resolvePaths(env.agentName, env.instanceId, org);
+        // Reconcile dashboard-resolved approvals against orch_approvals before listing
+        await reconcileOrchApprovals(orgPaths).catch(() => {});
         approvals = approvals.concat(listPendingApprovals(orgPaths));
       }
     } else {
       const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+      // Reconcile dashboard-resolved approvals against orch_approvals before listing
+      await reconcileOrchApprovals(paths).catch(() => {});
       approvals = listPendingApprovals(paths);
     }
 
