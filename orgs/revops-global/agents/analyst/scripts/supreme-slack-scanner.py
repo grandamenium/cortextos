@@ -434,12 +434,21 @@ def scan(token: str, since_seconds: int) -> List[Dict[str, Any]]:
         {"types": "im", "limit": "200"},
         "channels",
     )
-    print(f"[scanner] {len(dms)} DMs", file=sys.stderr)
+    print(f"[scanner] {len(dms)} DMs total; pre-filtering by latest.ts > since_ts", file=sys.stderr)
 
+    active_dms = 0
     for conv in dms[:MAX_CONVERSATIONS]:
+        # Pre-filter: skip DMs whose latest message predates the since window.
+        # users.conversations returns a 'latest' object with a 'ts' field on IM
+        # channels. If absent, include the DM (conservative — no false-negatives).
+        latest_ts = float((conv.get("latest") or {}).get("ts") or 0)
+        if latest_ts and latest_ts < since_ts:
+            continue
         check_budget()
         ch_id = conv["id"]
         ch_name = f"DM:{user_name(conv.get('user'))}"
+        active_dms += 1
+        print(f"[scanner] DM {active_dms}: {ch_id} (latest {latest_ts:.0f})", file=sys.stderr)
 
         hist = slack_get(token, "conversations.history", {
             "channel": ch_id,
