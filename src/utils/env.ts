@@ -4,6 +4,7 @@ import { homedir } from 'os';
 import type { CtxEnv } from '../types/index.js';
 import { ensureDir } from './atomic.js';
 import { validateAgentName, validateOrgName } from './validate.js';
+import { stripBom } from './strip-bom.js';
 
 /**
  * Resolve the cortextOS environment context.
@@ -76,7 +77,10 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
     try {
       const contextPath = join(projectRoot, 'orgs', org, 'context.json');
       if (existsSync(contextPath)) {
-        const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
+        // stripBom: PowerShell/Notepad-saved context.json files have a BOM
+        // that breaks JSON.parse at position 0 — silent fallback to wrong
+        // timezone/orchestrator. See src/utils/strip-bom.ts for incident.
+        const ctx = JSON.parse(stripBom(readFileSync(contextPath, 'utf-8')));
         if (!timezone && ctx.timezone) timezone = ctx.timezone;
         if (!orchestrator && ctx.orchestrator) orchestrator = ctx.orchestrator;
       }
@@ -160,8 +164,13 @@ export function writeCortextosEnv(agentDir: string, env: CtxEnv): void {
 export function parseEnvFile(filePath: string): Record<string, string> {
   const result: Record<string, string> = {};
   try {
-    const content = readFileSync(filePath, 'utf-8');
-    for (const line of content.split('\n')) {
+    // stripBom + CRLF-aware split: Windows tooling (PowerShell Out-File,
+    // Notepad) writes .env files with a UTF-8 BOM at position 0 AND CRLF
+    // line endings. Without stripBom the first KEY line never matches
+    // because position 0 is the BOM byte; without the regex split, each
+    // value gets a trailing \r that breaks downstream validators.
+    const content = stripBom(readFileSync(filePath, 'utf-8'));
+    for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
       const eqIdx = trimmed.indexOf('=');

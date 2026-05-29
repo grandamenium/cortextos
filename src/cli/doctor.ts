@@ -305,6 +305,73 @@ export const doctorCommand = new Command('doctor')
       });
     }
 
+    // Template drift detection: compare every agent's .claude/settings.json
+    // hook blocks against the canonical template they were created from.
+    // Missing hook blocks silently disable critical features — Stop missing
+    // means last_idle.flag never writes, which is exactly the 2026-05-16
+    // analyst/smith production incident. This catches drift before it
+    // surfaces as "agent X stopped responding."
+    if (existsSync(orgsDir)) {
+      const HOOK_KEYS = ['Stop', 'PreCompact', 'SessionEnd', 'PreToolUse', 'PermissionRequest', 'UserPromptSubmit'];
+      const driftFindings: Array<{ agent: string; org: string; missing: string[] }> = [];
+
+      try {
+        for (const org of readdirSync(orgsDir)) {
+          const agentsRoot = join(orgsDir, org, 'agents');
+          if (!existsSync(agentsRoot)) continue;
+          for (const agent of readdirSync(agentsRoot)) {
+            const agentSettings = join(agentsRoot, agent, '.claude', 'settings.json');
+            const agentConfig = join(agentsRoot, agent, 'config.json');
+            if (!existsSync(agentSettings) || !existsSync(agentConfig)) continue;
+
+            // Determine which template this agent was created from.
+            // config.json doesn't always record this, so default to 'agent'
+            // and check templates/orchestrator + templates/analyst as
+            // candidates if the agent's hook set looks like one of those.
+            let templateName = 'agent';
+            try {
+              const cfg = JSON.parse(readFileSync(agentConfig, 'utf-8'));
+              if (typeof cfg.template === 'string') templateName = cfg.template;
+            } catch { /* ignore — use default */ }
+
+            const templateSettings = join(frameworkRoot, 'templates', templateName, '.claude', 'settings.json');
+            if (!existsSync(templateSettings)) continue;
+
+            let templateHooks: Record<string, unknown> = {};
+            let agentHooks: Record<string, unknown> = {};
+            try {
+              templateHooks = (JSON.parse(readFileSync(templateSettings, 'utf-8')).hooks ?? {});
+            } catch { continue; }
+            try {
+              agentHooks = (JSON.parse(readFileSync(agentSettings, 'utf-8')).hooks ?? {});
+            } catch { continue; }
+
+            const missing = HOOK_KEYS.filter(k => k in templateHooks && !(k in agentHooks));
+            if (missing.length > 0) {
+              driftFindings.push({ agent, org, missing });
+            }
+          }
+        }
+      } catch { /* ignore scan errors */ }
+
+      if (driftFindings.length === 0) {
+        checks.push({
+          name: 'Agent template drift',
+          status: 'pass',
+          message: 'No hook blocks missing from agent settings.json files',
+        });
+      } else {
+        for (const finding of driftFindings) {
+          checks.push({
+            name: `Template drift: ${finding.org}/${finding.agent}`,
+            status: 'fail',
+            message: `Missing hook block(s): ${finding.missing.join(', ')}`,
+            fix: `Add the missing block(s) from templates/<agent-type>/.claude/settings.json into orgs/${finding.org}/agents/${finding.agent}/.claude/settings.json`,
+          });
+        }
+      }
+    }
+
     // Display results
     let hasFailures = false;
     for (const check of checks) {
