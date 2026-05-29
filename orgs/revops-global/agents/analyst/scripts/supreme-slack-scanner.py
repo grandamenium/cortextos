@@ -355,12 +355,55 @@ def pinned_messages(token: str, channel_id: str) -> List[Dict[str, Any]]:
 
 # -- scan ---------------------------------------------------------------------
 
+def slack_search_dms(token: str, since_seconds: int) -> List[Dict[str, Any]]:
+    """Find recent DM messages using search.messages with is:dm filter.
+
+    Replaces the per-DM conversations.history loop (was 66 calls → sustained 429s).
+    users.conversations does not return 'latest' for IM channels so the pre-filter
+    was always a no-op. search.messages is:dm is 1-3 calls regardless of DM count.
+
+    Returns all DM messages in the window. Caller groups by channel to find the
+    latest message per DM and determine unanswered state.
+    """
+    since_ts = time.time() - since_seconds
+    since_date = datetime.fromtimestamp(since_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    query = f"is:dm after:{since_date}"
+    matches: List[Dict[str, Any]] = []
+    page = 1
+    while True:
+        result = slack_get(token, "search.messages", {
+            "query": query,
+            "count": "100",
+            "page": str(page),
+            "sort": "timestamp",
+            "sort_dir": "desc",
+        })
+        if not result.get("ok"):
+            print(
+                f"[scanner] search.messages(is:dm) failed: {result.get('error')} — "
+                f"DM scan skipped",
+                file=sys.stderr,
+            )
+            return []
+        msg_block = result.get("messages") or {}
+        page_matches = msg_block.get("matches") or []
+        for m in page_matches:
+            ts = float(m.get("ts") or 0)
+            if ts >= since_ts:
+                matches.append(m)
+        paging = msg_block.get("paging") or {}
+        if page >= paging.get("pages", 1):
+            break
+        page += 1
+        time.sleep(API_DELAY_MS / 1000)
+    print(f"[scanner] DM search: {len(matches)} msgs", file=sys.stderr)
+    return matches
+
+
 def slack_search_mentions(token: str, since_seconds: int) -> List[Dict[str, Any]]:
     """Find @-mentions of Greg using search.messages (Tier 2, 1-3 API calls vs 200+).
 
     Replaces the per-channel conversations.history loop for channel/MPIM detection.
-    DMs still use conversations.history because unanswered DM detection is not
-    mention-based — a DM with no @Greg can still need a reply.
     """
     since_ts = time.time() - since_seconds
     since_date = datetime.fromtimestamp(since_ts, tz=timezone.utc).strftime("%Y-%m-%d")
@@ -427,53 +470,43 @@ def scan(token: str, since_seconds: int) -> List[Dict[str, Any]]:
         for uid in set(USER_MENTION_RE.findall(text or "")):
             user_name(uid)
 
-    # --- DM scan: unanswered detection (cannot use search; not @mention-based) ---
-    print(f"[scanner] listing DMs Greg is member of...", file=sys.stderr)
-    dms = slack_paginate(
-        token, "users.conversations",
-        {"types": "im", "limit": "200"},
-        "channels",
-    )
-    print(f"[scanner] {len(dms)} DMs total; pre-filtering by latest.ts > since_ts", file=sys.stderr)
-
-    active_dms = 0
-    for conv in dms[:MAX_CONVERSATIONS]:
-        # Pre-filter: skip DMs whose latest message predates the since window.
-        # users.conversations returns a 'latest' object with a 'ts' field on IM
-        # channels. If absent, include the DM (conservative — no false-negatives).
-        latest_ts = float((conv.get("latest") or {}).get("ts") or 0)
-        if latest_ts and latest_ts < since_ts:
+    # --- DM scan: unanswered detection via search.messages is:dm ---
+    # Replaces the previous 66x conversations.history loop that caused sustained 429s.
+    # users.conversations(types=im) never returns 'latest' for IM channels, making
+    # the pre-filter a no-op. search.messages is:dm uses 1-3 calls regardless of DM count.
+    #
+    # Strategy: search returns DM messages newest-first. Group by channel; the first
+    # (newest) message per channel determines answered state — if it's not from Greg,
+    # the DM is unanswered. No additional history calls needed.
+    dm_msgs = slack_search_dms(token, since_seconds)
+    dm_latest: Dict[str, Dict[str, Any]] = {}  # ch_id → latest message
+    for m in dm_msgs:
+        ch_obj = m.get("channel") or {}
+        ch_id = ch_obj.get("id", "") if isinstance(ch_obj, dict) else str(ch_obj)
+        if not ch_id:
             continue
+        ts = float(m.get("ts") or 0)
+        existing = dm_latest.get(ch_id)
+        if existing is None or ts > float(existing.get("ts") or 0):
+            dm_latest[ch_id] = m
+
+    for ch_id, latest_msg in dm_latest.items():
         check_budget()
-        ch_id = conv["id"]
-        ch_name = f"DM:{user_name(conv.get('user'))}"
-        active_dms += 1
-        print(f"[scanner] DM {active_dms}: {ch_id} (latest {latest_ts:.0f})", file=sys.stderr)
-
-        hist = slack_get(token, "conversations.history", {
-            "channel": ch_id,
-            "oldest": str(int(since_ts)),
-            "limit": "25",
-        })
-        msgs = unique_messages(hist.get("messages") or [])
-        time.sleep(API_DELAY_MS / 1000)
-
-        # messages come newest-first; stop at first Greg reply
-        for m in msgs:
-            if m.get("user") == GREG_USER_ID:
-                break
-            if m.get("subtype"):
-                continue
-            hydrate_mentions(m.get("text") or "")
-            items.append(build_item(
-                source="dm",
-                status="unanswered",
-                channel_id=ch_id,
-                channel_name=ch_name,
-                msg=m,
-                sender_name=user_name(m.get("user")),
-                user_lookup=user_cache,
-            ))
+        if latest_msg.get("user") == GREG_USER_ID:
+            continue  # Greg sent the last message — answered
+        if latest_msg.get("subtype"):
+            continue
+        ch_name = f"DM:{user_name(latest_msg.get('user'))}"
+        hydrate_mentions(latest_msg.get("text") or "")
+        items.append(build_item(
+            source="dm",
+            status="unanswered",
+            channel_id=ch_id,
+            channel_name=ch_name,
+            msg=latest_msg,
+            sender_name=user_name(latest_msg.get("user")),
+            user_lookup=user_cache,
+        ))
 
     check_budget()
 
