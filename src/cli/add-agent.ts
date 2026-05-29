@@ -394,6 +394,8 @@ function copyTemplateFiles(templateDir: string, agentDir: string, name: string, 
         content = content.replace(/\{\{org\}\}/g, org);
         content = content.replace(/\{\{current_timestamp\}\}/g, new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'));
         writeFileSync(destPath, content, 'utf-8');
+        // Preserve executable bit from source (shell hooks/scripts need +x)
+        if (stat.mode & 0o111) chmodSync(destPath, stat.mode & 0o777);
       } else if (stat.isDirectory() && file !== 'node_modules') {
         mkdirSync(destPath, { recursive: true });
         copyTemplateFiles(srcPath, destPath, name, org);
