@@ -355,6 +355,48 @@ def pinned_messages(token: str, channel_id: str) -> List[Dict[str, Any]]:
 
 # -- scan ---------------------------------------------------------------------
 
+def slack_search_mentions(token: str, since_seconds: int) -> List[Dict[str, Any]]:
+    """Find @-mentions of Greg using search.messages (Tier 2, 1-3 API calls vs 200+).
+
+    Replaces the per-channel conversations.history loop for channel/MPIM detection.
+    DMs still use conversations.history because unanswered DM detection is not
+    mention-based — a DM with no @Greg can still need a reply.
+    """
+    since_ts = time.time() - since_seconds
+    since_date = datetime.fromtimestamp(since_ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    query = f"<@{GREG_USER_ID}> after:{since_date}"
+    matches: List[Dict[str, Any]] = []
+    page = 1
+    while True:
+        result = slack_get(token, "search.messages", {
+            "query": query,
+            "count": "100",
+            "page": str(page),
+            "sort": "timestamp",
+            "sort_dir": "desc",
+        })
+        if not result.get("ok"):
+            print(
+                f"[scanner] search.messages failed: {result.get('error')} — "
+                f"falling back to empty mention list",
+                file=sys.stderr,
+            )
+            break
+        msg_block = result.get("messages") or {}
+        page_matches = msg_block.get("matches") or []
+        for m in page_matches:
+            ts = float(m.get("ts") or 0)
+            if ts >= since_ts:
+                matches.append(m)
+        paging = msg_block.get("paging") or {}
+        if page >= paging.get("pages", 1):
+            break
+        page += 1
+        time.sleep(API_DELAY_MS / 1000)
+    print(f"[scanner] search found {len(matches)} @-mentions of Greg", file=sys.stderr)
+    return matches
+
+
 def scan(token: str, since_seconds: int) -> List[Dict[str, Any]]:
     since_ts = time.time() - since_seconds
     scan_start = time.time()
@@ -385,113 +427,116 @@ def scan(token: str, since_seconds: int) -> List[Dict[str, Any]]:
         for uid in set(USER_MENTION_RE.findall(text or "")):
             user_name(uid)
 
-    print(f"[scanner] listing conversations Greg is member of...", file=sys.stderr)
-    convs = slack_paginate(
+    # --- DM scan: unanswered detection (cannot use search; not @mention-based) ---
+    print(f"[scanner] listing DMs Greg is member of...", file=sys.stderr)
+    dms = slack_paginate(
         token, "users.conversations",
-        {"types": "public_channel,private_channel,mpim,im", "limit": "200"},
+        {"types": "im", "limit": "200"},
         "channels",
     )
-    print(f"[scanner] {len(convs)} conversations", file=sys.stderr)
+    print(f"[scanner] {len(dms)} DMs", file=sys.stderr)
 
-    for conv in convs[:MAX_CONVERSATIONS]:
+    for conv in dms[:MAX_CONVERSATIONS]:
         check_budget()
         ch_id = conv["id"]
-        ch_name = conv.get("name") or ""
-        is_dm = bool(conv.get("is_im"))
-        is_mpim = bool(conv.get("is_mpim"))
-        if is_dm:
-            other = conv.get("user")
-            ch_name = f"DM:{user_name(other)}"
-        elif is_mpim and not ch_name:
-            ch_name = f"Group DM ({ch_id})"
+        ch_name = f"DM:{user_name(conv.get('user'))}"
 
-        # Fetch recent history
         hist = slack_get(token, "conversations.history", {
             "channel": ch_id,
             "oldest": str(int(since_ts)),
-            "limit": str(MAX_MESSAGES_PER_CONV),
+            "limit": "25",
         })
-        msgs = unique_messages((hist.get("messages") or []) + pinned_messages(token, ch_id))
+        msgs = unique_messages(hist.get("messages") or [])
         time.sleep(API_DELAY_MS / 1000)
 
-        if not msgs:
-            continue
-
-        # DM unanswered detection: latest non-Greg message with no later Greg reply
-        if is_dm:
-            # messages come newest-first
-            for m in msgs:
-                if m.get("user") == GREG_USER_ID:
-                    # Greg already replied — earlier messages are answered
-                    break
-                if m.get("subtype"):  # joins/leaves etc.
-                    continue
-                hydrate_mentions(m.get("text") or "")
-                items.append(build_item(
-                    source="dm",
-                    status="unanswered",
-                    channel_id=ch_id,
-                    channel_name=ch_name,
-                    msg=m,
-                    sender_name=user_name(m.get("user")),
-                    user_lookup=user_cache,
-                ))
-            # Only flag the latest one DM message awaiting reply; older context handled by Hub UI
-            continue
-
-        # Channel/group: scan messages mentioning Greg
+        # messages come newest-first; stop at first Greg reply
         for m in msgs:
             if m.get("user") == GREG_USER_ID:
+                break
+            if m.get("subtype"):
                 continue
-            text = m.get("text") or ""
-            if not mentions_greg(text):
-                continue
-            hydrate_mentions(text)
-            # Check thread state. For direct MPIM/IM questions, a later
-            # non-Greg follow-up should stay unanswered even if Greg appeared
-            # earlier in the thread.
-            replied = False
-            last_thread_user = m.get("user")
-            if m.get("reply_count", 0):
-                reps = slack_get(token, "conversations.replies", {
-                    "channel": ch_id,
-                    "ts": m.get("ts", ""),
-                    "limit": "50",
-                })
-                thread_messages = reps.get("messages") or []
-                last_thread_user = next(
-                    (r.get("user") for r in reversed(thread_messages) if not r.get("subtype")),
-                    last_thread_user,
-                )
-                replied = any(r.get("user") == GREG_USER_ID for r in thread_messages[1:])
-                time.sleep(API_DELAY_MS / 1000)
-
-            direct_unanswered = unanswered_direct_question(is_dm, is_mpim, text, last_thread_user)
-            if replied and not direct_unanswered:
-                continue
-
-            if direct_unanswered:
-                source = "dm" if is_dm else "channel_mention"
-                status = "unanswered"
-            elif is_action_item(text):
-                source = "action_item"
-                status = "action_item"
-            elif m.get("thread_ts") and m.get("thread_ts") != m.get("ts"):
-                source = "thread_mention"
-                status = "mentioned"
-            else:
-                source = "channel_mention"
-                status = "mentioned"
-
+            hydrate_mentions(m.get("text") or "")
             items.append(build_item(
-                source=source,
-                status=status,
+                source="dm",
+                status="unanswered",
                 channel_id=ch_id,
                 channel_name=ch_name,
                 msg=m,
                 sender_name=user_name(m.get("user")),
                 user_lookup=user_cache,
             ))
+
+    check_budget()
+
+    # --- Channel/MPIM mention scan: search.messages (Tier 2, 1-3 calls total) ---
+    # Replaces the previous 200-call conversations.history loop. Cuts API surface
+    # from O(conversations) to O(mention-pages), eliminating the sustained 429 storm.
+    search_matches = slack_search_mentions(token, since_seconds)
+
+    for m in search_matches:
+        check_budget()
+        if m.get("user") == GREG_USER_ID:
+            continue
+        text = m.get("text") or ""
+        if not mentions_greg(text):
+            continue
+
+        ch_obj = m.get("channel") or {}
+        if isinstance(ch_obj, str):
+            ch_id, ch_name, is_mpim = ch_obj, ch_obj, False
+        else:
+            ch_id = ch_obj.get("id", "")
+            ch_name = ch_obj.get("name") or ch_id
+            is_mpim = bool(ch_obj.get("is_mpim"))
+            if ch_obj.get("is_im"):
+                continue  # DMs handled above
+
+        if not ch_id:
+            continue
+
+        hydrate_mentions(text)
+        replied = False
+        last_thread_user = m.get("user")
+        if m.get("reply_count", 0):
+            reps = slack_get(token, "conversations.replies", {
+                "channel": ch_id,
+                "ts": m.get("ts", ""),
+                "limit": "50",
+            })
+            thread_messages = reps.get("messages") or []
+            last_thread_user = next(
+                (r.get("user") for r in reversed(thread_messages) if not r.get("subtype")),
+                last_thread_user,
+            )
+            replied = any(r.get("user") == GREG_USER_ID for r in thread_messages[1:])
+            time.sleep(API_DELAY_MS / 1000)
+
+        direct_unanswered = unanswered_direct_question(False, is_mpim, text, last_thread_user)
+        if replied and not direct_unanswered:
+            continue
+
+        if direct_unanswered:
+            source = "channel_mention"
+            status = "unanswered"
+        elif is_action_item(text):
+            source = "action_item"
+            status = "action_item"
+        elif m.get("thread_ts") and m.get("thread_ts") != m.get("ts"):
+            source = "thread_mention"
+            status = "mentioned"
+        else:
+            source = "channel_mention"
+            status = "mentioned"
+
+        items.append(build_item(
+            source=source,
+            status=status,
+            channel_id=ch_id,
+            channel_name=ch_name,
+            msg=m,
+            sender_name=user_name(m.get("user")),
+            user_lookup=user_cache,
+        ))
 
     return items
 
