@@ -2824,6 +2824,39 @@ async function runSupremeOutstandingChecks(page: Page): Promise<CheckResult[]> {
       evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
+  // CHECK 4: Scanner freshness strip present and contains recognizable text (correctness check)
+  try {
+    const stripState = await wallClock(
+      page.evaluate(() => {
+        const strip = document.querySelector('[data-testid="scanner-freshness-strip"]');
+        if (!strip) return { found: false, text: '', colorClass: '' };
+        const text = (strip.textContent ?? '').trim();
+        // Derive freshness state from border color classes present on the element
+        const cls = strip.className ?? '';
+        const colorClass = cls.includes('destructive') ? 'red'
+          : cls.includes('caution') ? 'amber'
+          : cls.includes('positive') ? 'ok'
+          : 'unknown';
+        return { found: true, text, colorClass };
+      }),
+      5000,
+      { found: false, text: '', colorClass: '' },
+    );
+    if (!stripState.found) {
+      results.push({ check: 'CHECK 4 Scanner freshness strip', status: 'FAIL',
+        evidence: 'data-testid="scanner-freshness-strip" element not found — strip may not have rendered or was removed.' });
+    } else if (!/last successful scan|no successful scan/i.test(stripState.text)) {
+      results.push({ check: 'CHECK 4 Scanner freshness strip', status: 'FAIL',
+        evidence: `Strip present but text unexpected: "${stripState.text.slice(0, 120)}"` });
+    } else {
+      results.push({ check: 'CHECK 4 Scanner freshness strip', status: 'PASS',
+        evidence: `Strip rendered — state=${stripState.colorClass} text="${stripState.text.slice(0, 80)}"` });
+    }
+  } catch (e) {
+    results.push({ check: 'CHECK 4 Scanner freshness strip', status: 'FAIL',
+      evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
   return results;
 }
 
