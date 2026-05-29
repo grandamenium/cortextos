@@ -403,20 +403,23 @@ async function checkFreshnessStrip(page: Page, session: SupabaseSession): Promis
     results.push({ id: 15, surface: 'Freshness strip', check: 'Assert 15 — Heartbeat row drilldown', status: 'DEFERRED', evidence: 'No heartbeat rows visible on /workflows/health', screenshot: sc15 });
   }
 
-  // Assert 16: /app/fleet/farm — try hub route (redirects to agentops if migrated)
+  // Assert 16: /app/fleet/farm redirect integrity — farm page retired 2026-05-29,
+  // route now redirects to /fleet/agents (router.tsx line 1193). Assert the redirect
+  // lands cleanly rather than checking for retired "Farm KPI" content.
   await navigate(page, `${HUB_URL}/app/fleet/farm`);
   await page.waitForTimeout(2000);
   const text16 = await pageText(page);
-  const sc16 = await shot(page, 'assert-16-farm-kpi');
-  const hasFarmKpi = /Farm KPI/i.test(text16);
-  const hasRecency = /Updated \d+[smhd] ago/i.test(text16);
-  results.push({ id: 16, surface: 'Freshness strip', check: 'Assert 16 — Farm KPI heading + recency label', status: hasFarmKpi ? 'PASS' : 'FAIL', evidence: hasFarmKpi ? `Farm KPI: ${hasFarmKpi}, recency: ${hasRecency}` : `Farm KPI not found. URL: ${page.url()}. snippet: ${text16.slice(0,200)}`, screenshot: sc16 });
+  const sc16 = await shot(page, 'assert-16-farm-redirect');
+  const farmLandedAt = page.url();
+  const farmRedirectOk = farmLandedAt.includes('/fleet/agents') || farmLandedAt.includes('/agents');
+  const farmHas404 = await hasNotFoundPage(page) || /page not found|not_found/i.test(text16);
+  const farmHasError = await elCount(page, SELECTORS.errorBanner) > 0;
+  results.push({ id: 16, surface: 'Freshness strip', check: 'Assert 16 — /fleet/farm redirect lands at /fleet/agents without error', status: farmRedirectOk && !farmHas404 && !farmHasError ? 'PASS' : 'FAIL', evidence: `landedAt=${farmLandedAt}, redirectOk=${farmRedirectOk}, 404=${farmHas404}, errorBanner=${farmHasError}`, screenshot: sc16 });
 
-  // Assert 17: Status footer visible, no stale-cache text
-  const hasStatusFooter = /Status as of \d+[smhd] ago/i.test(text16);
-  const hasStaleCache = /cached|stale cache|cache age|from cache/i.test(text16);
+  // Assert 17: RETIRED — farm status footer was part of the fleet/farm page which was
+  // retired 2026-05-29. No replacement content exists at /fleet/agents. Permanently DEFERRED.
   const sc17 = await shot(page, 'assert-17-farm-status-footer');
-  results.push({ id: 17, surface: 'Freshness strip', check: 'Assert 17 — Farm status footer visible, no stale-cache text', status: hasStatusFooter && !hasStaleCache ? 'PASS' : hasStaleCache ? 'FAIL' : 'DEFERRED', evidence: `Status footer: ${hasStatusFooter}, stale-cache text: ${hasStaleCache}`, screenshot: sc17 });
+  results.push({ id: 17, surface: 'Freshness strip', check: 'Assert 17 — Farm status footer (retired with fleet/farm page 2026-05-29)', status: 'DEFERRED', evidence: 'fleet/farm page retired; status footer has no replacement. Route now: /fleet/farm → /fleet/agents.', screenshot: sc17 });
 
   return results;
 }
