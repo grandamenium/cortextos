@@ -1,0 +1,15 @@
+local/
+.env
+/memory/*
+!/memory/.gitkeep
+*.log
+.cache/
+research/sources.json
+research/scoring-rubric.json
+research/db/*.db
+research/output/*
+!research/output/.gitkeep
+research/topic-briefings/*
+!research/topic-briefings/.gitkeep
+research/archive/*
+!research/archive/.gitkeep
