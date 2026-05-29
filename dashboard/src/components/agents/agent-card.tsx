@@ -37,7 +37,7 @@ export function AgentCard({ agent }: AgentCardProps) {
 
   return (
     <Link href={`/agents/${encodeURIComponent(agent.systemName)}`}>
-      <Card className="group relative h-full cursor-pointer transition-all hover:shadow-md hover:border-primary/20">
+      <Card className="group relative h-full cursor-pointer transition-[box-shadow,border-color] duration-150 hover:shadow-md hover:border-primary/20">
         <CardContent className="space-y-3">
           {/* Header: avatar + name + health */}
           <div className="flex items-start justify-between">
