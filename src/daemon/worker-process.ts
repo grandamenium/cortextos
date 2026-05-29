@@ -3,6 +3,7 @@ import { mkdirSync } from 'fs';
 import type { CtxEnv, WorkerStatus, WorkerStatusValue } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { injectMessage } from '../pty/inject.js';
+import { atomicWriteSync } from '../utils/atomic.js';
 
 /**
  * WorkerProcess — ephemeral Claude Code session for parallelized tasks.
@@ -24,6 +25,8 @@ export class WorkerProcess {
   private status: WorkerStatusValue = 'starting';
   private spawnedAt: string;
   private exitCode: number | undefined;
+  private exitSignal: number | null = null;
+  private ctxRoot: string | null = null;
   private onDoneCallback: ((name: string, exitCode: number) => void) | null = null;
   private log: (msg: string) => void;
 
@@ -44,6 +47,8 @@ export class WorkerProcess {
    * Spawn the worker Claude Code session with the given task prompt.
    */
   async spawn(env: CtxEnv, prompt: string, config: { model?: string; home?: string } = {}): Promise<void> {
+    this.ctxRoot = env.ctxRoot;
+
     // Ensure bus dirs exist so the worker can use cortextos bus commands
     try {
       mkdirSync(join(env.ctxRoot, 'inbox', this.name), { recursive: true });
@@ -54,10 +59,31 @@ export class WorkerProcess {
     const logPath = join(env.ctxRoot, 'logs', this.name, 'stdout.log');
     this.pty = new AgentPTY(env, config, logPath);
 
-    this.pty.onExit((code) => {
+    this.pty.onExit((code, signal) => {
       this.exitCode = code;
-      this.status = code === 0 ? 'completed' : 'failed';
-      this.log(`Exited with code ${code} → ${this.status}`);
+      this.exitSignal = signal ?? null;
+      this.status = code === 0 && (signal == null || signal === 0) ? 'completed' : 'failed';
+      this.log(`Exited with code ${code} signal ${signal ?? 'none'} → ${this.status}`);
+
+      // Write a status artifact so callers can detect what happened.
+      // Path: ~/.cortextos/<instanceId>/workers/<workerName>-status.json
+      try {
+        const statusPath = join(env.ctxRoot, 'workers', `${this.name}-status.json`);
+        const durationSeconds = Math.round(
+          (Date.now() - new Date(this.spawnedAt).getTime()) / 1000,
+        );
+        const statusPayload = {
+          status: this.status === 'completed' ? 'completed' : 'died',
+          exit_code: code ?? null,
+          signal: signal != null && signal !== 0 ? String(signal) : null,
+          duration_seconds: durationSeconds,
+          timestamp: new Date().toISOString(),
+        };
+        atomicWriteSync(statusPath, JSON.stringify(statusPayload, null, 2));
+      } catch (err) {
+        this.log(`Failed to write status artifact: ${err}`);
+      }
+
       if (this.onDoneCallback) {
         this.onDoneCallback(this.name, code);
       }
