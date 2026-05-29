@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { BusPaths } from '../types/index.js';
+import type { BusPaths, Task } from '../types/index.js';
 import { logEvent } from './event.js';
 
 interface AgentGoals {
@@ -126,6 +126,54 @@ function readEnabledAgents(ctxRoot: string): Record<string, { enabled?: boolean 
   }
 }
 
+/**
+ * Returns true when an agent should be treated as a "codex-runtime" agent:
+ * either its config.json declares runtime === "codex-app-server" (ChatGPT/Codex
+ * app process), or its name contains the substring "codex" (e.g. "mac-codex").
+ * This mirrors the set {codex, codex-2, codex-3, mac-codex} without hardcoding names.
+ */
+function isCodexRuntimeAgent(agentConfig: { runtime?: string } | null, agentName: string): boolean {
+  if (agentConfig?.runtime === 'codex-app-server') return true;
+  return agentName.toLowerCase().includes('codex');
+}
+
+/**
+ * Returns true when the task directory contains at least one task that was
+ * assigned to `agentName` and created by "orchestrator" within the last 24 hours.
+ *
+ * An orchestrator-issued task signals that the codex agent is part of an active
+ * workstream — goal-progress tracking should apply. Absence of such a task means
+ * the agent is truly idle (e.g. deprioritized due to auth/credit issues) and
+ * should be suppressed to avoid false-positive "stalled" alerts.
+ */
+function hasOrchIssuedTaskInLast24h(taskDir: string, agentName: string, nowMs: number): boolean {
+  if (!existsSync(taskDir)) return false;
+  const cutoffMs = nowMs - 24 * 3_600_000;
+  let files: string[];
+  try {
+    files = readdirSync(taskDir).filter(f => !f.startsWith('.') && f.endsWith('.json'));
+  } catch {
+    return false;
+  }
+  for (const file of files) {
+    try {
+      const raw = readFileSync(join(taskDir, file), 'utf-8');
+      const task = JSON.parse(raw) as Task;
+      if (
+        task.assigned_to === agentName &&
+        task.created_by === 'orchestrator' &&
+        typeof task.created_at === 'string'
+      ) {
+        const createdMs = Date.parse(task.created_at);
+        if (Number.isFinite(createdMs) && createdMs >= cutoffMs) return true;
+      }
+    } catch {
+      // Skip unparseable task files.
+    }
+  }
+  return false;
+}
+
 function keywords(input: string): string[] {
   return Array.from(new Set(
     input
@@ -217,11 +265,17 @@ export function runGoalProgressProbe(
       if (enabledEntry && enabledEntry.enabled === false) continue;
 
       // Skip agents whose config.json marks them disabled.
-      const agentConfig = readJson<{ enabled?: boolean }>(join(agentsDir, name, 'config.json'));
+      const agentConfig = readJson<{ enabled?: boolean; runtime?: string }>(join(agentsDir, name, 'config.json'));
       if (agentConfig && agentConfig.enabled === false) continue;
 
       // Skip agents not currently running (heartbeat older than 2h).
       if (!isAgentRunning(paths.ctxRoot, name)) continue;
+
+      // Skip codex-runtime agents that have no orchestrator-issued task in the
+      // last 24 h.  These agents go idle when Codex is deprioritised (auth/credit
+      // issues) and would otherwise generate spurious "stalled" alerts.  The moment
+      // an orchestrator assigns them real work they are tracked again.
+      if (isCodexRuntimeAgent(agentConfig, name) && !hasOrchIssuedTaskInLast24h(paths.taskDir, name, nowMs)) continue;
 
       const agentDir = join(agentsDir, name);
       const goals = readJson<AgentGoals>(join(agentDir, 'goals.json'));
