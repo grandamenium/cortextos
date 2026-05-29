@@ -705,21 +705,21 @@ async function checkLoad(page: Page, shotPrefix: string): Promise<CheckResult> {
   const absoluteTimer = new Promise<CheckResult>((resolve) =>
     setTimeout(() => {
       timedOut = true;
-      resolve({ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: `Playwright eval timed out after ${ABSOLUTE_MS / 1000}s — page alive at correct URL but JS engine busy (real-time subscriptions). URL: ${page.url()}` });
+      resolve({ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: `Playwright eval timed out after ${ABSOLUTE_MS / 1000}s — page alive at correct URL but JS engine busy (real-time subscriptions). URL: ${page.url()}` });
     }, ABSOLUTE_MS)
   );
   const innerCheck = (async (): Promise<CheckResult> => {
     try {
       console.log('[checkLoad] step 1: waitForPageLoad');
       await waitForPageLoad(page);
-      if (timedOut) return { check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Timed out' };
+      if (timedOut) return { check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Timed out' };
       console.log('[checkLoad] step 2: networkidle race');
       // Use a short networkidle settle via race — crashed pages can hang waitForLoadState indefinitely
       await Promise.race([
         page.waitForLoadState('networkidle').catch(() => {}),
         new Promise<void>(r => setTimeout(r, 5000)),
       ]);
-      if (timedOut) return { check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Timed out' };
+      if (timedOut) return { check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Timed out' };
       console.log('[checkLoad] step 3: element presence check via evaluate');
       // Use page.evaluate() for a single CDP call — locator.count() can block Playwright's
       // actionability polling loop on pages with continuous DOM mutations (real-time subscriptions).
@@ -744,23 +744,30 @@ async function checkLoad(page: Page, shotPrefix: string): Promise<CheckResult> {
         if (url.includes('/login') || url.includes('/auth') || url.includes('/error')) {
           throw new Error(`Page redirected to error/auth page: ${url}`);
         }
-        return { check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: `DOM eval returned no elements (btn=${hasContent.btn} main=${hasContent.main} card=${hasContent.card}) — JS engine busy or React still hydrating. URL correct: ${url}` };
+        return { check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: `DOM eval returned no elements (btn=${hasContent.btn} main=${hasContent.main} card=${hasContent.card}) — JS engine busy or React still hydrating. URL correct: ${url}` };
       }
       const h = await Promise.race([
         page.evaluate(() => { const el = document.querySelector('h1,h2'); return el?.textContent ?? ''; }).catch(() => ''),
         new Promise<string>(r => setTimeout(() => r(''), 3000)),
       ]);
       await Promise.race([page.screenshot({ path: path.join(OUTPUT_DIR, `${shotPrefix}-1-load.png`) }).catch(() => {}), new Promise<void>(r => setTimeout(r, 8000))]);
-      return { check: 'CHECK 1 Page load', status: 'PASS', evidence: `Page loaded. Heading: "${h?.trim()}". URL: ${page.url()}` };
+      // P2: heading must not be a placeholder value
+      const headingTrimmed = h?.trim() ?? '';
+      if (/^(loading|undefined|null|\.\.\.)$/i.test(headingTrimmed) && headingTrimmed.length > 0) {
+        return { check: '[LIVENESS] CHECK 1 Page load', status: 'FAIL', evidence: `Page loaded but heading is a placeholder: "${headingTrimmed}". URL: ${page.url()}` };
+      }
+      return { check: '[LIVENESS] CHECK 1 Page load', status: 'PASS', evidence: `Page loaded. Heading: "${headingTrimmed}". URL: ${page.url()}` };
     } catch (e) {
       await Promise.race([page.screenshot({ path: path.join(OUTPUT_DIR, `${shotPrefix}-1-load-fail.png`) }).catch(() => {}), new Promise<void>(r => setTimeout(r, 5000))]);
-      return { check: 'CHECK 1 Page load', status: 'FAIL', evidence: `Load failed: ${(e as Error).message?.split('\n')[0]} (url: ${page.url()})` };
+      return { check: '[LIVENESS] CHECK 1 Page load', status: 'FAIL', evidence: `Load failed: ${(e as Error).message?.split('\n')[0]} (url: ${page.url()})` };
     }
   })();
   return Promise.race([innerCheck, absoluteTimer]);
 }
 
-/** Generic: look for data items or an empty state; returns PASS for either */
+/** Generic: look for data items or an empty state; returns PASS for either.
+ *  P2 hardening: FAIL if items found but first item text matches a malformed-content pattern.
+ */
 async function checkDataOrEmpty(
   page: Page,
   shotPrefix: string,
@@ -773,6 +780,11 @@ async function checkDataOrEmpty(
     const emptyCount = await page.getByText(emptyPattern, { exact: false }).count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${shotPrefix}-data.png`) });
     if (count > 0) {
+      // P2: reject malformed content — items found but text is a parse error / sentinel
+      const firstText = (await page.locator(itemSelector).first().textContent().catch(() => '')).trim();
+      if (/(parse_error|undefined|null|\[object)/i.test(firstText)) {
+        return { check: checkName, status: 'FAIL', evidence: `${count} item(s) found but first item text is malformed: "${firstText.slice(0, 60)}".` };
+      }
       return { check: checkName, status: 'PASS', evidence: `${count} item(s) visible.` };
     } else if (emptyCount > 0) {
       return { check: checkName, status: 'PASS', evidence: 'Empty state shown — valid state, renders correctly.' };
@@ -781,6 +793,95 @@ async function checkDataOrEmpty(
     }
   } catch (e) {
     return { check: checkName, status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` };
+  }
+}
+
+/**
+ * P1 helper: parse relative time labels ("Xm ago", "Xs ago", "X minutes ago") and ISO
+ * timestamps on the page; assert at least one is < 30 minutes old.
+ * Returns PASS | FAIL | DEFERRED (no timestamps found).
+ */
+async function checkTimestampFreshness(page: Page, checkName: string): Promise<CheckResult> {
+  try {
+    const nowMs = Date.now();
+    const THIRTY_MIN_MS = 30 * 60 * 1000;
+
+    const freshness = await Promise.race([
+      page.evaluate((thirtyMinMs: number) => {
+        const body = document.body.innerText ?? '';
+        // Collect all text nodes across the page for timestamp scanning
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const texts: string[] = [];
+        let node: Text | null;
+        while ((node = walker.nextNode() as Text | null)) {
+          const t = node.textContent?.trim() ?? '';
+          if (t) texts.push(t);
+        }
+        const allText = texts.join('\n');
+
+        // Pattern 1: relative "Xm ago", "Xs ago", "X min ago", "X minutes ago", "just now", "less than a minute ago"
+        const relMatch = allText.match(/(\d+)\s*(?:m(?:in(?:utes?)?)?\s*ago|s(?:ec(?:onds?)?)?\s*ago)|just now|less than a minute ago/gi);
+        if (relMatch) {
+          for (const m of relMatch) {
+            const justNow = /just now|less than/i.test(m);
+            if (justNow) return { fresh: true, label: m };
+            const numMatch = m.match(/^(\d+)/);
+            const num = numMatch ? parseInt(numMatch[1], 10) : Infinity;
+            const isMin = /min|m\s*ago/i.test(m) && !/sec|s\s*ago/i.test(m);
+            const isSec = /sec|s\s*ago/i.test(m);
+            const ageMs = isMin ? num * 60000 : isSec ? num * 1000 : Infinity;
+            if (ageMs < thirtyMinMs) return { fresh: true, label: m };
+          }
+          // Found relative timestamps but none < 30min
+          return { fresh: false, label: relMatch[0] };
+        }
+
+        // Pattern 2: ISO timestamps (2026-05-29T14:30:00Z or similar)
+        const isoMatch = allText.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/g);
+        if (isoMatch) {
+          const nowApprox = Date.now();
+          for (const iso of isoMatch) {
+            const ts = new Date(iso).getTime();
+            if (!isNaN(ts) && (nowApprox - ts) < thirtyMinMs) return { fresh: true, label: iso };
+          }
+          return { fresh: false, label: isoMatch[0] };
+        }
+
+        // Pattern 3: "HH:MM" times — check if within last 30 min of current clock
+        const timeMatch = allText.match(/\b(\d{1,2}):(\d{2})\s*(AM|PM)?\b/gi);
+        if (timeMatch) {
+          const now = new Date();
+          for (const t of timeMatch) {
+            const parts = t.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+            if (!parts) continue;
+            let h = parseInt(parts[1], 10);
+            const min = parseInt(parts[2], 10);
+            const meridiem = parts[3];
+            if (meridiem) {
+              if (/PM/i.test(meridiem) && h < 12) h += 12;
+              if (/AM/i.test(meridiem) && h === 12) h = 0;
+            }
+            const candidate = new Date(now);
+            candidate.setHours(h, min, 0, 0);
+            if (Math.abs(now.getTime() - candidate.getTime()) < thirtyMinMs) return { fresh: true, label: t };
+          }
+          return { fresh: false, label: timeMatch[0] };
+        }
+
+        return { fresh: null, label: '' };
+      }, THIRTY_MIN_MS),
+      new Promise<{ fresh: boolean | null; label: string }>(r => setTimeout(() => r({ fresh: null, label: '' }), 5000)),
+    ]);
+
+    if (freshness.fresh === null) {
+      return { check: checkName, status: 'DEFERRED', evidence: 'No timestamps found on page (relative, ISO, or HH:MM).' };
+    }
+    if (freshness.fresh) {
+      return { check: checkName, status: 'PASS', evidence: `Fresh timestamp found (< 30 min old): "${freshness.label}".` };
+    }
+    return { check: checkName, status: 'FAIL', evidence: `Timestamps found but none < 30 min old. Oldest/first seen: "${freshness.label}". Page data may be stale.` };
+  } catch (e) {
+    return { check: checkName, status: 'FAIL', evidence: `Error checking timestamps: ${(e as Error).message?.split('\n')[0]}` };
   }
 }
 
@@ -960,12 +1061,34 @@ async function runDashboardChecks(page: Page): Promise<CheckResult[]> {
     results.push({ check: 'CHECK 2 Metric cards visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
-  // CHECK 3: Key numbers rendered (non-placeholder)
+  // CHECK 3: Key numbers rendered (non-placeholder) — P2: assert at least one metric > 0
   try {
-    const numbers = await page.getByText(/\$[\d,]+|[\d,]+\s*(clients|deals|hours|contacts)/i, { exact: false }).count();
-    results.push({ check: 'CHECK 3 Data numbers rendered', status: numbers > 0 ? 'PASS' : 'DEFERRED', evidence: numbers > 0 ? `${numbers} numeric metric(s) found (revenue/counts).` : 'No numeric metrics detected — may be empty data or loading.' });
+    const metricTexts = await Promise.race([
+      page.evaluate(() => {
+        // Collect all text content that matches numeric metric patterns
+        const allText = document.body.innerText ?? '';
+        const matches = allText.match(/\$[\d,]+|[\d,]+\s*(?:clients|deals|hours|contacts)/gi) ?? [];
+        return matches;
+      }).catch(() => [] as string[]),
+      new Promise<string[]>(r => setTimeout(() => r([]), 4000)),
+    ]);
+    const numbers = metricTexts.length;
+    if (numbers === 0) {
+      results.push({ check: '[LIVENESS] CHECK 3 Data numbers rendered', status: 'DEFERRED', evidence: 'No numeric metrics detected — may be empty data or loading.' });
+    } else {
+      // P2: parse numeric values and check if at least one is > 0
+      const hasNonZero = metricTexts.some(t => {
+        const numStr = t.replace(/[^0-9.]/g, '');
+        return numStr.length > 0 && parseFloat(numStr) > 0;
+      });
+      if (hasNonZero) {
+        results.push({ check: '[LIVENESS] CHECK 3 Data numbers rendered', status: 'PASS', evidence: `${numbers} numeric metric(s) found; at least one > 0. Examples: ${metricTexts.slice(0, 3).join(', ')}.` });
+      } else {
+        results.push({ check: '[LIVENESS] CHECK 3 Data numbers rendered', status: 'DEFERRED', evidence: `${numbers} metric(s) found but all are $0 or 0 — data may not be loaded yet. Values: ${metricTexts.slice(0, 4).join(', ')}.` });
+      }
+    }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Data numbers rendered', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Data numbers rendered', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Navigation links functional (click one and verify URL changes)
@@ -1002,40 +1125,124 @@ async function runOrchestratorChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
 
-  // CHECK 2: Agent cards / list visible
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Agent list visible',
-    '[class*="agent"], [class*="card"], [class*="Agent"]', /no agents|empty/i));
-
-  // CHECK 3: Online / offline status indicators visible
+  // CHECK 2: Agent list — scoped to main content, validate real names + status (P1 hardened)
+  // Previously: counted any element matching class *agent* or text /running|idle/i — sidebar nav satisfied this.
+  // Now: scope to main/article content area, assert at least one item has a non-empty name string
+  // that is NOT a nav sidebar label.
   try {
-    const statusDots = await page.locator('[class*="status"], [class*="online"], [class*="offline"], [class*="indicator"]').count();
-    const statusText = await page.getByText(/online|offline|running|idle|stopped/i, { exact: false }).count();
+    await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-agents.png`) });
+    const agentInfo = await Promise.race([
+      page.evaluate(() => {
+        // Scope to main content area — excludes sidebar nav which also has "agent"-related text
+        const mainEl = document.querySelector('main, [class*="content"], [class*="agent-list"], [class*="agentList"], [class*="fleet"]') ?? document.body;
+        // Find agent-like elements within main (not nav/aside)
+        const candidates = Array.from(mainEl.querySelectorAll('[class*="agent"], [class*="card"], [class*="Agent"], [role="listitem"], [role="row"]:not([role="columnheader"])'))
+          .filter(el => {
+            // Must not be inside nav/aside/sidebar
+            let parent: Element | null = el.parentElement;
+            for (let i = 0; i < 8 && parent; i++) {
+              const tag = parent.tagName.toLowerCase();
+              const cls = parent.className ?? '';
+              if (tag === 'nav' || tag === 'aside' || /sidebar|nav-/i.test(cls)) return false;
+              parent = parent.parentElement;
+            }
+            return true;
+          });
+        const items = candidates.map(el => {
+          const text = (el.textContent ?? '').trim().replace(/\s+/g, ' ');
+          return text.slice(0, 60);
+        }).filter(t => t.length > 2 && !/^(Tasks|Activity|Agents|Fleet|Dashboard|Settings|Pipeline|Time|Projects|Reports|Contacts|Clients|Wiki|Signals|Analytics|Invoices|Financials)$/.test(t));
+        return { count: items.length, samples: items.slice(0, 3) };
+      }).catch(() => ({ count: 0, samples: [] as string[] })),
+      new Promise<{ count: number; samples: string[] }>(r => setTimeout(() => r({ count: 0, samples: [] }), 6000)),
+    ]);
+    if (agentInfo.count > 0) {
+      results.push({ check: 'CHECK 2 Agent list visible', status: 'PASS', evidence: `${agentInfo.count} agent item(s) in main content (scoped, excludes nav). Samples: ${agentInfo.samples.map(s => `"${s}"`).join(', ')}.` });
+    } else {
+      const emptyText = await page.getByText(/no agents|empty/i, { exact: false }).count();
+      results.push({ check: 'CHECK 2 Agent list visible', status: emptyText > 0 ? 'PASS' : 'DEFERRED', evidence: emptyText > 0 ? 'Empty agent state shown.' : 'No agent items found in main content area (scoped selector).' });
+    }
+  } catch (e) {
+    results.push({ check: 'CHECK 2 Agent list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
+  // CHECK 3: Online / offline status indicators visible — scoped to main content (P1 hardened)
+  // Previously: counted text /running|idle/i body-wide — nav "Agents" label satisfied this.
+  // Now: scope to main content area only, validate status values are real enum members.
+  try {
+    const statusInfo = await Promise.race([
+      page.evaluate(() => {
+        const mainEl = document.querySelector('main, [class*="content"], [class*="agent-list"], [class*="agentList"]') ?? document.body;
+        // Exclude nav/aside
+        const all = Array.from(mainEl.querySelectorAll('*')).filter(el => {
+          let p: Element | null = el.parentElement;
+          for (let i = 0; i < 6 && p; i++) {
+            if (p.tagName.toLowerCase() === 'nav' || p.tagName.toLowerCase() === 'aside') return false;
+            p = p.parentElement;
+          }
+          return true;
+        });
+        const statusTexts = all
+          .map(el => (el.children.length === 0 ? el.textContent?.trim() ?? '' : ''))
+          .filter(t => /^(online|offline|running|idle|stopped|active|dead|degraded|error)$/i.test(t));
+        const statusDots = mainEl.querySelectorAll('[class*="status"], [class*="online"], [class*="offline"], [class*="indicator"], [class*="badge"]').length;
+        return { statusTexts: statusTexts.slice(0, 5), statusDots };
+      }).catch(() => ({ statusTexts: [] as string[], statusDots: 0 })),
+      new Promise<{ statusTexts: string[]; statusDots: number }>(r => setTimeout(() => r({ statusTexts: [], statusDots: 0 }), 5000)),
+    ]);
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-status.png`) });
-    const hasStatus = statusDots > 0 || statusText > 0;
-    results.push({ check: 'CHECK 3 Agent status indicators', status: hasStatus ? 'PASS' : 'DEFERRED', evidence: hasStatus ? `${statusDots} status indicator(s), ${statusText} status label(s) visible.` : 'No status indicators found.' });
+    const hasStatus = statusInfo.statusTexts.length > 0 || statusInfo.statusDots > 0;
+    results.push({
+      check: 'CHECK 3 Agent status indicators',
+      status: hasStatus ? 'PASS' : 'DEFERRED',
+      evidence: hasStatus
+        ? `Status dots: ${statusInfo.statusDots}. Valid status labels (scoped): [${statusInfo.statusTexts.join(', ')}].`
+        : 'No status indicators or enum-matching status labels found in main content area.',
+    });
   } catch (e) {
     results.push({ check: 'CHECK 3 Agent status indicators', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
-  // CHECK 4: Click an agent card to see detail
+  // CHECK 4: Click an agent card to see detail — P1: assert detail shows correct agent text
   try {
-    const agentCard = page.locator('[class*="agent"], [class*="card"]').filter({ hasText: /[a-z]/i }).first();
-    if (await agentCard.count() > 0) {
-      const cardText = (await agentCard.textContent().catch(() => ''))?.slice(0, 30);
-      await agentCard.click();
+    const agentCard = page.locator('main [class*="agent"], main [class*="card"], main [class*="Agent"]').filter({ hasText: /[a-z]/i }).first();
+    const fallbackCard = page.locator('[class*="agent"], [class*="card"]').filter({ hasText: /[a-z]/i }).first();
+    const target = await agentCard.count() > 0 ? agentCard : fallbackCard;
+    if (await target.count() > 0) {
+      const cardText = ((await target.textContent().catch(() => '')) ?? '').trim().slice(0, 40);
+      const cardKeyword = cardText.slice(0, 20).trim();
+      await target.click();
       await page.waitForTimeout(1000);
       await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-4-agent-detail.png`) });
       const detailVisible = await page.locator('[class*="detail"], [class*="panel"], [role="dialog"]').count() > 0;
+      // P1: assert detail content contains the agent keyword
+      const detailText = await Promise.race([
+        page.evaluate(() => {
+          const d = document.querySelector('[class*="detail"], [class*="panel"], [role="dialog"]');
+          return d ? d.textContent ?? '' : '';
+        }).catch(() => ''),
+        new Promise<string>(r => setTimeout(() => r(''), 3000)),
+      ]);
+      const titleMatch = cardKeyword.length > 3 && detailText.toLowerCase().includes(cardKeyword.toLowerCase());
       await page.keyboard.press('Escape');
       await page.goBack().catch(() => {});
       await page.waitForTimeout(600);
-      results.push({ check: 'CHECK 4 Agent detail view', status: 'PASS', evidence: `Clicked "${cardText?.trim()}" agent card. Detail ${detailVisible ? 'panel/dialog appeared' : 'page/view navigated'}. Returned.` });
+      if (titleMatch) {
+        results.push({ check: 'CHECK 4 Agent detail view', status: 'PASS', evidence: `Clicked "${cardText}" agent card. Detail content matches agent name. ${detailVisible ? 'Panel/dialog appeared' : 'Page navigated'}.` });
+      } else {
+        // Opened something — DEFERRED if keyword match failed (detail may show different fields)
+        results.push({ check: 'CHECK 4 Agent detail view', status: 'DEFERRED', evidence: `Clicked "${cardText}". Detail ${detailVisible ? 'appeared' : 'navigated'} but keyword "${cardKeyword.slice(0, 15)}" not confirmed in detail text. Returned.` });
+      }
     } else {
       results.push({ check: 'CHECK 4 Agent detail view', status: 'DEFERRED', evidence: 'No agent cards to click.' });
     }
   } catch (e) {
     results.push({ check: 'CHECK 4 Agent detail view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
+
+  // CHECK 5: Timestamp freshness (P1) — heartbeat pages must show at least one < 30 min timestamp
+  results.push(await checkTimestampFreshness(page, 'CHECK 5 Timestamp freshness'));
 
   return results;
 }
@@ -1722,38 +1929,58 @@ async function runFleetTasksChecks(page: Page): Promise<CheckResult[]> {
     results.push({ check: 'CHECK 2 Task list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
-  // CHECK 3: Filter/tab controls visible (agent, status, priority filters)
+  // [LIVENESS] CHECK 3: Filter/tab controls visible (agent, status, priority filters)
+  // This is a precondition check — filter presence is confirmed, activation is not tested here.
   try {
     await shot(page, `${sp}-3-controls`);
     const tabCount    = await page.locator('[role="tab"], [class*="tab"]').count();
     const filterCount = await page.locator('select, [class*="filter"], input[placeholder*="search" i], input[placeholder*="filter" i]').count();
     const total = tabCount + filterCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 3 Filter controls visible', status: 'PASS', evidence: `Controls: tabs:${tabCount}, filters/search:${filterCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Filter controls visible', status: 'PASS', evidence: `Controls: tabs:${tabCount}, filters/search:${filterCount}.` });
     } else {
-      results.push({ check: 'CHECK 3 Filter controls visible', status: 'DEFERRED', evidence: 'No tabs or filter controls found.' });
+      results.push({ check: '[LIVENESS] CHECK 3 Filter controls visible', status: 'DEFERRED', evidence: 'No tabs or filter controls found.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Filter controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Filter controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
-  // CHECK 4: Click first task → detail or expand
+  // CHECK 4: Click first task → detail or expand (P1: assert detail shows correct task title)
   try {
     await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
     const urlBefore = page.url();
     const firstRow  = page.locator('table tbody tr, [class*="task-row"], [class*="taskRow"], [role="row"]:not([role="columnheader"]), [role="listitem"]').first();
     if (await firstRow.count() > 0) {
-      const rowText = (await firstRow.textContent().catch(() => ''))?.trim().slice(0, 50) ?? '';
+      // Capture row text before clicking — we will assert the detail panel/heading reflects this task
+      const rowText = (await firstRow.textContent().catch(() => ''))?.trim().slice(0, 80) ?? '';
+      // Extract a distinctive keyword from the row text (first 30 chars, skip nav-menu terms)
+      const rowKeyword = rowText.slice(0, 30).replace(/\s+/g, ' ').trim();
       await firstRow.click();
       await page.waitForTimeout(1000);
       await shot(page, `${sp}-4-detail`);
       const urlAfter = page.url();
       const detailVisible = await page.locator('[class*="detail"], [class*="panel"], [role="dialog"], h1, h2').count() > 0;
       if (urlAfter !== urlBefore || detailVisible) {
+        // P1: verify detail heading/panel text contains the row keyword
+        const detailText = await Promise.race([
+          page.evaluate(() => {
+            const detailEl = document.querySelector('[class*="detail"], [class*="panel"], [role="dialog"], h1, h2');
+            return detailEl ? (detailEl.textContent ?? '') : (document.querySelector('main')?.textContent ?? '');
+          }).catch(() => ''),
+          new Promise<string>(r => setTimeout(() => r(''), 3000)),
+        ]);
+        const titleMatch = rowKeyword.length > 3 && detailText.toLowerCase().includes(rowKeyword.toLowerCase().slice(0, 20));
         if (urlAfter !== urlBefore) {
           await page.goto(`https://hub.revopsglobal.com/app/fleet/tasks`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
         }
-        results.push({ check: 'CHECK 4 Task click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail visible: ${detailVisible}. Returned.` });
+        if (titleMatch) {
+          results.push({ check: 'CHECK 4 Task click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". Detail heading matches row text. URL: ${urlBefore} → ${urlAfter}. Returned.` });
+        } else if (detailVisible || urlAfter !== urlBefore) {
+          // Detail opened but title match failed — DEFERRED not FAIL (selector may miss heading container)
+          results.push({ check: 'CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked "${rowText.slice(0, 40)}". Detail opened but heading text mismatch — expected keyword "${rowKeyword.slice(0, 20)}" in detail. URL: ${urlBefore} → ${urlAfter}.` });
+        } else {
+          results.push({ check: 'CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked task but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
+        }
       } else {
         results.push({ check: 'CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked task but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
       }
@@ -1762,6 +1989,97 @@ async function runFleetTasksChecks(page: Page): Promise<CheckResult[]> {
     }
   } catch (e) {
     results.push({ check: 'CHECK 4 Task click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+  }
+
+  // CHECK 6: Create task and verify persistence (P0 — fixes known silent-failure RGOS e585eb4f)
+  // Navigates back to task list, submits a new task, then queries the list for the title.
+  try {
+    const testTitle = `qa-persist-${Date.now()}`;
+    const newBtn = page.locator([
+      'button:has-text("New task")',
+      'button:has-text("New Task")',
+      'button:has-text("Add task")',
+      'button:has-text("Add Task")',
+      'button:has-text("Create task")',
+      'button:has-text("Create Task")',
+      'button[aria-label*="new task" i]',
+      'button[aria-label*="add task" i]',
+      'button[aria-label*="create task" i]',
+      'a:has-text("New task")',
+      'a:has-text("Add task")',
+      'button:has-text("+")',
+    ].join(', ')).first();
+
+    if (await newBtn.count() === 0) {
+      results.push({ check: 'CHECK 6 Create task persists', status: 'DEFERRED', evidence: 'No create task button found — cannot test persistence.' });
+    } else {
+      await newBtn.click();
+      await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
+      await page.waitForTimeout(500);
+
+      // Find title input in the form
+      const titleInput = page.locator([
+        'input[placeholder*="task" i]',
+        'input[placeholder*="title" i]',
+        'input[name*="title" i]',
+        '[role="dialog"] input[type="text"]',
+        'form input[type="text"]',
+        'input[placeholder*="name" i]',
+      ].join(', ')).first();
+
+      if (await titleInput.count() === 0) {
+        await page.keyboard.press('Escape');
+        results.push({ check: 'CHECK 6 Create task persists', status: 'DEFERRED', evidence: 'Create task button clicked but no title input appeared — cannot test persistence.' });
+      } else {
+        await titleInput.fill(testTitle);
+        await shot(page, `${sp}-6-form-filled`);
+
+        // Find and click the submit button (Save / Create / Add / Submit)
+        const submitBtn = page.locator([
+          '[role="dialog"] button:has-text("Save")',
+          '[role="dialog"] button:has-text("Create")',
+          '[role="dialog"] button:has-text("Add")',
+          '[role="dialog"] button:has-text("Submit")',
+          'form button[type="submit"]',
+          'button:has-text("Save task")',
+          'button:has-text("Create task")',
+        ].join(', ')).first();
+
+        if (await submitBtn.count() === 0) {
+          // Try pressing Enter as submit
+          await titleInput.press('Enter');
+        } else {
+          await submitBtn.click();
+        }
+
+        // Wait for form to close and list to potentially refresh
+        await page.waitForTimeout(1500);
+        await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+        await shot(page, `${sp}-6-after-submit`);
+
+        // Query the task list for the test title (with timeout for async updates)
+        const found = await Promise.race([
+          (async () => {
+            // Poll up to 8s for the task title to appear
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const taskVisible = await page.getByText(testTitle, { exact: false }).count() > 0;
+              if (taskVisible) return true;
+              await new Promise(r => setTimeout(r, 1000));
+            }
+            return false;
+          })(),
+          new Promise<boolean>(r => setTimeout(() => r(false), 9000)),
+        ]);
+
+        if (found) {
+          results.push({ check: 'CHECK 6 Create task persists', status: 'PASS', evidence: `Task "${testTitle}" found in list after form submit — persistence confirmed.` });
+        } else {
+          results.push({ check: 'CHECK 6 Create task persists', status: 'FAIL', evidence: `Task "${testTitle}" NOT found in list after form submit — create silently failed (known RGOS e585eb4f pattern).` });
+        }
+      }
+    }
+  } catch (e) {
+    results.push({ check: 'CHECK 6 Create task persists', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key columns — task name, agent/assignee, status, priority
@@ -1882,6 +2200,9 @@ async function runFleetAgentsChecks(page: Page): Promise<CheckResult[]> {
   } catch (e) {
     results.push({ check: 'CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
+
+  // CHECK 6: Timestamp freshness (P1) — fleet agents page must show at least one < 30 min timestamp
+  results.push(await checkTimestampFreshness(page, 'CHECK 6 Timestamp freshness'));
 
   return results;
 }
