@@ -26,16 +26,16 @@ describe('writeExitReasonSnapshot (#339)', () => {
     writeExitReasonSnapshot(tmp, { type: 'crash', timestamp: 't1', reason: 'a', lastTask: '' });
     writeExitReasonSnapshot(tmp, { type: 'user-stop', timestamp: 't2', reason: 'b', lastTask: 'x' });
     const raw = readFileSync(join(tmp, 'exit-reason.json'), 'utf-8').trim();
-    expect(raw.split('\n').length).toBe(1); // single JSON object, not an append log
+    expect(raw.split('\n').length).toBe(1);
     expect(JSON.parse(raw).type).toBe('user-stop');
   });
 
-  it('empty reason defaults to "none" (mirrors crashes.log reason||none)', () => {
+  it('empty reason defaults to "none"', () => {
     writeExitReasonSnapshot(tmp, { type: 'crash', timestamp: 't', reason: '', lastTask: '' });
     expect(JSON.parse(readFileSync(join(tmp, 'exit-reason.json'), 'utf-8')).reason).toBe('none');
   });
 
-  it('never throws on an unwritable target dir (best-effort)', () => {
+  it('never throws on an unwritable target dir', () => {
     expect(() => writeExitReasonSnapshot(join(tmp, 'does', 'not', 'exist'), { type: 'crash', timestamp: 't', reason: '', lastTask: '' })).not.toThrow();
   });
 });
