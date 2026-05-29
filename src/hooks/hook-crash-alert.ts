@@ -148,6 +148,101 @@ function shouldSuppressDedup(stateDir: string, endType: string): boolean {
   return false;
 }
 
+/**
+ * A restart marker is valid for the hook only while younger than this. The TTL
+ * budget runs from when the marker is WRITTEN — which is inside sessionRefresh
+ * BEFORE `await stop()` — to the LAST hook firing it must still classify, i.e.
+ * firing#2. So the budget must cover: stop()'s PTY-exit wait + the inter-firing
+ * gap. The inter-firing gap is ~13-22s typical; stop() is normally fast but is
+ * NOT bounded — BUG-011 exists precisely because PTY exit can hang. 300s is
+ * sized to absorb a slow stop() on top of the firing gap, not just the gap.
+ *
+ * The daemon's post-restart heartbeat is the primary clear (see updateHeartbeat
+ * in src/bus/heartbeat.ts). This TTL is the BACKSTOP for a failed start that
+ * never heartbeats: a marker older than the TTL is treated as stale, ignored,
+ * and lazy-unlinked, so it cannot misclassify a genuine crash arbitrarily far
+ * in the future.
+ *
+ * Sized on a deliberate cost asymmetry: a TTL too tight re-exposes the exact
+ * false-positive bug (it would ignore the marker at a slow firing#2); a TTL too
+ * generous only widens the bounded failed-start false-negative window — which
+ * the heartbeat-staleness monitor catches as a secondary path anyway.
+ */
+const MARKER_TTL_MS = 300_000; // 5 minutes
+
+/**
+ * Read the hook's stdin JSON payload. Claude Code pipes a JSON object to
+ * SessionEnd hooks containing `session_id` (the ending session's id) plus
+ * other event fields. Mirrors the stdin-read in hook-context-status.ts.
+ * Returns {} on any failure. The session_id is recorded in crashes.log for
+ * audit; it is not used for classification.
+ */
+async function readHookInput(): Promise<{ session_id?: string }> {
+  const chunks: Buffer[] = [];
+  await new Promise<void>((resolve) => {
+    // Fallback so a stdin that never ends can't hang the hook. unref()'d and
+    // cleared on a clean end/error so the timer never keeps the process alive
+    // past its work — without this the hook lingers up to 1.5s after it is done.
+    const timer = setTimeout(resolve, 1500);
+    timer.unref?.();
+    const finish = () => { clearTimeout(timer); resolve(); };
+    process.stdin.on('data', (chunk: Buffer) => chunks.push(chunk));
+    process.stdin.on('end', finish);
+    process.stdin.on('error', finish);
+  });
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Classify a SessionEnd from the state markers, returning the marker-derived
+ * end type + reason — WITHOUT consuming the marker.
+ *
+ * Why no-consume: a single restart fires the SessionEnd hook TWICE for one
+ * logical session-end (~13-22s apart) — once from the dying PTY, once from
+ * the next PTY's fresh-launch cleanup. Every restart path writes exactly ONE
+ * hook-recognized marker. The previous code unlinked the marker on the first
+ * firing, so the second firing found nothing and was logged as a false
+ * `type=crash reason=none` — the FP pairs in crashes.log. Leaving the marker
+ * in place lets BOTH firings classify correctly. The marker is cleared by the
+ * daemon's first-post-restart heartbeat (the successor session is genuinely
+ * up by then), with the TTL above as the failed-start backstop.
+ *
+ * A marker older than MARKER_TTL_MS is treated as stale: ignored (so it
+ * cannot misclassify a later genuine crash) and lazy-unlinked here.
+ *
+ * Returns { endType: 'crash' } when no fresh marker is present.
+ */
+export function classifyFromMarkers(
+  stateDir: string,
+  markers: { file: string; type: string }[],
+  nowMs: number = Date.now(),
+): { endType: string; reason: string } {
+  for (const marker of markers) {
+    const markerPath = join(stateDir, marker.file);
+    if (!existsSync(markerPath)) continue;
+    let ageMs = 0;
+    try {
+      ageMs = nowMs - statSync(markerPath).mtimeMs;
+    } catch { /* unreadable mtime — treat as fresh, fall through to classify */ }
+    if (ageMs > MARKER_TTL_MS) {
+      // Stale: the first-heartbeat clear evidently never fired (failed
+      // start). Do not classify from it — lazy-unlink and keep looking.
+      try { unlinkSync(markerPath); } catch { /* ignore */ }
+      continue;
+    }
+    let reason = '';
+    try {
+      reason = readFileSync(markerPath, 'utf-8').trim();
+    } catch { /* ignore */ }
+    return { endType: marker.type, reason };
+  }
+  return { endType: 'crash', reason: '' };
+}
+
 async function main(): Promise<void> {
   const agentName = process.env.CTX_AGENT_NAME;
   const instanceId = process.env.CTX_INSTANCE_ID || 'default';
@@ -160,11 +255,16 @@ async function main(): Promise<void> {
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });
 
-  // Determine end type from state markers (written by other parts of the system
-  // before the Claude Code session exits).
-  let endType = 'crash';
-  let reason = '';
+  // session_id is recorded in crashes.log for audit only — not used to
+  // classify. (An earlier iteration deduped firings by session_id; that was
+  // wrong — the two firings of one restart carry DIFFERENT session_ids, one
+  // real session + one ephemeral. The fix is marker-handling, not id-dedup.)
+  const hookInput = await readHookInput();
+  const sessionId = typeof hookInput.session_id === 'string' ? hookInput.session_id : '';
 
+  // Determine end type from state markers (written by other parts of the
+  // system before the Claude Code session exits). Markers are NOT consumed
+  // here — see classifyFromMarkers for why (restart fires this hook twice).
   const markers = [
     { file: '.restart-planned', type: 'planned-restart' },
     { file: '.session-refresh', type: 'session-refresh' },
@@ -178,17 +278,9 @@ async function main(): Promise<void> {
     { file: '.daemon-stop', type: 'daemon-stop' },
   ];
 
-  for (const marker of markers) {
-    const markerPath = join(stateDir, marker.file);
-    if (existsSync(markerPath)) {
-      endType = marker.type;
-      try {
-        reason = readFileSync(markerPath, 'utf-8').trim();
-        unlinkSync(markerPath);
-      } catch { /* ignore */ }
-      break;
-    }
-  }
+  const classified = classifyFromMarkers(stateDir, markers);
+  let endType = classified.endType;
+  let reason = classified.reason;
 
   // If no marker matched but the stdout tail shows a rate-limit signature,
   // reclassify as rate-limited. Prevents the 30-minute 🚨 CRASH buzz storm
@@ -235,8 +327,12 @@ async function main(): Promise<void> {
   } catch { /* ignore */ }
 
   // Always log to crashes.log — we want visibility even when alerts are muted.
+  // session_id is recorded purely for audit (there is no session_id dedup —
+  // an earlier iteration tried that and it was removed). If a duplicate-firing
+  // FP ever slips through, two crashes.log lines sharing a session value make
+  // it provable after the fact.
   const timestamp = new Date().toISOString();
-  const logLine = `${timestamp} type=${endType} reason=${reason || 'none'} last_task=${lastTask}\n`;
+  const logLine = `${timestamp} type=${endType} reason=${reason || 'none'} session=${sessionId || 'unknown'} last_task=${lastTask}\n`;
   try {
     appendFileSync(join(logDir, 'crashes.log'), logLine);
   } catch { /* ignore */ }

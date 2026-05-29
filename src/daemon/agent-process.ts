@@ -299,6 +299,23 @@ export class AgentProcess {
    */
   async sessionRefresh(): Promise<void> {
     this.log('Session refresh (--continue restart)');
+    // Write .session-refresh marker so the SessionEnd crash-alert hook
+    // (src/hooks/hook-crash-alert.ts) classifies the imminent PTY exit as a
+    // session refresh rather than a crash. The hook's marker handler +
+    // quiet-suppression set + message switch were all wired for this type,
+    // but no writer existed — every --continue rollover at the session-time
+    // cap surfaced as a false-positive 'crash' on chief/analyst + the
+    // crashes.log file.
+    try {
+      const paths = resolvePaths(this.name, this.env.instanceId, this.env.org);
+      writeFileSync(
+        join(paths.stateDir, '.session-refresh'),
+        'session-time-cap rollover\n',
+        'utf-8',
+      );
+    } catch (err) {
+      this.log(`Failed to write .session-refresh marker: ${err}`);
+    }
     await this.stop();
     await this.start();
     this.log('Session refreshed');
