@@ -475,25 +475,25 @@ export class CodexAppServerPTY {
   }
 
   private async startOrResumeThread(mode: 'fresh' | 'continue'): Promise<void> {
-    if (mode === 'continue') {
-      const persisted = this.readThreadState();
-      if (persisted) {
-        try {
-          const resumed = await this.request<ThreadResponse>('thread/resume', {
-            threadId: persisted.threadId,
-            cwd: this._cwd,
-            ...THREAD_PERMISSION_OVERRIDES,
-            config: { features: { goals: true } },
-            excludeTurns: true,
-            persistExtendedHistory: true,
-          });
-          this.setThreadId(resumed.result?.thread.id || persisted.threadId);
-          return;
-        } catch (err) {
-          this._outputBuffer.push(`[codex-app-server] persisted resume failed: ${err}\n`);
-        }
+    const persisted = this.readThreadState();
+    if (persisted) {
+      try {
+        const resumed = await this.request<ThreadResponse>('thread/resume', {
+          threadId: persisted.threadId,
+          cwd: this._cwd,
+          ...THREAD_PERMISSION_OVERRIDES,
+          config: { features: { goals: true } },
+          excludeTurns: true,
+          persistExtendedHistory: true,
+        });
+        this.setThreadId(resumed.result?.thread.id || persisted.threadId);
+        return;
+      } catch (err) {
+        this._outputBuffer.push(`[codex-app-server] persisted resume failed: ${err}\n`);
       }
+    }
 
+    if (mode === 'continue') {
       const latest = await this.findLatestThreadForCwd();
       if (latest) {
         const resumed = await this.request<ThreadResponse>('thread/resume', {
