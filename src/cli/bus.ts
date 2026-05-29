@@ -883,7 +883,16 @@ busCommand
   .option('--cycle <name>', 'Cycle name')
   .action((action: string, agent: string, opts: { metric?: string; metricType?: string; surface?: string; direction?: string; window?: string; measurement?: string; loopInterval?: string; enabled?: string; cycle?: string }) => {
     const env = resolveEnv();
-    const agentDir = env.agentDir || process.cwd();
+    // Resolve the TARGET agent's dir, not the invoker's. When <agent> differs from
+    // the invoking agent, derive the path from frameworkRoot + org + agent name.
+    // Without this, manage-cycle always writes to the invoker's config.json.
+    const invokerDir = env.agentDir || process.cwd();
+    const agentDir =
+      agent !== env.agentName && env.frameworkRoot && env.org
+        ? join(env.frameworkRoot, 'orgs', env.org, 'agents', agent)
+        : agent !== env.agentName && env.frameworkRoot
+          ? join(env.frameworkRoot, 'agents', agent)
+          : invokerDir;
     if (opts.direction && opts.direction !== 'higher' && opts.direction !== 'lower') {
       console.error(`Invalid --direction '${opts.direction}'. Must be 'higher' or 'lower'`);
       process.exit(1);
