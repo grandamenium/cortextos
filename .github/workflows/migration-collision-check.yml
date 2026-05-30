@@ -1,0 +1,216 @@
+name: Migration Collision Check
+
+# Reusable workflow that detects cross-PR migration-number collisions.
+#
+# Fails the calling PR's check if any migration file the PR INTRODUCES has a
+# number that:
+#   (a) is already used by a migration on the base branch, OR
+#   (b) is already proposed by another open (non-draft) PR in the same repo.
+#
+# The actionable error annotation names the colliding artifact (on main, or
+# in open PR #N).
+#
+# Consumer usage:
+#
+#   # in <consumer>/.github/workflows/migrations.yml
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, reopened]
+#   jobs:
+#     migration-collision-check:
+#       uses: grandamenium/cortextos/.github/workflows/migration-collision-check.yml@main
+#       # optionally override defaults:
+#       # with:
+#       #   migrations-path: db/migrations
+#       #   filename-pattern: '^([0-9]{14})_'
+
+on:
+  workflow_call:
+    inputs:
+      migrations-path:
+        description: >
+          Directory containing migration files, relative to repo root.
+          Default: migrations
+        type: string
+        default: 'migrations'
+      filename-pattern:
+        description: >
+          POSIX extended regex matching migration filenames; capture group 1
+          must be the migration number. Default matches the 3-digit sequential
+          prefix (NNN_xxx.sql) — the conduit convention. Override for
+          timestamp-style migrations (e.g. '^([0-9]{14})_').
+        type: string
+        default: '^([0-9]{3})_'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  collision-check:
+    name: Detect migration-number collisions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head with full history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect migration-number collisions
+        env:
+          MIGRATIONS_PATH: ${{ inputs.migrations-path }}
+          FILENAME_PATTERN: ${{ inputs.filename-pattern }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 <<'PYEOF'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+
+          MIGRATIONS_PATH = os.environ['MIGRATIONS_PATH'].rstrip('/')
+          FILENAME_PATTERN = os.environ['FILENAME_PATTERN']
+          BASE_REF = os.environ['BASE_REF']
+          PR_NUMBER = int(os.environ['PR_NUMBER'])
+          REPO = os.environ['REPO']
+
+          try:
+              pattern = re.compile(FILENAME_PATTERN)
+          except re.error as e:
+              print(f"::error::Invalid filename-pattern regex: {e}")
+              sys.exit(2)
+          if pattern.groups < 1:
+              print(f"::error::filename-pattern must include capture group 1 for the migration number")
+              sys.exit(2)
+
+
+          def basename_matches(path):
+              return pattern.match(os.path.basename(path)) is not None
+
+
+          def extract_number(path):
+              m = pattern.match(os.path.basename(path))
+              return m.group(1) if m else None
+
+
+          def ls_ref_migrations(ref):
+              """Return list of migration paths in MIGRATIONS_PATH at the given git ref."""
+              try:
+                  out = subprocess.check_output(
+                      ['git', 'ls-tree', '-r', '--name-only', ref, '--', MIGRATIONS_PATH],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  )
+              except subprocess.CalledProcessError:
+                  return []
+              return [line for line in out.splitlines() if line and basename_matches(line)]
+
+
+          # Fetch the base ref so we can diff against it.
+          subprocess.run(
+              ['git', 'fetch', '--no-tags', 'origin', BASE_REF],
+              check=True, capture_output=True,
+          )
+
+          base_files = set(ls_ref_migrations(f'origin/{BASE_REF}'))
+          pr_files = set(ls_ref_migrations('HEAD'))
+
+          # New = paths in PR HEAD but not on base.
+          new_files = pr_files - base_files
+
+          if not new_files:
+              print(f"No new migrations in {MIGRATIONS_PATH}/ introduced by this PR. Nothing to check.")
+              sys.exit(0)
+
+          # Map number -> our new file. Catch internal duplicates first.
+          pr_new_by_num = {}
+          for f in sorted(new_files):
+              n = extract_number(f)
+              if n is None:
+                  continue
+              if n in pr_new_by_num:
+                  print(
+                      f"::error file={f}::Migration number {n} appears twice in this PR's "
+                      f"new files: {pr_new_by_num[n]} and {f}"
+                  )
+                  sys.exit(1)
+              pr_new_by_num[n] = f
+
+          if not pr_new_by_num:
+              print(f"No new migrations matched filename-pattern. Nothing to check.")
+              sys.exit(0)
+
+          # Map number -> base file.
+          base_by_num = {}
+          for f in base_files:
+              n = extract_number(f)
+              if n is not None:
+                  base_by_num[n] = f
+
+          collisions = []  # list of (number, our_file, where_str)
+
+          # Check 1: collide with base branch.
+          for n, f in pr_new_by_num.items():
+              if n in base_by_num:
+                  collisions.append((n, f, f"on {BASE_REF} as {base_by_num[n]}"))
+
+          # Check 2: collide with another open (non-draft) PR.
+          prs_raw = subprocess.check_output(
+              ['gh', 'pr', 'list', '--repo', REPO, '--state', 'open',
+               '--limit', '300', '--json', 'number,isDraft'],
+              text=True,
+          )
+          others = [
+              p for p in json.loads(prs_raw)
+              if not p['isDraft'] and p['number'] != PR_NUMBER
+          ]
+
+          for p in others:
+              other_num = p['number']
+              try:
+                  files_raw = subprocess.check_output(
+                      ['gh', 'api', f'repos/{REPO}/pulls/{other_num}/files', '--paginate'],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  )
+              except subprocess.CalledProcessError:
+                  print(f"::warning::Could not enumerate files for open PR #{other_num} (skipped)")
+                  continue
+              try:
+                  files_data = json.loads(files_raw)
+              except json.JSONDecodeError:
+                  print(f"::warning::Malformed file listing for open PR #{other_num} (skipped)")
+                  continue
+              for fdata in files_data:
+                  if fdata.get('status') != 'added':
+                      continue
+                  path = fdata.get('filename', '')
+                  if not path.startswith(MIGRATIONS_PATH + '/'):
+                      continue
+                  if not basename_matches(path):
+                      continue
+                  on = extract_number(path)
+                  if on and on in pr_new_by_num:
+                      collisions.append(
+                          (on, pr_new_by_num[on], f"in open PR #{other_num} as {path}")
+                      )
+
+          if collisions:
+              print(f"::error::Found {len(collisions)} migration-number collision(s).")
+              for n, f, where in collisions:
+                  print(
+                      f"::error file={f}::Migration number {n} (this PR introduces {f}) "
+                      f"collides {where}. Renumber to the next available value."
+                  )
+              sys.exit(1)
+
+          print(
+              f"Checked {len(pr_new_by_num)} new migration(s) against {len(base_by_num)} "
+              f"base-branch migration(s) and {len(others)} other open PR(s); no collisions."
+          )
+          PYEOF
