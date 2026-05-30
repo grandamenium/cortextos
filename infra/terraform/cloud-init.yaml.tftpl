@@ -196,7 +196,10 @@ write_files:
 
       log "running cortextos install/ecosystem"
       sudo -u cortextos --preserve-env=HOME,CTX_INSTANCE_ID,CTX_FRAMEWORK_ROOT,CTX_PROJECT_ROOT,CTX_ORG bash -lc "cd /opt/cortextos && CTX_FRAMEWORK_ROOT=/opt/cortextos node dist/cli.js install --instance $INSTANCE || true"
-      sudo -u cortextos --preserve-env=HOME,CTX_INSTANCE_ID,CTX_FRAMEWORK_ROOT,CTX_PROJECT_ROOT,CTX_ORG bash -lc "cd /opt/cortextos && CTX_FRAMEWORK_ROOT=/opt/cortextos node dist/cli.js ecosystem --instance $INSTANCE --org $ORG --output /opt/cortextos/ecosystem.config.js"
+      # NODE_ENV=production is set here so src/cli/ecosystem.ts picks `next start`
+      # for the dashboard. Without it, the dashboard PM2 entry runs `next dev`,
+      # which lazy-compiles each route on first hit — 30+ second cold loads.
+      sudo -u cortextos --preserve-env=HOME,CTX_INSTANCE_ID,CTX_FRAMEWORK_ROOT,CTX_PROJECT_ROOT,CTX_ORG bash -lc "cd /opt/cortextos && CTX_FRAMEWORK_ROOT=/opt/cortextos NODE_ENV=production node dist/cli.js ecosystem --instance $INSTANCE --org $ORG --output /opt/cortextos/ecosystem.config.js"
 
       # ── cloudflared install + token fetch ──────────────────────
       if ! id cloudflared >/dev/null 2>&1; then
