@@ -59,8 +59,3 @@ dashboard/test-*.py
 # AGENTS.md, memory skill, and scaffold files.
 !community/agents/research-agent/
 !community/agents/research-agent/**
-
-# Obsidian vault (personal memory layer — not part of framework)
-obsidian-vault/
-.obsidian/
-
