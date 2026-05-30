@@ -218,14 +218,14 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
     );
     await shot(page, '1-load');
     if (pageState.buttonCount > 0 || pageState.hasTimeCopy) {
-      results.push({ check: 'CHECK 1 Page load', status: 'PASS', evidence: `Page loaded. Heading: "${pageState.heading}". ${pageState.buttonCount} button(s). URL: ${page.url()}` });
+      results.push({ check: '[LIVENESS] CHECK 1 Page load', status: 'PASS', evidence: `Page loaded. Heading: "${pageState.heading}". ${pageState.buttonCount} button(s). URL: ${page.url()}` });
     } else {
-      results.push({ check: 'CHECK 1 Page load', status: 'FAIL', evidence: `Page DOM did not expose time page controls within 8s. URL: ${page.url()}` });
+      results.push({ check: '[LIVENESS] CHECK 1 Page load', status: 'FAIL', evidence: `Page DOM did not expose time page controls within 8s. URL: ${page.url()}` });
       return results;
     }
   } catch (e) {
     await shot(page, '1-load-fail');
-    results.push({ check: 'CHECK 1 Page load', status: 'FAIL', evidence: `Page did not load buttons within 15s: ${e}` });
+    results.push({ check: '[LIVENESS] CHECK 1 Page load', status: 'FAIL', evidence: `Page did not load buttons within 15s: ${e}` });
     return results; // can't continue
   }
 
@@ -254,7 +254,7 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
   );
 
   results.push({
-    check: 'CHECK 2 Historical data',
+    check: '[CORRECTNESS] CHECK 2 Historical data',
     status: fastState.hasHoursText || !fastState.hasEmptyState ? 'PASS' : 'DEFERRED',
     evidence: fastState.hasHoursText
       ? 'Time/hours text rendered in the authenticated /time shell.'
@@ -263,24 +263,24 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
         : 'Authenticated /time shell rendered, but no hours/empty-state text was detectable through DOM smoke.',
   });
   results.push({
-    check: 'CHECK 3 Log new entry',
+    check: '[LIVENESS] CHECK 3 Log new entry',
     status: fastState.hasProjectPicker ? 'PASS' : 'DEFERRED',
     evidence: fastState.hasProjectPicker
       ? 'Project picker/log-entry affordance text is present. Interaction intentionally skipped on timeout-prone route.'
       : 'Project picker/log-entry affordance was not detectable through DOM smoke.',
   });
   results.push({
-    check: 'CHECK 4 Edit entry',
+    check: '[LIVENESS] CHECK 4 Edit entry',
     status: 'DEFERRED',
     evidence: 'Skipped interactive edit probe because /time locator/actionability waits can wedge Chromium; page-load and DOM affordances are covered.',
   });
   results.push({
-    check: 'CHECK 5 Delete entry',
+    check: '[CORRECTNESS] CHECK 5 Delete entry',
     status: 'DEFERRED',
     evidence: 'Skipped destructive-adjacent delete probe on the timeout-prone route; no deletion was attempted.',
   });
   results.push({
-    check: 'CHECK 6 Date navigation',
+    check: '[LIVENESS] CHECK 6 Date navigation',
     status: fastState.navButtons > 0 ? 'PASS' : 'DEFERRED',
     evidence: fastState.navButtons > 0
       ? `${fastState.navButtons} date/navigation control(s) detected.`
@@ -311,13 +311,13 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
     }
     await shot(page, '2-history');
     if (foundDataWeek) {
-      results.push({ check: 'CHECK 2 Historical data', status: 'PASS', evidence: `Found time entries in week: "${dataWeekLabel.trim()}". Grid rendered correctly.` });
+      results.push({ check: '[CORRECTNESS] CHECK 2 Historical data', status: 'PASS', evidence: `Found time entries in week: "${dataWeekLabel.trim()}". Grid rendered correctly.` });
     } else {
-      results.push({ check: 'CHECK 2 Historical data', status: 'DEFERRED', evidence: 'No entries found in past 4 weeks. May be empty account or data issue.' });
+      results.push({ check: '[CORRECTNESS] CHECK 2 Historical data', status: 'DEFERRED', evidence: 'No entries found in past 4 weeks. May be empty account or data issue.' });
     }
   } catch (e) {
     await shot(page, '2-history-fail');
-    results.push({ check: 'CHECK 2 Historical data', status: 'FAIL', evidence: `Error navigating history: ${e}` });
+    results.push({ check: '[CORRECTNESS] CHECK 2 Historical data', status: 'FAIL', evidence: `Error navigating history: ${e}` });
   }
 
   // Checks 3/4/5 run on whatever week is currently shown (the data week if found)
@@ -332,7 +332,7 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
       const options = await page.locator('[role="option"], [cmdk-item], li[role="option"]').count();
       await page.keyboard.press('Escape');
       await page.waitForTimeout(300);
-      results.push({ check: 'CHECK 3 Log new entry', status: 'PASS', evidence: `Project combobox opened. ${options} option(s) visible. Closed with Escape — no save.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Log new entry', status: 'PASS', evidence: `Project combobox opened. ${options} option(s) visible. Closed with Escape — no save.` });
     } else {
       // Fallback: click a day cell
       const dayCell = page.locator('td, [role="gridcell"]').nth(2);
@@ -342,14 +342,14 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
         await shot(page, '3-log-cell-click');
         const inputVisible = await page.locator('input[type="number"], input[type="text"]').count() > 0;
         await page.keyboard.press('Escape');
-        results.push({ check: 'CHECK 3 Log new entry', status: inputVisible ? 'PASS' : 'FAIL', evidence: inputVisible ? 'Day cell click opened input. Closed without saving.' : 'Day cell click opened nothing.' });
+        results.push({ check: '[LIVENESS] CHECK 3 Log new entry', status: inputVisible ? 'PASS' : 'FAIL', evidence: inputVisible ? 'Day cell click opened input. Closed without saving.' : 'Day cell click opened nothing.' });
       } else {
-        results.push({ check: 'CHECK 3 Log new entry', status: 'DEFERRED', evidence: 'No project combobox or day cell found.' });
+        results.push({ check: '[LIVENESS] CHECK 3 Log new entry', status: 'DEFERRED', evidence: 'No project combobox or day cell found.' });
       }
     }
   } catch (e) {
     await shot(page, '3-log-fail');
-    results.push({ check: 'CHECK 3 Log new entry', status: 'FAIL', evidence: `Error: ${e}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Log new entry', status: 'FAIL', evidence: `Error: ${e}` });
   }
 
   // Shared helper: navigate back to the data week found in Check 2.
@@ -435,23 +435,23 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
         await page.waitForTimeout(300);
         // DEFERRED not FAIL when coords existed — clicking may navigate to a view that doesn't show
         // an input immediately (e.g. Day view loads but input requires a second click to focus).
-        results.push({ check: 'CHECK 4 Edit entry', status: (coords && inputVisible) ? 'PASS' : 'DEFERRED', evidence: (coords && inputVisible) ? 'Clicking hour cell opened an edit input (Day view entry form). Cancelled without saving.' : (coords ? 'Hour cell clicked but no input appeared — Day view may require second interaction (real friction, not harness error).' : 'Coordinates not obtained for hour cell.') });
+        results.push({ check: '[LIVENESS] CHECK 4 Edit entry', status: (coords && inputVisible) ? 'PASS' : 'DEFERRED', evidence: (coords && inputVisible) ? 'Clicking hour cell opened an edit input (Day view entry form). Cancelled without saving.' : (coords ? 'Hour cell clicked but no input appeared — Day view may require second interaction (real friction, not harness error).' : 'Coordinates not obtained for hour cell.') });
         await returnToDataWeek();
       } else {
-        results.push({ check: 'CHECK 4 Edit entry', status: 'DEFERRED', evidence: 'Data week found but could not locate an hour cell in the grid (distinct from summary cards).' });
+        results.push({ check: '[LIVENESS] CHECK 4 Edit entry', status: 'DEFERRED', evidence: 'Data week found but could not locate an hour cell in the grid (distinct from summary cards).' });
         await returnToDataWeek();
       }
     } else {
-      results.push({ check: 'CHECK 4 Edit entry', status: 'DEFERRED', evidence: 'No data week found — skipped.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Edit entry', status: 'DEFERRED', evidence: 'No data week found — skipped.' });
     }
   } catch (e) {
     const msg = (e as Error).message ?? '';
     // SPA navigation mid-evaluate destroys execution context — treat as transient, not a harness error
     if (msg.includes('Execution context was destroyed') || msg.includes('navigation')) {
-      results.push({ check: 'CHECK 4 Edit entry', status: 'DEFERRED', evidence: `Page navigated mid-check (SPA context destroyed) — transient, not a product gap.` });
+      results.push({ check: '[LIVENESS] CHECK 4 Edit entry', status: 'DEFERRED', evidence: `Page navigated mid-check (SPA context destroyed) — transient, not a product gap.` });
     } else {
       await shot(page, '4-edit-fail');
-      results.push({ check: 'CHECK 4 Edit entry', status: 'FAIL', evidence: `Error: ${msg.split('\n')[0]}` });
+      results.push({ check: '[LIVENESS] CHECK 4 Edit entry', status: 'FAIL', evidence: `Error: ${msg.split('\n')[0]}` });
     }
   }
 
@@ -524,26 +524,26 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
         const urlAfter = page.url();
         if (urlAfter !== urlBefore) {
           // Click caused navigation — we hit the wrong button (nav element, not delete)
-          return { check: 'CHECK 5 Delete entry', status: 'DEFERRED', evidence: `Button click navigated away (${urlBefore} → ${urlAfter}). Wrong button matched — delete button not found.` };
+          return { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'DEFERRED', evidence: `Button click navigated away (${urlBefore} → ${urlAfter}). Wrong button matched — delete button not found.` };
         }
         const dialog = await dialogLoc.count() > 0;
         if (dialog) {
           const cancelBtn = page.locator('[role="dialog"] button:has-text("Cancel"), [role="alertdialog"] button:has-text("Cancel")').first();
           await cancelBtn.click({ timeout: 3000 }).catch(() => page.keyboard.press('Escape'));
-          return { check: 'CHECK 5 Delete entry', status: 'PASS', evidence: `Delete button opened confirmation dialog (row had ${rowHoursBeforeClick}h). Clicked Cancel — no deletion.` };
+          return { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'PASS', evidence: `Delete button opened confirmation dialog (row had ${rowHoursBeforeClick}h). Clicked Cancel — no deletion.` };
         } else if (rowHoursBeforeClick > 0) {
           // >0h row with no dialog = real regression — AlertDialog should have appeared
-          return { check: 'CHECK 5 Delete entry', status: 'FAIL', evidence: `Delete clicked on row with ${rowHoursBeforeClick}h logged — no confirmation dialog appeared. Expected AlertDialog for non-zero row (TimesheetWeekView regression).` };
+          return { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'FAIL', evidence: `Delete clicked on row with ${rowHoursBeforeClick}h logged — no confirmation dialog appeared. Expected AlertDialog for non-zero row (TimesheetWeekView regression).` };
         } else {
           // 0h row with no dialog = intentional by-design silent path (no DB write)
-          return { check: 'CHECK 5 Delete entry', status: 'DEFERRED', evidence: `Delete clicked on row with 0h logged — no dialog appeared (intentional: TimesheetWeekView silently removes 0h rows without DB write). By-design safe path.` };
+          return { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'DEFERRED', evidence: `Delete clicked on row with 0h logged — no dialog appeared (intentional: TimesheetWeekView silently removes 0h rows without DB write). By-design safe path.` };
         }
       }
-      return { check: 'CHECK 5 Delete entry', status: 'DEFERRED', evidence: 'No delete button found with known selectors.' };
+      return { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'DEFERRED', evidence: 'No delete button found with known selectors.' };
     };
 
     if (!foundDataWeek) {
-      results.push({ check: 'CHECK 5 Delete entry', status: 'DEFERRED', evidence: 'No data week found — skipped.' });
+      results.push({ check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'DEFERRED', evidence: 'No data week found — skipped.' });
     } else {
       await shot(page, '5-before');
       let res = await attemptDelete();
@@ -612,29 +612,29 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
           await shot(page, '5-delete-clicked');
           const urlAfterFallback = page.url();
           if (urlAfterFallback !== urlBeforeFallback) {
-            res = { check: 'CHECK 5 Delete entry', status: 'DEFERRED', evidence: `Fallback button click navigated away (${urlBeforeFallback} → ${urlAfterFallback}). Wrong button matched.` };
+            res = { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'DEFERRED', evidence: `Fallback button click navigated away (${urlBeforeFallback} → ${urlAfterFallback}). Wrong button matched.` };
           } else {
             const dialog = await fallbackDialogLoc.count() > 0;
             if (dialog) {
               await page.keyboard.press('Escape');
-              res = { check: 'CHECK 5 Delete entry', status: 'PASS', evidence: `Row delete button (text: "${taggedDelete}") opened confirmation dialog (row had ${fallbackRowHours}h). Escaped — no deletion.` };
+              res = { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'PASS', evidence: `Row delete button (text: "${taggedDelete}") opened confirmation dialog (row had ${fallbackRowHours}h). Escaped — no deletion.` };
             } else if (fallbackRowHours > 0) {
-              res = { check: 'CHECK 5 Delete entry', status: 'FAIL', evidence: `Delete clicked on row with ${fallbackRowHours}h logged — no confirmation dialog appeared. Expected AlertDialog for non-zero row (TimesheetWeekView regression).` };
+              res = { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'FAIL', evidence: `Delete clicked on row with ${fallbackRowHours}h logged — no confirmation dialog appeared. Expected AlertDialog for non-zero row (TimesheetWeekView regression).` };
             } else {
-              res = { check: 'CHECK 5 Delete entry', status: 'DEFERRED', evidence: `Delete clicked on row with 0h logged — no dialog appeared (intentional: TimesheetWeekView silently removes 0h rows without DB write). By-design safe path.` };
+              res = { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'DEFERRED', evidence: `Delete clicked on row with 0h logged — no dialog appeared (intentional: TimesheetWeekView silently removes 0h rows without DB write). By-design safe path.` };
             }
           }
         } else {
           // Last resort: take a screenshot so evidence of state is available
           await shot(page, '5-no-delete-found');
-          res = { check: 'CHECK 5 Delete entry', status: 'DEFERRED', evidence: 'No delete button found on data row. See screenshot 5-no-delete-found.' };
+          res = { check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'DEFERRED', evidence: 'No delete button found on data row. See screenshot 5-no-delete-found.' };
         }
       }
       results.push(res);
     }
   } catch (e) {
     await shot(page, '5-delete-fail');
-    results.push({ check: 'CHECK 5 Delete entry', status: 'FAIL', evidence: `Error: ${e}` });
+    results.push({ check: '[CORRECTNESS] CHECK 5 Delete entry', status: 'FAIL', evidence: `Error: ${e}` });
   }
 
   // CHECK 6: Week navigation — navigate from wherever we are, verify date range changes
@@ -666,16 +666,16 @@ async function runTimeChecks(page: Page): Promise<CheckResult[]> {
         // Also click next to verify it works
         if (await nextBtn.count() > 0) { await nextBtn.click({ timeout: 3000 }); await page.waitForTimeout(800); }
         await shot(page, '6-nav-after-next');
-        results.push({ check: 'CHECK 6 Week navigation', status: 'PASS', evidence: `Prev changed date range from "${before?.trim()}" to "${after?.trim()}". Next button also present and clicked.` });
+        results.push({ check: '[LIVENESS] CHECK 6 Week navigation', status: 'PASS', evidence: `Prev changed date range from "${before?.trim()}" to "${after?.trim()}". Next button also present and clicked.` });
       } else {
-        results.push({ check: 'CHECK 6 Week navigation', status: 'FAIL', evidence: `Prev button clicked but date range did not change (before: "${before?.trim()}", after: "${after?.trim()}").` });
+        results.push({ check: '[LIVENESS] CHECK 6 Week navigation', status: 'FAIL', evidence: `Prev button clicked but date range did not change (before: "${before?.trim()}", after: "${after?.trim()}").` });
       }
     } else {
-      results.push({ check: 'CHECK 6 Week navigation', status: 'FAIL', evidence: 'No previous period button found.' });
+      results.push({ check: '[LIVENESS] CHECK 6 Week navigation', status: 'FAIL', evidence: 'No previous period button found.' });
     }
   } catch (e) {
     await shot(page, '6-nav-fail');
-    results.push({ check: 'CHECK 6 Week navigation', status: 'FAIL', evidence: `Error: ${e}` });
+    results.push({ check: '[LIVENESS] CHECK 6 Week navigation', status: 'FAIL', evidence: `Error: ${e}` });
   }
 
   return results;
@@ -911,15 +911,15 @@ async function runMyDayChecks(page: Page): Promise<CheckResult[]> {
     const numericVisible = await page.getByText(new RegExp(`\\b${String(now.getMonth()+1).padStart(2,'0')}[/\\-]${String(dayNum).padStart(2,'0')}\\b`), { exact: false }).count() > 0;
     const dateVisible = dayVisible || monthVisible || numericVisible;
     const found = dayVisible ? today : monthVisible ? `${month} ${dayNum}` : numericVisible ? 'numeric date' : null;
-    results.push({ check: "CHECK 2 Today's date shown", status: dateVisible ? 'PASS' : 'DEFERRED', evidence: dateVisible ? `Date visible as "${found}".` : `No date pattern found (tried: "${today}", "${month} ${dayNum}", numeric) — page design may not show today's date (friction item F-MD-2).` });
+    results.push({ check: "[CORRECTNESS] CHECK 2 Today's date shown", status: dateVisible ? 'PASS' : 'DEFERRED', evidence: dateVisible ? `Date visible as "${found}".` : `No date pattern found (tried: "${today}", "${month} ${dayNum}", numeric) — page design may not show today's date (friction item F-MD-2).` });
   } catch (e) {
-    results.push({ check: "CHECK 2 Today's date shown", status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: "[CORRECTNESS] CHECK 2 Today's date shown", status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Content sections (comms feed items, cards, etc.)
   // Wait up to 3s for comms feed to finish rendering before checking
   await page.waitForSelector('[class*="card"], [class*="section"], [class*="item"], li', { timeout: 3000 }).catch(() => {});
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 3 Content sections visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 3 Content sections visible',
     '[class*="card"], [class*="section"], [class*="item"], li', /no tasks|nothing scheduled|empty/i));
 
   // CHECK 4: Per-item action button (Dismiss/Respond/Review) on comms feed items
@@ -942,12 +942,12 @@ async function runMyDayChecks(page: Page): Promise<CheckResult[]> {
       await page.waitForTimeout(600);
       await page.keyboard.press('Escape');
       // Finding and clicking an action button is PASS — inline actions don't need a form
-      results.push({ check: 'CHECK 4 Item action button', status: 'PASS', evidence: `Action button "${ctaText?.trim()}" found and clicked. Escaped. Action buttons present on comms items.` });
+      results.push({ check: '[LIVENESS] CHECK 4 Item action button', status: 'PASS', evidence: `Action button "${ctaText?.trim()}" found and clicked. Escaped. Action buttons present on comms items.` });
     } else {
-      results.push({ check: 'CHECK 4 Item action button', status: 'DEFERRED', evidence: 'No per-item action buttons (Dismiss/Respond/Review/Done) found — confirmed friction item F-MD-6: comms items may lack explicit action controls.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Item action button', status: 'DEFERRED', evidence: 'No per-item action buttons (Dismiss/Respond/Review/Done) found — confirmed friction item F-MD-6: comms items may lack explicit action controls.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Item action button', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Item action button', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -965,7 +965,7 @@ async function runTasksChecks(page: Page): Promise<CheckResult[]> {
   if (loadResult.status === 'FAIL') return results;
 
   // CHECK 2: Task list or empty state — try broad selectors since no semantic roles present
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Task list visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Task list visible',
     '[class*="task-item"], [class*="task-row"], [class*="TaskRow"], [class*="TaskItem"], [role="listitem"], [role="row"], tr, li[class], div[class*="row"]',
     /no tasks|empty|nothing here|no items/i));
 
@@ -973,9 +973,9 @@ async function runTasksChecks(page: Page): Promise<CheckResult[]> {
   try {
     const filters = await page.locator('button[class*="filter"], [role="tab"], select, [class*="Filter"], [class*="Tab"]').count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-filters.png`) });
-    results.push({ check: 'CHECK 3 Filters/tabs visible', status: filters > 0 ? 'PASS' : 'DEFERRED', evidence: filters > 0 ? `${filters} filter/tab control(s) visible.` : 'No filter/tab controls found.' });
+    results.push({ check: '[LIVENESS] CHECK 3 Filters/tabs visible', status: filters > 0 ? 'PASS' : 'DEFERRED', evidence: filters > 0 ? `${filters} filter/tab control(s) visible.` : 'No filter/tab controls found.' });
   } catch (e) {
-    results.push({ check: 'CHECK 3 Filters/tabs visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Filters/tabs visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Create task form — open and cancel
@@ -1018,12 +1018,12 @@ async function runTasksChecks(page: Page): Promise<CheckResult[]> {
       ].join(', ')).count() > 0;
       await page.keyboard.press('Escape');
       await page.waitForTimeout(300);
-      results.push({ check: 'CHECK 4 Create task form', status: formVisible ? 'PASS' : 'DEFERRED', evidence: formVisible ? 'Create task button opened a form with input. Escaped without saving.' : 'Create task button clicked but no input form appeared.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Create task form', status: formVisible ? 'PASS' : 'DEFERRED', evidence: formVisible ? 'Create task button opened a form with input. Escaped without saving.' : 'Create task button clicked but no input form appeared.' });
     } else {
-      results.push({ check: 'CHECK 4 Create task form', status: 'DEFERRED', evidence: 'No create task button found.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Create task form', status: 'DEFERRED', evidence: 'No create task button found.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Create task form', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Create task form', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1056,9 +1056,9 @@ async function runDashboardChecks(page: Page): Promise<CheckResult[]> {
   try {
     const cards = await page.locator('[class*="card"], [class*="metric"], [class*="stat"], [class*="KPI"]').count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-cards.png`) });
-    results.push({ check: 'CHECK 2 Metric cards visible', status: cards > 0 ? 'PASS' : 'DEFERRED', evidence: cards > 0 ? `${cards} metric/stat card(s) visible.` : 'No metric cards found.' });
+    results.push({ check: '[LIVENESS] CHECK 2 Metric cards visible', status: cards > 0 ? 'PASS' : 'DEFERRED', evidence: cards > 0 ? `${cards} metric/stat card(s) visible.` : 'No metric cards found.' });
   } catch (e) {
-    results.push({ check: 'CHECK 2 Metric cards visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Metric cards visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Key numbers rendered (non-placeholder) — P2: assert at least one metric > 0
@@ -1103,12 +1103,12 @@ async function runDashboardChecks(page: Page): Promise<CheckResult[]> {
       // Navigate back — use waitUntil:'domcontentloaded' to avoid race with in-flight SPA nav
       await page.goto(`${HUB_URL}/`, { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(500);
-      results.push({ check: 'CHECK 4 Nav link navigation', status: newUrl !== `${HUB_URL}/` ? 'PASS' : 'DEFERRED', evidence: `Clicking "${linkText?.trim()}" navigated to ${newUrl}. Returned to dashboard.` });
+      results.push({ check: '[LIVENESS] CHECK 4 Nav link navigation', status: newUrl !== `${HUB_URL}/` ? 'PASS' : 'DEFERRED', evidence: `Clicking "${linkText?.trim()}" navigated to ${newUrl}. Returned to dashboard.` });
     } else {
-      results.push({ check: 'CHECK 4 Nav link navigation', status: 'DEFERRED', evidence: 'No sidebar nav links found.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Nav link navigation', status: 'DEFERRED', evidence: 'No sidebar nav links found.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Nav link navigation', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Nav link navigation', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1158,13 +1158,13 @@ async function runOrchestratorChecks(page: Page): Promise<CheckResult[]> {
       new Promise<{ count: number; samples: string[] }>(r => setTimeout(() => r({ count: 0, samples: [] }), 6000)),
     ]);
     if (agentInfo.count > 0) {
-      results.push({ check: 'CHECK 2 Agent list visible', status: 'PASS', evidence: `${agentInfo.count} agent item(s) in main content (scoped, excludes nav). Samples: ${agentInfo.samples.map(s => `"${s}"`).join(', ')}.` });
+      results.push({ check: '[CORRECTNESS] CHECK 2 Agent list visible', status: 'PASS', evidence: `${agentInfo.count} agent item(s) in main content (scoped, excludes nav). Samples: ${agentInfo.samples.map(s => `"${s}"`).join(', ')}.` });
     } else {
       const emptyText = await page.getByText(/no agents|empty/i, { exact: false }).count();
-      results.push({ check: 'CHECK 2 Agent list visible', status: emptyText > 0 ? 'PASS' : 'DEFERRED', evidence: emptyText > 0 ? 'Empty agent state shown.' : 'No agent items found in main content area (scoped selector).' });
+      results.push({ check: '[CORRECTNESS] CHECK 2 Agent list visible', status: emptyText > 0 ? 'PASS' : 'DEFERRED', evidence: emptyText > 0 ? 'Empty agent state shown.' : 'No agent items found in main content area (scoped selector).' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Agent list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 2 Agent list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Online / offline status indicators visible — scoped to main content (P1 hardened)
@@ -1194,14 +1194,14 @@ async function runOrchestratorChecks(page: Page): Promise<CheckResult[]> {
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-status.png`) });
     const hasStatus = statusInfo.statusTexts.length > 0 || statusInfo.statusDots > 0;
     results.push({
-      check: 'CHECK 3 Agent status indicators',
+      check: '[CORRECTNESS] CHECK 3 Agent status indicators',
       status: hasStatus ? 'PASS' : 'DEFERRED',
       evidence: hasStatus
         ? `Status dots: ${statusInfo.statusDots}. Valid status labels (scoped): [${statusInfo.statusTexts.join(', ')}].`
         : 'No status indicators or enum-matching status labels found in main content area.',
     });
   } catch (e) {
-    results.push({ check: 'CHECK 3 Agent status indicators', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 3 Agent status indicators', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click an agent card to see detail — P1: assert detail shows correct agent text
@@ -1229,20 +1229,20 @@ async function runOrchestratorChecks(page: Page): Promise<CheckResult[]> {
       await page.goBack().catch(() => {});
       await page.waitForTimeout(600);
       if (titleMatch) {
-        results.push({ check: 'CHECK 4 Agent detail view', status: 'PASS', evidence: `Clicked "${cardText}" agent card. Detail content matches agent name. ${detailVisible ? 'Panel/dialog appeared' : 'Page navigated'}.` });
+        results.push({ check: '[CORRECTNESS] CHECK 4 Agent detail view', status: 'PASS', evidence: `Clicked "${cardText}" agent card. Detail content matches agent name. ${detailVisible ? 'Panel/dialog appeared' : 'Page navigated'}.` });
       } else {
         // Opened something — DEFERRED if keyword match failed (detail may show different fields)
-        results.push({ check: 'CHECK 4 Agent detail view', status: 'DEFERRED', evidence: `Clicked "${cardText}". Detail ${detailVisible ? 'appeared' : 'navigated'} but keyword "${cardKeyword.slice(0, 15)}" not confirmed in detail text. Returned.` });
+        results.push({ check: '[CORRECTNESS] CHECK 4 Agent detail view', status: 'DEFERRED', evidence: `Clicked "${cardText}". Detail ${detailVisible ? 'appeared' : 'navigated'} but keyword "${cardKeyword.slice(0, 15)}" not confirmed in detail text. Returned.` });
       }
     } else {
-      results.push({ check: 'CHECK 4 Agent detail view', status: 'DEFERRED', evidence: 'No agent cards to click.' });
+      results.push({ check: '[CORRECTNESS] CHECK 4 Agent detail view', status: 'DEFERRED', evidence: 'No agent cards to click.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Agent detail view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 4 Agent detail view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Timestamp freshness (P1) — heartbeat pages must show at least one < 30 min timestamp
-  results.push(await checkTimestampFreshness(page, 'CHECK 5 Timestamp freshness'));
+  results.push(await checkTimestampFreshness(page, '[CORRECTNESS] CHECK 5 Timestamp freshness'));
 
   return results;
 }
@@ -1259,16 +1259,16 @@ async function runFleetActivityChecks(page: Page): Promise<CheckResult[]> {
   if (loadResult.status === 'FAIL') return results;
 
   // CHECK 2: Activity events visible
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Activity events visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Activity events visible',
     '[class*="event"], [class*="activity"], [class*="item"], [class*="log"], li', /no activity|no events|empty/i));
 
   // CHECK 3: Timestamps on events
   try {
     // Timestamps appear as "3 minutes ago", "less than a minute ago", "2 hours ago", "just now", or HH:MM
     const timestamps = await page.getByText(/\d+ (second|minute|hour|day)s? ago|less than a minute|just now|today|yesterday|\d{1,2}:\d{2}/i, { exact: false }).count();
-    results.push({ check: 'CHECK 3 Event timestamps', status: timestamps > 0 ? 'PASS' : 'DEFERRED', evidence: timestamps > 0 ? `${timestamps} timestamp(s) visible on events.` : 'No timestamps found on events.' });
+    results.push({ check: '[LIVENESS] CHECK 3 Event timestamps', status: timestamps > 0 ? 'PASS' : 'DEFERRED', evidence: timestamps > 0 ? `${timestamps} timestamp(s) visible on events.` : 'No timestamps found on events.' });
   } catch (e) {
-    results.push({ check: 'CHECK 3 Event timestamps', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Event timestamps', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Filter controls (event-type pill buttons: All, agent spawned, task created, etc.)
@@ -1278,9 +1278,9 @@ async function runFleetActivityChecks(page: Page): Promise<CheckResult[]> {
       'button:has-text("All"), button:has-text("agent spawned"), button:has-text("task created"), button:has-text("task completed"), button:has-text("system"), select, [role="combobox"], button[class*="filter" i], input[placeholder*="filter" i], input[placeholder*="search" i]'
     ).count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-4-filters.png`) });
-    results.push({ check: 'CHECK 4 Filter controls', status: filterPills > 0 ? 'PASS' : 'DEFERRED', evidence: filterPills > 0 ? `${filterPills} filter/pill control(s) visible (event-type tabs).` : 'No filter controls found.' });
+    results.push({ check: '[LIVENESS] CHECK 4 Filter controls', status: filterPills > 0 ? 'PASS' : 'DEFERRED', evidence: filterPills > 0 ? `${filterPills} filter/pill control(s) visible (event-type tabs).` : 'No filter controls found.' });
   } catch (e) {
-    results.push({ check: 'CHECK 4 Filter controls', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Filter controls', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1298,7 +1298,7 @@ async function runWorkInboxChecks(page: Page): Promise<CheckResult[]> {
   if (loadResult.status === 'FAIL') return results;
 
   // CHECK 2: Inbox items or empty state
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Inbox items visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Inbox items visible',
     '[class*="inbox-item"], [class*="message"], [class*="item"], [role="listitem"]', /inbox is empty|no messages|nothing here/i));
 
   // CHECK 3 + CHECK 4: Click first inbox item, verify read view AND capture action buttons
@@ -1341,12 +1341,12 @@ async function runWorkInboxChecks(page: Page): Promise<CheckResult[]> {
       await page.keyboard.press('Escape');
       await page.goBack().catch(() => {});
       await page.waitForTimeout(500);
-      results.push({ check: 'CHECK 3 Item read view', status: 'PASS', evidence: `Clicked "${itemText}". Content ${contentVisible ? 'displayed' : 'page navigated'}. Returned.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Item read view', status: 'PASS', evidence: `Clicked "${itemText}". Content ${contentVisible ? 'displayed' : 'page navigated'}. Returned.` });
     } else {
-      results.push({ check: 'CHECK 3 Item read view', status: 'DEFERRED', evidence: 'No inbox items to click.' });
+      results.push({ check: '[LIVENESS] CHECK 3 Item read view', status: 'DEFERRED', evidence: 'No inbox items to click.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Item read view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Item read view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Action buttons present — uses evidence captured during CHECK 3 item-open context
@@ -1365,12 +1365,12 @@ async function runWorkInboxChecks(page: Page): Promise<CheckResult[]> {
       }
     }
     results.push({
-      check: 'CHECK 4 Action buttons present',
+      check: '[LIVENESS] CHECK 4 Action buttons present',
       status: actionBtnsInDetail > 0 ? 'PASS' : 'DEFERRED',
       evidence: actionBtnsEvidence,
     });
   } catch (e) {
-    results.push({ check: 'CHECK 4 Action buttons present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Action buttons present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1388,7 +1388,7 @@ async function runWorkApprovalsChecks(page: Page): Promise<CheckResult[]> {
   if (loadResult.status === 'FAIL') return results;
 
   // CHECK 2: Pending approvals or empty state
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Approval queue',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Approval queue',
     'main button:has-text("Approve"), main button:has-text("Deny"), main [class*="border-caution"], main [class*="bg-caution"]',
     /no pending approvals|no approvals|nothing pending|empty|all done/i));
 
@@ -1427,12 +1427,12 @@ async function runWorkApprovalsChecks(page: Page): Promise<CheckResult[]> {
 
     if (sumCounts(counts) > 0) {
       const detailNote = itemText ? ` after opening "${itemText.slice(0, 30)}"` : '';
-      results.push({ check: 'CHECK 3 Approve/Reject buttons', status: 'PASS', evidence: `${counts.approve ?? 0} Approve button(s), ${counts.reject ?? 0} Reject button(s) visible in ${context}${detailNote}. NOT clicked — NO-SEND.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Approve/Reject buttons', status: 'PASS', evidence: `${counts.approve ?? 0} Approve button(s), ${counts.reject ?? 0} Reject button(s) visible in ${context}${detailNote}. NOT clicked — NO-SEND.` });
     } else {
-      results.push({ check: 'CHECK 3 Approve/Reject buttons', status: 'DEFERRED', evidence: 'No Approve/Reject buttons found in list or first detail view. Queue may be empty or layout changed.' });
+      results.push({ check: '[LIVENESS] CHECK 3 Approve/Reject buttons', status: 'DEFERRED', evidence: 'No Approve/Reject buttons found in list or first detail view. Queue may be empty or layout changed.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Approve/Reject buttons', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Approve/Reject buttons', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click an approval item to view detail, verify modal/panel, then cancel
@@ -1446,12 +1446,12 @@ async function runWorkApprovalsChecks(page: Page): Promise<CheckResult[]> {
       const detailVisible = await page.locator('[role="dialog"], [role="alertdialog"], [class*="modal"], [class*="panel"], [class*="detail"]').count() > 0;
       await page.keyboard.press('Escape');
       await page.waitForTimeout(300);
-      results.push({ check: 'CHECK 4 Approval detail view', status: 'PASS', evidence: `Clicked approval item: "${itemText?.slice(0,30)}". Detail ${detailVisible ? 'dialog/panel shown' : 'navigated'}. Escaped.` });
+      results.push({ check: '[LIVENESS] CHECK 4 Approval detail view', status: 'PASS', evidence: `Clicked approval item: "${itemText?.slice(0,30)}". Detail ${detailVisible ? 'dialog/panel shown' : 'navigated'}. Escaped.` });
     } else {
-      results.push({ check: 'CHECK 4 Approval detail view', status: 'DEFERRED', evidence: 'No approval items to inspect.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Approval detail view', status: 'DEFERRED', evidence: 'No approval items to inspect.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Approval detail view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Approval detail view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1488,14 +1488,14 @@ async function runCompaniesChecks(page: Page): Promise<CheckResult[]> {
     ]);
     const total = counts.rows || counts.roleRows || counts.cards;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Company list visible', status: 'PASS', evidence: `${total} company row(s)/card(s) visible (tbody:${counts.rows}, role-row:${counts.roleRows}, cards:${counts.cards}).` });
+      results.push({ check: '[LIVENESS] CHECK 2 Company list visible', status: 'PASS', evidence: `${total} company row(s)/card(s) visible (tbody:${counts.rows}, role-row:${counts.roleRows}, cards:${counts.cards}).` });
     } else if (counts.empty) {
-      results.push({ check: 'CHECK 2 Company list visible', status: 'DEFERRED', evidence: 'Empty state shown — no companies in dataset.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Company list visible', status: 'DEFERRED', evidence: 'Empty state shown — no companies in dataset.' });
     } else {
-      results.push({ check: 'CHECK 2 Company list visible', status: 'DEFERRED', evidence: `No rows/cards found (tbody:${counts.rows}, role-row:${counts.roleRows}, cards:${counts.cards}). Page may use unrecognized layout.` });
+      results.push({ check: '[LIVENESS] CHECK 2 Company list visible', status: 'DEFERRED', evidence: `No rows/cards found (tbody:${counts.rows}, role-row:${counts.roleRows}, cards:${counts.cards}). Page may use unrecognized layout.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Company list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Company list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Search input present and functional
@@ -1521,12 +1521,12 @@ async function runCompaniesChecks(page: Page): Promise<CheckResult[]> {
         new Promise<number>(r => setTimeout(() => r(-1), 4000)),
       ]);
       await searchInput.clear();
-      results.push({ check: 'CHECK 3 Search filter works', status: 'PASS', evidence: `Search input found (placeholder="${inputInfo.placeholder}"). Before: ${inputInfo.before} rows, after "zzznomatch": ${afterCount}. Cleared.` });
+      results.push({ check: '[CORRECTNESS] CHECK 3 Search filter works', status: 'PASS', evidence: `Search input found (placeholder="${inputInfo.placeholder}"). Before: ${inputInfo.before} rows, after "zzznomatch": ${afterCount}. Cleared.` });
     } else {
-      results.push({ check: 'CHECK 3 Search filter works', status: 'DEFERRED', evidence: 'No search input found on page.' });
+      results.push({ check: '[CORRECTNESS] CHECK 3 Search filter works', status: 'DEFERRED', evidence: 'No search input found on page.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Search filter works', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 3 Search filter works', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first company row → detail view loads
@@ -1552,15 +1552,15 @@ async function runCompaniesChecks(page: Page): Promise<CheckResult[]> {
       ]);
       if (urlAfter !== urlBefore || hasDetail) {
         await page.goto(`${HUB_URL}/companies`, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-        results.push({ check: 'CHECK 4 Row click → detail', status: 'PASS', evidence: `Clicked "${rowInfo.text.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail content: ${hasDetail}. Returned.` });
+        results.push({ check: '[LIVENESS] CHECK 4 Row click → detail', status: 'PASS', evidence: `Clicked "${rowInfo.text.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail content: ${hasDetail}. Returned.` });
       } else {
-        results.push({ check: 'CHECK 4 Row click → detail', status: 'DEFERRED', evidence: `Clicked row but URL/content unchanged. Row: "${rowInfo.text.slice(0, 40)}".` });
+        results.push({ check: '[LIVENESS] CHECK 4 Row click → detail', status: 'DEFERRED', evidence: `Clicked row but URL/content unchanged. Row: "${rowInfo.text.slice(0, 40)}".` });
       }
     } else {
-      results.push({ check: 'CHECK 4 Row click → detail', status: 'DEFERRED', evidence: 'No clickable company rows found.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Row click → detail', status: 'DEFERRED', evidence: 'No clickable company rows found.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Row click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Row click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key columns present — name, domain/website, and at least one relational column
@@ -1578,12 +1578,12 @@ async function runCompaniesChecks(page: Page): Promise<CheckResult[]> {
     if (hasDomain)   cols.push('domain/website');
     if (hasRelation) cols.push('contacts/deals/owner');
     if (cols.length >= 2) {
-      results.push({ check: 'CHECK 5 Key columns present', status: 'PASS', evidence: `Columns detected: ${cols.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'PASS', evidence: `Columns detected: ${cols.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Key columns present', status: 'DEFERRED', evidence: `Only found: ${cols.join(', ') || 'none'}. Page may use icons only or unconventional labels.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'DEFERRED', evidence: `Only found: ${cols.join(', ') || 'none'}. Page may use icons only or unconventional labels.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Key columns present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1612,13 +1612,13 @@ async function runProjectsChecks(page: Page): Promise<CheckResult[]> {
     const roleRowCount = await page.locator('[role="row"]:not([role="columnheader"]), [role="listitem"]').count();
     const total = rowCount || cardCount || roleRowCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Project list visible', status: 'PASS', evidence: `${total} project row(s)/card(s) visible (rows:${rowCount}, cards:${cardCount}, listitems:${roleRowCount}).` });
+      results.push({ check: '[LIVENESS] CHECK 2 Project list visible', status: 'PASS', evidence: `${total} project row(s)/card(s) visible (rows:${rowCount}, cards:${cardCount}, listitems:${roleRowCount}).` });
     } else {
       const emptyText = await page.getByText(/no projects|empty|no results/i).count();
-      results.push({ check: 'CHECK 2 Project list visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no projects in dataset.' : 'No project rows/cards found — page may use unrecognized layout.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Project list visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no projects in dataset.' : 'No project rows/cards found — page may use unrecognized layout.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Project list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Project list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Search / filter input
@@ -1633,12 +1633,12 @@ async function runProjectsChecks(page: Page): Promise<CheckResult[]> {
       const afterCount = await page.locator('table tbody tr, [role="row"]:not([role="columnheader"]), [role="listitem"], [class*="project"]').count();
       await searchInput.clear();
       await page.waitForTimeout(500);
-      results.push({ check: 'CHECK 3 Search filter works', status: 'PASS', evidence: `Search input found. Before: ${beforeCount} items, after "zzznomatch": ${afterCount} items. Cleared.` });
+      results.push({ check: '[CORRECTNESS] CHECK 3 Search filter works', status: 'PASS', evidence: `Search input found. Before: ${beforeCount} items, after "zzznomatch": ${afterCount} items. Cleared.` });
     } else {
-      results.push({ check: 'CHECK 3 Search filter works', status: 'DEFERRED', evidence: 'No search input found on page.' });
+      results.push({ check: '[CORRECTNESS] CHECK 3 Search filter works', status: 'DEFERRED', evidence: 'No search input found on page.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Search filter works', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 3 Search filter works', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first project row → detail view loads
@@ -1657,15 +1657,15 @@ async function runProjectsChecks(page: Page): Promise<CheckResult[]> {
       const detailVisible = await page.locator('[class*="detail"], [class*="profile"], [class*="project-header"], [class*="projectHeader"], h1, h2').count() > 0;
       if (urlAfter !== urlBefore || detailVisible) {
         await page.goto(`https://hub.revopsglobal.com/projects`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
-        results.push({ check: 'CHECK 4 Row click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail visible: ${detailVisible}. Returned.` });
+        results.push({ check: '[LIVENESS] CHECK 4 Row click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail visible: ${detailVisible}. Returned.` });
       } else {
-        results.push({ check: 'CHECK 4 Row click → detail', status: 'DEFERRED', evidence: `Clicked row but URL/content unchanged. Row text: "${rowText.slice(0, 40)}".` });
+        results.push({ check: '[LIVENESS] CHECK 4 Row click → detail', status: 'DEFERRED', evidence: `Clicked row but URL/content unchanged. Row text: "${rowText.slice(0, 40)}".` });
       }
     } else {
-      results.push({ check: 'CHECK 4 Row click → detail', status: 'DEFERRED', evidence: 'No project rows/cards to click.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Row click → detail', status: 'DEFERRED', evidence: 'No project rows/cards to click.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Row click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Row click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key columns / fields present — name, client/company, status, owner
@@ -1681,12 +1681,12 @@ async function runProjectsChecks(page: Page): Promise<CheckResult[]> {
     if (hasClient) cols.push('client/company');
     if (hasStatus) cols.push('status/phase');
     if (cols.length >= 2) {
-      results.push({ check: 'CHECK 5 Key columns present', status: 'PASS', evidence: `Columns detected: ${cols.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'PASS', evidence: `Columns detected: ${cols.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Key columns present', status: 'DEFERRED', evidence: `Only found: ${cols.join(', ') || 'none'}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'DEFERRED', evidence: `Only found: ${cols.join(', ') || 'none'}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Key columns present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1715,13 +1715,13 @@ async function runPipelineChecks(page: Page): Promise<CheckResult[]> {
     const roleCount  = await page.locator('[role="row"]:not([role="columnheader"]), [role="listitem"]').count();
     const total = rowCount || cardCount || roleCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Deal list visible', status: 'PASS', evidence: `${total} deal/pipeline item(s) visible (rows:${rowCount}, cards:${cardCount}, listitems:${roleCount}).` });
+      results.push({ check: '[LIVENESS] CHECK 2 Deal list visible', status: 'PASS', evidence: `${total} deal/pipeline item(s) visible (rows:${rowCount}, cards:${cardCount}, listitems:${roleCount}).` });
     } else {
       const emptyText = await page.getByText(/no deals|empty pipeline|no results|add your first/i).count();
-      results.push({ check: 'CHECK 2 Deal list visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty pipeline state shown.' : 'No deal rows/cards found — may use unrecognized layout.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Deal list visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty pipeline state shown.' : 'No deal rows/cards found — may use unrecognized layout.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Deal list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Deal list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Pipeline view controls visible (stage columns, filters, or view toggle)
@@ -1732,12 +1732,12 @@ async function runPipelineChecks(page: Page): Promise<CheckResult[]> {
     const tabCount    = await page.locator('[role="tab"], [class*="tab"]').count();
     const total = stageCount + filterCount + tabCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 3 Pipeline controls visible', status: 'PASS', evidence: `Controls found: stages/columns:${stageCount}, filters/search:${filterCount}, tabs:${tabCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Pipeline controls visible', status: 'PASS', evidence: `Controls found: stages/columns:${stageCount}, filters/search:${filterCount}, tabs:${tabCount}.` });
     } else {
-      results.push({ check: 'CHECK 3 Pipeline controls visible', status: 'DEFERRED', evidence: 'No stage columns, filters, or tabs detected.' });
+      results.push({ check: '[LIVENESS] CHECK 3 Pipeline controls visible', status: 'DEFERRED', evidence: 'No stage columns, filters, or tabs detected.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Pipeline controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Pipeline controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first deal → detail view loads
@@ -1756,15 +1756,15 @@ async function runPipelineChecks(page: Page): Promise<CheckResult[]> {
       const detailVisible = await page.locator('[class*="detail"], [class*="deal-header"], [class*="dealHeader"], [class*="panel"], h1, h2').count() > 0;
       if (urlAfter !== urlBefore || detailVisible) {
         await page.goto(`https://hub.revopsglobal.com/pipeline`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
-        results.push({ check: 'CHECK 4 Deal click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail visible: ${detailVisible}. Returned.` });
+        results.push({ check: '[LIVENESS] CHECK 4 Deal click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail visible: ${detailVisible}. Returned.` });
       } else {
-        results.push({ check: 'CHECK 4 Deal click → detail', status: 'DEFERRED', evidence: `Clicked deal but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
+        results.push({ check: '[LIVENESS] CHECK 4 Deal click → detail', status: 'DEFERRED', evidence: `Clicked deal but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
       }
     } else {
-      results.push({ check: 'CHECK 4 Deal click → detail', status: 'DEFERRED', evidence: 'No deal rows/cards to click.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Deal click → detail', status: 'DEFERRED', evidence: 'No deal rows/cards to click.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Deal click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Deal click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key data fields present — deal name, value/amount, stage, owner
@@ -1780,12 +1780,12 @@ async function runPipelineChecks(page: Page): Promise<CheckResult[]> {
     if (hasValue) cols.push('value/$');
     if (hasStage) cols.push('stage/status');
     if (cols.length >= 2) {
-      results.push({ check: 'CHECK 5 Key fields present', status: 'PASS', evidence: `Fields detected: ${cols.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'PASS', evidence: `Fields detected: ${cols.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Key fields present', status: 'DEFERRED', evidence: `Only found: ${cols.join(', ') || 'none'}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'DEFERRED', evidence: `Only found: ${cols.join(', ') || 'none'}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1815,13 +1815,13 @@ async function runReportsChecks(page: Page): Promise<CheckResult[]> {
     const listCount   = await page.locator('[role="row"]:not([role="columnheader"]), [role="listitem"]').count();
     const total = rowCount + cardCount + chartCount + listCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Report content visible', status: 'PASS', evidence: `Content found: rows:${rowCount}, cards:${cardCount}, charts:${chartCount}, listitems:${listCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 2 Report content visible', status: 'PASS', evidence: `Content found: rows:${rowCount}, cards:${cardCount}, charts:${chartCount}, listitems:${listCount}.` });
     } else {
       const emptyText = await page.getByText(/no reports|empty|no data|no results/i).count();
-      results.push({ check: 'CHECK 2 Report content visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no report data.' : 'No recognizable report content found.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Report content visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no report data.' : 'No recognizable report content found.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Report content visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Report content visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Navigation controls (tabs, filters, date range, report type selector)
@@ -1832,12 +1832,12 @@ async function runReportsChecks(page: Page): Promise<CheckResult[]> {
     const buttonCount = await page.locator('button').count();
     const total = tabCount + filterCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 3 Report controls visible', status: 'PASS', evidence: `Controls: tabs:${tabCount}, filters/date:${filterCount}, buttons:${buttonCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Report controls visible', status: 'PASS', evidence: `Controls: tabs:${tabCount}, filters/date:${filterCount}, buttons:${buttonCount}.` });
     } else {
-      results.push({ check: 'CHECK 3 Report controls visible', status: 'DEFERRED', evidence: `No tabs or filter controls found. Buttons: ${buttonCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Report controls visible', status: 'DEFERRED', evidence: `No tabs or filter controls found. Buttons: ${buttonCount}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Report controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Report controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click a report item or tab → content updates or detail loads
@@ -1863,15 +1863,15 @@ async function runReportsChecks(page: Page): Promise<CheckResult[]> {
       await shot(page, `${sp}-4-after-click`);
       const urlAfter = page.url();
       const contentChanged = urlAfter !== urlBefore || await page.locator('canvas, svg[class*="chart"], [class*="chart"], table').count() > 0;
-      results.push({ check: 'CHECK 4 Report interaction', status: contentChanged ? 'PASS' : 'DEFERRED', evidence: `Clicked "${clickLabel}". URL: ${urlBefore} → ${urlAfter}. Content present: ${contentChanged}.` });
+      results.push({ check: '[LIVENESS] CHECK 4 Report interaction', status: contentChanged ? 'PASS' : 'DEFERRED', evidence: `Clicked "${clickLabel}". URL: ${urlBefore} → ${urlAfter}. Content present: ${contentChanged}.` });
       if (urlAfter !== urlBefore) {
         await page.goto(`https://hub.revopsglobal.com/reports`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
       }
     } else {
-      results.push({ check: 'CHECK 4 Report interaction', status: 'DEFERRED', evidence: 'No tabs or rows to interact with.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Report interaction', status: 'DEFERRED', evidence: 'No tabs or rows to interact with.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Report interaction', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Report interaction', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key data labels present — revenue, time, activity, or pipeline metrics
@@ -1887,12 +1887,12 @@ async function runReportsChecks(page: Page): Promise<CheckResult[]> {
     if (hasTime)     found.push('time/hours');
     if (hasActivity) found.push('activity/tasks');
     if (found.length >= 1) {
-      results.push({ check: 'CHECK 5 Key metric labels present', status: 'PASS', evidence: `Metric domains found: ${found.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key metric labels present', status: 'PASS', evidence: `Metric domains found: ${found.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Key metric labels present', status: 'DEFERRED', evidence: 'No recognizable metric labels found.' });
+      results.push({ check: '[LIVENESS] CHECK 5 Key metric labels present', status: 'DEFERRED', evidence: 'No recognizable metric labels found.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Key metric labels present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Key metric labels present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -1920,13 +1920,13 @@ async function runFleetTasksChecks(page: Page, serviceKey?: string): Promise<Che
     const roleCount = await page.locator('[role="row"]:not([role="columnheader"]), [role="listitem"]').count();
     const total = rowCount || roleCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Task list visible', status: 'PASS', evidence: `${total} task item(s) visible (rows:${rowCount}, listitems:${roleCount}).` });
+      results.push({ check: '[LIVENESS] CHECK 2 Task list visible', status: 'PASS', evidence: `${total} task item(s) visible (rows:${rowCount}, listitems:${roleCount}).` });
     } else {
       const emptyText = await page.getByText(/no tasks|empty|no results/i).count();
-      results.push({ check: 'CHECK 2 Task list visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no tasks.' : 'No task rows found — may use unrecognized layout.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Task list visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no tasks.' : 'No task rows found — may use unrecognized layout.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Task list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Task list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // [LIVENESS] CHECK 3: Filter/tab controls visible (agent, status, priority filters)
@@ -1961,7 +1961,7 @@ async function runFleetTasksChecks(page: Page, serviceKey?: string): Promise<Che
       const hasFixture = detailText.toLowerCase().includes('qa-pending') || detailText.toLowerCase().includes('qa-pending-1');
       // Return to base list page for subsequent checks
       await page.goto(`https://hub.revopsglobal.com/app/fleet/tasks`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
-      results.push({ check: 'CHECK 4 Task click → detail', status: hasFixture ? 'PASS' : 'DEFERRED', evidence: hasFixture ? 'Dogfood fixture qa-pending-1 detail rendered correctly.' : `Dogfood: navigated to ?task=qa-pending-1 but fixture text not found in detail panel. Detail text (100 chars): "${detailText.trim().slice(0, 100)}".` });
+      results.push({ check: '[CORRECTNESS] CHECK 4 Task click → detail', status: hasFixture ? 'PASS' : 'DEFERRED', evidence: hasFixture ? 'Dogfood fixture qa-pending-1 detail rendered correctly.' : `Dogfood: navigated to ?task=qa-pending-1 but fixture text not found in detail panel. Detail text (100 chars): "${detailText.trim().slice(0, 100)}".` });
     } else {
       const urlBefore = page.url();
       const firstRow  = page.locator('table tbody tr, [class*="task-row"], [class*="taskRow"], [role="row"]:not([role="columnheader"]), [role="listitem"]').first();
@@ -1989,21 +1989,21 @@ async function runFleetTasksChecks(page: Page, serviceKey?: string): Promise<Che
             await page.goto(`https://hub.revopsglobal.com/app/fleet/tasks`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
           }
           if (titleMatch) {
-            results.push({ check: 'CHECK 4 Task click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". Detail heading matches row text. URL: ${urlBefore} → ${urlAfter}. Returned.` });
+            results.push({ check: '[CORRECTNESS] CHECK 4 Task click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". Detail heading matches row text. URL: ${urlBefore} → ${urlAfter}. Returned.` });
           } else if (detailVisible || urlAfter !== urlBefore) {
-            results.push({ check: 'CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked "${rowText.slice(0, 40)}". Detail opened but heading text mismatch — expected keyword "${matchKeyword}" in detail. URL: ${urlBefore} → ${urlAfter}.` });
+            results.push({ check: '[CORRECTNESS] CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked "${rowText.slice(0, 40)}". Detail opened but heading text mismatch — expected keyword "${matchKeyword}" in detail. URL: ${urlBefore} → ${urlAfter}.` });
           } else {
-            results.push({ check: 'CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked task but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
+            results.push({ check: '[CORRECTNESS] CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked task but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
           }
         } else {
-          results.push({ check: 'CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked task but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
+          results.push({ check: '[CORRECTNESS] CHECK 4 Task click → detail', status: 'DEFERRED', evidence: `Clicked task but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
         }
       } else {
-        results.push({ check: 'CHECK 4 Task click → detail', status: 'DEFERRED', evidence: 'No task rows to click.' });
+        results.push({ check: '[CORRECTNESS] CHECK 4 Task click → detail', status: 'DEFERRED', evidence: 'No task rows to click.' });
       }
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Task click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 4 Task click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 6: Create task and verify persistence (P0 — fixes known silent-failure RGOS e585eb4f)
@@ -2028,7 +2028,7 @@ async function runFleetTasksChecks(page: Page, serviceKey?: string): Promise<Che
     ].join(', ')).filter({ visible: true }).first();  // visible:true prevents matching hidden/off-screen buttons
 
     if (await newBtn.count() === 0) {
-      results.push({ check: 'CHECK 6 Create task persists', status: 'DEFERRED', evidence: 'No visible create task button found — cannot test persistence.' });
+      results.push({ check: '[CORRECTNESS] CHECK 6 Create task persists', status: 'DEFERRED', evidence: 'No visible create task button found — cannot test persistence.' });
     } else {
       await newBtn.click({ timeout: 5000 });
       await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
@@ -2046,7 +2046,7 @@ async function runFleetTasksChecks(page: Page, serviceKey?: string): Promise<Che
 
       if (await titleInput.count() === 0) {
         await page.keyboard.press('Escape');
-        results.push({ check: 'CHECK 6 Create task persists', status: 'DEFERRED', evidence: 'Create task button clicked but no title input appeared — cannot test persistence.' });
+        results.push({ check: '[CORRECTNESS] CHECK 6 Create task persists', status: 'DEFERRED', evidence: 'Create task button clicked but no title input appeared — cannot test persistence.' });
       } else {
         await titleInput.fill(testTitle);
         await shot(page, `${sp}-6-form-filled`);
@@ -2106,9 +2106,9 @@ async function runFleetTasksChecks(page: Page, serviceKey?: string): Promise<Che
         }
 
         if (found) {
-          results.push({ check: 'CHECK 6 Create task persists', status: 'PASS', evidence: `Task "${testTitle}" found in list after form submit — persistence confirmed.${cleanupNote}` });
+          results.push({ check: '[CORRECTNESS] CHECK 6 Create task persists', status: 'PASS', evidence: `Task "${testTitle}" found in list after form submit — persistence confirmed.${cleanupNote}` });
         } else {
-          results.push({ check: 'CHECK 6 Create task persists', status: 'FAIL', evidence: `Task "${testTitle}" NOT found in list after form submit — create silently failed (known RGOS e585eb4f pattern).${cleanupNote}` });
+          results.push({ check: '[CORRECTNESS] CHECK 6 Create task persists', status: 'FAIL', evidence: `Task "${testTitle}" NOT found in list after form submit — create silently failed (known RGOS e585eb4f pattern).${cleanupNote}` });
         }
       }
     }
@@ -2117,7 +2117,7 @@ async function runFleetTasksChecks(page: Page, serviceKey?: string): Promise<Che
     // Locator/actionability timeouts → DEFERRED (button exists but UI state prevents interaction).
     // Only surface as FAIL for unexpected non-timeout errors.
     const isTimeout = /timeout/i.test(msg);
-    results.push({ check: 'CHECK 6 Create task persists', status: isTimeout ? 'DEFERRED' : 'FAIL', evidence: `${isTimeout ? 'Button located but click timed out (not actionable)' : 'Error'}: ${msg.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 6 Create task persists', status: isTimeout ? 'DEFERRED' : 'FAIL', evidence: `${isTimeout ? 'Button located but click timed out (not actionable)' : 'Error'}: ${msg.split('\n')[0]}` });
   }
 
   // CHECK 5: Key columns — task name, agent/assignee, status, priority
@@ -2133,12 +2133,12 @@ async function runFleetTasksChecks(page: Page, serviceKey?: string): Promise<Che
     if (hasAgent)  cols.push('agent/assignee');
     if (hasStatus) cols.push('status');
     if (cols.length >= 2) {
-      results.push({ check: 'CHECK 5 Key columns present', status: 'PASS', evidence: `Columns detected: ${cols.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'PASS', evidence: `Columns detected: ${cols.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Key columns present', status: 'DEFERRED', evidence: `Only found: ${cols.join(', ') || 'none'}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'DEFERRED', evidence: `Only found: ${cols.join(', ') || 'none'}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Key columns present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Key columns present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -2167,13 +2167,13 @@ async function runFleetAgentsChecks(page: Page): Promise<CheckResult[]> {
     const roleCount = await page.locator('[role="row"]:not([role="columnheader"]), [role="listitem"]').count();
     const total = rowCount || cardCount || roleCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Agent list visible', status: 'PASS', evidence: `${total} agent item(s) visible (rows:${rowCount}, cards:${cardCount}, listitems:${roleCount}).` });
+      results.push({ check: '[LIVENESS] CHECK 2 Agent list visible', status: 'PASS', evidence: `${total} agent item(s) visible (rows:${rowCount}, cards:${cardCount}, listitems:${roleCount}).` });
     } else {
       const emptyText = await page.getByText(/no agents|empty|no results/i).count();
-      results.push({ check: 'CHECK 2 Agent list visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no agents.' : 'No agent rows/cards found — may use unrecognized layout.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Agent list visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no agents.' : 'No agent rows/cards found — may use unrecognized layout.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Agent list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Agent list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Agent status indicators visible (online/offline/running badges)
@@ -2183,12 +2183,12 @@ async function runFleetAgentsChecks(page: Page): Promise<CheckResult[]> {
     const pageText    = (await page.locator('body').textContent().catch(() => '')) ?? '';
     const hasStatus   = /online|offline|running|idle|error|dead|alive|active/i.test(pageText);
     if (statusBadge > 0 || hasStatus) {
-      results.push({ check: 'CHECK 3 Status indicators visible', status: 'PASS', evidence: `Status elements: badges:${statusBadge}, text matches: ${hasStatus}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Status indicators visible', status: 'PASS', evidence: `Status elements: badges:${statusBadge}, text matches: ${hasStatus}.` });
     } else {
-      results.push({ check: 'CHECK 3 Status indicators visible', status: 'DEFERRED', evidence: 'No status badges or status text found.' });
+      results.push({ check: '[LIVENESS] CHECK 3 Status indicators visible', status: 'DEFERRED', evidence: 'No status badges or status text found.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Status indicators visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Status indicators visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first agent → detail panel or navigation
@@ -2207,15 +2207,15 @@ async function runFleetAgentsChecks(page: Page): Promise<CheckResult[]> {
         if (urlAfter !== urlBefore) {
           await page.goto(`https://hub.revopsglobal.com/app/fleet/agents`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
         }
-        results.push({ check: 'CHECK 4 Agent click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail visible: ${detailVisible}. Returned.` });
+        results.push({ check: '[LIVENESS] CHECK 4 Agent click → detail', status: 'PASS', evidence: `Clicked "${rowText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail visible: ${detailVisible}. Returned.` });
       } else {
-        results.push({ check: 'CHECK 4 Agent click → detail', status: 'DEFERRED', evidence: `Clicked agent but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
+        results.push({ check: '[LIVENESS] CHECK 4 Agent click → detail', status: 'DEFERRED', evidence: `Clicked agent but URL/content unchanged. Text: "${rowText.slice(0, 40)}".` });
       }
     } else {
-      results.push({ check: 'CHECK 4 Agent click → detail', status: 'DEFERRED', evidence: 'No agent rows/cards to click.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Agent click → detail', status: 'DEFERRED', evidence: 'No agent rows/cards to click.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Agent click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Agent click → detail', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key fields — agent name, type/role, last-seen/heartbeat, status
@@ -2231,16 +2231,16 @@ async function runFleetAgentsChecks(page: Page): Promise<CheckResult[]> {
     if (hasType)      found.push('type/role');
     if (hasHeartbeat) found.push('heartbeat/last-seen');
     if (found.length >= 2) {
-      results.push({ check: 'CHECK 5 Key fields present', status: 'PASS', evidence: `Fields detected: ${found.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'PASS', evidence: `Fields detected: ${found.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Key fields present', status: 'DEFERRED', evidence: `Only found: ${found.join(', ') || 'none'}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'DEFERRED', evidence: `Only found: ${found.join(', ') || 'none'}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 6: Timestamp freshness (P1) — fleet agents page must show at least one < 30 min timestamp
-  results.push(await checkTimestampFreshness(page, 'CHECK 6 Timestamp freshness'));
+  results.push(await checkTimestampFreshness(page, '[CORRECTNESS] CHECK 6 Timestamp freshness'));
 
   return results;
 }
@@ -2269,13 +2269,13 @@ async function runSocialContentChecks(page: Page): Promise<CheckResult[]> {
     const roleCount  = await page.locator('[role="row"]:not([role="columnheader"]), [role="listitem"]').count();
     const total = rowCount || postCount || cardCount || roleCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Content items visible', status: 'PASS', evidence: `${total} item(s) visible (rows:${rowCount}, posts:${postCount}, cards:${cardCount}, listitems:${roleCount}).` });
+      results.push({ check: '[MIXED] CHECK 2 Content items visible', status: 'PASS', evidence: `${total} item(s) visible (rows:${rowCount}, posts:${postCount}, cards:${cardCount}, listitems:${roleCount}).` });
     } else {
       const emptyText = await page.getByText(/no content|no posts|empty|no drafts|no results/i).count();
-      results.push({ check: 'CHECK 2 Content items visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no content items.' : 'No content items found — may use unrecognized layout.' });
+      results.push({ check: '[MIXED] CHECK 2 Content items visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state shown — no content items.' : 'No content items found — may use unrecognized layout.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Content items visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[MIXED] CHECK 2 Content items visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Filter/view controls (status tabs: draft/scheduled/published, search)
@@ -2286,12 +2286,12 @@ async function runSocialContentChecks(page: Page): Promise<CheckResult[]> {
     const buttonCount = await page.locator('button').count();
     const total = tabCount + filterCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 3 View controls visible', status: 'PASS', evidence: `Controls: tabs:${tabCount}, filters/search:${filterCount}, buttons:${buttonCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 View controls visible', status: 'PASS', evidence: `Controls: tabs:${tabCount}, filters/search:${filterCount}, buttons:${buttonCount}.` });
     } else {
-      results.push({ check: 'CHECK 3 View controls visible', status: 'DEFERRED', evidence: `No tabs or filter controls. Buttons: ${buttonCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 View controls visible', status: 'DEFERRED', evidence: `No tabs or filter controls. Buttons: ${buttonCount}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 View controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 View controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first content item → detail or edit view
@@ -2310,15 +2310,15 @@ async function runSocialContentChecks(page: Page): Promise<CheckResult[]> {
         if (urlAfter !== urlBefore) {
           await page.goto(`https://hub.revopsglobal.com/social-content`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
         }
-        results.push({ check: 'CHECK 4 Item click → detail/edit', status: 'PASS', evidence: `Clicked "${itemText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail/editor visible: ${detailVisible}. Returned.` });
+        results.push({ check: '[LIVENESS] CHECK 4 Item click → detail/edit', status: 'PASS', evidence: `Clicked "${itemText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Detail/editor visible: ${detailVisible}. Returned.` });
       } else {
-        results.push({ check: 'CHECK 4 Item click → detail/edit', status: 'DEFERRED', evidence: `Clicked item but no navigation or editor appeared. Text: "${itemText.slice(0, 40)}".` });
+        results.push({ check: '[LIVENESS] CHECK 4 Item click → detail/edit', status: 'DEFERRED', evidence: `Clicked item but no navigation or editor appeared. Text: "${itemText.slice(0, 40)}".` });
       }
     } else {
-      results.push({ check: 'CHECK 4 Item click → detail/edit', status: 'DEFERRED', evidence: 'No content items to click.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Item click → detail/edit', status: 'DEFERRED', evidence: 'No content items to click.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Item click → detail/edit', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Item click → detail/edit', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key fields — content text, platform (LinkedIn/Twitter), status, author
@@ -2334,12 +2334,12 @@ async function runSocialContentChecks(page: Page): Promise<CheckResult[]> {
     if (hasStatus)   found.push('status/stage');
     if (hasContent)  found.push('content/copy');
     if (found.length >= 2) {
-      results.push({ check: 'CHECK 5 Key fields present', status: 'PASS', evidence: `Fields detected: ${found.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'PASS', evidence: `Fields detected: ${found.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Key fields present', status: 'DEFERRED', evidence: `Only found: ${found.join(', ') || 'none'}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'DEFERRED', evidence: `Only found: ${found.join(', ') || 'none'}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -2368,13 +2368,13 @@ async function runContentReviewChecks(page: Page): Promise<CheckResult[]> {
     const roleCount = await page.locator('[role="row"]:not([role="columnheader"]), [role="listitem"]').count();
     const total = rowCount || itemCount || roleCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Review items visible', status: 'PASS', evidence: `${total} item(s) visible (rows:${rowCount}, items:${itemCount}, listitems:${roleCount}).` });
+      results.push({ check: '[LIVENESS] CHECK 2 Review items visible', status: 'PASS', evidence: `${total} item(s) visible (rows:${rowCount}, items:${itemCount}, listitems:${roleCount}).` });
     } else {
       const emptyText = await page.getByText(/no content|no items|empty|nothing to review|all caught up/i).count();
-      results.push({ check: 'CHECK 2 Review items visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state — no items pending review.' : 'No review items found — may use unrecognized layout.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Review items visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state — no items pending review.' : 'No review items found — may use unrecognized layout.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Review items visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Review items visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Current review workflow actions (scan, preset, upload, API key)
@@ -2389,12 +2389,12 @@ async function runContentReviewChecks(page: Page): Promise<CheckResult[]> {
     const tabCount = await page.locator('[role="tab"], [class*="tab"]').count();
     const anyAction = sumCounts(actionCounts) + uploadDropzone;
     if (anyAction > 0) {
-      results.push({ check: 'CHECK 3 Review workflow actions present', status: 'PASS', evidence: `Actions: scan:${actionCounts.scan ?? 0}, api-key:${actionCounts.apiKey ?? 0}, presets:${actionCounts.preset ?? 0}, upload:${uploadDropzone}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Review workflow actions present', status: 'PASS', evidence: `Actions: scan:${actionCounts.scan ?? 0}, api-key:${actionCounts.apiKey ?? 0}, presets:${actionCounts.preset ?? 0}, upload:${uploadDropzone}.` });
     } else {
-      results.push({ check: 'CHECK 3 Review workflow actions present', status: 'DEFERRED', evidence: `No scan, preset, upload, or API-key controls found. Tabs: ${tabCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Review workflow actions present', status: 'DEFERRED', evidence: `No scan, preset, upload, or API-key controls found. Tabs: ${tabCount}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Review workflow actions present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Review workflow actions present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first item → content preview with review actions
@@ -2413,15 +2413,15 @@ async function runContentReviewChecks(page: Page): Promise<CheckResult[]> {
         if (urlAfter !== urlBefore) {
           await page.goto(`https://hub.revopsglobal.com/content-review`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
         }
-        results.push({ check: 'CHECK 4 Item click → preview', status: 'PASS', evidence: `Clicked "${itemText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Preview visible: ${previewVisible}. Returned.` });
+        results.push({ check: '[LIVENESS] CHECK 4 Item click → preview', status: 'PASS', evidence: `Clicked "${itemText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Preview visible: ${previewVisible}. Returned.` });
       } else {
-        results.push({ check: 'CHECK 4 Item click → preview', status: 'DEFERRED', evidence: `Clicked item but no navigation or preview appeared. Text: "${itemText.slice(0, 40)}".` });
+        results.push({ check: '[LIVENESS] CHECK 4 Item click → preview', status: 'DEFERRED', evidence: `Clicked item but no navigation or preview appeared. Text: "${itemText.slice(0, 40)}".` });
       }
     } else {
-      results.push({ check: 'CHECK 4 Item click → preview', status: 'DEFERRED', evidence: 'No review items to click.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Item click → preview', status: 'DEFERRED', evidence: 'No review items to click.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Item click → preview', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Item click → preview', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key fields — content copy/preview, author, platform, status
@@ -2437,12 +2437,12 @@ async function runContentReviewChecks(page: Page): Promise<CheckResult[]> {
     if (hasStatus)   found.push('status');
     if (hasContent)  found.push('content/copy');
     if (found.length >= 2) {
-      results.push({ check: 'CHECK 5 Key fields present', status: 'PASS', evidence: `Fields detected: ${found.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'PASS', evidence: `Fields detected: ${found.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Key fields present', status: 'DEFERRED', evidence: `Only found: ${found.join(', ') || 'none'}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'DEFERRED', evidence: `Only found: ${found.join(', ') || 'none'}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Key fields present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -2474,13 +2474,13 @@ async function runWikiChecks(page: Page): Promise<CheckResult[]> {
     const listCount    = await page.locator('[role="listitem"], [role="row"]:not([role="columnheader"]), section[id^="wiki-"] li, ul li').count();
     const total = articleCount || rowCount || listCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Wiki content visible', status: 'PASS', evidence: `${total} item(s) visible (articles:${articleCount}, rows:${rowCount}, listitems:${listCount}).` });
+      results.push({ check: '[LIVENESS] CHECK 2 Wiki content visible', status: 'PASS', evidence: `${total} item(s) visible (articles:${articleCount}, rows:${rowCount}, listitems:${listCount}).` });
     } else {
       const emptyText = await page.getByText(/no articles|empty|no pages|no content|no results/i).count();
-      results.push({ check: 'CHECK 2 Wiki content visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state — no wiki content.' : 'No wiki content found — may use unrecognized layout.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Wiki content visible', status: 'DEFERRED', evidence: emptyText > 0 ? 'Empty state — no wiki content.' : 'No wiki content found — may use unrecognized layout.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Wiki content visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Wiki content visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Navigation/search controls (sidebar, search, categories)
@@ -2491,12 +2491,12 @@ async function runWikiChecks(page: Page): Promise<CheckResult[]> {
     const tabCount    = await page.locator('[role="tab"], [class*="tab"]').count();
     const total = searchCount + sidebarCount + tabCount;
     if (total > 0) {
-      results.push({ check: 'CHECK 3 Navigation controls visible', status: 'PASS', evidence: `Controls: search:${searchCount}, sidebar/nav:${sidebarCount}, tabs:${tabCount}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Navigation controls visible', status: 'PASS', evidence: `Controls: search:${searchCount}, sidebar/nav:${sidebarCount}, tabs:${tabCount}.` });
     } else {
-      results.push({ check: 'CHECK 3 Navigation controls visible', status: 'DEFERRED', evidence: 'No search, sidebar, or nav controls found.' });
+      results.push({ check: '[LIVENESS] CHECK 3 Navigation controls visible', status: 'DEFERRED', evidence: 'No search, sidebar, or nav controls found.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Navigation controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Navigation controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first article/entry → content renders
@@ -2515,15 +2515,15 @@ async function runWikiChecks(page: Page): Promise<CheckResult[]> {
         if (urlAfter !== urlBefore) {
           await page.goto(`https://hub.revopsglobal.com/app/wiki`, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
         }
-        results.push({ check: 'CHECK 4 Article click → content', status: 'PASS', evidence: `Clicked "${itemText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Content visible: ${contentVisible}. Returned.` });
+        results.push({ check: '[LIVENESS] CHECK 4 Article click → content', status: 'PASS', evidence: `Clicked "${itemText.slice(0, 40)}". URL: ${urlBefore} → ${urlAfter}. Content visible: ${contentVisible}. Returned.` });
       } else {
-        results.push({ check: 'CHECK 4 Article click → content', status: 'DEFERRED', evidence: `Clicked item but no navigation or content appeared. Text: "${itemText.slice(0, 40)}".` });
+        results.push({ check: '[LIVENESS] CHECK 4 Article click → content', status: 'DEFERRED', evidence: `Clicked item but no navigation or content appeared. Text: "${itemText.slice(0, 40)}".` });
       }
     } else {
-      results.push({ check: 'CHECK 4 Article click → content', status: 'DEFERRED', evidence: 'No wiki items to click.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Article click → content', status: 'DEFERRED', evidence: 'No wiki items to click.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Article click → content', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Article click → content', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Key structural elements — headings, body text, last-updated or author metadata
@@ -2539,12 +2539,12 @@ async function runWikiChecks(page: Page): Promise<CheckResult[]> {
     if (hasMeta)    found.push('metadata');
     if (hasBody)    found.push('body-text');
     if (found.length >= 2) {
-      results.push({ check: 'CHECK 5 Content structure present', status: 'PASS', evidence: `Structure confirmed: ${found.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Content structure present', status: 'PASS', evidence: `Structure confirmed: ${found.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 5 Content structure present', status: 'DEFERRED', evidence: `Sparse structure: ${found.join(', ') || 'none'}.` });
+      results.push({ check: '[LIVENESS] CHECK 5 Content structure present', status: 'DEFERRED', evidence: `Sparse structure: ${found.join(', ') || 'none'}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 5 Content structure present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Content structure present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -2566,13 +2566,13 @@ async function runCortexThetaChecks(page: Page): Promise<CheckResult[]> {
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-1-load.png`), fullPage: false });
     const landed = page.url();
     if (landed.includes('/auth')) {
-      results.push({ check: 'CHECK 1 Page load', status: 'FAIL', evidence: `Auth redirect — session not accepted. URL: ${landed}` });
+      results.push({ check: '[LIVENESS] CHECK 1 Page load', status: 'FAIL', evidence: `Auth redirect — session not accepted. URL: ${landed}` });
       return results;
     }
-    results.push({ check: 'CHECK 1 Page load', status: 'PASS', evidence: `Page loaded. Heading: "${h?.trim()}". URL: ${landed}` });
+    results.push({ check: '[LIVENESS] CHECK 1 Page load', status: 'PASS', evidence: `Page loaded. Heading: "${h?.trim()}". URL: ${landed}` });
   } catch (e) {
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-1-load-fail.png`) }).catch(() => {});
-    results.push({ check: 'CHECK 1 Page load', status: 'FAIL', evidence: `Did not load within 15s: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 1 Page load', status: 'FAIL', evidence: `Did not load within 15s: ${(e as Error).message?.split('\n')[0]}` });
     return results;
   }
 
@@ -2583,12 +2583,12 @@ async function runCortexThetaChecks(page: Page): Promise<CheckResult[]> {
     const nullLiterals  = await page.locator('text="null"').count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-undefined-check.png`), fullPage: false });
     if (undefinedHits > 0 || nullLiterals > 0) {
-      results.push({ check: 'CHECK 2 No undefined/null literals', status: 'FAIL', evidence: `${undefinedHits} "undefined" + ${nullLiterals} "null" literal(s) visible — FE field reads still broken post-deploy.` });
+      results.push({ check: '[CORRECTNESS] CHECK 2 No undefined/null literals', status: 'FAIL', evidence: `${undefinedHits} "undefined" + ${nullLiterals} "null" literal(s) visible — FE field reads still broken post-deploy.` });
     } else {
-      results.push({ check: 'CHECK 2 No undefined/null literals', status: 'PASS', evidence: 'No "undefined" or "null" literals on page — field reads clean.' });
+      results.push({ check: '[CORRECTNESS] CHECK 2 No undefined/null literals', status: 'PASS', evidence: 'No "undefined" or "null" literals on page — field reads clean.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 No undefined/null literals', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 2 No undefined/null literals', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Status field renders (expects 'complete' post-PR#688)
@@ -2598,14 +2598,14 @@ async function runCortexThetaChecks(page: Page): Promise<CheckResult[]> {
     const anyStatus   = await page.getByText(/complete|in.progress|pending|processing|active/i, { exact: false }).count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-status.png`), fullPage: false });
     if (completeHit > 0) {
-      results.push({ check: 'CHECK 3 Status renders "complete"', status: 'PASS', evidence: `"complete" text found (${completeHit} hit(s)). Status elements: ${statusEl}.` });
+      results.push({ check: '[CORRECTNESS] CHECK 3 Status renders "complete"', status: 'PASS', evidence: `"complete" text found (${completeHit} hit(s)). Status elements: ${statusEl}.` });
     } else if (anyStatus > 0) {
-      results.push({ check: 'CHECK 3 Status renders "complete"', status: 'DEFERRED', evidence: `Status text visible but "complete" not found. Other status hits: ${anyStatus}. May be different session data.` });
+      results.push({ check: '[CORRECTNESS] CHECK 3 Status renders "complete"', status: 'DEFERRED', evidence: `Status text visible but "complete" not found. Other status hits: ${anyStatus}. May be different session data.` });
     } else {
-      results.push({ check: 'CHECK 3 Status renders "complete"', status: 'DEFERRED', evidence: `No status text found. Status elements: ${statusEl}. May be empty data.` });
+      results.push({ check: '[CORRECTNESS] CHECK 3 Status renders "complete"', status: 'DEFERRED', evidence: `No status text found. Status elements: ${statusEl}. May be empty data.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Status renders "complete"', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 3 Status renders "complete"', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: challenger_notes + synthesis_summary + consolidated_memories_count
@@ -2638,21 +2638,21 @@ async function runCortexThetaChecks(page: Page): Promise<CheckResult[]> {
     if (synthHit === 0)      missing.push('synthesis_summary');
     if (memHit === 0)        missing.push('consolidated_memories_count');
     if (missing.length === 0) {
-      results.push({ check: 'CHECK 4 PR#688 fields render', status: 'PASS', evidence: `All three fields visible after accordion expand: challenger(${challengerHit}), synthesis(${synthHit}), consolidation(${memHit}).` });
+      results.push({ check: '[CORRECTNESS] CHECK 4 PR#688 fields render', status: 'PASS', evidence: `All three fields visible after accordion expand: challenger(${challengerHit}), synthesis(${synthHit}), consolidation(${memHit}).` });
     } else {
-      results.push({ check: 'CHECK 4 PR#688 fields render', status: 'FAIL', evidence: `Missing field(s) after expand: ${missing.join(', ')}. challenger:${challengerHit}, synthesis:${synthHit}, consolidation:${memHit}.` });
+      results.push({ check: '[CORRECTNESS] CHECK 4 PR#688 fields render', status: 'FAIL', evidence: `Missing field(s) after expand: ${missing.join(', ')}. challenger:${challengerHit}, synthesis:${synthHit}, consolidation:${memHit}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 PR#688 fields render', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 4 PR#688 fields render', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Page has substantial content (not blank/empty render)
   try {
     const bodyLen = (await page.locator('main, [class*="content"], body').first().innerText().catch(() => '')).trim().length;
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-5-full.png`), fullPage: true });
-    results.push({ check: 'CHECK 5 Page content not blank', status: bodyLen > 150 ? 'PASS' : 'DEFERRED', evidence: `Body text length: ${bodyLen} chars. ${bodyLen > 150 ? 'Substantial content present.' : 'Page appears sparse — may be no theta sessions yet.'}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Page content not blank', status: bodyLen > 150 ? 'PASS' : 'DEFERRED', evidence: `Body text length: ${bodyLen} chars. ${bodyLen > 150 ? 'Substantial content present.' : 'Page appears sparse — may be no theta sessions yet.'}` });
   } catch (e) {
-    results.push({ check: 'CHECK 5 Page content not blank', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Page content not blank', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -2673,19 +2673,19 @@ async function runLinkedInPresenceChecks(page: Page): Promise<CheckResult[]> {
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-1-load.png`), fullPage: false });
     const landed = page.url();
     if (landed.includes('/auth') || landed.includes('/login')) {
-      results.push({ check: 'CHECK 1 Page load', status: 'FAIL', evidence: `Auth redirect — session not accepted. URL: ${landed}` });
+      results.push({ check: '[LIVENESS] CHECK 1 Page load', status: 'FAIL', evidence: `Auth redirect — session not accepted. URL: ${landed}` });
       return results;
     }
     const heading = h?.trim() ?? '';
     const headingMatches = /linkedin|presence/i.test(heading);
     results.push({
-      check: 'CHECK 1 Page load',
+      check: '[LIVENESS] CHECK 1 Page load',
       status: headingMatches ? 'PASS' : 'FAIL',
       evidence: `Page loaded. Heading: "${heading}". URL: ${landed}. ${headingMatches ? 'Heading matches LinkedIn Presence.' : 'Heading did not contain LinkedIn or Presence.'}`,
     });
   } catch (e) {
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-1-load-fail.png`) }).catch(() => {});
-    results.push({ check: 'CHECK 1 Page load', status: 'FAIL', evidence: `Did not load within 15s: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 1 Page load', status: 'FAIL', evidence: `Did not load within 15s: ${(e as Error).message?.split('\n')[0]}` });
     return results;
   }
 
@@ -2696,12 +2696,12 @@ async function runLinkedInPresenceChecks(page: Page): Promise<CheckResult[]> {
     const nullLiterals  = await page.locator('text="null"').count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-undefined-check.png`), fullPage: false });
     if (undefinedHits > 0 || nullLiterals > 0) {
-      results.push({ check: 'CHECK 2 No undefined/null literals', status: 'FAIL', evidence: `${undefinedHits} "undefined" + ${nullLiterals} "null" literal(s) visible.` });
+      results.push({ check: '[CORRECTNESS] CHECK 2 No undefined/null literals', status: 'FAIL', evidence: `${undefinedHits} "undefined" + ${nullLiterals} "null" literal(s) visible.` });
     } else {
-      results.push({ check: 'CHECK 2 No undefined/null literals', status: 'PASS', evidence: 'No "undefined" or "null" literals on page.' });
+      results.push({ check: '[CORRECTNESS] CHECK 2 No undefined/null literals', status: 'PASS', evidence: 'No "undefined" or "null" literals on page.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 No undefined/null literals', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[CORRECTNESS] CHECK 2 No undefined/null literals', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: SignalSelector renders
@@ -2709,14 +2709,14 @@ async function runLinkedInPresenceChecks(page: Page): Promise<CheckResult[]> {
     const signalHits = await page.getByText(/revenue|signal|client/i).count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-3-signal-selector.png`), fullPage: false });
     if (signalHits >= 2) {
-      results.push({ check: 'CHECK 3 SignalSelector renders', status: 'PASS', evidence: `Found ${signalHits} signal-related text hit(s) matching revenue/signal/client.` });
+      results.push({ check: '[LIVENESS] CHECK 3 SignalSelector renders', status: 'PASS', evidence: `Found ${signalHits} signal-related text hit(s) matching revenue/signal/client.` });
     } else if (signalHits === 0) {
-      results.push({ check: 'CHECK 3 SignalSelector renders', status: 'DEFERRED', evidence: 'No signal text found, but the page loaded. Signals may be empty.' });
+      results.push({ check: '[LIVENESS] CHECK 3 SignalSelector renders', status: 'DEFERRED', evidence: 'No signal text found, but the page loaded. Signals may be empty.' });
     } else {
-      results.push({ check: 'CHECK 3 SignalSelector renders', status: 'DEFERRED', evidence: `Only ${signalHits} signal-related text hit(s) found; selector may be partially populated.` });
+      results.push({ check: '[LIVENESS] CHECK 3 SignalSelector renders', status: 'DEFERRED', evidence: `Only ${signalHits} signal-related text hit(s) found; selector may be partially populated.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 SignalSelector renders', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 SignalSelector renders', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Draft editor renders
@@ -2726,21 +2726,21 @@ async function runLinkedInPresenceChecks(page: Page): Promise<CheckResult[]> {
     const actionButtons = await page.getByRole('button', { name: /generate|save/i }).count();
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-4-draft-editor.png`), fullPage: false });
     if (textareaCount > 0 || editorTextHits > 0) {
-      results.push({ check: 'CHECK 4 Draft editor renders', status: 'PASS', evidence: `Draft editor found. Textareas: ${textareaCount}; draft/editor/write/compose text hits: ${editorTextHits}; Generate/Save buttons: ${actionButtons}.` });
+      results.push({ check: '[LIVENESS] CHECK 4 Draft editor renders', status: 'PASS', evidence: `Draft editor found. Textareas: ${textareaCount}; draft/editor/write/compose text hits: ${editorTextHits}; Generate/Save buttons: ${actionButtons}.` });
     } else {
-      results.push({ check: 'CHECK 4 Draft editor renders', status: 'DEFERRED', evidence: `No textarea or draft/editor/write/compose text found. Draft editor may need signal selection first. Generate/Save buttons: ${actionButtons}.` });
+      results.push({ check: '[LIVENESS] CHECK 4 Draft editor renders', status: 'DEFERRED', evidence: `No textarea or draft/editor/write/compose text found. Draft editor may need signal selection first. Generate/Save buttons: ${actionButtons}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Draft editor renders', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Draft editor renders', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 5: Page has substantial content (not blank/empty render)
   try {
     const bodyLen = (await page.locator('body').innerText().catch(() => '')).trim().length;
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-5-full.png`), fullPage: true });
-    results.push({ check: 'CHECK 5 Page content not blank', status: bodyLen > 200 ? 'PASS' : 'FAIL', evidence: `Body text length: ${bodyLen} chars. ${bodyLen > 200 ? 'Substantial content present.' : 'Page appears sparse.'}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Page content not blank', status: bodyLen > 200 ? 'PASS' : 'FAIL', evidence: `Body text length: ${bodyLen} chars. ${bodyLen > 200 ? 'Substantial content present.' : 'Page appears sparse.'}` });
   } catch (e) {
-    results.push({ check: 'CHECK 5 Page content not blank', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 5 Page content not blank', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -2758,7 +2758,7 @@ async function runSignalsChecks(page: Page): Promise<CheckResult[]> {
   if (loadResult.status === 'FAIL') return results;
 
   // CHECK 2: Signal cards or empty state
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Signal cards visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Signal cards visible',
     '[class*="signal"], [class*="card"], [class*="item"], [role="listitem"]',
     /no signals|nothing here|empty|all clear/i));
 
@@ -2770,10 +2770,10 @@ async function runSignalsChecks(page: Page): Promise<CheckResult[]> {
       'button:has-text("Snooze")',
       'button:has-text("Mark")',
     ].join(', ')).count();
-    results.push({ check: 'CHECK 3 Action buttons present', status: actionBtns > 0 ? 'PASS' : 'DEFERRED',
+    results.push({ check: '[LIVENESS] CHECK 3 Action buttons present', status: actionBtns > 0 ? 'PASS' : 'DEFERRED',
       evidence: actionBtns > 0 ? `${actionBtns} action button(s) visible.` : 'No Dismiss/View/Snooze buttons — queue may be empty.' });
   } catch (e) {
-    results.push({ check: 'CHECK 3 Action buttons present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Action buttons present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Click first signal card, verify expansion, close
@@ -2787,13 +2787,13 @@ async function runSignalsChecks(page: Page): Promise<CheckResult[]> {
       const detailVisible = await page.locator('[role="dialog"], [role="alertdialog"], [class*="modal"], [class*="panel"], [class*="detail"], [class*="expanded"]').count() > 0;
       await page.keyboard.press('Escape');
       await page.waitForTimeout(300);
-      results.push({ check: 'CHECK 4 Signal detail view', status: 'PASS',
+      results.push({ check: '[LIVENESS] CHECK 4 Signal detail view', status: 'PASS',
         evidence: `Clicked "${cardText?.slice(0, 30)}". Detail ${detailVisible ? 'shown' : 'navigated/expanded'}. Escaped.` });
     } else {
-      results.push({ check: 'CHECK 4 Signal detail view', status: 'DEFERRED', evidence: 'No signal cards to inspect.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Signal detail view', status: 'DEFERRED', evidence: 'No signal cards to inspect.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Signal detail view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Signal detail view', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -2818,14 +2818,14 @@ async function runSupremeOutstandingChecks(page: Page): Promise<CheckResult[]> {
       false,
     );
     results.push({
-      check: 'CHECK 2 Mentions Triage heading',
+      check: '[LIVENESS] CHECK 2 Mentions Triage heading',
       status: hasMentionsTriage ? 'PASS' : 'FAIL',
       evidence: hasMentionsTriage
         ? '"Mentions Triage" heading found — page shell correct.'
         : '"Mentions Triage" heading missing — page may have reverted or failed to render.',
     });
   } catch (e) {
-    results.push({ check: 'CHECK 2 Mentions Triage heading', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Mentions Triage heading', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Priority buckets rendered or valid triage state shown
@@ -2845,20 +2845,20 @@ async function runSupremeOutstandingChecks(page: Page): Promise<CheckResult[]> {
       { bucketsFound: 0, hasRunBtn: false, hasError: false, hasEmpty: false, hasFreshness: false },
     );
     if (state.hasError) {
-      results.push({ check: 'CHECK 3 Triage content or state', status: 'FAIL',
+      results.push({ check: '[LIVENESS] CHECK 3 Triage content or state', status: 'FAIL',
         evidence: `Page contains error message — API likely failing auth gate.` });
     } else if (state.bucketsFound >= 2) {
-      results.push({ check: 'CHECK 3 Triage content or state', status: 'PASS',
+      results.push({ check: '[LIVENESS] CHECK 3 Triage content or state', status: 'PASS',
         evidence: `${state.bucketsFound}/4 priority bucket labels visible (Urgent/High/Normal/Low).` });
     } else if (state.hasEmpty || state.hasFreshness || state.hasRunBtn) {
-      results.push({ check: 'CHECK 3 Triage content or state', status: 'PASS',
+      results.push({ check: '[LIVENESS] CHECK 3 Triage content or state', status: 'PASS',
         evidence: `Triage UI rendered (empty/freshness/run-button present). bucketsFound=${state.bucketsFound}` });
     } else {
-      results.push({ check: 'CHECK 3 Triage content or state', status: 'DEFERRED',
+      results.push({ check: '[LIVENESS] CHECK 3 Triage content or state', status: 'DEFERRED',
         evidence: `No buckets, empty state, or freshness banner detected — page may still be loading. bucketsFound=${state.bucketsFound}` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Triage content or state', status: 'FAIL',
+    results.push({ check: '[LIVENESS] CHECK 3 Triage content or state', status: 'FAIL',
       evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
@@ -2881,17 +2881,17 @@ async function runSupremeOutstandingChecks(page: Page): Promise<CheckResult[]> {
       { found: false, text: '', colorClass: '' },
     );
     if (!stripState.found) {
-      results.push({ check: 'CHECK 4 Scanner freshness strip', status: 'FAIL',
+      results.push({ check: '[CORRECTNESS] CHECK 4 Scanner freshness strip', status: 'FAIL',
         evidence: 'data-testid="scanner-freshness-strip" element not found — strip may not have rendered or was removed.' });
     } else if (!/last successful scan|no successful scan/i.test(stripState.text)) {
-      results.push({ check: 'CHECK 4 Scanner freshness strip', status: 'FAIL',
+      results.push({ check: '[CORRECTNESS] CHECK 4 Scanner freshness strip', status: 'FAIL',
         evidence: `Strip present but text unexpected: "${stripState.text.slice(0, 120)}"` });
     } else {
-      results.push({ check: 'CHECK 4 Scanner freshness strip', status: 'PASS',
+      results.push({ check: '[CORRECTNESS] CHECK 4 Scanner freshness strip', status: 'PASS',
         evidence: `Strip rendered — state=${stripState.colorClass} text="${stripState.text.slice(0, 80)}"` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Scanner freshness strip', status: 'FAIL',
+    results.push({ check: '[CORRECTNESS] CHECK 4 Scanner freshness strip', status: 'FAIL',
       evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
@@ -2908,7 +2908,7 @@ async function runClientsChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
   await new Promise<void>(r => setTimeout(r, 1500));
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Client list visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Client list visible',
     'table tbody tr, [role="row"]:not([role="columnheader"]), [class*="client-card"],[class*="clientCard"]',
     /no clients|no results|empty/i));
   return results;
@@ -2924,7 +2924,7 @@ async function runContactsChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
   await new Promise<void>(r => setTimeout(r, 1500));
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Contact list visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Contact list visible',
     'table tbody tr, [role="row"]:not([role="columnheader"]), [class*="contact-card"],[class*="contactCard"]',
     /no contacts|no results|empty/i));
   return results;
@@ -2940,7 +2940,7 @@ async function runInvoicesChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
   await new Promise<void>(r => setTimeout(r, 1500));
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Invoice list visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Invoice list visible',
     'table tbody tr, [role="row"]:not([role="columnheader"]), [class*="invoice"]',
     /no invoices|no results|empty/i));
   return results;
@@ -2968,12 +2968,12 @@ async function runSettingsChecks(page: Page): Promise<CheckResult[]> {
     ]);
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-sections.png`) }).catch(() => {});
     if (state.sections > 0 || state.inputs > 0) {
-      results.push({ check: 'CHECK 2 Settings sections visible', status: 'PASS', evidence: `${state.sections} section(s), ${state.inputs} input(s). Headings: ${state.headings.slice(0, 3).join(', ')}` });
+      results.push({ check: '[LIVENESS] CHECK 2 Settings sections visible', status: 'PASS', evidence: `${state.sections} section(s), ${state.inputs} input(s). Headings: ${state.headings.slice(0, 3).join(', ')}` });
     } else {
-      results.push({ check: 'CHECK 2 Settings sections visible', status: 'DEFERRED', evidence: `No recognized settings sections found (sections=${state.sections}, inputs=${state.inputs}). Headings: ${state.headings.slice(0, 3).join(', ')}` });
+      results.push({ check: '[LIVENESS] CHECK 2 Settings sections visible', status: 'DEFERRED', evidence: `No recognized settings sections found (sections=${state.sections}, inputs=${state.inputs}). Headings: ${state.headings.slice(0, 3).join(', ')}` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Settings sections visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Settings sections visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
   return results;
 }
@@ -2988,7 +2988,7 @@ async function runFinancialsChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
   await new Promise<void>(r => setTimeout(r, 1500));
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Financial data visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Financial data visible',
     '[class*="financial"],[class*="revenue"],[class*="chart"],[class*="metric"],table tbody tr',
     /no data|no results|empty|no financial/i));
   return results;
@@ -3032,14 +3032,14 @@ async function runAnalyticsChecks(page: Page): Promise<CheckResult[]> {
     ]);
     const total = (counts.charts > 0 ? counts.charts : 0) + (counts.metrics > 0 ? counts.metrics : 0);
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Charts/metrics visible', status: 'PASS', evidence: `charts:${counts.charts}, metric-tiles:${counts.metrics}.` });
+      results.push({ check: '[LIVENESS] CHECK 2 Charts/metrics visible', status: 'PASS', evidence: `charts:${counts.charts}, metric-tiles:${counts.metrics}.` });
     } else if (counts.empty) {
-      results.push({ check: 'CHECK 2 Charts/metrics visible', status: 'PASS', evidence: 'Empty analytics state shown — valid state.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Charts/metrics visible', status: 'PASS', evidence: 'Empty analytics state shown — valid state.' });
     } else {
-      results.push({ check: 'CHECK 2 Charts/metrics visible', status: 'DEFERRED', evidence: `No charts or metric tiles detected (charts=${counts.charts}, metrics=${counts.metrics}). Page may still be hydrating.` });
+      results.push({ check: '[LIVENESS] CHECK 2 Charts/metrics visible', status: 'DEFERRED', evidence: `No charts or metric tiles detected (charts=${counts.charts}, metrics=${counts.metrics}). Page may still be hydrating.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Charts/metrics visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Charts/metrics visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Filter/date-range controls present
@@ -3055,12 +3055,12 @@ async function runAnalyticsChecks(page: Page): Promise<CheckResult[]> {
       new Promise<{ tabs: number; filters: number; btns: number }>(r => setTimeout(() => r({ tabs: 0, filters: 0, btns: 0 }), 5000)),
     ]);
     if (ctrl.tabs + ctrl.filters > 0) {
-      results.push({ check: 'CHECK 3 Filter/date controls present', status: 'PASS', evidence: `tabs:${ctrl.tabs}, filters/date:${ctrl.filters}, buttons:${ctrl.btns}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Filter/date controls present', status: 'PASS', evidence: `tabs:${ctrl.tabs}, filters/date:${ctrl.filters}, buttons:${ctrl.btns}.` });
     } else {
-      results.push({ check: 'CHECK 3 Filter/date controls present', status: 'DEFERRED', evidence: `No tabs or filter controls found. buttons:${ctrl.btns}.` });
+      results.push({ check: '[LIVENESS] CHECK 3 Filter/date controls present', status: 'DEFERRED', evidence: `No tabs or filter controls found. buttons:${ctrl.btns}.` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 3 Filter/date controls present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Filter/date controls present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Key metric labels present — revenue, time, activity, pipeline, agent
@@ -3077,12 +3077,12 @@ async function runAnalyticsChecks(page: Page): Promise<CheckResult[]> {
     if (hasActivity) found.push('activity/agents');
     if (hasTime)     found.push('time/hours');
     if (found.length >= 1) {
-      results.push({ check: 'CHECK 4 Key metric labels present', status: 'PASS', evidence: `Metric domains: ${found.join(', ')}.` });
+      results.push({ check: '[LIVENESS] CHECK 4 Key metric labels present', status: 'PASS', evidence: `Metric domains: ${found.join(', ')}.` });
     } else {
-      results.push({ check: 'CHECK 4 Key metric labels present', status: 'DEFERRED', evidence: 'No recognizable metric labels found — page may use icons only or be empty.' });
+      results.push({ check: '[LIVENESS] CHECK 4 Key metric labels present', status: 'DEFERRED', evidence: 'No recognizable metric labels found — page may use icons only or be empty.' });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 4 Key metric labels present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Key metric labels present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -3126,14 +3126,14 @@ async function runFleetChecks(page: Page): Promise<CheckResult[]> {
     ]);
     const total = Math.max(counts.cards > 0 ? counts.cards : 0, counts.rows > 0 ? counts.rows : 0);
     if (total > 0) {
-      results.push({ check: 'CHECK 2 Agent list visible', status: 'PASS', evidence: `cards:${counts.cards}, rows:${counts.rows}.` });
+      results.push({ check: '[LIVENESS] CHECK 2 Agent list visible', status: 'PASS', evidence: `cards:${counts.cards}, rows:${counts.rows}.` });
     } else if (counts.empty) {
-      results.push({ check: 'CHECK 2 Agent list visible', status: 'PASS', evidence: 'Empty fleet state shown — valid state.' });
+      results.push({ check: '[LIVENESS] CHECK 2 Agent list visible', status: 'PASS', evidence: 'Empty fleet state shown — valid state.' });
     } else {
-      results.push({ check: 'CHECK 2 Agent list visible', status: 'DEFERRED', evidence: `No agent cards/rows detected (cards=${counts.cards}, rows=${counts.rows}).` });
+      results.push({ check: '[LIVENESS] CHECK 2 Agent list visible', status: 'DEFERRED', evidence: `No agent cards/rows detected (cards=${counts.cards}, rows=${counts.rows}).` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Agent list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Agent list visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 3: Status indicators visible (online/offline/running)
@@ -3148,9 +3148,9 @@ async function runFleetChecks(page: Page): Promise<CheckResult[]> {
       new Promise<{ dots: number; text: boolean }>(r => setTimeout(() => r({ dots: 0, text: false }), 5000)),
     ]);
     const hasStatus = statusInfo.dots > 0 || statusInfo.text;
-    results.push({ check: 'CHECK 3 Status indicators', status: hasStatus ? 'PASS' : 'DEFERRED', evidence: hasStatus ? `${statusInfo.dots} status indicator(s). Status text present: ${statusInfo.text}.` : 'No status indicators found.' });
+    results.push({ check: '[LIVENESS] CHECK 3 Status indicators', status: hasStatus ? 'PASS' : 'DEFERRED', evidence: hasStatus ? `${statusInfo.dots} status indicator(s). Status text present: ${statusInfo.text}.` : 'No status indicators found.' });
   } catch (e) {
-    results.push({ check: 'CHECK 3 Status indicators', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 3 Status indicators', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   // CHECK 4: Navigation sub-links visible (tasks, activity, agents sub-pages)
@@ -3164,9 +3164,9 @@ async function runFleetChecks(page: Page): Promise<CheckResult[]> {
       }),
       new Promise<{ count: number; labels: string }>(r => setTimeout(() => r({ count: 0, labels: '' }), 5000)),
     ]);
-    results.push({ check: 'CHECK 4 Fleet sub-nav present', status: navInfo.count > 0 ? 'PASS' : 'DEFERRED', evidence: navInfo.count > 0 ? `${navInfo.count} fleet nav link(s): ${navInfo.labels}.` : 'No fleet sub-navigation links detected.' });
+    results.push({ check: '[LIVENESS] CHECK 4 Fleet sub-nav present', status: navInfo.count > 0 ? 'PASS' : 'DEFERRED', evidence: navInfo.count > 0 ? `${navInfo.count} fleet nav link(s): ${navInfo.labels}.` : 'No fleet sub-navigation links detected.' });
   } catch (e) {
-    results.push({ check: 'CHECK 4 Fleet sub-nav present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 4 Fleet sub-nav present', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
 
   return results;
@@ -3211,7 +3211,7 @@ async function runCapabilitiesChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
   await new Promise<void>(r => setTimeout(r, 1500));
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Capabilities list visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Capabilities list visible',
     '[class*="capability"],[class*="Capability"],[class*="card"],[class*="tile"],table tbody tr',
     /no capabilities|no results|empty/i));
   return results;
@@ -3239,12 +3239,12 @@ async function runConfigBehaviorChecks(page: Page): Promise<CheckResult[]> {
     ]);
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-controls.png`) }).catch(() => {});
     if (state.inputs > 0 || state.sections > 0) {
-      results.push({ check: 'CHECK 2 Config controls visible', status: 'PASS', evidence: `${state.inputs} input(s), ${state.sections} section(s). Headings: ${state.headings.slice(0, 3).join(', ')}` });
+      results.push({ check: '[LIVENESS] CHECK 2 Config controls visible', status: 'PASS', evidence: `${state.inputs} input(s), ${state.sections} section(s). Headings: ${state.headings.slice(0, 3).join(', ')}` });
     } else {
-      results.push({ check: 'CHECK 2 Config controls visible', status: 'DEFERRED', evidence: `No recognized config controls found (inputs=${state.inputs}, sections=${state.sections}). Headings: ${state.headings.slice(0, 3).join(', ')}` });
+      results.push({ check: '[LIVENESS] CHECK 2 Config controls visible', status: 'DEFERRED', evidence: `No recognized config controls found (inputs=${state.inputs}, sections=${state.sections}). Headings: ${state.headings.slice(0, 3).join(', ')}` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Config controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Config controls visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
   return results;
 }
@@ -3259,7 +3259,7 @@ async function runFleetDreamsChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
   await new Promise<void>(r => setTimeout(r, 2000));
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Dream log entries visible (>=1 card)',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Dream log entries visible (>=1 card)',
     '[class*="dream"],[class*="Dream"],[class*="prescription"],[class*="Prescription"],[class*="card"],[class*="grid"] > *,table tbody tr',
     /no dreams|no entries|no results|empty/i));
   return results;
@@ -3275,7 +3275,7 @@ async function runMemoryChecks(page: Page): Promise<CheckResult[]> {
   results.push(loadResult);
   if (loadResult.status === 'FAIL') return results;
   await new Promise<void>(r => setTimeout(r, 1500));
-  results.push(await checkDataOrEmpty(page, sp, 'CHECK 2 Memory entries visible',
+  results.push(await checkDataOrEmpty(page, sp, '[MIXED] CHECK 2 Memory entries visible',
     '[class*="memory"],[class*="Memory"],[class*="record"],[class*="entry"],table tbody tr,[class*="card"]',
     /no memories|no results|empty/i));
   return results;
@@ -3302,12 +3302,12 @@ async function runWikiGraphChecks(page: Page): Promise<CheckResult[]> {
     ]);
     await page.screenshot({ path: path.join(OUTPUT_DIR, `${sp}-2-graph.png`) }).catch(() => {});
     if (state.canvas > 0) {
-      results.push({ check: 'CHECK 2 Graph canvas/SVG visible', status: 'PASS', evidence: `${state.canvas} graph element(s). Headings: ${state.headings.slice(0, 3).join(', ')}` });
+      results.push({ check: '[LIVENESS] CHECK 2 Graph canvas/SVG visible', status: 'PASS', evidence: `${state.canvas} graph element(s). Headings: ${state.headings.slice(0, 3).join(', ')}` });
     } else {
-      results.push({ check: 'CHECK 2 Graph canvas/SVG visible', status: 'DEFERRED', evidence: `No canvas/SVG/graph elements found (canvas=${state.canvas}) — may still be rendering. Headings: ${state.headings.slice(0, 3).join(', ')}` });
+      results.push({ check: '[LIVENESS] CHECK 2 Graph canvas/SVG visible', status: 'DEFERRED', evidence: `No canvas/SVG/graph elements found (canvas=${state.canvas}) — may still be rendering. Headings: ${state.headings.slice(0, 3).join(', ')}` });
     }
   } catch (e) {
-    results.push({ check: 'CHECK 2 Graph canvas/SVG visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
+    results.push({ check: '[LIVENESS] CHECK 2 Graph canvas/SVG visible', status: 'FAIL', evidence: `Error: ${(e as Error).message?.split('\n')[0]}` });
   }
   return results;
 }
@@ -3451,71 +3451,71 @@ async function main() {
 
     let results: CheckResult[] = [];
     if (targetPage === '/time') {
-      results = await runWithTimeout(() => runTimeChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runTimeChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/my-day') {
-      results = await runWithTimeout(() => runMyDayChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runMyDayChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/tasks') {
-      results = await runWithTimeout(() => runTasksChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runTasksChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/' || targetPage === '/dashboard') {
-      results = await runWithTimeout(() => runDashboardChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runDashboardChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/orchestrator') {
-      results = await runWithTimeout(() => runOrchestratorChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runOrchestratorChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/fleet/activity') {
-      results = await runWithTimeout(() => runFleetActivityChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runFleetActivityChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/work/inbox') {
-      results = await runWithTimeout(() => runWorkInboxChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runWorkInboxChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/work/approvals') {
-      results = await runWithTimeout(() => runWorkApprovalsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runWorkApprovalsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/companies') {
-      results = await runWithTimeout(() => runCompaniesChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runCompaniesChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/projects') {
-      results = await runWithTimeout(() => runProjectsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runProjectsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/reports') {
-      results = await runWithTimeout(() => runReportsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runReportsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/pipeline') {
-      results = await runWithTimeout(() => runPipelineChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runPipelineChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/fleet/tasks') {
-      results = await runWithTimeout(() => runFleetTasksChecks(page, serviceKey), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runFleetTasksChecks(page, serviceKey), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/fleet/agents') {
-      results = await runWithTimeout(() => runFleetAgentsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runFleetAgentsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/social-content') {
-      results = await runWithTimeout(() => runSocialContentChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runSocialContentChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/content-review') {
-      results = await runWithTimeout(() => runContentReviewChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runContentReviewChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/wiki') {
-      results = await runWithTimeout(() => runWikiChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runWikiChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/cortex/theta' || targetPage === 'cortex-theta') {
-      results = await runWithTimeout(() => runCortexThetaChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runCortexThetaChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/presence' || targetPage === 'linkedin-presence') {
-      results = await runWithTimeout(() => runLinkedInPresenceChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runLinkedInPresenceChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/app/signals' || targetPage === '/signals') {
-      results = await runWithTimeout(() => runSignalsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runSignalsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/app/supreme-outstanding' || targetPage === '/supreme-outstanding') {
-      results = await runWithTimeout(() => runSupremeOutstandingChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
+      results = await runWithTimeout(() => runSupremeOutstandingChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy (real-time subscriptions); manual check recommended' }]);
     } else if (targetPage === '/clients') {
-      results = await runWithTimeout(() => runClientsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runClientsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/contacts') {
-      results = await runWithTimeout(() => runContactsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runContactsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/invoices') {
-      results = await runWithTimeout(() => runInvoicesChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runInvoicesChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/settings') {
-      results = await runWithTimeout(() => runSettingsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runSettingsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/financials') {
-      results = await runWithTimeout(() => runFinancialsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runFinancialsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/analytics') {
-      results = await runWithTimeout(() => runAnalyticsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy; manual check recommended' }]);
+      results = await runWithTimeout(() => runAnalyticsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy; manual check recommended' }]);
     } else if (targetPage === '/fleet') {
-      results = await runWithTimeout(() => runFleetChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy; manual check recommended' }]);
+      results = await runWithTimeout(() => runFleetChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout — page alive but JS engine busy; manual check recommended' }]);
     } else if (targetPage === '/app/capabilities') {
-      results = await runWithTimeout(() => runCapabilitiesChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runCapabilitiesChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/app/config-behavior') {
-      results = await runWithTimeout(() => runConfigBehaviorChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runConfigBehaviorChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/app/fleet/dreams' || targetPage === '/app/dream-log') {
-      results = await runWithTimeout(() => runFleetDreamsChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runFleetDreamsChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/app/memory') {
-      results = await runWithTimeout(() => runMemoryChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runMemoryChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else if (targetPage === '/app/wiki-graph') {
-      results = await runWithTimeout(() => runWikiGraphChecks(page), [{ check: 'CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
+      results = await runWithTimeout(() => runWikiGraphChecks(page), [{ check: '[LIVENESS] CHECK 1 Page load', status: 'DEFERRED', evidence: 'Suite eval timeout' }]);
     } else {
       throw new Error(`Page "${targetPage}" not yet implemented in this harness. Supported: /time, /my-day, /tasks, /, /app/orchestrator, /app/fleet/activity, /app/work/inbox, /app/work/approvals, /companies, /projects, /reports, /pipeline, /app/fleet/tasks, /app/fleet/agents, /social-content, /content-review, /app/wiki, /app/cortex/theta, /app/presence, linkedin-presence, /app/signals, /app/supreme-outstanding, /clients, /contacts, /invoices, /settings, /financials, /analytics, /fleet, /app/capabilities, /app/config-behavior, /app/fleet/dreams, /app/memory, /app/wiki-graph`);
     }
