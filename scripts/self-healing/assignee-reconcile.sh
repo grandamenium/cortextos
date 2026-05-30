@@ -52,44 +52,59 @@ print(result)
 
   [ -z "$desc_assignee" ] && continue
 
-  # Compare with assigned_to
-  current_assignee=$(python3 -c "import json; d=json.load(open('$f')); print(d.get('assigned_to',''))" 2>/dev/null)
+  # Extract current assigned_to and task metadata using env var to avoid injection
+  read -r current_assignee task_id task_title < <(TASK_FILE="$f" python3 - <<'PY'
+import json, os
+d = json.load(open(os.environ['TASK_FILE']))
+print(d.get('assigned_to',''), d.get('id',''), d.get('title','')[:80])
+PY
+  ) 2>/dev/null
+
+  [ -z "$task_id" ] && continue
 
   if [[ "$current_assignee" == "$desc_assignee" ]]; then
     continue
   fi
 
-  task_id=$(python3 -c "import json; d=json.load(open('$f')); print(d.get('id',''))" 2>/dev/null)
-  task_title=$(python3 -c "import json; d=json.load(open('$f')); print(d.get('title','')[:80])" 2>/dev/null)
+  # Validate task_id as safe filename component (alphanumeric, underscore, hyphen only)
+  if ! [[ "$task_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "$LOG_PREFIX Skipping unsafe task_id: $task_id" >&2
+    continue
+  fi
 
   echo "$LOG_PREFIX Rerouting $task_id: $current_assignee -> $desc_assignee ($task_title)"
 
-  # Update assigned_to in-place
-  python3 -c "
-import json
-with open('$f') as fh:
+  # Update assigned_to in-place — pass new value via env, not string interpolation
+  TASK_FILE="$f" NEW_ASSIGNEE="$desc_assignee" python3 - <<'PY' 2>/dev/null
+import json, os
+path = os.environ['TASK_FILE']
+with open(path) as fh:
     d = json.load(fh)
-d['assigned_to'] = '$desc_assignee'
-with open('$f', 'w') as fh:
+d['assigned_to'] = os.environ['NEW_ASSIGNEE']
+with open(path, 'w') as fh:
     json.dump(d, fh)
-" 2>/dev/null
+PY
 
-  # Append audit record
+  # Append audit record — all values via env vars, no string interpolation into Python source
   audit_file="$AUDIT_DIR/${task_id}.jsonl"
-  python3 -c "
-import json
+  AUDIT_FILE="$audit_file" \
+  CURRENT_ASSIGNEE="$current_assignee" \
+  DESC_ASSIGNEE="$desc_assignee" \
+  BY_AGENT="${CTX_AGENT_NAME:-cortextos-improver}" \
+  python3 - <<'PY' 2>/dev/null
+import json, os
 from datetime import datetime
 record = {
   'event': 'assignee_reconcile',
-  'from': '$current_assignee',
-  'to': '$desc_assignee',
+  'from': os.environ['CURRENT_ASSIGNEE'],
+  'to': os.environ['DESC_ASSIGNEE'],
   'reason': 'Assignee: line in description did not match assigned_to — auto-corrected by assignee-reconcile cron',
   'timestamp': datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-  'by': '${CTX_AGENT_NAME:-cortextos-improver}'
+  'by': os.environ['BY_AGENT'],
 }
-with open('$audit_file', 'a') as f:
+with open(os.environ['AUDIT_FILE'], 'a') as f:
     f.write(json.dumps(record) + '\n')
-" 2>/dev/null
+PY
 
   ((reassigned++)) || true
 done
