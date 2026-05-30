@@ -913,6 +913,11 @@ busCommand
       loop_interval: opts.loopInterval,
       enabled: opts.enabled !== undefined ? opts.enabled === 'true' : undefined,
     });
+    if ((action === 'create' || action === 'modify' || action === 'remove') && agent !== env.agentName) {
+      const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+      logEvent(paths, env.agentName, env.org, 'action', 'cycle_cross_agent_write', 'info',
+        JSON.stringify({ action, invoker: env.agentName, target_agent: agent, cycle: opts.cycle }));
+    }
     console.log(JSON.stringify(cycles, null, 2));
   });
 
