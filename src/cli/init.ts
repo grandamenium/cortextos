@@ -1,10 +1,11 @@
 import { Command } from 'commander';
-import { existsSync, mkdirSync, writeFileSync, copyFileSync, readFileSync, readdirSync, chmodSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync, readdirSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
 import { validateOrgName } from '../utils/validate.js';
 import { stripBom } from '../utils/strip-bom.js';
+import { findOrgTemplateDir, copyOrgTemplateFiles } from '../scaffold/templates.js';
 import type { OrgContext } from '../types/index.js';
 
 export const initCommand = new Command('init')
@@ -219,34 +220,3 @@ export const initCommand = new Command('init')
     console.log(`    2. Add an agent: cortextos add-agent <name> --template orchestrator`);
     console.log(`    3. Start: cortextos start\n`);
   });
-
-function findOrgTemplateDir(projectRoot: string): string | null {
-  const candidates = [
-    join(projectRoot, 'templates', 'org'),
-    join(projectRoot, 'node_modules', 'cortextos', 'templates', 'org'),
-    join(__dirname, '..', '..', 'templates', 'org'),
-  ];
-  for (const dir of candidates) {
-    if (existsSync(dir)) return dir;
-  }
-  return null;
-}
-
-function copyOrgTemplateFiles(templateDir: string, orgDir: string, orgName: string): void {
-  try {
-    const files = readdirSync(templateDir);
-    for (const file of files) {
-      const srcPath = join(templateDir, file);
-      const destPath = join(orgDir, file);
-      if (existsSync(destPath)) continue; // Don't overwrite existing
-      try {
-        const stat = require('fs').statSync(srcPath);
-        if (stat.isFile()) {
-          let content = readFileSync(srcPath, 'utf-8');
-          content = content.replace(/\{\{org_name\}\}/g, orgName);
-          writeFileSync(destPath, content, 'utf-8');
-        }
-      } catch { /* skip */ }
-    }
-  } catch { /* skip */ }
-}
