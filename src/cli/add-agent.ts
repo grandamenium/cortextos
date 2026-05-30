@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, extname } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName, validateOrgName } from '../utils/validate';
@@ -204,6 +204,12 @@ export const addAgentCommand = new Command('add-agent')
       chmodSync(envPath, 0o600); // credentials — owner read/write only
     }
 
+    // F4: org-derived day-mode values for the deferred-placeholder substitution
+    // below. Default to the same fallbacks the config seeding uses, so the
+    // tokens resolve even when context.json is absent or incomplete.
+    let dayModeStart = '08:00';
+    let dayModeEnd = '00:00';
+
     // Generate SYSTEM.md from context.json (static org context only).
     // This overwrites whatever the template wrote — context.json is the source of truth.
     // Dynamic data (agent roster, health) is discovered live via list-agents + read-all-heartbeats.
@@ -272,6 +278,9 @@ export const addAgentCommand = new Command('add-agent')
               ? ctx.day_mode_start : '08:00';
             agentCfg.day_mode_end = (typeof ctx.day_mode_end === 'string' && timeRegex.test(ctx.day_mode_end))
               ? ctx.day_mode_end : '00:00';
+            // F4: reuse the exact resolved values for markdown token substitution.
+            dayModeStart = agentCfg.day_mode_start;
+            dayModeEnd = agentCfg.day_mode_end;
             agentCfg.communication_style = ctx.communication_style || 'direct and casual';
             agentCfg.approval_rules = {
               always_ask: Array.isArray(ctx.default_approval_categories)
@@ -284,6 +293,15 @@ export const addAgentCommand = new Command('add-agent')
         } catch { /* org context may be incomplete — agent keeps template defaults */ }
       }
     }
+
+    // F4: substitute org-level placeholders the copy step leaves unresolved in
+    // template markdown. {{day_mode_start}}/{{day_mode_end}} come from org
+    // context.json (read above), so copyTemplateFiles can't fill them at copy
+    // time — without this they leak verbatim into the agent's SOUL.md/etc.
+    substituteDeferredTokens(agentDir, {
+      day_mode_start: dayModeStart,
+      day_mode_end: dayModeEnd,
+    });
 
     // Update org context.json if this is the orchestrator
     if (options.template === 'orchestrator') {
@@ -413,6 +431,59 @@ function copyTemplateFiles(templateDir: string, agentDir: string, name: string, 
         copyTemplateFiles(srcPath, destPath, name, org);
       }
     } catch { /* skip files that can't be read */ }
+  }
+}
+
+// Directories the deferred-token walker never descends into: VCS/build/dep
+// trees that may hold large binary objects and never contain agent bootstrap
+// templates.
+const DEFERRED_TOKEN_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next']);
+
+// Only these (text) file types are scanned for deferred tokens. The leaking
+// placeholders live exclusively in markdown/config text; restricting by
+// extension avoids reading binary assets into memory and removes any chance of
+// corrupting a binary file that happens to contain a token-like byte sequence.
+const DEFERRED_TOKEN_TEXT_EXTS = new Set([
+  '.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.env',
+  '.sh', '.ts', '.js', '.mjs', '.cjs', '.toml', '.ini', '.csv',
+]);
+
+/**
+ * Replace org-level placeholders that copyTemplateFiles cannot resolve at copy
+ * time (their values come from org context.json, which is read AFTER the copy).
+ * Walks the agent dir recursively and substitutes {{key}} -> value in text
+ * files only. Pre-F4, {{day_mode_start}}/{{day_mode_end}} leaked verbatim into
+ * scaffolded agents (templates/<t>/SOUL.md, ONBOARDING.md, orchestrator skills).
+ * Only writes a file when a token actually matched. Symlinks are skipped
+ * (isFile() is false); see DEFERRED_TOKEN_SKIP_DIRS / _TEXT_EXTS for bounds.
+ */
+function substituteDeferredTokens(dir: string, replacements: Record<string, string>): void {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (DEFERRED_TOKEN_SKIP_DIRS.has(entry.name)) continue;
+      substituteDeferredTokens(full, replacements);
+    } else if (entry.isFile()) {
+      if (!DEFERRED_TOKEN_TEXT_EXTS.has(extname(entry.name).toLowerCase())) continue;
+      try {
+        let content = readFileSync(full, 'utf-8');
+        let changed = false;
+        for (const [key, value] of Object.entries(replacements)) {
+          const token = `{{${key}}}`;
+          if (content.includes(token)) {
+            content = content.split(token).join(value);
+            changed = true;
+          }
+        }
+        if (changed) writeFileSync(full, content, 'utf-8');
+      } catch { /* skip files that can't be read/written as utf-8 */ }
+    }
   }
 }
 
