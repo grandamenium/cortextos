@@ -47,20 +47,29 @@ export CTX_ROOT CTX_FRAMEWORK_ROOT CTX_ORG
 export CTX_AGENT_NAME="$BUS_AGENT"
 export CTX_AGENT_DIR="$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/$BUS_AGENT"
 
-CORTEXTOS=/usr/bin/cortextos
-JQ=/usr/bin/jq
-CCUSAGE=/usr/bin/ccusage
-CLAUDE_CREDS=/root/.claude/.credentials.json
+# Tool paths — env-overridable so the script is portable (macOS Homebrew puts
+# cortextos under /opt/homebrew/bin; ccusage may be absent). Defaults preserve
+# the original Linux layout.
+CORTEXTOS="${CORTEXTOS:-$(command -v cortextos || echo /usr/bin/cortextos)}"
+JQ="${JQ:-$(command -v jq || echo /usr/bin/jq)}"
+CCUSAGE="${CCUSAGE:-$(command -v ccusage || echo /usr/bin/ccusage)}"
+CLAUDE_CREDS="${CLAUDE_CREDS:-$HOME/.claude/.credentials.json}"
 
-# Auto-extract OAuth token from Claude Code's local credentials store if no
-# accounts.json is configured and CLAUDE_CODE_OAUTH_TOKEN isn't already set.
-# Claude Code refreshes that file automatically while any agent runs, so the
-# watchdog gets fresh tokens for free.
+# Acquire an OAuth token for the usage API if not already provided and no
+# accounts.json is configured. Claude Code refreshes the underlying store
+# automatically while any agent runs, so the watchdog gets fresh tokens for free.
+#   - macOS: read from the login Keychain ("Claude Code-credentials").
+#   - Linux: read from the credentials file ($CLAUDE_CREDS).
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
-   && [ ! -f "$CTX_ROOT/state/oauth/accounts.json" ] \
-   && [ -f "$CLAUDE_CREDS" ]; then
-  TOK=$("$JQ" -r '.claudeAiOauth.accessToken // empty' "$CLAUDE_CREDS" 2>/dev/null)
-  [ -n "$TOK" ] && export CLAUDE_CODE_OAUTH_TOKEN="$TOK"
+   && [ ! -f "$CTX_ROOT/state/oauth/accounts.json" ]; then
+  if [ "$(uname)" = "Darwin" ] && command -v security >/dev/null 2>&1; then
+    TOK=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
+          | "$JQ" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+    [ -n "$TOK" ] && export CLAUDE_CODE_OAUTH_TOKEN="$TOK"
+  elif [ -f "$CLAUDE_CREDS" ]; then
+    TOK=$("$JQ" -r '.claudeAiOauth.accessToken // empty' "$CLAUDE_CREDS" 2>/dev/null)
+    [ -n "$TOK" ] && export CLAUDE_CODE_OAUTH_TOKEN="$TOK"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -212,13 +221,26 @@ fi
 
 log "TRIGGER remaining=${REMAINING_PCT}% < ${THRESHOLD_PCT}%"
 
-# Snapshot running agents
-RUNNING_JSON='[]'
+# Snapshot running agents. If the snapshot FAILS, bail rather than fall through
+# and write a stale, empty paused.json that makes the watchdog believe it paused
+# agents it never touched (#534 Bug A).
+RUNNING_JSON=""
 if AGENTS_OUT=$("$CORTEXTOS" bus list-agents 2>/dev/null); then
   RUNNING_JSON=$(echo "$AGENTS_OUT" | "$JQ" -c '[.[] | select(.running == true) | .name]')
-  [ -z "$RUNNING_JSON" ] && RUNNING_JSON='[]'
 fi
+
+if [ -z "$RUNNING_JSON" ]; then
+  log "ERROR: list-agents snapshot failed or returned empty; skipping pause action to avoid stale-paused-state trap (#534 Bug A)"
+  MSG="⚠️ Quota watchdog wanted to trip (remaining=${REMAINING_PCT}%, threshold ${THRESHOLD_PCT}%) but the list-agents snapshot failed. Holding action — NO agents paused, no state written. Investigate cortextos daemon health. Log: $LOG"
+  "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$MSG" --plain-text >> "$LOG" 2>&1 || true
+  exit 0
+fi
+
 COUNT=$(echo "$RUNNING_JSON" | "$JQ" 'length')
+if [ "$COUNT" -eq 0 ]; then
+  log "no running agents to pause; not writing paused-state"
+  exit 0
+fi
 log "running agents: $RUNNING_JSON (count=$COUNT)"
 
 if [ "$DRY_RUN" = "1" ]; then
@@ -228,12 +250,23 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
-# Stop each running agent
-echo "$RUNNING_JSON" | "$JQ" -r '.[]' | while IFS= read -r AGENT; do
+# Stop each running agent. Process substitution keeps the loop in the parent
+# shell so STOP_FAILED survives the loop (same subshell-state class as #534 Bug B).
+STOP_FAILED=()
+while IFS= read -r AGENT; do
   [ -z "$AGENT" ] && continue
   log "stop: $AGENT"
-  "$CORTEXTOS" stop "$AGENT" >> "$LOG" 2>&1 || log "  stop failed: $AGENT"
-done
+  if "$CORTEXTOS" stop "$AGENT" >> "$LOG" 2>&1; then
+    :
+  else
+    log "  stop failed: $AGENT"
+    STOP_FAILED+=("$AGENT")
+  fi
+done < <(echo "$RUNNING_JSON" | "$JQ" -r '.[]')
+
+if [ "${#STOP_FAILED[@]}" -gt 0 ]; then
+  log "WARNING: ${#STOP_FAILED[@]} agents failed to stop: ${STOP_FAILED[*]} — paused-state will still record the full intended set"
+fi
 
 # Write paused-state file (schema: paused_at, agents_paused, remaining_pct_at_pause + extras)
 cat > "$PAUSED_FILE" <<EOF
