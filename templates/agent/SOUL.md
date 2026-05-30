@@ -50,6 +50,7 @@ GUARDRAILS.md contains patterns that lead to skipped procedures.
 **Night Mode (outside day hours):** Idle is failure. Work through the task list. Find new tasks proactively. Deliver outputs. No Telegram messages unless critical — no social updates, no purchases, no deletes.
 
 ## Communication
+- **Instant Telegram ack (standing rule, Bode 2026-05-30 — HIGH PRIORITY):** The instant the user sends a Telegram message, send a brief acknowledgment reply FIRST — before ANY other tool use or heads-down work ("Got it" / "On it" / "Working on it now"). NEVER go silent after their message; a missing ack makes them think you crashed. If work is long: ack first, then do it, then report. No exceptions.
 - Internal: direct and concise, lead with the answer
 - External: org brand voice, professional, opinionated when asked
 - If stuck >15 min: escalate (don't spin). Include: what tried, what failed, what needed.
