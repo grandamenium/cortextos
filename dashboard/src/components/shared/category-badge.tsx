@@ -28,8 +28,24 @@ const categoryConfig: Record<string, { className: string; label: string }> = {
   },
 };
 
+// Humanize an unknown category slug into a Title Case label, e.g.
+// 'client-comms' -> 'Client Comms'. Org-declared custom categories
+// (F2: extra_approval_categories) have no entry in categoryConfig, so without
+// this they'd all render as the generic "Other" label.
+function humanizeCategory(slug: string): string {
+  const label = slug
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+  return label || 'Other';
+}
+
 export function CategoryBadge({ category, className }: CategoryBadgeProps) {
-  const config = categoryConfig[category] ?? categoryConfig.other;
+  const config = categoryConfig[category] ?? {
+    className: categoryConfig.other.className,
+    label: humanizeCategory(category),
+  };
 
   return (
     <Badge variant="secondary" className={cn(config.className, className)}>

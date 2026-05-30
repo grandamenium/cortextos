@@ -57,14 +57,28 @@ export function validateEventSeverity(severity: string): asserts severity is Eve
   }
 }
 
-const VALID_APPROVAL_CATEGORIES: ApprovalCategory[] = [
+export const STANDARD_APPROVAL_CATEGORIES: readonly string[] = [
   'external-comms', 'financial', 'deployment', 'data-deletion', 'other',
 ];
 
-export function validateApprovalCategory(category: string): asserts category is ApprovalCategory {
-  if (!VALID_APPROVAL_CATEGORIES.includes(category as ApprovalCategory)) {
+/**
+ * F2: org-scoped approval categories.
+ *
+ * Accepts the standard set PLUS any categories the org declares in its
+ * context.json `extra_approval_categories`. `extra` defaults to [] so every
+ * existing caller keeps IDENTICAL behavior (standard set only) — zero
+ * regression. Callers that want to honor a vertical pack's custom categories
+ * pass the org's declared list. It never accepts an arbitrary string: a
+ * category must be standard or explicitly declared by the org.
+ */
+export function validateApprovalCategory(
+  category: string,
+  extra: readonly string[] = [],
+): asserts category is ApprovalCategory {
+  if (!STANDARD_APPROVAL_CATEGORIES.includes(category) && !extra.includes(category)) {
+    const allowed = [...STANDARD_APPROVAL_CATEGORIES, ...extra];
     throw new Error(
-      `Invalid approval category '${category}'. Must be one of: ${VALID_APPROVAL_CATEGORIES.join(', ')}`
+      `Invalid approval category '${category}'. Must be one of: ${allowed.join(', ')}`
     );
   }
 }

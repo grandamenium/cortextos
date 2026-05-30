@@ -100,6 +100,23 @@ describe('validateApprovalCategory', () => {
       expect(() => validateApprovalCategory(cat)).not.toThrow();
     }
   });
+
+  // F2: org-scoped extra categories
+  it('rejects an unknown category by default (no extras) — unchanged behavior', () => {
+    expect(() => validateApprovalCategory('client-comms')).toThrow();
+  });
+
+  it('accepts a custom category when the org declares it in extras', () => {
+    expect(() => validateApprovalCategory('client-comms', ['client-comms', 'billing'])).not.toThrow();
+  });
+
+  it('still rejects a category absent from both the standard set and the extras', () => {
+    expect(() => validateApprovalCategory('totally-made-up', ['client-comms'])).toThrow();
+  });
+
+  it('standard categories remain valid even when extras are supplied', () => {
+    expect(() => validateApprovalCategory('financial', ['client-comms'])).not.toThrow();
+  });
 });
 
 describe('validateModel', () => {

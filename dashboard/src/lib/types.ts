@@ -76,7 +76,19 @@ export interface Task {
 
 // -- Approval Types --
 
-export type ApprovalCategory = 'deployment' | 'cost' | 'access' | 'other';
+// Standard categories plus (string & {}) so org-declared custom categories
+// (F2: OrgContext.extra_approval_categories, e.g. a law-firm pack's
+// 'client-comms') typecheck and render. Literal members are kept for
+// autocomplete; the badge humanizes any unknown slug.
+export type ApprovalCategory =
+  | 'external-comms'
+  | 'financial'
+  | 'deployment'
+  | 'data-deletion'
+  | 'cost'
+  | 'access'
+  | 'other'
+  | (string & {});
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 
 export interface Approval {

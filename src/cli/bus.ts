@@ -3,7 +3,7 @@ import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
-import { validateAgentName } from '../utils/validate.js';
+import { validateAgentName, validateApprovalCategory } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
@@ -12,7 +12,7 @@ import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity 
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
-import { createApproval, updateApproval } from '../bus/approval.js';
+import { createApproval, updateApproval, getOrgExtraApprovalCategories } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
@@ -1074,15 +1074,25 @@ busCommand
   .command('create-approval')
   .description('Request human approval for a high-stakes action')
   .argument('<title>', 'What you are requesting approval for')
-  .argument('<category>', 'Category: external-comms, financial, deployment, data-deletion, other')
+  .argument('<category>', 'Category: external-comms, financial, deployment, data-deletion, other (plus any extra_approval_categories declared in the org context.json)')
   .argument('[context]', 'Additional context')
   .action(async (title: string, category: string, context?: string) => {
-    const validCategories: ApprovalCategory[] = ['external-comms', 'financial', 'deployment', 'data-deletion', 'other'];
-    if (!validCategories.includes(category as ApprovalCategory)) {
-      console.error(`Invalid category '${category}'. Must be one of: ${validCategories.join(', ')}`);
+    let env: ReturnType<typeof resolveEnv>;
+    try {
+      env = resolveEnv();
+    } catch (err) {
+      console.error((err as Error).message);
       process.exit(1);
     }
-    const env = resolveEnv();
+    // F2: accept the standard categories PLUS any the org declares in its
+    // context.json (extra_approval_categories). An org that declares none gets
+    // exactly the standard set — identical to the previous hardcoded check.
+    try {
+      validateApprovalCategory(category, getOrgExtraApprovalCategories(env.frameworkRoot, env.org));
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     // await — createApproval fan-out posts to the activity channel, which
     // must complete before the CLI process exits or the post silently

@@ -5,9 +5,43 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { parseEnvFile } from '../utils/env.js';
 import { randomString } from '../utils/random.js';
 import { validateApprovalCategory } from '../utils/validate.js';
+import { stripBom } from '../utils/strip-bom.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { sendMessage } from './message.js';
 import { postActivity } from './system.js';
+
+/**
+ * F2: read an org's declared extra approval categories from its context.json.
+ * Returns [] when the org, file, or field is absent/unreadable — so callers
+ * fall back to exactly the standard set (zero behavior change for orgs that
+ * declare nothing).
+ *
+ * Root resolution mirrors the rest of the bus: an explicit `frameworkRoot`
+ * wins, else CTX_FRAMEWORK_ROOT / CTX_PROJECT_ROOT from the env, else cwd —
+ * so daemon-side callers that set the env but don't pass the arg still resolve
+ * the right org dir. `org` is validated against the canonical name shape before
+ * being used in a path, so a malicious/garbled org can't traverse out of orgs/.
+ */
+export function getOrgExtraApprovalCategories(frameworkRoot: string | undefined, org: string): string[] {
+  // Defense-in-depth: never build a path from an org name that isn't the
+  // canonical /^[a-z0-9_-]+$/ shape (the CLI validates this upstream, but
+  // createApproval is also a programmatic API).
+  if (!/^[a-z0-9_-]+$/.test(org)) return [];
+  try {
+    const root = frameworkRoot
+      || process.env.CTX_FRAMEWORK_ROOT
+      || process.env.CTX_PROJECT_ROOT
+      || process.cwd();
+    const contextPath = join(root, 'orgs', org, 'context.json');
+    if (!existsSync(contextPath)) return [];
+    const ctx = JSON.parse(stripBom(readFileSync(contextPath, 'utf-8')));
+    return Array.isArray(ctx.extra_approval_categories)
+      ? ctx.extra_approval_categories.filter((c: unknown): c is string => typeof c === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Build the inline keyboard posted to the activity channel alongside a
@@ -185,7 +219,7 @@ export async function createApproval(
   frameworkRoot?: string,
   agentDir?: string,
 ): Promise<string> {
-  validateApprovalCategory(category);
+  validateApprovalCategory(category, getOrgExtraApprovalCategories(frameworkRoot, org));
 
   const epoch = Math.floor(Date.now() / 1000);
   const rand = randomString(5);

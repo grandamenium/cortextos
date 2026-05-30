@@ -430,3 +430,39 @@ describe('listPendingApprovals', () => {
     expect(pending[0].id).toBe(id1);
   });
 });
+
+// F2: createApproval must honor an org's context.json extra_approval_categories
+// (the integration gate, distinct from the pure validateApprovalCategory unit).
+describe('createApproval org-scoped extra categories (F2)', () => {
+  function writeOrgContext(org: string, extra: string[]) {
+    const orgDir = join(frameworkRoot, 'orgs', org);
+    mkdirSync(orgDir, { recursive: true });
+    writeFileSync(join(orgDir, 'context.json'), JSON.stringify({ name: org, extra_approval_categories: extra }));
+  }
+
+  it('accepts a custom category the org declares in extra_approval_categories', async () => {
+    writeOrgContext('lawfirm', ['client-comms', 'billing']);
+    const id = await createApproval(paths, 'alice', 'lawfirm', 'Email a client', 'client-comms', undefined, frameworkRoot);
+    expect(id).toMatch(/^approval_/);
+  });
+
+  it('rejects a category that is neither standard nor declared', async () => {
+    writeOrgContext('lawfirm', ['client-comms']);
+    await expect(
+      createApproval(paths, 'alice', 'lawfirm', 'Bogus', 'totally-made-up', undefined, frameworkRoot)
+    ).rejects.toThrow(/Invalid approval category/);
+  });
+
+  it('still accepts standard categories when the org declares extras', async () => {
+    writeOrgContext('lawfirm', ['client-comms']);
+    const id = await createApproval(paths, 'alice', 'lawfirm', 'Spend money', 'financial', undefined, frameworkRoot);
+    expect(id).toMatch(/^approval_/);
+  });
+
+  it('rejects a custom category when the org declares no extras (default behavior)', async () => {
+    // No context.json written for this org → extras default to [].
+    await expect(
+      createApproval(paths, 'alice', 'no-extras-org', 'Email a client', 'client-comms', undefined, frameworkRoot)
+    ).rejects.toThrow(/Invalid approval category/);
+  });
+});

@@ -113,12 +113,20 @@ export interface Heartbeat {
 
 // Approval Types
 
-export type ApprovalCategory =
+export type StandardApprovalCategory =
   | 'external-comms'
   | 'financial'
   | 'deployment'
   | 'data-deletion'
   | 'other';
+
+// F2: an org (e.g. a vertical install pack) may declare additional approval
+// categories via OrgContext.extra_approval_categories. The `(string & {})`
+// member keeps literal autocomplete for the standard set while allowing
+// validated custom categories. Validity is enforced at runtime by
+// validateApprovalCategory(category, extra), which accepts the standard set
+// PLUS the org's declared extras — never an arbitrary string by default.
+export type ApprovalCategory = StandardApprovalCategory | (string & {});
 
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 
@@ -446,6 +454,10 @@ export interface OrgContext {
   day_mode_start?: string;
   day_mode_end?: string;
   default_approval_categories?: string[];
+  /** F2: vertical/custom approval categories this org accepts IN ADDITION to
+   *  the standard set (external-comms, financial, deployment, data-deletion,
+   *  other). Enforced at approval creation via validateApprovalCategory. */
+  extra_approval_categories?: string[];
   communication_style?: string;
   dashboard_url?: string;
   /** When true, agents are instructed at startup that every task submitted
