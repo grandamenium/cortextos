@@ -396,8 +396,33 @@ export class CronScheduler {
     this.attachedAgent = agent;
     // Reset defer timers so the fresh session isn't still in a defer window
     // from the previous generation.
+    const now = Date.now();
     for (const sc of this.scheduled.values()) {
       sc.deferStart = null;
+
+      // ATTACH CATCH-UP: if nextFireAt was pushed into the future by
+      // consecutive dispatch failures while the agent was down (miss-retry
+      // exhaustion advances to the next normal slot), reset it to fire on
+      // the next tick.  Detect this by checking whether the cron was due
+      // to fire at least once since it last SUCCESSFULLY fired (last_fired_at).
+      //
+      // We intentionally use only last_fired_at, not last_fire_attempted_at:
+      // attempted_at is updated on every failed dispatch and would be recent
+      // during an ongoing outage, masking the overdue status.
+      if (sc.nextFireAt > now && sc.definition.last_fired_at) {
+        const def = sc.definition;
+        const lastFiredMs = new Date(def.last_fired_at).getTime();
+        const expectedNext = computeNextFireAt(def, lastFiredMs, this.timezone);
+        if (!isNaN(expectedNext) && expectedNext <= now) {
+          this.logger(
+            `[cron-scheduler] attach-catchup: cron "${def.name}" overdue ` +
+            `(expected next=${new Date(expectedNext).toISOString()}, ` +
+            `scheduled=${new Date(sc.nextFireAt).toISOString()}) — resetting to fire now`,
+          );
+          sc.nextFireAt = now;
+          sc.missRetryCount = 0;
+        }
+      }
     }
     this.logger(`[cron-scheduler] agent "${agent.name}" attached (gen=${agent.generation})`);
   }

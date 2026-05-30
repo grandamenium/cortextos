@@ -33,6 +33,7 @@ vi.mock('../../../src/bus/crons.js', () => ({
 // ---------------------------------------------------------------------------
 
 import { CronScheduler, nextFireFromCron } from '../../../src/daemon/cron-scheduler';
+import type { ManagedAgent } from '../../../src/daemon/cron-scheduler';
 import type { CronDefinition } from '../../../src/types/index';
 
 // ---------------------------------------------------------------------------
@@ -774,6 +775,158 @@ describe('CronScheduler', () => {
     // Verify the fire happened at a minute that is divisible by 5
     const firedCron = fired.find(c => c.name === 'every5min');
     expect(firedCron).toBeDefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // attachAgent catch-up — overdue crons recover on agent re-attach
+  // -------------------------------------------------------------------------
+
+  it('attachAgent resets nextFireAt for crons overdue while agent was down', async () => {
+    // Scenario: cron last SUCCESSFULLY fired at T (3h ago).  All dispatch
+    // attempts since then failed (agent PTY was down).  Miss-retry exhaustion
+    // has advanced nextFireAt to a future slot (~1h from now).  When the agent
+    // re-attaches, attachAgent() should detect that the cron is overdue based
+    // on last_fired_at and reset nextFireAt = now so it fires on the next tick.
+    const threeHoursAgo = new Date(Date.now() - 3 * 3_600_000).toISOString();
+
+    // Build a scheduler whose onFire always rejects (PTY unavailable).
+    const catchUpLogs: string[] = [];
+    const catchUpScheduler = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: vi.fn().mockRejectedValue(new Error('PTY unavailable')),
+      logger: (m) => catchUpLogs.push(m),
+    });
+
+    mockReadCrons.mockReturnValue([
+      makeCron({ name: 'stalled', schedule: '1h', last_fired_at: threeHoursAgo }),
+    ]);
+    catchUpScheduler.start();
+
+    // Drive through: one catch-up attempt (all 4 retries ~21s) + 5min miss-retry
+    // window + one miss-retry attempt (all 4 retries ~21s) + buffer.
+    // After this MAX_MISS_RETRIES (1) is exhausted and nextFireAt is advanced to
+    // a future slot (computeNextFireAt from the attempt time ≈ ~1h from now).
+    // last_fired_at on sc.definition remains threeHoursAgo (no successful fire).
+    const RETRY_WALL_MS = 1_000 + 4_000 + 16_000 + 500; // 4 attempts ≈ 21.5 s
+    const MISS_RETRY_DELAY_MS = 5 * 60_000;
+    await vi.advanceTimersByTimeAsync(TICK + RETRY_WALL_MS + MISS_RETRY_DELAY_MS + TICK + RETRY_WALL_MS + 2_000);
+
+    // Verify nextFireAt is now in the future (miss-retry advanced it).
+    const preAttachTimes = catchUpScheduler.getNextFireTimes();
+    const preAttach = preAttachTimes.find(t => t.name === 'stalled');
+    expect(preAttach).toBeDefined();
+    expect(preAttach!.nextFireAt).toBeGreaterThan(Date.now());
+
+    // Also verify catch-up log was emitted earlier (attach-catchup log appears
+    // on start() because last_fired_at was old then).
+    expect(catchUpLogs.some(l => l.includes('catch-up'))).toBe(true);
+
+    // Swap onFire to succeed so we can observe the re-fire.
+    const reAttachFired: CronDefinition[] = [];
+    const succeeding = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: (c) => { reAttachFired.push(c); },
+      logger: () => undefined,
+    });
+    // Start with same stale last_fired_at — catch-up fires once on first tick.
+    succeeding.start();
+    await vi.advanceTimersByTimeAsync(TICK);
+    const countAfterInitialCatchUp = reAttachFired.filter(c => c.name === 'stalled').length;
+    expect(countAfterInitialCatchUp).toBe(1);
+    // nextFireAt is now ~now+1h; sc.definition.last_fired_at = now (updated in-memory).
+
+    // A re-attach right now should NOT spuriously re-catch-up because
+    // last_fired_at was just updated to "now" by the successful fire.
+    const freshAgent: ManagedAgent = {
+      name: 'test-agent', generation: 2,
+      stateDir: '/tmp/test', configPath: '/tmp/test/config.json',
+      timezone: undefined, isRunning: () => true, isIdle: () => true,
+    };
+    succeeding.attachAgent(freshAgent);
+    await vi.advanceTimersByTimeAsync(TICK);
+    // Should still be exactly 1 fire — no spurious double-fire.
+    expect(reAttachFired.filter(c => c.name === 'stalled')).toHaveLength(1);
+
+    catchUpScheduler.stop();
+    succeeding.stop();
+  });
+
+  it('attachAgent triggers catch-up when nextFireAt is future but last_fired_at is overdue', async () => {
+    // Direct test of the attach-catchup guard: start a scheduler that is NOT
+    // yet due (last_fired_at 30min ago, schedule 1h → next fire in 30min).
+    // Then reload with an old last_fired_at (simulates crash + pg-cron not
+    // persisting the fire), verify reload itself catches-up.
+    // Then test attachAgent directly by using a cron where last_fired_at is
+    // old but the scheduler's nextFireAt was pushed to a future slot.
+    const threeHoursAgo = new Date(Date.now() - 3 * 3_600_000).toISOString();
+    const attachLogs: string[] = [];
+    const attachFired: CronDefinition[] = [];
+
+    // Use a failing scheduler to build the stale state, then observe logs.
+    const failSched = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: vi.fn().mockRejectedValue(new Error('down')),
+      logger: (m) => attachLogs.push(m),
+    });
+    mockReadCrons.mockReturnValue([
+      makeCron({ name: 'attach-cron', schedule: '1h', last_fired_at: threeHoursAgo }),
+    ]);
+    failSched.start();
+
+    // Exhaust miss-retry to push nextFireAt into the future.
+    const RETRY_WALL_MS = 1_000 + 4_000 + 16_000 + 500;
+    const MISS_WINDOW = 5 * 60_000;
+    await vi.advanceTimersByTimeAsync(TICK + RETRY_WALL_MS + MISS_WINDOW + TICK + RETRY_WALL_MS + 2_000);
+
+    const timesBeforeAttach = failSched.getNextFireTimes();
+    const beforeAttach = timesBeforeAttach.find(t => t.name === 'attach-cron');
+    expect(beforeAttach!.nextFireAt).toBeGreaterThan(Date.now());
+
+    // Call attachAgent — attach-catchup should detect overdue via last_fired_at.
+    const mockAgt: ManagedAgent = {
+      name: 'test-agent', generation: 2,
+      stateDir: '/tmp', configPath: '/tmp/config.json',
+      timezone: undefined, isRunning: () => true, isIdle: () => true,
+    };
+    failSched.attachAgent(mockAgt);
+
+    // Log should mention attach-catchup for 'attach-cron'.
+    expect(attachLogs.some(l => l.includes('attach-catchup') && l.includes('attach-cron'))).toBe(true);
+
+    // nextFireAt should now be reset to now (≤ Date.now()).
+    const timesAfterAttach = failSched.getNextFireTimes();
+    const afterAttach = timesAfterAttach.find(t => t.name === 'attach-cron');
+    expect(afterAttach!.nextFireAt).toBeLessThanOrEqual(Date.now() + 100);
+
+    failSched.stop();
+  });
+
+  it('attachAgent does NOT re-fire crons that are not overdue', async () => {
+    // Cron fired 30min ago, schedule 1h — not yet due.
+    const thirtyMinsAgo = new Date(Date.now() - 30 * 60_000).toISOString();
+    mockReadCrons.mockReturnValue([
+      makeCron({ name: 'fresh', schedule: '1h', last_fired_at: thirtyMinsAgo }),
+    ]);
+
+    scheduler.start();
+    // Advance past initial tick (no catch-up — not overdue)
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect(fired.filter(c => c.name === 'fresh')).toHaveLength(0);
+
+    const before = fired.filter(c => c.name === 'fresh').length;
+    const mockAgent: import('../../../src/daemon/cron-scheduler').ManagedAgent = {
+      name: 'test-agent',
+      generation: 2,
+      stateDir: '/tmp/test',
+      configPath: '/tmp/test/config.json',
+      timezone: undefined,
+      isRunning: () => true,
+      isIdle:    () => true,
+    };
+    scheduler.attachAgent(mockAgent);
+    // No catch-up expected since cron is not overdue
+    await vi.advanceTimersByTimeAsync(TICK);
+    expect(fired.filter(c => c.name === 'fresh').length).toBe(before);
   });
 
   // -------------------------------------------------------------------------
