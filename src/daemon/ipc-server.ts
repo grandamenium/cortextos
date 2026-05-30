@@ -7,7 +7,7 @@ import { getIpcPath } from '../utils/paths.js';
 import { readCrons, getExecutionLog, getExecutionLogPage, addCron, updateCron, removeCron, getCronByName } from '../bus/crons.js';
 import type { ExecutionLogStatusFilter } from '../bus/crons.js';
 import { nextFireFromCron } from './cron-scheduler.js';
-import { parseDurationMs } from '../bus/cron-state.js';
+import { parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { computeHealth, aggregateFleetHealth } from '../utils/cron-health.js';
 
 const WORKER_NAME_REGEX = /^[a-z0-9_-]+$/;
@@ -146,6 +146,13 @@ export function computeNextFire(
   return 'unknown';
 }
 
+/** Return the more-recent of two nullable ISO timestamps; null if both absent. */
+function mostRecentTs(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
+}
+
 /**
  * Walk all enabled agents from enabled-agents.json, read each agent's crons.json
  * and cron execution log, and return a combined summary array.
@@ -172,16 +179,29 @@ function listAllCrons(): CronSummaryRow[] {
     const org = entry.org ?? '';
     const crons = readCrons(agentName);
 
+    // Merge cron-state.json so harness CronCreate fires (written via
+    // `bus update-cron-fire`) are visible to the gap-detector — the
+    // execution log only captures daemon-managed fires.
+    const stateDir = join(ctxRoot, 'state', agentName);
+    const cronStateRecords = readCronState(stateDir).crons;
+    const harnessFireByName = new Map<string, string>();
+    for (const rec of cronStateRecords) harnessFireByName.set(rec.name, rec.last_fire);
+
     for (const cron of crons) {
       // Read the last execution log entry for this cron
       const logEntries = getExecutionLog(agentName, cron.name, 1);
       const lastEntry = logEntries.length > 0 ? logEntries[logEntries.length - 1] : null;
 
+      // Take the most-recent of: daemon execution log ts vs cron-state.json last_fire
+      const logTs = lastEntry?.ts ?? null;
+      const harnessTs = harnessFireByName.get(cron.name) ?? null;
+      const lastFire = mostRecentTs(logTs, harnessTs);
+
       rows.push({
         agent: agentName,
         org,
         cron,
-        lastFire: lastEntry?.ts ?? null,
+        lastFire,
         lastStatus: lastEntry?.status ?? null,
         nextFire: computeNextFire(cron.schedule, cron.last_fired_at, now),
       });
