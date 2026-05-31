@@ -85,6 +85,11 @@ describe('F4: add-agent substitutes day_mode placeholders', () => {
     const onboarding = readFileSync(onboardingPath, 'utf-8');
     expect(onboarding).not.toContain('{{day_mode_start}}');
     expect(onboarding).not.toContain('{{day_mode_end}}');
+    // The onboarding identity line must use {{agent_name}} (substituted at copy),
+    // not {{CTX_AGENT_NAME}} (which nothing substitutes and would leak verbatim).
+    expect(onboarding).not.toContain('{{CTX_AGENT_NAME}}');
+    expect(onboarding).not.toContain('{{agent_name}}');
+    expect(onboarding).toContain('daymode-onboard'); // the resolved agent name
   });
 
   it('falls back to 08:00/00:00 defaults when context.json is absent', async () => {
