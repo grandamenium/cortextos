@@ -10,6 +10,19 @@ import {
   substituteDeferredTokens,
 } from './templates.js';
 
+/**
+ * Thrown when the target agent directory already exists. The add-agent CLI
+ * catches THIS specifically to reproduce its historical "already exists" exit-1
+ * message, while letting unexpected scaffold errors propagate as before. The
+ * pack installer catches it to skip an existing agent (idempotent re-run).
+ */
+export class AgentAlreadyExistsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AgentAlreadyExistsError';
+  }
+}
+
 export interface AddAgentOptions {
   name: string;
   template: string;
@@ -48,7 +61,7 @@ export function addAgent(opts: AddAgentOptions): void {
 
   const agentDir = join(projectRoot, 'orgs', org, 'agents', name);
   if (existsSync(agentDir)) {
-    throw new Error(`Agent "${name}" already exists at ${agentDir}`);
+    throw new AgentAlreadyExistsError(`Agent "${name}" already exists at ${agentDir}`);
   }
 
   console.log(`\nAdding agent: ${name}`);

@@ -25,11 +25,7 @@ export const initCommand = new Command('init')
     // All scaffolding logic lives in src/scaffold/org.ts (F3) so the
     // add-org --pack installer can reuse it. This command is a thin wrapper:
     // validate the CLI arg, then delegate. projectRoot is process.cwd() to
-    // preserve the original behavior.
-    try {
-      initOrg({ orgName, instance: options.instance, projectRoot: process.cwd() });
-    } catch (err) {
-      console.error(`Error initializing organization: ${(err as Error).message}`);
-      process.exit(1);
-    }
+    // preserve the original behavior. Unexpected scaffold I/O errors are left to
+    // propagate exactly as they did in the original action (no extra wrapping).
+    initOrg({ orgName, instance: options.instance, projectRoot: process.cwd() });
   });

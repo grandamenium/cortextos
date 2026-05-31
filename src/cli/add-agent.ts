@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { validateAgentName, validateOrgName } from '../utils/validate';
-import { addAgent } from '../scaffold/agent';
+import { addAgent, AgentAlreadyExistsError } from '../scaffold/agent.js';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -89,8 +89,9 @@ export const addAgentCommand = new Command('add-agent')
 
     // All scaffolding lives in src/scaffold/agent.ts (F3) so the add-org --pack
     // installer can provision a roster directly. This command validates the CLI
-    // args (above), then delegates. addAgent throws if the agent already exists;
-    // we translate that to the same exit-1 message the command always produced.
+    // args (above), then delegates. Catch ONLY the "already exists" case to
+    // reproduce the command's historical exit-1 message; let any unexpected
+    // scaffold error propagate exactly as it did before the extraction.
     try {
       addAgent({
         name,
@@ -101,7 +102,10 @@ export const addAgentCommand = new Command('add-agent')
         projectRoot,
       });
     } catch (err) {
-      console.error((err as Error).message);
-      process.exit(1);
+      if (err instanceof AgentAlreadyExistsError) {
+        console.error(err.message);
+        process.exit(1);
+      }
+      throw err;
     }
   });
