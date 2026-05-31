@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, m
 import { join, basename, dirname } from 'path';
 import { execSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
+import { HEARTBEAT_STALE_MS } from './heartbeat.js';
 
 // --- Types ---
 
@@ -177,7 +178,8 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       }
     }
 
-    // Check heartbeat staleness (stale if >5 hours old)
+    // Check heartbeat staleness against the shared HEARTBEAT_STALE_MS threshold
+    // (5h) so this health check and the read-all-heartbeats display agree.
     let heartbeatStale = true;
     const hbFile = join(ctxRoot, 'state', agent, 'heartbeat.json');
     if (existsSync(hbFile)) {
@@ -186,7 +188,7 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
         if (hb.last_heartbeat) {
           const hbTime = new Date(hb.last_heartbeat).getTime();
           const age = Date.now() - hbTime;
-          if (age < 5 * 60 * 60 * 1000) {
+          if (age < HEARTBEAT_STALE_MS) {
             heartbeatStale = false;
             agentsHealthy++;
           }

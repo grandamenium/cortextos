@@ -4,6 +4,35 @@ import type { Heartbeat, BusPaths } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 
 /**
+ * Single source of truth for heartbeat staleness thresholds, so the
+ * `read-all-heartbeats` display and the metrics health check cannot drift.
+ *
+ * Policy (HEARTBEAT.md): an agent is flagged STALE at 5h and treated as
+ * UNRESPONSIVE (escalate to orchestrator) at 8h. Previously the display tagged
+ * `[STALE]` at a hardcoded 2h while the metrics computed staleness at 5h — a 3h
+ * gap that produced false `[STALE]` alarms for agents that were merely
+ * heads-down or idle, and that contributed to premature self-repair.
+ */
+export const HEARTBEAT_STALE_MS = 5 * 60 * 60 * 1000;
+export const HEARTBEAT_UNRESPONSIVE_MS = 8 * 60 * 60 * 1000;
+
+/** True if `lastHeartbeat` is older than the staleness threshold (5h). */
+export function isHeartbeatStale(lastHeartbeat: string | undefined, now: number = Date.now()): boolean {
+  if (!lastHeartbeat) return true;
+  const t = new Date(lastHeartbeat).getTime();
+  if (Number.isNaN(t)) return true;
+  return now - t >= HEARTBEAT_STALE_MS;
+}
+
+/** True if `lastHeartbeat` is older than the unresponsive/escalate threshold (8h). */
+export function isHeartbeatUnresponsive(lastHeartbeat: string | undefined, now: number = Date.now()): boolean {
+  if (!lastHeartbeat) return true;
+  const t = new Date(lastHeartbeat).getTime();
+  if (Number.isNaN(t)) return true;
+  return now - t >= HEARTBEAT_UNRESPONSIVE_MS;
+}
+
+/**
  * SessionEnd-hook end-type markers (see src/hooks/hook-crash-alert.ts). A
  * restart writes one of these; the crash-alert hook reads it WITHOUT consuming
  * it, because one restart fires the hook twice and both firings must classify
