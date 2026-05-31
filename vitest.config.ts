@@ -16,6 +16,9 @@ export default defineConfig({
   test: {
     globals: true,
     testTimeout: 10000,
+    // Hermetic env: strip ambient CTX_* vars so the suite is deterministic from
+    // any context (local shell, live agent session, CI) — see the setup file.
+    setupFiles: ['./tests/setup/clear-ctx-env.ts'],
     include: [
       'tests/**/*.test.ts',
       'dashboard/src/**/__tests__/**/*.test.ts',
