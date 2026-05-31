@@ -7,7 +7,7 @@ import { validateAgentName, validateApprovalCategory } from '../utils/validate.j
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
-import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
+import { updateHeartbeat, readAllHeartbeats, isHeartbeatStale, isHeartbeatUnresponsive } from '../bus/heartbeat.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
@@ -496,8 +496,14 @@ busCommand
     }
 
     for (const hb of heartbeats) {
-      const stale = new Date(hb.last_heartbeat) < new Date(Date.now() - 2 * 60 * 60 * 1000);
-      const staleFlag = stale ? ' [STALE]' : '';
+      // Staleness thresholds mirror the metrics health check + HEARTBEAT.md
+      // policy (5h STALE / 8h UNRESPONSIVE) via the shared heartbeat helpers,
+      // so the display and the escalation logic stay in lockstep.
+      const staleFlag = isHeartbeatUnresponsive(hb.last_heartbeat)
+        ? ' [UNRESPONSIVE]'
+        : isHeartbeatStale(hb.last_heartbeat)
+          ? ' [STALE]'
+          : '';
       const label = hb.display_name ? `${hb.display_name} (${hb.agent})` : hb.agent;
       console.log(`${label} (${hb.org}) — ${hb.status}${staleFlag} — last seen ${hb.last_heartbeat}`);
       if (hb.current_task) console.log(`  task: ${hb.current_task}`);
