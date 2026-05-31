@@ -15,26 +15,49 @@ import { join } from 'path';
  */
 
 const ENV_KEY_RE = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+const VALID_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
  * Upsert KEY=value pairs into an env-style file, preserving comments and any
  * lines/keys the caller did not provide. Creates the file if missing. Always
  * chmod 0600 (owner read/write only — these hold credentials).
+ *
+ * Hardening (cross-review): keys are validated against the env-name shape and
+ * values are rejected if they contain CR/LF/NUL — so a value can never inject a
+ * second KEY=line (which would otherwise smuggle e.g. a BOT_TOKEN past
+ * writeAgentEnv's guard). For a managed key the FIRST matching line is replaced
+ * and any later duplicate lines for that key are dropped, so stale duplicates
+ * can't survive with "last-wins" downstream parsers.
  */
 export function upsertEnvFile(filePath: string, values: Record<string, string>): void {
+  for (const [key, value] of Object.entries(values)) {
+    if (!VALID_KEY_RE.test(key)) {
+      throw new Error(`upsertEnvFile: invalid env key "${key}" (must match ${VALID_KEY_RE}).`);
+    }
+    if (/[\r\n\0]/.test(value)) {
+      throw new Error(`upsertEnvFile: value for "${key}" must not contain newlines or null bytes.`);
+    }
+  }
+
+  const managed = new Set(Object.keys(values));
   const remaining = new Set(Object.keys(values));
   const lines = existsSync(filePath)
     ? readFileSync(filePath, 'utf-8').split('\n')
     : [];
 
-  const out = lines.map((line) => {
+  const out: string[] = [];
+  for (const line of lines) {
     const m = line.match(ENV_KEY_RE);
-    if (m && remaining.has(m[1])) {
-      remaining.delete(m[1]);
-      return `${m[1]}=${values[m[1]]}`;
+    if (m && managed.has(m[1])) {
+      if (remaining.has(m[1])) {
+        remaining.delete(m[1]);
+        out.push(`${m[1]}=${values[m[1]]}`);
+      }
+      // else: a later duplicate of an already-replaced managed key — drop it.
+      continue;
     }
-    return line;
-  });
+    out.push(line);
+  }
 
   // Append any keys that weren't already present as placeholders.
   if (remaining.size > 0) {
@@ -71,8 +94,14 @@ export function writeAgentEnv(agentDir: string, secrets: Record<string, string>)
   const settingBotToken = typeof secrets.BOT_TOKEN === 'string' && secrets.BOT_TOKEN.trim() !== '';
   if (settingBotToken) {
     const allowedInCall = typeof secrets.ALLOWED_USER === 'string' && secrets.ALLOWED_USER.trim() !== '';
-    const allowedOnDisk = existsSync(envPath)
-      && /^ALLOWED_USER=.+/m.test(readFileSync(envPath, 'utf-8'));
+    // On-disk check must require a NON-empty, non-whitespace value — the
+    // scaffolder writes an empty `ALLOWED_USER=` placeholder, which must NOT
+    // count as configured.
+    let allowedOnDisk = false;
+    if (existsSync(envPath)) {
+      const m = readFileSync(envPath, 'utf-8').match(/^ALLOWED_USER=(.*)$/m);
+      allowedOnDisk = !!m && m[1].trim() !== '';
+    }
     if (!allowedInCall && !allowedOnDisk) {
       throw new Error(
         `writeAgentEnv: setting BOT_TOKEN requires ALLOWED_USER (the daemon refuses Telegram polling without it). Provide ALLOWED_USER for agent at ${agentDir}.`

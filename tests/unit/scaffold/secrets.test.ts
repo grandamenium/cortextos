@@ -50,6 +50,36 @@ describe('F5 scaffold/secrets', () => {
       expect(out).toContain('A=9');
       expect(out).toContain('B=2');
     });
+
+    // Hardening (cross-review)
+    it('rejects a value containing a newline (env-injection guard)', () => {
+      const p = join(dir, 'secrets.env');
+      expect(() => upsertEnvFile(p, { CHAT_ID: '123\nBOT_TOKEN=evil' })).toThrow(/newlines or null bytes/);
+    });
+
+    it('rejects a value containing a null byte', () => {
+      const p = join(dir, 'secrets.env');
+      const withNul = 'a' + String.fromCharCode(0) + 'b';
+      expect(() => upsertEnvFile(p, { K: withNul })).toThrow(/newlines or null bytes/);
+    });
+
+    it('rejects an invalid env key', () => {
+      const p = join(dir, 'secrets.env');
+      expect(() => upsertEnvFile(p, { 'bad-key': 'v' })).toThrow(/invalid env key/);
+    });
+
+    it('drops stale duplicate lines for a managed key (no last-wins leak)', () => {
+      const p = join(dir, 'secrets.env');
+      writeFileSync(p, 'BOT_TOKEN=old\nKEEP=1\nBOT_TOKEN=old2\n');
+      upsertEnvFile(p, { BOT_TOKEN: 'new' });
+      const out = readFileSync(p, 'utf-8');
+      expect(out).toContain('BOT_TOKEN=new');
+      expect(out).not.toContain('BOT_TOKEN=old2');
+      expect(out).not.toContain('BOT_TOKEN=old\n');
+      expect(out).toContain('KEEP=1');
+      // exactly one BOT_TOKEN line remains
+      expect(out.match(/^BOT_TOKEN=/gm)?.length).toBe(1);
+    });
   });
 
   describe('writeOrgSecrets', () => {
@@ -84,6 +114,17 @@ describe('F5 scaffold/secrets', () => {
 
     it('does not require ALLOWED_USER when BOT_TOKEN is not being set', () => {
       expect(() => writeAgentEnv(dir, { CHAT_ID: '123' })).not.toThrow();
+    });
+
+    it('treats an empty ALLOWED_USER= placeholder on disk as NOT configured (still throws)', () => {
+      // The scaffolder writes an empty placeholder; it must not satisfy the guard.
+      writeFileSync(join(dir, '.env'), 'ALLOWED_USER=\n');
+      expect(() => writeAgentEnv(dir, { BOT_TOKEN: 't' })).toThrow(/ALLOWED_USER/);
+    });
+
+    it('treats a whitespace-only ALLOWED_USER on disk as NOT configured (still throws)', () => {
+      writeFileSync(join(dir, '.env'), 'ALLOWED_USER=   \n');
+      expect(() => writeAgentEnv(dir, { BOT_TOKEN: 't' })).toThrow(/ALLOWED_USER/);
     });
   });
 });
