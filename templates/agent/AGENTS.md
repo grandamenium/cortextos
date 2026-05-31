@@ -27,6 +27,7 @@ Complete the following in order. Do not skip steps.
    ```
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
    - TOOLS.md is a compact command index — load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
+   - Read the cross-agent operating standards: `${CTX_FRAMEWORK_ROOT}/AGENT-OPERATING-STANDARDS.md` (read-only-until-corroborated, user writing conventions, deliverability pre-flight, secrets handling, mobile-first user-path verification) — framework-general, applies in every org
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
