@@ -56,3 +56,8 @@ dashboard/screenshots/
 dashboard/test-*.py
 .gstack/
 graphify-out/
+
+# Public community agent templates may intentionally include their own docs,
+# AGENTS.md, memory skill, and scaffold files.
+!community/agents/research-agent/
+!community/agents/research-agent/**

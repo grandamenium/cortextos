@@ -116,27 +116,46 @@ export const startCommand = new Command('start')
         const logDir = join(ctxRoot, 'logs');
         const logFile = join(logDir, 'daemon.log');
 
-        const child = spawn(process.execPath, [daemonScript, '--instance', options.instance], {
-          detached: true,
-          stdio: ['ignore', 'ignore', 'ignore'],
-          env: daemonEnv,
-          cwd: projectRoot,
-          windowsHide: true,
-        });
-        child.unref();
-
-        // Give it a moment to start
-        await new Promise(r => setTimeout(r, 1500));
-
+        // Spawn-with-retry: a detached spawn() succeeds from Node's POV even if
+        // the child dies milliseconds later (bad state dir, permission denied
+        // on logs, missing dist/daemon.js). Without retries, the user sees
+        // "Daemon spawned" and assumes everything is fine while the daemon is
+        // actually dead. Retry up to 2x with 2s backoff; if still not running,
+        // exit non-zero so the operator gets an actionable error.
+        const MAX_SPAWN_ATTEMPTS = 3;
+        const SPAWN_RETRY_BACKOFF_MS = 2000;
         const ipc2 = new IPCClient(options.instance);
-        const running = await ipc2.isDaemonRunning();
+        let running = false;
+
+        for (let attempt = 1; attempt <= MAX_SPAWN_ATTEMPTS && !running; attempt++) {
+          const child = spawn(process.execPath, [daemonScript, '--instance', options.instance], {
+            detached: true,
+            stdio: ['ignore', 'ignore', 'ignore'],
+            env: daemonEnv,
+            cwd: projectRoot,
+            windowsHide: true,
+          });
+          child.unref();
+
+          // Give it a moment to bootstrap, then check.
+          await new Promise(r => setTimeout(r, 1500));
+          running = await ipc2.isDaemonRunning();
+          if (!running && attempt < MAX_SPAWN_ATTEMPTS) {
+            console.log(`Daemon spawn attempt ${attempt}/${MAX_SPAWN_ATTEMPTS} did not produce a running daemon. Retrying in ${SPAWN_RETRY_BACKOFF_MS / 1000}s...`);
+            await new Promise(r => setTimeout(r, SPAWN_RETRY_BACKOFF_MS));
+          }
+        }
+
         if (running) {
           console.log('Daemon started successfully (background process).');
           console.log('Note: daemon will stop if you close this terminal session.');
           console.log('Install PM2 for persistence: npm install -g pm2');
         } else {
-          console.log('Daemon spawned. Check logs if agents do not appear:');
-          console.log(`  ${logFile}`);
+          console.error(`Daemon failed to start after ${MAX_SPAWN_ATTEMPTS} attempts.`);
+          console.error('Check the daemon log for the root cause:');
+          console.error(`  ${logFile}`);
+          console.error('Common causes: missing dist/daemon.js (run `npm run build`), permission denied on logs dir, bad CTX_ROOT.');
+          process.exit(1);
         }
       }
       return;

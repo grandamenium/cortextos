@@ -2524,6 +2524,11 @@ busCommand
   .description('PostToolUse hook: route tool call + result preview to dispatch-events + Telegram (Item 4)')
   .action(() => runHook('hook-tool-result-router'));
 
+busCommand
+  .command('hook-loop-detector')
+  .description('PreToolUse hook: detects and blocks repeated tool loops (same-args repetition + ping-pong alternation)')
+  .action(() => runHook('hook-loop-detector'));
+
 // --- OAuth token rotation commands ---
 
 busCommand
