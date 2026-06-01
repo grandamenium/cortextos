@@ -19,6 +19,7 @@ import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByN
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { loadBundlePlan, computeBundleProgress, renderBundleSummary, renderBundleDetail, renderBundleTelegram, diffBundleSnapshots, type BundleProgress } from '../bus/bundle-status.js';
+import { buildOverview, renderOverviewText, renderOverviewTelegram } from '../bus/feature-rollup.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -460,6 +461,24 @@ busCommand
       paint(next, changes);
       prev = next;
     }, intervalMs);
+  });
+
+busCommand
+  .command('overview')
+  .description('Feature-level project progress derived live from task [TAG]s (no sprint-plan file needed)')
+  .option('--format <fmt>', 'Output format: text, json, or telegram', 'text')
+  .action((opts: { format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const tasks = listTasks(paths, {});
+    const o = buildOverview(tasks);
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(o, null, 2));
+    } else if (opts.format === 'telegram') {
+      console.log(renderOverviewTelegram(o));
+    } else {
+      console.log(renderOverviewText(o));
+    }
   });
 
 busCommand

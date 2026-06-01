@@ -6,6 +6,8 @@ import { getGoals } from '@/lib/data/goals';
 import { getHealthSummary, getAllHeartbeats } from '@/lib/data/heartbeats';
 import { getRecentEvents, getMilestones } from '@/lib/data/events';
 import { discoverAgents } from '@/lib/data/agents';
+import { FeatureOverview } from '@/components/feature-overview';
+import { buildOverview } from '@/lib/feature-rollup';
 
 import { ActionRequired } from '@/components/overview/action-required';
 import { CurrentFocus } from '@/components/overview/current-focus';
@@ -59,6 +61,9 @@ export default async function OverviewPage({
     heartbeats[hb.agent] = hb;
   }
 
+  // Feature-level project pulse (the "Karte") — derived live from task [TAG]s.
+  const featureOverview = buildOverview(allTasks);
+
   const staleAgentCount = healthSummary.stale + healthSummary.down;
   const inProgressTasks = allTasks.filter(t => t.status === 'in_progress').length;
   const pendingTasks = allTasks.filter(t => t.status === 'pending').length;
@@ -85,6 +90,9 @@ export default async function OverviewPage({
           </Link>
         )}
       </div>
+
+      {/* Feature-Overview — project pulse as the dashboard start page */}
+      <FeatureOverview overview={featureOverview} />
 
       {/* Metric Cards */}
       <MetricCards
