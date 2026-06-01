@@ -134,8 +134,7 @@ export const importAgentCommand = new Command('import-agent')
     // Copy state (tasks, memory) from export if present
     const exportedStateDir = join(tmpDir, 'state');
     if (existsSync(exportedStateDir)) {
-      const ctxRoot = join(homedir(), '.cortextos', options.instance);
-      const paths = resolvePaths(agentName, options.instance, org);
+      const paths = resolvePaths(agentName, options.instance, org, process.env.CTX_ROOT || undefined);
 
       // Tasks
       const exportedTasks = join(exportedStateDir, 'tasks');
@@ -155,7 +154,8 @@ export const importAgentCommand = new Command('import-agent')
     }
 
     // Register in enabled-agents.json
-    const ctxRoot = join(homedir(), '.cortextos', options.instance);
+    const paths = resolvePaths(agentName, options.instance, undefined, process.env.CTX_ROOT || undefined);
+    const ctxRoot = paths.ctxRoot;
     const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
     let enabledAgents: Record<string, any> = {};
     try {

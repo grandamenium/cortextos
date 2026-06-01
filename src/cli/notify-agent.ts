@@ -1,6 +1,4 @@
 import { Command } from 'commander';
-import { homedir } from 'os';
-import { join } from 'path';
 import { resolvePaths } from '../utils/paths.js';
 import { notifyAgent } from '../bus/agents.js';
 
@@ -11,9 +9,7 @@ export const notifyAgentCommand = new Command('notify-agent')
   .option('--from <agent>', 'Sender agent name', 'cli')
   .option('--instance <id>', 'Instance ID', 'default')
   .action((name: string, message: string, options: { from: string; instance: string }) => {
-    const paths = resolvePaths(options.from, options.instance);
-    const ctxRoot = join(homedir(), '.cortextos', options.instance);
-
-    notifyAgent(paths, options.from, name, message, ctxRoot);
+    const paths = resolvePaths(options.from, options.instance, undefined, process.env.CTX_ROOT || undefined);
+    notifyAgent(paths, options.from, name, message, paths.ctxRoot);
     console.log(`Signal sent to ${name}`);
   });

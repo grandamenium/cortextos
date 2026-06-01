@@ -27,20 +27,21 @@ export function resolvePaths(
   agentName: string,
   instanceId: string = 'default',
   org?: string,
+  ctxRoot?: string,
 ): BusPaths {
   validateInstanceId(instanceId);
-  const ctxRoot = join(homedir(), '.cortextos', instanceId);
+  const resolvedCtxRoot = ctxRoot || join(homedir(), '.cortextos', instanceId);
 
   // Org-scoped paths for tasks, approvals, analytics
-  const orgBase = org ? join(ctxRoot, 'orgs', org) : ctxRoot;
+  const orgBase = org ? join(resolvedCtxRoot, 'orgs', org) : resolvedCtxRoot;
 
   return {
-    ctxRoot,
-    inbox: join(ctxRoot, 'inbox', agentName),
-    inflight: join(ctxRoot, 'inflight', agentName),
-    processed: join(ctxRoot, 'processed', agentName),
-    logDir: join(ctxRoot, 'logs', agentName),
-    stateDir: join(ctxRoot, 'state', agentName),
+    ctxRoot: resolvedCtxRoot,
+    inbox: join(resolvedCtxRoot, 'inbox', agentName),
+    inflight: join(resolvedCtxRoot, 'inflight', agentName),
+    processed: join(resolvedCtxRoot, 'processed', agentName),
+    logDir: join(resolvedCtxRoot, 'logs', agentName),
+    stateDir: join(resolvedCtxRoot, 'state', agentName),
     taskDir: join(orgBase, 'tasks'),
     approvalDir: join(orgBase, 'approvals'),
     analyticsDir: join(orgBase, 'analytics'),
