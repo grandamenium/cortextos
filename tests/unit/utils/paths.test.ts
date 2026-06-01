@@ -40,6 +40,8 @@ describe('resolvePaths', () => {
     expect(() => resolvePaths('paul', 'invalid/id', undefined, '/custom/root')).toThrow();
     expect(() => resolvePaths('paul', 'Invalid', undefined, '/custom/root')).toThrow();
     expect(() => resolvePaths('paul', '../traversal', undefined, '/custom/root')).toThrow();
+    expect(() => resolvePaths('paul', '', undefined, '/custom/root')).toThrow();
+    expect(() => resolvePaths('paul', 'My Instance', undefined, '/custom/root')).toThrow();
   });
 
   it('accepts valid instanceIds with explicit ctxRoot', () => {
