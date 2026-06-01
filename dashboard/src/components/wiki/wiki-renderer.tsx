@@ -63,7 +63,7 @@ export function WikiRenderer({ text, onWikilink }: WikiRendererProps) {
           </code>,
         );
       } else if (m[6] !== undefined) {
-        const safeHref = /^(https?:|mailto:|\\/|#)/i.test(m[7]) ? m[7] : '#';
+        const safeHref = /^(https?:|mailto:|\/|#)/i.test(m[7]) ? m[7] : '#';
         parts.push(
           <a
             key={key()}
