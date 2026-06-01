@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+# Pre-commit: typecheck only (tests run in CI). Prevents TS errors from slipping
+# through when CI branch-glob misses non-main branches. Cascade-fix 2026-05-27.
+# Emergency bypass: git commit --no-verify
+
+echo "🔍 Pre-commit: typecheck..."
+npm run typecheck --silent || {
+  echo ""
+  echo "❌ TypeScript errors found. Fix before committing."
+  echo "   Emergency bypass: git commit --no-verify"
+  exit 1
+}
+echo "✅ Typecheck passed"

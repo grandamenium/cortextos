@@ -30,7 +30,7 @@ export class TelegramPoller {
    *   - 'stopped-externally': intentional stop() call — do NOT restart.
    *   - 'conflict-self-die': Telegram 409 Conflict (another getUpdates holder
    *     owns the lock after a daemon crash) — supervisor should sleep 30s and
-   *     retake the lock instead of hot-looping on Conflict.
+   *     retake the lock instead of hot-looping on Conflict errors.
    *   - '': loop still running / never exited.
    */
   lastExitReason: string = '';

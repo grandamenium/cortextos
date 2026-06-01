@@ -326,8 +326,11 @@ export function checkGoalStaleness(
         continue;
       }
 
-      // Parse ISO 8601 timestamp
-      const parsedDate = new Date(updatedLine);
+      // Parse ISO 8601 timestamp. Strip trailing " (by <author>)" suffix that
+      // platform-director appends when writing goals.json — e.g.
+      // "2026-05-21T08:34:10Z (by platform-director)" is not a valid Date string.
+      const isoOnly = updatedLine.replace(/\s+\(by\s+[^)]+\)\s*$/, '').trim();
+      const parsedDate = new Date(isoOnly);
       if (isNaN(parsedDate.getTime())) {
         agents.push({
           agent: agentName,

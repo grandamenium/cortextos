@@ -22,13 +22,13 @@ for f in "$TASK_DIR"/task_*.json; do
   [ -f "$f" ] || continue
 
   # Skip archived/completed tasks
-  status=$(python3 -c "import json; d=json.load(open('$f')); print(d.get('status',''))" 2>/dev/null)
+  status=$(TASK_FILE="$f" python3 -c "import json,os; d=json.load(open(os.environ['TASK_FILE'])); print(d.get('status',''))" 2>/dev/null)
   if [[ "$status" == "completed" || "$status" == "cancelled" ]]; then
     ((skipped++)) || true
     continue
   fi
 
-  archived=$(python3 -c "import json; d=json.load(open('$f')); print(d.get('archived', False))" 2>/dev/null)
+  archived=$(TASK_FILE="$f" python3 -c "import json,os; d=json.load(open(os.environ['TASK_FILE'])); print(d.get('archived', False))" 2>/dev/null)
   if [[ "$archived" == "True" ]]; then
     ((skipped++)) || true
     continue
@@ -37,18 +37,16 @@ for f in "$TASK_DIR"/task_*.json; do
   # Extract "Assignee: X" from description.
   # Only match line-start occurrences (standalone label, not embedded in prose/quotes).
   # Only match known agent names to avoid placeholders like "Assignee: X" or "Assignee: backend-architect (etc.)".
-  desc_assignee=$(python3 -c "
-import json, re
-d = json.load(open('$f'))
+  desc_assignee=$(TASK_FILE="$f" VALID_AGENTS="$VALID_AGENTS" python3 - <<'PY' 2>/dev/null
+import json, re, os
+d = json.load(open(os.environ['TASK_FILE']))
 desc = d.get('description', '')
-valid = set('$VALID_AGENTS'.split())
-# Only match 'Assignee: agent-name' at line start OR after '. ' (end of sentence),
-# and where the agent name is the entire word (not inside quotes or parens).
-# Pattern: start of line or sentence end, then 'Assignee: <agent>.' or 'Assignee: <agent> ' or EOL.
-matches = re.findall(r'(?:^|\.\s+)Assignee:\s+([a-z][a-z0-9-]+)(?=[\s.,;]|\$)', desc, re.MULTILINE)
+valid = set(os.environ['VALID_AGENTS'].split())
+matches = re.findall(r'(?:^|\.\s+)Assignee:\s+([a-z][a-z0-9-]+)(?=[\s.,;]|$)', desc, re.MULTILINE)
 result = next((m for m in reversed(matches) if m in valid), '')
 print(result)
-" 2>/dev/null)
+PY
+)
 
   [ -z "$desc_assignee" ] && continue
 

@@ -114,14 +114,31 @@ export function notifyAgents(opts: {
     `crashes today: ${opts.crashCount}`,
     `restart attempted: ${opts.restartAttempted ? 'yes' : 'no (max_crashes_per_day reached)'}`,
   ].join('\n');
+  // PATH-unaware execFile is unreliable on Windows: the daemon spawned by
+  // PM2 doesn't inherit the npm-link target, so 'cortextos' fails ENOENT and
+  // crash alerts are silently dropped — operator loses visibility into the
+  // very crashes this hook exists to surface. Invoke via process.execPath +
+  // dist/cli.js path (same pattern as fast-checker.ts heartbeat watchdog).
+  const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+  const cliPath = frameworkRoot ? join(frameworkRoot, 'dist', 'cli.js') : null;
   for (const target of opts.recipients) {
     try {
-      execFile(
-        'cortextos',
-        ['bus', 'send-message', target, 'high', body],
-        { timeout: 10_000 },
-        () => { /* fire-and-forget */ },
-      );
+      if (cliPath) {
+        execFile(
+          process.execPath,
+          [cliPath, 'bus', 'send-message', target, 'high', body],
+          { timeout: 10_000 },
+          () => { /* fire-and-forget */ },
+        );
+      } else {
+        // Fallback: CTX_FRAMEWORK_ROOT unset (rare — test env). Try PATH lookup.
+        execFile(
+          'cortextos',
+          ['bus', 'send-message', target, 'high', body],
+          { timeout: 10_000 },
+          () => { /* fire-and-forget */ },
+        );
+      }
     } catch { /* best-effort, never throw */ }
   }
 }

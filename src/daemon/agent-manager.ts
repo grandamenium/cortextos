@@ -470,15 +470,58 @@ export class AgentManager {
         checker.queueTelegramMessage(formatted);
       });
 
-      poller.start().catch(err => {
-        log(`Telegram poller error: ${err}`);
+      // Wrap poller.start() in a restart-on-Conflict supervisor. The poller's
+      // 'conflict-self-die' exit yields the Telegram getUpdates lock when a
+      // duplicate holder is detected (e.g. a lingering connection ~60s after a
+      // daemon crash). Without this wrapper the agent silently loses Telegram
+      // input for the rest of the session. The supervisor sleeps 30s and retries
+      // until the lock clears. Intentional stops (stopAgent → poller.stop()) set
+      // lastExitReason='stopped-externally' and exit the loop cleanly.
+      const startPrimaryPollerWithRestart = async () => {
+        // 5min hard cap on CONSECUTIVE Conflict failures. A run longer than
+        // LONG_RUN_RESET_MS proves the lock cleared, so the budget resets —
+        // without this reset a poller running cleanly for hours would give up
+        // on its first subsequent Conflict because total runtime already exceeds 5min.
+        const MAX_CONSECUTIVE_CONFLICT_MS = 5 * 60 * 1000;
+        const LONG_RUN_RESET_MS = 60_000;
+        let consecutiveConflictStart: number | null = null;
+        while (true) {
+          if (!this.agents.has(name)) return;
+          const runStart = Date.now();
+          try {
+            await poller.start();
+          } catch (err) {
+            log(`Telegram poller threw (will not restart): ${err}`);
+            return;
+          }
+          const runDuration = Date.now() - runStart;
+          if (poller.lastExitReason === 'stopped-externally') return;
+          if (!this.agents.has(name)) return;
+          if (runDuration > LONG_RUN_RESET_MS) consecutiveConflictStart = null;
+          if (consecutiveConflictStart === null) consecutiveConflictStart = Date.now();
+          if (Date.now() - consecutiveConflictStart > MAX_CONSECUTIVE_CONFLICT_MS) {
+            log(`Telegram poller for ${name} could not clear Conflict within 5min of consecutive failures — giving up. Inspect for duplicate bot instance.`);
+            return;
+          }
+          log(`Telegram poller for ${name} exited (${poller.lastExitReason}). Sleeping 30s then restarting to retake getUpdates lock.`);
+          await new Promise(r => setTimeout(r, 30_000));
+        }
+      };
+      startPrimaryPollerWithRestart().catch(err => {
+        log(`Telegram poller wrapper crashed: ${err}`);
+        if (telegramApi && chatId) {
+          telegramApi.sendMessage(
+            String(chatId),
+            `${name}: Telegram poller wrapper crashed. Inbound messages may be dropped until restart. Check daemon log.`,
+          ).catch(() => {});
+        }
       });
 
       // Store poller reference so stopAgent() can clean it up
       const entry = this.agents.get(name);
       if (entry) entry.poller = poller;
 
-      log('Telegram poller started');
+      log('Telegram poller started (with Conflict-restart wrapper)');
 
       // Orchestrator-only: start a second poller for the org's activity
       // channel bot so Telegram inline-button callbacks (currently just
@@ -570,14 +613,42 @@ export class AgentManager {
       log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
     });
 
-    activityPoller.start().catch((err) => {
-      log(`Activity-channel poller error: ${err}`);
+    // 5min retry budget measured against CONSECUTIVE failures; resets
+    // after a >1min successful run. See primary poller wrapper for rationale.
+    const startActivityPollerWithRestart = async () => {
+      const MAX_CONSECUTIVE_CONFLICT_MS = 5 * 60 * 1000;
+      const LONG_RUN_RESET_MS = 60_000;
+      let consecutiveConflictStart: number | null = null;
+      while (true) {
+        if (!this.agents.has(name)) return;
+        const runStart = Date.now();
+        try {
+          await activityPoller.start();
+        } catch (err) {
+          log(`Activity-channel poller threw (will not restart): ${err}`);
+          return;
+        }
+        const runDuration = Date.now() - runStart;
+        if (activityPoller.lastExitReason === 'stopped-externally') return;
+        if (!this.agents.has(name)) return;
+        if (runDuration > LONG_RUN_RESET_MS) consecutiveConflictStart = null;
+        if (consecutiveConflictStart === null) consecutiveConflictStart = Date.now();
+        if (Date.now() - consecutiveConflictStart > MAX_CONSECUTIVE_CONFLICT_MS) {
+          log(`Activity-channel poller for ${name} could not clear Conflict within 5min of consecutive failures — giving up.`);
+          return;
+        }
+        log(`Activity-channel poller for ${name} exited (${activityPoller.lastExitReason}). Sleeping 30s then restarting.`);
+        await new Promise(r => setTimeout(r, 30_000));
+      }
+    };
+    startActivityPollerWithRestart().catch((err) => {
+      log(`Activity-channel poller wrapper crashed: ${err}`);
     });
 
     const entry = this.agents.get(name);
     if (entry) entry.activityPoller = activityPoller;
 
-    log(`Activity-channel poller started (chat ${activityChatId})`);
+    log(`Activity-channel poller started (chat ${activityChatId}, with Conflict-restart wrapper)`);
   }
 
   /**

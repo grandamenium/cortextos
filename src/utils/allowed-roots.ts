@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, isAbsolute } from 'path';
 import { atomicWriteSync } from './atomic.js';
+import { stripBom } from './strip-bom.js';
 
 /**
  * Allowed-roots config layer for the deliverables system.
@@ -62,7 +63,8 @@ export function readAllowedRoots(configPath: string): AllowedRootsFile {
   const empty: AllowedRootsFile = { additional_roots: [] };
   if (!existsSync(configPath)) return empty;
   try {
-    const parsed = JSON.parse(readFileSync(configPath, 'utf-8'));
+    // stripBom: see src/utils/strip-bom.ts for incident context.
+    const parsed = JSON.parse(stripBom(readFileSync(configPath, 'utf-8')));
     if (!parsed || typeof parsed !== 'object') return empty;
     const roots = Array.isArray(parsed.additional_roots) ? parsed.additional_roots : [];
     return {

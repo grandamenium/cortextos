@@ -8,7 +8,6 @@ import { getRecentEvents, getMilestones } from '@/lib/data/events';
 import { discoverAgents } from '@/lib/data/agents';
 import { FeatureOverview } from '@/components/feature-overview';
 import { buildOverview } from '@/lib/feature-rollup';
-
 import { ActionRequired } from '@/components/overview/action-required';
 import { CurrentFocus } from '@/components/overview/current-focus';
 import { TodaysProgress } from '@/components/overview/todays-progress';

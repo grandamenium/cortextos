@@ -4,6 +4,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
 import { validateOrgName } from '../utils/validate.js';
+import { stripBom } from '../utils/strip-bom.js';
 import type { OrgContext } from '../types/index.js';
 
 export const initCommand = new Command('init')
@@ -88,7 +89,10 @@ export const initCommand = new Command('init')
     } else {
       // Fill in any missing fields (handles upgrades from older context.json without new fields)
       try {
-        const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
+        // stripBom: see src/utils/strip-bom.ts. Skipping this would make
+        // every re-run of `cortextos init` silently fall through to the
+        // catch block, leaving context.json un-upgraded.
+        const ctx = JSON.parse(stripBom(readFileSync(contextPath, 'utf-8')));
         if (!ctx.timezone) ctx.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
         if (!ctx.name) ctx.name = orgName;
         if (!ctx.day_mode_start) ctx.day_mode_start = '08:00';
@@ -151,7 +155,8 @@ export const initCommand = new Command('init')
       let ctx: OrgContext | null = null;
       try {
         const contextPath = join(orgDir, 'context.json');
-        ctx = JSON.parse(readFileSync(contextPath, 'utf-8')) as OrgContext;
+        // stripBom: same incident as line ~75 above
+        ctx = JSON.parse(stripBom(readFileSync(contextPath, 'utf-8'))) as OrgContext;
       } catch { /* skip if unreadable */ }
 
       if (ctx) {

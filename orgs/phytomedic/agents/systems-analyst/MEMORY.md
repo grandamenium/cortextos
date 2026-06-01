@@ -92,3 +92,48 @@ Legal texts still reference cannabis-aerzte.de (not PhytoMedic). Missing GDPR se
 
 ## HUNT-20260428-01 strain-product linkage — FULLY RESOLVED (2026-04-29)
 PR #281 by backend-architect. upsertProduct now slug-matches cultivar against strains on every sync. backfillStrainLinkage ran 2026-04-29 — 292 products linked. "Produkte mit dieser Sorte" on strain detail pages now shows correct results.
+
+## BUG-CATALOG-01 — cross-provider dedup — PARTIALLY RESOLVED (2026-05-05)
+Root cause: Cannaleo sends PZN → productIdentity=pzn:{pzn}. HiGreen omits PZN for same physical product → productIdentity=fp:{hash}. Two separate DB records created. by_manufacturer index returns both → duplicates on catalog page. Fix (PR #385, merged): upsertProduct now redirects fp: upserts to matching pzn: record via by_manufacturerKey_active + [cultivar+thcBand+cbdBand] match — additive-only enrichment. Future syncs collapse correctly. Migration (reconcilePznFpDuplicates) to reconcile existing orphans pending cursor pagination fix (PR #387). Until migration runs: existing duplicates persist in prod on manufacturer-filtered views.
+
+## BUG-CATALOG-02 — Hersteller sidebar overflow — RESOLVED (2026-05-05, PR #384)
+69 manufacturer buttons expanded → 2811px sidebar, sticky broken. Fix: top-10 collapse with "Alle anzeigen (N)" expand. Shared FilterPanelContent covers both desktop sidebar + mobile drawer. Prod-verified.
+
+## Coherence audit cluster 1 findings (2026-05-05)
+Audited: Product ↔ Strain ↔ Pharmacy ↔ Catalog. Key gaps found:
+- Product → Strain: "Sorte suchen →" chip linked to /strains?suche=[cultivar] which returned 0 results (wrong cultivar or strain not in DB). COHERENCE-01-02 filed + fixed in PR #386 (chip now gated on strainSlug being truthy).
+- Product → Pharmacy detail: pharmacy names in Preisvergleich not clickable. COHERENCE-01-03 filed, fix in PR #386.
+- Similar products: self-referential + cross-provider duplicates. COHERENCE-01-04 filed, fix in PR #386.
+- Product → Catalog: ✓ (breadcrumb, filter links)
+- Product → Pharmacy (price): ✓ (Preisvergleich shows 115 pharmacies with prices, best price visible)
+Next cluster: Cluster 2 (Strain ↔ Catalog ↔ Sister-Strains)
+
+## Convex mutation budget — two-phase pattern (2026-05-05)
+For large-scale Convex migrations: use internalQuery (higher read budget than mutations) to collect all target IDs in one scan, then internalAction batches explicit IDs into mutation calls of ~20. Each mutation fetches by _id (O(1)). Avoids cursor-scan O(n) growth that hits 16,384-doc read limit for large catalogs. Established by PR #387 (backend-architect).
+
+## Bug-hunt methodology — cursor:default + nested-anchor ≠ "decorative/non-functional" (2026-05-26, corrected by frontend-dev SO-1)
+HUNT-20260526-01: I flagged strain-card effect pills as "decorative, no filter exists" based on cursor:default + button-nested-in-card-anchor, WITHOUT cleanly clicking a fresh-ref pill and observing the URL. frontend-dev's code-read falsified it: the effect filter works end-to-end (getPublicStrains effects.includes + ?effect= URL persistence). The REAL bug = invalid HTML (button-in-anchor) hijacks the click so a working filter behaves unreliably and LOOKS dead.
+LESSON (SO-2): When a control looks dead, run the falsifying experiment — click a fresh-ref element and check URL/state delta — before concluding "decorative/missing". cursor:default and nested-in-anchor are symptoms of a click-hijack bug, NOT proof the handler is absent. Report the SYMPTOM ("pill appears non-functional / sometimes navigates") with high confidence; hold the ROOT CAUSE ("no filter exists") as a hypothesis until verified by clean click-test or code-read. My symptom obs was right; my root-cause inference was wrong and overstated.
+
+## Convex-internal ground-truth path — route to data-owner with deploy-key (2026-05-26)
+My CLI cannot read Convex-internal state: getProviderHealthSummary, getProviderStatusPage, and most foundation queries are requireAdmin/requireAuth-gated → return null without a Clerk session. CONFIRMED resolution path: cannametrics-data (and likely other agents with a Convex deploy-key) can run `convex data` / queries that BYPASS the requireAdmin gate — this is real ground truth, not public-layer inference. So for daily-cannametrics-foundation + daily-integration-health internal checks (sync freshness, snapshot jobs, price-history append, routing/Rx-linkage), route the ground-truth query to cannametrics-data (foundation) or integrations-routing (providers/routing). Do NOT adopt the deploy-key myself without explicit authorization (privileged credential). Diagnostic heuristic learned: uniform emptiness across ALL clinical/transactional tables = never-populated = pre-launch expected, NOT partial data loss/corruption — the uniformity is the falsification of the corruption hypothesis.
+
+## data-freshness-sla — lastSeenAt structurally unfit as SLA primitive (2026-05-26)
+cannametrics-data ground-truthed exp_1779338654 (DISCARD): prod p95AgeHoursActive=75.2h (Cannaleo 15067 offers @75.2h, HiGreen 0.1h). Cannaleo delta sync is HEALTHY (15min, 0 errors) but offersUpserted only 2-60/cycle because batchUpsertOffers bumps lastSeenAt ONLY for price/availability-CHANGED offers. So lastSeenAt = time-since-last-CHANGE, NOT sync-coverage. A high p95 ≠ stale data. The earlier 0.2h "repair" reading was a transient post-bulk-upsert artifact. No sync-interval experiment can fix a change-frequency proxy.
+DECISION (I own cycle): redefine metric → syncLog sync-recency = time-since-last-SUCCESSFUL-sync per active provider (per-provider max-age + p95). Option-b (confirm-present all offers on full sync) is per-offer-staleness, a separate concern w/ write-amp — don't fold into freshness SLA. Cycle PAUSED until cannametrics-data sends syncLog-recency baseline; then I set SLA target + unpause. data-integrity ticket open as structural-finding record.
+LESSON: when a metric reads "bad", first verify the primitive measures what the SLA cares about. lastSeenAt under change-detection delta sync proxies change-frequency, not freshness.
+
+## cortextos framework main CI — stale codex-skill count (2026-05-26)
+cortextos `main` CI red since ~01:10Z: 2 fails in tests/unit/cli/add-agent-codex.test.ts (expected 23, received 29). NON-functional — codex skills grew 23→29, count assertion (L131/L149) + title (L114) not bumped. Test-only; phytomedic-saas product unaffected/green. Fix already in open PR #7 (chore/per-agent-worktree-isolation-v2 → toBe(29)). Flagged cortextos-improver (framework coordinator) to merge #7 or cherry-pick the bump. Did NOT force-merge #7 (scope = SO-tooling) nor user-alert (low severity, product green).
+
+## data-freshness-sla — FINAL SPEC set (2026-05-26 16:03Z)
+Primitive: per-provider time-since-last-successful-sync = syncLog max(completedAt). Bands config-driven off provider sync interval (Cannaleo 15min delta, HiGreen 60min hourly), so a 3rd provider auto-inherits.
+- GREEN: age ≤ 2x interval (Cannaleo ≤30, HiGreen ≤120 min)
+- WARN (log only): 2x–3x (Cannaleo 30–45, HiGreen 120–180). Single breach = track.
+- ALERT (→ me; PD if provider-wide/sustained): age >3x interval (Cannaleo >45, HiGreen >180) OR WARN sustained 2 consecutive cycles.
+- Stability = rolling p95 gap. Baseline 2026-05-26: Cannaleo 44.8 / HiGreen 63.6 min. Regression if rolling p95 >25% over baseline (Cannaleo >56, HiGreen >80).
+- Cross-provider rollup = max(provider ages), each in own band.
+Calibration rationale: Cannaleo p95-gap (44.8) already ~3x its 15min interval (delta-sync variance) → flat 2x would fire on a single missed cycle (noisy). Escalation band sits ABOVE stability band per escalation-threshold SO. cannametrics-data wiring internalQuery + unpausing; awaiting first measurement. Ticket task_1779811189290 = structural record.
+
+## data-freshness-sla — promotion criterion (note 2026-05-26)
+Experiment measurement runs at 6h cron cadence (fine for VALIDATING bands). PROMOTION criterion if this graduates from experiment-metric → live production SLA alert: run the syncLog-recency query at integration-health frequency (≤ provider sync interval) so detection latency < one sync cycle. The >3x single-reading ALERT is the real-time fast-path; sustained-2-cycle is secondary. cannametrics-data wires post-#882 merge → unpause → first live measurement to me; I confirm bands hold vs live data before calling cycle improved.
