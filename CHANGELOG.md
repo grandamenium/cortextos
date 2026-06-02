@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- SP3a — Slack outbound. New `src/slack/` (SlackAPI client + per-agent
+  identity loader). `cortextos slack {test-send, discover-channels}` CLI.
+  `bus/_slack-curl.sh` + `bus/send-slack.sh` shell entry points. Per-agent
+  `slack.json` schema (display_name, icon_emoji, channels, allowed_channels).
+  Cloud-init pulls `slack-bot-token` from Key Vault into `/etc/cortextos.env`
+  at boot. Runbook walkthrough for the one-time Slack app registration
+  (`docs/runbook/sp3a-slack-app-setup.md`). App registered & installed to the
+  WYRE workspace (app id `A0B8MN37YSC`); verified end-to-end on the live VM
+  by posting to #general as `boss` with the per-agent username override.
 - SP2c-4 — dashboard env auto-provisioning at first boot. Cloud-init
   generates `ADMIN_PASSWORD` and `AUTH_SECRET`, writes them to
   `dashboard/.env.local`, and stores recoverable copies in Key Vault as
