@@ -25,12 +25,12 @@
  * New or modified crons get a freshly computed nextFireAt.
  */
 
-import { homedir } from 'os';
 import { join } from 'path';
 import { parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { readCronsWithStatus, updateCron } from '../bus/crons.js';
 import type { CronDefinition } from '../types/index.js';
 import { appendExecutionLog } from './cron-execution-log.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 // ---------------------------------------------------------------------------
 // Cron expression parser — no external deps.
@@ -342,8 +342,7 @@ export class CronScheduler {
     //
     // Resolve stateDir from CTX_ROOT so test sandboxes (which override CTX_ROOT
     // but not homedir) don't accidentally read production state.
-    const ctxRoot = process.env.CTX_ROOT ||
-      join(homedir(), '.cortextos', process.env.CTX_INSTANCE_ID || 'default');
+    const ctxRoot = getCtxRoot(process.env.CTX_INSTANCE_ID || 'default');
     const stateDir = join(ctxRoot, 'state', this.agentName);
     let stateLastFireByName = new Map<string, string>();
     try {

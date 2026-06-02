@@ -15,8 +15,8 @@
 
 import { statSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { atomicWriteSync } from '../utils/atomic.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 interface StatusLineInput {
   context_window?: {
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
   const agentName = process.env.CTX_AGENT_NAME;
   if (!agentName) return;
 
-  const ctxRoot = process.env.CTX_ROOT || join(homedir(), '.cortextos', 'default');
+  const ctxRoot = getCtxRoot(process.env.CTX_INSTANCE_ID || 'default');
   const stateDir = join(ctxRoot, 'state', agentName);
   const outPath = join(stateDir, 'context_status.json');
 

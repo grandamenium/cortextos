@@ -4,6 +4,7 @@ import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName, validateOrgName } from '../utils/validate';
+import { getCtxRoot } from '../utils/paths.js';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -301,7 +302,7 @@ export const addAgentCommand = new Command('add-agent')
 
     // Register in enabled-agents.json
     const instanceId = options.instance;
-    const ctxRoot = join(homedir(), '.cortextos', instanceId);
+    const ctxRoot = getCtxRoot(instanceId);
     const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
     const configDir = join(ctxRoot, 'config');
     mkdirSync(configDir, { recursive: true });

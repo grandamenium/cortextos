@@ -16,8 +16,8 @@
  */
 import { existsSync, readFileSync, writeFileSync, appendFileSync, unlinkSync, mkdirSync, statSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { execFile } from 'child_process';
+import { getCtxRoot } from '../utils/paths.js';
 
 const DEDUP_WINDOW_MS = 10 * 60 * 1000;         // 10 minutes
 const QUIET_HOUR_START_LA = 22;                 // 22:00 America/Los_Angeles
@@ -265,7 +265,7 @@ async function main(): Promise<void> {
   const instanceId = process.env.CTX_INSTANCE_ID || 'default';
   if (!agentName) return;
 
-  const ctxRoot = join(homedir(), '.cortextos', instanceId);
+  const ctxRoot = getCtxRoot(instanceId);
   const stateDir = join(ctxRoot, 'state', agentName);
   const logDir = join(ctxRoot, 'logs', agentName);
 

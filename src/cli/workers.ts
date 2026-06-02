@@ -12,7 +12,7 @@ export const spawnWorkerCommand = new Command('spawn-worker')
   .option('--model <model>', 'Claude model to use (defaults to org default)')
   .action(async (name: string, opts: { dir: string; prompt: string; parent?: string; model?: string }) => {
     const env = resolveEnv();
-    const client = new IPCClient(env.instanceId);
+    const client = new IPCClient(env.instanceId, env.ctxRoot);
     const dir = resolve(opts.dir);
 
     const response = await client.send({
@@ -36,7 +36,7 @@ export const terminateWorkerCommand = new Command('terminate-worker')
   .argument('<name>', 'Worker name')
   .action(async (name: string) => {
     const env = resolveEnv();
-    const client = new IPCClient(env.instanceId);
+    const client = new IPCClient(env.instanceId, env.ctxRoot);
 
     const response = await client.send({
       type: 'terminate-worker',
@@ -55,7 +55,7 @@ export const listWorkersCommand = new Command('list-workers')
   .description('List active and recently completed worker sessions')
   .action(async () => {
     const env = resolveEnv();
-    const client = new IPCClient(env.instanceId);
+    const client = new IPCClient(env.instanceId, env.ctxRoot);
 
     const response = await client.send({ type: 'list-workers' });
 
@@ -89,7 +89,7 @@ export const injectWorkerCommand = new Command('inject-worker')
   .argument('<text>', 'Text to inject into the worker PTY')
   .action(async (name: string, text: string) => {
     const env = resolveEnv();
-    const client = new IPCClient(env.instanceId);
+    const client = new IPCClient(env.instanceId, env.ctxRoot);
 
     const response = await client.send({
       type: 'inject-worker',

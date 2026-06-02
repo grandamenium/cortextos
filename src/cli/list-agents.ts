@@ -1,7 +1,6 @@
 import { Command } from 'commander';
-import { homedir } from 'os';
-import { join } from 'path';
 import { listAgents } from '../bus/agents.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 export const listAgentsCommand = new Command('list-agents')
   .description('List all agents in the system')
@@ -10,7 +9,7 @@ export const listAgentsCommand = new Command('list-agents')
   .option('--instance <id>', 'Instance ID')
   .action((options: { org?: string; format: string; instance?: string }) => {
     const instanceId = options.instance || process.env.CTX_INSTANCE_ID || 'default';
-    const ctxRoot = join(homedir(), '.cortextos', instanceId);
+    const ctxRoot = getCtxRoot(instanceId);
     const agents = listAgents(ctxRoot, options.org);
 
     if (options.format === 'json') {

@@ -1,9 +1,10 @@
 import { Command } from 'commander';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { homedir, platform } from 'os';
+import { platform } from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { IPCClient } from '../daemon/ipc-server.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const SAFE_CMD = /^[@a-z0-9._/-]+$/i;
@@ -33,7 +34,7 @@ export const startCommand = new Command('start')
         process.exit(1);
       }
 
-      const ctxRoot = join(homedir(), '.cortextos', options.instance);
+      const ctxRoot = getCtxRoot(options.instance);
 
       // Try reading org from enabled-agents.json
       let org = '';
@@ -164,7 +165,7 @@ export const startCommand = new Command('start')
     // Daemon already running
     if (agent) {
       // Auto-register in enabled-agents.json if not already present
-      const ctxRoot = join(homedir(), '.cortextos', options.instance);
+      const ctxRoot = getCtxRoot(options.instance);
       const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
       let enabledAgents: Record<string, any> = {};
       try {

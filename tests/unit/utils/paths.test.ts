@@ -1,5 +1,49 @@
-import { describe, it, expect } from 'vitest';
-import { resolvePaths } from '../../../src/utils/paths';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { resolvePaths, getIpcPath, getCtxRoot } from '../../../src/utils/paths';
+
+// Make every test hermetic: a CTX_ROOT set in the developer's shell must not
+// leak into expectations. Tests that want CTX_ROOT stub it explicitly.
+beforeEach(() => {
+  vi.stubEnv('CTX_ROOT', '');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe('getCtxRoot (#568)', () => {
+  it('falls back to ~/.cortextos/{instance} when CTX_ROOT is not set', () => {
+    expect(getCtxRoot('default')).toMatch(/\.cortextos\/default$/);
+    expect(getCtxRoot('prod')).toMatch(/\.cortextos\/prod$/);
+  });
+
+  it('honours the CTX_ROOT env var when set', () => {
+    vi.stubEnv('CTX_ROOT', '/agentic/cortextos-data');
+    expect(getCtxRoot('default')).toBe('/agentic/cortextos-data');
+  });
+
+  it('explicit override beats the CTX_ROOT env var', () => {
+    vi.stubEnv('CTX_ROOT', '/from-env');
+    expect(getCtxRoot('default', '/explicit/root')).toBe('/explicit/root');
+  });
+
+  it('empty-string override falls through to env then default', () => {
+    vi.stubEnv('CTX_ROOT', '/from-env');
+    expect(getCtxRoot('default', '')).toBe('/from-env');
+  });
+
+  it('still validates instanceId even when CTX_ROOT is set', () => {
+    vi.stubEnv('CTX_ROOT', '/agentic/cortextos-data');
+    expect(() => getCtxRoot('../traversal')).toThrow();
+    expect(() => getCtxRoot('bad/id')).toThrow();
+    expect(() => getCtxRoot('')).toThrow();
+  });
+
+  it('rejects uppercase / dotted instance IDs (council review)', () => {
+    expect(() => getCtxRoot('Prod')).toThrow();
+    expect(() => getCtxRoot('v2.1')).toThrow();
+  });
+});
 
 describe('resolvePaths', () => {
   it('returns paths under ctxRoot when explicitly provided', () => {
@@ -27,6 +71,21 @@ describe('resolvePaths', () => {
     expect(paths.stateDir).toContain('/.cortextos/default/state/paul');
   });
 
+  it('honours CTX_ROOT env var when no explicit ctxRoot is passed (#568)', () => {
+    vi.stubEnv('CTX_ROOT', '/agentic/cortextos-data');
+    const paths = resolvePaths('paul', 'default');
+    expect(paths.ctxRoot).toBe('/agentic/cortextos-data');
+    expect(paths.inbox).toBe('/agentic/cortextos-data/inbox/paul');
+    expect(paths.stateDir).toBe('/agentic/cortextos-data/state/paul');
+    expect(paths.taskDir).toBe('/agentic/cortextos-data/tasks');
+  });
+
+  it('explicit ctxRoot param wins over CTX_ROOT env var (#568)', () => {
+    vi.stubEnv('CTX_ROOT', '/from-env');
+    const paths = resolvePaths('paul', 'default', undefined, '/explicit/root');
+    expect(paths.ctxRoot).toBe('/explicit/root');
+  });
+
   it('applies org to org-scoped paths when provided', () => {
     const customRoot = '/custom/ctx/root';
     const paths = resolvePaths('paul', 'default', 'acme', customRoot);
@@ -52,5 +111,31 @@ describe('resolvePaths', () => {
   it('empty string ctxRoot falls back to homedir default', () => {
     const pathsWithEmpty = resolvePaths('paul', 'default', undefined, '');
     expect(pathsWithEmpty.ctxRoot).toMatch(/\.cortextos\/default$/);
+  });
+});
+
+describe('getIpcPath (#568)', () => {
+  // Windows named pipes are instance-keyed, not path-based — CTX_ROOT does not
+  // apply there. These tests cover the Unix socket branch only.
+  const unixOnly = process.platform === 'win32' ? it.skip : it;
+
+  unixOnly('socket lives under the default root when CTX_ROOT is not set', () => {
+    expect(getIpcPath('default')).toMatch(/\.cortextos\/default\/daemon\.sock$/);
+  });
+
+  unixOnly('socket lives under CTX_ROOT when set', () => {
+    vi.stubEnv('CTX_ROOT', '/agentic/cortextos-data');
+    expect(getIpcPath('default')).toBe('/agentic/cortextos-data/daemon.sock');
+  });
+
+  unixOnly('explicit ctxRoot param wins over CTX_ROOT env var', () => {
+    vi.stubEnv('CTX_ROOT', '/from-env');
+    expect(getIpcPath('default', '/explicit/root')).toBe('/explicit/root/daemon.sock');
+  });
+
+  it('validates instanceId', () => {
+    expect(() => getIpcPath('bad/id')).toThrow();
+    expect(() => getIpcPath('../traversal')).toThrow();
+    expect(() => getIpcPath('')).toThrow();
   });
 });

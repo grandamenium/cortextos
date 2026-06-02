@@ -3,10 +3,10 @@
  * Each hook reads JSON from stdin, processes it, and writes JSON to stdout.
  */
 
-import { readFileSync, existsSync, watch, statSync, unlinkSync, mkdirSync, realpathSync, lstatSync } from 'fs';
+import { readFileSync, existsSync, watch, unlinkSync, mkdirSync, realpathSync, lstatSync } from 'fs';
 import { join, resolve, sep, dirname, basename } from 'path';
-import { homedir } from 'os';
 import * as crypto from 'crypto';
+import { getCtxRoot } from '../utils/paths.js';
 
 /**
  * Read all data from stdin as a string.
@@ -47,7 +47,7 @@ export function loadEnv(): {
   ctxRoot: string;
 } {
   const agentName = process.env.CTX_AGENT_NAME || require('path').basename(process.cwd());
-  const ctxRoot = process.env.CTX_ROOT || join(homedir(), '.cortextos', 'default');
+  const ctxRoot = getCtxRoot(process.env.CTX_INSTANCE_ID || 'default');
   const stateDir = join(ctxRoot, 'state', agentName);
 
   // Try to load .env file

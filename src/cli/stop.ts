@@ -1,8 +1,8 @@
 import { Command } from 'commander';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 /**
  * BUG-036 fix: write a `.user-stop` marker before the agent's PTY is killed,
@@ -12,7 +12,7 @@ import { IPCClient } from '../daemon/ipc-server.js';
  */
 export function writeStopMarker(instanceId: string, agent: string, reason: string): void {
   try {
-    const ctxRoot = join(homedir(), '.cortextos', instanceId);
+    const ctxRoot = getCtxRoot(instanceId);
     const stateDir = join(ctxRoot, 'state', agent);
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, '.user-stop'), reason);

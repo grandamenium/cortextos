@@ -603,7 +603,7 @@ busCommand
     const reason = opts.reason || 'self-restart requested';
 
     // Write .user-restart marker (same as soft-restart)
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
     const stateDir = join(ctxRoot, 'state', env.agentName);
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, '.user-restart'), reason);
@@ -612,7 +612,7 @@ busCommand
     selfRestart(paths, env.agentName, reason);
 
     // Send IPC restart-agent signal for self — makes restart immediate
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
     if (daemonRunning) {
       const resp = await ipc.send({ type: 'restart-agent', agent: env.agentName, source: 'cortextos bus self-restart' });
@@ -645,7 +645,7 @@ busCommand
     // Send IPC restart-agent so the daemon terminates and restarts this session
     // immediately. Without this the session keeps running — .force-fresh is only
     // consumed on the NEXT restart, which never comes unless the daemon is notified.
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
     if (daemonRunning) {
       const resp = await ipc.send({ type: 'restart-agent', agent: env.agentName, source: 'cortextos bus hard-restart' });
@@ -1217,7 +1217,7 @@ busCommand
 
     const frameworkRoot = env.frameworkRoot || process.cwd();
     const instanceId = env.instanceId;
-    const kbRoot = pjoin(hdir(), '.cortextos', instanceId, 'orgs', org, 'knowledge-base');
+    const kbRoot = pjoin(env.ctxRoot, 'orgs', org, 'knowledge-base');
     const chromaDir = pjoin(kbRoot, 'chromadb');
     const isWin = process.platform === 'win32';
     const venvBin = isWin ? 'Scripts' : 'bin';
@@ -1376,7 +1376,7 @@ busCommand
     const { existsSync, readdirSync, readFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
     const frameworkRoot = env.frameworkRoot || process.cwd();
 
     // Collect agents from enabled-agents.json + filesystem scan
@@ -1406,7 +1406,7 @@ busCommand
 
     // Determine running agents via IPC daemon.
     const runningAgents = new Set<string>();
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     try {
       const resp = await ipc.send({ type: 'status', source: 'cortextos bus' });
       if (resp.success && Array.isArray(resp.data)) {
@@ -1560,7 +1560,7 @@ busCommand
     const { join } = require('path');
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
 
     // Write urgent signal file that fast-checker checks on every poll
     const signalDir = join(ctxRoot, 'state', targetAgent);
@@ -1589,7 +1589,7 @@ busCommand
     const { mkdirSync, writeFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
 
     // Step 1: Write .user-restart marker BEFORE triggering exit
     const stateDir = join(ctxRoot, 'state', targetAgent);
@@ -1598,7 +1598,7 @@ busCommand
     console.log(`Wrote .user-restart marker for ${targetAgent}: ${reason}`);
 
     // Step 2: Send restart via IPC daemon (cross-platform — named pipe on Windows, socket on Unix).
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (daemonRunning) {
@@ -1624,7 +1624,7 @@ busCommand
     const { mkdirSync, writeFileSync, readFileSync, existsSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
     const staggerMs = parseInt(opts.stagger, 10) * 1000;
 
     // Read enabled agents from config
@@ -1647,7 +1647,7 @@ busCommand
       process.exit(0);
     }
 
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
     if (!daemonRunning) {
       console.error('ERROR: Node daemon is not running. Start it with: cortextos start');
@@ -1690,7 +1690,7 @@ busCommand
     const { mkdirSync, appendFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
 
     // Write to outbound-messages.jsonl so iOS app chat history picks it up
     const logDir = join(ctxRoot, 'logs', agent);
@@ -1733,7 +1733,7 @@ busCommand
 
     if (opts.allOrgs) {
       // Scan every org directory under CTX_ROOT — mirrors dashboard syncAll() behaviour
-      const ctxRoot = join(homedir(), '.cortextos', env.instanceId);
+      const ctxRoot = env.ctxRoot;
       const orgsDir = join(ctxRoot, 'orgs');
       const orgs: string[] = existsSync(orgsDir)
         ? readdirSync(orgsDir, { withFileTypes: true })
@@ -1911,9 +1911,9 @@ function fmtTs(iso: string | undefined): string {
  * Send a reload-crons IPC signal to the daemon (non-blocking, best-effort).
  * Silently swallows errors — the daemon will pick up changes on its next tick.
  */
-async function signalCronReload(agentName: string, instanceId: string): Promise<void> {
+async function signalCronReload(agentName: string, instanceId: string, ctxRoot?: string): Promise<void> {
   try {
-    const ipc = new IPCClient(instanceId);
+    const ipc = new IPCClient(instanceId, ctxRoot);
     await ipc.send({ type: 'reload-crons', agent: agentName, source: 'cortextos bus cron-cmd' });
   } catch { /* non-fatal — scheduler picks up file change on next 30s tick */ }
 }
@@ -2130,7 +2130,7 @@ busCommand
     }
 
     const env = resolveEnv();
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
 
     const daemonRunning = await ipc.isDaemonRunning();
     if (!daemonRunning) {

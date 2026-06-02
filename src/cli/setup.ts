@@ -12,10 +12,10 @@ import { Command } from 'commander';
 import { createInterface, type Interface } from 'readline';
 import { existsSync, writeFileSync, chmodSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { spawnSync } from 'child_process';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
 import { validateAgentName, validateOrgName } from '../utils/validate.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 function rl(): Interface {
   return createInterface({ input: process.stdin, output: process.stdout });
@@ -196,7 +196,7 @@ export const setupCommand = new Command('setup')
   .action(async (options: { instance: string }) => {
     const instanceId = options.instance;
     const projectRoot = findProjectRoot();
-    const ctxRoot = join(homedir(), '.cortextos', instanceId);
+    const ctxRoot = getCtxRoot(instanceId);
 
     const iface = rl();
 

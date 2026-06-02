@@ -9,14 +9,14 @@
  */
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { getCtxRoot } from '../utils/paths.js';
 
 async function main(): Promise<void> {
   const agentName = process.env.CTX_AGENT_NAME;
   const instanceId = process.env.CTX_INSTANCE_ID || 'default';
   if (!agentName) return;
 
-  const stateDir = join(homedir(), '.cortextos', instanceId, 'state', agentName);
+  const stateDir = join(getCtxRoot(instanceId), 'state', agentName);
   try {
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, 'last_idle.flag'), String(Math.floor(Date.now() / 1000)), 'utf-8');

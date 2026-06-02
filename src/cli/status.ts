@@ -1,9 +1,9 @@
 import { Command } from 'commander';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 import type { AgentStatus, Heartbeat } from '../types/index.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 export const statusCommand = new Command('status')
   .option('--instance <id>', 'Instance ID')
@@ -23,7 +23,7 @@ export const statusCommand = new Command('status')
     } else {
       // Fall back to reading heartbeat files
       console.log('Daemon is not running. Showing last known heartbeats:\n');
-      const ctxRoot = join(homedir(), '.cortextos', instanceId);
+      const ctxRoot = getCtxRoot(instanceId);
       const stateDir = join(ctxRoot, 'state');
 
       if (!existsSync(stateDir)) {
