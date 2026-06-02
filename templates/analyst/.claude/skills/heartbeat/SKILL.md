@@ -90,3 +90,9 @@ pm2 list
 ```
 
 Location: `$CTX_ROOT/state/{agent}/heartbeat.json`
+
+---
+
+## Implementation
+
+The 4 steps above are the canonical MINIMUM. Each agent's per-agent `HEARTBEAT.md` is the authoritative extended implementation and may add operational steps (fleet health checks, integration health probes, daily memory writes, goals-freshness checks, escalation logic). When a cron prompt says "Read HEARTBEAT.md and follow its instructions," follow HEARTBEAT.md; treat this SKILL.md as the framework-level reference.
