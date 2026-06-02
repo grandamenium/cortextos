@@ -3,11 +3,17 @@ import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
-import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
-import { checkInbox, ackInbox } from '../bus/message.js';
+import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery, TeamMember } from '../types/index.js';
+import { checkInbox, ackInbox, sendMessage } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
+import { SlackAPI, type SlackMessage } from '../slack/api.js';
+import {
+  resolveSlackIdentity,
+  evaluateSlackTrust,
+  formatSlackOriginator,
+} from '../slack/slack-identity.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars } from '../utils/validate.js';
 
@@ -59,11 +65,38 @@ export class FastChecker {
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
 
+  // Slack watch state (polling fallback path). When Socket Mode is active the
+  // daemon leaves slackWatch unset and checkSlackWatch early-returns.
+  private slackWatch?: { channel: string; intervalMs: number };
+  private slackApi?: SlackAPI;
+  private slackLastTs: string = '0';
+  private slackLastCheckedAt: number = 0;
+  // Slack identity + trust layer (text-enrich only).
+  private slackTrustedUsers?: string[];
+  private slackTeamMembers?: TeamMember[];
+  // userId -> resolved identity; cache hits skip users.info.
+  private slackIdentityCache: Map<string, { handle: string | null; displayName: string }> = new Map();
+  // Loudly-open warning is logged at most once per checker instance.
+  private slackOpenWarned: boolean = false;
+
   constructor(
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: {
+      pollInterval?: number;
+      log?: LogFn;
+      telegramApi?: TelegramAPI;
+      chatId?: string;
+      allowedUserId?: number;
+      slackWatch?: {
+        channel: string;
+        intervalMs: number;
+        token: string;
+        trustedSlackUsers?: string[];
+        teamMembers?: TeamMember[];
+      };
+    } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
@@ -81,6 +114,15 @@ export class FastChecker {
     // Load persisted circuit breaker state so --continue restarts don't reset it
     this.ctxCircuitFile = join(paths.stateDir, '.ctx-circuit.json');
     this.loadCtxCircuit();
+
+    // Initialize Slack watch (polling fallback). Socket Mode leaves this unset.
+    if (options.slackWatch) {
+      this.slackWatch = { channel: options.slackWatch.channel, intervalMs: options.slackWatch.intervalMs };
+      this.slackApi = new SlackAPI(options.slackWatch.token);
+      this.slackLastTs = (Date.now() / 1000).toFixed(6);
+      this.slackTrustedUsers = options.slackWatch.trustedSlackUsers;
+      this.slackTeamMembers = options.slackWatch.teamMembers;
+    }
   }
 
   /**
@@ -211,6 +253,111 @@ export class FastChecker {
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
     await this.checkContextStatus();
+
+    // Slack watch (polling fallback): poll the configured channel on its
+    // interval and write trusted inbound messages to the agent inbox. No-op
+    // unless slack_watch is configured AND Socket Mode is unavailable.
+    await this.checkSlackWatch();
+  }
+
+  /**
+   * Poll the configured Slack channel and deliver trusted inbound messages to
+   * the agent inbox. Self-echo guard + identity/trust gate live here; the heavy
+   * lifting stays in src/slack/* (api, identity, redact). No-op when slack_watch
+   * is unset (e.g. when Socket Mode owns inbound, or Slack isn't configured).
+   */
+  private async checkSlackWatch(): Promise<void> {
+    if (!this.slackWatch || !this.slackApi) return;
+    const now = Date.now();
+    if (now - this.slackLastCheckedAt < this.slackWatch.intervalMs) return;
+    this.slackLastCheckedAt = now;
+
+    let messages: SlackMessage[] = [];
+    try {
+      messages = await this.slackApi.getHistory(this.slackWatch.channel, this.slackLastTs);
+    } catch (err) {
+      this.log(`Slack watch poll failed: ${err}`);
+      return;
+    }
+
+    if (messages.length === 0) return;
+    // Advance the cursor to the RAW newest fetched message BEFORE filtering, so
+    // bot-authored (self-echo) messages never stall it. If filtering ran first,
+    // a poll whose newest/only event is the agent's own reply would drop it
+    // without advancing slackLastTs, then re-fetch + re-drop it every poll until
+    // a later human message arrived — and with limit:50, a run of bot messages
+    // could push an older human message out of the window and lose it. The trust
+    // gate below already relies on the cursor sitting past dropped messages.
+    this.slackLastTs = messages[messages.length - 1].ts;
+
+    // Filter out bot-authored messages to prevent self-wake / self-echo loops.
+    // `bot_message` subtype catches classic bot posts; `bot_id` catches messages
+    // the agent posts via its own bot token (which arrive as a normal message
+    // with bot_id set and no bot_message subtype) — the self-echo path.
+    messages = messages.filter(m => m.subtype !== 'bot_message' && !m.bot_id);
+    if (messages.length === 0) return;
+
+    const slackApi = this.slackApi;
+    // Gate the WHOLE batch first, then cap for display. The 10-item display cap
+    // must apply to DELIVERABLE messages, not raw history: slackLastTs has
+    // already advanced to the batch's newest, so any message not delivered now
+    // is permanently skipped. If we capped raw history at 10 and the first 10
+    // were all dropped (untrusted/userless), a trusted message at position 11+
+    // would be lost. Gating before the cap keeps trusted messages.
+    const deliverable: string[] = [];
+    for (const msg of messages) {
+      let from: string;
+      if (msg.user) {
+        // Identity + trust gate. Cache hits skip users.info.
+        const identity = await resolveSlackIdentity(
+          msg.user,
+          (id) => slackApi.getUserInfo(id),
+          this.slackTeamMembers,
+          this.slackIdentityCache,
+        );
+        const trust = evaluateSlackTrust(identity.handle, this.slackTrustedUsers);
+        if (trust.openWarning && !this.slackOpenWarned) {
+          this.log('Slack allowlist not configured — all workspace users can drive the agent.');
+          this.slackOpenWarned = true;
+        }
+        if (!trust.allowed) {
+          this.log(`Slack message from untrusted user ${identity.handle ?? msg.user} dropped (not in allowlist)`);
+          continue;
+        }
+        from = formatSlackOriginator(identity);
+      } else {
+        // No user id (e.g. some app/integration/webhook messages): the sender
+        // cannot be resolved or trust-gated. FAIL-CLOSED — if an allowlist is
+        // configured, drop it; otherwise a userless message would bypass the
+        // allowlist entirely. When no allowlist is set (loudly-open), deliver
+        // via the username fallback as before.
+        if (this.slackTrustedUsers && this.slackTrustedUsers.length > 0) {
+          this.log('Slack message with no user id dropped (allowlist configured — sender cannot be verified)');
+          continue;
+        }
+        from = msg.username ?? 'unknown';
+      }
+      deliverable.push(
+        `=== SLACK from ${from} (channel:${this.slackWatch.channel} ts:${msg.ts}) ===\n` +
+        `${msg.text}\n` +
+        `Reply using: cortextos bus send-slack ${this.slackWatch.channel} "<reply>"`,
+      );
+    }
+
+    if (deliverable.length === 0) return;
+
+    // Display cap applies to deliverable messages (see gating note above).
+    const shown = deliverable.slice(0, 10);
+    const remaining = deliverable.length - shown.length;
+    const trailer = remaining > 0 ? `\n\n(${remaining} more messages not shown)` : '';
+    const inboxText = shown.join('\n\n---\n\n') + trailer;
+
+    this.log(`Slack watch: ${messages.length} new message(s) in ${this.slackWatch.channel} — writing inbox`);
+    try {
+      sendMessage(this.paths, 'fast-checker', this.agent.name, 'normal', inboxText);
+    } catch (err) {
+      this.log(`Slack watch inbox write failed: ${err}`);
+    }
   }
 
   /**

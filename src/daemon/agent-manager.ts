@@ -1,9 +1,11 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, relative } from 'path';
-import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
+import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage, TeamMember } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
+import { SlackSocketListener } from './slack-socket-listener.js';
+import { resolveSlackInboundMode } from './slack-inbound-mode.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
@@ -23,7 +25,7 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller; telegramRejectCount?: number; telegramLastRejectAlertAt?: number }> = new Map();
+  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller; telegramRejectCount?: number; telegramLastRejectAlertAt?: number; slackListener?: SlackSocketListener }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
@@ -376,6 +378,65 @@ export class AgentManager {
     if (telegramApi && chatId) {
       agentProcess.setTelegramHandle(telegramApi, chatId);
     }
+
+    // Slack inbound: prefer Socket Mode (real-time WSS) when an app-level token
+    // (xapp-) is present; otherwise fall back to the legacy poll. Tokens are
+    // secrets and live in .env (parity with BOT_TOKEN), not in config.json.
+    // When Socket Mode wins, slackWatchOption stays unset so the poll path in
+    // FastChecker.checkSlackWatch early-returns (no double inbound).
+    let slackWatchOption:
+      | {
+          channel: string;
+          intervalMs: number;
+          token: string;
+          trustedSlackUsers?: string[];
+          teamMembers?: TeamMember[];
+        }
+      | undefined;
+    let slackSocketConfig: { channel: string; botToken: string; appToken: string } | undefined;
+    if (config?.slack_watch?.channel) {
+      let slackBotToken = '';
+      let slackAppToken = '';
+      if (existsSync(agentEnvFile)) {
+        const slackEnv = stripBom(readFileSync(agentEnvFile, 'utf-8'));
+        const botMatch = slackEnv.match(/^SLACK_BOT_TOKEN=(.+)$/m);
+        if (botMatch?.[1]?.trim()) slackBotToken = botMatch[1].trim();
+        const appMatch = slackEnv.match(/^SLACK_APP_TOKEN=(.+)$/m);
+        if (appMatch?.[1]?.trim()) slackAppToken = appMatch[1].trim();
+      }
+      if (!slackBotToken) slackBotToken = process.env.SLACK_BOT_TOKEN ?? '';
+      if (!slackAppToken) slackAppToken = process.env.SLACK_APP_TOKEN ?? '';
+
+      // Socket Mode is primary ONLY when native WebSocket is available (Node 22+);
+      // otherwise the poll stays live as the fallback so there is never a silent
+      // no-inbound gap (Socket can't run on Node 20/21 even with both tokens).
+      const decision = resolveSlackInboundMode({
+        botToken: slackBotToken,
+        appToken: slackAppToken,
+        channel: config.slack_watch.channel,
+        intervalMs: config.slack_watch.interval_ms ?? 60_000,
+        webSocketAvailable: typeof WebSocket !== 'undefined',
+      });
+      if (decision.mode === 'socket') {
+        slackSocketConfig = {
+          channel: decision.channel,
+          botToken: decision.botToken,
+          appToken: decision.appToken,
+        };
+      } else if (decision.mode === 'poll') {
+        if (decision.reason) log(`Slack inbound: ${decision.reason}`);
+        slackWatchOption = {
+          channel: decision.channel,
+          intervalMs: decision.intervalMs,
+          token: decision.botToken,
+          trustedSlackUsers: config.trusted_slack_users,
+          teamMembers: config.team_members,
+        };
+      } else {
+        log(`Slack watch configured but ${decision.reason} in .env — skipping`);
+      }
+    }
+
     const checker = new FastChecker(agentProcess, paths, this.frameworkRoot, {
       log,
       telegramApi,
@@ -383,6 +444,7 @@ export class AgentManager {
       // FastChecker only needs the first ID for its single-recipient typing
       // indicator / quick-checks. Multi-user is enforced by the gates above.
       allowedUserId: allowedUserId ? parseInt(allowedUserId.split(',')[0].trim(), 10) : undefined,
+      slackWatch: slackWatchOption,
     });
 
     // Send Telegram notification on crashes and session refreshes
@@ -426,6 +488,27 @@ export class AgentManager {
     checker.start().catch(err => {
       console.error(`[${name}] Fast checker error:`, err);
     });
+
+    // Start Slack Socket Mode listener (real-time inbound) if an app token is
+    // configured. Stored on the registry entry so stopAgent() closes the WSS
+    // cleanly. When active, the legacy poll is dormant (slackWatchOption unset).
+    if (slackSocketConfig) {
+      const slackListener = new SlackSocketListener({
+        appToken: slackSocketConfig.appToken,
+        botToken: slackSocketConfig.botToken,
+        channel: slackSocketConfig.channel,
+        agentName: name,
+        paths,
+        log,
+        trustedSlackUsers: config?.trusted_slack_users,
+        teamMembers: config?.team_members,
+      });
+      slackListener.start().catch(err => {
+        log(`Slack Socket Mode listener failed to start: ${err}`);
+      });
+      const slackEntry = this.agents.get(name);
+      if (slackEntry) slackEntry.slackListener = slackListener;
+    }
 
     // Register Telegram slash commands at startup (fix for issue #1)
     if (telegramApi && botToken) {
@@ -840,6 +923,7 @@ export class AgentManager {
 
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
+    if (entry.slackListener) entry.slackListener.stop();
     entry.checker.stop();
     await entry.process.stop();
     this.agents.delete(name);

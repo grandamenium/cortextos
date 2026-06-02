@@ -1023,6 +1023,44 @@ busCommand
   });
 
 busCommand
+  .command('send-slack')
+  .description('Send a message to a Slack channel')
+  .argument('<channel>', 'Slack channel ID (e.g. C1234567890) or name (e.g. #general)')
+  .argument('<message>', 'Message text')
+  .action(async (channel: string, message: string) => {
+    const env = resolveEnv();
+    let slackToken = '';
+
+    // 1. Check agent .env (most specific)
+    if (env.agentDir) {
+      const agentEnv = join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const content = readFileSync(agentEnv, 'utf-8');
+        const match = content.match(/^SLACK_BOT_TOKEN=(.+)$/m);
+        if (match?.[1]?.trim()) slackToken = match[1].trim();
+      }
+    }
+
+    // 2. Fall back to process env
+    if (!slackToken) slackToken = process.env.SLACK_BOT_TOKEN ?? '';
+
+    if (!slackToken) {
+      console.error('Warning: SLACK_BOT_TOKEN not set. Skipping Slack message. Set it in your agent .env file or as SLACK_BOT_TOKEN env var.');
+      process.exit(0);
+    }
+
+    const { SlackAPI } = await import('../slack/api.js');
+    const api = new SlackAPI(slackToken);
+    try {
+      await api.postMessage(channel, message);
+      console.log(`Slack message sent to ${channel}`);
+    } catch (err) {
+      console.error(`Failed to send Slack message: ${err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
   .command('react-telegram')
   .description("Set the bot's reaction on a Telegram message (single emoji ack)")
   .argument('<chat-id>', 'Telegram chat ID')
