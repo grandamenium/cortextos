@@ -1959,7 +1959,7 @@ busCommand
       process.exit(1);
     }
 
-    await signalCronReload(agent, env.instanceId);
+    await signalCronReload(agent, env.instanceId, env.ctxRoot);
     console.log(`Added cron '${name}' for ${agent}`);
   });
 
@@ -1978,7 +1978,7 @@ busCommand
     }
 
     const env = resolveEnv();
-    await signalCronReload(agent, env.instanceId);
+    await signalCronReload(agent, env.instanceId, env.ctxRoot);
     console.log(`Removed cron '${name}' from ${agent}`);
   });
 
@@ -2111,7 +2111,7 @@ busCommand
     }
 
     const env = resolveEnv();
-    await signalCronReload(agent, env.instanceId);
+    await signalCronReload(agent, env.instanceId, env.ctxRoot);
     console.log(`Updated cron '${name}' for ${agent}`);
   });
 

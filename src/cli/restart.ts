@@ -1,13 +1,14 @@
 import { Command } from 'commander';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { writeStopMarker } from './stop.js';
+import { resolveCtxRoot } from '../utils/env.js';
 
 export const restartCommand = new Command('restart')
   .argument('<agent>', 'Agent name to restart')
   .option('--instance <id>', 'Instance ID', 'default')
   .description('Restart a running agent (stop + start). Re-reads config.json and .env, respawns the PTY. Does NOT restart the daemon process itself — use `pm2 restart cortextos-daemon` for that.')
   .action(async (agent: string, options: { instance: string }) => {
-    const ipc = new IPCClient(options.instance);
+    const ipc = new IPCClient(options.instance, resolveCtxRoot(options.instance));
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (!daemonRunning) {

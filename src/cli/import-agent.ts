@@ -6,6 +6,7 @@ import { spawnSync } from 'child_process';
 import { validateAgentName } from '../utils/validate.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { resolvePaths } from '../utils/paths.js';
+import { resolveCtxRoot } from '../utils/env.js';
 
 interface ExportManifest {
   version: string;
@@ -134,7 +135,7 @@ export const importAgentCommand = new Command('import-agent')
     // Copy state (tasks, memory) from export if present
     const exportedStateDir = join(tmpDir, 'state');
     if (existsSync(exportedStateDir)) {
-      const paths = resolvePaths(agentName, options.instance, org, process.env.CTX_ROOT || undefined);
+      const paths = resolvePaths(agentName, options.instance, org, resolveCtxRoot(options.instance));
 
       // Tasks
       const exportedTasks = join(exportedStateDir, 'tasks');
@@ -154,7 +155,7 @@ export const importAgentCommand = new Command('import-agent')
     }
 
     // Register in enabled-agents.json
-    const paths = resolvePaths(agentName, options.instance, undefined, process.env.CTX_ROOT || undefined);
+    const paths = resolvePaths(agentName, options.instance, undefined, resolveCtxRoot(options.instance));
     const ctxRoot = paths.ctxRoot;
     const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
     let enabledAgents: Record<string, any> = {};
@@ -182,7 +183,7 @@ export const importAgentCommand = new Command('import-agent')
 
     // Start the agent
     if (options.start) {
-      const ipc = new IPCClient(options.instance);
+      const ipc = new IPCClient(options.instance, resolveCtxRoot(options.instance));
       const daemonRunning = await ipc.isDaemonRunning();
       if (daemonRunning) {
         console.log(`\n  Starting agent...`);

@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { IPCClient } from '../daemon/ipc-server.js';
-import { getCtxRoot } from '../utils/paths.js';
+import { resolveCtxRoot } from '../utils/env.js';
 
 /**
  * BUG-036 fix: write a `.user-stop` marker before the agent's PTY is killed,
@@ -12,7 +12,7 @@ import { getCtxRoot } from '../utils/paths.js';
  */
 export function writeStopMarker(instanceId: string, agent: string, reason: string): void {
   try {
-    const ctxRoot = getCtxRoot(instanceId);
+    const ctxRoot = resolveCtxRoot(instanceId);
     const stateDir = join(ctxRoot, 'state', agent);
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, '.user-stop'), reason);
@@ -42,7 +42,7 @@ export const stopCommand = new Command('stop')
       process.exit(2);
     }
 
-    const ipc = new IPCClient(options.instance);
+    const ipc = new IPCClient(options.instance, resolveCtxRoot(options.instance));
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (!daemonRunning) {
