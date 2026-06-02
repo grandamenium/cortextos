@@ -52,8 +52,20 @@ describe('readMaxCrashesPerDay', () => {
 });
 
 describe('notifyAgents', () => {
+  // After #556 (a89cee2), notifyAgents switches to
+  //   execFile(process.execPath, [cliPath, 'bus', 'send-message', ...])
+  // when CTX_FRAMEWORK_ROOT is set, and falls back to
+  //   execFile('cortextos', ['bus', 'send-message', ...])
+  // when it isn't. The assertions in this block target the fallback shape;
+  // clear the env so the test runner's value doesn't leak into the SUT.
+  let savedFrameworkRoot: string | undefined;
   beforeEach(() => {
     execFileMock.mockReset();
+    savedFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+    delete process.env.CTX_FRAMEWORK_ROOT;
+  });
+  afterEach(() => {
+    if (savedFrameworkRoot !== undefined) process.env.CTX_FRAMEWORK_ROOT = savedFrameworkRoot;
   });
 
   it('sends one bus send-message per recipient', () => {
