@@ -176,6 +176,32 @@ export interface AgentConfig {
     never_ask: string[];
   };
   ecosystem?: EcosystemConfig;
+  /**
+   * Slack inbound watch. When `channel` is set the daemon wires a Slack
+   * listener for this agent (Socket Mode when an app-level token is present in
+   * .env, otherwise a polling fallback). Tokens are read from .env
+   * (SLACK_BOT_TOKEN / SLACK_APP_TOKEN), never config.json.
+   */
+  slack_watch?: {
+    /** Slack channel ID (e.g. C1234567890) the agent listens to. */
+    channel: string;
+    /** Poll interval in ms for the fallback poll path. Default: 60000. */
+    interval_ms?: number;
+  };
+  /**
+   * Slack handles (without @) allowed to drive this agent. When set, inbound
+   * Slack messages from any other user are dropped (fail-closed allowlist).
+   * When absent/empty, the agent runs "loudly open" and warns once.
+   */
+  trusted_slack_users?: string[];
+  /** Optional map of friendly channel names -> Slack channel IDs. */
+  slack_channels?: Record<string, string>;
+  /**
+   * Human team members for Slack identity/trust resolution. Per-agent override;
+   * the canonical roster may also live on OrgContext.team_members. Used to
+   * resolve a Slack handle -> trust_level when enriching inbound messages.
+   */
+  team_members?: TeamMember[];
   /** Context window % at which to warn agent + user. Default: 70. Absent = observe-only. */
   ctx_warning_threshold?: number;
   /** Context window % at which to inject handoff prompt and hard-restart. Default: 80. */
@@ -453,6 +479,34 @@ export interface OrgContext {
    *  save-output. The instruction is injected into the boot prompt
    *  dynamically — no agent markdown files are modified. */
   require_deliverables?: boolean;
+  /**
+   * Human team members accessible to agents in this org via Slack.
+   * Agents reference this to resolve slack_handles and trust levels.
+   */
+  team_members?: TeamMember[];
+}
+
+// Slack Multi-Agent Types
+
+export type TrustLevel = 'owner' | 'manager' | 'member';
+
+export const VALID_TRUST_LEVELS: TrustLevel[] = ['owner', 'manager', 'member'];
+
+/**
+ * A human team member connected via Slack.
+ * Stored in org config or agent config under team_members.
+ */
+export interface TeamMember {
+  /** Display name (e.g. "Jordan Lee") */
+  name: string;
+  /** Job role or title (e.g. "Operations Manager") */
+  role: string;
+  /** Slack handle without @ (e.g. "jordan.lee") */
+  slack_handle: string;
+  /** Trust level — determines how the agent treats messages from this person */
+  trust_level: TrustLevel;
+  /** Optional persona-agent routing hint from Business Profile Wizard */
+  assigned_to_agent?: string;
 }
 
 // Telegram Types
