@@ -60,3 +60,8 @@ scripts/.surface-poll-state.json
 scripts/.surface-poll-relayed.jsonl
 scripts/.surface-poll.log
 scripts/.codex-health-restart.log
+
+# Public community agent templates may intentionally include their own docs,
+# AGENTS.md, memory skill, and scaffold files.
+!community/agents/research-agent/
+!community/agents/research-agent/**

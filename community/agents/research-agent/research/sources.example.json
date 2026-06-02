@@ -1,0 +1,99 @@
+{
+  "_note": "Copy to research/sources.json and replace placeholders. Delete or disable source blocks you do not need.",
+  "youtube_channels": [
+    {
+      "name": "Example Creator",
+      "channel_id": "UC_REPLACE_WITH_CHANNEL_ID"
+    }
+  ],
+  "reddit_subreddits": [
+    "ExampleSubreddit"
+  ],
+  "github_search_queries": [
+    "your topic keyword",
+    "related tool or framework",
+    "adjacent concept"
+  ],
+  "github_trending": {
+    "enabled": true,
+    "created_within_days": 7,
+    "min_stars": 25,
+    "queries": [
+      "your topic keyword",
+      "related framework"
+    ],
+    "overlap_terms": [
+      "automation",
+      "agent",
+      "workflow",
+      "memory",
+      "dashboard"
+    ]
+  },
+  "arxiv_queries": [
+    "all:\"your topic\" AND all:\"agent\"",
+    "all:\"related concept\""
+  ],
+  "official_feeds": [
+    {
+      "name": "Vendor Blog",
+      "url": "https://example.com/rss.xml"
+    }
+  ],
+  "hacker_news": {
+    "enabled": true,
+    "feed": "topstories",
+    "limit": 30,
+    "min_score": 50
+  },
+  "custom_urls": [
+    {
+      "name": "Example Changelog",
+      "url": "https://example.com/changelog",
+      "method": "web_fetch",
+      "max_chars": 500
+    }
+  ],
+  "apify_social": {
+    "enabled": false,
+    "_note": "Set enabled true and add APIFY_TOKEN to .env before using. Requires Apify account and may incur cost.",
+    "instagram": {
+      "enabled": false,
+      "actor": "apify~instagram-api-scraper",
+      "handles": [],
+      "max_results_per_handle": 5,
+      "since_days": 7,
+      "search_enabled": false,
+      "search_hashtags": [],
+      "max_results_per_search": 3
+    },
+    "x": {
+      "enabled": false,
+      "actor": "fastdata~twitter-scraper",
+      "search_actor": "xquik~x-tweet-scraper",
+      "handles": [],
+      "max_tweets_per_handle": 5,
+      "since_days": 7,
+      "search_enabled": false,
+      "search_terms": [],
+      "max_results_per_search": 5
+    },
+    "tiktok": {
+      "enabled": false,
+      "actor": "clockworks~tiktok-profile-scraper",
+      "handles": [],
+      "max_results_per_handle": 3,
+      "freshness_hours": 24,
+      "profile_sorting": "latest",
+      "exclude_pinned_posts": true,
+      "search_enabled": false,
+      "search_hashtags": [],
+      "max_results_per_search": 3
+    }
+  },
+  "creator_watch": {
+    "enabled": false,
+    "freshness_hours": 24,
+    "_note": "Filter creator sources to published_at >= now - freshness_hours before scoring."
+  }
+}
