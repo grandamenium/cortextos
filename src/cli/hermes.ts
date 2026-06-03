@@ -59,9 +59,12 @@ export const hermesRunCommand = new Command('hermes-run')
     }
     const task = JSON.parse(readFileSync(file, 'utf-8')) as Task;
     const prompt = task.description || task.title;
-    // Reply target: whoever the task is assigned to (the dispatching planner),
-    // falling back to this worker's own identity when unset.
-    const parent = task.assigned_to || env.agentName;
+    // Reply target: the task's CREATOR (the delegator who needs the result), NOT
+    // assigned_to. On a delegated task assigned_to is this worker itself, so
+    // replying there would send the served/exhausted notification to our own
+    // inbox and the delegator would never hear the outcome. Fall back to
+    // assigned_to, then this worker's identity, only when created_by is unset.
+    const parent = task.created_by || task.assigned_to || env.agentName;
 
     // ---- Validate --preferred ----
     let preferred: BackendId | undefined;

@@ -100,7 +100,7 @@ describe('hermes orchestrator — contract (spec §6.2)', () => {
     const claude = fakeAdapter('claude');
     const adapters = (b: BackendId) => ({ codex, gemini, claude })[b];
 
-    const { bus, events, completed } = spyBus();
+    const { bus, events, completed, messages } = spyBus();
     const { log } = spyLogger();
 
     const outcome = await runHermesDispatch(
@@ -113,6 +113,12 @@ describe('hermes orchestrator — contract (spec §6.2)', () => {
     expect(
       events.some((e) => e.name === 'hermes_task_served' && e.meta.servedModel === 'gpt-5.5'),
     ).toBe(true);
+    // RECIPIENT assertion (regression guard): the served reply must go to the
+    // delegator passed as req.parent — NOT the serving backend or the worker.
+    // (The omission of this check is what let the assigned_to-vs-created_by
+    // recipient bug ship initially.)
+    expect(messages.length).toBe(1);
+    expect(messages[0].to).toBe('planner');
   });
 
   it('exhausted path is never silent: completeTask EXHAUSTED + high-pri parent ping + exhausted event, completeTask exactly once', async () => {

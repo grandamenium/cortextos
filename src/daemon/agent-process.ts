@@ -125,7 +125,12 @@ export class AgentProcess {
     // handleExit, preventing spurious crash recovery on the new agent.
     const myGeneration = ++this.lifecycleGeneration;
 
-    // Create PTY — runtime-specific subclass handles binary, args, bootstrap detection
+    // Create PTY — runtime-specific subclass handles binary, args, bootstrap detection.
+    // 'hermes-worker' intentionally has NO dedicated PTY: it is a first-class agent
+    // whose planning brain runs on the standard claude-code AgentPTY (the default
+    // arm below); its multi-backend dispatcher runs in-process, invoked per task via
+    // the `hermes-run` CLI verb (see src/workers/hermes/). So it boots like any
+    // claude-code agent — the runtime literal marks intent + config, not a new PTY.
     const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
     ensureDir(join(this.env.ctxRoot, 'logs', this.name));
     this.log(`Log path: ${logPath}`);
@@ -133,7 +138,7 @@ export class AgentProcess {
       ? new HermesPTY(this.env, this.config, logPath)
       : this.config.runtime === 'codex-app-server'
         ? new CodexAppServerPTY(this.env, this.config, logPath)
-        : new AgentPTY(this.env, this.config, logPath);
+        : new AgentPTY(this.env, this.config, logPath); // claude-code AND hermes-worker
 
     // Issue #330: re-wire the Telegram handle on every start() (session refresh
     // creates a fresh CodexAppServerPTY). Only CodexAppServerPTY uses this — Claude / Hermes

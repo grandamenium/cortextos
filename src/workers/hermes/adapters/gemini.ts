@@ -1,7 +1,7 @@
 import { execFile } from 'child_process';
 import type { ExecFileException } from 'child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
-import { tmpdir } from 'os';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
+import { tmpdir, homedir } from 'os';
 import { join } from 'path';
 import type {
   AdapterContext,
@@ -73,14 +73,16 @@ export const geminiAdapter: WorkerAdapter = {
     const start = Date.now();
     const pinned = model ?? SAFE_MODELS[0];
 
-    // GEMINI_API_KEY present in env (loaded from the org secrets.env by the
-    // agent PTY bootstrap) else no-auth. health() pins the model explicitly.
-    const hasKey = Boolean(process.env.GEMINI_API_KEY);
+    // Auth must match what gemini_task.py actually resolves: get_api_key() reads
+    // GEMINI_API_KEY from the env OR `gemini_api_key` from the mmrag config file.
+    // Checking env alone made health STRICTER than capability — it skipped Gemini
+    // when the key lived only in the mmrag config. Mirror both sources here.
+    const hasKey = Boolean(process.env.GEMINI_API_KEY) || mmragConfigHasGeminiKey();
     if (!hasKey) {
       return {
         available: false,
         reason: 'no-auth',
-        detail: 'GEMINI_API_KEY absent in env',
+        detail: 'GEMINI_API_KEY absent in env and no gemini_api_key in the mmrag config',
         checkedModel: pinned,
         latencyMs: Date.now() - start,
       };
@@ -204,5 +206,25 @@ function mapFailure(failure: GeminiTaskEnvelope['failure']): Unavailability {
       return 'no-auth';
     default:
       return 'process-fail';
+  }
+}
+
+/**
+ * Mirror gemini_task.py's secondary credential source: get_api_key() falls back
+ * to `gemini_api_key` in the mmrag config when GEMINI_API_KEY is not in the env.
+ * Resolve the config path exactly as mmrag.py does (MMRAG_CONFIG, else
+ * MMRAG_DIR/config.json, else ~/.mmrag/config.json). Best-effort: any read/parse
+ * failure means "no key here", never throws into the health probe.
+ */
+function mmragConfigHasGeminiKey(): boolean {
+  try {
+    const configPath =
+      process.env.MMRAG_CONFIG ||
+      join(process.env.MMRAG_DIR || join(homedir(), '.mmrag'), 'config.json');
+    if (!existsSync(configPath)) return false;
+    const cfg = JSON.parse(readFileSync(configPath, 'utf-8')) as { gemini_api_key?: unknown };
+    return typeof cfg.gemini_api_key === 'string' && cfg.gemini_api_key.length > 0;
+  } catch {
+    return false;
   }
 }
