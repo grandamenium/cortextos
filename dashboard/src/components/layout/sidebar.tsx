@@ -23,6 +23,7 @@ import {
   IconBulb,
   IconNotes,
   IconUsers,
+  IconBuilding,
   IconReportMoney,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
@@ -45,7 +46,7 @@ const navItems: NavItem[] = [
   { label: 'Activity', href: '/activity', icon: IconActivity, section: 'core' },
 
   // Operations
-  { label: 'Clients', href: '/clients', icon: IconUsers, section: 'ops' },
+  { label: 'Clients', href: '/clients', icon: IconBuilding, section: 'ops' },
   { label: 'Comms', href: '/comms', icon: IconMessages, section: 'ops' },
   { label: 'Approvals', href: '/approvals', icon: IconShieldCheck, section: 'ops' },
   { label: 'Workflows', href: '/workflows', icon: IconClock, section: 'ops' },

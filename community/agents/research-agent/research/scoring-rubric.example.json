@@ -1,0 +1,52 @@
+{
+  "_note": "Copy to research/scoring-rubric.json and tune for your niche. Keys must match the signal-scoring skill.",
+  "minimum_score_threshold": 5.0,
+  "top_n": 8,
+  "base_weight": 1.0,
+  "fit_weight": 0.3,
+  "velocity_weight": 0.2,
+  "niche_bonus": 1.5,
+  "tutorial_bonus": 1.0,
+  "platform_bonus": 0.5,
+  "source_type_bonuses": {
+    "github": 0.4,
+    "github_trending": 0.6,
+    "arxiv": 0.3,
+    "hacker_news": 0.2,
+    "youtube": 0.1,
+    "rss": 0.0,
+    "reddit": 0.0,
+    "custom_url": 0.2,
+    "instagram": 0.0,
+    "x": 0.0,
+    "tiktok": 0.0
+  },
+  "engagement_normalization": {
+    "github_stars_per_10": 500,
+    "github_star_velocity_per_10": 50,
+    "reddit_score_per_10": 100,
+    "hn_score_per_10": 50,
+    "social_views_per_10": 10000,
+    "social_likes_per_10": 1000
+  },
+  "keyword_boosts": {
+    "_note": "Items whose title/snippet contain any of these get +1 bonus per match, max +2.",
+    "keywords": []
+  },
+  "negative_keywords": [],
+  "niche_terms": [
+    "your topic keyword"
+  ],
+  "tutorial_terms": [
+    "how to",
+    "tutorial",
+    "quickstart",
+    "setup",
+    "template"
+  ],
+  "high_value_platforms": [
+    "github",
+    "youtube",
+    "hacker_news"
+  ]
+}

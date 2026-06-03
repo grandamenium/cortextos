@@ -831,6 +831,34 @@ describe('CodexAppServerPTY thread lifecycle', () => {
       persistExtendedHistory: true,
     });
   });
+
+  it('resumes the persisted thread in fresh mode when state exists', async () => {
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockReturnValue(JSON.stringify({
+      threadId: 'persisted-fresh-thread',
+      cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
+      updatedAt: '2026-05-07T00:00:00Z',
+    }));
+    requestMock.mockResolvedValue({ result: { thread: { id: 'persisted-fresh-thread' } } });
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _rpc: { request: typeof requestMock } })._rpc = { request: requestMock };
+
+    await (pty as unknown as { startOrResumeThread(mode: 'fresh' | 'continue'): Promise<void> }).startOrResumeThread('fresh');
+
+    expect(requestMock).toHaveBeenCalledWith('thread/resume', {
+      threadId: 'persisted-fresh-thread',
+      cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
+      config: { features: { goals: true } },
+      excludeTurns: true,
+      persistExtendedHistory: true,
+    });
+    expect(requestMock).not.toHaveBeenCalledWith(
+      'thread/start',
+      expect.anything(),
+    );
+  });
 });
 
 describe('CodexAppServerPTY event handling', () => {

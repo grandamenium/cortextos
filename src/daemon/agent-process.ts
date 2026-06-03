@@ -299,6 +299,23 @@ export class AgentProcess {
    */
   async sessionRefresh(): Promise<void> {
     this.log('Session refresh (--continue restart)');
+    // Write .session-refresh marker so the SessionEnd crash-alert hook
+    // (src/hooks/hook-crash-alert.ts) classifies the imminent PTY exit as a
+    // session refresh rather than a crash. The hook's marker handler +
+    // quiet-suppression set + message switch were all wired for this type,
+    // but no writer existed — every --continue rollover at the session-time
+    // cap surfaced as a false-positive 'crash' on chief/analyst + the
+    // crashes.log file.
+    try {
+      const paths = resolvePaths(this.name, this.env.instanceId, this.env.org);
+      writeFileSync(
+        join(paths.stateDir, '.session-refresh'),
+        'session-time-cap rollover\n',
+        'utf-8',
+      );
+    } catch (err) {
+      this.log(`Failed to write .session-refresh marker: ${err}`);
+    }
     await this.stop();
     await this.start();
     this.log('Session refreshed');
@@ -412,7 +429,80 @@ export class AgentProcess {
 
   // --- Private methods ---
 
+  /**
+   * Read the tail of this agent's stdout.log without loading the whole file.
+   * Used by handleExit() to inspect recent output for known-crash signatures
+   * (e.g. the image-poison API 400 pattern) so it can decide whether the
+   * exit is a real crash or a recoverable upstream artifact.
+   *
+   * Returns an empty string if the log doesn't exist or can't be read.
+   */
+  private tailStdoutLog(maxBytes: number): string {
+    const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
+    try {
+      if (!existsSync(logPath)) return '';
+      const stats = statSync(logPath);
+      const start = Math.max(0, stats.size - maxBytes);
+      const len = stats.size - start;
+      // Synchronous read of the tail; small and bounded so the cost is fine
+      // even in the exit handler.
+      const fd = require('fs').openSync(logPath, 'r');
+      try {
+        const buf = Buffer.alloc(len);
+        const read = require('fs').readSync(fd, buf, 0, len, start);
+        return buf.toString('utf-8', 0, read);
+      } finally {
+        require('fs').closeSync(fd);
+      }
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Match the API 400 image-poison signature in recent stdout.
+   *
+   * Two variants observed in Anthropic's Messages API responses:
+   *   `API Error: 400 messages.N.content.M.image.source.base64.data: Image format image/<fmt> not supported`
+   *   `API Error: 400 ... image.source.base64.data: ...`
+   *
+   * Matching the prefix `image.source.base64` is robust to wording changes
+   * in Anthropic's error string; matching `image format image/<fmt>` is the
+   * confirmed exact wording today and gives a second signal. Either is enough.
+   */
+  private detectImagePoisonCrash(recentOutput: string): boolean {
+    if (!recentOutput) return false;
+    if (recentOutput.includes('API Error: 400') && recentOutput.includes('image.source.base64')) {
+      return true;
+    }
+    if (/image format image\/[a-z]+ not supported/i.test(recentOutput)) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Write the `.force-fresh` marker that AgentProcess.shouldContinue() reads
+   * on the next start() to force a fresh Claude Code session (no --continue).
+   * Used by the image-poison auto-recovery in handleExit().
+   */
+  private armForceFresh(reason: string): void {
+    try {
+      const stateDir = join(this.env.ctxRoot, 'state', this.name);
+      ensureDir(stateDir);
+      const markerPath = join(stateDir, '.force-fresh');
+      writeFileSync(markerPath, `${new Date().toISOString()} ${reason}\n`, 'utf-8');
+    } catch (err) {
+      this.log(`Failed to arm .force-fresh marker: ${err}`);
+    }
+  }
+
   private handleExit(exitCode: number): void {
+    // Capture last 16KB of the agent's stdout BEFORE nulling pty.
+    // Used by the image-poison auto-recovery check below — reads the log
+    // file so this works even if the PTY buffer has already been GC'd.
+    const recentOutput = this.tailStdoutLog(16384);
+
     this.pty = null;
     this.clearSessionTimer();
 
@@ -453,6 +543,43 @@ export class AgentProcess {
     // awaiting. Either flag short-circuits crash recovery.
     if (this.stopRequested || this.stopping) {
       this.stopRequested = false;
+      return;
+    }
+
+    // Image-poison auto-recovery (companion to PR #446's photo-injection fix).
+    // Checked FIRST so a poisoned-context crash neither trips the crash-loop
+    // window nor charges the daily counter — it is an upstream artifact, not
+    // an agent malfunction.
+    //
+    // Claude Code crashes with `API Error: 400 messages.N.content.M.image.source.base64.data:
+    // Image format image/<fmt> not supported` when conversation history holds a
+    // base64-encoded image whose claimed media_type does not match the actual
+    // bytes. The poison is permanent: every `--continue` restart reloads the
+    // same conversation history and re-hits the same 400, so the agent
+    // crash-loops until it exhausts max_crashes_per_day and the daemon halts.
+    //
+    // This block covers agents that ALREADY have a poisoned context: detect
+    // the 400 signature in the recent stdout, write `.force-fresh` so the next
+    // start discards the saved conversation, and respawn WITHOUT charging the
+    // crash counter. (The photo-suppression source fix from #446 was superseded
+    // by the Track-2 byte-sniff mime reconciliation; this recovery block is the
+    // independent resilience half and stands on its own.)
+    //
+    // Exit is always code 0 in this failure mode (Claude Code surfaces the
+    // 400 to the user then exits cleanly), so we gate on both exit code and
+    // the error signature to avoid false positives that would skip a real
+    // crash counter increment.
+    if (exitCode === 0 && this.detectImagePoisonCrash(recentOutput)) {
+      this.log('Image-poison crash detected (API 400, unsupported image format). Arming .force-fresh and restarting without counting against max_crashes_per_day.');
+      this.armForceFresh('image-poison auto-recovery');
+      this.appendCrashToRestartsLog(exitCode, 5000, 'IMAGE_POISON_RECOVERY');
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(err => this.log(`Image-poison restart failed: ${err}`));
+        }
+      }, 5000);
       return;
     }
 
@@ -519,7 +646,7 @@ export class AgentProcess {
       return hermesDbExists(hermesHome);
     }
 
-    // Check for force-fresh marker
+    // Check for force-fresh marker (all runtimes honor it).
     const forceFreshPath = join(this.env.ctxRoot, 'state', this.name, '.force-fresh');
     if (existsSync(forceFreshPath)) {
       try {
@@ -529,7 +656,24 @@ export class AgentProcess {
       return false;
     }
 
-    // Check for existing conversation
+    // codex-app-server: session continuity is tracked by the adapter's own
+    // codex-app-server-thread.json under ctxRoot/state/<agent>/. The Claude
+    // JSONL check below is meaningless for the codex runtime, and a stale
+    // Claude JSONL left over from a prior Claude-runtime tenure caused
+    // continue-mode → thread/resume timeout → exit_code=0 crash loop
+    // (testorg codex-agent crashed 3x with this signature on 2026-05-09,
+    // 05-14, and 05-16 before backoff drained the pending resume RPC).
+    if (this.config.runtime === 'codex-app-server') {
+      const threadStatePath = join(
+        this.env.ctxRoot,
+        'state',
+        this.name,
+        'codex-app-server-thread.json',
+      );
+      return existsSync(threadStatePath);
+    }
+
+    // Default (Claude runtime): existing conversation = JSONL files present.
     const launchDir = this.config.working_directory || this.env.agentDir;
     if (!launchDir) return false;
 
@@ -763,7 +907,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -772,7 +916,9 @@ export class AgentProcess {
       const details =
         kind === 'HALTED'
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
-          : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+          : kind === 'IMAGE_POISON_RECOVERY'
+            ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
+            : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {
