@@ -21,7 +21,7 @@ import { existsSync, statSync } from 'fs';
 import { join } from 'path';
 import type { Task } from '../types/index.js';
 import { listTasks } from '../bus/task.js';
-import { resolvePaths } from '../utils/paths.js';
+import { resolvePaths, resolveVaultRoot, discoverPrimaryOrg } from '../utils/paths.js';
 import { writeActiveTasksBoard, PROJECT_STATE_REL } from '../bus/active-tasks.js';
 import { sendOperatorAlertBestEffort } from './operator-alert.js';
 
@@ -33,9 +33,9 @@ export interface VaultLivenessOptions {
   checkIntervalMs?: number;
   staleThresholdMs?: number;
   alertCooldownMs?: number;
-  /** Vault root; defaults to <frameworkRoot>/obsidian-vault. */
+  /** Vault root; defaults to resolveVaultRoot(frameworkRoot) (env/worktree-aware). */
   vaultRoot?: string;
-  /** Task source; defaults to listTasks(resolvePaths('daemon', instanceId, org)). */
+  /** Task source; defaults to listTasks over the resolved org (CTX_ORG or discovered). */
   loadTasks?: () => Task[];
   /** Alert sink; defaults to a best-effort Telegram send. Injected in tests. */
   alert?: (message: string) => void;
@@ -51,6 +51,7 @@ export class VaultLivenessWatchdog {
   private readonly staleThresholdMs: number;
   private readonly alertCooldownMs: number;
   private readonly vaultRoot: string;
+  private readonly effectiveOrg: string;
   private readonly loadTasks: () => Task[];
   private readonly alert: (message: string) => void;
   private readonly now: () => number;
@@ -61,10 +62,14 @@ export class VaultLivenessWatchdog {
     this.checkIntervalMs = options.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
     this.staleThresholdMs = options.staleThresholdMs ?? DEFAULT_STALE_THRESHOLD_MS;
     this.alertCooldownMs = options.alertCooldownMs ?? DEFAULT_ALERT_COOLDOWN_MS;
-    this.vaultRoot = options.vaultRoot ?? join(frameworkRoot, 'obsidian-vault');
+    this.vaultRoot = options.vaultRoot ?? resolveVaultRoot(frameworkRoot);
     this.now = options.now ?? (() => Date.now());
     this.log = options.log ?? ((m) => console.log(m));
-    this.loadTasks = options.loadTasks ?? (() => listTasks(resolvePaths('daemon', instanceId, org)));
+    // Default an empty CTX_ORG to the discovered primary org so the board renders
+    // the real task store (orgs/<org>/tasks), not the empty <ctxRoot>/tasks.
+    const effectiveOrg = org || discoverPrimaryOrg(instanceId) || '';
+    this.effectiveOrg = effectiveOrg;
+    this.loadTasks = options.loadTasks ?? (() => listTasks(resolvePaths('daemon', instanceId, effectiveOrg)));
     this.alert = options.alert ?? ((message) => { sendOperatorAlertBestEffort(frameworkRoot, message); });
   }
 
@@ -72,7 +77,8 @@ export class VaultLivenessWatchdog {
     if (this.timer) return;
     this.log(
       `[vault-liveness] started: regenerate active-tasks.md every ${this.checkIntervalMs / 60000}m, ` +
-      `alert on narrative state older than ${this.staleThresholdMs / 60000}m (vault: ${this.vaultRoot})`,
+      `alert on narrative state older than ${this.staleThresholdMs / 60000}m ` +
+      `(vault: ${this.vaultRoot}, org: ${this.effectiveOrg || '(none)'})`,
     );
     // Run immediately so the board is fresh on boot (heals the placeholder at once),
     // then on the interval.

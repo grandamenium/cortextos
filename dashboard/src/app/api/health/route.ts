@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { join } from 'path';
-import { getFrameworkRoot } from '@/lib/config';
+import { getVaultRoot } from '@/lib/config';
 import { computeVaultHealth } from '@/lib/health/vault-health';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +13,7 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET() {
   try {
-    const vaultRoot = join(getFrameworkRoot(), 'obsidian-vault');
+    const vaultRoot = getVaultRoot();
     return NextResponse.json(computeVaultHealth(vaultRoot));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -35,6 +35,30 @@ export function getFrameworkRoot(): string {
   return CTX_FRAMEWORK_ROOT;
 }
 
+/**
+ * Resolve the obsidian-vault root that holds the LIVE coordination layer — the
+ * same rule the daemon's resolveVaultRoot uses, so /api/health checks the SAME
+ * board the watchdog writes. Naive `<frameworkRoot>/obsidian-vault` is wrong when
+ * the dashboard runs from a git worktree (that path is an empty placeholder while
+ * the populated vault is at the repo root). Requires a populated `agent-shared/`
+ * before accepting a candidate.
+ * Priority: CTX_VAULT_ROOT → <frameworkRoot>/obsidian-vault → repo-root vault
+ * derived from a `.claude/worktrees/` framework root.
+ */
+export function getVaultRoot(): string {
+  const fr = getFrameworkRoot();
+  const candidates: string[] = [];
+  if (process.env.CTX_VAULT_ROOT) candidates.push(expandTilde(process.env.CTX_VAULT_ROOT));
+  candidates.push(path.join(fr, 'obsidian-vault'));
+  const marker = `${path.sep}.claude${path.sep}worktrees${path.sep}`;
+  const idx = fr.indexOf(marker);
+  if (idx !== -1) candidates.push(path.join(fr.slice(0, idx), 'obsidian-vault'));
+  for (const c of candidates) {
+    try { if (fs.existsSync(path.join(c, 'agent-shared'))) return c; } catch { /* skip */ }
+  }
+  return candidates[0];
+}
+
 // -- Org-scoped paths --
 
 export function getOrgDir(org: string): string {
