@@ -26,7 +26,10 @@ import { writeActiveTasksBoard, PROJECT_STATE_REL } from '../bus/active-tasks.js
 import { sendOperatorAlertBestEffort } from './operator-alert.js';
 
 const DEFAULT_CHECK_INTERVAL_MS = 5 * 60 * 1000;   // regenerate the board every 5 min
-const DEFAULT_STALE_THRESHOLD_MS = 60 * 60 * 1000; // narrative file older than 60 min → alert
+// Narrative docs (project-state.md) change infrequently — the board's 5-min auto-regeneration
+// is the real liveness signal, so only alert on GENUINE abandonment, not normal quiet periods.
+// 60 min was far too tight (spammed every 30 min). Env-overridable via CTX_NARRATIVE_STALE_MIN.
+const DEFAULT_STALE_THRESHOLD_MS = (Number(process.env.CTX_NARRATIVE_STALE_MIN) || 24 * 60) * 60 * 1000;
 const DEFAULT_ALERT_COOLDOWN_MS = 30 * 60 * 1000;  // at most one alert per key per 30 min
 
 export interface VaultLivenessOptions {
