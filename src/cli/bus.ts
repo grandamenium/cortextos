@@ -1045,8 +1045,12 @@ busCommand
     if (!slackToken) slackToken = process.env.SLACK_BOT_TOKEN ?? '';
 
     if (!slackToken) {
-      console.error('Warning: SLACK_BOT_TOKEN not set. Skipping Slack message. Set it in your agent .env file or as SLACK_BOT_TOKEN env var.');
-      process.exit(0);
+      // Exit nonzero (mirroring send-telegram's missing-BOT_TOKEN handling) so
+      // an agent driving the Slack reply flow sees the failure instead of a
+      // false success — a status-0 skip would make automation believe the reply
+      // was delivered when nothing reached Slack.
+      console.error('Error: SLACK_BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Slack.');
+      process.exit(1);
     }
 
     const { SlackAPI } = await import('../slack/api.js');
