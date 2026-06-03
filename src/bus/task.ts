@@ -23,6 +23,8 @@ export function createTask(
     dueDate?: string;
     blockedBy?: string[];
     blocks?: string[];
+    bundle?: string;
+    role?: string;
   } = {},
 ): string {
   const {
@@ -34,6 +36,8 @@ export function createTask(
     dueDate = '',
     blockedBy = [],
     blocks = [],
+    bundle = '',
+    role = '',
   } = options;
 
   validatePriority(priority);
@@ -78,6 +82,8 @@ export function createTask(
     completed_at: null,
     due_date: dueDate || null,
     archived: false,
+    ...(bundle ? { bundle_id: bundle } : {}),
+    ...(role ? { role } : {}),
     ...(blockedBy.length ? { blocked_by: [...blockedBy] } : {}),
     ...(blocks.length ? { blocks: [...blocks] } : {}),
   };
@@ -520,6 +526,7 @@ export function listTasks(
     agent?: string;
     status?: TaskStatus;
     priority?: Priority;
+    bundle?: string;
     respectDeps?: boolean;
   },
 ): Task[] {
@@ -543,6 +550,9 @@ export function listTasks(
       if (filters?.agent && task.assigned_to !== filters.agent) continue;
       if (filters?.status && task.status !== filters.status) continue;
       if (filters?.priority && task.priority !== filters.priority) continue;
+      // Exact match — bundle_id is `<free>`, NOT a task-id prefix. A prefix
+      // compare would mis-bucket real ids (task_<epoch>_<rand>).
+      if (filters?.bundle && task.bundle_id !== filters.bundle) continue;
       if (task.archived) continue;
 
       tasks.push(task);
@@ -576,6 +586,44 @@ export function listTasks(
   const blocked: Task[] = [];
   for (const t of sorted) (isBlocked(t) ? blocked : unblocked).push(t);
   return [...unblocked, ...blocked];
+}
+
+/**
+ * Bundle-scoped atomic "claim the next workable task".
+ *
+ * Selects pending tasks for a given bundle_id (optionally narrowed to a role),
+ * orders them DAG-aware (unblocked first, then created_at DESC), skips any whose
+ * dependencies are not all completed, then atomically claimTask()s the first
+ * eligible one. Reuses the O_EXCL claim lock, so two agents racing claim-next on
+ * the same bundle can never grab the same task. Returns the claimed Task, or
+ * null if the bundle has no eligible pending task.
+ *
+ * This is how builder agents pull COORDINATED work — `claim-next --bundle <id>`
+ * instead of grabbing an isolated, self-filed random task.
+ */
+export function selectAndClaimNext(
+  paths: BusPaths,
+  agent: string,
+  opts: { bundle: string; role?: string },
+): Task | null {
+  const candidates = listTasks(paths, {
+    status: 'pending',
+    bundle: opts.bundle,
+    respectDeps: true,
+  }).filter((t) => !opts.role || t.role === opts.role);
+
+  for (const t of candidates) {
+    // Authoritative cross-store dependency check (listTasks only orders by
+    // in-list deps). Non-empty = unmet/missing deps → not yet workable.
+    if (checkTaskDependencies(paths, t.id).length > 0) continue;
+    try {
+      return claimTask(paths, t.id, agent);
+    } catch {
+      // Lost the race to another agent, or became unclaimable — try next.
+      continue;
+    }
+  }
+  return null;
 }
 
 /**

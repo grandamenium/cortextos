@@ -57,6 +57,16 @@ export interface Task {
   due_date: string | null;
   archived: boolean;
   result?: string;
+  /**
+   * Feature-bundle grouping key. A bundle is one shared goal spanning the
+   * product roles (patient/doctor/pharmacy/manufacturer/admin); every sub-task
+   * of the bundle shares this id. Optional so existing task files stay valid.
+   * `claim-next --bundle <id>` selects only tasks carrying this id, so agents
+   * work a coordinated feature instead of isolated random tasks.
+   */
+  bundle_id?: string;
+  /** Which product role this sub-task belongs to within its bundle. */
+  role?: string;
   /** Linked deliverables (files saved via `cortextos bus save-output`). */
   outputs?: TaskOutput[];
   /**
