@@ -14,6 +14,19 @@ import type { AgentConfig, Task } from '../types/index.js';
 
 const BACKENDS: readonly BackendId[] = ['claude', 'codex', 'gemini'];
 
+/**
+ * Resolve who the served/exhausted result is reported to. The task's CREATOR
+ * (delegator) is the right target — on a delegated task `assigned_to` is the
+ * Hermes worker itself, so replying there would notify our own inbox and the
+ * delegator would never hear the outcome. Falls back to assigned_to, then this
+ * worker's own identity, only when created_by is unset (malformed task).
+ * Extracted as a pure fn so the exact created_by-over-assigned_to precedence is
+ * directly unit-testable (the inline commander action is not).
+ */
+export function resolveReplyTarget(task: Task, self: string): string {
+  return task.created_by || task.assigned_to || self;
+}
+
 interface HermesRunOpts {
   task: string;
   preferred?: string;
@@ -59,12 +72,9 @@ export const hermesRunCommand = new Command('hermes-run')
     }
     const task = JSON.parse(readFileSync(file, 'utf-8')) as Task;
     const prompt = task.description || task.title;
-    // Reply target: the task's CREATOR (the delegator who needs the result), NOT
-    // assigned_to. On a delegated task assigned_to is this worker itself, so
-    // replying there would send the served/exhausted notification to our own
-    // inbox and the delegator would never hear the outcome. Fall back to
-    // assigned_to, then this worker's identity, only when created_by is unset.
-    const parent = task.created_by || task.assigned_to || env.agentName;
+    // Reply to the task's creator/delegator (see resolveReplyTarget) — never
+    // assigned_to, which on a delegated task is this worker itself.
+    const parent = resolveReplyTarget(task, env.agentName);
 
     // ---- Validate --preferred ----
     let preferred: BackendId | undefined;
