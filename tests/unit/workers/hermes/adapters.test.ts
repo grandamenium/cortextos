@@ -39,6 +39,14 @@ function exitErr(code: number): Error & { code: number } {
   return Object.assign(new Error(`exit ${code}`), { code });
 }
 
+/** A kill-by-timeout error: execFile sets err.killed when the timeout fires. */
+function timeoutErr(): Error & { killed: boolean } {
+  return Object.assign(new Error('killed'), { killed: true });
+}
+
+/** The claude binary run() spawns (no `timeout` shell wrapper). */
+const CLAUDE_BINARY = process.platform === 'win32' ? 'claude.cmd' : 'claude';
+
 const ctx = { config: {}, env: {} } as unknown as AdapterContext;
 const baseInput = { prompt: 'do x', workdir: '/tmp', timeoutMs: 1000 };
 
@@ -47,7 +55,32 @@ beforeEach(() => {
 });
 
 describe('claude execute() — classifier verdicts (spec §6.1)', () => {
-  // claude shells `timeout <secs> claude -p …`, so the spawned cmd is `timeout`.
+  // claude spawns the `claude` binary DIRECTLY; the wall-clock cap is the
+  // execFile timeout in run() (killedByTimeout), not a `timeout` shell wrapper.
+  it('spawns the claude binary directly, NOT a `timeout` shell wrapper', async () => {
+    // Regression: the old impl spawned `timeout <secs> claude …`, which ENOENTs
+    // on macOS (no GNU coreutils `timeout`/`gtimeout`) while health() — which
+    // only probes the claude binary — passes, silently disabling this backstop.
+    // A child_process mock returns rc-0 regardless of cmd, so this is the ONLY
+    // assertion that catches the wrong spawn target. Spawned cmd MUST be claude.
+    let spawnedCmd: string | undefined;
+    let spawnedArgs: string[] = [];
+    routeExecFile((cmd, args) => {
+      spawnedCmd = cmd;
+      spawnedArgs = args;
+      return { stdout: '{"is_error":false,"result":"ok"}' };
+    });
+
+    await claudeAdapter.execute({ ...baseInput }, ctx);
+
+    expect(spawnedCmd).toBe(CLAUDE_BINARY);
+    expect(spawnedCmd).not.toBe('timeout');
+    // argv carries the real claude flags directly, not `<secs> claude …`.
+    expect(spawnedArgs[0]).toBe('-p');
+    expect(spawnedArgs).toContain('--output-format');
+    expect(spawnedArgs).not.toContain(CLAUDE_BINARY); // binary is argv[0], not nested
+  });
+
   it('ENOENT (spawn fail) => failure no-binary, not retryable', async () => {
     // run() maps err.code === "ENOENT" to code 127 + spawnError.
     routeExecFile(() => ({ err: Object.assign(new Error('enoent'), { code: 'ENOENT' }) }));
@@ -60,15 +93,16 @@ describe('claude execute() — classifier verdicts (spec §6.1)', () => {
     expect(r.exitCode).toBe(127);
   });
 
-  it('exit 124 (the `timeout` wrapper kill) => failure timeout, retryable', async () => {
-    routeExecFile(() => ({ err: exitErr(124) }));
+  it('killedByTimeout (execFile SIGKILL cap) => failure timeout, retryable', async () => {
+    // The cap is now the execFile { timeout, killSignal: SIGKILL } in run(),
+    // which sets killedByTimeout — there is no shell `timeout` rc-124 anymore.
+    routeExecFile(() => ({ err: timeoutErr() }));
 
     const r = await claudeAdapter.execute({ ...baseInput }, ctx);
 
     expect(r.ok).toBe(false);
     expect(r.failure).toBe('timeout');
     expect(r.retryable).toBe(true);
-    expect(r.exitCode).toBe(124);
   });
 
   it('exit 0 with is_error:true => failure process-fail EVEN ON EXIT 0 (load-bearing)', async () => {

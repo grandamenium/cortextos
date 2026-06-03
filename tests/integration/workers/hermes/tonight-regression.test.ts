@@ -67,7 +67,10 @@ const fastDeps = { ctx, now: () => 0, sleep: async () => {} };
 describe('hermes tonight-regression — codex config-error -> auto-failover (spec §6.4)', () => {
   it('config-error costs exactly ONE execute, fails over immediately, ends SERVED', async () => {
     const codex = fakeAdapter('codex', {
-      // Simulates the gpt-5.3-codex entitlement gate: non-retryable config-error.
+      // codex supports the pinned model (so the per-backend model-pin guard
+      // honors it on codex), but the request hits the gpt-5.3-codex entitlement
+      // gate at runtime: non-retryable config-error.
+      safeModels: ['gpt-5.3-codex'],
       execute: async () => ({
         ok: false,
         failure: 'config-error',

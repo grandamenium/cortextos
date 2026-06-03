@@ -109,13 +109,14 @@ export const claudeAdapter: WorkerAdapter = {
   async execute(input: ExecInput, _ctx: AdapterContext): Promise<ExecResult> {
     const model = input.model ?? SAFE_MODELS[0];
 
-    // The `timeout <secs> claude …` shell wrapper guarantees a hung run exits
-    // (rc 124) rather than hanging forever; the child_process timeout is a belt-
-    // and-suspenders backstop set slightly higher so the shell `timeout` wins.
-    const timeoutSecs = Math.max(1, Math.ceil(input.timeoutMs / 1000));
+    // Spawn the claude binary directly. The wall-clock cap is enforced by the
+    // execFile { timeout, killSignal: 'SIGKILL' } inside run() (which sets
+    // killedByTimeout) — NOT a `timeout <secs> claude …` shell wrapper. That
+    // wrapper depended on GNU coreutils `timeout`, which is ABSENT on macOS
+    // (no `timeout`, no `gtimeout`), so execute() would ENOENT (rc 127) while
+    // health() — which only probes the `claude` binary — passes, silently
+    // disabling this backstop on a Mac deploy. Mirrors the gemini adapter.
     const args = [
-      String(timeoutSecs),
-      BINARY,
       '-p',
       input.prompt,
       '--output-format',
@@ -127,11 +128,10 @@ export const claudeAdapter: WorkerAdapter = {
       input.workdir,
     ];
 
-    const r = await run('timeout', args, input.timeoutMs + 5000);
+    const r = await run(BINARY, args, input.timeoutMs);
 
-    // rc 124 ⇒ the `timeout` wrapper killed the run. A SIGKILL by our own
-    // child_process backstop is also a timeout.
-    if (r.code === 124 || r.killedByTimeout) {
+    // killedByTimeout ⇒ our child_process backstop (SIGKILL) fired on the cap.
+    if (r.killedByTimeout) {
       return {
         ok: false,
         failure: 'timeout',

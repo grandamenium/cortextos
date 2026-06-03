@@ -114,6 +114,58 @@ describe('hermes fallback — backend-down -> fallback (spec §6.3)', () => {
     );
   });
 
+  it('a backend-pinned model does NOT leak onto the fallback backend (P1)', async () => {
+    // Regression: orchestrator applied req.model to EVERY backend in the chain.
+    // A model pinned for codex (gpt-5.3-codex) must NOT be reused on failover —
+    // gemini must run with ITS OWN safeModels()[0]. Otherwise gemini's
+    // health/execute rejects the unsupported model and the auto-fallback this
+    // engine exists to provide is defeated for any pinned request.
+    const codex = fakeAdapter('codex', {
+      safeModels: ['gpt-5.3-codex'],
+      execute: async () => ({
+        ok: false,
+        failure: 'config-error', // non-retryable -> immediate failover
+        retryable: false,
+        servedModel: 'gpt-5.3-codex',
+      }),
+    });
+    const gemini = fakeAdapter('gemini', {
+      safeModels: ['gemini-2.5-pro'],
+      execute: async () => ({
+        ok: true,
+        output: 'gemini result',
+        retryable: false,
+        servedModel: 'gemini-2.5-pro',
+      }),
+    });
+    const claude = fakeAdapter('claude', { safeModels: ['claude-sonnet-4-6'] });
+    const adapters = (b: BackendId) => ({ codex, gemini, claude })[b];
+
+    const { bus } = spyBus();
+    const { log } = spyLogger();
+
+    const outcome = await runHermesDispatch(
+      { taskId: 't3', prompt: 'p', workdir: '/w', parent: 'planner', model: 'gpt-5.3-codex' },
+      { adapters, bus, log, ...fastDeps },
+    );
+
+    expect(outcome.status).toBe('served');
+    expect(outcome.backend).toBe('gemini');
+
+    // codex ran with its pinned model — correct, the pin matches codex.
+    const codexCall = (codex.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(codexCall.model).toBe('gpt-5.3-codex');
+
+    // gemini ran with ITS OWN default, NOT the leaked codex pin.
+    const geminiCall = (gemini.execute as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(geminiCall.model).toBe('gemini-2.5-pro');
+    expect(geminiCall.model).not.toBe('gpt-5.3-codex');
+
+    // The health gate on gemini also saw its own model, not the pin.
+    const geminiHealthArg = (gemini.health as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(geminiHealthArg).toBe('gemini-2.5-pro');
+  });
+
   it('codex unavailable at health() -> execute NEVER called, gemini serves, skip logged', async () => {
     const codex = fakeAdapter('codex', {
       health: { available: false, reason: 'no-binary', latencyMs: 1 },

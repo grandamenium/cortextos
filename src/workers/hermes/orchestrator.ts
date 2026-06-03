@@ -105,8 +105,15 @@ export async function runHermesDispatch(
     const backend = chain[i];
     const nextBackend: BackendId | null = i + 1 < chain.length ? chain[i + 1] : null;
     const adapter = adapters(backend);
-    // Per-backend pinned model: explicit request override, else adapter default.
-    const model = req.model ?? adapter.safeModels()[0];
+    // Per-backend pinned model: honor an explicit request override ONLY when
+    // THIS backend supports it, else fall to the backend default. Without the
+    // supports-check a model pinned for one backend (e.g. a Codex-only model)
+    // would leak onto every fallback backend, making their health/execute skip
+    // or fail on an unsupported model — defeating the auto-fallback this engine
+    // exists to provide for any pinned request.
+    const model = req.model && adapter.safeModels().includes(req.model)
+      ? req.model
+      : adapter.safeModels()[0];
 
     // Budget guard at the backend boundary.
     if (overBudget()) {
