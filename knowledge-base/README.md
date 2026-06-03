@@ -69,6 +69,9 @@ API keys are read from the org's `secrets.env` (or the framework `.env`):
 - **Rerank off**: `similarity_threshold` is applied to cosine similarity (legacy behaviour).
   Defaults to 0.5 when the config omits it.
 - `--threshold` on the CLI overrides whichever threshold is active.
+- **Rerank failure fallback**: if the rerank API call fails mid-query (outage), results fall
+  back to cosine ordering filtered by `similarity_threshold` — an explicit `--threshold`
+  (which is rerank-scale in rerank mode) is NOT reinterpreted as a cosine threshold.
 
 ## Migration: switching providers
 

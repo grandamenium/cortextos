@@ -694,6 +694,17 @@ def collection_metadata_for(config):
 def get_chroma_collection(collection_name="default", config=None):
     import chromadb
     client = chromadb.PersistentClient(path=str(CHROMADB_DIR))
+
+    # Self-heal an interrupted reindex swap at the ACCESS layer: if the named
+    # collection vanished mid-swap but its __pre_reindex copy survives, restore
+    # the copy instead of letting get_or_create silently create a fresh EMPTY
+    # collection on top of it — that would strand the orphaned data and make
+    # the kb-reindex self-heal path unreachable.
+    existing = {c.name if hasattr(c, "name") else c for c in client.list_collections()}
+    orphan_name = f"{collection_name}{REINDEX_OLD_SUFFIX}"
+    if collection_name not in existing and orphan_name in existing:
+        client.get_collection(orphan_name).modify(name=collection_name)
+
     metadata = collection_metadata_for(config) if config else {"hnsw:space": "cosine"}
     collection = client.get_or_create_collection(
         name=collection_name,
