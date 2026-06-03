@@ -63,7 +63,40 @@ List all KB collections for the org:
 cortextos bus kb-collections --org $CTX_ORG
 ```
 
-If no collections appear, the KB may not be configured yet — check that `GEMINI_API_KEY` is set in `orgs/$CTX_ORG/secrets.env`.
+If no collections appear, the KB may not be configured yet — check that the embedding provider's API key is set in `orgs/$CTX_ORG/secrets.env`:
+- `GEMINI_API_KEY` when `embedding_provider` is `gemini` (default)
+- `COHERE_API_KEY` when `embedding_provider` is `cohere` (also enables the rerank stage)
+
+---
+
+## Rerank (two-stage retrieval)
+
+When the KB is configured with `embedding_provider: cohere`, queries automatically run a
+two-stage retrieve→rerank pipeline (wide vector recall, then Cohere rerank for true relevance).
+This significantly improves result quality. To compare or fall back to vector-only search:
+
+```bash
+cortextos bus kb-query "your question" --org $CTX_ORG --no-rerank
+```
+
+---
+
+## Reindex (provider migration)
+
+If the org switches embedding provider (e.g. gemini → cohere) or changes embedding
+dimensions, existing collections must be re-embedded before they can be queried:
+
+```bash
+# Migrate all collections to the configured provider
+cortextos bus kb-reindex --org $CTX_ORG
+
+# Migrate a single collection
+cortextos bus kb-reindex --org $CTX_ORG --collection agent-$CTX_AGENT_NAME
+```
+
+Reindex re-embeds the stored chunks directly — no source files needed, and existing
+media descriptions are preserved. If a query fails with a provider/dimension mismatch
+error, this is the fix.
 
 ---
 

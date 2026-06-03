@@ -17,7 +17,7 @@ import { createReminder, listReminders, ackReminder, pruneReminders } from '../b
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
-import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
+import { queryKnowledgeBase, ingestKnowledgeBase, reindexKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -1124,9 +1124,10 @@ busCommand
   .option('--agent <name>', 'Agent name (for private scope)')
   .option('--scope <s>', 'Scope: shared, private, or all', 'all')
   .option('--top-k <n>', 'Number of results', '5')
-  .option('--threshold <f>', 'Minimum similarity score (0-1)', '0.5')
+  .option('--threshold <f>', 'Minimum relevance score (0-1); applies to rerank score when rerank is on')
+  .option('--no-rerank', 'Disable the rerank stage (A/B comparison / fallback)')
   .option('--json', 'Output raw JSON')
-  .action((question: string, opts: { org?: string; agent?: string; scope?: string; topK?: string; threshold?: string; json?: boolean }) => {
+  .action((question: string, opts: { org?: string; agent?: string; scope?: string; topK?: string; threshold?: string; rerank?: boolean; json?: boolean }) => {
     const env = resolveEnv();
     const org = opts.org || env.org;
     if (!org) {
@@ -1142,7 +1143,10 @@ busCommand
         agent: opts.agent || env.agentName,
         scope: (opts.scope as 'shared' | 'private' | 'all') || 'all',
         topK: parseInt(opts.topK || '5', 10),
-        threshold: parseFloat(opts.threshold || '0.5'),
+        // Only pass threshold when given — mmrag.py applies per-stage config defaults
+        threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
+        // Commander --no-rerank sets opts.rerank=false; default (true) means "config decides"
+        rerank: opts.rerank === false ? false : undefined,
         frameworkRoot: env.frameworkRoot || process.cwd(),
         instanceId: env.instanceId,
       },
@@ -1158,7 +1162,8 @@ busCommand
       return;
     }
 
-    console.log(`\n  Knowledge Base Results (${result.results.length}/${result.total})\n`);
+    const rerankedTag = result.reranked ? ' (reranked)' : '';
+    console.log(`\n  Knowledge Base Results (${result.results.length}/${result.total})${rerankedTag}\n`);
     for (let i = 0; i < result.results.length; i++) {
       const r = result.results[i];
       console.log(`  [${i + 1}] Score: ${r.score.toFixed(3)} | ${r.source_file}`);
@@ -1190,6 +1195,27 @@ busCommand
       agent: opts.agent || env.agentName,
       scope: (opts.scope as 'shared' | 'private') || 'shared',
       force: opts.force,
+      frameworkRoot: env.frameworkRoot || process.cwd(),
+      instanceId: env.instanceId,
+    });
+  });
+
+busCommand
+  .command('kb-reindex')
+  .description('Migrate KB collections to the configured embedding provider (re-embeds stored chunks)')
+  .option('--org <org>', 'Organization name')
+  .option('--collection <name>', 'Specific collection to reindex (default: all)')
+  .action((opts: { org?: string; collection?: string }) => {
+    const env = resolveEnv();
+    const org = opts.org || env.org;
+    if (!org) {
+      console.error('ERROR: --org or CTX_ORG required');
+      process.exit(1);
+    }
+
+    reindexKnowledgeBase({
+      org,
+      collection: opts.collection,
       frameworkRoot: env.frameworkRoot || process.cwd(),
       instanceId: env.instanceId,
     });
