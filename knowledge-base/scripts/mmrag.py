@@ -332,7 +332,13 @@ class Clients:
         if self._genai is None:
             # Route through get_genai_client() so the MMRAG_GEMINI_CLIENT_FACTORY
             # injection seam (fault-injection tests, _test_clients/) keeps working.
-            self._genai = get_genai_client(get_api_key(self.config))
+            # When a factory is injected, don't demand a real GEMINI_API_KEY —
+            # fake clients don't need one (the factory receives whatever is set).
+            if os.environ.get("MMRAG_GEMINI_CLIENT_FACTORY"):
+                self._genai = get_genai_client(
+                    os.environ.get("GEMINI_API_KEY") or self.config.get("gemini_api_key") or "factory-injected")
+            else:
+                self._genai = get_genai_client(get_api_key(self.config))
         return self._genai
 
     @property

@@ -134,7 +134,7 @@ export function queryKnowledgeBase(
     instanceId: string;
   },
 ): KBQueryResponse {
-  const { agent, scope = 'all', topK = 5, threshold, rerank, frameworkRoot, instanceId } = options;
+  const { agent, scope = 'all', topK, threshold, rerank, frameworkRoot, instanceId } = options;
   // Normalize once at the top so every downstream path join, env var, and
   // ChromaDB collection name uses the canonical filesystem casing. Without
   // this, `shared-acmecorp` and `shared-AcmeCorp` become two
@@ -180,9 +180,11 @@ export function queryKnowledgeBase(
     const queryArgs = [
       mmragPath, 'query', question,
       '--collection', col,
-      '--top-k', String(topK),
       '--json',
     ];
+    if (topK !== undefined) {
+      queryArgs.push('--top-k', String(topK));
+    }
     // Only pass --threshold when explicitly set; otherwise mmrag.py applies the
     // per-stage config default (similarity_threshold — 0.5 fallback — or
     // rerank_threshold). The org config owns the default, not this wrapper.
@@ -198,7 +200,15 @@ export function queryKnowledgeBase(
         timeout: 60000,
         env,
       });
-    } catch {
+    } catch (err) {
+      // Surface actionable mmrag errors (provider mismatch -> "run kb-reindex")
+      // instead of silently collapsing them into an empty result set.
+      const execErr = err as { stdout?: string; stderr?: string };
+      const detail = `${execErr.stdout || ''}${execErr.stderr || ''}`;
+      const errorLine = detail.split('\n').find((l) => l.startsWith('ERROR:'));
+      if (errorLine) {
+        console.error(`[kb] ${errorLine}`);
+      }
       return null;
     }
   };

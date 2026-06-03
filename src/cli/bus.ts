@@ -1123,7 +1123,7 @@ busCommand
   .option('--org <org>', 'Organization name')
   .option('--agent <name>', 'Agent name (for private scope)')
   .option('--scope <s>', 'Scope: shared, private, or all', 'all')
-  .option('--top-k <n>', 'Number of results', '5')
+  .option('--top-k <n>', 'Number of results (default: rerank_top_n config when reranking, else 5)')
   .option('--threshold <f>', 'Minimum relevance score (0-1); applies to rerank score when rerank is on')
   .option('--no-rerank', 'Disable the rerank stage (A/B comparison / fallback)')
   .option('--json', 'Output raw JSON')
@@ -1142,7 +1142,9 @@ busCommand
         org,
         agent: opts.agent || env.agentName,
         scope: (opts.scope as 'shared' | 'private' | 'all') || 'all',
-        topK: parseInt(opts.topK || '5', 10),
+        // Only pass top-k when explicitly given — mmrag.py falls back to
+        // rerank_top_n (rerank mode) or 5, making the config knob effective.
+        topK: opts.topK !== undefined ? parseInt(opts.topK, 10) : undefined,
         // Only pass threshold when given — mmrag.py applies per-stage config defaults
         threshold: opts.threshold !== undefined ? parseFloat(opts.threshold) : undefined,
         // Commander --no-rerank sets opts.rerank=false; default (true) means "config decides"
