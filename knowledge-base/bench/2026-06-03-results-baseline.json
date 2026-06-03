@@ -1,0 +1,1086 @@
+{
+  "metrics": {
+    "gemini-vector": {
+      "queries": 28,
+      "hit@1": 0.893,
+      "hit@3": 0.964,
+      "hit@5": 1.0,
+      "mrr": 0.932,
+      "zero_result_rate": 0.0,
+      "miss_rate": 0.0,
+      "mean_latency_s": 2.5,
+      "p95_latency_s": 2.84,
+      "T1_hit@3": 1.0,
+      "T1_zero_rate": 0.0,
+      "T2_hit@3": 1.0,
+      "T2_zero_rate": 0.0,
+      "T3_hit@3": 0.833,
+      "T3_zero_rate": 0.0
+    },
+    "cohere-vector": {
+      "queries": 28,
+      "hit@1": 0.321,
+      "hit@3": 0.321,
+      "hit@5": 0.321,
+      "mrr": 0.321,
+      "zero_result_rate": 0.643,
+      "miss_rate": 0.679,
+      "mean_latency_s": 1.28,
+      "p95_latency_s": 1.34,
+      "T1_hit@3": 0.714,
+      "T1_zero_rate": 0.286,
+      "T2_hit@3": 0.267,
+      "T2_zero_rate": 0.667,
+      "T3_hit@3": 0.0,
+      "T3_zero_rate": 1.0
+    },
+    "cohere-rerank": {
+      "queries": 28,
+      "hit@1": 0.857,
+      "hit@3": 0.964,
+      "hit@5": 0.964,
+      "mrr": 0.899,
+      "zero_result_rate": 0.0,
+      "miss_rate": 0.036,
+      "mean_latency_s": 1.66,
+      "p95_latency_s": 1.73,
+      "T1_hit@3": 1.0,
+      "T1_zero_rate": 0.0,
+      "T2_hit@3": 1.0,
+      "T2_zero_rate": 0.0,
+      "T3_hit@3": 0.833,
+      "T3_zero_rate": 0.0
+    }
+  },
+  "per_query": {
+    "gemini-vector": [
+      {
+        "query": "how do I broadcast an announcement to every agent in the org",
+        "tier": "T2",
+        "expected": [
+          "activity-channel"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 3.11,
+        "top_source": "community_skills_activity-channel_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "agent goals and responsibilities",
+        "tier": "T3",
+        "expected": [
+          "GOALS",
+          "SOUL"
+        ],
+        "rank": 4,
+        "n_results": 5,
+        "latency_s": 2.24,
+        "top_source": "templates_orchestrator_IDENTITY.md",
+        "error": null
+      },
+      {
+        "query": "what should I do when a telegram message arrives",
+        "tier": "T1",
+        "expected": [
+          "comms"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.57,
+        "top_source": "community_skills_comms_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "set up a recurring scheduled task",
+        "tier": "T1",
+        "expected": [
+          "cron-management"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.64,
+        "top_source": "community_skills_cron-management_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "how do I tell the system I am still alive and running",
+        "tier": "T2",
+        "expected": [
+          "heartbeat",
+          "HEARTBEAT"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.57,
+        "top_source": "community_skills_heartbeat_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "I need a person to make a payment I cannot do myself",
+        "tier": "T2",
+        "expected": [
+          "human-tasks"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.43,
+        "top_source": "community_skills_human-tasks_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "search previously stored research before searching the web",
+        "tier": "T2",
+        "expected": [
+          "knowledge-base"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.29,
+        "top_source": "community_skills_knowledge-base_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "first boot setup for a brand new agent",
+        "tier": "T1",
+        "expected": [
+          "onboarding",
+          "ONBOARDING"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.64,
+        "top_source": "templates_agent_ONBOARDING.md",
+        "error": null
+      },
+      {
+        "query": "tasks are stuck and agents have gone quiet, how do I investigate",
+        "tier": "T2",
+        "expected": [
+          "system-diagnostics"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.44,
+        "top_source": "community_skills_system-diagnostics_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "spawn an isolated session to work on something in parallel",
+        "tier": "T2",
+        "expected": [
+          "worker-agents"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.22,
+        "top_source": "community_skills_worker-agents_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "morning briefing routine",
+        "tier": "T1",
+        "expected": [
+          "morning-review"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.4,
+        "top_source": "community_skills_morning-review_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "end of day wrap up and summary",
+        "tier": "T2",
+        "expected": [
+          "evening-review"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.19,
+        "top_source": "community_skills_evening-review_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "share a skill I built with the community",
+        "tier": "T2",
+        "expected": [
+          "community-publish"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.37,
+        "top_source": "community_skills_community-publish_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "what skills are available to install",
+        "tier": "T2",
+        "expected": [
+          "catalog-browse"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.74,
+        "top_source": "community_skills_catalog-browse_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "pull the latest changes from the upstream framework",
+        "tier": "T1",
+        "expected": [
+          "upstream-sync",
+          "framework-upstream"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.64,
+        "top_source": "community_skills_upstream-sync_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "write my notes into the obsidian vault",
+        "tier": "T1",
+        "expected": [
+          "obsidian-log"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.61,
+        "top_source": "community_skills_obsidian-log_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "create an excel spreadsheet from the command line",
+        "tier": "T2",
+        "expected": [
+          "officecli"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.95,
+        "top_source": "community_skills_officecli_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "which agent should handle which type of work",
+        "tier": "T2",
+        "expected": [
+          "delegation-matrix"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.84,
+        "top_source": "community_skills_delegation-matrix_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "weekly retrospective process",
+        "tier": "T1",
+        "expected": [
+          "weekly-review"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.59,
+        "top_source": "community_skills_weekly-review_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "rules I must never break under any circumstances",
+        "tier": "T3",
+        "expected": [
+          "GUARDRAILS"
+        ],
+        "rank": 3,
+        "n_results": 5,
+        "latency_s": 2.23,
+        "top_source": "templates_analyst_SOUL.md",
+        "error": null
+      },
+      {
+        "query": "what tools and commands do I have access to",
+        "tier": "T2",
+        "expected": [
+          "TOOLS"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.11,
+        "top_source": "templates_agent_TOOLS.md",
+        "error": null
+      },
+      {
+        "query": "how should I behave and what are my core principles",
+        "tier": "T3",
+        "expected": [
+          "SOUL"
+        ],
+        "rank": 2,
+        "n_results": 5,
+        "latency_s": 2.67,
+        "top_source": "templates_agent_IDENTITY.md",
+        "error": null
+      },
+      {
+        "query": "communicating between agents running on different machines",
+        "tier": "T2",
+        "expected": [
+          "multi-machine-network-bus"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.37,
+        "top_source": "docs_architecture_multi-machine-network-bus.md",
+        "error": null
+      },
+      {
+        "query": "exposing agents to external systems through a standard protocol",
+        "tier": "T3",
+        "expected": [
+          "a2a-adapter"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.48,
+        "top_source": "docs_architecture_a2a-adapter-facade.md",
+        "error": null
+      },
+      {
+        "query": "who is the user and what do they care about",
+        "tier": "T3",
+        "expected": [
+          "USER"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.36,
+        "top_source": "templates_agent_USER.md",
+        "error": null
+      },
+      {
+        "query": "how often do agent sessions restart automatically",
+        "tier": "T2",
+        "expected": [
+          "CLAUDE",
+          "AGENTS"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.47,
+        "top_source": "templates_agent_CLAUDE.md",
+        "error": null
+      },
+      {
+        "query": "what tone of voice should written content use",
+        "tier": "T3",
+        "expected": [
+          "brand-voice"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.37,
+        "top_source": "templates_org_brand-voice.md",
+        "error": null
+      },
+      {
+        "query": "facts and background knowledge about the organisation",
+        "tier": "T2",
+        "expected": [
+          "knowledge"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 2.36,
+        "top_source": "templates_org_knowledge.md",
+        "error": null
+      }
+    ],
+    "cohere-vector": [
+      {
+        "query": "how do I broadcast an announcement to every agent in the org",
+        "tier": "T2",
+        "expected": [
+          "activity-channel"
+        ],
+        "rank": 1,
+        "n_results": 2,
+        "latency_s": 1.24,
+        "top_source": "community_skills_activity-channel_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "agent goals and responsibilities",
+        "tier": "T3",
+        "expected": [
+          "GOALS",
+          "SOUL"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.2,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "what should I do when a telegram message arrives",
+        "tier": "T1",
+        "expected": [
+          "comms"
+        ],
+        "rank": 1,
+        "n_results": 1,
+        "latency_s": 1.26,
+        "top_source": "community_skills_comms_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "set up a recurring scheduled task",
+        "tier": "T1",
+        "expected": [
+          "cron-management"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.42,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "how do I tell the system I am still alive and running",
+        "tier": "T2",
+        "expected": [
+          "heartbeat",
+          "HEARTBEAT"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.32,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "I need a person to make a payment I cannot do myself",
+        "tier": "T2",
+        "expected": [
+          "human-tasks"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.29,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "search previously stored research before searching the web",
+        "tier": "T2",
+        "expected": [
+          "knowledge-base"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.3,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "first boot setup for a brand new agent",
+        "tier": "T1",
+        "expected": [
+          "onboarding",
+          "ONBOARDING"
+        ],
+        "rank": 1,
+        "n_results": 2,
+        "latency_s": 1.2,
+        "top_source": "templates_agent_ONBOARDING.md",
+        "error": null
+      },
+      {
+        "query": "tasks are stuck and agents have gone quiet, how do I investigate",
+        "tier": "T2",
+        "expected": [
+          "system-diagnostics"
+        ],
+        "rank": null,
+        "n_results": 1,
+        "latency_s": 1.28,
+        "top_source": "templates_analyst_HEARTBEAT.md",
+        "error": null
+      },
+      {
+        "query": "spawn an isolated session to work on something in parallel",
+        "tier": "T2",
+        "expected": [
+          "worker-agents"
+        ],
+        "rank": 1,
+        "n_results": 2,
+        "latency_s": 1.2,
+        "top_source": "community_skills_worker-agents_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "morning briefing routine",
+        "tier": "T1",
+        "expected": [
+          "morning-review"
+        ],
+        "rank": 1,
+        "n_results": 1,
+        "latency_s": 1.23,
+        "top_source": "community_skills_morning-review_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "end of day wrap up and summary",
+        "tier": "T2",
+        "expected": [
+          "evening-review"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.59,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "share a skill I built with the community",
+        "tier": "T2",
+        "expected": [
+          "community-publish"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.25,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "what skills are available to install",
+        "tier": "T2",
+        "expected": [
+          "catalog-browse"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.24,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "pull the latest changes from the upstream framework",
+        "tier": "T1",
+        "expected": [
+          "upstream-sync",
+          "framework-upstream"
+        ],
+        "rank": 1,
+        "n_results": 3,
+        "latency_s": 1.29,
+        "top_source": "community_skills_upstream-sync_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "write my notes into the obsidian vault",
+        "tier": "T1",
+        "expected": [
+          "obsidian-log"
+        ],
+        "rank": 1,
+        "n_results": 2,
+        "latency_s": 1.23,
+        "top_source": "community_skills_obsidian-log_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "create an excel spreadsheet from the command line",
+        "tier": "T2",
+        "expected": [
+          "officecli"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.24,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "which agent should handle which type of work",
+        "tier": "T2",
+        "expected": [
+          "delegation-matrix"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.21,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "weekly retrospective process",
+        "tier": "T1",
+        "expected": [
+          "weekly-review"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.23,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "rules I must never break under any circumstances",
+        "tier": "T3",
+        "expected": [
+          "GUARDRAILS"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.19,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "what tools and commands do I have access to",
+        "tier": "T2",
+        "expected": [
+          "TOOLS"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.28,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "how should I behave and what are my core principles",
+        "tier": "T3",
+        "expected": [
+          "SOUL"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.28,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "communicating between agents running on different machines",
+        "tier": "T2",
+        "expected": [
+          "multi-machine-network-bus"
+        ],
+        "rank": 1,
+        "n_results": 1,
+        "latency_s": 1.32,
+        "top_source": "docs_architecture_multi-machine-network-bus.md",
+        "error": null
+      },
+      {
+        "query": "exposing agents to external systems through a standard protocol",
+        "tier": "T3",
+        "expected": [
+          "a2a-adapter"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.33,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "who is the user and what do they care about",
+        "tier": "T3",
+        "expected": [
+          "USER"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.32,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "how often do agent sessions restart automatically",
+        "tier": "T2",
+        "expected": [
+          "CLAUDE",
+          "AGENTS"
+        ],
+        "rank": 1,
+        "n_results": 4,
+        "latency_s": 1.34,
+        "top_source": "templates_agent_CLAUDE.md",
+        "error": null
+      },
+      {
+        "query": "what tone of voice should written content use",
+        "tier": "T3",
+        "expected": [
+          "brand-voice"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.3,
+        "top_source": null,
+        "error": null
+      },
+      {
+        "query": "facts and background knowledge about the organisation",
+        "tier": "T2",
+        "expected": [
+          "knowledge"
+        ],
+        "rank": null,
+        "n_results": 0,
+        "latency_s": 1.23,
+        "top_source": null,
+        "error": null
+      }
+    ],
+    "cohere-rerank": [
+      {
+        "query": "how do I broadcast an announcement to every agent in the org",
+        "tier": "T2",
+        "expected": [
+          "activity-channel"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.56,
+        "top_source": "community_skills_activity-channel_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "agent goals and responsibilities",
+        "tier": "T3",
+        "expected": [
+          "GOALS",
+          "SOUL"
+        ],
+        "rank": null,
+        "n_results": 5,
+        "latency_s": 1.72,
+        "top_source": "templates_orchestrator_CLAUDE.md",
+        "error": null
+      },
+      {
+        "query": "what should I do when a telegram message arrives",
+        "tier": "T1",
+        "expected": [
+          "comms"
+        ],
+        "rank": 3,
+        "n_results": 5,
+        "latency_s": 1.69,
+        "top_source": "templates_orchestrator_AGENTS.md",
+        "error": null
+      },
+      {
+        "query": "set up a recurring scheduled task",
+        "tier": "T1",
+        "expected": [
+          "cron-management"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.94,
+        "top_source": "community_skills_cron-management_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "how do I tell the system I am still alive and running",
+        "tier": "T2",
+        "expected": [
+          "heartbeat",
+          "HEARTBEAT"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.56,
+        "top_source": "community_skills_heartbeat_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "I need a person to make a payment I cannot do myself",
+        "tier": "T2",
+        "expected": [
+          "human-tasks"
+        ],
+        "rank": 1,
+        "n_results": 4,
+        "latency_s": 1.6,
+        "top_source": "community_skills_human-tasks_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "search previously stored research before searching the web",
+        "tier": "T2",
+        "expected": [
+          "knowledge-base"
+        ],
+        "rank": 1,
+        "n_results": 4,
+        "latency_s": 1.67,
+        "top_source": "community_skills_knowledge-base_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "first boot setup for a brand new agent",
+        "tier": "T1",
+        "expected": [
+          "onboarding",
+          "ONBOARDING"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.66,
+        "top_source": "community_skills_onboarding_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "tasks are stuck and agents have gone quiet, how do I investigate",
+        "tier": "T2",
+        "expected": [
+          "system-diagnostics"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.7,
+        "top_source": "community_skills_system-diagnostics_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "spawn an isolated session to work on something in parallel",
+        "tier": "T2",
+        "expected": [
+          "worker-agents"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.68,
+        "top_source": "community_skills_worker-agents_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "morning briefing routine",
+        "tier": "T1",
+        "expected": [
+          "morning-review"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.73,
+        "top_source": "community_skills_morning-review_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "end of day wrap up and summary",
+        "tier": "T2",
+        "expected": [
+          "evening-review"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.64,
+        "top_source": "community_skills_evening-review_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "share a skill I built with the community",
+        "tier": "T2",
+        "expected": [
+          "community-publish"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.52,
+        "top_source": "community_skills_community-publish_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "what skills are available to install",
+        "tier": "T2",
+        "expected": [
+          "catalog-browse"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.53,
+        "top_source": "community_skills_catalog-browse_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "pull the latest changes from the upstream framework",
+        "tier": "T1",
+        "expected": [
+          "upstream-sync",
+          "framework-upstream"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.59,
+        "top_source": "community_skills_upstream-sync_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "write my notes into the obsidian vault",
+        "tier": "T1",
+        "expected": [
+          "obsidian-log"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.66,
+        "top_source": "community_skills_obsidian-log_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "create an excel spreadsheet from the command line",
+        "tier": "T2",
+        "expected": [
+          "officecli"
+        ],
+        "rank": 1,
+        "n_results": 3,
+        "latency_s": 1.49,
+        "top_source": "community_skills_officecli_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "which agent should handle which type of work",
+        "tier": "T2",
+        "expected": [
+          "delegation-matrix"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.65,
+        "top_source": "community_skills_delegation-matrix_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "weekly retrospective process",
+        "tier": "T1",
+        "expected": [
+          "weekly-review"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.48,
+        "top_source": "community_skills_weekly-review_SKILL.md",
+        "error": null
+      },
+      {
+        "query": "rules I must never break under any circumstances",
+        "tier": "T3",
+        "expected": [
+          "GUARDRAILS"
+        ],
+        "rank": 2,
+        "n_results": 5,
+        "latency_s": 1.53,
+        "top_source": "templates_agent_ONBOARDING.md",
+        "error": null
+      },
+      {
+        "query": "what tools and commands do I have access to",
+        "tier": "T2",
+        "expected": [
+          "TOOLS"
+        ],
+        "rank": 3,
+        "n_results": 5,
+        "latency_s": 1.49,
+        "top_source": "templates_agent_ONBOARDING.md",
+        "error": null
+      },
+      {
+        "query": "how should I behave and what are my core principles",
+        "tier": "T3",
+        "expected": [
+          "SOUL"
+        ],
+        "rank": 1,
+        "n_results": 1,
+        "latency_s": 1.51,
+        "top_source": "templates_agent_SOUL.md",
+        "error": null
+      },
+      {
+        "query": "communicating between agents running on different machines",
+        "tier": "T2",
+        "expected": [
+          "multi-machine-network-bus"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 3.36,
+        "top_source": "docs_architecture_multi-machine-network-bus.md",
+        "error": null
+      },
+      {
+        "query": "exposing agents to external systems through a standard protocol",
+        "tier": "T3",
+        "expected": [
+          "a2a-adapter"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.51,
+        "top_source": "docs_architecture_a2a-adapter-facade.md",
+        "error": null
+      },
+      {
+        "query": "who is the user and what do they care about",
+        "tier": "T3",
+        "expected": [
+          "USER"
+        ],
+        "rank": 1,
+        "n_results": 4,
+        "latency_s": 1.55,
+        "top_source": "templates_agent_USER.md",
+        "error": null
+      },
+      {
+        "query": "how often do agent sessions restart automatically",
+        "tier": "T2",
+        "expected": [
+          "CLAUDE",
+          "AGENTS"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.51,
+        "top_source": "templates_agent_CLAUDE.md",
+        "error": null
+      },
+      {
+        "query": "what tone of voice should written content use",
+        "tier": "T3",
+        "expected": [
+          "brand-voice"
+        ],
+        "rank": 1,
+        "n_results": 1,
+        "latency_s": 1.51,
+        "top_source": "templates_org_brand-voice.md",
+        "error": null
+      },
+      {
+        "query": "facts and background knowledge about the organisation",
+        "tier": "T2",
+        "expected": [
+          "knowledge"
+        ],
+        "rank": 1,
+        "n_results": 5,
+        "latency_s": 1.55,
+        "top_source": "templates_org_knowledge.md",
+        "error": null
+      }
+    ]
+  }
+}
