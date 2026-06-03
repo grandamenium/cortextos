@@ -88,6 +88,32 @@ export function sendMessage(
 }
 
 /**
+ * Resolve the message body from one of three sources, in precedence order:
+ * stdin content > --body-file > positional <text>.
+ *
+ * Security: the stdin/file forms let a caller supply a body WITHOUT
+ * interpolating it into a shell-expanded argument. A body passed as a
+ * positional shell argument can be command-substituted by the caller's
+ * shell (backticks or $()) BEFORE the CLI ever runs — the root of the
+ * 2026-06-02 message-body command-injection incident. Reading the body
+ * from stdin or a file avoids argument-level shell expansion entirely.
+ */
+export function resolveMessageBody(opts: {
+  text?: string;
+  bodyFile?: string;
+  bodyStdinContent?: string;
+}): string {
+  const { text, bodyFile, bodyStdinContent } = opts;
+  if (bodyStdinContent !== undefined) return bodyStdinContent;
+  if (bodyFile) return readFileSync(bodyFile, 'utf-8');
+  if (text !== undefined && text !== '') return text;
+  throw new Error(
+    'No message body. Provide <text>, --body-file <path>, or --body-stdin ' +
+      '(the stdin/file forms avoid shell expansion of the body).',
+  );
+}
+
+/**
  * Check inbox for pending messages.
  * Reads inbox directory, moves messages to inflight, returns sorted array.
  * Recovers stale inflight messages (>5 minutes old).

@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
+import { sendMessage, checkInbox, ackInbox, resolveMessageBody } from '../bus/message.js';
 import { validateAgentName, validateTaskId } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
@@ -72,12 +72,33 @@ busCommand
   .command('send-message')
   .argument('<to>', 'Target agent')
   .argument('<priority>', 'Message priority (urgent, high, normal, low)')
-  .argument('<text>', 'Message text')
+  .argument('[text]', 'Message text (omit when using --body-stdin or --body-file)')
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
-  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string }) => {
+  .option('--body-stdin', 'Read the message body from stdin instead of <text>. Avoids shell expansion of the body (backticks/$()) — use for any body containing code or command examples.', false)
+  .option('--body-file <path>', 'Read the message body from a file instead of <text>. Avoids shell expansion of the body.')
+  .action((to: string, priority: string, text: string | undefined, replyToArg: string | undefined, opts: { replyTo?: string; bodyStdin?: boolean; bodyFile?: string }) => {
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
+    // Resolve body from stdin/file/positional. The stdin/file forms let callers
+    // supply a body without interpolating it into a shell-expanded argument
+    // (root of the 2026-06-02 command-injection incident).
+    let bodyStdinContent: string | undefined;
+    if (opts.bodyStdin) {
+      try {
+        bodyStdinContent = readFileSync(0, 'utf-8');
+      } catch (err) {
+        console.error(`Failed to read body from stdin: ${String(err)}`);
+        process.exit(1);
+      }
+    }
+    let text2: string;
+    try {
+      text2 = resolveMessageBody({ text, bodyFile: opts.bodyFile, bodyStdinContent });
+    } catch (err) {
+      console.error(String(err instanceof Error ? err.message : err));
+      process.exit(1);
+    }
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
     if (!validPriorities.includes(priority as Priority)) {
       console.error(`Invalid priority '${priority}'. Must be one of: ${validPriorities.join(', ')}`);
@@ -115,7 +136,7 @@ busCommand
       console.error(`Warning: agent '${to}' not found in project. Message will be queued but may never be read.`);
     }
 
-    const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo);
+    const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text2, effectiveReplyTo);
     try {
       logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null }));
     } catch { /* non-fatal */ }
