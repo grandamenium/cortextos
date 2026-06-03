@@ -691,6 +691,7 @@ busCommand
       console.log('Activity posted');
     } else {
       console.error('Failed to post activity. Check that ACTIVITY_CHAT_ID is set in your org secrets.env or .env file.');
+      process.exit(1);
     }
   });
 
