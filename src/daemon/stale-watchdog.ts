@@ -123,6 +123,9 @@ export class StaleAgentWatchdog {
         console.error(`[watchdog] Error during stale check: ${err.message}`);
       });
     }, this.checkIntervalMs);
+    // Don't let this timer alone hold the event loop open (belt-and-suspenders
+    // against a leaked interval surviving an incomplete shutdown).
+    if (typeof this.timer.unref === 'function') this.timer.unref();
   }
 
   stop(): void {
