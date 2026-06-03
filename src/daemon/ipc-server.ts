@@ -595,34 +595,55 @@ export class IPCServer {
 
         case 'start-agent':
           if (!request.agent) {
-            response = { success: false, error: 'Agent name required' };
+            response = { success: false, error: 'Agent name required', code: 'INVALID_INPUT' };
           } else {
-            // Start is async, respond immediately
+            // Inspect synchronously so the IPC response distinguishes DEDUPED
+            // from NOT_FOUND (issue #346). The async dispatch is unchanged —
+            // agent-manager's own dedup logic still runs and is the source of
+            // truth; we just give the operator a structured response code.
+            const insp = this.agentManager.inspectAgentOp('start', request.agent);
             this.agentManager.startAgent(
               request.agent,
               (request.data?.dir as string) || '',
             ).catch(err => console.error(`Failed to start ${request.agent}:`, err));
-            response = { success: true, data: `Starting ${request.agent}` };
+            if (insp.ok) {
+              response = { success: true, data: `Starting ${request.agent}` };
+            } else {
+              console.log(`[ipc] start-agent ${request.agent}: ${insp.code} — ${insp.message}`);
+              response = { success: false, error: insp.message, code: insp.code };
+            }
           }
           break;
 
         case 'stop-agent':
           if (!request.agent) {
-            response = { success: false, error: 'Agent name required' };
+            response = { success: false, error: 'Agent name required', code: 'INVALID_INPUT' };
           } else {
+            const insp = this.agentManager.inspectAgentOp('stop', request.agent);
             this.agentManager.stopAgent(request.agent)
               .catch(err => console.error(`Failed to stop ${request.agent}:`, err));
-            response = { success: true, data: `Stopping ${request.agent}` };
+            if (insp.ok) {
+              response = { success: true, data: `Stopping ${request.agent}` };
+            } else {
+              console.log(`[ipc] stop-agent ${request.agent}: ${insp.code} — ${insp.message}`);
+              response = { success: false, error: insp.message, code: insp.code };
+            }
           }
           break;
 
         case 'restart-agent':
           if (!request.agent) {
-            response = { success: false, error: 'Agent name required' };
+            response = { success: false, error: 'Agent name required', code: 'INVALID_INPUT' };
           } else {
+            const insp = this.agentManager.inspectAgentOp('restart', request.agent);
             this.agentManager.restartAgent(request.agent)
               .catch(err => console.error(`Failed to restart ${request.agent}:`, err));
-            response = { success: true, data: `Restarting ${request.agent}` };
+            if (insp.ok) {
+              response = { success: true, data: `Restarting ${request.agent}` };
+            } else {
+              console.log(`[ipc] restart-agent ${request.agent}: ${insp.code} — ${insp.message}`);
+              response = { success: false, error: insp.message, code: insp.code };
+            }
           }
           break;
 
@@ -698,12 +719,20 @@ export class IPCServer {
           const agentToInject = request.agent;
           const textToInject = request.data?.text as string | undefined;
           if (!agentToInject || !textToInject) {
-            response = { success: false, error: 'inject-agent requires: agent, data.text' };
+            response = { success: false, error: 'inject-agent requires: agent, data.text', code: 'INVALID_INPUT' };
           } else {
-            const ok = this.agentManager.injectAgent(agentToInject, textToInject);
-            response = ok
-              ? { success: true, data: `Injected into agent ${agentToInject}` }
-              : { success: false, error: `Agent ${agentToInject} not found or not running` };
+            // Structured outcome distinguishes NOT_FOUND (agent not in registry)
+            // from NOT_RUNNING (registered but PTY dead) from DEDUPED (content
+            // collision in MessageDedup window). Closes the conflation Boris
+            // surfaced — the harness "3 not found errors" were dedup hits.
+            // See issue #346.
+            const result = this.agentManager.injectAgentDetailed(agentToInject, textToInject);
+            if (result.ok) {
+              response = { success: true, data: `Injected into agent ${agentToInject}` };
+            } else {
+              console.log(`[ipc] inject-agent ${agentToInject}: ${result.code} — ${result.message}`);
+              response = { success: false, error: result.message, code: result.code };
+            }
           }
           break;
         }

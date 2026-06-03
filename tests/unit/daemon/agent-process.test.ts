@@ -39,7 +39,7 @@ vi.mock('../../../src/bus/reminders.js', () => ({
 }));
 
 vi.mock('../../../src/utils/paths.js', () => ({
-  resolvePaths: vi.fn().mockReturnValue({}),
+  resolvePaths: vi.fn().mockReturnValue({ stateDir: '/tmp/test-ctx/state/alice' }),
 }));
 
 const fsMocks = {
@@ -248,6 +248,27 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     const startOrder = startSpy.mock.invocationCallOrder[0];
     expect(stopOrder).toBeLessThan(startOrder);
   });
+
+  it('sessionRefresh() writes .session-refresh marker before stop (false-crash FP fix)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const stopSpy = vi.spyOn(ap, 'stop').mockResolvedValue();
+    vi.spyOn(ap, 'start').mockResolvedValue();
+    fsMocks.writeFileSync.mockReset();
+
+    await ap.sessionRefresh();
+
+    const writeIdx = fsMocks.writeFileSync.mock.calls.findIndex(
+      (call) => String(call[0]).endsWith('.session-refresh'),
+    );
+    expect(writeIdx).toBeGreaterThanOrEqual(0);
+    expect(String(fsMocks.writeFileSync.mock.calls[writeIdx][0])).toBe('/tmp/test-ctx/state/alice/.session-refresh');
+    // The marker must be written BEFORE stop() — a SessionEnd hook firing as
+    // the PTY dies must already see the marker, or it classifies a false crash.
+    const markerWriteOrder = fsMocks.writeFileSync.mock.invocationCallOrder[writeIdx];
+    expect(markerWriteOrder).toBeLessThan(stopSpy.mock.invocationCallOrder[0]);
+  });
 });
 
 describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
@@ -344,5 +365,54 @@ describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
     ).length;
     expect(rescheduleCount).toBeLessThan(5);
     expect(refreshSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', () => {
+  it('triggers CRASH_LOOP halt when crash_window fills', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      crash_window: { seconds: 60, max_crashes: 3 },
+    });
+    await ap.start();
+
+    // Fire 3 crashes in rapid succession (well within the 60s window).
+    capturedOnExit!(1, 0);
+    expect(ap.getStatus().status).toBe('crashed'); // first crash — normal recovery
+
+    // Reset mocks and simulate the restart + second crash
+    mockPty.spawn.mockClear();
+    mockPty.onExit.mockClear();
+    capturedOnExit = null;
+    await ap.start();
+    capturedOnExit!(1, 0);
+    expect(ap.getStatus().status).toBe('crashed'); // second crash — still normal
+
+    mockPty.spawn.mockClear();
+    mockPty.onExit.mockClear();
+    capturedOnExit = null;
+    await ap.start();
+    capturedOnExit!(1, 0);
+    // Third crash in window → CRASH_LOOP → halted
+    expect(ap.getStatus().status).toBe('halted');
+  });
+
+  it('does not trigger CRASH_LOOP when no crash_window is configured (backward compat)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      max_crashes_per_day: 5,
+    });
+    await ap.start();
+
+    // 3 crashes — without crash_window, these are just normal crash recovery
+    for (let i = 0; i < 3; i++) {
+      capturedOnExit!(1, 0);
+      if (ap.getStatus().status !== 'halted') {
+        mockPty.spawn.mockClear();
+        mockPty.onExit.mockClear();
+        capturedOnExit = null;
+        await ap.start();
+      }
+    }
+    // Should be 'crashed' (recovering), NOT 'halted', because daily max is 5
+    expect(ap.getStatus().status).not.toBe('halted');
   });
 });

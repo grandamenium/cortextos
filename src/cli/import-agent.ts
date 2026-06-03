@@ -13,6 +13,7 @@ interface ExportManifest {
   agent_name: string;
   exported_at: string;
   model?: string;
+  runtime?: string;
   crons?: unknown[];
   memory_files?: string[];
   task_count?: number;
@@ -118,6 +119,7 @@ export const importAgentCommand = new Command('import-agent')
       working_directory: '',
       timezone: importedConfig?.timezone || 'America/New_York',
       model: importedConfig?.model || manifest?.model || 'claude-sonnet-4-6',
+      runtime: importedConfig?.runtime || manifest?.runtime || 'claude-code',
       crons: importedConfig?.crons || manifest?.crons || [],
       ecosystem: { local_version_control: { enabled: true } },
       day_mode_start: '08:00',

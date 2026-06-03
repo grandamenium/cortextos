@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -26,6 +26,12 @@ export class AgentProcess {
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
+  // CrashLoopPauser (instar-inspired): sliding-window crash detection.
+  // Timestamps of recent crashes within the configured window. If the
+  // window fills, the agent auto-pauses instead of retrying with backoff.
+  private crashTimestamps: number[] = [];
+  private crashWindowMs: number = 0;
+  private crashWindowMax: number = 0;
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
@@ -58,6 +64,11 @@ export class AgentProcess {
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
   private telegramChatId: string | null = null;
+  // Issue #392: tracks whether the most recently built startup prompt consumed
+  // a handoff doc marker. start() reads this after spawn to decide whether the
+  // daemon should fire the codex-app-server back-online Telegram directly
+  // (skipped on handoff restart — the agent sends its own contextual reply).
+  private lastSpawnWasHandoff = false;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -65,6 +76,10 @@ export class AgentProcess {
     this.config = config;
     if (config.max_crashes_per_day !== undefined) {
       this.maxCrashesPerDay = config.max_crashes_per_day;
+    }
+    if (config.crash_window?.seconds) {
+      this.crashWindowMs = config.crash_window.seconds * 1000;
+      this.crashWindowMax = config.crash_window.max_crashes ?? 3;
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
@@ -166,6 +181,13 @@ export class AgentProcess {
       this.status = 'running';
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
+
+      // Issue #392: codex-app-server does not reliably execute the inline
+      // "Send a Telegram message saying you are back online" instruction the
+      // way claude-code does, so fire the back-online ping directly from the
+      // daemon for that runtime. Skipped on handoff restart — the agent
+      // sends its own contextual "back — ..." reply in that case.
+      this.maybeSendCodexBootNotification();
 
       // Start session timer
       this.startSessionTimer();
@@ -277,26 +299,57 @@ export class AgentProcess {
    */
   async sessionRefresh(): Promise<void> {
     this.log('Session refresh (--continue restart)');
+    // Write .session-refresh marker so the SessionEnd crash-alert hook
+    // (src/hooks/hook-crash-alert.ts) classifies the imminent PTY exit as a
+    // session refresh rather than a crash. The hook's marker handler +
+    // quiet-suppression set + message switch were all wired for this type,
+    // but no writer existed — every --continue rollover at the session-time
+    // cap surfaced as a false-positive 'crash' on chief/analyst + the
+    // crashes.log file.
+    try {
+      const paths = resolvePaths(this.name, this.env.instanceId, this.env.org);
+      writeFileSync(
+        join(paths.stateDir, '.session-refresh'),
+        'session-time-cap rollover\n',
+        'utf-8',
+      );
+    } catch (err) {
+      this.log(`Failed to write .session-refresh marker: ${err}`);
+    }
     await this.stop();
     await this.start();
     this.log('Session refreshed');
   }
 
   /**
-   * Inject a message into the agent's PTY.
+   * Inject a message into the agent's PTY — structured outcome.
+   *
+   * Distinguishes NOT_RUNNING (agent registered but no live PTY) from
+   * DEDUPED (content collapsed against the in-process MessageDedup window).
+   * See issue #346 — both used to surface as a bare `false` and got mistaken
+   * for "agent not found" by operators investigating restart/cron failures.
    */
-  injectMessage(content: string): boolean {
+  injectMessageDetailed(content: string): { ok: true } | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED'; message: string } {
     if (!this.pty || this.status !== 'running') {
-      return false;
+      return { ok: false, code: 'NOT_RUNNING', message: `agent "${this.name}" is registered but not running (status: ${this.status})` };
     }
 
     if (this.dedup.isDuplicate(content)) {
       this.log('Dedup: skipping duplicate message');
-      return false;
+      return { ok: false, code: 'DEDUPED', message: `inject for "${this.name}" deduped — content matches MessageDedup hash window` };
     }
 
     injectMessage((data) => this.pty?.write(data), content);
-    return true;
+    return { ok: true };
+  }
+
+  /**
+   * Inject a message into the agent's PTY (back-compat boolean wrapper).
+   * New callers that need to distinguish DEDUPED from NOT_RUNNING should use
+   * `injectMessageDetailed()` instead.
+   */
+  injectMessage(content: string): boolean {
+    return this.injectMessageDetailed(content).ok;
   }
 
   /**
@@ -376,7 +429,80 @@ export class AgentProcess {
 
   // --- Private methods ---
 
+  /**
+   * Read the tail of this agent's stdout.log without loading the whole file.
+   * Used by handleExit() to inspect recent output for known-crash signatures
+   * (e.g. the image-poison API 400 pattern) so it can decide whether the
+   * exit is a real crash or a recoverable upstream artifact.
+   *
+   * Returns an empty string if the log doesn't exist or can't be read.
+   */
+  private tailStdoutLog(maxBytes: number): string {
+    const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
+    try {
+      if (!existsSync(logPath)) return '';
+      const stats = statSync(logPath);
+      const start = Math.max(0, stats.size - maxBytes);
+      const len = stats.size - start;
+      // Synchronous read of the tail; small and bounded so the cost is fine
+      // even in the exit handler.
+      const fd = require('fs').openSync(logPath, 'r');
+      try {
+        const buf = Buffer.alloc(len);
+        const read = require('fs').readSync(fd, buf, 0, len, start);
+        return buf.toString('utf-8', 0, read);
+      } finally {
+        require('fs').closeSync(fd);
+      }
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Match the API 400 image-poison signature in recent stdout.
+   *
+   * Two variants observed in Anthropic's Messages API responses:
+   *   `API Error: 400 messages.N.content.M.image.source.base64.data: Image format image/<fmt> not supported`
+   *   `API Error: 400 ... image.source.base64.data: ...`
+   *
+   * Matching the prefix `image.source.base64` is robust to wording changes
+   * in Anthropic's error string; matching `image format image/<fmt>` is the
+   * confirmed exact wording today and gives a second signal. Either is enough.
+   */
+  private detectImagePoisonCrash(recentOutput: string): boolean {
+    if (!recentOutput) return false;
+    if (recentOutput.includes('API Error: 400') && recentOutput.includes('image.source.base64')) {
+      return true;
+    }
+    if (/image format image\/[a-z]+ not supported/i.test(recentOutput)) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Write the `.force-fresh` marker that AgentProcess.shouldContinue() reads
+   * on the next start() to force a fresh Claude Code session (no --continue).
+   * Used by the image-poison auto-recovery in handleExit().
+   */
+  private armForceFresh(reason: string): void {
+    try {
+      const stateDir = join(this.env.ctxRoot, 'state', this.name);
+      ensureDir(stateDir);
+      const markerPath = join(stateDir, '.force-fresh');
+      writeFileSync(markerPath, `${new Date().toISOString()} ${reason}\n`, 'utf-8');
+    } catch (err) {
+      this.log(`Failed to arm .force-fresh marker: ${err}`);
+    }
+  }
+
   private handleExit(exitCode: number): void {
+    // Capture last 16KB of the agent's stdout BEFORE nulling pty.
+    // Used by the image-poison auto-recovery check below — reads the log
+    // file so this works even if the PTY buffer has already been GC'd.
+    const recentOutput = this.tailStdoutLog(16384);
+
     this.pty = null;
     this.clearSessionTimer();
 
@@ -420,7 +546,68 @@ export class AgentProcess {
       return;
     }
 
-    // Check crash limit
+    // Image-poison auto-recovery (companion to PR #446's photo-injection fix).
+    // Checked FIRST so a poisoned-context crash neither trips the crash-loop
+    // window nor charges the daily counter — it is an upstream artifact, not
+    // an agent malfunction.
+    //
+    // Claude Code crashes with `API Error: 400 messages.N.content.M.image.source.base64.data:
+    // Image format image/<fmt> not supported` when conversation history holds a
+    // base64-encoded image whose claimed media_type does not match the actual
+    // bytes. The poison is permanent: every `--continue` restart reloads the
+    // same conversation history and re-hits the same 400, so the agent
+    // crash-loops until it exhausts max_crashes_per_day and the daemon halts.
+    //
+    // This block covers agents that ALREADY have a poisoned context: detect
+    // the 400 signature in the recent stdout, write `.force-fresh` so the next
+    // start discards the saved conversation, and respawn WITHOUT charging the
+    // crash counter. (The photo-suppression source fix from #446 was superseded
+    // by the Track-2 byte-sniff mime reconciliation; this recovery block is the
+    // independent resilience half and stands on its own.)
+    //
+    // Exit is always code 0 in this failure mode (Claude Code surfaces the
+    // 400 to the user then exits cleanly), so we gate on both exit code and
+    // the error signature to avoid false positives that would skip a real
+    // crash counter increment.
+    if (exitCode === 0 && this.detectImagePoisonCrash(recentOutput)) {
+      this.log('Image-poison crash detected (API 400, unsupported image format). Arming .force-fresh and restarting without counting against max_crashes_per_day.');
+      this.armForceFresh('image-poison auto-recovery');
+      this.appendCrashToRestartsLog(exitCode, 5000, 'IMAGE_POISON_RECOVERY');
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(err => this.log(`Image-poison restart failed: ${err}`));
+        }
+      }, 5000);
+      return;
+    }
+
+    // CrashLoopPauser (instar-inspired): if a sliding window is configured,
+    // check whether the agent is crash-looping before falling through to
+    // the legacy daily counter. The window is a more precise signal than
+    // the per-day count: 3 crashes in 30 minutes is a crash loop even if
+    // the daily budget of 10 is far from exhausted.
+    if (this.crashWindowMs > 0) {
+      const now = Date.now();
+      this.crashTimestamps.push(now);
+      // Prune timestamps outside the window.
+      this.crashTimestamps = this.crashTimestamps.filter(
+        (ts) => now - ts <= this.crashWindowMs,
+      );
+      if (this.crashTimestamps.length >= this.crashWindowMax) {
+        this.log(
+          `CRASH_LOOP: ${this.crashTimestamps.length} crashes in ${this.crashWindowMs / 1000}s window — auto-pausing`,
+        );
+        this.appendCrashToRestartsLog(exitCode, 0, 'CRASH_LOOP');
+        this.status = 'halted';
+        this.notifyStatusChange();
+        return;
+      }
+    }
+
+    // Legacy daily crash counter (fallback when no crash_window is configured,
+    // or as a secondary gate when the window hasn't filled yet).
     this.crashCount++;
     const today = new Date().toISOString().split('T')[0];
     this.resetCrashCountIfNewDay(today);
@@ -459,7 +646,7 @@ export class AgentProcess {
       return hermesDbExists(hermesHome);
     }
 
-    // Check for force-fresh marker
+    // Check for force-fresh marker (all runtimes honor it).
     const forceFreshPath = join(this.env.ctxRoot, 'state', this.name, '.force-fresh');
     if (existsSync(forceFreshPath)) {
       try {
@@ -469,7 +656,24 @@ export class AgentProcess {
       return false;
     }
 
-    // Check for existing conversation
+    // codex-app-server: session continuity is tracked by the adapter's own
+    // codex-app-server-thread.json under ctxRoot/state/<agent>/. The Claude
+    // JSONL check below is meaningless for the codex runtime, and a stale
+    // Claude JSONL left over from a prior Claude-runtime tenure caused
+    // continue-mode → thread/resume timeout → exit_code=0 crash loop
+    // (testorg codex-agent crashed 3x with this signature on 2026-05-09,
+    // 05-14, and 05-16 before backoff drained the pending resume RPC).
+    if (this.config.runtime === 'codex-app-server') {
+      const threadStatePath = join(
+        this.env.ctxRoot,
+        'state',
+        this.name,
+        'codex-app-server-thread.json',
+      );
+      return existsSync(threadStatePath);
+    }
+
+    // Default (Claude runtime): existing conversation = JSONL files present.
     const launchDir = this.config.working_directory || this.env.agentDir;
     if (!launchDir) return false;
 
@@ -515,6 +719,7 @@ export class AgentProcess {
     const deliverablesBlock = this.buildDeliverablesBlock();
     const handoffBlock = this.consumeHandoffBlock();
     const isHandoffRestart = handoffBlock.length > 0;
+    this.lastSpawnWasHandoff = isHandoffRestart;
     // HANDOFF UX: the pickup message MUST be the first action after reading the handoff doc —
     // before cron restoration, before heartbeat, before anything else. Placing this instruction
     // immediately after the handoffBlock in the prompt ensures it is not buried.
@@ -531,6 +736,8 @@ export class AgentProcess {
     const nowUtc = new Date().toISOString();
     const reminderBlock = this.buildReminderBlock();
     const deliverablesBlock = this.buildDeliverablesBlock();
+    // Session refresh (--continue) is never a handoff restart.
+    this.lastSpawnWasHandoff = false;
     return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations. After checking inbox, send a Telegram message to the user saying you are back online.`;
   }
 
@@ -584,7 +791,6 @@ export class AgentProcess {
     const markerPath = join(this.env.ctxRoot, 'state', this.name, '.handoff-doc-path');
     if (!existsSync(markerPath)) return '';
     try {
-      const { unlinkSync } = require('fs');
       const docPath = readFileSync(markerPath, 'utf-8').trim();
       unlinkSync(markerPath);
       if (!docPath || !existsSync(docPath)) return '';
@@ -592,6 +798,29 @@ export class AgentProcess {
     } catch {
       return '';
     }
+  }
+
+  /**
+   * Issue #392: send the back-online Telegram notification directly from the
+   * daemon when the codex-app-server runtime spawns. The boot prompt's inline
+   * "Send a Telegram message..." instruction reaches the codex thread but is
+   * not executed reliably as a tool call, leaving James without the standard
+   * post-restart notification claude-code peers send.
+   *
+   * Skipped when:
+   *  - runtime is anything other than codex-app-server (claude-code/hermes
+   *    already emit this via the prompt),
+   *  - the most recent prompt was built for a handoff restart (the agent
+   *    sends its own contextual "back — ..." reply in that case),
+   *  - no Telegram handle has been wired (no chat_id configured).
+   */
+  private maybeSendCodexBootNotification(): void {
+    if (this.config.runtime !== 'codex-app-server') return;
+    if (this.lastSpawnWasHandoff) return;
+    if (!this.telegramApi || !this.telegramChatId) return;
+    this.telegramApi
+      .sendMessage(this.telegramChatId, `Agent ${this.name} is back online`)
+      .catch(() => { /* non-fatal: notification is observability only */ });
   }
 
   private startSessionTimer(): void {
@@ -678,7 +907,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -687,7 +916,9 @@ export class AgentProcess {
       const details =
         kind === 'HALTED'
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
-          : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+          : kind === 'IMAGE_POISON_RECOVERY'
+            ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
+            : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {

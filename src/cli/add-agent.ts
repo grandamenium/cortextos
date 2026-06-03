@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFi
 import { join, resolve, relative } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
-import { validateAgentName } from '../utils/validate';
+import { validateAgentName, validateOrgName } from '../utils/validate';
 import { resolveAgentDir, parseQualifiedName } from '../utils/agent-dir.js';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
@@ -75,6 +75,20 @@ export const addAgentCommand = new Command('add-agent')
 
     if (!org) {
       console.error('No organization found. Run "cortextos init <org>" first.');
+      process.exit(1);
+    }
+
+    // Mirror the BUG-041 fix above for the resolved org name.
+    // Mixed-case orgs pass through add-agent today (whether supplied via --org or
+    // auto-detected from the orgs/ directory), get committed to disk, and then
+    // break every `cortextos bus *` invocation at runtime because env.ts strictly
+    // validates CTX_ORG. The dashboard API also rejects them with HTTP 400.
+    // Canonical rule: src/utils/validate.ts:validateOrgName (/^[a-z0-9_-]+$/).
+    try {
+      validateOrgName(org);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      console.error(`Org names must match /^[a-z0-9_-]+$/ (lowercase letters, numbers, underscores, hyphens).`);
       process.exit(1);
     }
 
@@ -243,6 +257,7 @@ export const addAgentCommand = new Command('add-agent')
             '',
             '- Agent-to-agent: `cortextos bus send-message <agent> <priority> "<text>"`',
             '- Telegram to user: `cortextos bus send-telegram <chat_id> "<text>"`',
+            '- React to a Telegram message (single emoji ack, no verbal noise): `cortextos bus react-telegram <chat_id> <message_id> 👍`',
             '- Check inbox: `cortextos bus check-inbox`',
             '',
           ].join('\n');
@@ -451,5 +466,6 @@ Complete tasks: \`cortextos bus complete-task <id> --result "<text>"\`
 Log events: \`cortextos bus log-event <category> <event> <severity>\`
 Update heartbeat: \`cortextos bus update-heartbeat "<status>"\`
 Send Telegram: \`cortextos bus send-telegram <chat_id> "<text>"\`
+React to Telegram message (single emoji ack): \`cortextos bus react-telegram <chat_id> <message_id> 👍\`
 `;
 }

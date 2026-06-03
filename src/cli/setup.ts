@@ -16,6 +16,7 @@ import { homedir } from 'os';
 import { spawnSync } from 'child_process';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
 import { resolveAgentDir } from '../utils/agent-dir.js';
+import { validateAgentName, validateOrgName } from '../utils/validate.js';
 
 function rl(): Interface {
   return createInterface({ input: process.stdin, output: process.stdout });
@@ -166,14 +167,6 @@ async function validateTelegramCredsInteractive(
   return null;
 }
 
-function validateAgentName(name: string): boolean {
-  return /^[a-z0-9_-]+$/.test(name);
-}
-
-function validateOrgName(name: string): boolean {
-  return /^[a-z0-9_-]+$/.test(name);
-}
-
 function findProjectRoot(): string {
   // Prefer CTX_FRAMEWORK_ROOT if set (running inside cortextOS session)
   if (process.env.CTX_FRAMEWORK_ROOT && existsSync(join(process.env.CTX_FRAMEWORK_ROOT, 'dist', 'cli.js'))) {
@@ -238,7 +231,9 @@ export const setupCommand = new Command('setup')
     let orgName = '';
     while (true) {
       orgName = await askRequired(iface, '  Organization name: ', 'Organization name cannot be empty.');
-      if (!validateOrgName(orgName)) {
+      try {
+        validateOrgName(orgName);
+      } catch {
         console.log('  Invalid name. Use lowercase letters, numbers, hyphens, and underscores only.');
         continue;
       }
@@ -266,7 +261,9 @@ export const setupCommand = new Command('setup')
     let orchName = '';
     while (true) {
       orchName = await askDefault(iface, '  Orchestrator agent name', 'boss');
-      if (!validateAgentName(orchName)) {
+      try {
+        validateAgentName(orchName);
+      } catch {
         console.log('  Invalid name. Use lowercase letters, numbers, hyphens, and underscores only.');
         continue;
       }
@@ -351,7 +348,9 @@ export const setupCommand = new Command('setup')
       let agentName = '';
       while (true) {
         agentName = await askRequired(iface, '  Agent name: ', 'Agent name is required.');
-        if (!validateAgentName(agentName)) {
+        try {
+          validateAgentName(agentName);
+        } catch {
           console.log('  Invalid name. Use lowercase letters, numbers, hyphens, and underscores only.');
           continue;
         }

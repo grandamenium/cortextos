@@ -1,0 +1,69 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "{{timezone}}",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update heartbeat, check inbox, and continue the highest priority research-agent task. When finished, run: cortextos bus update-cron-fire heartbeat --interval 4h"
+    },
+    {
+      "name": "daily-research-brief",
+      "type": "recurring",
+      "cron": "0 9 * * *",
+      "prompt": "Create a task for this daily research brief run, mark it in_progress, then run the daily research brief agent workflow: read .claude/skills/source-collection/SKILL.md, .claude/skills/signal-scoring/SKILL.md, .claude/skills/brief-generation/SKILL.md, and .claude/skills/delivery-routing/SKILL.md. Use the skills as the runtime instructions to collect configured sources, score signals, write research/output/YYYY-MM-DD artifacts, and route delivery through the configured approval-safe path. If delivery creates an approval, block the run task on the approval ID. When finished or blocked, run: cortextos bus update-cron-fire daily-research-brief --interval \"0 9 * * *\""
+    },
+    {
+      "name": "topic-briefing",
+      "type": "recurring",
+      "cron": "0 18 * * *",
+      "prompt": "Create a task for this topic briefing run, mark it in_progress, then run the topic briefing agent workflow: ensure recent signals exist, then read .claude/skills/topic-briefing/SKILL.md and generate research/topic-briefings/YYYY-MM-DD/options.md plus detail files. Send or hold the compact options through delivery-routing according to approval settings. If delivery creates an approval, block the run task on the approval ID. When finished or blocked, run: cortextos bus update-cron-fire topic-briefing --interval \"0 18 * * *\""
+    },
+    {
+      "name": "weekly-trends-review",
+      "type": "recurring",
+      "cron": "0 9 * * 1",
+      "prompt": "Create a task for this weekly trends review, mark it in_progress, review the last 7 days of research/output and research/topic-briefings, and write a weekly trends synthesis with repeated themes, strongest sources, missed opportunities, and next actions. When finished, run: cortextos bus update-cron-fire weekly-trends-review --interval \"0 9 * * 1\""
+    },
+    {
+      "name": "research-quality-review",
+      "type": "recurring",
+      "cron": "0 12 * * 5",
+      "prompt": "Create a task for this research quality review, mark it in_progress, read .claude/skills/research-quality-review/SKILL.md, and inspect source failures, noisy sources, duplicate patterns, scoring threshold quality, stale config, and suggested tuning changes. When finished, run: cortextos bus update-cron-fire research-quality-review --interval \"0 12 * * 5\""
+    }
+  ],
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    }
+  },
+  "research": {
+    "sources_file": "research/sources.json",
+    "scoring_rubric_file": "research/scoring-rubric.json",
+    "database_path": "research/db/signals.db",
+    "output_dir": "research/output",
+    "topic_briefings_dir": "research/topic-briefings",
+    "signal_window_hours": 24,
+    "suppress_delivered_hours": 72,
+    "delivery": {
+      "destination": "local_markdown",
+      "requires_approval": true,
+      "summary_only": true
+    }
+  },
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "data-deletion"
+    ],
+    "never_ask": []
+  }
+}
