@@ -148,6 +148,14 @@ Auth failures are the "silent productivity killer" class — everything looks he
 cat $CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/goals.json
 ```
 
+### 1A-b: Check goal staleness
+
+```bash
+cortextos bus check-goal-staleness --threshold 7
+```
+
+Parse the JSON output. Note any agents where `stale: true`. These are force-cascaded in 1D regardless of `daily_focus_set_at`. Carry the stale agent list into Phase 3 System Health.
+
 ### 1B: Ask user for daily focus
 
 Send via Telegram:
@@ -189,7 +197,7 @@ For each agent in the roster:
    cortextos bus send-message <agent> normal "New goals for today. Check GOALS.md and create tasks."
    ```
 
-If an agent's `goals.json` already has `daily_focus_set_at` matching today: skip — don't overwrite.
+If an agent's `goals.json` already has `daily_focus_set_at` matching today AND the agent was not flagged stale in 1A-b: skip — don't overwrite. Always cascade to stale agents (age_days ≥ 7) even if they have a fresh `daily_focus_set_at`.
 
 ### 1E: Set your own goals
 
@@ -244,7 +252,8 @@ Overnight Work
 [Agent-by-agent summary of completed tasks]
 
 System Health
-[Agent heartbeat status — any stale agents flagged]
+[Agent heartbeat status — any stale heartbeats flagged]
+[Stale goals — agents with goals.json >7 days old: list agent + age_days, or "all current"]
 
 Today's Focus: [daily_focus from goals.json]
 ```
