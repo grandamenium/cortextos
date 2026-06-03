@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
-import os from 'os';
-import { getCTXRoot, getFrameworkRoot } from '@/lib/config';
+import { getFrameworkRoot, getKnowledgeBaseDir, getCTXInstanceId } from '@/lib/config';
 
 
 export const dynamic = 'force-dynamic';
@@ -36,6 +35,9 @@ export async function GET(request: NextRequest) {
   const q = searchParams.get('q') ?? '';
 
   // Security (H12): Validate org/agent against allowlist before shell use.
+  // Org remains optional here for backward compatibility (the alias route
+  // /api/knowledge/search and existing callers may omit it); when present it is
+  // used to scope the org KB root ($CTX_ROOT/orgs/<org>/knowledge-base).
   if (org && !/^[a-z0-9_-]+$/.test(org)) {
     return Response.json({ error: 'Invalid org' }, { status: 400 });
   }
@@ -67,12 +69,13 @@ export async function GET(request: NextRequest) {
   }
 
   const frameworkRoot = getFrameworkRoot();
-  const ctxRoot = getCTXRoot();
+  // Council [medium]: use the real CTX_INSTANCE_ID, not path.basename(ctxRoot)
+  // — a relocated CTX_ROOT basenames to a bogus instance name.
+  const instanceId = getCTXInstanceId();
 
-  // Derive instance ID from CTX_ROOT (e.g. ~/.cortextos/e2e-phase → "e2e-phase")
-  const instanceId = path.basename(ctxRoot);
-
-  const kbRoot = path.join(os.homedir(), '.cortextos', instanceId, 'orgs', org, 'knowledge-base');
+  // #38: resolve the KB data root through CTX_ROOT (same tree the bus-side KB
+  // writer ingests into) instead of rebuilding ~/.cortextos/<instanceId>/...
+  const kbRoot = getKnowledgeBaseDir(org);
   const chromaDir = path.join(kbRoot, 'chromadb');
   const configPath = path.join(kbRoot, 'config.json');
   const isWin = process.platform === 'win32';

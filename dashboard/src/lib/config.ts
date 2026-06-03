@@ -1,29 +1,47 @@
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
-
-// Expand tilde in paths (Node.js doesn't do this automatically)
-function expandTilde(p: string): string {
-  if (p.startsWith('~/') || p === '~') {
-    return path.join(os.homedir(), p.slice(1));
-  }
-  return p;
-}
+import {
+  getCtxRoot,
+  getInstanceId,
+  getOrgDir as resolveOrgDir,
+  getKnowledgeBaseDir as resolveKnowledgeBaseDir,
+} from './paths';
 
 // Core identity
-const CTX_INSTANCE_ID = process.env.CTX_INSTANCE_ID ?? 'default';
+// Resolve the instance id, but NEVER hard-crash the dashboard at module load on
+// a malformed CTX_INSTANCE_ID. The resolver validates the id (lowercase /
+// digits / _ / - only); the old config.ts tolerated invalid ids silently, so on
+// a validation failure we warn and fall back to 'default' rather than throwing
+// during import and taking the whole Next.js server down on boot.
+const CTX_INSTANCE_ID = (() => {
+  const raw = getInstanceId();
+  try {
+    getCtxRoot(raw); // throws if `raw` is not a valid instance id
+    return raw;
+  } catch {
+    console.warn(
+      `[config] Invalid CTX_INSTANCE_ID '${raw}' — falling back to 'default'. ` +
+        `Instance ids must match /^[a-z0-9_-]+$/.`,
+    );
+    return 'default';
+  }
+})();
 
-// Core path constants - mirror bus/_ctx-env.sh logic
-export const CTX_ROOT = expandTilde(
-  process.env.CTX_ROOT ??
-  path.join(os.homedir(), '.cortextos', CTX_INSTANCE_ID),
-);
+// Core path constants — resolved through the shared dashboard path resolver
+// (dashboard/src/lib/paths.ts) so the dashboard and the daemon agree on the
+// data root (#38 #40). CTX_ROOT, when set, IS the full per-instance root.
+//
+// Neither CTX_ROOT nor CTX_FRAMEWORK_ROOT is tilde-expanded: the daemon reads
+// CTX_ROOT verbatim (src/utils/paths.ts) and resolves CTX_FRAMEWORK_ROOT with
+// path.resolve (src/utils/env.ts) — both treat a leading "~" literally. The
+// dashboard MUST match, so a relocated root resolves to the SAME physical tree
+// in both processes. Always set these to absolute paths.
+export const CTX_ROOT = getCtxRoot(CTX_INSTANCE_ID);
 
-export const CTX_FRAMEWORK_ROOT = expandTilde(
+export const CTX_FRAMEWORK_ROOT =
   process.env.CTX_FRAMEWORK_ROOT ??
   process.env.CTX_PROJECT_ROOT ??
-  path.resolve(process.cwd(), '..'),
-);
+  path.resolve(process.cwd(), '..');
 
 // Helper functions required by downstream tasks
 
@@ -35,10 +53,31 @@ export function getFrameworkRoot(): string {
   return CTX_FRAMEWORK_ROOT;
 }
 
+/**
+ * The instance id resolved at module-load time (CTX_INSTANCE_ID env, defaulting
+ * to 'default'). Captured once at import, consistent with CTX_ROOT /
+ * CTX_FRAMEWORK_ROOT above — env is fixed for the lifetime of a Next.js server
+ * process, so a snapshot is the intended invariant here.
+ */
+export function getCTXInstanceId(): string {
+  return CTX_INSTANCE_ID;
+}
+
 // -- Org-scoped paths --
 
 export function getOrgDir(org: string): string {
-  return path.join(CTX_ROOT, 'orgs', org);
+  return resolveOrgDir(org, CTX_INSTANCE_ID, CTX_ROOT);
+}
+
+/**
+ * Knowledge-base data dir for an org (#38): `$CTX_ROOT/orgs/<org>/knowledge-base`.
+ * Honours CTX_ROOT so the dashboard reads the SAME tree the bus-side KB writer
+ * (src/bus/knowledge-base.ts) ingests into. The previous dashboard routes
+ * rebuilt this path from `~/.cortextos/<instanceId>` via path.basename(ctxRoot),
+ * which broke whenever CTX_ROOT was relocated (e.g. ~/agentic/cortextos-data).
+ */
+export function getKnowledgeBaseDir(org: string): string {
+  return resolveKnowledgeBaseDir(org, CTX_INSTANCE_ID, CTX_ROOT);
 }
 
 export function getTaskDir(org?: string): string {
