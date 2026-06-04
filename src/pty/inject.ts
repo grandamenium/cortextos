@@ -43,6 +43,17 @@ export class MessageDedup {
     return false;
   }
 
+  /**
+   * Remove a previously-recorded hash. Used to roll back the dedup window when
+   * an inject fails AFTER isDuplicate() recorded it, so the cron's retry of the
+   * same content is not silently swallowed as a duplicate (#510).
+   */
+  forget(content: string): void {
+    const hash = createHash('md5').update(content).digest('hex');
+    const i = this.hashes.indexOf(hash);
+    if (i !== -1) this.hashes.splice(i, 1);
+  }
+
   clear(): void {
     this.hashes = [];
   }
@@ -64,7 +75,7 @@ export function injectMessage(
   write: (data: string) => void,
   content: string,
   enterDelay: number = 300,
-): void {
+): Promise<boolean> {
   // For very large messages, chunk the write to avoid overwhelming the PTY buffer
   const MAX_CHUNK = 4096;
 
@@ -88,14 +99,24 @@ export function injectMessage(
   // Root cause: PR #196 fixed three this.pty! callers in agent-process.ts
   // but missed worker-process.ts:93. This try/catch is the structural fix
   // that covers every present and future caller.
-  setTimeout(() => {
-    try {
-      write(KEYS.ENTER);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[inject] deferred Enter failed (pty likely torn down): ${msg}`);
-    }
-  }, enterDelay);
+  // Resolve only after the deferred ENTER is written, so callers can serialize
+  // one PASTE+ENTER cycle fully before starting the next (#510). A torn-down PTY
+  // still resolves (after the swallow) rather than rejecting — the dropped ENTER
+  // is the acceptable cost and must not wedge a per-agent inject queue.
+  return new Promise<boolean>((resolve) => {
+    setTimeout(() => {
+      try {
+        write(KEYS.ENTER);
+        resolve(true);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[inject] deferred Enter failed (pty likely torn down): ${msg}`);
+        // Resolve false (don't reject) so fire-and-forget callers can't raise an
+        // unhandled rejection, while awaiting callers learn the submit failed (#510).
+        resolve(false);
+      }
+    }, enterDelay);
+  });
 }
 
 /**

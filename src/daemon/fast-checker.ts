@@ -186,7 +186,7 @@ export class FastChecker {
 
     // Inject if there's anything
     if (messageBlock) {
-      const injected = this.agent.injectMessage(messageBlock);
+      const injected = await this.agent.injectMessage(messageBlock);
       if (injected) {
         // ACK inbox messages
         for (const id of ackIds) {
@@ -861,7 +861,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         // Inject the urgent message
         if (content) {
           const urgentMsg = `=== URGENT SIGNAL ===\n\`\`\`\n${content}\n\`\`\`\n\n`;
-          this.agent.injectMessage(urgentMsg);
+          void this.agent.injectMessage(urgentMsg).then((ok) => {
+            if (!ok) this.log('Urgent-signal inject did not submit (PTY unavailable)');
+          });
         }
       } catch (err) {
         this.log(`Error processing urgent signal: ${err}`);
@@ -971,7 +973,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       this.ctxWarningFiredAt = now;
       const pctRound = Math.round(effectivePct);
       const statusSuffix = effectivePct >= handoff ? 'Handoff in progress.' : `Handoff triggers at ${handoff}%.`;
-      this.agent.injectMessage(`[CONTEXT] Window at ${pctRound}%. ${statusSuffix}`);
+      void this.agent.injectMessage(`[CONTEXT] Window at ${pctRound}%. ${statusSuffix}`).then((ok) => {
+        if (!ok) this.log('Context-warning inject did not submit (PTY unavailable)');
+      });
       this.log(`Context warning fired at ${pctRound}%`);
     }
 
@@ -986,7 +990,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       } catch { /* non-fatal */ }
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + 'Z';
       const handoffPrompt = `[CONTEXT HANDOFF REQUIRED] Context is at ${Math.round(effectivePct)}%. Write a handoff document to memory/handoffs/handoff-${ts}.md with these sections: ## Current Tasks, ## Next Actions, ## Active Crons, ## Key Context, ## Files Modified This Session. Then run: cortextos bus hard-restart --reason "context handoff at ${Math.round(effectivePct)}%" --handoff-doc <absolute path to the handoff doc you just wrote>. Do this NOW before the context window is exhausted.`;
-      this.agent.injectMessage(handoffPrompt);
+      void this.agent.injectMessage(handoffPrompt).then((ok) => {
+        if (!ok) this.log('Handoff inject did not submit (PTY unavailable)');
+      });
       this.log(`Handoff prompt injected at ${Math.round(effectivePct)}%`);
       // Pre-arm .force-fresh so the next restart is always a clean fresh session.
       // If the agent cooperates and calls hard-restart, it also writes .force-fresh — no-op.

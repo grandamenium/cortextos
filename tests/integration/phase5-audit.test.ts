@@ -158,7 +158,7 @@ function readCronsRaw(): { updated_at: string; crons: CronDefinition[] } {
 // ---------------------------------------------------------------------------
 
 describe('AD-1: Cron lifecycle audit', () => {
-  it('ADD: crons.json records created_at timestamp and all required fields', () => {
+  it('ADD: crons.json records created_at timestamp and all required fields', async () => {
     const beforeTs = new Date().toISOString();
     addCron(AGENT, makeCron('audit-create'));
 
@@ -226,7 +226,7 @@ describe('AD-1: Cron lifecycle audit', () => {
 // ---------------------------------------------------------------------------
 
 describe('AD-2: Execution audit', () => {
-  it('FIRE SUCCESS: execution log entry has all required audit fields', () => {
+  it('FIRE SUCCESS: execution log entry has all required audit fields', async () => {
     ensureAgentDir();
 
     appendExecutionLog(AGENT, {
@@ -259,7 +259,7 @@ describe('AD-2: Execution audit', () => {
     expect(entry.error).toBeNull();
   });
 
-  it('RETRY: retry entry carries status=retried, attempt>1, and non-null error', () => {
+  it('RETRY: retry entry carries status=retried, attempt>1, and non-null error', async () => {
     ensureAgentDir();
 
     appendExecutionLog(AGENT, {
@@ -314,7 +314,7 @@ describe('AD-2: Execution audit', () => {
 // ---------------------------------------------------------------------------
 
 describe('AD-3: Failure audit', () => {
-  it('FINAL FAILURE: status=failed, attempt=4, error message present', () => {
+  it('FINAL FAILURE: status=failed, attempt=4, error message present', async () => {
     ensureAgentDir();
 
     // Simulate all 4 attempts exhausted
@@ -395,7 +395,7 @@ describe('AD-3: Failure audit', () => {
 // ---------------------------------------------------------------------------
 
 describe('AD-4: Recovery audit', () => {
-  it('.bak fallback: writeCrons creates a .bak; readCrons falls back to it on primary corruption', () => {
+  it('.bak fallback: writeCrons creates a .bak; readCrons falls back to it on primary corruption', async () => {
     // Write a known-good schedule — this creates crons.json + crons.json.bak
     addCron(AGENT, makeCron('backup-audit'));
     addCron(AGENT, makeCron('backup-audit-2', '2h'));
@@ -471,7 +471,7 @@ describe('AD-4: Recovery audit', () => {
 // ---------------------------------------------------------------------------
 
 describe('AD-5: User actions audit', () => {
-  it('handleAddCron: result is traceable — includes ok:true, cron persisted with created_at', () => {
+  it('handleAddCron: result is traceable — includes ok:true, cron persisted with created_at', async () => {
     // Write enabled-agents.json so the handler accepts the agent
     mkdirSync(join(tmpRoot, 'config'), { recursive: true });
     writeFileSync(
@@ -498,14 +498,14 @@ describe('AD-5: User actions audit', () => {
     expect(() => new Date(persisted!.created_at)).not.toThrow();
   });
 
-  it('handleFireCron: result carries firedAt epoch for cooldown tracking and audit', () => {
+  it('handleFireCron: result carries firedAt epoch for cooldown tracking and audit', async () => {
     // Set up cron on disk for getCronByName to find
     addCron(AGENT, makeCron('manual-fire-audit'));
 
     const now = 1_700_000_000_000; // fixed epoch for determinism
     const injectFn = vi.fn().mockReturnValue(true);
 
-    const result = handleFireCron(AGENT, 'manual-fire-audit', injectFn, now);
+    const result = await handleFireCron(AGENT, 'manual-fire-audit', injectFn, now);
 
     expect(result.ok).toBe(true);
     // firedAt is the epoch ms of the fire — core audit field

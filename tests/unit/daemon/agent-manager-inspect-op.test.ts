@@ -40,12 +40,12 @@ describe('AgentManager.inspectAgentOp — issue #346 (DEDUPED vs NOT_FOUND)', ()
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('start on empty registry: ok (queued)', () => {
+  it('start on empty registry: ok (queued)', async () => {
     const r = am.inspectAgentOp('start', 'alice');
     expect(r.ok).toBe(true);
   });
 
-  it('start when agent already in registry: DEDUPED (not NOT_FOUND)', () => {
+  it('start when agent already in registry: DEDUPED (not NOT_FOUND)', async () => {
     // Simulate an in-flight start by injecting an entry into the private map.
     // This is the exact precondition that triggers the BUG-011 dedup branch
     // in startAgent — we need to confirm it surfaces as DEDUPED, not NOT_FOUND.
@@ -60,7 +60,7 @@ describe('AgentManager.inspectAgentOp — issue #346 (DEDUPED vs NOT_FOUND)', ()
     }
   });
 
-  it('stop on empty registry: NOT_FOUND (the misreport bug — must distinguish)', () => {
+  it('stop on empty registry: NOT_FOUND (the misreport bug — must distinguish)', async () => {
     const r = am.inspectAgentOp('stop', 'ghost');
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -71,7 +71,7 @@ describe('AgentManager.inspectAgentOp — issue #346 (DEDUPED vs NOT_FOUND)', ()
     }
   });
 
-  it('restart on empty registry: NOT_FOUND', () => {
+  it('restart on empty registry: NOT_FOUND', async () => {
     const r = am.inspectAgentOp('restart', 'ghost');
     expect(r.ok).toBe(false);
     if (!r.ok) {
@@ -80,19 +80,19 @@ describe('AgentManager.inspectAgentOp — issue #346 (DEDUPED vs NOT_FOUND)', ()
     }
   });
 
-  it('stop on agent in registry: ok', () => {
+  it('stop on agent in registry: ok', async () => {
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', {} as unknown);
     const r = am.inspectAgentOp('stop', 'alice');
     expect(r.ok).toBe(true);
   });
 
-  it('restart on agent in registry: ok', () => {
+  it('restart on agent in registry: ok', async () => {
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', {} as unknown);
     const r = am.inspectAgentOp('restart', 'alice');
     expect(r.ok).toBe(true);
   });
 
-  it('inspectAgentOp does not mutate the agents map (read-only check)', () => {
+  it('inspectAgentOp does not mutate the agents map (read-only check)', async () => {
     const before = (am as unknown as { agents: Map<string, unknown> }).agents.size;
     am.inspectAgentOp('start', 'alice');
     am.inspectAgentOp('stop', 'ghost');
@@ -116,8 +116,8 @@ describe('AgentManager.injectAgentDetailed — issue #346 (NOT_FOUND vs NOT_RUNN
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('agent not in registry: NOT_FOUND (the actual harness misreport surface)', () => {
-    const r = am.injectAgentDetailed('ghost', 'hello');
+  it('agent not in registry: NOT_FOUND (the actual harness misreport surface)', async () => {
+    const r = await am.injectAgentDetailed('ghost', 'hello');
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.code).toBe('NOT_FOUND');
@@ -126,7 +126,7 @@ describe('AgentManager.injectAgentDetailed — issue #346 (NOT_FOUND vs NOT_RUNN
     }
   });
 
-  it('agent in registry but PTY dead: NOT_RUNNING (was conflated with NOT_FOUND)', () => {
+  it('agent in registry but PTY dead: NOT_RUNNING (was conflated with NOT_FOUND)', async () => {
     // Inject a fake entry whose process reports NOT_RUNNING.
     const fakeEntry = {
       process: {
@@ -134,7 +134,7 @@ describe('AgentManager.injectAgentDetailed — issue #346 (NOT_FOUND vs NOT_RUNN
       },
     };
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', fakeEntry);
-    const r = am.injectAgentDetailed('alice', 'hello');
+    const r = await am.injectAgentDetailed('alice', 'hello');
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.code).toBe('NOT_RUNNING');
@@ -142,14 +142,14 @@ describe('AgentManager.injectAgentDetailed — issue #346 (NOT_FOUND vs NOT_RUNN
     }
   });
 
-  it('agent running but content matches dedup window: DEDUPED (the cron-salt collision case)', () => {
+  it('agent running but content matches dedup window: DEDUPED (the cron-salt collision case)', async () => {
     const fakeEntry = {
       process: {
         injectMessageDetailed: () => ({ ok: false, code: 'DEDUPED' as const, message: 'inject for "alice" deduped — content matches MessageDedup hash window' }),
       },
     };
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', fakeEntry);
-    const r = am.injectAgentDetailed('alice', 'duplicate-content');
+    const r = await am.injectAgentDetailed('alice', 'duplicate-content');
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.code).toBe('DEDUPED');
@@ -157,38 +157,38 @@ describe('AgentManager.injectAgentDetailed — issue #346 (NOT_FOUND vs NOT_RUNN
     }
   });
 
-  it('agent running, novel content: ok', () => {
+  it('agent running, novel content: ok', async () => {
     const fakeEntry = {
       process: {
         injectMessageDetailed: () => ({ ok: true as const }),
       },
     };
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', fakeEntry);
-    const r = am.injectAgentDetailed('alice', 'novel-content');
+    const r = await am.injectAgentDetailed('alice', 'novel-content');
     expect(r.ok).toBe(true);
   });
 
-  it('boolean injectAgent stays back-compat — NOT_FOUND collapses to false', () => {
-    expect(am.injectAgent('ghost', 'hello')).toBe(false);
+  it('boolean injectAgent stays back-compat — NOT_FOUND collapses to false', async () => {
+    expect(await am.injectAgent('ghost', 'hello')).toBe(false);
   });
 
-  it('boolean injectAgent stays back-compat — DEDUPED collapses to false', () => {
+  it('boolean injectAgent stays back-compat — DEDUPED collapses to false', async () => {
     const fakeEntry = {
       process: {
         injectMessageDetailed: () => ({ ok: false, code: 'DEDUPED' as const, message: 'x' }),
       },
     };
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', fakeEntry);
-    expect(am.injectAgent('alice', 'x')).toBe(false);
+    expect(await am.injectAgent('alice', 'x')).toBe(false);
   });
 
-  it('boolean injectAgent stays back-compat — ok collapses to true', () => {
+  it('boolean injectAgent stays back-compat — ok collapses to true', async () => {
     const fakeEntry = {
       process: {
         injectMessageDetailed: () => ({ ok: true as const }),
       },
     };
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', fakeEntry);
-    expect(am.injectAgent('alice', 'x')).toBe(true);
+    expect(await am.injectAgent('alice', 'x')).toBe(true);
   });
 });
