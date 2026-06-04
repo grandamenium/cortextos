@@ -17,6 +17,7 @@ import { createReminder, listReminders, ackReminder, pruneReminders } from '../b
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
+import { resolveAgentTimezone, hostTimezone, isValidTimeZone } from '../utils/agent-timezone.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
@@ -1905,6 +1906,25 @@ function fmtTs(iso: string | undefined): string {
 }
 
 /**
+ * Format an epoch ms in the given IANA timezone as "YYYY-MM-DD HH:mm TZ" (#481).
+ * Falls back to UTC when no/invalid timezone.
+ */
+function fmtTsZone(ms: number, tz?: string): string {
+  if (!tz) return fmtTs(new Date(ms).toISOString());
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz, hourCycle: 'h23',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+    }).formatToParts(new Date(ms));
+    const v = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+    return `${v('year')}-${v('month')}-${v('day')} ${v('hour')}:${v('minute')} ${v('timeZoneName')}`;
+  } catch {
+    return fmtTs(new Date(ms).toISOString());
+  }
+}
+
+/**
  * Send a reload-crons IPC signal to the daemon (non-blocking, best-effort).
  * Silently swallows errors — the daemon will pick up changes on its next tick.
  */
@@ -2020,8 +2040,29 @@ busCommand
       return;
     }
 
-    // Compute next_fire_at for each cron so the table is informative
+    // Compute next_fire_at for each cron so the table is informative.
+    // Cron-expression schedules are interpreted in the agent's configured
+    // timezone (#481) — the same source the daemon scheduler uses — so the
+    // displayed Next Fire matches when the cron actually fires.
     const now = Date.now();
+    // Effective zone: the agent's configured timezone, else the host zone — used
+    // for BOTH the next-fire computation and its rendering so they always agree
+    // (a non-UTC host with no agent TZ must not compute local but display UTC).
+    const configTz = resolveAgentTimezone({
+      agent, org: env.org, frameworkRoot: env.frameworkRoot, ctxRoot: env.ctxRoot,
+    });
+    // Fallbacks mirror the scheduler so display never disagrees with firing:
+    // valid config TZ -> use it; present-but-invalid -> UTC (same as the
+    // scheduler's nextFireFromCron fallback); absent -> host zone.
+    let effectiveTz: string;
+    if (configTz && isValidTimeZone(configTz)) {
+      effectiveTz = configTz;
+    } else if (configTz) {
+      console.error(`  warning: agent's configured timezone "${configTz}" is invalid — showing times in UTC (matches scheduler)`);
+      effectiveTz = 'UTC';
+    } else {
+      effectiveTz = hostTimezone();
+    }
     const rows = crons.map(c => {
       const lastFire = mostRecent(c.last_fired_at, fireByName.get(c.name));
       let nextFire = '-';
@@ -2030,8 +2071,8 @@ busCommand
         const refMs = lastFire ? new Date(lastFire).getTime() : now;
         nextFire = fmtTs(new Date(refMs + dms).toISOString());
       } else {
-        const nf = nextFireFromCron(c.schedule, now);
-        if (!isNaN(nf)) nextFire = fmtTs(new Date(nf).toISOString());
+        const nf = nextFireFromCron(c.schedule, now, effectiveTz);
+        if (!isNaN(nf)) nextFire = fmtTsZone(nf, effectiveTz);
       }
       const promptPreview = c.prompt.length > 60 ? c.prompt.slice(0, 57) + '...' : c.prompt;
       return {
@@ -2054,7 +2095,8 @@ busCommand
     const pad = (s: string, w: number) => s.padEnd(w);
     const sep = '-'.repeat(nameW + schedW + enW + lastW + nextW + 63 + 5);
 
-    console.log(`\nCrons for ${agent} (${rows.length})\n`);
+    console.log(`\nCrons for ${agent} (${rows.length})`);
+    console.log(`  cron-expression schedules interpreted in ${effectiveTz}\n`);
     console.log(`  ${pad('Name', nameW)}  ${pad('Schedule', schedW)}  ${pad('Enabled', enW)}  ${pad('Last Fire', lastW)}  ${pad('Next Fire', nextW)}  Prompt`);
     console.log(`  ${sep}`);
     for (const r of rows) {

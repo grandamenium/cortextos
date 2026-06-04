@@ -8,6 +8,7 @@ import { readCrons, getExecutionLog, getExecutionLogPage, addCron, updateCron, r
 import type { ExecutionLogStatusFilter } from '../bus/crons.js';
 import { nextFireFromCron } from './cron-scheduler.js';
 import { parseDurationMs } from '../bus/cron-state.js';
+import { resolveAgentTimezone, hostTimezone } from '../utils/agent-timezone.js';
 import { computeHealth, aggregateFleetHealth } from '../utils/cron-health.js';
 
 const WORKER_NAME_REGEX = /^[a-z0-9_-]+$/;
@@ -126,6 +127,7 @@ export function computeNextFire(
   schedule: string,
   lastFiredAt: string | undefined,
   now = Date.now(),
+  timeZone?: string,
 ): string {
   const referenceMs = lastFiredAt ? new Date(lastFiredAt).getTime() : now;
 
@@ -136,8 +138,8 @@ export function computeNextFire(
     return new Date(next <= now ? now + durationMs : next).toISOString();
   }
 
-  // Try as a 5-field cron expression
-  const nextMs = nextFireFromCron(schedule, now);
+  // Try as a 5-field cron expression (interpreted in the agent's timezone, #481)
+  const nextMs = nextFireFromCron(schedule, now, timeZone);
   if (!isNaN(nextMs)) {
     return new Date(nextMs).toISOString();
   }
@@ -171,6 +173,12 @@ function listAllCrons(): CronSummaryRow[] {
 
     const org = entry.org ?? '';
     const crons = readCrons(agentName);
+    // Interpret cron hours in the agent's timezone (#481) so the dashboard/API
+    // next-fire matches actual firing; fall back to the daemon host zone.
+    const effectiveTz = resolveAgentTimezone({
+      agent: agentName, org,
+      frameworkRoot: process.env.CTX_FRAMEWORK_ROOT, ctxRoot: process.env.CTX_ROOT,
+    }) ?? hostTimezone();
 
     for (const cron of crons) {
       // Read the last execution log entry for this cron
@@ -183,7 +191,7 @@ function listAllCrons(): CronSummaryRow[] {
         cron,
         lastFire: lastEntry?.ts ?? null,
         lastStatus: lastEntry?.status ?? null,
-        nextFire: computeNextFire(cron.schedule, cron.last_fired_at, now),
+        nextFire: computeNextFire(cron.schedule, cron.last_fired_at, now, effectiveTz),
       });
     }
   }
