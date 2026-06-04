@@ -9,9 +9,10 @@ import { TaskListTable } from '@/components/tasks/task-list-table';
 import { TaskDetailSheet } from '@/components/tasks/task-detail-sheet';
 import { CreateTaskDialog } from '@/components/tasks/create-task-dialog';
 import { TaskFilters } from '@/components/tasks/task-filters';
+import { BundleOverview } from '@/components/tasks/bundle-overview';
 import type { Task, TaskStatus } from '@/lib/types';
 
-type ViewMode = 'kanban' | 'list';
+type ViewMode = 'kanban' | 'list' | 'bundles';
 
 const DEFAULT_FILTERS = {
   org: 'all',
@@ -173,6 +174,14 @@ export default function TasksPage() {
               <IconList className="size-3.5" />
               List
             </Button>
+            <Button
+              variant={view === 'bundles' ? 'secondary' : 'ghost'}
+              size="xs"
+              onClick={() => setView('bundles')}
+            >
+              <IconChecklist className="size-3.5" />
+              Bundles
+            </Button>
           </div>
           <CreateTaskDialog
             agents={agents}
@@ -212,6 +221,8 @@ export default function TasksPage() {
           completedTodayTasks={completedToday}
           onTaskClick={handleTaskClick}
         />
+      ) : view === 'bundles' ? (
+        <BundleOverview tasks={tasks} onTaskClick={handleTaskClick} />
       ) : (
         <TaskListTable tasks={displayTasks} onTaskClick={handleTaskClick} />
       )}
