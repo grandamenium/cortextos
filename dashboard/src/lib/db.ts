@@ -62,7 +62,8 @@ function initializeSchema(db: Database.Database): void {
       updated_at TEXT,
       completed_at TEXT,
       notes TEXT,
-      source_file TEXT
+      source_file TEXT,
+      bundle_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS approvals (
@@ -154,6 +155,7 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
     CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+    CREATE INDEX IF NOT EXISTS idx_tasks_bundle ON tasks(bundle_id);
 
     CREATE INDEX IF NOT EXISTS idx_approvals_org ON approvals(org);
     CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
@@ -174,6 +176,15 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_org ON messages(org);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
   `);
+
+  // Migration: add bundle_id to a pre-existing tasks table. CREATE TABLE IF NOT
+  // EXISTS above won't add the column to an already-created DB, so add it here.
+  try {
+    db.exec('ALTER TABLE tasks ADD COLUMN bundle_id TEXT');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_bundle ON tasks(bundle_id)');
+  } catch {
+    // column already exists — fine
+  }
 }
 
 // globalThis singleton survives Next.js hot reload
