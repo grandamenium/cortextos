@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import fs from 'fs/promises';
+import { createHash } from 'crypto';
 import { getAgentDetail, getAgentPaths } from '@/lib/data/agents';
 import {
   parseIdentityMd,
@@ -52,7 +53,48 @@ export async function PATCH(
   const org = (body.org as string) || undefined;
   const paths = getAgentPaths(decoded, org);
 
-  const results: { identity?: boolean; soul?: boolean } = {};
+  const results: { identity?: boolean; soul?: boolean; memory?: boolean } = {};
+  let newMemoryHash: string | undefined;
+
+  // Optimistic concurrency pre-flight (#515): a MEMORY.md update must carry the
+  // hash of the version the client loaded, and we reject BEFORE writing any
+  // field so a conflict can't partially persist identity or soul.
+  //
+  // This is an optimistic check, not a lock: a small TOCTOU window remains
+  // between this read and the write below. It closes the reported
+  // single-operator silent-overwrite; true concurrent-writer safety would need
+  // a per-agent lock, which is out of scope for this fix.
+  if (typeof body.memoryRaw === 'string') {
+    if (typeof body.memoryHash !== 'string') {
+      return Response.json(
+        { error: 'memoryHash is required when updating MEMORY.md (optimistic concurrency, #515).' },
+        { status: 400 },
+      );
+    }
+    let current = '';
+    try {
+      current = await fs.readFile(paths.memoryMd, 'utf-8');
+    } catch (err) {
+      // Only a genuinely missing file means "empty baseline". A permission/IO
+      // error must NOT be silently treated as empty — that would let the save
+      // proceed on a false assumption (codex review).
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error(`[api/agents/${decoded}] PATCH memory read error:`, err);
+        return Response.json({ error: 'Failed to read MEMORY.md' }, { status: 500 });
+      }
+    }
+    const currentHash = createHash('sha256').update(current, 'utf-8').digest('hex');
+    if (currentHash !== body.memoryHash) {
+      return Response.json(
+        {
+          error:
+            'MEMORY.md changed on disk since it was loaded. Reload to see the latest, then re-apply your edits.',
+          currentHash,
+        },
+        { status: 409 },
+      );
+    }
+  }
 
   // Update IDENTITY.md
   if (body.identity) {
@@ -102,10 +144,16 @@ export async function PATCH(
     }
   }
 
-  // Update MEMORY.md
+  // Update MEMORY.md (stale-write conflict already rejected in the pre-flight above)
   if (typeof body.memoryRaw === 'string') {
     try {
       await fs.writeFile(paths.memoryMd, body.memoryRaw as string, 'utf-8');
+      // Return the post-write hash so the client can update its in-memory
+      // baseline and the next save in the same tab doesn't false-409 (#515).
+      newMemoryHash = createHash('sha256')
+        .update(body.memoryRaw as string, 'utf-8')
+        .digest('hex');
+      results.memory = true;
     } catch (err) {
       console.error(`[api/agents/${decoded}] PATCH memory error:`, err);
       return Response.json(
@@ -115,5 +163,9 @@ export async function PATCH(
     }
   }
 
-  return Response.json({ success: true, updated: results });
+  return Response.json({
+    success: true,
+    updated: results,
+    ...(newMemoryHash ? { memoryHash: newMemoryHash } : {}),
+  });
 }
