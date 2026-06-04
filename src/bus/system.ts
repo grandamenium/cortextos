@@ -1,6 +1,6 @@
 import { execSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync, statSync, appendFileSync, writeFileSync } from 'fs';
-import { join, extname } from 'path';
+import { join, extname, dirname, isAbsolute } from 'path';
 import { readdirSync } from 'fs';
 import { ensureDir } from '../utils/atomic.js';
 import { TelegramAPI } from '../telegram/api.js';
@@ -105,10 +105,24 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
     return { status: 'clean', staged: [], blocked: [] };
   }
 
+  // Resolve main repo root when running inside a linked git worktree.
+  // git status/add operate on the worktree index by default; we always want the main repo index.
+  let repoDir = projectDir;
+  try {
+    const gitDir = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: projectDir, encoding: 'utf-8' }).trim();
+    if (gitDir.includes('/worktrees/')) {
+      const commonDirRaw = execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: projectDir, encoding: 'utf-8' }).trim();
+      const absoluteCommonDir = isAbsolute(commonDirRaw) ? commonDirRaw : join(projectDir, commonDirRaw);
+      repoDir = dirname(absoluteCommonDir);
+    }
+  } catch {
+    // fall back to projectDir
+  }
+
   // Get changed files
   let porcelainOutput: string;
   try {
-    porcelainOutput = execSync('git status --porcelain', { cwd: projectDir, encoding: 'utf-8' });
+    porcelainOutput = execFileSync('git', ['status', '--porcelain'], { cwd: repoDir, encoding: 'utf-8' });
   } catch {
     return { status: 'clean', staged: [], blocked: [] };
   }
@@ -153,7 +167,7 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
       continue;
     }
 
-    const fullPath = join(projectDir, file);
+    const fullPath = join(repoDir, file);
 
     // Block files over 10MB
     if (existsSync(fullPath)) {
@@ -198,7 +212,7 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
   // Stage safe files
   for (const file of staged) {
     try {
-      execFileSync('git', ['add', file], { cwd: projectDir, stdio: 'pipe' });
+      execFileSync('git', ['add', file], { cwd: repoDir, stdio: 'pipe' });
     } catch {
       // Ignore individual add failures
     }
@@ -207,7 +221,7 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
   // Get diff stat
   let diffStat: string | undefined;
   try {
-    const stat = execSync('git diff --cached --stat', { cwd: projectDir, encoding: 'utf-8' });
+    const stat = execFileSync('git', ['diff', '--cached', '--stat'], { cwd: repoDir, encoding: 'utf-8' });
     const lines = stat.trim().split('\n');
     diffStat = lines[lines.length - 1]?.trim() || undefined;
   } catch {
