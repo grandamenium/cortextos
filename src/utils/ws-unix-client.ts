@@ -51,7 +51,12 @@ export class WsUnixJsonRpcClient {
   async connect(): Promise<void> {
     if (this.socket) return;
 
-    const socket = createConnection(this.socketPath);
+    // Support both Unix socket paths and TCP addresses (host:port)
+    const colonIdx = this.socketPath.lastIndexOf(':');
+    const looksLikeTcp = colonIdx > 0 && !this.socketPath.startsWith('/') && !this.socketPath.startsWith('.');
+    const socket = looksLikeTcp
+      ? createConnection(parseInt(this.socketPath.slice(colonIdx + 1), 10), this.socketPath.slice(0, colonIdx))
+      : createConnection(this.socketPath);
     await new Promise<void>((resolve, reject) => {
       socket.once('connect', resolve);
       socket.once('error', reject);
