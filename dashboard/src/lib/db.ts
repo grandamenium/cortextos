@@ -155,7 +155,6 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee);
     CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
-    CREATE INDEX IF NOT EXISTS idx_tasks_bundle ON tasks(bundle_id);
 
     CREATE INDEX IF NOT EXISTS idx_approvals_org ON approvals(org);
     CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
@@ -177,14 +176,17 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
   `);
 
-  // Migration: add bundle_id to a pre-existing tasks table. CREATE TABLE IF NOT
-  // EXISTS above won't add the column to an already-created DB, so add it here.
+  // Migration: add bundle_id to a pre-existing tasks table (CREATE TABLE IF NOT
+  // EXISTS above won't add the column to an already-created DB).
   try {
     db.exec('ALTER TABLE tasks ADD COLUMN bundle_id TEXT');
-    db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_bundle ON tasks(bundle_id)');
   } catch {
-    // column already exists — fine
+    // column already exists (fresh DB created it in CREATE TABLE) — fine
   }
+  // Index is created AFTER bundle_id is guaranteed to exist (fresh: from CREATE
+  // TABLE; pre-existing: from the ALTER above). It must NOT live in the main schema
+  // exec, which runs before this ALTER and would fail with "no such column".
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_bundle ON tasks(bundle_id)');
 }
 
 // globalThis singleton survives Next.js hot reload
