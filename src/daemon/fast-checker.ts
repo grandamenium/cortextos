@@ -9,7 +9,7 @@ import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
-import { stripControlChars } from '../utils/validate.js';
+import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
 
 type LogFn = (msg: string) => void;
 
@@ -219,11 +219,16 @@ export class FastChecker {
    */
   private formatInboxMessage(msg: InboxMessage): string {
     const replyNote = msg.reply_to ? ` [reply_to: ${msg.reply_to}]` : '';
-    return `=== AGENT MESSAGE from ${msg.from}${replyNote} [msg_id: ${msg.id}] ===
-\`\`\`
-${msg.text}
-\`\`\`
-Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.id}
+    // msg.text/from are externally influenced (a body can carry its own
+    // fence/header markers; --body-stdin/--body-file made arbitrary bodies easy
+    // to send). The body is wrapped with wrapFenceSafe — a dynamically-sized
+    // fence the body cannot close, with the body left byte-exact so pasted code
+    // blocks stay readable. The inline `from` is collapse-sanitized (it sits in
+    // the header line, not a fence).
+    const safeFrom = sanitizeForPtyInjection(msg.from);
+    return `=== AGENT MESSAGE from ${safeFrom}${replyNote} [msg_id: ${msg.id}] ===
+${wrapFenceSafe(msg.text)}
+Reply using: cortextos bus send-message ${safeFrom} normal '<your reply>' ${msg.id}
 
 `;
   }
@@ -241,29 +246,37 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
     lastSentText?: string,
     recentHistory?: string,
   ): string {
+    // Every externally-influenced field below is untrusted (the sender controls
+    // text/display-name; reply-context, last-sent and recent-history are built
+    // from prior external messages). Sanitize each so none can escape the fence
+    // or forge a containment header. Unfenced context fields (reply/history) are
+    // the weakest surface — they sit raw in [Replying to: "..."] / [Recent ...].
     let replyCx = '';
     if (replyToText) {
-      replyCx = `[Replying to: "${replyToText.slice(0, 500)}"]\n`;
+      replyCx = `[Replying to: "${sanitizeForPtyInjection(replyToText.slice(0, 500))}"]\n`;
     }
 
     let lastSentCtx = '';
     if (lastSentText) {
-      lastSentCtx = `[Your last message: "${lastSentText.slice(0, 500)}"]\n`;
+      lastSentCtx = `[Your last message: "${sanitizeForPtyInjection(lastSentText.slice(0, 500))}"]\n`;
     }
 
     let historyCx = '';
     if (recentHistory) {
-      historyCx = `[Recent conversation:]\n${recentHistory}\n`;
+      historyCx = `[Recent conversation:]\n${sanitizeForPtyInjection(recentHistory)}\n`;
     }
 
     // Use [USER: ...] wrapper to prevent prompt injection via crafted display names
     // Slash commands (text starting with /) are NOT wrapped in backticks so Claude Code
     // can recognize and invoke them via the Skill tool (e.g. /loop, /commit, /restart).
-    const isSlashCommand = /^\/[a-zA-Z]/.test(text.trim());
+    // Non-slash bodies use wrapFenceSafe: an unescapable dynamically-sized fence
+    // that leaves the body byte-exact (legit code blocks preserved). Slash commands
+    // get control-char strip + header-quote only (no fence — must stay invokable).
+    const isSlashCommand = /^\/[a-zA-Z]/.test(stripControlChars(text).trim());
     const body = isSlashCommand
-      ? text.trim()
-      : `\`\`\`\n${text}\n\`\`\``;
-    return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}) ===
+      ? sanitizeForPtyInjection(text).trim()
+      : wrapFenceSafe(text);
+    return `=== TELEGRAM from [USER: ${sanitizeForPtyInjection(from)}] (chat_id:${chatId}) ===
 ${replyCx}${historyCx}${body}
 ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
