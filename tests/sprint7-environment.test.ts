@@ -227,5 +227,34 @@ describe('Sprint 7: Environment & Config Completeness', () => {
       expect(result.projectRoot).toBe(root);
       expect(result.agentDir).toBe(join(root, 'orgs', 'testorg', 'agents', 'test-agent'));
     });
+
+    it('TC-E root: frameworkRoot=/ does not reject a subordinate agentDir (issue #527)', () => {
+      // When frameworkRoot resolves to filesystem root '/', the old anchor
+      // `fwRootResolved + sep` became '//', so '/tmp/agent'.startsWith('//')
+      // was false and the guard wrongly threw. '/tmp/agent' is under '/'.
+      let result!: ReturnType<typeof resolveEnv>;
+      expect(() => {
+        result = resolveEnv({
+          frameworkRoot: '/',
+          agentDir: '/tmp/agent',
+          agentName: 'agent',
+        });
+      }).not.toThrow();
+      // Assert the resolved values pass through, so a silent containment
+      // regression can't hide behind a bare not.toThrow() (codex review).
+      expect(result.frameworkRoot).toBe('/');
+      expect(result.agentDir).toBe('/tmp/agent');
+    });
+
+    it('TC-F near-prefix: sibling sharing a name prefix is NOT treated as subordinate', () => {
+      // Guards the reason the anchor needs a trailing sep: '/tmp/foobar' must
+      // NOT be considered under '/tmp/foo'. Without the separator the raw
+      // startsWith would wrongly accept it (codex review).
+      expect(() => resolveEnv({
+        frameworkRoot: '/tmp/foo',
+        agentDir: '/tmp/foobar',
+        agentName: 'agent',
+      })).toThrow(/not under CTX_FRAMEWORK_ROOT/);
+    });
   });
 });
