@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { sendMessage, checkInbox, ackInbox } from '../../../src/bus/message';
+import { sendMessage, checkInbox, ackInbox, resolveMessageBody } from '../../../src/bus/message';
 import { resolvePaths } from '../../../src/utils/paths';
 import type { BusPaths } from '../../../src/types';
 
@@ -137,6 +137,45 @@ describe('Message Bus', () => {
 
       expect(inflightFiles.length).toBe(0);
       expect(processedFiles.length).toBe(1);
+    });
+  });
+
+  // Security: --body-stdin / --body-file let callers supply a body without
+  // interpolating it into a shell-expanded argument (root of the 2026-06-02
+  // command-injection incident). resolveMessageBody picks the source.
+  describe('resolveMessageBody', () => {
+    it('returns positional text when no body source given', () => {
+      expect(resolveMessageBody({ text: 'hello' })).toBe('hello');
+    });
+
+    it('reads body verbatim from file (no shell expansion of backticks/$())', () => {
+      const f = join(testDir, 'body.txt');
+      const raw = 'run `git status` and $(whoami) — must stay literal';
+      writeFileSync(f, raw);
+      expect(resolveMessageBody({ bodyFile: f })).toBe(raw);
+    });
+
+    it('prefers stdin content over file and text', () => {
+      const f = join(testDir, 'body2.txt');
+      writeFileSync(f, 'from-file');
+      expect(
+        resolveMessageBody({ text: 'from-text', bodyFile: f, bodyStdinContent: 'from-stdin' }),
+      ).toBe('from-stdin');
+    });
+
+    it('prefers file over positional text', () => {
+      const f = join(testDir, 'body3.txt');
+      writeFileSync(f, 'from-file');
+      expect(resolveMessageBody({ text: 'from-text', bodyFile: f })).toBe('from-file');
+    });
+
+    it('preserves an empty stdin body (does not fall through to text)', () => {
+      expect(resolveMessageBody({ text: 'from-text', bodyStdinContent: '' })).toBe('');
+    });
+
+    it('throws when no body source is provided', () => {
+      expect(() => resolveMessageBody({})).toThrow(/No message body/);
+      expect(() => resolveMessageBody({ text: '' })).toThrow(/No message body/);
     });
   });
 });
