@@ -141,6 +141,42 @@ busCommand
     console.log(`ACK'd ${id}`);
   });
 
+/**
+ * Build the inbox notification an assignee receives for a newly assigned task.
+ * A long description is previewed (not silently mid-word clipped) with a marker
+ * pointing at the full task body, so the agent knows content was shortened and
+ * where to read the rest (#513).
+ */
+// Preview cap for the inbox notification. The issue (#513) suggested ~500 as a
+// balance between giving the assignee useful context and not flooding the PTY
+// inbox; the full body is always available via `bus list-tasks --format json`.
+const TASK_NOTIFY_DESC_LIMIT = 500;
+export function formatTaskAssignmentMessage(opts: {
+  priority: string;
+  title: string;
+  desc?: string;
+  taskId: string;
+}): string {
+  let descPart = '';
+  if (opts.desc) {
+    let preview = opts.desc;
+    // Count/slice by code point (Array.from) so we never split a surrogate pair
+    // into a broken half-character, then back off to the last word boundary
+    // before appending the marker — no silent mid-word clip, and no mojibake
+    // from a chopped pair (#513). (Code-point safe; not full ZWJ-grapheme aware,
+    // which is unnecessary for a preview.)
+    const cps = Array.from(opts.desc);
+    if (cps.length > TASK_NOTIFY_DESC_LIMIT) {
+      let cut = cps.slice(0, TASK_NOTIFY_DESC_LIMIT).join('');
+      const lastSpace = cut.lastIndexOf(' ');
+      if (lastSpace > TASK_NOTIFY_DESC_LIMIT * 0.6) cut = cut.slice(0, lastSpace);
+      preview = `${cut}… [truncated — run \`bus list-tasks --format json\` for the full description]`;
+    }
+    descPart = ` — ${preview}`;
+  }
+  return `Task assigned: [${opts.priority}] ${opts.title}${descPart} (id: ${opts.taskId})`;
+}
+
 busCommand
   .command('create-task')
   .argument('<title>', 'Task title')
@@ -168,9 +204,8 @@ busCommand
     // Auto-notify assignee so the task is visible immediately (issue #78)
     if (opts.assignee && opts.assignee !== env.agentName) {
       const assigneePaths = resolvePaths(opts.assignee, env.instanceId, env.org);
-      const desc = opts.desc ? ` — ${opts.desc.slice(0, 120)}` : '';
       sendMessage(assigneePaths, env.agentName, opts.assignee, 'normal',
-        `Task assigned: [${opts.priority}] ${title}${desc} (id: ${taskId})`);
+        formatTaskAssignmentMessage({ priority: opts.priority, title, desc: opts.desc, taskId }));
     }
   });
 
