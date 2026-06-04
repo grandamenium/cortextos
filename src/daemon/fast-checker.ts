@@ -10,6 +10,7 @@ import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars } from '../utils/validate.js';
+import { sanitizeForPtyFence } from '../utils/pty-sanitize.js';
 
 type LogFn = (msg: string) => void;
 
@@ -221,7 +222,7 @@ export class FastChecker {
     const replyNote = msg.reply_to ? ` [reply_to: ${msg.reply_to}]` : '';
     return `=== AGENT MESSAGE from ${msg.from}${replyNote} [msg_id: ${msg.id}] ===
 \`\`\`
-${msg.text}
+${sanitizeForPtyFence(msg.text)}
 \`\`\`
 Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.id}
 
@@ -243,27 +244,32 @@ Reply using: cortextos bus send-message ${msg.from} normal '<your reply>' ${msg.
   ): string {
     let replyCx = '';
     if (replyToText) {
-      replyCx = `[Replying to: "${replyToText.slice(0, 500)}"]\n`;
+      replyCx = `[Replying to: "${sanitizeForPtyFence(replyToText.slice(0, 500))}"]\n`;
     }
 
     let lastSentCtx = '';
     if (lastSentText) {
-      lastSentCtx = `[Your last message: "${lastSentText.slice(0, 500)}"]\n`;
+      lastSentCtx = `[Your last message: "${sanitizeForPtyFence(lastSentText.slice(0, 500))}"]\n`;
     }
 
     let historyCx = '';
     if (recentHistory) {
-      historyCx = `[Recent conversation:]\n${recentHistory}\n`;
+      historyCx = `[Recent conversation:]\n${sanitizeForPtyFence(recentHistory)}\n`;
     }
 
     // Use [USER: ...] wrapper to prevent prompt injection via crafted display names
     // Slash commands (text starting with /) are NOT wrapped in backticks so Claude Code
     // can recognize and invoke them via the Skill tool (e.g. /loop, /commit, /restart).
     const isSlashCommand = /^\/[a-zA-Z]/.test(text.trim());
+    // Slash commands are passed unfenced so Claude Code can invoke them, but
+    // still sanitised: normal commands (/loop, /commit) contain no backtick runs
+    // or control bytes so they're unchanged, while a crafted "/… ```inject" can
+    // no longer break out. (Which commands a remote user may invoke is a
+    // separate allowlist policy, not handled here.)
     const body = isSlashCommand
-      ? text.trim()
-      : `\`\`\`\n${text}\n\`\`\``;
-    return `=== TELEGRAM from [USER: ${from}] (chat_id:${chatId}) ===
+      ? sanitizeForPtyFence(text.trim())
+      : `\`\`\`\n${sanitizeForPtyFence(text)}\n\`\`\``;
+    return `=== TELEGRAM from [USER: ${sanitizeForPtyFence(from)}] (chat_id:${chatId}) ===
 ${replyCx}${historyCx}${body}
 ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
@@ -296,7 +302,7 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const removed = newReaction.length === 0 && oldReaction.length > 0;
     const label = removed ? `removed ${render(oldReaction)}` : render(newReaction);
 
-    return `=== REACTION from [USER: ${from}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
+    return `=== REACTION from [USER: ${sanitizeForPtyFence(from)}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
 
 `;
   }
@@ -311,10 +317,10 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     caption: string,
     imagePath: string,
   ): string {
-    return `=== TELEGRAM PHOTO from ${from} (chat_id:${chatId}) ===
+    return `=== TELEGRAM PHOTO from ${sanitizeForPtyFence(from)} (chat_id:${chatId}) ===
 caption:
 \`\`\`
-${caption}
+${sanitizeForPtyFence(caption)}
 \`\`\`
 local_file: ${imagePath}
 Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
@@ -333,13 +339,13 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     filePath: string,
     fileName: string,
   ): string {
-    return `=== TELEGRAM DOCUMENT from ${from} (chat_id:${chatId}) ===
+    return `=== TELEGRAM DOCUMENT from ${sanitizeForPtyFence(from)} (chat_id:${chatId}) ===
 caption:
 \`\`\`
-${caption}
+${sanitizeForPtyFence(caption)}
 \`\`\`
 local_file: ${filePath}
-file_name: ${fileName}
+file_name: ${sanitizeForPtyFence(fileName)}
 Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
 `;
@@ -363,9 +369,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   ): string {
     const dur = duration !== undefined ? duration : 'unknown';
     const transcriptBlock = transcript && transcript.trim()
-      ? `transcript:\n\`\`\`\n${transcript.trim()}\n\`\`\`\n`
+      ? `transcript:\n\`\`\`\n${sanitizeForPtyFence(transcript.trim())}\n\`\`\`\n`
       : '';
-    return `=== TELEGRAM VOICE from ${from} (chat_id:${chatId}) ===
+    return `=== TELEGRAM VOICE from ${sanitizeForPtyFence(from)} (chat_id:${chatId}) ===
 duration: ${dur}s
 local_file: ${filePath}
 ${transcriptBlock}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
@@ -386,14 +392,14 @@ ${transcriptBlock}Reply using: cortextos bus send-telegram ${chatId} '<your repl
     duration: number | undefined,
   ): string {
     const dur = duration !== undefined ? duration : 'unknown';
-    return `=== TELEGRAM VIDEO from ${from} (chat_id:${chatId}) ===
+    return `=== TELEGRAM VIDEO from ${sanitizeForPtyFence(from)} (chat_id:${chatId}) ===
 caption:
 \`\`\`
-${caption}
+${sanitizeForPtyFence(caption)}
 \`\`\`
 duration: ${dur}s
 local_file: ${filePath}
-file_name: ${fileName}
+file_name: ${sanitizeForPtyFence(fileName)}
 Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
 `;
@@ -860,7 +866,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
         // Inject the urgent message
         if (content) {
-          const urgentMsg = `=== URGENT SIGNAL ===\n\`\`\`\n${content}\n\`\`\`\n\n`;
+          const urgentMsg = `=== URGENT SIGNAL ===\n\`\`\`\n${sanitizeForPtyFence(content)}\n\`\`\`\n\n`;
           this.agent.injectMessage(urgentMsg);
         }
       } catch (err) {
