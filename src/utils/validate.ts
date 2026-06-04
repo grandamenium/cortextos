@@ -2,6 +2,19 @@ import type { Priority, EventCategory, EventSeverity, ApprovalCategory } from '.
 import { VALID_PRIORITIES } from '../types/index.js';
 
 const AGENT_NAME_REGEX = /^[a-z0-9_-]+$/;
+// Task IDs are generated as `task_<epoch>_<rand>` (lowercase). Allow lowercase
+// letters, digits, underscores and hyphens — matching the generator and the
+// rest of the codebase's identifier convention — while rejecting path
+// separators and dots so a task id can never traverse out of the task tree.
+const TASK_ID_REGEX = /^[a-z0-9_-]+$/;
+
+export function validateTaskId(taskId: string): void {
+  if (!taskId || !TASK_ID_REGEX.test(taskId)) {
+    throw new Error(
+      `Invalid task id '${taskId}'. Must contain only letters, numbers, underscores, and hyphens.`
+    );
+  }
+}
 
 export function validateInstanceId(instanceId: string): void {
   if (!instanceId || !AGENT_NAME_REGEX.test(instanceId)) {
