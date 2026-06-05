@@ -8,6 +8,11 @@ import {
   storeUsageData,
   collectTelegramCommands,
 } from '../src/bus/metrics.js';
+import {
+  defaultRoleType,
+  defaultRoleConfig,
+  resolveRoleConfig,
+} from '../src/bus/role-config.js';
 
 describe('Sprint 5: Observability & Metrics', () => {
   const testDir = join(tmpdir(), `cortextos-sprint5-${Date.now()}`);
@@ -214,6 +219,240 @@ describe('Sprint 5: Observability & Metrics', () => {
 
       const report = collectMetrics(ctxRoot);
       expect(report.agents.bot1.errors_today).toBe(1);
+    });
+  });
+
+  // --- Role-typed metrics (SYS-MET-01) ---
+  describe('role-typed metrics', () => {
+    it('emits a role block with sensible defaults for unknown agents (coding-assignee)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ randomBot: { enabled: true } }), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents.randomBot.role.role_type).toBe('coding-assignee');
+      expect(report.agents.randomBot.role.primary_kpi).toBe('assignee_completion_ratio');
+      expect(report.agents.randomBot.role.anomalies).toEqual([]);
+    });
+
+    it('uses NAME_DEFAULTS to assign role_type without an explicit role.json', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({
+        'frontend-dev': { enabled: true },
+        'product-owner': { enabled: true },
+        'devops-monitor': { enabled: true },
+        'systems-analyst': { enabled: true },
+      }), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents['frontend-dev'].role.role_type).toBe('coding-assignee');
+      expect(report.agents['product-owner'].role.role_type).toBe('authoring');
+      expect(report.agents['devops-monitor'].role.role_type).toBe('inbox-triage');
+      expect(report.agents['systems-analyst'].role.role_type).toBe('analyst-hybrid');
+    });
+
+    it('respects an explicit agents/<name>/role.json override', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      const agentDir = join(ctxRoot, 'agents', 'frontend-dev');
+      mkdirSync(agentDir, { recursive: true });
+      writeFileSync(join(agentDir, 'role.json'), JSON.stringify({
+        role_type: 'authoring',
+        anomaly_thresholds: { pending_dispatch_age_p95_max_ms: 3_600_000 },
+      }), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents['frontend-dev'].role.role_type).toBe('authoring');
+      // Partial override merges with type defaults
+      expect(report.agents['frontend-dev'].role.primary_kpi).toBe('pending_dispatch_age_p95_ms');
+    });
+
+    it('falls back to name-default when role.json is malformed', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      const agentDir = join(ctxRoot, 'agents', 'product-owner');
+      mkdirSync(agentDir, { recursive: true });
+      writeFileSync(join(agentDir, 'role.json'), 'not json at all', 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents['product-owner'].role.role_type).toBe('authoring');
+    });
+
+    it('falls back to name-default when role_type is invalid', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      const agentDir = join(ctxRoot, 'agents', 'product-owner');
+      mkdirSync(agentDir, { recursive: true });
+      writeFileSync(join(agentDir, 'role.json'), JSON.stringify({ role_type: 'nonsense' }), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents['product-owner'].role.role_type).toBe('authoring');
+    });
+
+    it('computes assignee completion_ratio from assigned tasks', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 't1.json'), JSON.stringify({ assigned_to: 'frontend-dev', status: 'completed' }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 't2.json'), JSON.stringify({ assigned_to: 'frontend-dev', status: 'completed' }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 't3.json'), JSON.stringify({ assigned_to: 'frontend-dev', status: 'pending' }), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      const a = report.agents['frontend-dev'].role.assignee;
+      expect(a.completed).toBe(2);
+      expect(a.pending).toBe(1);
+      expect(a.completion_ratio).toBeCloseTo(2 / 3, 5);
+    });
+
+    it('returns null completion_ratio when there is no work to ratio', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents['frontend-dev'].role.assignee.completion_ratio).toBeNull();
+      // No anomaly should fire on null — the previous false-positive guard
+      expect(report.agents['frontend-dev'].role.anomalies).not.toContain('assignee_low_completion_ratio');
+    });
+
+    it('counts authored tasks and pending_dispatch via created_by', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      const recent = new Date(Date.now() - 1000).toISOString();
+      writeFileSync(join(ctxRoot, 'tasks', 't1.json'), JSON.stringify({
+        created_by: 'product-owner', assigned_to: 'product-owner', status: 'pending', created_at: recent,
+      }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 't2.json'), JSON.stringify({
+        created_by: 'product-owner', status: 'pending', created_at: recent,
+      }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 't3.json'), JSON.stringify({
+        created_by: 'product-owner', assigned_to: 'frontend-dev', status: 'in_progress', created_at: recent,
+      }), 'utf-8');
+
+      const a = collectMetrics(ctxRoot).agents['product-owner'].role.authoring;
+      expect(a.authored_total).toBe(3);
+      // Self-assigned + unassigned both count as undispatched; assigned-to-other does not
+      expect(a.pending_dispatch).toBe(2);
+    });
+
+    it('fires authoring_dispatch_backlog when p95 age > 48h', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      // 5 days ago — well past 48h
+      const old = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+      writeFileSync(join(ctxRoot, 'tasks', 't1.json'), JSON.stringify({
+        created_by: 'product-owner', status: 'pending', created_at: old,
+      }), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      const role = report.agents['product-owner'].role;
+      expect(role.authoring.pending_dispatch_age_p95_ms).toBeGreaterThan(172_800_000);
+      expect(role.anomalies).toContain('authoring_dispatch_backlog');
+    });
+
+    it('does NOT fire dispatch backlog on a 1-hour-old pending task', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      const recent = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      writeFileSync(join(ctxRoot, 'tasks', 't1.json'), JSON.stringify({
+        created_by: 'product-owner', status: 'pending', created_at: recent,
+      }), 'utf-8');
+
+      const role = collectMetrics(ctxRoot).agents['product-owner'].role;
+      expect(role.anomalies).not.toContain('authoring_dispatch_backlog');
+    });
+
+    it('does NOT fire low-completion-ratio on authoring roles (the original PO false-positive)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      // 5 completed assignee, 22 pending assignee → ratio = 5/27 = 0.185, < 0.3 threshold.
+      // But product-owner is `authoring`, so the assignee threshold must NOT apply.
+      for (let i = 0; i < 5; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `c${i}.json`), JSON.stringify({ assigned_to: 'product-owner', status: 'completed' }), 'utf-8');
+      }
+      for (let i = 0; i < 22; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `p${i}.json`), JSON.stringify({ assigned_to: 'product-owner', status: 'pending' }), 'utf-8');
+      }
+
+      const role = collectMetrics(ctxRoot).agents['product-owner'].role;
+      expect(role.anomalies).not.toContain('assignee_low_completion_ratio');
+    });
+
+    it('fires wip_cap_breach on coding-assignee with too many in_progress', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      for (let i = 0; i < 7; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `ip${i}.json`), JSON.stringify({ assigned_to: 'frontend-dev', status: 'in_progress' }), 'utf-8');
+      }
+
+      const role = collectMetrics(ctxRoot).agents['frontend-dev'].role;
+      expect(role.anomalies).toContain('assignee_wip_cap_breach');
+    });
+
+    it('analyst-hybrid carries BOTH assignee and authoring thresholds', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'systems-analyst': { enabled: true } }), 'utf-8');
+      // 6 in_progress (> 5 cap) AS assignee
+      for (let i = 0; i < 6; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `ip${i}.json`), JSON.stringify({ assigned_to: 'systems-analyst', status: 'in_progress' }), 'utf-8');
+      }
+      // 1 stale authored task (> 48h)
+      const old = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+      writeFileSync(join(ctxRoot, 'tasks', 'auth.json'), JSON.stringify({
+        created_by: 'systems-analyst', status: 'pending', created_at: old,
+      }), 'utf-8');
+
+      const role = collectMetrics(ctxRoot).agents['systems-analyst'].role;
+      expect(role.role_type).toBe('analyst-hybrid');
+      expect(role.anomalies).toContain('assignee_wip_cap_breach');
+      expect(role.anomalies).toContain('authoring_dispatch_backlog');
+    });
+
+    it('inbox-triage counts category=inbox and inbox_*/request_* events', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'devops-monitor': { enabled: true } }), 'utf-8');
+      const today = new Date().toISOString().split('T')[0];
+      const eventDir = join(ctxRoot, 'analytics', 'events', 'devops-monitor');
+      mkdirSync(eventDir, { recursive: true });
+      writeFileSync(join(eventDir, `${today}.jsonl`), [
+        '{"category":"inbox","event":"telegram_message","severity":"info"}',
+        '{"category":"action","event":"inbox_message_received","severity":"info"}',
+        '{"category":"action","event":"request_received","severity":"info"}',
+        '{"category":"action","event":"heartbeat","severity":"info"}',
+      ].join('\n'), 'utf-8');
+
+      const role = collectMetrics(ctxRoot).agents['devops-monitor'].role;
+      expect(role.role_type).toBe('inbox-triage');
+      expect(role.inbox_triage.requests_today).toBe(3);
+      // p50 and classification_accuracy stay null pending the backfill pipeline
+      expect(role.inbox_triage.response_p50_ms).toBeNull();
+      expect(role.inbox_triage.classification_accuracy).toBeNull();
+    });
+
+    it('keeps legacy fields (tasks_completed/pending/in_progress) alongside the role block', () => {
+      // Backwards-compat for existing dashboards reading the unified counters.
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 't1.json'), JSON.stringify({ assigned_to: 'bot1', status: 'completed' }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 't2.json'), JSON.stringify({ assigned_to: 'bot1', status: 'pending' }), 'utf-8');
+
+      const a = collectMetrics(ctxRoot).agents.bot1;
+      expect(a.tasks_completed).toBe(1);
+      expect(a.tasks_pending).toBe(1);
+      expect(a.role.assignee.completed).toBe(1);
+      expect(a.role.assignee.pending).toBe(1);
+    });
+  });
+
+  describe('resolveRoleConfig', () => {
+    it('returns name-default config when no role.json exists', () => {
+      expect(defaultRoleType('frontend-dev')).toBe('coding-assignee');
+      expect(defaultRoleType('product-owner')).toBe('authoring');
+      expect(defaultRoleType('systems-analyst')).toBe('analyst-hybrid');
+      expect(defaultRoleType('some-future-agent')).toBe('coding-assignee');
+    });
+
+    it('defaultRoleConfig returns a deep copy (mutating one does not bleed into another)', () => {
+      const a = defaultRoleConfig('coding-assignee');
+      a.anomaly_thresholds.assignee_completion_ratio_min = 0.99;
+      const b = defaultRoleConfig('coding-assignee');
+      expect(b.anomaly_thresholds.assignee_completion_ratio_min).toBe(0.3);
+    });
+
+    it('resolveRoleConfig prefers org-scoped role.json over root role.json', () => {
+      const agent = 'frontend-dev';
+      const rootDir = join(ctxRoot, 'agents', agent);
+      mkdirSync(rootDir, { recursive: true });
+      writeFileSync(join(rootDir, 'role.json'), JSON.stringify({ role_type: 'inbox-triage' }), 'utf-8');
+
+      const orgDir = join(ctxRoot, 'orgs', 'myorg', 'agents', agent);
+      mkdirSync(orgDir, { recursive: true });
+      writeFileSync(join(orgDir, 'role.json'), JSON.stringify({ role_type: 'authoring' }), 'utf-8');
+
+      expect(resolveRoleConfig(ctxRoot, agent).role_type).toBe('inbox-triage');
+      expect(resolveRoleConfig(ctxRoot, agent, 'myorg').role_type).toBe('authoring');
     });
   });
 

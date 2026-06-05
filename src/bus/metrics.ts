@@ -7,8 +7,52 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, m
 import { join, basename, dirname } from 'path';
 import { execSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
+import { resolveRoleConfig, type RoleConfig, type RoleType } from './role-config.js';
 
 // --- Types ---
+
+/**
+ * Per-role KPI blocks (SYS-MET-01). The role-typed `role` block is emitted
+ * alongside the legacy unified counters so existing dashboards and callers
+ * keep working.
+ */
+
+export interface AssigneeMetrics {
+  completed: number;
+  pending: number;
+  in_progress: number;
+  /** completed / (completed + pending), or null when both are 0 */
+  completion_ratio: number | null;
+}
+
+export interface AuthoringMetrics {
+  /** All tasks where created_by === agent (any status) */
+  authored_total: number;
+  /** Authored tasks still in author's queue: pending + (unassigned OR self-assigned) */
+  pending_dispatch: number;
+  /** Age (now - created_at, ms) percentiles across currently pending-dispatch tasks */
+  pending_dispatch_age_p50_ms: number | null;
+  pending_dispatch_age_p95_ms: number | null;
+}
+
+export interface InboxTriageMetrics {
+  /** Today's events with category='inbox' or event names matching the inbox pattern */
+  requests_today: number;
+  /** p50 response latency (ms). null until a separate event-pairing pipeline emits it */
+  response_p50_ms: number | null;
+  /** null pending the ground-truth backfill pipeline — see SYS-MET-01-ADDENDUM */
+  classification_accuracy: number | null;
+}
+
+export interface RoleMetrics {
+  role_type: RoleType;
+  primary_kpi: string;
+  assignee: AssigneeMetrics;
+  authoring: AuthoringMetrics;
+  inbox_triage: InboxTriageMetrics;
+  /** Anomaly tokens fired this run, scoped to this role-type's thresholds */
+  anomalies: string[];
+}
 
 export interface AgentMetrics {
   tasks_completed: number;
@@ -16,6 +60,8 @@ export interface AgentMetrics {
   tasks_in_progress: number;
   errors_today: number;
   heartbeat_stale: boolean;
+  /** Role-typed KPI block. Required — every agent resolves to a role config. */
+  role: RoleMetrics;
 }
 
 export interface SystemMetrics {
@@ -97,9 +143,107 @@ function isErrorEvent(line: string): boolean {
   return evt.severity === 'error' || evt.severity === 'critical';
 }
 
+/**
+ * Index of all task records used by collectMetrics. Internal-only — kept in
+ * memory so we can compute per-agent assignee+authoring rollups in O(tasks)
+ * total instead of O(tasks × agents). Only the fields that matter for KPIs
+ * are typed; everything else is intentionally absent.
+ */
+interface TaskRecord {
+  assigned_to?: string;
+  created_by?: string;
+  status?: string;
+  created_at?: string;
+}
+
+/**
+ * Nearest-rank percentile (no interpolation). p must be in [0, 100].
+ * Returns null for empty input — keeps callers honest about no-data cases.
+ */
+function percentile(values: number[], p: number): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx];
+}
+
+/**
+ * Inbox-triage request signal. Counts today's events that look like inbound
+ * messages: category='inbox' OR an event name starting with `inbox_`/`request_`.
+ * Conservative — agents that already emit category='inbox' get an accurate
+ * count; others get 0 until they normalize. This is the scaffold called out
+ * in SYS-MET-01-ADDENDUM (primary KPI = request-count + response-p50; the
+ * pairing pipeline that produces p50 lives in a separate task).
+ */
+function countInboxRequests(eventFiles: string[]): number {
+  let count = 0;
+  for (const f of eventFiles) {
+    if (!existsSync(f)) continue;
+    try {
+      const lines = readFileSync(f, 'utf-8').split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const e = JSON.parse(line) as { category?: unknown; event?: unknown };
+          if (e.category === 'inbox') { count++; continue; }
+          if (typeof e.event === 'string' && (e.event.startsWith('inbox_') || e.event.startsWith('request_'))) {
+            count++;
+          }
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+  }
+  return count;
+}
+
+/**
+ * Apply per-role anomaly thresholds. Returns the firing anomaly tokens.
+ * Empty array = healthy. Tokens are stable strings consumers can match on.
+ */
+function detectAnomalies(role: RoleConfig, metrics: Omit<RoleMetrics, 'anomalies' | 'role_type' | 'primary_kpi'>): string[] {
+  const out: string[] = [];
+  const t = role.anomaly_thresholds;
+
+  const wantsAssignee = role.role_type === 'coding-assignee' || role.role_type === 'analyst-hybrid';
+  const wantsAuthoring = role.role_type === 'authoring' || role.role_type === 'analyst-hybrid';
+  const wantsInbox = role.role_type === 'inbox-triage';
+
+  if (wantsAssignee) {
+    if (typeof t.assignee_completion_ratio_min === 'number'
+        && metrics.assignee.completion_ratio !== null
+        && metrics.assignee.completion_ratio < t.assignee_completion_ratio_min) {
+      out.push('assignee_low_completion_ratio');
+    }
+    if (typeof t.wip_cap_max === 'number' && metrics.assignee.in_progress > t.wip_cap_max) {
+      out.push('assignee_wip_cap_breach');
+    }
+  }
+  if (wantsAuthoring) {
+    if (typeof t.pending_dispatch_age_p95_max_ms === 'number'
+        && metrics.authoring.pending_dispatch_age_p95_ms !== null
+        && metrics.authoring.pending_dispatch_age_p95_ms > t.pending_dispatch_age_p95_max_ms) {
+      out.push('authoring_dispatch_backlog');
+    }
+  }
+  if (wantsInbox) {
+    if (typeof t.response_p50_max_ms === 'number'
+        && metrics.inbox_triage.response_p50_ms !== null
+        && metrics.inbox_triage.response_p50_ms > t.response_p50_max_ms) {
+      out.push('inbox_triage_slow_response');
+    }
+    if (typeof t.classification_accuracy_min === 'number'
+        && metrics.inbox_triage.classification_accuracy !== null
+        && metrics.inbox_triage.classification_accuracy < t.classification_accuracy_min) {
+      out.push('inbox_triage_classification_drift');
+    }
+  }
+
+  return out;
+}
+
 export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
   const timestamp = new Date().toISOString();
   const today = timestamp.split('T')[0];
+  const now = Date.now();
 
   const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
   let agentNames: string[] = [];
@@ -131,25 +275,47 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
     } catch { /* ignore */ }
   }
 
-  for (const agent of agentNames) {
-    let completed = 0, pending = 0, inProgress = 0;
+  // Single-pass: load every task once into memory. 1k+ tasks × 10+ agents ran
+  // the previous nested loop at O(tasks × agents) reads; preloading collapses
+  // it to O(tasks). Status/created_by parsing happens per-task once.
+  const allTasks: TaskRecord[] = [];
+  for (const taskDir of taskDirs) {
+    try {
+      for (const file of readdirSync(taskDir)) {
+        if (!file.endsWith('.json')) continue;
+        try {
+          allTasks.push(JSON.parse(readFileSync(join(taskDir, file), 'utf-8')) as TaskRecord);
+        } catch { /* skip bad files */ }
+      }
+    } catch { /* skip bad dirs */ }
+  }
 
-    // Count tasks by status
-    for (const taskDir of taskDirs) {
-      try {
-        for (const file of readdirSync(taskDir)) {
-          if (!file.endsWith('.json')) continue;
-          try {
-            const task = JSON.parse(readFileSync(join(taskDir, file), 'utf-8'));
-            if (task.assigned_to !== agent) continue;
-            switch (task.status) {
-              case 'completed': completed++; break;
-              case 'pending': pending++; break;
-              case 'in_progress': inProgress++; break;
-            }
-          } catch { /* skip bad files */ }
+  for (const agent of agentNames) {
+    const roleConfig = resolveRoleConfig(ctxRoot, agent, org);
+    let completed = 0, pending = 0, inProgress = 0;
+    let authoredTotal = 0, pendingDispatch = 0;
+    const pendingDispatchAges: number[] = [];
+
+    for (const task of allTasks) {
+      if (task.assigned_to === agent) {
+        switch (task.status) {
+          case 'completed': completed++; break;
+          case 'pending': pending++; break;
+          case 'in_progress': inProgress++; break;
         }
-      } catch { /* skip bad dirs */ }
+      }
+      if (task.created_by === agent) {
+        authoredTotal++;
+        // "pending dispatch" = author still owns it (unassigned OR self-assigned)
+        const selfOrUnassigned = !task.assigned_to || task.assigned_to === agent;
+        if (task.status === 'pending' && selfOrUnassigned) {
+          pendingDispatch++;
+          if (task.created_at) {
+            const t = Date.parse(task.created_at);
+            if (!Number.isNaN(t)) pendingDispatchAges.push(now - t);
+          }
+        }
+      }
     }
     totalCompleted += completed;
 
@@ -185,7 +351,7 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
         const hb = JSON.parse(readFileSync(hbFile, 'utf-8'));
         if (hb.last_heartbeat) {
           const hbTime = new Date(hb.last_heartbeat).getTime();
-          const age = Date.now() - hbTime;
+          const age = now - hbTime;
           if (age < 5 * 60 * 60 * 1000) {
             heartbeatStale = false;
             agentsHealthy++;
@@ -194,12 +360,40 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       } catch { /* stale by default */ }
     }
 
+    const denom = completed + pending;
+    const assignee: AssigneeMetrics = {
+      completed,
+      pending,
+      in_progress: inProgress,
+      completion_ratio: denom === 0 ? null : completed / denom,
+    };
+    const authoring: AuthoringMetrics = {
+      authored_total: authoredTotal,
+      pending_dispatch: pendingDispatch,
+      pending_dispatch_age_p50_ms: percentile(pendingDispatchAges, 50),
+      pending_dispatch_age_p95_ms: percentile(pendingDispatchAges, 95),
+    };
+    const inbox: InboxTriageMetrics = {
+      requests_today: roleConfig.role_type === 'inbox-triage' ? countInboxRequests(eventPaths) : 0,
+      response_p50_ms: null,
+      classification_accuracy: null,
+    };
+    const anomalies = detectAnomalies(roleConfig, { assignee, authoring, inbox_triage: inbox });
+
     agents[agent] = {
       tasks_completed: completed,
       tasks_pending: pending,
       tasks_in_progress: inProgress,
       errors_today: errorsToday,
       heartbeat_stale: heartbeatStale,
+      role: {
+        role_type: roleConfig.role_type,
+        primary_kpi: roleConfig.primary_kpi,
+        assignee,
+        authoring,
+        inbox_triage: inbox,
+        anomalies,
+      },
     };
   }
 

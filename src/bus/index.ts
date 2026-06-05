@@ -52,8 +52,19 @@ export {
   registerTelegramCommands,
   type MetricsReport,
   type AgentMetrics,
+  type AssigneeMetrics,
+  type AuthoringMetrics,
+  type InboxTriageMetrics,
+  type RoleMetrics,
   type SystemMetrics,
   type UsageData,
   type UpstreamResult,
   type RegisterCommandsResult,
 } from './metrics.js';
+export {
+  defaultRoleType,
+  defaultRoleConfig,
+  resolveRoleConfig,
+  type RoleType,
+  type RoleConfig,
+} from './role-config.js';
