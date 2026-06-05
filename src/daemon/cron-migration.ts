@@ -391,6 +391,140 @@ function runMigrationCore(
 }
 
 // ---------------------------------------------------------------------------
+// Boot-time config → crons.json re-sync (config-state-resync)
+// ---------------------------------------------------------------------------
+
+export interface ResyncResult {
+  agentName: string;
+  /** Config crons newly added to crons.json. */
+  added: string[];
+  /** Config-owned crons whose schedule/prompt changed in config.json. */
+  updated: string[];
+  /** Config-owned crons removed because they vanished from config.json. */
+  removed: string[];
+  /** True iff crons.json was rewritten. */
+  changed: boolean;
+}
+
+/**
+ * Re-sync an agent's crons.json with its config.json on every daemon boot.
+ *
+ * The one-shot `.crons-migrated` marker means `migrateCronsForAgent` runs
+ * exactly once; after that, edits to the `crons` array in config.json never
+ * reach the live daemon (evidence: tezcatlipoca notes/f-bundle-config-state-
+ * evidence.md — Inari's ollama-day/night crons edited post-migration silently
+ * no-opped). This function closes that gap by merging on every boot.
+ *
+ * Ownership model — crons.json holds two kinds of cron:
+ *   1. Config-owned: migrated from config.json, tagged
+ *      `metadata.migrated_from_config === true`. config.json is their source
+ *      of truth: this resync ADDs new ones, UPDATEs schedule/prompt when the
+ *      config entry changed, and REMOVEs ones deleted from config.
+ *   2. Runtime: added via `cortextos bus add-cron` (no migrated flag). These
+ *      are never touched — add-cron / update-cron / remove-cron own them.
+ *
+ * Runtime state on a config-owned cron (last_fired_at, fire_count,
+ * last_fire_attempted_at) and its original created_at are preserved across an
+ * update; only schedule, prompt, and description are pulled forward from
+ * config. `enabled` is intentionally NOT overridden — an operator who paused a
+ * cron at runtime (update-cron --enabled false) keeps that pause. crons.json is
+ * rewritten only when something actually changed, so a steady-state boot is a
+ * pure read.
+ */
+export function resyncCronsFromConfig(
+  agentName: string,
+  configJsonPath: string,
+  options: MigrationOptions = {},
+): ResyncResult {
+  const log = options.log ?? ((msg: string) => console.log(`[cron-resync] ${msg}`));
+  const empty: ResyncResult = { agentName, added: [], updated: [], removed: [], changed: false };
+
+  // Missing config → nothing to sync. Never clear live crons.json from absence.
+  if (!existsSync(configJsonPath)) return empty;
+
+  let rawConfig: unknown;
+  try {
+    rawConfig = JSON.parse(readFileSync(configJsonPath, 'utf-8'));
+  } catch (err) {
+    // Corrupt config.json: leave live state untouched (do NOT wipe crons).
+    log(
+      `resync skipped for "${agentName}" — config.json unparseable: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return empty;
+  }
+
+  const configCrons: CronEntry[] = [];
+  if (
+    rawConfig !== null &&
+    typeof rawConfig === 'object' &&
+    'crons' in rawConfig &&
+    Array.isArray((rawConfig as { crons?: unknown }).crons)
+  ) {
+    configCrons.push(...((rawConfig as { crons: CronEntry[] }).crons));
+  }
+
+  // Convert config entries; unconvertible ones (one-shots, schedule-less) are
+  // simply absent from the owned set and so neither added nor used for removal.
+  const configDefs = new Map<string, CronDefinition>();
+  for (const entry of configCrons) {
+    const converted = convertEntry(entry, agentName);
+    if ('cron' in converted) {
+      configDefs.set(converted.cron.name, converted.cron);
+    }
+  }
+
+  const existing = readCrons(agentName);
+  const existingNames = new Set(existing.map((c) => c.name));
+
+  const added: string[] = [];
+  const updated: string[] = [];
+  const removed: string[] = [];
+  const result: CronDefinition[] = [];
+
+  // 1. Walk existing crons: preserve runtime crons, reconcile config-owned ones.
+  for (const cur of existing) {
+    const isConfigOwned = cur.metadata?.['migrated_from_config'] === true;
+    if (!isConfigOwned) {
+      result.push(cur); // runtime cron — never touched
+      continue;
+    }
+    const cfg = configDefs.get(cur.name);
+    if (!cfg) {
+      removed.push(cur.name); // deleted from config.json
+      continue;
+    }
+    const merged: CronDefinition = {
+      ...cur,
+      schedule: cfg.schedule,
+      prompt: cfg.prompt,
+      description: cfg.description ?? cur.description,
+      metadata: { ...cur.metadata, migrated_from_config: true },
+    };
+    if (merged.schedule !== cur.schedule || merged.prompt !== cur.prompt) {
+      updated.push(cur.name);
+    }
+    result.push(merged);
+  }
+
+  // 2. Add config crons not already present in crons.json.
+  for (const [name, def] of configDefs) {
+    if (existingNames.has(name)) continue;
+    result.push(def);
+    added.push(name);
+  }
+
+  const changed = added.length > 0 || updated.length > 0 || removed.length > 0;
+  if (changed) {
+    writeCrons(agentName, result);
+    log(
+      `Resynced "${agentName}" from config.json: +${added.length} added, ~${updated.length} updated, -${removed.length} removed`,
+    );
+  }
+
+  return { agentName, added, updated, removed, changed };
+}
+
+// ---------------------------------------------------------------------------
 // Multi-agent migration
 // ---------------------------------------------------------------------------
 

@@ -5,7 +5,7 @@ import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
-import { migrateCronsForAgent } from './cron-migration.js';
+import { migrateCronsForAgent, resyncCronsFromConfig } from './cron-migration.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -414,6 +414,15 @@ export class AgentManager {
     const configJsonPath = join(agentDir, 'config.json');
     migrateCronsForAgent(name, configJsonPath, this.ctxRoot, {
       log: (msg) => log(`[migration] ${msg}`),
+    });
+
+    // config-state-resync: the migration above is one-shot (gated by the
+    // .crons-migrated marker), so post-migration edits to config.json's crons
+    // array never reached the live daemon. Re-sync on every boot to pull
+    // config-owned cron add/edit/remove into crons.json while leaving
+    // runtime-added (add-cron) crons untouched. Cheap no-op when nothing changed.
+    resyncCronsFromConfig(name, configJsonPath, {
+      log: (msg) => log(`[resync] ${msg}`),
     });
 
     // Wire daemon-level CronScheduler for this agent.
