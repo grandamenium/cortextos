@@ -153,9 +153,26 @@ export class AgentPTY {
 
     this._alive = true;
 
-    // Set up output capture
+    // Set up output capture. Watch for Claude Code's "Bypass Permissions mode"
+    // confirmation dialog that appears on boot with --dangerously-skip-permissions.
+    // The dialog renders option 1 "No, exit" (pre-selected) and option 2 "Yes, I accept".
+    // ANSI cursor-right codes (\x1b[1C) appear between words, so multi-word phrases
+    // don't appear as contiguous strings — but single words like "Bypass" do.
+    // We detect "Bypass" early and send Down Arrow + Enter to select option 2.
+    let bypassDialogHandled = false;
     this.pty.onData((data: string) => {
       this.outputBuffer.push(data);
+      // "Bypass" appears as a contiguous word in the ANSI-encoded dialog stream.
+      // Only fire once (bypassDialogHandled) to avoid spurious keystrokes later.
+      if (!bypassDialogHandled && data.includes('Bypass')) {
+        bypassDialogHandled = true;
+        setTimeout(() => {
+          if (this.pty) {
+            this.pty.write('\x1b[B'); // Down arrow: move selection to "Yes, I accept"
+            setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 200);
+          }
+        }, 300);
+      }
     });
 
     // Set up exit handler
@@ -166,26 +183,6 @@ export class AgentPTY {
         this.onExitHandler(exitCode, signal);
       }
     });
-
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 8000);
   }
 
   /**
@@ -229,6 +226,7 @@ export class AgentPTY {
     }
 
     args.push('--dangerously-skip-permissions');
+    args.push('--permission-mode', 'bypassPermissions');
 
     if (this.config.model) {
       args.push('--model', this.config.model);

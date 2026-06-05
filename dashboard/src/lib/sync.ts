@@ -358,6 +358,7 @@ export function syncCostsLazy(): void {
 // ---------------------------------------------------------------------------
 
 export function syncFile(filePath: string): void {
+  filePath = filePath.replace(/\\/g, '/');
   if (filePath.includes('/tasks/') && filePath.endsWith('.json')) {
     const org = extractOrgFromPath(filePath);
     if (org) syncTasks(org);

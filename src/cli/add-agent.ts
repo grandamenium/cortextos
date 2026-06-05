@@ -368,7 +368,7 @@ function installCodexSkillSymlinks(agentDir: string, agentName: string): number 
           }
         } catch { /* path likely doesn't exist; continue to symlink */ }
       }
-      symlinkSync(skillSrc, linkPath, 'dir');
+      symlinkSync(skillSrc, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
       linked++;
     } catch (err) {
       // Don't abort the whole scaffold for one bad symlink.

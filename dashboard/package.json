@@ -51,5 +51,11 @@
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.1"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.8.0": true,
+    "msw@2.13.0": true,
+    "sharp@0.34.5": true,
+    "unrs-resolver@1.11.1": true
   }
 }

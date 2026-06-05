@@ -28,6 +28,7 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
   let tempRoot: string;
   let tempHome: string;
   let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
   let originalCwd: string | undefined;
   let originalFrameworkRoot: string | undefined;
 
@@ -36,16 +37,18 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     tempHome = mkdtempSync(join(tmpdir(), 'pr02-home-'));
 
     originalHome = process.env.HOME;
+    originalUserProfile = process.env.USERPROFILE;
     originalCwd = process.env.CTX_PROJECT_ROOT;
     originalFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
     process.env.HOME = tempHome;
+    process.env.USERPROFILE = tempHome; // Windows: os.homedir() reads USERPROFILE
     // Point template lookup + agent creation at the temp root.
     process.env.CTX_FRAMEWORK_ROOT = tempRoot;
     process.env.CTX_PROJECT_ROOT = tempRoot;
 
     // Symlink the real templates dir into the temp root so findTemplateDir resolves.
     const realTemplates = join(__dirname, '..', '..', '..', 'templates');
-    symlinkSync(realTemplates, join(tempRoot, 'templates'), 'dir');
+    symlinkSync(realTemplates, join(tempRoot, 'templates'), process.platform === 'win32' ? 'junction' : 'dir');
 
     // Set up an org so the scaffolder doesn't bail on "no org found".
     mkdirSync(join(tempRoot, 'orgs', 'testorg', 'agents'), { recursive: true });
@@ -65,6 +68,8 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
 
   afterEach(() => {
     process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
     process.env.CTX_PROJECT_ROOT = originalCwd;
     process.env.CTX_FRAMEWORK_ROOT = originalFrameworkRoot;
     rmSync(tempRoot, { recursive: true, force: true });
@@ -242,7 +247,7 @@ describe('PR-10: add-agent rejects codex+claude-only-template combos', () => {
     process.env.CTX_PROJECT_ROOT = tempRoot;
 
     const realTemplates = join(__dirname, '..', '..', '..', 'templates');
-    symlinkSync(realTemplates, join(tempRoot, 'templates'), 'dir');
+    symlinkSync(realTemplates, join(tempRoot, 'templates'), process.platform === 'win32' ? 'junction' : 'dir');
 
     mkdirSync(join(tempRoot, 'orgs', 'testorg', 'agents'), { recursive: true });
     writeFileSync(

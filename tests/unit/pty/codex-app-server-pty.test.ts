@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join } from 'path';
 
 const fsMocks = {
   existsSync: vi.fn().mockReturnValue(false),
@@ -94,7 +95,7 @@ beforeEach(() => {
 describe('CodexAppServerPTY socket path policy', () => {
   it('uses codex.sock in the agent state dir by default', () => {
     const pty = new CodexAppServerPTY(mockEnv, {});
-    expect((pty as unknown as { _socketPath: string })._socketPath).toBe('/tmp/ctx/state/codex-app-agent/codex.sock');
+    expect((pty as unknown as { _socketPath: string })._socketPath).toBe(join('/tmp/ctx', 'state', 'codex-app-agent', 'codex.sock'));
     expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toBe('unix://./codex.sock');
   });
 
@@ -105,7 +106,7 @@ describe('CodexAppServerPTY socket path policy', () => {
     };
     const pty = new CodexAppServerPTY(longEnv, {});
     const socketPath = (pty as unknown as { _socketPath: string })._socketPath;
-    expect(socketPath).toMatch(/\/cas-[a-f0-9]{8}\.sock$/);
+    expect(socketPath).toMatch(/[/\\]cas-[a-f0-9]{8}\.sock$/);
     expect((pty as unknown as { _socketListenArg: string })._socketListenArg).toMatch(/^unix:\/\/\.\/cas-[a-f0-9]{8}\.sock$/);
     expect((pty as unknown as { _socketCwd: string })._socketCwd).toBe('/tmp');
     expect(fsMocks.writeFileSync).toHaveBeenCalledWith(
@@ -937,7 +938,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
 
     expect(atomicWriteSyncMock).toHaveBeenCalledTimes(1);
     const [path] = atomicWriteSyncMock.mock.calls[0];
-    expect(path).toBe('/tmp/ctx/state/codex-app-agent/context_status.json');
+    expect(path).toBe(join('/tmp/ctx', 'state', 'codex-app-agent', 'context_status.json'));
     const payload = lastWrittenPayload()!;
     expect(payload.used_percentage).toBeCloseTo(35, 5);
     expect(payload.context_window_size).toBe(200000);
@@ -1080,7 +1081,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
 
     expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
     const [path, line] = fsMocks.appendFileSync.mock.calls[0] as [string, string];
-    expect(path).toBe('/tmp/ctx/logs/codex-app-agent/codex-tokens.jsonl');
+    expect(path).toBe(join('/tmp/ctx', 'logs', 'codex-app-agent', 'codex-tokens.jsonl'));
     expect(line.endsWith('\n')).toBe(true);
 
     const entry = lastAppendedEntry()!;

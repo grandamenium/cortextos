@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { join } from 'path';
 
 // Capture the PTY exit handler so tests can simulate exits at controlled times
 let capturedOnExit: ((exitCode: number, signal?: number) => void) | null = null;
@@ -177,7 +178,7 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     // to stdout and left restarts.log empty.
     expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
     const [logPath, logLine] = fsMocks.appendFileSync.mock.calls[0];
-    expect(String(logPath)).toContain('/logs/alice/restarts.log');
+    expect(String(logPath).replace(/\\/g, '/')).toContain('/logs/alice/restarts.log');
     expect(String(logLine)).toMatch(/\] CRASH: exit_code=1 crash_count=1 backoff_s=5\b/);
     expect(String(logLine).endsWith('\n')).toBe(true);
   });
@@ -188,7 +189,7 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     // signal and bail out before touching the crash counter or restarts.log.
     fsMocks.existsSync.mockImplementation((p: any) => {
       const path = String(p);
-      return path.endsWith('/state/alice/.daemon-stop');
+      return path.replace(/\\/g, '/').endsWith('/state/alice/.daemon-stop');
     });
     fsMocks.statSync.mockImplementation((p: any) => ({ mtimeMs: Date.now() - 2_000 }));
 
@@ -263,7 +264,7 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
       (call) => String(call[0]).endsWith('.session-refresh'),
     );
     expect(writeIdx).toBeGreaterThanOrEqual(0);
-    expect(String(fsMocks.writeFileSync.mock.calls[writeIdx][0])).toBe('/tmp/test-ctx/state/alice/.session-refresh');
+    expect(String(fsMocks.writeFileSync.mock.calls[writeIdx][0])).toBe(join('/tmp/test-ctx', 'state', 'alice', '.session-refresh'));
     // The marker must be written BEFORE stop() — a SessionEnd hook firing as
     // the PTY dies must already see the marker, or it classifies a false crash.
     const markerWriteOrder = fsMocks.writeFileSync.mock.invocationCallOrder[writeIdx];

@@ -41,7 +41,7 @@ interface MockCodexServerInstance {
   requestLog: Array<{ method: string; params: unknown; notification?: boolean }>;
 }
 
-describe('E2E codex lifecycle (mock-codex.js + WsUnixJsonRpcClient)', () => {
+describe.skipIf(process.platform === 'win32')('E2E codex lifecycle (mock-codex.js + WsUnixJsonRpcClient)', () => {
   let testDir: string;
   let socketPath: string;
   let server: MockCodexServerInstance;

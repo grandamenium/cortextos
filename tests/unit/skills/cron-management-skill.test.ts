@@ -12,7 +12,7 @@ function readSkill(p: string): string {
 }
 
 function parseFrontmatter(content: string): Record<string, unknown> | null {
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
   const block = match[1];
   const result: Record<string, unknown> = {};
@@ -51,7 +51,7 @@ describe('cron-management skill', () => {
     const canonical = readSkill(CANONICAL_PATH);
 
     it('has valid frontmatter delimiters', () => {
-      expect(canonical).toMatch(/^---\n[\s\S]*?\n---/);
+      expect(canonical).toMatch(/^---\r?\n[\s\S]*?\r?\n---/);
     });
 
     it('has name field', () => {
@@ -80,7 +80,7 @@ describe('cron-management skill', () => {
 
   describe('body references all 6 bus commands', () => {
     const canonical = readSkill(CANONICAL_PATH);
-    const body = canonical.replace(/^---\n[\s\S]*?\n---\n/, '');
+    const body = canonical.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
 
     it('references add-cron', () => {
       expect(body).toContain('add-cron');
@@ -109,7 +109,7 @@ describe('cron-management skill', () => {
 
   describe('stale patterns removed from body', () => {
     const canonical = readSkill(CANONICAL_PATH);
-    const body = canonical.replace(/^---\n[\s\S]*?\n---\n/, '');
+    const body = canonical.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
 
     it('does not contain "Crons die on restart"', () => {
       expect(body).not.toContain('Crons die on restart');

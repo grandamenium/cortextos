@@ -134,7 +134,7 @@ describe('listAgentFiles', () => {
     write('AGENTS.md', 'b\n');
     write('ONBOARDING.md', 'c\n');
     const files = listAgentFiles(workDir);
-    expect(files.map((f) => f.split('/').pop())).toEqual(
+    expect(files.map((f) => f.split(/[/\\]/).pop())).toEqual(
       expect.arrayContaining(['CLAUDE.md', 'AGENTS.md', 'ONBOARDING.md']),
     );
   });
@@ -144,7 +144,7 @@ describe('listAgentFiles', () => {
     write('.claude/skills/agent-management/SKILL.md', 'am\n');
     write('.claude/skills/agent-management/notes.md', 'ignored\n'); // not SKILL.md
     const files = listAgentFiles(workDir);
-    const basenames = files.map((f) => f.replace(workDir + '/', ''));
+    const basenames = files.map((f) => f.slice(workDir.length + 1).replace(/\\/g, '/'));
     expect(basenames).toContain('.claude/skills/cron-management/SKILL.md');
     expect(basenames).toContain('.claude/skills/agent-management/SKILL.md');
     expect(basenames).not.toContain('.claude/skills/agent-management/notes.md');
