@@ -2,6 +2,19 @@ import type { Priority, EventCategory, EventSeverity, ApprovalCategory } from '.
 import { VALID_PRIORITIES } from '../types/index.js';
 
 const AGENT_NAME_REGEX = /^[a-z0-9_-]+$/;
+// Task IDs are generated as `task_<epoch>_<rand>` (lowercase). Allow lowercase
+// letters, digits, underscores and hyphens — matching the generator and the
+// rest of the codebase's identifier convention — while rejecting path
+// separators and dots so a task id can never traverse out of the task tree.
+const TASK_ID_REGEX = /^[a-z0-9_-]+$/;
+
+export function validateTaskId(taskId: string): void {
+  if (!taskId || !TASK_ID_REGEX.test(taskId)) {
+    throw new Error(
+      `Invalid task id '${taskId}'. Must contain only letters, numbers, underscores, and hyphens.`
+    );
+  }
+}
 
 export function validateInstanceId(instanceId: string): void {
   if (!instanceId || !AGENT_NAME_REGEX.test(instanceId)) {
@@ -140,7 +153,15 @@ export function wrapFenceSafe(input: string): string {
  *    that swallows following real structure (survives input transforms — no
  *    zero-width reliance);
  *  - prefix forged `=== AGENT MESSAGE` / `=== TELEGRAM` / `Reply using:
- *    cortextos bus` lines with [quoted] so they read as content.
+ *    cortextos bus` lines with [quoted] so they read as content. The leading-
+ *    whitespace class must match every Unicode space char a downstream parser's
+ *    `.trim()` would strip, or a header preceded by e.g. NBSP/IDEOGRAPHIC SPACE
+ *    escapes [quoted] here yet is still recognized as a header after trim (#596,
+ *    ClintMoody). Line terminators are excluded — the /m anchor already starts a
+ *    new match after \n and after U+2028/U+2029; \r was folded to \n above; and
+ *    \v/\f were removed by stripControlChars — so the class only needs the
+ *    space-like chars: tab, space, NBSP, OGHAM, the U+2000–200A run, NARROW NBSP,
+ *    MEDIUM MATH SPACE, IDEOGRAPHIC SPACE, and BOM/ZWNBSP.
  * Lossy, but these fields are already truncated context hints — acceptable.
  */
 export function sanitizeForPtyInjection(input: string): string {
@@ -148,7 +169,7 @@ export function sanitizeForPtyInjection(input: string): string {
     .replace(/\r\n?/g, '\n')
     .replace(/`{3,}/g, '``')
     .replace(
-      /^([ \t]*)(={3,}\s*(?:AGENT MESSAGE|TELEGRAM)\b|Reply using:\s*cortextos\s+bus)/gim,
+      /^([ \t\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\uFEFF]*)(={3,}\s*(?:AGENT MESSAGE|TELEGRAM)\b|Reply using:\s*cortextos\s+bus)/gim,
       '$1[quoted] $2',
     );
 }

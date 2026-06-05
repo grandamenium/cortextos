@@ -324,11 +324,9 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     caption: string,
     imagePath: string,
   ): string {
-    return `=== TELEGRAM PHOTO from ${from} (chat_id:${chatId}) ===
+    return `=== TELEGRAM PHOTO from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
 caption:
-\`\`\`
-${caption}
-\`\`\`
+${wrapFenceSafe(caption)}
 local_file: ${imagePath}
 Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
@@ -346,13 +344,11 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     filePath: string,
     fileName: string,
   ): string {
-    return `=== TELEGRAM DOCUMENT from ${from} (chat_id:${chatId}) ===
+    return `=== TELEGRAM DOCUMENT from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
 caption:
-\`\`\`
-${caption}
-\`\`\`
+${wrapFenceSafe(caption)}
 local_file: ${filePath}
-file_name: ${fileName}
+file_name: ${sanitizeForPtyInjection(fileName)}
 Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
 `;
@@ -376,9 +372,9 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   ): string {
     const dur = duration !== undefined ? duration : 'unknown';
     const transcriptBlock = transcript && transcript.trim()
-      ? `transcript:\n\`\`\`\n${transcript.trim()}\n\`\`\`\n`
+      ? `transcript:\n${wrapFenceSafe(transcript.trim())}\n`
       : '';
-    return `=== TELEGRAM VOICE from ${from} (chat_id:${chatId}) ===
+    return `=== TELEGRAM VOICE from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
 duration: ${dur}s
 local_file: ${filePath}
 ${transcriptBlock}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
@@ -399,14 +395,12 @@ ${transcriptBlock}Reply using: cortextos bus send-telegram ${chatId} '<your repl
     duration: number | undefined,
   ): string {
     const dur = duration !== undefined ? duration : 'unknown';
-    return `=== TELEGRAM VIDEO from ${from} (chat_id:${chatId}) ===
+    return `=== TELEGRAM VIDEO from ${sanitizeForPtyInjection(from)} (chat_id:${chatId}) ===
 caption:
-\`\`\`
-${caption}
-\`\`\`
+${wrapFenceSafe(caption)}
 duration: ${dur}s
 local_file: ${filePath}
-file_name: ${fileName}
+file_name: ${sanitizeForPtyInjection(fileName)}
 Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
 `;
@@ -781,7 +775,28 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return;
     }
 
-    this.log(`Unhandled callback data: ${data}`);
+    // Inject unhandled callbacks as a Telegram message so the agent can process custom button flows.
+    // senderName (Telegram first_name) and callback_data are untrusted: sanitize both against
+    // PTY-injection before interpolating, matching the text path (sanitizeForPtyInjection at the
+    // `=== TELEGRAM from [USER: ...]` header). This block predates #592; #592's hardening was never
+    // retrofitted here, leaving forged `=== AGENT MESSAGE`/fence-breakout headers un-neutralized.
+    if (chatId && this.agent) {
+      const senderName = sanitizeForPtyInjection(query.from?.first_name || 'User');
+      const safeData = sanitizeForPtyInjection(data);
+      const msg = [
+        `=== TELEGRAM from [USER: ${senderName}] (chat_id:${chatId}) ===`,
+        `callback_data: ${safeData}`,
+        `message_id: ${messageId}`,
+        `Reply using: cortextos bus send-telegram ${chatId} '<your reply>'`,
+      ].join('\n');
+      const injected = this.agent.injectMessage(msg);
+      if (injected && this.telegramApi) {
+        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
+      }
+      this.log(`Injected unhandled callback to agent: ${data.slice(0, 60)}`);
+    } else {
+      this.log(`Unhandled callback data (no agent/chatId): ${data}`);
+    }
   }
 
   /**
@@ -871,9 +886,11 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         this.log(`Urgent signal detected: ${content}`);
         unlinkSync(urgentPath);
 
-        // Inject the urgent message
+        // Inject the urgent message — fence the body unescapably (#592 follow-up)
+        // so a signal payload carrying its own fence can't break out and forge
+        // daemon containment headers.
         if (content) {
-          const urgentMsg = `=== URGENT SIGNAL ===\n\`\`\`\n${content}\n\`\`\`\n\n`;
+          const urgentMsg = `=== URGENT SIGNAL ===\n${wrapFenceSafe(content)}\n\n`;
           this.agent.injectMessage(urgentMsg);
         }
       } catch (err) {
