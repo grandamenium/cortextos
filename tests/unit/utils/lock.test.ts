@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { acquireLock, releaseLock, withFileLockSync } from '../../../src/utils/lock';
+import { acquireLock, releaseLock, withFileLockSync, sweepOrphanLockTemps } from '../../../src/utils/lock';
 
 // A pid that is (essentially) guaranteed not to be a live process, so the
 // liveness check (process.kill(pid, 0)) throws and the holder reads as dead.
@@ -95,6 +95,58 @@ describe('atomic file-based locking (.lock, windowless acquire)', () => {
       let ran = false;
       withFileLockSync(testDir, () => { ran = true; });
       expect(ran).toBe(true);
+    });
+  });
+
+  // ── identity-safe release (fast-follow clean win) ────────────────────────
+  describe('identity-safe release', () => {
+    it('releaseLock is identity-safe: never removes a lock owned by another pid', () => {
+      writeFileSync(lockFile(), String(DEAD_PID)); // a FOREIGN owner's lock
+      releaseLock(testDir);                         // we do NOT own it
+      expect(existsSync(lockFile())).toBe(true);    // left intact — not ours to release
+      // but our OWN lock IS released
+      rmSync(lockFile(), { force: true });
+      expect(acquireLock(testDir)).toBe(true);
+      releaseLock(testDir);
+      expect(existsSync(lockFile())).toBe(false);
+    });
+
+    it('recovering a dead lock clears it and leaves no .tmp residue', () => {
+      writeFileSync(lockFile(), String(DEAD_PID));
+      acquireLock(testDir);                          // dead → best-effort rmSync
+      expect(existsSync(lockFile())).toBe(false);    // dead lock cleared
+      expect(readdirSync(testDir).filter(f => f.endsWith('.tmp'))).toEqual([]);
+    });
+  });
+
+  // ── orphan temp sweep (fast-follow) ──────────────────────────────────────
+  describe('sweepOrphanLockTemps (age + dead-owner gated)', () => {
+    const tmpName = (pid: number) => `.lock.${pid}.${'a'.repeat(8)}-0000-0000-0000-000000000000.tmp`;
+    const OLD = (Date.now() - 10 * 60_000) / 1000; // 10 min ago
+
+    it('sweeps an OLD dead-owner temp, but NOT a live-owner or a FRESH temp', () => {
+      const deadOld = join(testDir, tmpName(DEAD_PID));
+      const liveOld = join(testDir, tmpName(process.pid));
+      const deadFresh = join(testDir, `.lock.${DEAD_PID}.bbbbbbbb-0000-0000-0000-000000000000.tmp`);
+      writeFileSync(deadOld, String(DEAD_PID)); utimesSync(deadOld, OLD, OLD);
+      writeFileSync(liveOld, String(process.pid)); utimesSync(liveOld, OLD, OLD);
+      writeFileSync(deadFresh, String(DEAD_PID)); // mtime = now
+
+      const swept = sweepOrphanLockTemps(testDir, 5 * 60_000);
+      expect(swept).toBe(1);                       // only the old dead-owner temp
+      expect(existsSync(deadOld)).toBe(false);     // swept
+      expect(existsSync(liveOld)).toBe(true);      // live owner — kept
+      expect(existsSync(deadFresh)).toBe(true);    // too fresh — kept
+    });
+
+    it('ignores non-lock files and the live .lock itself', () => {
+      acquireLock(testDir);                         // creates a live .lock
+      writeFileSync(join(testDir, 'message.json'), '{}');
+      const swept = sweepOrphanLockTemps(testDir, 0); // age 0 = sweep any old-enough
+      expect(swept).toBe(0);                         // .lock isn't a .tmp; message.json isn't a lock temp
+      expect(existsSync(lockFile())).toBe(true);
+      expect(existsSync(join(testDir, 'message.json'))).toBe(true);
+      releaseLock(testDir);
     });
   });
 });

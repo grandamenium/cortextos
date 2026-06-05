@@ -196,7 +196,9 @@ export function getFleetHealth(org: string): FleetHealth | null {
   if (fs.existsSync(inboxDir)) {
     for (const ad of fs.readdirSync(inboxDir, { withFileTypes: true })) {
       if (!ad.isDirectory()) continue;
-      try { totalPending += fs.readdirSync(path.join(inboxDir, ad.name)).length; } catch { /* skip */ }
+      // Count only deliverable messages — exclude lock artifacts (.lock, the
+      // .lock.*.tmp temps) and any dotfile, matching checkInbox's own filter.
+      try { totalPending += fs.readdirSync(path.join(inboxDir, ad.name)).filter(f => f.endsWith('.json') && !f.startsWith('.')).length; } catch { /* skip */ }
     }
   }
 

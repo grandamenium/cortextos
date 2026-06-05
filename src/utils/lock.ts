@@ -1,115 +1,150 @@
-import { writeFileSync, readFileSync, rmSync, linkSync, unlinkSync } from 'fs';
+import { writeFileSync, readFileSync, rmSync, linkSync, unlinkSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 
+// Matches a lock link-temp left by a crashed acquirer: `.lock.<pid>.<uuid>.tmp`.
+const LOCK_TMP_RE = /^\.lock\.(\d+)\.[0-9a-fA-F-]+\.tmp$/;
+
+type HolderState =
+  | { state: 'gone' }                              // no lock file
+  | { state: 'alive'; pid: number }                // held by a live process
+  | { state: 'recoverable'; pid: number | null };  // dead / empty / corrupt → reclaimable
+
 /**
- * Acquire a mutex lock via an ATOMIC, windowless file create.
- *
- * The lock is a regular file (`.lock`) whose content is the owner pid. It is
- * created by hard-linking a fully-written temp file into place: `linkSync` is
- * atomic and fails EEXIST if the lock already exists, and the lock file springs
- * into existence ALREADY containing the pid (it is a hardlink to the complete
- * temp). There is therefore NO instant at which `.lock` exists without its owner
- * pid — the pid-less window that permanently deadlocked the old mkdir+write
- * mutex (a crash between `mkdir` and `writeFile(pid)` left a lock nothing could
- * steal — it deafened codex's inbox for 3 days) is eliminated by construction.
- *
- * (A lighter single-op variant — `writeFileSync(lock, pid, {flag:'wx'})` — also
- * fixes the deadlock but reintroduces a microscopic open→write window where an
- * empty lock can be stolen mid-acquire; the hardlink-temp approach here is
- * windowless and was chosen for the strongest guarantee on this critical
- * primitive. Full-suite perf is identical: parallel-load flakiness is the same
- * for both and absent single-threaded — the extra temp op is not a factor.)
- *
- * Stale recovery: a holder that crashed WHILE holding the lock leaves `.lock`
- * with a dead pid; we detect that (`process.kill(pid,0)` throws) and remove it
- * so the next attempt re-links. NOTE: this recovery is not identity-safe under
- * two concurrent recoverers — the SAME pre-existing race the mkdir version had
- * (`rmSync` could nuke a peer's freshly-recovered lock). Locks are held for
- * microseconds and recovery is rare; the serialized-recovery hardening is a
- * separate fast-follow (and, when built, its recovery mutex must itself use this
- * atomic primitive — never a bare mkdir, which would re-introduce the deadlock).
- *
- * Returns true if acquired, false if another LIVE process holds it (caller retries).
- * Real filesystem failures (EACCES/ENOSPC/EROFS/ENOENT…) propagate so callers do
- * not spin against a path that will never be writable.
+ * True iff `pid` names a process that currently EXISTS. `process.kill(pid, 0)`
+ * succeeding means alive; ESRCH means dead; EPERM means the process exists but we
+ * may not signal it (e.g. a different user) — still ALIVE. So a live holder is
+ * never mistaken for dead, even in a mixed-user deployment.
  */
-export function acquireLock(dir: string): boolean {
-  const lockFile = join(dir, '.lock');
-  // randomUUID guarantees a unique temp name per attempt even across same-PID
-  // worker threads / isolates (where a module-level counter would each reset);
-  // 'wx' refuses to clobber any (astronomically unlikely) name collision.
-  const tmpFile = join(dir, `.lock.${process.pid}.${randomUUID()}.tmp`);
-
-  // Write the owner pid to a private temp FIRST. A real fs error here propagates.
-  writeFileSync(tmpFile, String(process.pid), { flag: 'wx' });
-
+function isProcessAlive(pid: number): boolean {
   try {
-    // Atomically publish the lock: the hardlink either creates `.lock` (already
-    // holding the pid) or fails EEXIST if it is held. No pid-less window exists.
-    linkSync(tmpFile, lockFile);
+    process.kill(pid, 0);
     return true;
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== 'EEXIST') {
-      throw err; // real filesystem failure — propagate
-    }
-    // Lock is held. Read the always-present owner pid; recover only if dead.
-    let alive = true;
-    try {
-      const raw = readFileSync(lockFile, 'utf-8').trim();
-      if (raw === '') {
-        alive = false; // empty (legacy/partial) — recoverable
-      } else {
-        const pid = parseInt(raw, 10);
-        if (Number.isNaN(pid)) {
-          alive = false; // corrupt content — recoverable
-        } else {
-          try {
-            process.kill(pid, 0);
-          } catch {
-            alive = false; // holder process is dead — recoverable
-          }
-        }
-      }
-    } catch {
-      // `.lock` vanished between EEXIST and read (released concurrently) — the
-      // caller's retry will re-link cleanly.
-      return false;
-    }
-    if (alive) {
-      return false; // held by a live process — caller retries
-    }
-    // Dead/corrupt holder: remove so the next attempt re-links. `rmSync(force)`
-    // never throws on ENOENT, so a concurrent recoverer winning is harmless.
-    try {
-      rmSync(lockFile, { force: true });
-    } catch {
-      /* another recoverer won — fine */
-    }
-    return false; // let the caller's retry loop re-link
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** Classify the current holder of a lock file by reading + liveness-checking its pid. */
+function readHolder(lockFile: string): HolderState {
+  let raw: string;
+  try {
+    raw = readFileSync(lockFile, 'utf-8').trim();
+  } catch {
+    return { state: 'gone' };
+  }
+  if (raw === '') return { state: 'recoverable', pid: null };
+  const pid = parseInt(raw, 10);
+  if (Number.isNaN(pid)) return { state: 'recoverable', pid: null };
+  return isProcessAlive(pid) ? { state: 'alive', pid } : { state: 'recoverable', pid };
+}
+
+/**
+ * Atomically + windowlessly create `lockFile` holding our pid: write the pid to a
+ * uniquely-named temp, then hardlink it into place — `linkSync` is atomic and the
+ * lock springs into existence ALREADY holding the pid (a hardlink to the complete
+ * temp), so there is NO instant where the lock exists pid-less. Returns 'acquired'
+ * or 'exists' (already held). Real fs errors propagate.
+ *
+ * (A lighter `writeFileSync(lock, pid, {flag:'wx'})` variant also kills the
+ * deadlock but reopens a microscopic open→write window; the hardlink-temp form is
+ * windowless and chosen for the strongest guarantee on this critical primitive.)
+ */
+function tryLink(lockFile: string): 'acquired' | 'exists' {
+  // Temp lives beside its lock, derived from the lock path: `.lock` →
+  // `.lock.<pid>.<uuid>.tmp`. randomUUID → unique even across same-PID worker
+  // threads/isolates; 'wx' refuses to clobber any (astronomically unlikely) collision.
+  const tmpFile = `${lockFile}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(tmpFile, String(process.pid), { flag: 'wx' });
+  try {
+    linkSync(tmpFile, lockFile);
+    return 'acquired';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    return 'exists';
   } finally {
-    // Drop our temp name. After a successful link the lock survives (it is a
-    // separate hardlink to the same inode); on EEXIST/failure this removes the
-    // orphan temp.
-    try {
-      unlinkSync(tmpFile);
-    } catch {
-      /* already gone */
-    }
+    try { unlinkSync(tmpFile); } catch { /* after a successful link the lock survives via its own hardlink */ }
   }
 }
 
 /**
- * Release a mutex lock (remove the `.lock` file).
+ * Acquire a mutex lock. Returns true if acquired, false if another LIVE process
+ * holds it (the caller's retry loop re-tries). A dead/empty/corrupt holder is
+ * removed (best-effort) so the next attempt re-links. Real filesystem failures
+ * propagate so callers do not spin against a path that will never be writable.
+ *
+ * KNOWN RESIDUAL (recovery TOCTOU — pre-existing; full fix tracked in the
+ * serialized-recovery-mutex/mtime-staleness design task): the `readHolder` check
+ * and the `rmSync` below are NOT atomic. Under adversarial scheduling a CONCURRENT
+ * recoverer can remove the dead lock and a peer re-acquire a fresh LIVE lock in
+ * the gap, which this `rmSync` would then delete → a rare double-hold. This is
+ * inherent to recover-by-delete on a CAS-less filesystem (atomic-rename and a
+ * naive recovery-mutex were both proven not to close it). It is bounded in
+ * practice by the FastChecker context restart circuit-breaker and is the same
+ * residual the base mutex carried — these changes do NOT touch it.
+ */
+export function acquireLock(dir: string): boolean {
+  const lockFile = join(dir, '.lock');
+  if (tryLink(lockFile) === 'acquired') return true;
+  // Held — inspect the holder.
+  const holder = readHolder(lockFile);
+  if (holder.state === 'alive') return false; // live holder — caller retries / waits
+  if (holder.state === 'gone') return false;  // released concurrently — caller retries
+  // Dead/empty/corrupt — best-effort remove so the next attempt re-links (see the
+  // KNOWN RESIDUAL note above). `rmSync(force)` never throws on ENOENT.
+  try { rmSync(lockFile, { force: true }); } catch { /* a concurrent recoverer won — fine */ }
+  return false;
+}
+
+/**
+ * Release a mutex lock — IDENTITY-SAFE: only removes `.lock` if WE own it (its
+ * pid is ours). A process therefore never releases a lock it no longer holds
+ * (e.g. one already recovered + re-acquired by a peer), and never deletes a
+ * foreign owner's lock.
  */
 export function releaseLock(dir: string): void {
   const lockFile = join(dir, '.lock');
   try {
-    rmSync(lockFile, { force: true });
+    if (readFileSync(lockFile, 'utf-8').trim() === String(process.pid)) {
+      rmSync(lockFile, { force: true });
+    }
   } catch {
-    // Ignore errors on release
+    // No lock / unreadable — nothing to release.
   }
+}
+
+/**
+ * Sweep orphan lock temp files (`.lock.<pid>.<uuid>.tmp`) left by a writer that
+ * crashed between `writeFileSync(temp)` and the
+ * finally-unlink. Because temps now carry a random name they are never reused or
+ * overwritten, so they would otherwise accumulate. Removal is doubly-gated:
+ *  - AGE: only temps older than `maxAgeMs` (a fresh temp may be an in-flight acquire);
+ *  - IDENTITY: only temps whose owner pid is dead (NEVER a live owner's temp).
+ * Returns the number swept. Read-mostly + best-effort; never throws.
+ */
+export function sweepOrphanLockTemps(dir: string, maxAgeMs = 5 * 60_000): number {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  const now = Date.now();
+  let swept = 0;
+  for (const f of entries) {
+    const m = LOCK_TMP_RE.exec(f);
+    if (!m) continue;
+    const full = join(dir, f);
+    try {
+      if (now - statSync(full).mtimeMs < maxAgeMs) continue; // too fresh — may be in-flight
+    } catch {
+      continue;
+    }
+    const pid = parseInt(m[1], 10);
+    if (!Number.isNaN(pid) && isProcessAlive(pid)) continue; // live owner — keep its in-flight temp
+    try { unlinkSync(full); swept++; } catch { /* already gone */ }
+  }
+  return swept;
 }
 
 /**
