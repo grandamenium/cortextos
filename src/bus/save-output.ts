@@ -7,6 +7,7 @@ import {
 import { basename, extname, join, posix, relative, sep } from 'path';
 import type { BusPaths, Task, TaskOutput } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { validateTaskId, validateAgentName } from '../utils/validate.js';
 
 export interface SaveOutputOptions {
   /** Source file to copy or move into the deliverables tree. */
@@ -56,6 +57,9 @@ export function saveOutput(
 ): SaveOutputResult {
   const { sourcePath, taskId, label, move = false, noLink = false } = options;
 
+  // Reject a path-traversal taskId before it builds the task-file path below.
+  validateTaskId(taskId);
+
   if (!existsSync(sourcePath)) {
     throw new Error(`Source file not found: ${sourcePath}`);
   }
@@ -65,6 +69,10 @@ export function saveOutput(
     throw new Error(`Task not found: ${taskId}`);
   }
   const task: Task = JSON.parse(readFileSync(taskFile, 'utf-8'));
+
+  // assigned_to comes from the task JSON and is interpolated into the
+  // deliverables path — validate it so a tampered task file can't escape the tree.
+  validateAgentName(task.assigned_to);
 
   const taskDir = join(paths.deliverablesDir, task.assigned_to, taskId);
   ensureDir(taskDir);
