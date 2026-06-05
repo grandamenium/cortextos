@@ -775,12 +775,17 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return;
     }
 
-    // Inject unhandled callbacks as a Telegram message so the agent can process custom button flows
+    // Inject unhandled callbacks as a Telegram message so the agent can process custom button flows.
+    // senderName (Telegram first_name) and callback_data are untrusted: sanitize both against
+    // PTY-injection before interpolating, matching the text path (sanitizeForPtyInjection at the
+    // `=== TELEGRAM from [USER: ...]` header). This block predates #592; #592's hardening was never
+    // retrofitted here, leaving forged `=== AGENT MESSAGE`/fence-breakout headers un-neutralized.
     if (chatId && this.agent) {
-      const senderName = query.from?.first_name || 'User';
+      const senderName = sanitizeForPtyInjection(query.from?.first_name || 'User');
+      const safeData = sanitizeForPtyInjection(data);
       const msg = [
         `=== TELEGRAM from [USER: ${senderName}] (chat_id:${chatId}) ===`,
-        `callback_data: ${data}`,
+        `callback_data: ${safeData}`,
         `message_id: ${messageId}`,
         `Reply using: cortextos bus send-telegram ${chatId} '<your reply>'`,
       ].join('\n');
