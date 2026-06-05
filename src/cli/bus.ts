@@ -3,7 +3,7 @@ import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
-import { validateAgentName } from '../utils/validate.js';
+import { validateAgentName, validateTaskId } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
@@ -32,6 +32,9 @@ import type { Priority, Task, TaskStatus, EventCategory, EventSeverity, Approval
  * Returns an error message if the transition should be blocked, or null if allowed.
  */
 function checkDeliverableRequirement(taskId: string, frameworkRoot: string, org: string, taskDir: string): string | null {
+  // Reject a traversal task id before it builds the task-file path below — this
+  // runs ahead of updateTask/completeTask, so it can't rely on findTaskFile's guard.
+  validateTaskId(taskId);
   // Read org context to check require_deliverables setting
   const contextPath = join(frameworkRoot, 'orgs', org, 'context.json');
   if (!existsSync(contextPath)) return null;
