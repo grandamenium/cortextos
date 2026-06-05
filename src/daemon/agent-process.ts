@@ -609,6 +609,28 @@ export class AgentProcess {
       return;
     }
 
+    // F17: intentional restart (cortextos bus self-restart / hard-restart wrote
+    // .restart-planned). The exit is on purpose, so do NOT charge the crash
+    // counter or write a CRASH line — but DO bring the agent back up, since a
+    // restart was the whole point. Consume the marker so a later genuine crash
+    // is still classified correctly. Checked after isDaemonShuttingDown() (a
+    // daemon-wide stop wins) and before crash classification.
+    if (this.isPlannedRestart()) {
+      this.log('Planned restart detected (.restart-planned marker) — respawning without counting as crash');
+      try {
+        unlinkSync(join(this.env.ctxRoot, 'state', this.name, '.restart-planned'));
+      } catch { /* marker cleanup is best-effort */ }
+      this.appendCrashToRestartsLog(exitCode, 2000, 'PLANNED_RESTART');
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(err => this.log(`Planned restart failed: ${err}`));
+        }
+      }, 2000);
+      return;
+    }
+
     // BUG-040 fix: check stopRequested instead of (only) stopping. The
     // stopping flag is cleared inside stop() after a 15s timeout window —
     // which means a slow PTY shutdown can fire handleExit AFTER stopping is
@@ -719,6 +741,15 @@ export class AgentProcess {
   }
 
   private shouldContinue(): boolean {
+    // F15-expansion: agents configured to hard-restart on rollover always
+    // start fresh, regardless of runtime or existing conversation state. This
+    // short-circuits before any runtime-specific continuity check so an agent
+    // that accumulates context faster than the rollover window never resumes
+    // into a compaction loop.
+    if (this.config.hard_restart_on_rollover) {
+      return false;
+    }
+
     // Hermes: session continuity is determined by whether the SQLite DB exists.
     // HERMES_HOME env var overrides the default ~/.hermes path.
     if (this.config.runtime === 'hermes') {
@@ -975,6 +1006,33 @@ export class AgentProcess {
   }
 
   /**
+   * F17: check whether this exit is an intentional restart.
+   *
+   * `cortextos bus self-restart` / `hard-restart` (src/bus/system.ts) write a
+   * `.restart-planned` marker before the agent's PTY exits. The SessionEnd
+   * crash-alert hook already reads this marker to suppress the user-facing
+   * Telegram alert, but the daemon's handleExit() crash counter never did —
+   * so every voluntary restart still incremented .crash_count_today and wrote
+   * a spurious CRASH line to restarts.log, eventually tripping max_crashes and
+   * halting an agent that only ever restarted on purpose.
+   *
+   * Mirrors isDaemonShuttingDown(): the marker counts only if written within
+   * the last 60s, so a stale marker from a prior restart cannot mask a genuine
+   * crash later. The caller consumes the marker on a positive match so the
+   * next exit is classified on its own merits.
+   */
+  private isPlannedRestart(): boolean {
+    const marker = join(this.env.ctxRoot, 'state', this.name, '.restart-planned');
+    try {
+      if (!existsSync(marker)) return false;
+      const ageMs = Date.now() - statSync(marker).mtimeMs;
+      return ageMs < 60_000;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Append an unplanned-exit entry to restarts.log. Complements the planned
    * SELF-RESTART / HARD-RESTART entries written by src/bus/system.ts so that
    * a single file gives the complete restart history for an agent.
@@ -987,7 +1045,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY' | 'PLANNED_RESTART',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -998,7 +1056,9 @@ export class AgentProcess {
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
           : kind === 'IMAGE_POISON_RECOVERY'
             ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
-            : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+            : kind === 'PLANNED_RESTART'
+              ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (intentional restart, not counted toward max_crashes)`
+              : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {

@@ -201,6 +201,14 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * F15-expansion: when true, the agent always starts a fresh session on a
+   * rollover restart instead of resuming with --continue. shouldContinue()
+   * short-circuits to false. Use for agents that accumulate context faster
+   * than the rollover window and would otherwise compaction-loop. Reuses the
+   * existing .force-fresh fresh-session path. Default (absent) = resume.
+   */
+  hard_restart_on_rollover?: boolean;
 }
 
 export interface CronEntry {
