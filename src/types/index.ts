@@ -209,6 +209,32 @@ export interface AgentConfig {
    * existing .force-fresh fresh-session path. Default (absent) = resume.
    */
   hard_restart_on_rollover?: boolean;
+  /**
+   * F10 Phase 2: proactive RSS-driven restart threshold in MB. When set (> 0),
+   * the daemon samples this agent's own process RSS on a timer and, once RSS
+   * stays at/above this threshold across two consecutive samples, triggers a
+   * planned session refresh (the same --continue rollover path used at the
+   * session-time cap) to reclaim the bloat before it forces a system-wide OOM.
+   * Absent or <= 0 disables the monitor (default). The complement to the
+   * external Phase 1 rss-monitor.sh, which reactively STOPS idle agents under
+   * acute system pressure; Phase 2 proactively refreshes a single bloated agent
+   * while there is still memory headroom to absorb the fresh-session cost.
+   */
+  rss_restart_threshold_mb?: number;
+  /**
+   * F10 Phase 2: how often (seconds) to sample this agent's RSS. Default 300.
+   * Only consulted when rss_restart_threshold_mb is set.
+   */
+  rss_check_interval_seconds?: number;
+  /**
+   * F10 Phase 2 pre-restart check: minimum system soft-available memory
+   * (free + inactive, MB) required before an RSS restart will fire. If
+   * soft-avail is below this floor, the restart is deferred — restarting into
+   * low memory would worsen pressure (a fresh session costs ~490MB), and the
+   * Phase 1 reactive stop owns acute-pressure handling. Default 1500 (aligned
+   * with the fleet's 1.5GB restoration gate).
+   */
+  rss_restart_soft_avail_floor_mb?: number;
 }
 
 export interface CronEntry {

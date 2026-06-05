@@ -416,3 +416,96 @@ describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', ()
     expect(ap.getStatus().status).not.toBe('halted');
   });
 });
+
+describe('AgentProcess — F10 Phase 2 (proactive RSS restart)', () => {
+  it('does not arm the RSS monitor when rss_restart_threshold_mb is absent', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect((ap as any).rssTimer).toBeNull();
+  });
+
+  it('arms the RSS monitor when a threshold is configured', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { rss_restart_threshold_mb: 2000 });
+    await ap.start();
+    expect((ap as any).rssTimer).not.toBeNull();
+    (ap as any).clearRssMonitor();
+  });
+
+  it('requires two consecutive over-threshold samples before restarting', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { rss_restart_threshold_mb: 2000 });
+    await ap.start();
+    const refresh = vi.spyOn(ap as any, 'sessionRefresh').mockResolvedValue(undefined);
+    vi.spyOn(ap as any, 'readProcessRssMb').mockReturnValue(2500);
+    vi.spyOn(ap as any, 'readSystemSoftAvailMb').mockReturnValue(4000);
+
+    await (ap as any).checkRss(2000);
+    expect(refresh).not.toHaveBeenCalled();        // first sample: arm only
+    expect((ap as any).rssOverCount).toBe(1);
+
+    await (ap as any).checkRss(2000);
+    expect(refresh).toHaveBeenCalledTimes(1);       // second sample: fire
+    expect((ap as any).rssOverCount).toBe(0);       // reset after firing
+    (ap as any).clearRssMonitor();
+  });
+
+  it('resets the counter when RSS drops back under threshold', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { rss_restart_threshold_mb: 2000 });
+    await ap.start();
+    const refresh = vi.spyOn(ap as any, 'sessionRefresh').mockResolvedValue(undefined);
+    const rss = vi.spyOn(ap as any, 'readProcessRssMb');
+    vi.spyOn(ap as any, 'readSystemSoftAvailMb').mockReturnValue(4000);
+
+    rss.mockReturnValue(2500);
+    await (ap as any).checkRss(2000);
+    expect((ap as any).rssOverCount).toBe(1);
+
+    rss.mockReturnValue(1500);                       // back under threshold
+    await (ap as any).checkRss(2000);
+    expect((ap as any).rssOverCount).toBe(0);
+    expect(refresh).not.toHaveBeenCalled();
+    (ap as any).clearRssMonitor();
+  });
+
+  it('defers the restart when system soft-avail is below the floor', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {
+      rss_restart_threshold_mb: 2000,
+      rss_restart_soft_avail_floor_mb: 1500,
+    });
+    await ap.start();
+    const refresh = vi.spyOn(ap as any, 'sessionRefresh').mockResolvedValue(undefined);
+    vi.spyOn(ap as any, 'readProcessRssMb').mockReturnValue(3000);
+    vi.spyOn(ap as any, 'readSystemSoftAvailMb').mockReturnValue(800); // below floor
+
+    await (ap as any).checkRss(2000);
+    await (ap as any).checkRss(2000);
+    expect(refresh).not.toHaveBeenCalled();          // deferred, not fired
+    expect((ap as any).rssOverCount).toBe(2);        // counter retained for re-eval
+    (ap as any).clearRssMonitor();
+  });
+
+  it('proceeds when soft-avail reads as unknown (0)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { rss_restart_threshold_mb: 2000 });
+    await ap.start();
+    const refresh = vi.spyOn(ap as any, 'sessionRefresh').mockResolvedValue(undefined);
+    vi.spyOn(ap as any, 'readProcessRssMb').mockReturnValue(3000);
+    vi.spyOn(ap as any, 'readSystemSoftAvailMb').mockReturnValue(0); // unreadable
+
+    await (ap as any).checkRss(2000);
+    await (ap as any).checkRss(2000);
+    expect(refresh).toHaveBeenCalledTimes(1);         // unknown never blocks
+    (ap as any).clearRssMonitor();
+  });
+
+  it('does not sample when the agent is stopping', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { rss_restart_threshold_mb: 2000 });
+    await ap.start();
+    const rss = vi.spyOn(ap as any, 'readProcessRssMb').mockReturnValue(3000);
+    (ap as any).stopping = true;
+    (ap as any).rssOverCount = 1;
+
+    await (ap as any).checkRss(2000);
+    expect(rss).not.toHaveBeenCalled();               // bailed before sampling
+    expect((ap as any).rssOverCount).toBe(0);         // counter reset
+    (ap as any).clearRssMonitor();
+  });
+});

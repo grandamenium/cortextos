@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -24,6 +25,12 @@ export class AgentProcess {
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  // F10 Phase 2: proactive RSS monitor. rssTimer is the sampling interval;
+  // rssOverCount tracks consecutive over-threshold samples so a single
+  // transient spike never triggers a restart (mirrors rss-monitor.sh's
+  // confirm-before-act guard).
+  private rssTimer: ReturnType<typeof setInterval> | null = null;
+  private rssOverCount: number = 0;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
   // CrashLoopPauser (instar-inspired): sliding-window crash detection.
@@ -192,6 +199,10 @@ export class AgentProcess {
       // Start session timer
       this.startSessionTimer();
 
+      // F10 Phase 2: start the proactive RSS monitor (no-op unless
+      // rss_restart_threshold_mb is configured for this agent).
+      this.startRssMonitor();
+
       this.notifyStatusChange();
     } catch (err) {
       this.log(`Failed to start: ${err}`);
@@ -212,6 +223,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearRssMonitor();
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -585,6 +597,7 @@ export class AgentProcess {
 
     this.pty = null;
     this.clearSessionTimer();
+    this.clearRssMonitor();
 
     // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
     // the whole process group and reaches each PTY's Claude Code child
@@ -982,6 +995,147 @@ export class AgentProcess {
     if (this.sessionTimer) {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
+    }
+  }
+
+  /**
+   * F10 Phase 2: start the proactive RSS monitor.
+   *
+   * Opt-in per agent via rss_restart_threshold_mb. When set, the daemon samples
+   * this agent's own process RSS every rss_check_interval_seconds (default 300)
+   * and, once RSS stays at/above the threshold across two consecutive samples
+   * AND system soft-available memory is above the configured floor, fires a
+   * planned session refresh to reclaim the bloat. No-op when the threshold is
+   * absent or <= 0, so existing agents are unaffected.
+   */
+  private startRssMonitor(): void {
+    const thresholdMb = this.config.rss_restart_threshold_mb;
+    if (!thresholdMb || thresholdMb <= 0) return; // opt-in; off by default
+
+    const intervalMs = (this.config.rss_check_interval_seconds || 300) * 1000;
+    this.rssOverCount = 0;
+    this.rssTimer = setInterval(() => {
+      this.checkRss(thresholdMb).catch(err => this.log(`[F10-P2] RSS check failed: ${err}`));
+    }, intervalMs);
+    this.log(`[F10-P2] RSS monitor armed: threshold=${thresholdMb}MB, interval=${intervalMs / 1000}s`);
+  }
+
+  private clearRssMonitor(): void {
+    if (this.rssTimer) {
+      clearInterval(this.rssTimer);
+      this.rssTimer = null;
+    }
+    this.rssOverCount = 0;
+  }
+
+  /**
+   * F10 Phase 2: one RSS sample + act decision.
+   *
+   * Acts only when ALL hold:
+   *  1. agent is genuinely running with a live PTY and a readable PID;
+   *  2. RSS has been at/above threshold for two consecutive samples (a single
+   *     transient spike resets the counter — mirrors rss-monitor.sh's confirm
+   *     guard);
+   *  3. the pre-restart check passes: system soft-available memory (free +
+   *     inactive) is at/above the floor, so the ~490MB fresh-session cost will
+   *     not tip the box into pressure. If soft-avail is below the floor we
+   *     DEFER (keep the over-count) — restarting into low memory is the
+   *     restart-inversion the Phase 1 reactive stop exists to avoid.
+   *
+   * The restart itself reuses sessionRefresh() so it is classified as a planned
+   * refresh (F17 marker → not a crash) and respects shouldContinue() /
+   * compaction-loop archival for fresh-vs-resume (F15 / F15-expansion).
+   */
+  private async checkRss(thresholdMb: number): Promise<void> {
+    if (this.status !== 'running' || !this.pty || this.stopping || this.stopRequested) {
+      this.rssOverCount = 0;
+      return;
+    }
+    const pid = this.pty.getPid();
+    if (!pid) {
+      this.rssOverCount = 0;
+      return;
+    }
+
+    const rssMb = this.readProcessRssMb(pid);
+    if (rssMb <= 0) return; // read failed — skip this sample, leave counter intact
+
+    if (rssMb < thresholdMb) {
+      if (this.rssOverCount > 0) {
+        this.log(`[F10-P2] RSS back under threshold (${rssMb}MB < ${thresholdMb}MB) — resetting`);
+      }
+      this.rssOverCount = 0;
+      return;
+    }
+
+    this.rssOverCount++;
+    this.log(`[F10-P2] RSS ${rssMb}MB >= threshold ${thresholdMb}MB (consecutive=${this.rssOverCount})`);
+    if (this.rssOverCount < 2) return; // require sustained over-threshold
+
+    // Pre-restart check: only refresh while there is memory headroom.
+    const floorMb = this.config.rss_restart_soft_avail_floor_mb || 1500;
+    const softAvailMb = this.readSystemSoftAvailMb();
+    if (softAvailMb > 0 && softAvailMb < floorMb) {
+      this.log(`[F10-P2] Deferring RSS restart: soft_avail=${softAvailMb}MB < floor=${floorMb}MB (restart would worsen pressure; Phase 1 reactive stop owns acute pressure)`);
+      return; // keep rssOverCount so we re-evaluate next tick
+    }
+
+    this.log(`[F10-P2] Proactive RSS restart firing: rss=${rssMb}MB >= ${thresholdMb}MB, soft_avail=${softAvailMb || 'unknown'}MB`);
+    try {
+      const logDir = join(this.env.ctxRoot, 'logs', this.name);
+      ensureDir(logDir);
+      appendFileSync(
+        join(logDir, 'restarts.log'),
+        `[${new Date().toISOString()}] RSS_RESTART: rss_mb=${rssMb} threshold_mb=${thresholdMb} soft_avail_mb=${softAvailMb} (F10-P2 proactive, planned refresh)\n`,
+        'utf-8',
+      );
+    } catch { /* best-effort logging */ }
+
+    this.rssOverCount = 0;
+    await this.sessionRefresh();
+  }
+
+  /**
+   * F10 Phase 2: read a single process's RSS in MB via `ps -o rss=`.
+   * Returns 0 on any failure (treated as "unknown" — skip the sample).
+   * Absolute path avoids the PATH-unaware-execFile class fixed in #459.
+   */
+  private readProcessRssMb(pid: number): number {
+    try {
+      const out = execFileSync('/bin/ps', ['-o', 'rss=', '-p', String(pid)], {
+        encoding: 'utf-8',
+        timeout: 5000,
+      }).trim();
+      const kb = parseInt(out, 10);
+      return Number.isFinite(kb) && kb > 0 ? Math.round(kb / 1024) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * F10 Phase 2: read system soft-available memory (free + inactive) in MB.
+   *
+   * Matches rss-monitor.sh's soft-avail definition: macOS's inactive pool is
+   * genuinely reclaimable, so hard-free alone is too noisy a pre-restart
+   * signal. Returns 0 on non-darwin or any read failure, which the caller
+   * treats as "unknown" and proceeds (the soft-avail guard only blocks on a
+   * known-low reading, never on an unreadable one).
+   */
+  private readSystemSoftAvailMb(): number {
+    if (process.platform !== 'darwin') return 0;
+    try {
+      const out = execFileSync('/usr/bin/vm_stat', [], { encoding: 'utf-8', timeout: 5000 });
+      const pageSizeMatch = out.match(/page size of (\d+) bytes/);
+      const freeMatch = out.match(/Pages free:\s+(\d+)/);
+      const inactiveMatch = out.match(/Pages inactive:\s+(\d+)/);
+      if (!pageSizeMatch || !freeMatch || !inactiveMatch) return 0;
+      const pageSize = parseInt(pageSizeMatch[1], 10);
+      const pages = parseInt(freeMatch[1], 10) + parseInt(inactiveMatch[1], 10);
+      if (!Number.isFinite(pageSize) || !Number.isFinite(pages)) return 0;
+      return Math.round((pages * pageSize) / 1048576);
+    } catch {
+      return 0;
     }
   }
 
