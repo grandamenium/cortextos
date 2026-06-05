@@ -73,9 +73,14 @@ export async function middleware(request: NextRequest) {
   // GAP-0034: /api/workflows/health is an unauthenticated health probe — must be
   // reachable from monitoring contexts (load balancers, watcher crons, external
   // watchdogs) without requiring a session cookie. Auth-gating defeats the purpose.
+  // /api/webhook/* uses its OWN token auth (bearer + Cloudflare Access service
+  // token), not the NextAuth session cookie — an iOS Shortcut has no browser
+  // session. It must bypass the session gate here; the route itself enforces the
+  // constant-time bearer-token check.
   if (
     pathname.startsWith('/login') ||
     pathname.startsWith('/api/auth') ||
+    pathname.startsWith('/api/webhook/') ||
     pathname.startsWith('/_next') ||
     pathname === '/favicon.ico' ||
     pathname === '/api/workflows/health'
