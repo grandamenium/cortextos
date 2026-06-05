@@ -325,6 +325,18 @@
       "dependencies": [],
       "install_path": "community/skills/nighttime-mode",
       "submitted_at": "2026-04-06T00:00:00Z"
+    },
+    {
+      "name": "ghostty-agent-testing",
+      "description": "Live Ghostty terminal-agent control using human-style keystrokes plus agent-native transcript/log observation",
+      "author": "grandamenium",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["ghostty", "terminal-agent", "interactive", "qa", "jsonl", "automation"],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/skills/ghostty-agent-testing",
+      "submitted_at": "2026-05-19T00:00:00Z"
     }
   ]
 }
