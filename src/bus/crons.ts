@@ -19,6 +19,7 @@ import { join, dirname } from 'path';
 import type { CronDefinition, CronExecutionLogEntry } from '../types/index.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME, cronExecutionLogPathFor } from './crons-schema.js';
 import { atomicWriteSync } from '../utils/atomic.js';
+import { validateAgentName } from '../utils/validate.js';
 import { withFileLockSync } from '../utils/lock.js';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +40,9 @@ interface CronsFile {
  * process.env.CTX_ROOT pointing to a tempdir.
  */
 function cronsFilePath(agentName: string): string {
+  // Chokepoint for read/write/lock + add/update/remove/getCronByName — reject a
+  // traversal agent name before it builds a path into an arbitrary directory.
+  validateAgentName(agentName);
   const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
   return join(ctxRoot, CRONS_DIRECTORY, agentName, CRONS_FILENAME);
 }
@@ -346,6 +350,9 @@ export function getExecutionLogPage(
   offset = 0,
   statusFilter: ExecutionLogStatusFilter = 'all',
 ): ExecutionLogPage {
+  // Separate path builder from cronsFilePath — validate here too (covers
+  // getExecutionLog, which delegates to this function).
+  validateAgentName(agentName);
   const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
   const filePath = join(ctxRoot, cronExecutionLogPathFor(agentName));
 

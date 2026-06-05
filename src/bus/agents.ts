@@ -3,6 +3,7 @@ import { join } from 'path';
 import type { AgentInfo, AgentConfig, BusPaths } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { sendMessage } from './message.js';
+import { validateAgentName } from '../utils/validate.js';
 
 /**
  * List all agents in the system.
@@ -243,6 +244,10 @@ export function notifyAgent(
   message: string,
   ctxRoot: string,
 ): void {
+  // Reject traversal in either name before building the signal path / sending —
+  // targetAgent feeds state/<agent>, from is forwarded to the message bus.
+  validateAgentName(targetAgent);
+  validateAgentName(from);
   // Write signal file to state dir
   const signalDir = join(ctxRoot, 'state', targetAgent);
   ensureDir(signalDir);

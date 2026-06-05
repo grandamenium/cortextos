@@ -208,6 +208,14 @@ describe('Agent Discovery', () => {
       expect(files.length).toBe(1);
     });
 
+    it('rejects path-traversal in targetAgent or from (#32)', () => {
+      // targetAgent guard fires before any write; the from guard fires before the
+      // (swallowed) sendMessage call — without it a bad from would be silently
+      // ignored. Both surface as a thrown error, so no path is ever built/written.
+      expect(() => notifyAgent(paths, 'sender', '../../etc', 'x', ctxRoot)).toThrow(/Invalid agent name/);
+      expect(() => notifyAgent(paths, '../../etc', 'target', 'x', ctxRoot)).toThrow(/Invalid agent name/);
+    });
+
     it('signal file has correct JSON format', () => {
       notifyAgent(paths, 'boris', 'paul', 'New task available', ctxRoot);
 
