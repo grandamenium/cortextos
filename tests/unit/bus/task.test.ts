@@ -40,6 +40,19 @@ describe('Task Management', () => {
       expect(() => readTaskAudit(paths, '../../../etc/shadow')).toThrow(/Invalid task id/);
     });
 
+    it('createTask rejects a traversal assignee at creation (#600)', () => {
+      expect(() => createTask(paths, 'paul', 'acme', 'T', { assignee: '../../../etc/passwd' }))
+        .toThrow(/Invalid agent name/);
+      expect(() => createTask(paths, 'paul', 'acme', 'T', { assignee: 'Bad Name With Spaces' }))
+        .toThrow(/Invalid agent name/);
+    });
+
+    it('createTask still accepts legitimate assignees incl underscore/hyphen and human', () => {
+      for (const a of ['boris', 'codex-agent', 'sandbox_agent-1', 'human', 'james']) {
+        expect(() => createTask(paths, 'paul', 'acme', 'T', { assignee: a })).not.toThrow();
+      }
+    });
+
     it('findTaskFile still resolves a legitimate task', () => {
       const id = createTask(paths, 'paul', 'acme', 'T', { assignee: 'boris' });
       expect(findTaskFile(paths, id)).toContain(`${id}.json`);
@@ -195,11 +208,11 @@ describe('Cross-org task lifecycle', () => {
 
     orgAPaths = {
       ctxRoot: testDir,
-      inbox: join(testDir, 'inbox', 'agentA'),
-      inflight: join(testDir, 'inflight', 'agentA'),
-      processed: join(testDir, 'processed', 'agentA'),
-      logDir: join(testDir, 'logs', 'agentA'),
-      stateDir: join(testDir, 'state', 'agentA'),
+      inbox: join(testDir, 'inbox', 'agent-a'),
+      inflight: join(testDir, 'inflight', 'agent-a'),
+      processed: join(testDir, 'processed', 'agent-a'),
+      logDir: join(testDir, 'logs', 'agent-a'),
+      stateDir: join(testDir, 'state', 'agent-a'),
       taskDir: join(testDir, 'orgs', 'OrgA', 'tasks'),
       approvalDir: join(testDir, 'orgs', 'OrgA', 'approvals'),
       analyticsDir: join(testDir, 'orgs', 'OrgA', 'analytics'),
@@ -229,7 +242,7 @@ describe('Cross-org task lifecycle', () => {
       type: 'agent',
       needs_approval: false,
       status: 'pending',
-      assigned_to: 'agentA',
+      assigned_to: 'agent-a',
       created_by: 'orchestrator',
       org: 'OrgB',
       priority: 'normal',
@@ -248,7 +261,7 @@ describe('Cross-org task lifecycle', () => {
   it('updateTask same-org happy path: still works via the fast path', () => {
     // Regression guard for the existing single-org behavior. This is the
     // hot path and must not pay any cross-org scan cost when it hits.
-    const taskId = createTask(orgAPaths, 'agentA', 'OrgA', 'Same-org task');
+    const taskId = createTask(orgAPaths, 'agent-a', 'OrgA', 'Same-org task');
     updateTask(orgAPaths, taskId, 'in_progress');
 
     const content = JSON.parse(
@@ -367,7 +380,7 @@ describe('Cross-org task lifecycle', () => {
     // per-org scoping for its sync loop. If this test fails, the refactor
     // broke the contract and must be reverted or gated behind an opt-in
     // flag.
-    const sameOrgId = createTask(orgAPaths, 'agentA', 'OrgA', 'Same-org task');
+    const sameOrgId = createTask(orgAPaths, 'agent-a', 'OrgA', 'Same-org task');
     writeOrgBTask('task_other_1', { title: 'Sibling-org task 1' });
     writeOrgBTask('task_other_2', { title: 'Sibling-org task 2' });
 
