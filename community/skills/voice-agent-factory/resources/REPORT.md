@@ -131,7 +131,8 @@ Conversation.startSession({
 | Per-session tuning | overrides (enable per-field in Security tab first) | VERIFIED |
 | Future MCP path | POST /v1/convai/mcp-servers, require_approval_all default | VERIFIED |
 
-Build-blocking gaps: server-tool schema (close by fetching
-/docs/eleven-agents/customization/tools/server-tools at build time or first key-test)
-and pricing/concurrency (account-specific - confirm on the operator's dashboard, which
-beats public pricing pages anyway).
+Remaining build-time / key-test checks: WebSocket event taxonomy + audio handling,
+KB/RAG attachment flow (if used), voice settings / turn-taking / max-tools / latency
+figures, and server-tool call-timeout measurement. Server-tool schema and
+pricing/concurrency are CLOSED in GAPS.md — re-confirm at key-test (docs drift;
+the account dashboard beats public pricing pages).

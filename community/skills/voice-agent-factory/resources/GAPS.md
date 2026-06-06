@@ -19,7 +19,7 @@ Fetched /docs/eleven-agents/customization/tools/server-tools:
     "path_params_schema": {},
     "query_params_schema": {},
     "request_body_schema": {},
-    "headers_schema": {}
+    "request_headers": {}
   }
 }
 ```
@@ -27,6 +27,9 @@ Fetched /docs/eleven-agents/customization/tools/server-tools:
 - Param binding: value_type "LLM Prompt" = model extracts values from conversation;
   path params as {id} in URL, plus query and body params.
 - Body content_type: application/json (default) or x-www-form-urlencoded.
+- Auth may be configured via `auth_connection` / `auth_resolved_params` or via
+  `request_headers` entries depending on the path chosen (see
+  `WebhookToolApiSchemaConfig-Input` in /docs/api-reference/tools/create.md).
 - Note: current OpenAPI names the POST/PATCH/PUT body schema `request_body_schema`
   (a `response_body_schema` also exists but is documentation-only — not surfaced
   to the LLM per current docs).

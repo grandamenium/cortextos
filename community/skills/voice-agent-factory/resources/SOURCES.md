@@ -24,7 +24,7 @@ content; canonical replacements listed where resolved.
 
 ## 404-drift / unreliable at fetch time (re-resolve under /docs/eleven-agents/)
 
-- /docs/agents-platform/customization/tools/server-tools — SERVER TOOL SCHEMA (build-time re-fetch REQUIRED)
+- /docs/agents-platform/customization/tools/server-tools — server-tool schema — resolved in GAPS; re-confirm at key-test because docs drift
 - /docs/agents-platform/customization/authentication — auth guide (content corroborated via api-reference)
 - /docs/conversational-ai/libraries/web-sockets, /docs/agents-platform/libraries/java-script — SDK/WebSocket events (build-time re-fetch)
 - /docs/conversational-ai/guides/llm-cascading, /docs/changelog, /docs/agents-platform/customization/tools
