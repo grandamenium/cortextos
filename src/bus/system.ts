@@ -43,7 +43,16 @@ const EXCLUDED_DIR_PREFIXES = [
   '.venv/',
 ];
 
-const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-|ghp_|xoxb-|AKIA)/;
+// Matches real hardcoded secrets, NOT attribute names. Two false-positive classes are fixed:
+//   1. JSX props — `key={...}`/`secret={...}` etc.: a credential-name `=` followed by `{` (a JSX
+//      expression) is excluded via `(?!\{)`, and a real value char must follow. (`key=` is also no
+//      longer a bare alternative; only `api[_-]?key=`/`apikey=` count.)
+//   2. Prose — bare `sk-` is tightened to `sk-<8 chars>` so "task-force" etc. no longer trips it.
+// Detection is also STRENGTHENED: strong provider value-prefixes added (Stripe sk_live_/sk_test_/
+// rk_live_, GitHub ghp_, Slack xox[bap]-, AWS AKIA<6>, JWT eyJ….eyJ…) — these catch a leaked secret
+// regardless of the surrounding variable name.
+const CREDENTIAL_PATTERNS =
+  /(?:(?:token|api[_-]?key|apikey|password|passwd|secret)=(?!\{)["']?[\w\-]|sk-[A-Za-z0-9]{8}|sk_live_|sk_test_|rk_live_|ghp_[A-Za-z0-9]|xox[bap]-|AKIA[A-Z0-9]{6}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})/;
 
 const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
 
@@ -97,7 +106,11 @@ export function hardRestart(paths: BusPaths, agentName: string, reason?: string)
  * Filters out dangerous files (credentials, env, large, binary).
  * Never pushes. Mirrors bash bus/auto-commit.sh.
  */
-export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCommitReport {
+export function autoCommit(
+  projectDir: string,
+  dryRun: boolean = false,
+  scopePaths: string[] = [],
+): AutoCommitReport {
   // Check if git repo
   try {
     execSync('git rev-parse --is-inside-work-tree', { cwd: projectDir, stdio: 'pipe' });
@@ -105,10 +118,16 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
     return { status: 'clean', staged: [], blocked: [] };
   }
 
-  // Get changed files
+  // Get changed files. When scopePaths is given, restrict to those pathspecs so an agent's
+  // snapshot never sweeps the whole repo (e.g. another agent's in-progress build); default
+  // (empty) preserves the original whole-repo behavior for single-agent/customer boxes.
   let porcelainOutput: string;
   try {
-    porcelainOutput = execSync('git status --porcelain', { cwd: projectDir, encoding: 'utf-8' });
+    const scopeArgs = scopePaths.length ? ['--', ...scopePaths] : [];
+    porcelainOutput = execFileSync('git', ['status', '--porcelain', ...scopeArgs], {
+      cwd: projectDir,
+      encoding: 'utf-8',
+    });
   } catch {
     return { status: 'clean', staged: [], blocked: [] };
   }

@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, relative, isAbsolute } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName, validateApprovalCategory } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
@@ -667,10 +667,21 @@ busCommand
   .command('auto-commit')
   .description('Stage safe files for commit (never pushes)')
   .option('--dry-run', 'Show what would be staged without modifying git')
-  .action((opts: { dryRun?: boolean }) => {
+  .option('--scope <path...>', "Limit staging to these repo-relative paths (default: this agent's workspace on a multi-agent box)")
+  .action((opts: { dryRun?: boolean; scope?: string[] }) => {
     const env = resolveEnv();
     const projectDir = env.projectRoot || env.frameworkRoot || process.cwd();
-    const report = autoCommit(projectDir, opts.dryRun ?? false);
+    let scope = opts.scope ?? [];
+    // Auto-scope: on a multi-agent box the agent dir is a SUBDIR of the repo, so snapshot only
+    // THIS agent's workspace — the cron must never sweep another agent's in-progress build.
+    // A single-agent/customer box (agentDir == projectDir, or not nested) keeps whole-repo behavior.
+    if (scope.length === 0 && env.agentDir) {
+      const rel = relative(projectDir, env.agentDir);
+      if (rel && !rel.startsWith('..') && !isAbsolute(rel)) {
+        scope = [rel];
+      }
+    }
+    const report = autoCommit(projectDir, opts.dryRun ?? false, scope);
     console.log(JSON.stringify(report));
   });
 

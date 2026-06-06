@@ -127,6 +127,37 @@ describe('Bus System', () => {
       expect(report.staged).toContain('main.js');
     });
 
+    it('does NOT flag React JSX key={...} props as credentials (false-positive fix)', () => {
+      writeFileSync(
+        join(gitDir, 'list.tsx'),
+        'export const L = () => items.map(i => <Card key={i.id} secret={i.s} />);',
+      );
+      const report = autoCommit(gitDir, true);
+      expect(report.staged).toContain('list.tsx');
+      expect(report.blocked.some(b => b.includes('list.tsx'))).toBe(false);
+    });
+
+    it('still flags real hardcoded secret values (sk_live_, JWT)', () => {
+      writeFileSync(join(gitDir, 'leak1.md'), 'key is sk_live_51HxYzAbC0deFgHiJkLmNoP');
+      writeFileSync(join(gitDir, 'leak2.md'), 'jwt eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0');
+      const report = autoCommit(gitDir, true);
+      expect(report.blocked.some(b => b.includes('leak1.md') && b.includes('credential'))).toBe(true);
+      expect(report.blocked.some(b => b.includes('leak2.md') && b.includes('credential'))).toBe(true);
+    });
+
+    it('scopePaths restricts staging to the given subtree (does not sweep the whole repo)', () => {
+      mkdirSync(join(gitDir, 'mine'), { recursive: true });
+      mkdirSync(join(gitDir, 'other'), { recursive: true });
+      writeFileSync(join(gitDir, 'mine', 'a.txt'), 'my work');
+      writeFileSync(join(gitDir, 'other', 'b.txt'), "another agent's in-progress work");
+
+      const report = autoCommit(gitDir, true, ['mine']);
+      // git collapses a wholly-untracked dir to 'mine/'; what matters is the scope held —
+      // only the in-scope subtree staged, the other agent's work never swept in.
+      expect(report.staged.some(f => f.startsWith('mine'))).toBe(true);
+      expect(report.staged.some(f => f.includes('other'))).toBe(false);
+    });
+
     it('filters out binary/temp files', () => {
       writeFileSync(join(gitDir, 'output.log'), 'log data');
       writeFileSync(join(gitDir, 'cache.tmp'), 'temp');
