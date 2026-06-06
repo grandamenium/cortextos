@@ -19,6 +19,39 @@ tests, provisioning calls — fresh, fit to the target agent's actual capabiliti
 as discovered. Two agents with different jobs get completely different tool
 catalogs from the same skill.
 
+## Prerequisites
+
+- A cortextOS install with the target agent onboarded (`<agentDir>` = the agent's
+  workspace, e.g. `orgs/<org>/agents/<name>/`), and the `cortextos` CLI on PATH.
+- Node >= 18 (the generated gateway and tests are zero-dependency `node:` builtins).
+- An ElevenLabs account + `ELEVENLABS_API_KEY` in your org secrets file. Any paid
+  tier works; the skill tier-detects and picks the right provisioning path. Voice
+  minutes are billed by ElevenLabs — see `resources/GAPS.md` pricing table.
+- For remote reach: `cloudflared` (quick tunnel). Localhost-only runs skip it, but
+  then ElevenLabs webhook tools cannot reach the gateway — server-tools mode
+  REQUIRES a public HTTPS URL. A reverse proxy or other tunnel works equally well.
+- A process manager (pm2 or equivalent) for the gateway. The quick tunnel itself
+  must NOT be process-managed (lesson 8).
+- Browser page: the generated widget page loads the EL embed from unpkg.com at
+  runtime (the one external browser dependency). If you need a no-CDN deployment,
+  vendor `@elevenlabs/convai-widget-embed` locally and point the script tag at it.
+
+## How to run
+
+Tell the agent running this skill: the target agent name + org, the operator
+contact, and (optionally) a voice id. Then follow the phases in order. Minimal
+invocation: "Run voice-agent-factory against <agent> in <org>; I'm the operator."
+
+## What this writes / creates
+
+- Files: `<agentDir>/voice/` (gateway, tools, tests, page, provisioning scripts,
+  `.env` chmod 600 + gitignored, `voice-profile.json`) and an append-only audit
+  log under the agent's docs. Nothing outside the target agent's workspace.
+- Local: one listening port you choose (track one port per agent), a process-manager
+  entry `<agent>-voice-gateway`, optionally a quick-tunnel process.
+- External (ONLY after the Phase 5 gate): an ElevenLabs agent, one EL webhook tool
+  per gateway tool (or an MCP server attachment), and EL voice-minute usage.
+
 Read `resources/REPORT.md` before any ElevenLabs API call: EL is mid-rename
 (ConvAI -> ElevenAgents), doc URLs drift, and the API surface in REPORT is the
 verified one. `resources/GAPS.md` has the server-tool webhook schema + pricing.
@@ -97,6 +130,15 @@ verified one. `resources/GAPS.md` has the server-tool webhook schema + pricing.
 
 ## Phase 1 — DISCOVER (the tool engine, part 1: inventory)
 
+FIRST detect the target's runtime from its `config.json` (`runtime` field).
+The discovery paths below are for `claude-code` agents. For `codex-app-server`
+agents, substitute: skills under the agent's plugin skills dir (e.g.
+`plugins/cortextos-agent-skills/skills/`), identity from AGENTS/IDENTITY/SOUL/
+TOOLS files, and the runtime's own session/transcript store if one exists. If no
+transcript source can be found for the runtime, STOP with an explicit
+unsupported-runtime error naming what was looked for — do not silently
+under-mine the agent (frequency ranking and anchor workflows would be fiction).
+
 Mine four sources, in this order, into `voice-profile.json` candidates:
 
 1. **Skills.** Read every `<agentDir>/.claude/skills/*/SKILL.md` (+ org-level
@@ -125,7 +167,8 @@ each returns structured raw data, not prose.
 ranking), what requires verbal confirmation vs auto, anything that must be
 EXCLUDED from voice entirely, voice choice, reach (localhost vs tunnel).
 Propose defaults from discovery so the operator can answer with one word — and
-if the operator is unavailable, proceed on stated defaults without blocking.
+if the operator is unavailable, proceed on stated defaults for DISCOVERY and
+GENERATION only. Provisioning never proceeds on defaults (Phase 5 gate).
 
 ## Phase 3 — GENERATE (the tool engine, part 2: synthesis)
 
@@ -156,8 +199,10 @@ Per candidate tool, in dependency order:
   paths.
 - Keep lean; 2MB is the EL cap but hundreds of lines is the practical target.
 
-Write the per-agent tree FROM SCRATCH at `<agentDir>/voice/` (lesson 13 if
-occupied): `voice.config.js` (identity + persona + PINNED data paths),
+Generate a new voice scaffold (never copy a prior build's files) under an empty
+`<agentDir>/voice/`; if that directory already exists, coexist per lesson 13 —
+new filenames + a free port inside it, or a `voice/<deployment-name>/` subtree,
+and append to existing docs rather than overwriting. The generated tree: `voice.config.js` (identity + persona + PINNED data paths),
 `src/tools/*` (written per tool, shaped by its backend type and probe captures),
 `mcp-server.js` (written for this agent's tool registry + policy classes),
 `src/policy.js`, `src/session-store.js` (append-only audit JSONL), `tests/`
@@ -181,6 +226,15 @@ occupied): `voice.config.js` (identity + persona + PINNED data paths),
 
 ## Phase 5 — PROVISION
 
+**OPERATOR GATE (hard stop — do not pass on defaults).** Before ANY
+`api.elevenlabs.io` provisioning call, process-manager start, tunnel, or link
+sharing, present the operator with: the discovered tool catalog + policy classes,
+the verb-matrix exclusions, expected EL cost/tier implications (minutes billing,
+concurrency), the tunnel-exposure surface (public HTTPS URL fronting the
+gateway), and every write tool with its server-side invariant. Get explicit
+approval. This is the conscious human checkpoint between "code generated locally"
+and "external paid resources exist + a voice surface is reachable".
+
 1. Tier probe (lesson 4, POST not GET) -> MCP path or server-tools path.
 2. Start the gateway under a process manager (`<agent>-voice-gateway`); tunnel
    via a detached quick tunnel (lesson 8); verify tunnel -> gateway health.
@@ -190,7 +244,11 @@ occupied): `voice.config.js` (identity + persona + PINNED data paths),
    `/tool/<name>`, bearer header, request_body_schema from the generated
    schema), then PATCH agent `tool_ids` (GET current ids first, append — never
    overwrite blind). MCP path = `POST /v1/convai/mcp-servers` with
-   `require_approval_per_tool`.
+   `require_approval_per_tool` — this only CREATES the MCP server config; the
+   agent does not use it until you PATCH the agent's prompt config to include
+   the returned MCP server id (`conversation_config.agent.prompt.mcp_server_ids`
+   — GET current ids first and append, preserving existing entries, exactly as
+   with `tool_ids`).
 5. Live read smokes through the tunnel; write smokes create-then-cleanup.
 
 ## Phase 6 — VERIFY (before any link ships)

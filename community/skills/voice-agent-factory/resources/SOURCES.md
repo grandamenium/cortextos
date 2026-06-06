@@ -1,6 +1,6 @@
 # Sources — ElevenLabs Conversational AI research (2026-06-06)
 
-Workflow wf_0b57a6dd-57b: 28 fetched, quality-rated by the harness. "unreliable" below
+Research snapshot 2026-06-06: 28 sources fetched, quality-rated. "unreliable" below
 mostly = 404-drift from the Conversational AI -> ElevenAgents docs rename, not bad
 content; canonical replacements listed where resolved.
 

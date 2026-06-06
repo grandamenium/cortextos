@@ -4,7 +4,7 @@ The deep-research verified set left 4 gaps. Two build-critical ones were closed 
 direct fetches of canonical docs (single-source — confidence "documented" not
 "3-vote verified"; re-confirm at first live key-test).
 
-## CLOSED: Server (webhook) tool schema — our PRIMARY mechanism
+## CLOSED: Server (webhook) tool schema — the gateway's PRIMARY mechanism
 
 Fetched /docs/eleven-agents/customization/tools/server-tools:
 
@@ -18,7 +18,7 @@ Fetched /docs/eleven-agents/customization/tools/server-tools:
     "method": "GET|POST|PUT|PATCH",
     "path_params_schema": {},
     "query_params_schema": {},
-    "body_params_schema": {},
+    "request_body_schema": {},
     "headers_schema": {}
   }
 }
@@ -27,6 +27,9 @@ Fetched /docs/eleven-agents/customization/tools/server-tools:
 - Param binding: value_type "LLM Prompt" = model extracts values from conversation;
   path params as {id} in URL, plus query and body params.
 - Body content_type: application/json (default) or x-www-form-urlencoded.
+- Note: current OpenAPI names the POST/PATCH/PUT body schema `request_body_schema`
+  (a `response_body_schema` also exists but is documentation-only — not surfaced
+  to the LLM per current docs).
 - Auth options: OAuth2 client-credentials, OAuth2 JWT, Basic, Bearer, Custom Headers
   with Secret type for sensitive values. -> voice gateway: Bearer/custom-secret
   header is the fit; secret stored in EL workspace secrets, validated by gateway.
@@ -37,7 +40,7 @@ Fetched /docs/eleven-agents/customization/tools/server-tools:
 
 ## CLOSED: Pricing + concurrency (pricing question context)
 
-Fetched /pricing/agents (list prices, his dashboard is the truth for his account):
+Fetched /pricing/agents (list prices; the operator's dashboard is the truth for a given account):
 
 | Plan | Incl. minutes | Extra/min | Concurrent |
 |---|---|---|---|

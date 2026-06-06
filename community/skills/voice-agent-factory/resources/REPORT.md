@@ -1,8 +1,8 @@
 # ElevenLabs Conversational AI — Build-Ready Reference (voice agent builds)
 
-Generated 2026-06-06 via deep-research workflow wf_0b57a6dd-57b (28 sources fetched,
-86 claims extracted, 25 adversarially verified 3-vote, 24 confirmed / 1 refuted,
-synthesized to 11 findings — all unanimous 3-0 against primary ElevenLabs docs).
+Research snapshot generated 2026-06-06 (28 sources fetched, 86 claims extracted,
+25 adversarially verified 3-vote, 24 confirmed / 1 refuted, synthesized to 11
+findings — all unanimous against primary ElevenLabs docs).
 Companion files: SOURCES.md (full source list w/ quality ratings), GAPS.md (open
 questions + single-source follow-ups).
 
@@ -21,7 +21,7 @@ NAMING NOTE: ElevenLabs is actively rebranding "Conversational AI" -> "ElevenAge
   open models (GLM-4.5-Air, Qwen3-30B-A3B, GPT-OSS-120B).
 - EL prompting guide recommends Claude Sonnet 4/4.5 for complex multi-step reasoning
   and tool orchestration ("highest accuracy and reasoning capability with excellent
-  tool-calling reliability") — supports our Sonnet 4.5 pick for the agent.
+  tool-calling reliability") — supports the Sonnet 4.5 pick for the agent.
 - REFUTED (1-2 vote, excluded): "default LLM is GPT-4o/GLM-4.5-Air, Gemini 2.5 Flash
   Lite for speed" — do not rely on any claimed default; set the model explicitly.
 
@@ -60,9 +60,9 @@ Conversation.startSession({
    `{id, type, value_type: "llm_prompt", description, required}`.
    SDK registration: `clientTools: { toolName: async (parameters) => result }`
    passed to `Conversation.startSession()`.
-2. **Server tools (webhook)** — EL calls our HTTPS endpoint; dynamic params; auth
-   via secrets in headers. Exact JSON schema NOT in verified set — see GAPS.md.
-   This is our PRIMARY mechanism for the voice gateway.
+2. **Server tools (webhook)** — EL calls the gateway's HTTPS endpoint; dynamic
+   params; auth via secrets in headers. Exact JSON schema NOT in verified set —
+   see GAPS.md. This is the PRIMARY mechanism for the voice gateway.
 3. **System tools** — EL-internal (end-call etc.); dedicated docs page.
 4. **MCP tools** (live since changelog 2026-04-27):
    - Attach: `POST /v1/convai/mcp-servers`, body nests under `config`:
@@ -72,8 +72,8 @@ Conversation.startSession({
      `require_approval_per_tool` (UI: "No Approval" / "Always Ask (Recommended)" /
      "Fine-Grained Tool Approval").
    - `response_timeout_secs`: default 30, max 300.
-   - EL disclaims all security responsibility for third-party MCP servers — if we
-     ever expose a cortextOS MCP surface to EL, WE own its auth + hardening.
+   - EL disclaims all security responsibility for third-party MCP servers — if a
+     cortextOS MCP surface is exposed to EL, the implementer owns its auth + hardening.
 
 ## 5. Auth + session flow (VERIFIED high)
 
@@ -85,7 +85,7 @@ Conversation.startSession({
     ~15 min (older snake_case `get_signed_url` deprecated).
   - WebRTC: `GET /v1/convai/conversation/token` -> `TokenResponseModel {token}`,
     passed to startSession as `conversationToken`.
-- Matches our plan exactly: gateway mints signed URL/token, browser never sees key.
+- Matches the gateway design exactly: gateway mints signed URL/token, browser never sees key.
 
 ## 6. Web SDK contract (@elevenlabs/client + React) (VERIFIED high)
 
@@ -105,14 +105,15 @@ Conversation.startSession({
   get/delete implied by the /v1/convai/* CRUD namespace; only create + update
   pages were in the verified/fetched set).
 
-## 8. NOT covered by verified claims (open — GAPS.md)
+## 8. NOT covered by verified claims — status
 
-- Pricing per tier + concurrency limits (section 7 of the brief): zero verified
-  claims. /pricing/agents was fetched but its claims didn't survive to synthesis.
-- Server-tool exact webhook JSON schema + call timeout.
-- KB/RAG attachment API details (create-from-url endpoint exists in source list).
+- Pricing per tier + concurrency limits: CLOSED by GAPS.md single-source follow-up
+  (re-confirm at first live key-test; account dashboard is the truth).
+- Server-tool exact webhook JSON schema: CLOSED by GAPS.md (request_body_schema);
+  call timeout still unmeasured — measure at key-test.
+- KB/RAG attachment API details (create-from-url endpoint exists in source list) — open.
 - Voice settings + turn-taking/interruption config keys; max tools per agent;
-  latency figures.
+  latency figures — open.
 
 ---
 
@@ -124,7 +125,7 @@ Conversation.startSession({
 | Brain | Claude Sonnet 4.5 first-party, Language Model dropdown / API | VERIFIED |
 | Tap-to-talk browser | @elevenlabs/client startSession + signed URL | VERIFIED |
 | Key isolation | server-minted get-signed-url / token, xi-api-key server-side | VERIFIED |
-| Bus actions (status/memory/task/message) | server tools -> our gateway | mechanism verified, exact schema GAP |
+| Bus actions (status/memory/task/message) | server tools -> the gateway | mechanism verified, exact schema GAP |
 | Mid-call UI actions (if any) | client tools map | VERIFIED |
 | Bulk context | KB + RAG (separate limits) | partial — attachment API GAP |
 | Per-session tuning | overrides (enable per-field in Security tab first) | VERIFIED |
