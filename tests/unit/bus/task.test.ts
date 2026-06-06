@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile } from '../../../src/bus/task';
+import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile, archiveTasks } from '../../../src/bus/task';
 import type { BusPaths } from '../../../src/types';
 
 describe('Task Management', () => {
@@ -27,6 +27,36 @@ describe('Task Management', () => {
 
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
+  });
+
+  describe('path-traversal hardening (#13/#14)', () => {
+    it('findTaskFile rejects a traversal task id', () => {
+      expect(() => findTaskFile(paths, '../../etc/passwd')).toThrow(/Invalid task id/);
+      expect(() => findTaskFile(paths, 'task/../../secrets')).toThrow(/Invalid task id/);
+      expect(() => findTaskFile(paths, 'task_1.json')).toThrow(/Invalid task id/);
+    });
+
+    it('readTaskAudit rejects a traversal task id', () => {
+      expect(() => readTaskAudit(paths, '../../../etc/shadow')).toThrow(/Invalid task id/);
+    });
+
+    it('findTaskFile still resolves a legitimate task', () => {
+      const id = createTask(paths, 'paul', 'acme', 'T', { assignee: 'boris' });
+      expect(findTaskFile(paths, id)).toContain(`${id}.json`);
+    });
+
+    it('archiveTasks skips a task whose JSON id is tampered with traversal (no escape)', () => {
+      mkdirSync(paths.taskDir, { recursive: true });
+      // Safe filename, but the internal id carries traversal that would resolve
+      // to testDir/escaped.json (outside the task tree) on archive write/rename.
+      writeFileSync(join(paths.taskDir, 'task_evil_1.json'), JSON.stringify({
+        id: '../escaped', status: 'completed', completed_at: '2020-01-01T00:00:00Z',
+        assigned_to: 'boris', org: 'acme',
+      }));
+      expect(() => archiveTasks(paths)).not.toThrow();
+      // The guard must have prevented the out-of-tree write.
+      expect(existsSync(join(testDir, 'escaped.json'))).toBe(false);
+    });
   });
 
   describe('createTask', () => {

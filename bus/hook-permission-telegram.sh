@@ -35,19 +35,34 @@ if [[ "$TOOL_NAME" == "ExitPlanMode" || "$TOOL_NAME" == "AskUserQuestion" ]]; th
     exit 0
 fi
 
-# Auto-approve .claude/ directory writes - agents need to modify their own configs at runtime
-if [[ "$TOOL_NAME" == "Bash" ]]; then
-    CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
-    if [[ "$CMD" == *".claude/"* ]]; then
-        echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
-        exit 0
-    fi
-fi
+# Auto-approve edits to the agent's OWN .claude/ directory (configs/skills it
+# manages at runtime). Precise path containment — NOT a substring match — because
+# under bypassPermissions this hook is the only approval gate.
+#   - Bash is never auto-approved: a command string can't be proven to touch only
+#     .claude/ (e.g. `rm -rf ~; ls .claude/` contains the substring) (#1).
+#   - Edit/Write only when file_path resolves inside <agentDir>/.claude/, which
+#     defeats ../ traversal and other/arbitrary .claude/ directories (#18).
 if [[ "$TOOL_NAME" == "Edit" || "$TOOL_NAME" == "Write" ]]; then
     FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null)
-    if [[ "$FILE_PATH" == *"/.claude/"* ]]; then
-        echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
-        exit 0
+    # Require an explicit trust boundary — no pwd fallback, so the auto-approve
+    # scope can't drift to whatever directory the hook happened to start in.
+    # `realpath -m` is GNU-specific; on shells without it (BSD/macOS) skip
+    # auto-approval entirely and let the request go to the human gate (safe).
+    if [[ -n "$FILE_PATH" && -n "${CTX_AGENT_DIR:-}" ]] && realpath -m / >/dev/null 2>&1; then
+        AGENT_DIR="$CTX_AGENT_DIR"
+        # Reject a symlinked .claude root: it would redirect the gate elsewhere.
+        if [[ ! -L "${AGENT_DIR}/.claude" ]]; then
+            CLAUDE_ROOT="$(realpath -m "${AGENT_DIR}/.claude")"
+            case "$FILE_PATH" in
+                /*) ABS_PATH="$FILE_PATH" ;;
+                *)  ABS_PATH="${AGENT_DIR}/${FILE_PATH}" ;;
+            esac
+            RESOLVED="$(realpath -m "$ABS_PATH")"
+            if [[ "$RESOLVED" == "$CLAUDE_ROOT" || "$RESOLVED" == "$CLAUDE_ROOT/"* ]]; then
+                echo '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+                exit 0
+            fi
+        fi
     fi
 fi
 
@@ -70,8 +85,16 @@ case "$TOOL_NAME" in
 ${CONTENT_PREVIEW}"
         ;;
     Bash)
-        CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null | head -c 200)
-        TOOL_SUMMARY="Command: ${CMD}"
+        # Show up to 1500 chars (was 200) so a benign-looking prefix can't hide a
+        # payload from the human approver; mark truncation explicitly (#39).
+        CMD_FULL=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null)
+        CMD=$(printf '%s' "$CMD_FULL" | head -c 1500)
+        if [[ ${#CMD_FULL} -gt ${#CMD} ]]; then
+            TOOL_SUMMARY="Command: ${CMD}
+…(preview truncated — the FULL command, not just this preview, runs if you approve)"
+        else
+            TOOL_SUMMARY="Command: ${CMD}"
+        fi
         ;;
     *)
         TOOL_SUMMARY=$(echo "$INPUT" | jq -r '.tool_input // {}' 2>/dev/null | jq -c '.' 2>/dev/null | head -c 200)
