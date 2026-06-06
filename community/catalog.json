@@ -1,14 +1,21 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-04-06T00:00:00Z",
+  "updated_at": "2026-06-06T09:30:00Z",
   "items": [
     {
       "name": "agentic-crm-assistant",
-      "description": "Agentic CRM personal assistant — reusable executive/personal assistant template with structured relationship memory, inbox/calendar/meeting workflows, full interactive setup, tool-agnostic connectors, CRM skills, and recurring assistant crons",
+      "description": "Agentic CRM personal assistant \u2014 reusable executive/personal assistant template with structured relationship memory, inbox/calendar/meeting workflows, full interactive setup, tool-agnostic connectors, CRM skills, and recurring assistant crons",
       "author": "cortextos",
       "type": "agent",
       "version": "0.1.0",
-      "tags": ["personal-assistant", "crm", "calendar", "email", "meetings", "relationships"],
+      "tags": [
+        "personal-assistant",
+        "crm",
+        "calendar",
+        "email",
+        "meetings",
+        "relationships"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/agents/agentic-crm-assistant",
@@ -16,11 +23,16 @@
     },
     {
       "name": "orchestrator",
-      "description": "Orchestrator agent — coordinates other agents, handles morning/evening reviews, manages goals and approvals, weekly reporting",
+      "description": "Orchestrator agent \u2014 coordinates other agents, handles morning/evening reviews, manages goals and approvals, weekly reporting",
       "author": "cortextos",
       "type": "agent",
       "version": "1.0.0",
-      "tags": ["orchestrator", "management", "reviews", "goals"],
+      "tags": [
+        "orchestrator",
+        "management",
+        "reviews",
+        "goals"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/agents/orchestrator",
@@ -28,11 +40,16 @@
     },
     {
       "name": "analyst",
-      "description": "Analyst agent — system health, metrics, theta-wave autoresearch, community publishing, upstream sync",
+      "description": "Analyst agent \u2014 system health, metrics, theta-wave autoresearch, community publishing, upstream sync",
       "author": "cortextos",
       "type": "agent",
       "version": "1.0.0",
-      "tags": ["analyst", "metrics", "research", "health"],
+      "tags": [
+        "analyst",
+        "metrics",
+        "research",
+        "health"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/agents/analyst",
@@ -40,11 +57,15 @@
     },
     {
       "name": "agent",
-      "description": "General-purpose worker agent — base template for specialist agents. Handles tasks, Telegram comms, memory, and skill execution",
+      "description": "General-purpose worker agent \u2014 base template for specialist agents. Handles tasks, Telegram comms, memory, and skill execution",
       "author": "cortextos",
       "type": "agent",
       "version": "1.0.0",
-      "tags": ["agent", "worker", "general-purpose"],
+      "tags": [
+        "agent",
+        "worker",
+        "general-purpose"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/agents/agent",
@@ -52,11 +73,16 @@
     },
     {
       "name": "tasks",
-      "description": "Task lifecycle management — create, update, complete tasks with KPI logging. Every significant piece of work gets a task",
+      "description": "Task lifecycle management \u2014 create, update, complete tasks with KPI logging. Every significant piece of work gets a task",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["tasks", "workflow", "kpi", "visibility"],
+      "tags": [
+        "tasks",
+        "workflow",
+        "kpi",
+        "visibility"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/tasks",
@@ -64,11 +90,16 @@
     },
     {
       "name": "comms",
-      "description": "Telegram and agent-to-agent message handling — format reference, reply patterns, callback handling, bidirectional file send/receive",
+      "description": "Telegram and agent-to-agent message handling \u2014 format reference, reply patterns, callback handling, bidirectional file send/receive",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["telegram", "messaging", "comms", "inbox"],
+      "tags": [
+        "telegram",
+        "messaging",
+        "comms",
+        "inbox"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/comms",
@@ -76,11 +107,16 @@
     },
     {
       "name": "autoresearch",
-      "description": "Structured experimentation loop — form hypothesis, make targeted change, measure outcome, keep or discard. Theta wave research cycles",
+      "description": "Structured experimentation loop \u2014 form hypothesis, make targeted change, measure outcome, keep or discard. Theta wave research cycles",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["research", "experiments", "theta-wave", "optimization"],
+      "tags": [
+        "research",
+        "experiments",
+        "theta-wave",
+        "optimization"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/autoresearch",
@@ -88,11 +124,17 @@
     },
     {
       "name": "m2c1-worker",
-      "description": "Autonomous software builds — spawn a dedicated M2C1 worker session to build any project through 12 structured phases",
+      "description": "Autonomous software builds \u2014 spawn a dedicated M2C1 worker session to build any project through 12 structured phases",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["m2c1", "builds", "worker", "autonomous", "software"],
+      "tags": [
+        "m2c1",
+        "builds",
+        "worker",
+        "autonomous",
+        "software"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/m2c1-worker",
@@ -104,7 +146,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["workers", "parallel", "spawn", "isolation"],
+      "tags": [
+        "workers",
+        "parallel",
+        "spawn",
+        "isolation"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/worker-agents",
@@ -112,11 +159,16 @@
     },
     {
       "name": "knowledge-base",
-      "description": "RAG-powered org knowledge base — ingest documents, query with natural language, keep institutional knowledge searchable",
+      "description": "RAG-powered org knowledge base \u2014 ingest documents, query with natural language, keep institutional knowledge searchable",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["rag", "knowledge", "search", "memory"],
+      "tags": [
+        "rag",
+        "knowledge",
+        "search",
+        "memory"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/knowledge-base",
@@ -124,11 +176,16 @@
     },
     {
       "name": "approvals",
-      "description": "Human approval gate — request approval before external actions (email, deploy, delete, financial), block until approved",
+      "description": "Human approval gate \u2014 request approval before external actions (email, deploy, delete, financial), block until approved",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["approvals", "safety", "human-in-loop", "guardrails"],
+      "tags": [
+        "approvals",
+        "safety",
+        "human-in-loop",
+        "guardrails"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/approvals",
@@ -136,11 +193,16 @@
     },
     {
       "name": "memory",
-      "description": "Session and long-term memory management — daily memory files, MEMORY.md, KB ingestion for cross-session continuity",
+      "description": "Session and long-term memory management \u2014 daily memory files, MEMORY.md, KB ingestion for cross-session continuity",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["memory", "continuity", "session", "persistence"],
+      "tags": [
+        "memory",
+        "continuity",
+        "session",
+        "persistence"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/memory",
@@ -148,11 +210,16 @@
     },
     {
       "name": "cron-management",
-      "description": "Recurring schedule management — set up crons, persist across restarts, prevent duplicates",
+      "description": "Recurring schedule management \u2014 set up crons, persist across restarts, prevent duplicates",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["cron", "scheduling", "recurring", "automation"],
+      "tags": [
+        "cron",
+        "scheduling",
+        "recurring",
+        "automation"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/cron-management",
@@ -160,11 +227,16 @@
     },
     {
       "name": "heartbeat",
-      "description": "Agent health monitoring — update heartbeat, check stale tasks, log events, prevent showing as DEAD on dashboard",
+      "description": "Agent health monitoring \u2014 update heartbeat, check stale tasks, log events, prevent showing as DEAD on dashboard",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["heartbeat", "health", "monitoring", "dashboard"],
+      "tags": [
+        "heartbeat",
+        "health",
+        "monitoring",
+        "dashboard"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/heartbeat",
@@ -172,11 +244,16 @@
     },
     {
       "name": "human-tasks",
-      "description": "Human task routing — when blocked by a capability gap, create a human task with clear instructions and priority",
+      "description": "Human task routing \u2014 when blocked by a capability gap, create a human task with clear instructions and priority",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["human-tasks", "blockers", "escalation", "routing"],
+      "tags": [
+        "human-tasks",
+        "blockers",
+        "escalation",
+        "routing"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/human-tasks",
@@ -184,11 +261,16 @@
     },
     {
       "name": "agent-management",
-      "description": "Agent lifecycle management — create, start, stop, restart agents, handle crashes and context exhaustion",
+      "description": "Agent lifecycle management \u2014 create, start, stop, restart agents, handle crashes and context exhaustion",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["agents", "lifecycle", "management", "crash-recovery"],
+      "tags": [
+        "agents",
+        "lifecycle",
+        "management",
+        "crash-recovery"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/agent-management",
@@ -196,11 +278,16 @@
     },
     {
       "name": "activity-channel",
-      "description": "Org-wide activity broadcast — post significant completions to the shared activity channel for all agents to see",
+      "description": "Org-wide activity broadcast \u2014 post significant completions to the shared activity channel for all agents to see",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["activity", "broadcast", "org", "visibility"],
+      "tags": [
+        "activity",
+        "broadcast",
+        "org",
+        "visibility"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/activity-channel",
@@ -208,11 +295,16 @@
     },
     {
       "name": "event-logging",
-      "description": "Activity feed logging — log session events, task completions, and milestones so they appear in the dashboard",
+      "description": "Activity feed logging \u2014 log session events, task completions, and milestones so they appear in the dashboard",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["events", "logging", "activity", "dashboard"],
+      "tags": [
+        "events",
+        "logging",
+        "activity",
+        "dashboard"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/event-logging",
@@ -220,11 +312,16 @@
     },
     {
       "name": "system-diagnostics",
-      "description": "Debug stuck systems — diagnose unresponsive agents, stale tasks, bus issues, PTY problems",
+      "description": "Debug stuck systems \u2014 diagnose unresponsive agents, stale tasks, bus issues, PTY problems",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["diagnostics", "debug", "troubleshooting", "health"],
+      "tags": [
+        "diagnostics",
+        "debug",
+        "troubleshooting",
+        "health"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/system-diagnostics",
@@ -232,11 +329,16 @@
     },
     {
       "name": "onboarding",
-      "description": "First-boot onboarding wizard — guides new agents through identity setup, Telegram configuration, and first session startup",
+      "description": "First-boot onboarding wizard \u2014 guides new agents through identity setup, Telegram configuration, and first session startup",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["onboarding", "setup", "first-boot", "configuration"],
+      "tags": [
+        "onboarding",
+        "setup",
+        "first-boot",
+        "configuration"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/onboarding",
@@ -244,11 +346,16 @@
     },
     {
       "name": "morning-review",
-      "description": "Daily morning briefing — overnight recap, task summaries, pending approvals, goal progress, day plan",
+      "description": "Daily morning briefing \u2014 overnight recap, task summaries, pending approvals, goal progress, day plan",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["morning", "briefing", "review", "daily"],
+      "tags": [
+        "morning",
+        "briefing",
+        "review",
+        "daily"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/morning-review",
@@ -256,11 +363,16 @@
     },
     {
       "name": "evening-review",
-      "description": "Daily evening wrap-up — what was shipped, blockers, plan for overnight, goals progress",
+      "description": "Daily evening wrap-up \u2014 what was shipped, blockers, plan for overnight, goals progress",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["evening", "review", "daily", "wrap-up"],
+      "tags": [
+        "evening",
+        "review",
+        "daily",
+        "wrap-up"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/evening-review",
@@ -268,11 +380,16 @@
     },
     {
       "name": "weekly-review",
-      "description": "Weekly performance review — metrics, accomplishments, blockers, next week goals",
+      "description": "Weekly performance review \u2014 metrics, accomplishments, blockers, next week goals",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["weekly", "review", "performance", "metrics"],
+      "tags": [
+        "weekly",
+        "review",
+        "performance",
+        "metrics"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/weekly-review",
@@ -280,11 +397,16 @@
     },
     {
       "name": "theta-wave",
-      "description": "Overnight autonomous research cycles — assign research cycles to agents, monitor results, surface findings",
+      "description": "Overnight autonomous research cycles \u2014 assign research cycles to agents, monitor results, surface findings",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["theta-wave", "research", "overnight", "autonomous"],
+      "tags": [
+        "theta-wave",
+        "research",
+        "overnight",
+        "autonomous"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/theta-wave",
@@ -292,11 +414,16 @@
     },
     {
       "name": "goal-management",
-      "description": "Goal setting and tracking — create goals, assign to agents, track progress, refresh daily",
+      "description": "Goal setting and tracking \u2014 create goals, assign to agents, track progress, refresh daily",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["goals", "strategy", "tracking", "management"],
+      "tags": [
+        "goals",
+        "strategy",
+        "tracking",
+        "management"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/goal-management",
@@ -304,11 +431,16 @@
     },
     {
       "name": "local-version-control",
-      "description": "Git workflow management — commit, branch, PR creation, merge conflict resolution for agent-managed code",
+      "description": "Git workflow management \u2014 commit, branch, PR creation, merge conflict resolution for agent-managed code",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["git", "version-control", "pr", "workflow"],
+      "tags": [
+        "git",
+        "version-control",
+        "pr",
+        "workflow"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/local-version-control",
@@ -316,15 +448,38 @@
     },
     {
       "name": "nighttime-mode",
-      "description": "Night mode behavior — quieter notifications, autonomous work, overnight research execution",
+      "description": "Night mode behavior \u2014 quieter notifications, autonomous work, overnight research execution",
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["nighttime", "autonomous", "quiet", "overnight"],
+      "tags": [
+        "nighttime",
+        "autonomous",
+        "quiet",
+        "overnight"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/nighttime-mode",
       "submitted_at": "2026-04-06T00:00:00Z"
+    },
+    {
+      "name": "voice-agent-factory",
+      "description": "Turn any cortextOS agent into a live ElevenLabs voice agent: mine its real capabilities into a tool catalog, generate a policy-gated gateway dynamically (no pre-built scripts), test on probe-shaped fixtures, provision with tier fallback, verify with real conversations",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": [
+        "voice",
+        "elevenlabs",
+        "conversational-ai",
+        "gateway",
+        "tools"
+      ],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/skills/voice-agent-factory",
+      "submitted_at": "2026-06-06T09:30:00Z"
     }
   ]
 }
