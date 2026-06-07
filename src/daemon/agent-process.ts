@@ -700,6 +700,9 @@ export class AgentProcess {
     const onboardingPath = join(this.env.agentDir, 'ONBOARDING.md');
     const heartbeatPath = join(this.env.ctxRoot, 'state', this.name, 'heartbeat.json');
     let onboardingAppend = '';
+    // Telegram-optional: when no bot is configured, this is a UI-only deployment.
+    const hasTelegram = !!(this.telegramApi && this.telegramChatId);
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
 
     // If agent has a heartbeat but no .onboarded marker, they completed onboarding but
     // forgot to write the marker. Auto-write it so they don't re-onboard next restart.
@@ -711,7 +714,9 @@ export class AgentProcess {
     }
 
     if (!existsSync(onboardedPath) && existsSync(onboardingPath)) {
-      onboardingAppend = ' IMPORTANT: This is your FIRST BOOT. Before doing anything else, read ONBOARDING.md and complete the onboarding protocol.';
+      onboardingAppend = hasTelegram
+        ? ' IMPORTANT: This is your FIRST BOOT. Before doing anything else, read ONBOARDING.md and complete the onboarding protocol.'
+        : ` IMPORTANT: This is your FIRST BOOT in a UI-ONLY deployment — Telegram is NOT configured. Do NOT run any send-telegram or *-telegram commands, and do NOT wait for Telegram input. Read AGENTS.md and ONBOARDING.md for context but SKIP every Telegram step. Your identity is already set in IDENTITY.md — do not re-ask it. Read the org context.json and goals.json for configuration. Then SELF-COMPLETE onboarding non-interactively: (1) write your first heartbeat exactly as described in HEARTBEAT.md; (2) mark onboarding complete by running this Bash command verbatim: mkdir -p "${stateDir}" && touch "${onboardedPath}" ; then begin normal operations. You are driven by your inbox and the dashboard Tasks board, not Telegram.`;
     }
 
     const nowUtc = new Date().toISOString();
@@ -726,7 +731,7 @@ export class AgentProcess {
     const handoffUxOverride = isHandoffRestart
       ? ' HANDOFF UX: This is a context handoff restart — your memory is intact via the handoff doc. CRITICAL: After reading the handoff document, your VERY FIRST tool call MUST be a Bash call running: cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID \'back — [what you were just working on]\' — replace the brackets with one brief plain-English sentence about your current state. Do this BEFORE running heartbeat, BEFORE any other tool call. No cron IDs, no status report, no cold-boot phrasing. Do NOT send "Booting up... one moment" (skip AGENTS.md step 1 entirely).'
       : '';
-    const onlineMessage = isHandoffRestart
+    const onlineMessage = (isHandoffRestart || !hasTelegram)
       ? ''
       : ' Send a Telegram message to the user saying you are back online.';
     return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onlineMessage}${onboardingAppend}`;
@@ -738,7 +743,11 @@ export class AgentProcess {
     const deliverablesBlock = this.buildDeliverablesBlock();
     // Session refresh (--continue) is never a handoff restart.
     this.lastSpawnWasHandoff = false;
-    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations. After checking inbox, send a Telegram message to the user saying you are back online.`;
+    const hasTelegram = !!(this.telegramApi && this.telegramChatId);
+    const onlineNote = hasTelegram
+      ? ' After checking inbox, send a Telegram message to the user saying you are back online.'
+      : ' Telegram is not configured (UI-only) — do NOT run any send-telegram commands.';
+    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved. Re-read AGENTS.md and ALL bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock} Check inbox. Resume normal operations.${onlineNote}`;
   }
 
   /**
