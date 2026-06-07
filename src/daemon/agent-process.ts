@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -24,6 +24,10 @@ export class AgentProcess {
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  private sizeTimer: ReturnType<typeof setInterval> | null = null;
+  // In-flight guard for size-aware rotation: prevents a second archiveAndRefresh
+  // from overlapping the first (interval re-entrancy / external stop-start race).
+  private rotating: boolean = false;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
   // CrashLoopPauser (instar-inspired): sliding-window crash detection.
@@ -189,12 +193,17 @@ export class AgentProcess {
       // sends its own contextual "back — ..." reply in that case.
       this.maybeSendCodexBootNotification();
 
-      // Start session timer
+      // Start session timer (time cap) + size-aware rotation monitor
       this.startSessionTimer();
+      this.startSizeMonitor();
 
       this.notifyStatusChange();
     } catch (err) {
       this.log(`Failed to start: ${err}`);
+      // Clear any timers armed before the failure so a crashed/never-running
+      // agent doesn't keep firing the session/size timers in the background.
+      this.clearSessionTimer();
+      this.clearSizeMonitor();
       this.status = 'crashed';
       this.notifyStatusChange();
     }
@@ -212,6 +221,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearSizeMonitor();
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -505,6 +515,7 @@ export class AgentProcess {
 
     this.pty = null;
     this.clearSessionTimer();
+    this.clearSizeMonitor();
 
     // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
     // the whole process group and reaches each PTY's Claude Code child
@@ -674,24 +685,215 @@ export class AgentProcess {
     }
 
     // Default (Claude runtime): existing conversation = JSONL files present.
-    const launchDir = this.config.working_directory || this.env.agentDir;
-    if (!launchDir) return false;
-
-    // Claude projects dir uses the absolute path with all separators replaced by dashes
-    // e.g. /Users/foo/agents/boss -> -Users-foo-agents-boss (leading sep becomes -)
-    // Use homedir() for cross-platform compatibility (HOME is not set on Windows).
-    const convDir = join(
-      homedir(),
-      '.claude',
-      'projects',
-      launchDir.split(sep).join('-'),
-    );
+    const convDir = this.getConversationDir();
+    if (!convDir) return false;
 
     try {
-      const files = require('fs').readdirSync(convDir);
+      const files = readdirSync(convDir);
       return files.some((f: string) => f.endsWith('.jsonl'));
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Resolve the Claude conversation directory for this agent, or null if the
+   * launch dir is unknown. Claude stores transcripts under
+   * ~/.claude/projects/<absolute-launch-dir-with-separators-as-dashes>
+   * (leading separator becomes a leading dash). homedir() keeps this
+   * cross-platform (HOME is unset on Windows). Shared by shouldContinue()
+   * (existence check) and the size-aware rotation monitor (byte total).
+   */
+  private getConversationDir(): string | null {
+    const launchDir = this.config.working_directory || this.env.agentDir;
+    if (!launchDir) return null;
+    return join(homedir(), '.claude', 'projects', launchDir.split(sep).join('-'));
+  }
+
+  /**
+   * Total size, in bytes, of all .jsonl transcripts in the conversation dir.
+   * Returns 0 when the dir is missing/unreadable (treated as "nothing to
+   * rotate"). A long-running --continue session appends to a single growing
+   * JSONL; heavy recurring crons can bloat it to tens of MB and eventually
+   * exhaust context on resume.
+   */
+  private getConversationBytes(): number {
+    const convDir = this.getConversationDir();
+    if (!convDir) return 0;
+    try {
+      let total = 0;
+      for (const f of readdirSync(convDir)) {
+        if (!f.endsWith('.jsonl')) continue;
+        try {
+          const st = statSync(join(convDir, f));
+          if (st.isFile()) total += st.size;
+        } catch { /* file vanished between readdir and stat — skip */ }
+      }
+      return total;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Size-aware session rotation monitor. Polls the conversation transcript
+   * size on an interval; when it exceeds config.max_session_mb, archives the
+   * transcript and restarts FRESH (see archiveAndRefresh). Complements the
+   * time-based session timer — the ~71h time cap is too coarse to catch
+   * heavy-cron bloat before it stalls the agent (wally hit 91MB in 2 days).
+   *
+   * No-op (monitor never started) when max_session_mb is absent/<=0, or for
+   * non-Claude runtimes (only Claude keeps growing JSONL transcripts).
+   */
+  private startSizeMonitor(): void {
+    // Idempotent: clear any prior interval before arming a new one. start() can
+    // be reached without a preceding stop() (crash-recovery / image-poison
+    // restart paths both call start() directly), and without this the old
+    // interval would leak and could fire a duplicate rotation.
+    this.clearSizeMonitor();
+
+    const maxMb = this.config.max_session_mb;
+    if (!maxMb || maxMb <= 0) return;
+    if (this.config.runtime === 'codex-app-server' || this.config.runtime === 'hermes') return;
+
+    const POLL_MS = 10 * 60 * 1000; // 10 min — bloat accrues over hours, not seconds
+    const thresholdBytes = maxMb * 1024 * 1024;
+
+    this.sizeTimer = setInterval(() => {
+      // Only act on a live, settled session — never interrupt start/stop, a
+      // daemon shutdown, or a rotation already in flight (the in-flight guard
+      // also covers an external stop()/start() racing the interval callback).
+      if (this.rotating || this.status !== 'running' || this.stopping || this.isDaemonShuttingDown()) return;
+
+      // Re-read the threshold from config so runtime tuning takes effect without
+      // a restart (mirrors the session timer). If the operator removes or zeroes
+      // max_session_mb at runtime, disable the monitor entirely — re-enabling
+      // requires a restart, symmetric with the monitor only arming at start().
+      let currentThreshold = thresholdBytes;
+      try {
+        const configPath = join(this.env.agentDir, 'config.json');
+        if (existsSync(configPath)) {
+          const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+          const v = cfg.max_session_mb;
+          if (typeof v === 'number' && v > 0) {
+            currentThreshold = v * 1024 * 1024;
+          } else {
+            this.log('Size guard: max_session_mb removed/zeroed in config — disabling monitor');
+            this.clearSizeMonitor();
+            return;
+          }
+        }
+      } catch { /* transient read error — keep the start-time threshold */ }
+
+      const bytes = this.getConversationBytes();
+      if (bytes < currentThreshold) return;
+
+      const mb = (bytes / 1024 / 1024).toFixed(1);
+      this.log(`Size guard: transcript ${mb}MB >= ${(currentThreshold / 1024 / 1024).toFixed(0)}MB cap — archiving + fresh restart`);
+      this.archiveAndRefresh().catch(err => this.log(`Size-guard rotation failed: ${err}`));
+    }, POLL_MS);
+
+    // Node keeps the event loop alive for active timers; the daemon process is
+    // long-lived so this is fine, but unref so the interval can't by itself
+    // hold the process open during shutdown.
+    this.sizeTimer.unref?.();
+  }
+
+  private clearSizeMonitor(): void {
+    if (this.sizeTimer) {
+      clearInterval(this.sizeTimer);
+      this.sizeTimer = null;
+    }
+  }
+
+  /**
+   * Archive the bloated conversation transcript, then restart FRESH.
+   *
+   * Critical difference from sessionRefresh(): that does a --continue restart,
+   * which would reload the very transcript we're rotating away from and stall
+   * again. Here we stop the PTY first (releasing the open JSONL), MOVE the
+   * transcripts out of the conversation dir so shouldContinue() returns false,
+   * then start() — which now launches a fresh session that rebuilds context
+   * from memory files. The archived JSONLs are preserved under
+   * <convDir>/archived-<timestamp>/ for forensics, not deleted.
+   *
+   * Writes the .session-refresh marker so the SessionEnd crash-alert hook
+   * classifies the PTY exit as a planned rollover, not a crash.
+   */
+  private async archiveAndRefresh(): Promise<void> {
+    // In-flight guard: never overlap two rotations (defensive — the interval
+    // also checks this.rotating, and stop() clears the timer).
+    if (this.rotating) return;
+    this.rotating = true;
+    this.log('Size-guard rotation (archive + fresh restart)');
+    try {
+      // Write both rotation markers BEFORE anything can fail:
+      //  - .session-refresh: the SessionEnd crash-alert hook reads this to
+      //    classify the imminent PTY exit as a planned rollover, not a crash.
+      //  - .force-fresh: shouldContinue() honors this (all runtimes) and starts
+      //    FRESH regardless of any leftover transcript. This is the safety net
+      //    for the archive step below: if the move partially fails (permission
+      //    denied, disk pressure) and leaves a .jsonl behind, the next start()
+      //    would otherwise --continue and reload the exact bloated transcript we
+      //    are rotating away from — the failure mode that defeats the guard when
+      //    it matters most. The marker guarantees fresh start either way.
+      try {
+        const paths = resolvePaths(this.name, this.env.instanceId, this.env.org);
+        writeFileSync(join(paths.stateDir, '.session-refresh'), 'size-aware rotation\n', 'utf-8');
+      } catch (err) {
+        this.log(`Failed to write .session-refresh marker: ${err}`);
+      }
+      try {
+        // Use the exact path shouldContinue() reads, to avoid any path-derivation drift.
+        writeFileSync(join(this.env.ctxRoot, 'state', this.name, '.force-fresh'), 'size-aware rotation\n', 'utf-8');
+      } catch (err) {
+        // If we cannot guarantee fresh start, abort the rotation rather than risk
+        // reloading the bloat on --continue. The agent keeps running; next tick retries.
+        this.log(`Size-guard: failed to write .force-fresh marker (${err}) — aborting rotation to avoid --continue on bloated transcript`);
+        return;
+      }
+
+      // Stop FIRST so the Claude process releases its open transcript handle
+      // before we move the files (avoids writing into a moved/odd inode).
+      await this.stop();
+
+      const convDir = this.getConversationDir();
+      if (convDir) {
+        try {
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const archiveDir = join(convDir, `archived-${stamp}`);
+          ensureDir(archiveDir);
+          let moved = 0;
+          for (const f of readdirSync(convDir)) {
+            if (!f.endsWith('.jsonl')) continue;
+            try {
+              renameSync(join(convDir, f), join(archiveDir, f));
+              moved++;
+            } catch (err) {
+              this.log(`Size-guard: failed to archive ${f}: ${err}`);
+            }
+          }
+          this.log(`Size-guard: archived ${moved} transcript file(s) to ${archiveDir}`);
+        } catch (err) {
+          // .force-fresh (written above) still guarantees a fresh start even if
+          // the bloated transcript could not be moved aside — it just won't be
+          // archived for forensics. Log so the operator can reclaim disk manually.
+          this.log(`Size-guard: archive step failed (${err}) — .force-fresh still guarantees a fresh start`);
+        }
+      }
+
+      // Re-check shutdown AFTER the awaited stop(): the daemon may have begun
+      // its shutdown sequence while we were stopping. Don't resurrect the agent
+      // into a shutting-down daemon (the interval's pre-check is now stale).
+      if (this.isDaemonShuttingDown()) {
+        this.log('Size-guard: daemon shutting down during rotation — leaving agent stopped, skipping fresh start');
+        return;
+      }
+
+      await this.start();
+      this.log('Size-guard rotation complete (fresh session)');
+    } finally {
+      this.rotating = false;
     }
   }
 

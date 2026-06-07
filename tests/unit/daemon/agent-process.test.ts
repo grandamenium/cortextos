@@ -48,6 +48,8 @@ const fsMocks = {
   writeFileSync: vi.fn(),
   appendFileSync: vi.fn(),
   statSync: vi.fn(),
+  readdirSync: vi.fn(),
+  renameSync: vi.fn(),
 };
 
 vi.mock('fs', async () => {
@@ -76,6 +78,8 @@ vi.mock('fs', async () => {
     get writeFileSync() { return fsMocks.writeFileSync; },
     get appendFileSync() { return fsMocks.appendFileSync; },
     get statSync() { return fsMocks.statSync; },
+    get readdirSync() { return fsMocks.readdirSync; },
+    get renameSync() { return fsMocks.renameSync; },
   };
 });
 
@@ -105,6 +109,8 @@ beforeEach(() => {
   fsMocks.writeFileSync.mockReset();
   fsMocks.appendFileSync.mockReset();
   fsMocks.statSync.mockReset();
+  fsMocks.readdirSync.mockReset().mockReturnValue([]);
+  fsMocks.renameSync.mockReset();
 });
 
 describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
@@ -414,5 +420,104 @@ describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', ()
     }
     // Should be 'crashed' (recovering), NOT 'halted', because daily max is 5
     expect(ap.getStatus().status).not.toBe('halted');
+  });
+});
+
+describe('AgentProcess - size-aware session guard (max_session_mb)', () => {
+  // convDir for mockEnv.agentDir (/tmp/fw/orgs/acme/agents/alice) is
+  // ~/.claude/projects/-tmp-fw-orgs-acme-agents-alice — the actual path is
+  // irrelevant to these tests since readdirSync/statSync are mocked.
+
+  it('getConversationBytes() sums only .jsonl files and ignores other files', () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
+    fsMocks.readdirSync.mockReturnValue(['session.jsonl', 'notes.txt', 'old.jsonl']);
+    const isFile = () => true;
+    fsMocks.statSync.mockImplementation((p: string) => {
+      if (p.endsWith('session.jsonl')) return { size: 10 * 1024 * 1024, isFile };
+      if (p.endsWith('old.jsonl')) return { size: 5 * 1024 * 1024, isFile };
+      return { size: 999, isFile }; // notes.txt — filtered by extension, not isFile
+    });
+    const bytes = (ap as any).getConversationBytes();
+    expect(bytes).toBe(15 * 1024 * 1024);
+  });
+
+  it('getConversationBytes() returns 0 when the conversation dir is unreadable', () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
+    fsMocks.readdirSync.mockImplementation(() => { throw new Error('ENOENT'); });
+    expect((ap as any).getConversationBytes()).toBe(0);
+  });
+
+  it('getConversationBytes() ignores a directory that happens to end in .jsonl', () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
+    fsMocks.readdirSync.mockReturnValue(['real.jsonl', 'weird.jsonl']);
+    fsMocks.statSync.mockImplementation((p: string) => ({
+      size: 4 * 1024 * 1024,
+      isFile: () => p.endsWith('real.jsonl'), // weird.jsonl is a directory
+    }));
+    expect((ap as any).getConversationBytes()).toBe(4 * 1024 * 1024);
+  });
+
+  it('archiveAndRefresh() is a no-op while a rotation is already in flight (in-flight guard)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
+    (ap as any).rotating = true;
+    mockPty.kill.mockClear();
+    await (ap as any).archiveAndRefresh();
+    // Should have returned immediately without driving a stop()/start() cycle.
+    expect(mockPty.kill).not.toHaveBeenCalled();
+    expect(fsMocks.renameSync).not.toHaveBeenCalled();
+  });
+
+  it('getConversationDir() maps the launch dir to the dashed Claude projects path', () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    const dir = (ap as any).getConversationDir();
+    // /tmp/fw/orgs/acme/agents/alice -> -tmp-fw-orgs-acme-agents-alice
+    expect(dir).toContain('.claude');
+    expect(dir).toContain('projects');
+    expect(dir).toContain('-tmp-fw-orgs-acme-agents-alice');
+  });
+
+  it('startSizeMonitor() is a no-op when max_session_mb is absent or <= 0', () => {
+    const apNone = new AgentProcess('alice', mockEnv, {});
+    (apNone as any).startSizeMonitor();
+    expect((apNone as any).sizeTimer).toBeNull();
+
+    const apZero = new AgentProcess('alice', mockEnv, { max_session_mb: 0 });
+    (apZero as any).startSizeMonitor();
+    expect((apZero as any).sizeTimer).toBeNull();
+  });
+
+  it('startSizeMonitor() arms an interval when max_session_mb is set; clearSizeMonitor() disarms it', () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
+    (ap as any).startSizeMonitor();
+    expect((ap as any).sizeTimer).not.toBeNull();
+    (ap as any).clearSizeMonitor();
+    expect((ap as any).sizeTimer).toBeNull();
+  });
+
+  it('does not arm the size monitor for the codex-app-server runtime (no JSONL transcripts)', () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50, runtime: 'codex-app-server' });
+    (ap as any).startSizeMonitor();
+    expect((ap as any).sizeTimer).toBeNull();
+  });
+
+  it('startSizeMonitor() is idempotent — re-arming clears the prior interval', () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
+    (ap as any).startSizeMonitor();
+    const first = (ap as any).sizeTimer;
+    expect(first).not.toBeNull();
+    (ap as any).startSizeMonitor(); // must clear `first` before arming again
+    const second = (ap as any).sizeTimer;
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first); // a new interval, old one cleared (no leak)
+    (ap as any).clearSizeMonitor();
+  });
+
+  it('handleExit (crash/exit) clears the size monitor so the restarted agent does not leak intervals', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
+    await ap.start();
+    expect((ap as any).sizeTimer).not.toBeNull(); // armed while running
+    // Simulate an unintentional PTY exit (crash) — handleExit must clear it.
+    capturedOnExit!(1, 0);
+    expect((ap as any).sizeTimer).toBeNull();
   });
 });
