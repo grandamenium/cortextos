@@ -154,6 +154,7 @@ interface TaskRecord {
   created_by?: string;
   status?: string;
   created_at?: string;
+  archived?: boolean;
 }
 
 /**
@@ -258,21 +259,23 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
   let agentsHealthy = 0;
   const agentsTotal = agentNames.length;
 
-  // Gather task directories
+  // Scope task aggregation to the caller's org context. Walking root + every
+  // org's tasks dir conflates unrelated agent populations: a phytomedic-org
+  // `product-owner` lookup would include the 56 mis-routed default-pool
+  // tasks plus any other org's `product-owner` queue, so `tasks_pending`
+  // came back ~57 when `list-tasks --agent product-owner --status pending`
+  // (single-dir, listTasks semantics) returned 1. Match listTasks here:
+  // when org is set, look only at <ctxRoot>/orgs/<org>/tasks; otherwise
+  // look only at <ctxRoot>/tasks. Cross-org rollups belong in a separate
+  // explicit aggregator, not in per-agent metrics.
   const taskDirs: string[] = [];
-  const tasksDir = join(ctxRoot, 'tasks');
-  if (existsSync(tasksDir)) taskDirs.push(tasksDir);
-  // Org-scoped tasks
   const orgsDir = join(ctxRoot, 'orgs');
-  if (existsSync(orgsDir)) {
-    try {
-      for (const orgEntry of readdirSync(orgsDir, { withFileTypes: true })) {
-        if (orgEntry.isDirectory()) {
-          const orgTasks = join(orgsDir, orgEntry.name, 'tasks');
-          if (existsSync(orgTasks)) taskDirs.push(orgTasks);
-        }
-      }
-    } catch { /* ignore */ }
+  if (org) {
+    const orgTasks = join(orgsDir, org, 'tasks');
+    if (existsSync(orgTasks)) taskDirs.push(orgTasks);
+  } else {
+    const tasksDir = join(ctxRoot, 'tasks');
+    if (existsSync(tasksDir)) taskDirs.push(tasksDir);
   }
 
   // Single-pass: load every task once into memory. 1k+ tasks × 10+ agents ran
@@ -297,6 +300,10 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
     const pendingDispatchAges: number[] = [];
 
     for (const task of allTasks) {
+      // Archived tasks are excluded from listTasks (src/bus/task.ts), so
+      // counting them here would make `tasks_pending` drift above the live
+      // workload visible to the agent. Mirror listTasks: skip archived.
+      if (task.archived) continue;
       if (task.assigned_to === agent) {
         switch (task.status) {
           case 'completed': completed++; break;
@@ -397,18 +404,18 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
     };
   }
 
-  // Count pending approvals
+  // Count pending approvals — same org-scoping rationale as taskDirs above.
+  // Cross-org approval rollups would inflate `approvals_pending` for a
+  // single-org report. Use the org's approvals dir when org is set, the
+  // root one otherwise.
   let approvalsPending = 0;
-  const approvalPaths = [join(ctxRoot, 'approvals', 'pending')];
-  if (existsSync(orgsDir)) {
-    try {
-      for (const orgEntry of readdirSync(orgsDir, { withFileTypes: true })) {
-        if (orgEntry.isDirectory()) {
-          const p = join(orgsDir, orgEntry.name, 'approvals', 'pending');
-          if (existsSync(p)) approvalPaths.push(p);
-        }
-      }
-    } catch { /* ignore */ }
+  const approvalPaths: string[] = [];
+  if (org) {
+    const p = join(orgsDir, org, 'approvals', 'pending');
+    if (existsSync(p)) approvalPaths.push(p);
+  } else {
+    const p = join(ctxRoot, 'approvals', 'pending');
+    if (existsSync(p)) approvalPaths.push(p);
   }
   for (const apDir of approvalPaths) {
     if (existsSync(apDir)) {

@@ -98,6 +98,59 @@ describe('Sprint 5: Observability & Metrics', () => {
       expect(report.system.approvals_pending).toBe(2);
     });
 
+    // Regression: METRICS-ACCURACY-01. Archived tasks were counted into
+    // tasks_pending/tasks_completed but excluded by listTasks, so the metric
+    // overstated the live workload. Mirror listTasks: skip archived.
+    it('skips archived tasks (matches listTasks)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      mkdirSync(join(ctxRoot, 'state', 'bot1'), { recursive: true });
+
+      writeFileSync(join(ctxRoot, 'tasks', 'live.json'), JSON.stringify({ assigned_to: 'bot1', status: 'pending' }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 'archived.json'), JSON.stringify({ assigned_to: 'bot1', status: 'pending', archived: true }), 'utf-8');
+      writeFileSync(join(ctxRoot, 'tasks', 'archived_done.json'), JSON.stringify({ assigned_to: 'bot1', status: 'completed', archived: true }), 'utf-8');
+
+      const report = collectMetrics(ctxRoot);
+      expect(report.agents.bot1.tasks_pending).toBe(1);
+      expect(report.agents.bot1.tasks_completed).toBe(0);
+    });
+
+    // Regression: METRICS-ACCURACY-01. Per-agent counts conflated cross-org
+    // populations because the loop walked root + every orgs/*/tasks dir.
+    // From an org-context call, only that org's tasks should be counted.
+    it('scopes task aggregation to caller org only', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      mkdirSync(join(ctxRoot, 'state', 'bot1'), { recursive: true });
+
+      mkdirSync(join(ctxRoot, 'orgs', 'phytomedic', 'tasks'), { recursive: true });
+      mkdirSync(join(ctxRoot, 'orgs', 'other', 'tasks'), { recursive: true });
+
+      // Mis-routed default-pool task — must NOT count for an org-scoped run.
+      writeFileSync(join(ctxRoot, 'tasks', 'orphan.json'), JSON.stringify({ assigned_to: 'bot1', status: 'pending' }), 'utf-8');
+      // Cross-org task — must NOT count for phytomedic.
+      writeFileSync(join(ctxRoot, 'orgs', 'other', 'tasks', 't.json'), JSON.stringify({ assigned_to: 'bot1', status: 'pending' }), 'utf-8');
+      // Phytomedic's own — MUST count.
+      writeFileSync(join(ctxRoot, 'orgs', 'phytomedic', 'tasks', 't.json'), JSON.stringify({ assigned_to: 'bot1', status: 'pending' }), 'utf-8');
+
+      const phyto = collectMetrics(ctxRoot, 'phytomedic');
+      expect(phyto.agents.bot1.tasks_pending).toBe(1);
+    });
+
+    // Same scoping rule for approvals — an org-scoped report shouldn't roll
+    // up sibling-org approval queues.
+    it('scopes approval count to caller org only', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), '{}', 'utf-8');
+      mkdirSync(join(ctxRoot, 'orgs', 'phytomedic', 'approvals', 'pending'), { recursive: true });
+      mkdirSync(join(ctxRoot, 'orgs', 'other', 'approvals', 'pending'), { recursive: true });
+
+      writeFileSync(join(ctxRoot, 'approvals', 'pending', 'root.json'), '{}', 'utf-8');
+      writeFileSync(join(ctxRoot, 'orgs', 'other', 'approvals', 'pending', 'a.json'), '{}', 'utf-8');
+      writeFileSync(join(ctxRoot, 'orgs', 'phytomedic', 'approvals', 'pending', 'a.json'), '{}', 'utf-8');
+      writeFileSync(join(ctxRoot, 'orgs', 'phytomedic', 'approvals', 'pending', 'b.json'), '{}', 'utf-8');
+
+      const phyto = collectMetrics(ctxRoot, 'phytomedic');
+      expect(phyto.system.approvals_pending).toBe(2);
+    });
+
     it('writes report to analytics/reports/latest.json', () => {
       writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), '{}', 'utf-8');
       collectMetrics(ctxRoot);
