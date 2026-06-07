@@ -244,6 +244,15 @@ export function isClaudeDirOperation(
   const filePath = toolInput?.file_path;
   if (typeof filePath !== 'string' || filePath.length === 0) return false;
 
+  // Reject ANY `..` path segment before resolution. `resolve()` collapses `..`
+  // LEXICALLY, which does NOT match the filesystem: for `.claude/escape/../x`
+  // where `escape` is a symlink out of the tree, the OS follows the symlink first
+  // and THEN applies `..`, landing the write outside `.claude` — while the lexical
+  // collapse to `.claude/x` would wrongly pass containment and never lstat the
+  // `escape` symlink. Auto-approved `.claude/` writes never need `..`; a path that
+  // contains one falls through to the human gate (fail-closed).
+  if (filePath.split(/[\\/]/).includes('..')) return false;
+
   // Require an explicit trust boundary — never fall back to cwd, which would let
   // the auto-approve scope drift to whatever directory the hook started in.
   const base = agentDir ?? process.env.CTX_AGENT_DIR;
@@ -254,9 +263,19 @@ export function isClaudeDirOperation(
   // thing left to vet.
   const canonAgentDir = canonicalizePath(resolve(base));
   const claudeRoot = join(canonAgentDir, '.claude');
-  const target = resolve(canonAgentDir, filePath);
+  // Canonicalize the target the SAME way as the agent dir (realpath the deepest
+  // existing ancestor), so the containment comparison is apples-to-apples. This
+  // does two things at once: (a) it resolves legitimate install-path symlinks on
+  // the target (e.g. an absolute file_path under /tmp -> /private/tmp) so a real
+  // in-.claude write is no longer wrongly refused; (b) it resolves a LIVE escape
+  // symlink — `.claude/escape` -> outside, even when the leaf (evil.txt) doesn't
+  // exist yet — so the resolved target lands outside claudeRoot and fails the
+  // containment check below = REFUSED. A *dangling* escape symlink can't be
+  // resolved (canonicalize falls back to lexical), so it stays caught by the
+  // hasSymlinkComponent lstat walk.
+  const target = canonicalizePath(resolve(canonAgentDir, filePath));
 
-  // Lexical containment within the agent's own .claude/.
+  // Containment within the agent's own canonical .claude/.
   if (target !== claudeRoot && !target.startsWith(claudeRoot + sep)) return false;
 
   // Reject if any component at or below .claude is a symlink — live OR dangling.

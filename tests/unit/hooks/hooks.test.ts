@@ -188,6 +188,37 @@ describe('Hook Utilities', () => {
       }
     });
 
+    it('refuses a write that escapes via a symlink + .. lexical collapse (codex cross-model gate)', () => {
+      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      try {
+        const realAgentDir = join(base, 'agent');
+        mkdirSync(join(realAgentDir, '.claude'), { recursive: true });
+        const outside = join(base, 'outside');
+        mkdirSync(outside, { recursive: true });
+        symlinkSync(outside, join(realAgentDir, '.claude', 'escape'));
+        // .claude/escape/../evil.txt as a RAW string (un-collapsed): the OS follows escape->outside
+        // FIRST, then applies `..`, landing the write in base/ — OUTSIDE .claude. Must REFUSE (the
+        // raw-`..` rejection catches it before resolution). NOTE: path.join() would LEXICALLY collapse
+        // `escape/..` to nothing -> `.claude/evil.txt` (a safe in-tree write), masking the attack — so
+        // these use raw strings with the `..` intact, exactly as a tool/attacker passes file_path.
+        expect(isClaudeDirOperation('Write',
+          { file_path: realAgentDir + '/.claude/escape/../evil.txt' }, realAgentDir)).toBe(false);
+        expect(isClaudeDirOperation('Write',
+          { file_path: '.claude/escape/../evil.txt' }, realAgentDir)).toBe(false);
+        // Single `..` escaping .claude, and multiple `..`, both REFUSED.
+        expect(isClaudeDirOperation('Write',
+          { file_path: '.claude/../evil.txt' }, realAgentDir)).toBe(false);
+        expect(isClaudeDirOperation('Write',
+          { file_path: '.claude/a/../../../etc/passwd' }, realAgentDir)).toBe(false);
+        // But `..` must be rejected as a SEGMENT, not a substring: a legit filename
+        // containing `..` (foo..bak) inside .claude is still ALLOWED.
+        expect(isClaudeDirOperation('Write',
+          { file_path: '.claude/foo..bak' }, realAgentDir)).toBe(true);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+
     it('handles a symlinked agent-dir ancestor without leaking (mmax)', () => {
       const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
       try {
