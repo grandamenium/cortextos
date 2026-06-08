@@ -157,6 +157,12 @@ export interface AgentConfig {
   startup_delay?: number;
   max_session_seconds?: number;
   max_crashes_per_day?: number;
+  /**
+   * Sliding-window crash-loop detector. When N crashes occur within the window,
+   * the agent auto-pauses (status: 'halted') instead of retrying. Absent = legacy
+   * daily counter only.
+   */
+  crash_window?: { seconds: number; max_crashes?: number };
   model?: string;
   working_directory?: string;
   enabled?: boolean;
@@ -175,12 +181,18 @@ export interface AgentConfig {
   /** Context window % at which to inject handoff prompt and hard-restart. Default: 80. */
   ctx_handoff_threshold?: number;
   /**
+   * Fallback context window cap (tokens) for codex-app-server agents when the
+   * server's `thread/tokenUsage/updated` event reports `modelContextWindow=null`.
+   * Defaults to 256000 when unset. Only applied to the codex-app-server runtime.
+   */
+  codex_context_cap?: number;
+  /**
    * Agent runtime. Defaults to 'claude-code' when absent.
    * 'hermes' selects the HermesPTY spawn path (Python persistent REPL,
    * NousResearch/hermes-agent) with Hermes-specific bootstrap, session
    * continuity, and exit handling.
    */
-  runtime?: 'claude-code' | 'hermes' | 'codex';
+  runtime?: 'claude-code' | 'hermes' | 'codex-app-server';
   /**
    * Whether this agent runs a Telegram poller. Defaults to true when absent
    * (preserves existing behaviour). Set to false on specialist agents that
@@ -189,6 +201,40 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * F15-expansion: when true, the agent always starts a fresh session on a
+   * rollover restart instead of resuming with --continue. shouldContinue()
+   * short-circuits to false. Use for agents that accumulate context faster
+   * than the rollover window and would otherwise compaction-loop. Reuses the
+   * existing .force-fresh fresh-session path. Default (absent) = resume.
+   */
+  hard_restart_on_rollover?: boolean;
+  /**
+   * F10 Phase 2: proactive RSS-driven restart threshold in MB. When set (> 0),
+   * the daemon samples this agent's own process RSS on a timer and, once RSS
+   * stays at/above this threshold across two consecutive samples, triggers a
+   * planned session refresh (the same --continue rollover path used at the
+   * session-time cap) to reclaim the bloat before it forces a system-wide OOM.
+   * Absent or <= 0 disables the monitor (default). The complement to the
+   * external Phase 1 rss-monitor.sh, which reactively STOPS idle agents under
+   * acute system pressure; Phase 2 proactively refreshes a single bloated agent
+   * while there is still memory headroom to absorb the fresh-session cost.
+   */
+  rss_restart_threshold_mb?: number;
+  /**
+   * F10 Phase 2: how often (seconds) to sample this agent's RSS. Default 300.
+   * Only consulted when rss_restart_threshold_mb is set.
+   */
+  rss_check_interval_seconds?: number;
+  /**
+   * F10 Phase 2 pre-restart check: minimum system soft-available memory
+   * (free + inactive, MB) required before an RSS restart will fire. If
+   * soft-avail is below this floor, the restart is deferred — restarting into
+   * low memory would worsen pressure (a fresh session costs ~490MB), and the
+   * Phase 1 reactive stop owns acute-pressure handling. Default 1500 (aligned
+   * with the fleet's 1.5GB restoration gate).
+   */
+  rss_restart_soft_avail_floor_mb?: number;
 }
 
 export interface CronEntry {
@@ -742,6 +788,12 @@ export interface IPCResponse {
   success: boolean;
   data?: unknown;
   error?: string;
+  /**
+   * Structured error code for failed responses. Lets operators distinguish
+   * "agent does not exist" (NOT_FOUND) from "request collapsed against an
+   * in-flight identical op" (DEDUPED). See issue #346.
+   */
+  code?: 'NOT_FOUND' | 'DEDUPED' | 'INVALID_INPUT' | 'NOT_RUNNING';
 }
 
 // Agent Discovery Types

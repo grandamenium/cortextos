@@ -17,7 +17,14 @@ interface AgentConfig {
   max_session_seconds?: number;
   max_crashes_per_day?: number;
   startup_delay?: number;
+  runtime?: 'claude-code' | 'codex-app-server' | 'hermes';
 }
+
+const MODEL_PLACEHOLDER: Record<NonNullable<AgentConfig['runtime']>, string> = {
+  'claude-code': 'claude-sonnet-4-5',
+  'codex-app-server': 'gpt-5-codex',
+  hermes: 'hermes-1',
+};
 
 interface SettingsTabProps {
   agentName: string;
@@ -294,7 +301,7 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
               type="text"
               value={config.model || ''}
               onChange={e => setConfig(p => ({ ...p, model: e.target.value }))}
-              placeholder="claude-sonnet-4-5"
+              placeholder={MODEL_PLACEHOLDER[config.runtime ?? 'claude-code']}
               className="mt-1 block w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:border-primary focus:outline-none"
             />
           </div>

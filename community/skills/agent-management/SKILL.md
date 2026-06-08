@@ -19,6 +19,7 @@ external_calls: ["api.telegram.org"]
 4. **ALWAYS use `cortextos enable` to start agents.** Never manually edit PM2 config.
 5. **NEVER share bot tokens between agents.** Each agent gets its own bot from @BotFather.
 6. **NEVER hardcode chat IDs.** Get them from the actual user via Telegram getUpdates.
+7. **ALWAYS ask the user which runtime** (claude-code vs codex-app-server) before scaffolding a new agent. Default to claude-code only if the user has no preference. Never silently pick.
 
 ---
 
@@ -28,7 +29,18 @@ external_calls: ["api.telegram.org"]
 
 ```bash
 # Option A: CLI (recommended)
-cortextos add-agent <name> --template agent --org <org>
+
+# STEP 0 — REQUIRED BEFORE SCAFFOLDING — Ask the user which runtime:
+#   "Should this agent run on Claude Code (Anthropic) or Codex (OpenAI gpt-5-codex)?"
+# Default to claude-code if the user has no preference. Never silently pick.
+# Codex agents MUST use the agent-codex template; orchestrator/analyst/m2c1-worker
+# do not have codex variants — the CLI will reject the mismatch.
+
+# claude-code path (the common one):
+cortextos add-agent <name> --template agent --org <org> --runtime claude-code
+
+# codex-app-server path (gpt-5-codex via codex CLI app-server JSONRPC):
+cortextos add-agent <name> --template agent-codex --org <org> --runtime codex-app-server
 
 # Option B: Manual
 TEMPLATE="agent"  # or "orchestrator" or "analyst"
@@ -136,7 +148,25 @@ cortextos bus send-message <agent_name> high "soft-restart" "<reason>"
 cortextos bus hard-restart --reason "context exhaustion"
 ```
 
-**When to use:** Context window full, conversation corrupted, need clean slate.
+**When to use:** Context window full, conversation corrupted, need clean slate, or wiring a new hook (see Hook Reload Lifecycle below). Hard-restart sends an IPC `restart-agent` signal to the daemon, which kills the running PID and respawns it fresh. The respawn consumes the `.force-fresh` marker and skips `--continue`, so `settings.json` (including newly-wired hooks) is re-read from scratch.
+
+### Hook Reload Lifecycle
+
+`.claude/settings.json` hooks (PreToolUse, PostToolUse, Stop, SessionStart, etc) are loaded once when the Claude CLI process starts. They are NOT reloaded by `cortextos bus self-restart` — soft restart relaunches Claude with `--continue`, which reuses the existing process settings cache. Project-level hooks added or changed in `settings.json` since the original boot DO NOT take effect under soft restart.
+
+**When wiring a new hook to a running agent, use a hard restart, not a soft restart:**
+
+```bash
+# From inside the agent itself, or from another agent/terminal:
+cortextos bus hard-restart --reason "loading new hook"
+
+# Equivalent ops-side path:
+cortextos stop <agent> && cortextos start <agent>
+```
+
+Both kill the existing PID and respawn a fresh process that re-reads `settings.json` from scratch. Verify by adding a one-line debug write to your hook script before testing — if the file shows up after a benign tool call, the hook is loaded.
+
+This bit us hard on the coder-telegram-guardrail wire-up before upstream PR #217 fixed `bus hard-restart` to actually signal the daemon. On any fork that has not pulled in #217 (commit `a38ef7a`), `bus hard-restart` writes markers without killing the PID — fall back to external `stop && start` until the fork is rebased.
 
 ### Restart from Another Agent
 
@@ -368,13 +398,20 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 3. Regenerate ecosystem config: `cortextos ecosystem` then `pm2 restart ecosystem.config.js`
 4. If exit code shows throttling, wait 10s then `cortextos enable <agent> --restart`
 
+### New Hook Not Firing After Wiring It Up
+1. Confirm `settings.json` is valid JSON and the hook block is in the right shape (matcher, type=command, etc).
+2. Try a benign tool call that should trigger the hook. If nothing happens, the hook is not loaded.
+3. **Do NOT soft-restart** — `--continue` does not reload project hooks (see Hook Reload Lifecycle in Section 2).
+4. Hard-restart the agent: `cortextos bus hard-restart --reason "load new hook"`. The daemon kills the PID and respawns a fresh process that re-reads `settings.json`.
+5. If the hook still does not fire after a fresh PID, instrument the script with an unconditional write to `/tmp/<agent>-hook-test.log` at the very top of `main()`, run a benign tool, and check whether the file appears. If yes, the hook is firing but the script is returning early. If no, the hook is wired wrong in `settings.json`.
+
 ---
 
 ## Quick Reference
 
 | I need to... | Command |
 |---|---|
-| Create new agent | `cortextos add-agent <name> --template <type> --org <org>` |
+| Create new agent | `cortextos add-agent <name> --template agent --org <org> --runtime claude-code` (or `--template agent-codex --runtime codex-app-server` after asking the user which runtime) |
 | Enable agent | `cortextos enable <agent> --org <org>` |
 | Disable agent | `cortextos disable <agent> --org <org>` |
 | Soft restart (self) | `cortextos bus self-restart --reason "<reason>"` |

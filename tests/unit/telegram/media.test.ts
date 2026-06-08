@@ -56,13 +56,23 @@ describe('sanitizeFilename', () => {
 
 describe('processMediaMessage', () => {
   let downloadDir: string;
+  let prevNoTranscribe: string | undefined;
 
   beforeEach(() => {
     downloadDir = mkdtempSync(join(tmpdir(), 'cortextos-media-test-'));
+    // Disable transcription in unit tests to avoid spawning whisper-cli on
+    // junk audio bytes. transcribe.ts has dedicated tests.
+    prevNoTranscribe = process.env.CTX_TELEGRAM_NO_TRANSCRIBE;
+    process.env.CTX_TELEGRAM_NO_TRANSCRIBE = '1';
   });
 
   afterEach(() => {
     rmSync(downloadDir, { recursive: true, force: true });
+    if (prevNoTranscribe === undefined) {
+      delete process.env.CTX_TELEGRAM_NO_TRANSCRIBE;
+    } else {
+      process.env.CTX_TELEGRAM_NO_TRANSCRIBE = prevNoTranscribe;
+    }
   });
 
   function makeMsg(overrides: Partial<TelegramMessage>): TelegramMessage {
@@ -172,6 +182,17 @@ describe('processMediaMessage', () => {
     expect(result!.duration).toBe(5);
     expect(result!.file_path).toMatch(/voice_\d+\.ogg$/);
     expect(existsSync(result!.file_path!)).toBe(true);
+  });
+
+  it('voice message has undefined transcript when transcription disabled', async () => {
+    const msg = makeMsg({
+      voice: { file_id: 'voice1', duration: 5 },
+    });
+    const api = createMockApi('voice/file_123.ogg');
+    const result = await processMediaMessage(msg, api, downloadDir);
+
+    expect(result).not.toBeNull();
+    expect(result!.transcript).toBeUndefined();
   });
 
   it('processes video messages with filename', async () => {

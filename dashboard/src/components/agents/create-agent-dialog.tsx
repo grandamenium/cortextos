@@ -30,9 +30,30 @@ interface CreateAgentDialogProps {
 const NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
 const TEMPLATES = [
-  { value: 'agent', label: 'Agent' },
-  { value: 'orchestrator', label: 'Orchestrator' },
-  { value: 'analyst', label: 'Analyst' },
+  {
+    value: 'agent',
+    label: 'Agent (Claude)',
+    runtime: 'claude-code',
+    description: 'General-purpose worker on the Claude-Code runtime. Default. Skills under .claude/skills/, slash-commands available.',
+  },
+  {
+    value: 'agent-codex',
+    label: 'Agent (Codex)',
+    runtime: 'codex-app-server',
+    description: 'General-purpose worker on the codex-app-server runtime (gpt-5-codex). Skills under plugins/cortextos-agent-skills/skills/, no slash-commands.',
+  },
+  {
+    value: 'orchestrator',
+    label: 'Orchestrator (Claude only)',
+    runtime: 'claude-code',
+    description: 'Coordinates the org — morning/evening reviews, goal cascade, approvals. Claude-Code runtime only.',
+  },
+  {
+    value: 'analyst',
+    label: 'Analyst (Claude only)',
+    runtime: 'claude-code',
+    description: 'System health, metrics, theta-wave autoresearch. Claude-Code runtime only.',
+  },
 ] as const;
 
 type Template = (typeof TEMPLATES)[number]['value'];
@@ -170,6 +191,14 @@ export function CreateAgentDialog({
                 ))}
               </SelectContent>
             </Select>
+            {/* Runtime tooltip — shows what the selected template means
+                so users picking between Claude / Codex agents understand
+                the runtime + skill location implications before submit. */}
+            <p className="text-xs text-muted-foreground">
+              Runtime: <code className="text-xs">{TEMPLATES.find((t) => t.value === template)?.runtime ?? 'claude-code'}</code>.
+              {' '}
+              {TEMPLATES.find((t) => t.value === template)?.description}
+            </p>
           </div>
 
           {/* Bot Token */}

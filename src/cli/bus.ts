@@ -953,6 +953,10 @@ busCommand
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
   .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
+    // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
+    // does not expand escapes, so they arrive at argv as 2-char literals and
+    // Telegram renders them as visible text. Normalize before send + log.
+    message = message.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
     // Resolve bot token: agent .env first, then process.env
     const env = resolveEnv();
     let botToken = '';
@@ -1014,6 +1018,54 @@ busCommand
       console.log('Message sent');
     } catch (err: any) {
       console.error(`Failed to send: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('react-telegram')
+  .description("Set the bot's reaction on a Telegram message (single emoji ack)")
+  .argument('<chat-id>', 'Telegram chat ID')
+  .argument('<message-id>', 'ID of the message to react to')
+  .argument('[emoji]', 'Reaction emoji (default: 👍). Pass an empty string to clear.', '👍')
+  .action(async (chatId: string, messageIdRaw: string, emoji: string) => {
+    const messageId = Number(messageIdRaw);
+    if (!Number.isFinite(messageId) || messageId <= 0) {
+      console.error(`Invalid message-id '${messageIdRaw}'. Must be a positive integer.`);
+      process.exit(1);
+    }
+
+    // Resolve bot token: agent .env first, then process.env (same flow as
+    // send-telegram so the agent identity / personality of the reaction
+    // matches the agent that owns the conversation).
+    const env = resolveEnv();
+    let botToken = '';
+    if (env.agentDir) {
+      const { readFileSync, existsSync } = require('fs');
+      const { join } = require('path');
+      const agentEnv = join(env.agentDir, '.env');
+      if (existsSync(agentEnv)) {
+        const content = readFileSync(agentEnv, 'utf-8');
+        const match = content.match(/^BOT_TOKEN=(.+)$/m);
+        if (match && match[1].trim()) botToken = match[1].trim();
+      }
+    }
+    if (!botToken) botToken = process.env.BOT_TOKEN || '';
+    if (!botToken) {
+      console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
+      process.exit(1);
+    }
+
+    const api = new TelegramAPI(botToken);
+    try {
+      // Empty string clears the reaction; otherwise send a single-emoji array.
+      // Telegram limits bots to one reaction per message; we treat that as the
+      // primitive here. Multi-emoji is a future feature if/when needed.
+      const emojis = emoji === '' ? [] : [emoji];
+      await api.setMessageReaction(chatId, messageId, emojis);
+      console.log(emojis.length > 0 ? `Reacted ${emoji}` : 'Reaction cleared');
+    } catch (err: any) {
+      console.error(`Failed to react: ${err.message || err}`);
       process.exit(1);
     }
   });
@@ -1630,6 +1682,8 @@ busCommand
   .argument('<reply>', 'Reply text')
   .argument('[msg-id]', 'Inbox message ID to ACK')
   .action((agent: string, reply: string, msgId?: string) => {
+    // Same literal '\n'/'\t' normalize as send-telegram (codex agent fix).
+    reply = reply.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
     const { mkdirSync, appendFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
@@ -2395,6 +2449,11 @@ busCommand
   .command('hook-idle-flag')
   .description('Stop hook: writes last_idle.flag timestamp so fast-checker knows agent finished its turn')
   .action(() => runHook('hook-idle-flag'));
+
+busCommand
+  .command('hook-loop-detector')
+  .description('PreToolUse hook: detects and blocks repeated tool loops (same-args repetition + ping-pong alternation)')
+  .action(() => runHook('hook-loop-detector'));
 
 // --- OAuth token rotation commands ---
 

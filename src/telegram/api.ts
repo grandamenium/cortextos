@@ -109,16 +109,25 @@ export class TelegramAPI {
    *   5. Italic (_..._) — word-boundary aware to avoid snake_case false positives
    *   6. Links ([text](url)) → <a href="url">text</a>
    *
-   * Pass `plainText: true` to skip conversion (just HTML-escape and send raw).
+   * Pass `plainText: true` to skip both Markdown conversion AND HTML-escaping.
+   * sendChunk calls sendMessage without parse_mode in that case, so Telegram
+   * renders the raw text -- escaping would leak visible `&gt;` / `&lt;` /
+   * `&amp;` into the message.
    */
   private markdownToHtml(text: string, plainText = false): string {
+    // Plain-text mode: skip both HTML-escaping AND Markdown conversion.
+    // sendChunk calls sendMessage without parse_mode, so Telegram renders
+    // the raw text. HTML-escaping in this path leaks visible &gt; / &lt; /
+    // &amp; into the rendered message — agents emitting "->" or "5 > 4" in
+    // plain-text bodies were getting "-&gt;" and "5 &gt; 4" in customer-
+    // facing copy. Fixed by short-circuiting before the escape step.
+    if (plainText) return text;
+
     // Step 1: HTML-escape (& must be first to avoid double-escaping)
     let html = text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
-
-    if (plainText) return html;
 
     // Step 2: Fenced code blocks — multiline, processed before inline `
     html = html.replace(/```(?:\w*\n?)?([\s\S]*?)```/g, (_, code) =>
@@ -511,6 +520,37 @@ export class TelegramAPI {
     return this.post('answerCallbackQuery', {
       callback_query_id: callbackQueryId,
       text: text || 'OK',
+    });
+  }
+
+  /**
+   * Set the bot's reaction on a message.
+   *
+   * Wraps Telegram's setMessageReaction Bot API method. Use this when an
+   * agent wants to acknowledge a message with a single emoji instead of
+   * sending a full verbal reply. Cleaner than message-spam acks ("got it",
+   * "on it", "sounds good") -- the reaction is one bit of signal that lives
+   * on the original message.
+   *
+   * Pass an empty `emojis` array to clear the bot's reactions on the message.
+   *
+   * Telegram limits bots to ONE reaction per message. The full list of
+   * reaction emojis the API accepts is documented here:
+   * https://core.telegram.org/bots/api#reactiontypeemoji
+   *
+   * Note: bots can only react to messages within ~48h of the message being
+   * sent (the same window that applies to deleteMessage). Older messages
+   * return an error.
+   */
+  async setMessageReaction(
+    chatId: string | number,
+    messageId: number,
+    emojis: string[] = [],
+  ): Promise<any> {
+    return this.post('setMessageReaction', {
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: emojis.map((emoji) => ({ type: 'emoji', emoji })),
     });
   }
 

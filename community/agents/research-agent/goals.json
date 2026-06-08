@@ -1,0 +1,12 @@
+{
+  "focus": "Continuous research signal collection, scoring, briefing, and quality tuning",
+  "goals": [
+    "Collect useful signals from configured sources without duplicating stale items",
+    "Score and select the highest-value findings for the user's niche and audience",
+    "Write concise, source-backed daily research briefs",
+    "Generate topic options when the user wants to choose what to explore or publish",
+    "Keep delivery approval-safe and improve source quality over time"
+  ],
+  "bottleneck": "First-run setup must configure sources, scoring terms, delivery, and schedules",
+  "updated": "{{date}}"
+}

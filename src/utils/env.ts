@@ -1,9 +1,10 @@
 import { readFileSync, existsSync, writeFileSync } from 'fs';
-import { join, basename } from 'path';
+import { join, basename, resolve as resolvePath, sep } from 'path';
 import { homedir } from 'os';
 import type { CtxEnv } from '../types/index.js';
 import { ensureDir } from './atomic.js';
 import { validateAgentName, validateOrgName } from './validate.js';
+import { stripBom } from './strip-bom.js';
 
 /**
  * Resolve the cortextOS environment context.
@@ -76,11 +77,40 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
     try {
       const contextPath = join(projectRoot, 'orgs', org, 'context.json');
       if (existsSync(contextPath)) {
-        const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
+        // stripBom: PowerShell/Notepad-saved context.json files have a BOM
+        // that breaks JSON.parse at position 0 — silent fallback to wrong
+        // timezone/orchestrator. See src/utils/strip-bom.ts for incident.
+        const ctx = JSON.parse(stripBom(readFileSync(contextPath, 'utf-8')));
         if (!timezone && ctx.timezone) timezone = ctx.timezone;
         if (!orchestrator && ctx.orchestrator) orchestrator = ctx.orchestrator;
       }
     } catch { /* ignore */ }
+  }
+
+  // Sandbox/live isolation (issue #313): when both CTX_FRAMEWORK_ROOT and CTX_AGENT_DIR
+  // are set, the resolved agentDir MUST be subordinate to frameworkRoot. Catches the leak
+  // class where a CLI subprocess inherits CTX_AGENT_DIR (or CTX_PROJECT_ROOT) from a live
+  // agent shell while only CTX_FRAMEWORK_ROOT was overridden — agentDir then silently
+  // points at the live install. Equality check on projectRoot vs frameworkRoot catches
+  // the same divergence on the projectRoot axis.
+  if (agentDir && frameworkRoot) {
+    const fwRootResolved = resolvePath(frameworkRoot);
+    const agentDirResolved = resolvePath(agentDir);
+    if (agentDirResolved !== fwRootResolved && !agentDirResolved.startsWith(fwRootResolved + sep)) {
+      throw new Error(
+        `Resolved CTX_AGENT_DIR '${agentDir}' is not under CTX_FRAMEWORK_ROOT '${frameworkRoot}'. ` +
+        `This indicates a sandbox/live environment leak — likely CTX_FRAMEWORK_ROOT was overridden ` +
+        `but CTX_AGENT_DIR or CTX_PROJECT_ROOT was inherited from the parent shell. ` +
+        `Refusing to proceed.`,
+      );
+    }
+  }
+  if (projectRoot && frameworkRoot && resolvePath(projectRoot) !== resolvePath(frameworkRoot)) {
+    throw new Error(
+      `CTX_PROJECT_ROOT '${projectRoot}' must equal CTX_FRAMEWORK_ROOT '${frameworkRoot}'. ` +
+      `A divergence indicates a sandbox/live environment leak — likely one of the two was ` +
+      `inherited from the parent shell while the other was overridden. Refusing to proceed.`,
+    );
   }
 
   // Security (H9): Validate agent name and org before they flow into filesystem paths.
@@ -134,8 +164,13 @@ export function writeCortextosEnv(agentDir: string, env: CtxEnv): void {
 export function parseEnvFile(filePath: string): Record<string, string> {
   const result: Record<string, string> = {};
   try {
-    const content = readFileSync(filePath, 'utf-8');
-    for (const line of content.split('\n')) {
+    // stripBom + CRLF-aware split: Windows tooling (PowerShell Out-File,
+    // Notepad) writes .env files with a UTF-8 BOM at position 0 AND CRLF
+    // line endings. Without stripBom the first KEY line never matches
+    // because position 0 is the BOM byte; without the regex split, each
+    // value gets a trailing \r that breaks downstream validators.
+    const content = stripBom(readFileSync(filePath, 'utf-8'));
+    for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
       const eqIdx = trimmed.indexOf('=');
