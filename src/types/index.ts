@@ -164,6 +164,17 @@ export interface EcosystemConfig {
 export interface AgentConfig {
   startup_delay?: number;
   max_session_seconds?: number;
+  /**
+   * Size-aware session rotation. When the agent's Claude conversation JSONL(s)
+   * exceed this many megabytes, the daemon ARCHIVES the conversation and starts
+   * a FRESH session (not --continue) — because --continue would reload the
+   * bloated transcript and re-trigger the context-exhaustion stall this guards
+   * against (wally hit 91MB over 2 days → stall). The time-based
+   * max_session_seconds cap is too coarse to catch heavy-cron bloat in time.
+   * Absent or <= 0 disables size-based rotation (time cap still applies).
+   * Only meaningful for the claude-code runtime (JSONL transcripts).
+   */
+  max_session_mb?: number;
   max_crashes_per_day?: number;
   /**
    * Sliding-window crash-loop detector. When N crashes occur within the window,
