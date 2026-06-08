@@ -314,6 +314,14 @@ export class AgentManager {
     let chatId: string | undefined;
     let allowedUserId: string | undefined;
     let botToken: string | undefined;
+    // Trust-chat mode (ALLOWED_USER=*): accept any sender, but only when the
+    // message comes from the trusted chat. For private/invite-only group chats
+    // where group membership is itself the access control.
+    let trustChat = false;
+    // The chat that "*" trusts. Defaults to CHAT_ID, but TRUST_CHAT_ID lets an
+    // agent keep its home/proactive chat (CHAT_ID, e.g. the operator's DM) while
+    // ALSO trusting a separate group, so the two roles can be decoupled.
+    let trustChatId: string | undefined;
 
     if (existsSync(agentEnvFile)) {
       // stripBom: Windows tooling writes .env with a UTF-8 BOM that breaks
@@ -323,9 +331,12 @@ export class AgentManager {
       const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
       const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
       const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
+      const trustChatIdMatch = envContent.match(/^TRUST_CHAT_ID=(.+)$/m);
       botToken = botTokenMatch?.[1]?.trim();
       chatId = chatIdMatch?.[1]?.trim();
       allowedUserId = allowedUserMatch?.[1]?.trim() || undefined;
+      // "*" trusts TRUST_CHAT_ID if set, otherwise the home CHAT_ID.
+      trustChatId = trustChatIdMatch?.[1]?.trim() || chatId;
 
       // Validate BOT_TOKEN format: must be numeric_id:alphanumeric_secret
       if (botToken && !/^\d+:[A-Za-z0-9_-]+$/.test(botToken)) {
@@ -333,17 +344,25 @@ export class AgentManager {
         botToken = undefined;
       }
 
-      // ALLOWED_USER must be one or more numeric Telegram user IDs.
-      // Comma-separated for multi-user (e.g. group chats with Sam + a collaborator).
-      // Whitespace tolerated; any non-numeric token rejects the whole list.
+      // ALLOWED_USER tokens (comma-separated, whitespace tolerated):
+      //   - "*"  = trust the configured chat (CHAT_ID): accept ANY sender, but
+      //            only when the message originates from CHAT_ID. For private /
+      //            invite-only group chats where membership is the access control.
+      //   - digits = a numeric Telegram user ID: accept that user from ANY chat
+      //            (e.g. their 1-on-1 DM with the bot).
+      // The two can be combined, e.g. "*,8993058901" = trust the group AND also
+      // answer that user privately. Any non-"*", non-numeric token rejects all.
       if (allowedUserId) {
-        const ids = allowedUserId.split(',').map((s) => s.trim()).filter(Boolean);
-        if (ids.length === 0 || !ids.every((id) => /^\d+$/.test(id))) {
-          log(`SECURITY: ALLOWED_USER must be a comma-separated list of numeric Telegram user IDs (e.g. 123456789,987654321). Refusing to enable Telegram. Fix the .env file.`);
+        const tokens = allowedUserId.split(',').map((s) => s.trim()).filter(Boolean);
+        const numericIds = tokens.filter((t) => t !== '*');
+        if (tokens.includes('*')) trustChat = true;
+        if (numericIds.length > 0 && !numericIds.every((id) => /^\d+$/.test(id))) {
+          log(`SECURITY: ALLOWED_USER must be numeric Telegram user IDs (e.g. 123456789,987654321) and/or "*" to trust the configured chat. Refusing to enable Telegram. Fix the .env file.`);
           allowedUserId = undefined;
+          trustChat = false;
         } else {
-          // Normalize to comma-joined form so downstream gate splits on it
-          allowedUserId = ids.join(',');
+          // Keep only the numeric IDs in allowedUserId; "*" is tracked by trustChat.
+          allowedUserId = numericIds.length > 0 ? numericIds.join(',') : undefined;
         }
       }
 
@@ -351,7 +370,7 @@ export class AgentManager {
       // ANY Telegram user who finds the bot @handle could control the agent.
       // Fail closed: refuse to start Telegram unless the operator explicitly
       // whitelists their numeric user ID.
-      if (botToken && !allowedUserId) {
+      if (botToken && !allowedUserId && !trustChat) {
         log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
         if (chatId) {
           const alertApi = new TelegramAPI(botToken);
@@ -365,7 +384,7 @@ export class AgentManager {
       if (botToken && chatId) {
         telegramApi = new TelegramAPI(botToken);
         // Don't log sensitive user IDs — just indicate the gate is enabled
-        log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
+        log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: ${trustChat ? 'trust-chat (any member of configured group)' : 'enabled'})`);
       }
     }
 
@@ -381,7 +400,8 @@ export class AgentManager {
       telegramApi,
       chatId,
       // FastChecker only needs the first ID for its single-recipient typing
-      // indicator / quick-checks. Multi-user is enforced by the gates above.
+      // indicator / quick-checks. Multi-user / trust-chat is enforced by the
+      // gates above; here just pass the first numeric ID if one is configured.
       allowedUserId: allowedUserId ? parseInt(allowedUserId.split(',')[0].trim(), 10) : undefined,
     });
 
@@ -449,15 +469,21 @@ export class AgentManager {
       const REJECT_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
 
       poller.onMessage((msg) => {
-        // ALLOWED_USER gate: comma-separated list of numeric user IDs.
-        // If configured, ignore messages from other users. Always log the
-        // rejected user_id + name so operators can discover IDs to whitelist.
-        if (allowedUserId) {
-          const allowedIds = allowedUserId.split(',').map((s) => parseInt(s.trim(), 10));
+        // Authorization gate. A message is accepted if EITHER:
+        //   - trust-chat is on AND it comes from the configured CHAT_ID
+        //     (group membership is the access control), OR
+        //   - the sender's numeric id is in the ALLOWED_USER whitelist (from
+        //     any chat, e.g. their 1-on-1 DM with the bot).
+        // The two combine, so an agent can serve a trusted group AND answer a
+        // specific operator privately at the same time.
+        if (trustChat || allowedUserId) {
           const fromId = msg.from?.id;
-          if (typeof fromId !== 'number' || !allowedIds.includes(fromId)) {
+          const fromTrustedChat = trustChat && String(msg.chat?.id) === String(trustChatId);
+          const allowedIds = allowedUserId ? allowedUserId.split(',').map((s) => parseInt(s.trim(), 10)) : [];
+          const fromAllowedUser = typeof fromId === 'number' && allowedIds.includes(fromId);
+          if (!fromTrustedChat && !fromAllowedUser) {
             const rejectedFrom = msg.from?.first_name || msg.from?.username || 'unknown';
-            log(`Ignoring message from unauthorized user (allowed_user gate): from=${fromId} (${rejectedFrom})`);
+            log(`Ignoring message (auth gate): from=${fromId} (${rejectedFrom}) chat=${msg.chat?.id}`);
             // #459 reject-count watchdog: alert after N consecutive rejects (multi-user gate from #467 preserved).
             const entry = this.agents.get(name);
             if (entry) {
@@ -467,7 +493,7 @@ export class AgentManager {
                 const lastAlert = entry.telegramLastRejectAlertAt ?? 0;
                 if (now - lastAlert > REJECT_ALERT_COOLDOWN_MS) {
                   entry.telegramLastRejectAlertAt = now;
-                  const alertText = `⚠️ WATCHDOG: ${name} rejected ${entry.telegramRejectCount} consecutive Telegram messages (ALLOWED_USER gate). Last from_id: ${fromId ?? 'unknown'}. Verify ALLOWED_USER in .env matches expected users, or this may be unsolicited contact.`;
+                  const alertText = `⚠️ WATCHDOG: ${name} rejected ${entry.telegramRejectCount} consecutive Telegram messages (auth gate). Last from_id: ${fromId ?? 'unknown'}. Verify ALLOWED_USER in .env matches expected users, or this may be unsolicited contact.`;
                   log(alertText);
                   if (telegramApi && chatId) {
                     telegramApi.sendMessage(chatId, alertText).catch(() => {});
@@ -582,12 +608,15 @@ export class AgentManager {
       });
 
       poller.onReaction((reaction) => {
-        // ALLOWED_USER gate: same multi-user rule as message handler.
-        if (allowedUserId) {
-          const allowedIds = allowedUserId.split(',').map((s) => parseInt(s.trim(), 10));
+        // Authorization gate: same combined rule as the message handler —
+        // accept reactions from the trusted CHAT_ID and/or whitelisted users.
+        if (trustChat || allowedUserId) {
           const fromId = reaction.user?.id;
-          if (typeof fromId !== 'number' || !allowedIds.includes(fromId)) {
-            log(`Ignoring reaction from unauthorized user (allowed_user gate): from=${fromId}`);
+          const fromTrustedChat = trustChat && String(reaction.chat?.id) === String(trustChatId);
+          const allowedIds = allowedUserId ? allowedUserId.split(',').map((s) => parseInt(s.trim(), 10)) : [];
+          const fromAllowedUser = typeof fromId === 'number' && allowedIds.includes(fromId);
+          if (!fromTrustedChat && !fromAllowedUser) {
+            log(`Ignoring reaction (auth gate): from=${fromId} chat=${reaction.chat?.id}`);
             // #459 reject-count watchdog (multi-user gate from #467 preserved).
             const entry = this.agents.get(name);
             if (entry) {
