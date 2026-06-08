@@ -161,7 +161,7 @@ function convertEntry(
   entry: CronEntry,
   agentName: string,
 ): { cron: CronDefinition } | { skip: string } {
-  const { name, type, interval, cron: cronExpr, fire_at, prompt } = entry;
+  const { name, type, interval, cron: cronExpr, fire_at, prompt, enabled } = entry;
 
   // Treat absent `type` as "recurring" (spec requirement)
   const effectiveType = type ?? 'recurring';
@@ -230,7 +230,7 @@ function convertEntry(
     name,
     prompt,
     schedule,
-    enabled: true,
+    enabled: enabled !== false,
     created_at: new Date().toISOString(),
     metadata: { migrated_from_config: true, original_type: effectiveType },
   };
