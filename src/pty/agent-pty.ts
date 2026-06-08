@@ -110,6 +110,19 @@ export class AgentPTY {
       }
     }
 
+    // Modal-trap hardening: suppress the Claude Code feedback survey (and other
+    // non-essential interactive traffic) that can pop a TUI modal which seizes the
+    // PTY and swallows the daemon's injected messages — leaving the agent
+    // alive-but-unreachable. Injected at spawn so protection is ALWAYS present:
+    // it survives an .env regeneration and doesn't depend on the .env file or the
+    // keepVars allowlist. An explicit .env value (if the operator set one) is respected.
+    if (!ptyEnv['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']) {
+      ptyEnv['CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'] = '1';
+    }
+    if (!ptyEnv['CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY']) {
+      ptyEnv['CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY'] = '1';
+    }
+
     // Add convenience CTX_* aliases used throughout agent templates.
     // CTX_TELEGRAM_CHAT_ID: alias for CHAT_ID from the agent's .env
     if (ptyEnv['CHAT_ID']) {

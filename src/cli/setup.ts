@@ -74,7 +74,13 @@ function runCli(cwd: string, args: string[], label: string): boolean {
 
 function writeAgentEnv(agentDir: string, botToken: string, chatId: string): void {
   const envPath = join(agentDir, '.env');
-  const content = `BOT_TOKEN=${botToken}\nCHAT_ID=${chatId}\n`;
+  // Modal-trap hardening: bake in the survey/non-essential-traffic suppression so a
+  // TUI modal can't seize the PTY and swallow injected messages. The daemon also
+  // injects these at spawn as a backstop, but writing them here keeps the .env
+  // self-documenting and correct after any regeneration.
+  const content =
+    `BOT_TOKEN=${botToken}\nCHAT_ID=${chatId}\n` +
+    `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\nCLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1\n`;
   writeFileSync(envPath, content, 'utf-8');
   try { chmodSync(envPath, 0o600); } catch { /* ignore on Windows */ }
 }

@@ -9,9 +9,18 @@ import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
+import { classifyOutput, currentScreen } from './modal-watchdog.js';
 import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
 
 type LogFn = (msg: string) => void;
+
+// --- Modal-trap watchdog tuning ---
+// Live screen unchanged this long => frozen (blocked). A trap also requires a
+// modal/await-input SIGNATURE on the live screen — frozen alone is NOT a trap
+// (a healthy long turn reading/composing is also frozen).
+const OUTPUT_FROZEN_MS = 90 * 1000;
+// Edge-trigger dedup for the direct-to-operator stuck alert.
+const STUCK_ALERT_DEDUP_MS = 10 * 60 * 1000;
 
 /**
  * Fast message checker for a single agent.
@@ -47,6 +56,12 @@ export class FastChecker {
 
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
+
+  // Modal-trap watchdog state (detection only)
+  private trapScreenDigest: string = '';      // last CURRENT-SCREEN snapshot, to detect FROZEN
+  private trapScreenChangedAt: number = 0;    // when the live screen last changed
+  private lastStuckAlertAt: number = 0;       // edge-trigger dedup for operator alert
+  private trapDegraded: boolean = false;      // current modal-trap state (for heartbeat)
 
   // Context monitor state
   private ctxConfigMtime: number = 0;
@@ -106,12 +121,20 @@ export class FastChecker {
     await this.waitForBootstrap();
     this.log('Bootstrap complete. Beginning poll loop.');
 
-    // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
+    // Idle-session heartbeat watchdog. Fires every 50 min — but must NOT paint a
+    // trapped agent green. When the modal-trap watchdog has flagged a blocked-on-input
+    // state (trapDegraded), emit DEGRADED instead of 'alive' so the dashboard reflects
+    // the real REPL state. This false-green (the daemon writing 'alive' regardless of
+    // whether the agent's REPL is responsive) is what made the operator the detector of
+    // last resort in the modal-trap incident.
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
+      const status = this.trapDegraded
+        ? `[watchdog] ${agentName} DEGRADED — blocked on input modal, not responding ${ts}`
+        : `[watchdog] ${agentName} alive — idle session ${ts}`;
+      execFile('cortextos', ['bus', 'update-heartbeat', status], (err) => {
         if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
       });
     }, HEARTBEAT_INTERVAL_MS);
@@ -211,6 +234,77 @@ export class FastChecker {
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
     await this.checkContextStatus();
+
+    // Modal-trap watchdog: detect + recover a PTY blocked on an input modal that
+    // swallowed our injection (agent alive-but-unreachable).
+    await this.checkModalTrap();
+  }
+
+  /**
+   * Modal-trap watchdog — DETECTION ONLY (no automated recovery). A Claude Code TUI
+   * modal (feedback survey, trust prompt, auth-expiry, weekly-cap, …) can seize the PTY
+   * and swallow the daemon's bracketed-paste injection, leaving the agent
+   * alive-but-unreachable with a green heartbeat and a permanent "typing…".
+   *
+   * This DETECTS that state and (a) marks the agent DEGRADED so the heartbeat can't
+   * paint it green, and (b) sends a direct, actionable alert to the operator via the
+   * agent's OWN bot. It presses NO keys and triggers NO restart — both can interrupt a
+   * healthy long turn if the discriminator is ever wrong, and a false action into a
+   * privileged REPL fleet-wide is far worse than the bug it fixes. Recovery is
+   * operator-triggered from the alert. (Automated recovery is a deferred, more-gated
+   * follow-up; the survey itself is already prevented by the suppression env var.)
+   *
+   * To stay quiet on healthy work: classify only the CURRENT SCREEN (never scrollback),
+   * and only flag when a modal/await-input signature is on a FROZEN screen, or a pending
+   * message has gone unanswered past the deadline with a frozen screen.
+   */
+  private async checkModalTrap(): Promise<void> {
+    const now = Date.now();
+
+    const screen = currentScreen(this.agent.getOutputBuffer()?.getRecent(300) ?? '');
+    if (screen !== this.trapScreenDigest) {
+      this.trapScreenDigest = screen;
+      this.trapScreenChangedAt = now;
+    }
+    const frozen = now - (this.trapScreenChangedAt || now) > OUTPUT_FROZEN_MS;
+    const cls = classifyOutput(screen);
+
+    // TRAPPED requires a REAL trap SIGNAL: a modal/await-input signature on a FROZEN live
+    // screen. NEVER frozen-alone — a healthy long turn (reading a big doc, a slow compose,
+    // a long build) is ALSO "message-unanswered + screen-frozen", and a frozen-alone gate
+    // cried wolf with a 'frozen' TRAPPED alert to the operator on a healthy mid-turn agent.
+    // The defining feature of a real trap is a modal/prompt ON SCREEN; without one, there
+    // is no trap to alert on. (Caught even with no pending message — e.g. a pre-existing
+    // modal at startup.)
+    if (!(cls.trapped && frozen)) {
+      this.trapDegraded = false;
+      return;
+    }
+
+    this.trapDegraded = true;
+    const sig = cls.known ? `modal:${cls.known.name}` : 'await-input';
+    this.alertStuck(sig, screen, now, cls.known?.humanRequired ?? false);
+  }
+
+  /**
+   * Direct-to-operator stuck alert via the agent's OWN bot (NOT through the
+   * orchestrator — it may be the stuck one). Edge-triggered with a dedup window.
+   * Actionable: tells the operator to restart to recover (recovery is manual this round).
+   */
+  private alertStuck(signature: string, screen: string, now: number, humanRequired = false): void {
+    if (now - this.lastStuckAlertAt < STUCK_ALERT_DEDUP_MS) return;
+    this.lastStuckAlertAt = now;
+    const tail = screen.split('\n').slice(-3).join(' / ').slice(-240);
+    const recover = humanRequired
+      ? 'needs operator action (re-login / wait for cap reset) — a restart will NOT clear it'
+      : 'recover with: cortextos bus hard-restart, or check the box';
+    const text =
+      `⚠️ ${this.agent.name} appears TRAPPED (${signature}) — not responding (modal seized the PTY). ` +
+      `${recover}. Screen tail: ${tail}`;
+    this.log(`[modal-watchdog] ALERT ${text}`);
+    if (this.telegramApi && this.chatId) {
+      this.telegramApi.sendMessage(this.chatId, text).catch(() => { /* best-effort */ });
+    }
   }
 
   /**
