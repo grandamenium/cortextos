@@ -10,6 +10,38 @@
 
 set -euo pipefail
 
+# Self-heal the git 2.50.1 worktree-flip bug BEFORE any git work-tree op below.
+# `git worktree add/remove` can flip core.bare=true on this working-tree repo,
+# which then breaks `git rev-parse --show-toplevel` and every op that follows
+# (and silently aborts autoCommit). Restore it — but ONLY for a genuine mis-flagged
+# work tree, never a deliberately-bare repo. Ask git authoritatively with the bad
+# flag forced off (--type=bool handles yes/on/1/case), then VERIFY the repo is
+# actually usable as a work tree afterward (not merely that the string changed). If
+# it can't be made usable, fail loud and refuse — a guard that only thinks it fixed
+# it is worse than none.
+if [ "$(git config --type=bool --get core.bare 2>/dev/null || echo false)" = "true" ]; then
+  # Work-tree repo (main or linked worktree) iff its git common-dir basename is `.git`;
+  # a genuinely-bare repo's common-dir is the repo root. Immune to the corrupt flag.
+  COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || echo .)"
+  if [ "$(basename "$COMMON_DIR")" = ".git" ]; then
+    echo "[pre-push] core.bare=true on a work-tree repo (git 2.50.1 worktree-flip) — restoring core.bare=false" >&2
+    git config core.bare false || true
+    # Verify the repo is actually usable as a work tree now (not merely that the string
+    # changed); a failed read must NOT count as success.
+    if [ "$(git config --type=bool --get core.bare 2>/dev/null || echo unknown)" != "false" ] \
+       || [ "$(git rev-parse --is-inside-work-tree 2>/dev/null || echo false)" != "true" ]; then
+      echo "[pre-push] ERROR: could not restore a usable work tree (core.bare may live in another scope)." >&2
+      echo "[pre-push] Refusing to push from a still-bare repo — fix core.bare manually, then retry." >&2
+      exit 1
+    fi
+  else
+    # Genuinely-bare repo (not our worktree-flip bug) — never corrupt it. Our build/
+    # test gate needs a work tree it doesn't have, so skip the gate and allow the push.
+    echo "[pre-push] core.bare=true but this is a genuinely bare repo — leaving it untouched, skipping the build/test gate." >&2
+    exit 0
+  fi
+fi
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 

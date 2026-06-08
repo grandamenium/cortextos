@@ -3,13 +3,14 @@ import { existsSync, readFileSync, statSync, appendFileSync, writeFileSync } fro
 import { join, extname } from 'path';
 import { readdirSync } from 'fs';
 import { ensureDir } from '../utils/atomic.js';
+import { ensureNotBare } from '../utils/git.js';
 import { TelegramAPI } from '../telegram/api.js';
 import type { BusPaths } from '../types/index.js';
 
 // --- Types ---
 
 export interface AutoCommitReport {
-  status: 'staged' | 'clean' | 'nothing_to_stage' | 'dry_run';
+  status: 'staged' | 'clean' | 'nothing_to_stage' | 'dry_run' | 'skipped_bare';
   staged: string[];
   blocked: string[];
   diff_stat?: string;
@@ -111,6 +112,21 @@ export function autoCommit(
   dryRun: boolean = false,
   scopePaths: string[] = [],
 ): AutoCommitReport {
+  // Self-heal the git 2.50.1 worktree-flip bug BEFORE any work-tree op: a stray
+  // core.bare=true would make every git call below fail and silently abort the
+  // snapshot. autoCommit only runs in a work-tree context, so bare here is the bug.
+  const bare = ensureNotBare(projectDir);
+  if (bare.corrected) {
+    console.warn(`[autoCommit] restored core.bare=false on ${projectDir} (git 2.50.1 worktree-flip)`);
+  }
+  if (bare.isBare) {
+    // Could not make the repo non-bare (failed restore, or a genuinely-bare repo).
+    // Do NOT run a work-tree snapshot on a bare repo — it would misbehave silently.
+    // Fail loud + return a DISTINCT status so callers don't read this as a clean repo.
+    console.error(`[autoCommit] repo at ${projectDir} is bare (${bare.reason}) — skipping snapshot`);
+    return { status: 'skipped_bare', staged: [], blocked: [`${projectDir}:${bare.reason}`] };
+  }
+
   // Check if git repo
   try {
     execSync('git rev-parse --is-inside-work-tree', { cwd: projectDir, stdio: 'pipe' });

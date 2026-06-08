@@ -5,6 +5,7 @@ import { spawnSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
+import { ensureNotBare } from '../utils/git.js';
 
 // Each fast-checker registers a process-level SIGUSR1 handler (see
 // fast-checker.ts:102). With >10 active agents the default Node listener cap
@@ -268,9 +269,34 @@ class Daemon {
 
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
+    // Backstop for the git 2.50.1 worktree-flip bug. Op-level guards (autoCommit,
+    // the pre-push hook) self-heal the paths that actually break under a stray
+    // core.bare=true; this periodic sweep is the safety net for any other path and
+    // keeps the framework repo from lingering as bare. ensureNotBare() logs on
+    // correction and leaves an intentionally-bare repo untouched. unref()'d so it
+    // never keeps the process alive; wrapped so it can never crash the daemon.
+    let lastBareReason = 'not_bare';
+    const bareGuard = setInterval(() => {
+      try {
+        const r = ensureNotBare(frameworkRoot);
+        // De-dup: only log on a state change, so a persistent failure can't spam
+        // every 60s while a real correction is still never silent.
+        if (r.reason !== lastBareReason) {
+          if (r.corrected) {
+            console.warn('[daemon] core.bare self-heal: restored core.bare=false on framework repo (git 2.50.1 worktree-flip)');
+          } else if (r.reason === 'restore_failed') {
+            console.error('[daemon] core.bare is true on the framework repo and could NOT be restored — work-tree ops will fail until fixed manually');
+          }
+          lastBareReason = r.reason;
+        }
+      } catch { /* backstop must never throw */ }
+    }, 60_000);
+    bareGuard.unref();
+
     // Handle shutdown signals
     const shutdown = async () => {
       console.log('[daemon] Shutting down...');
+      clearInterval(bareGuard);
       try {
         if (this.agentManager) {
           await this.agentManager.stopAll();
