@@ -55,6 +55,10 @@ export function getApprovalDir(org?: string): string {
   return path.join(CTX_ROOT, 'approvals');
 }
 
+export function getDealsDir(org: string): string {
+  return path.join(CTX_ROOT, 'orgs', org, 'deals');
+}
+
 export function getAnalyticsDir(org?: string): string {
   if (org) {
     return path.join(CTX_ROOT, 'orgs', org, 'analytics');

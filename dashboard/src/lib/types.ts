@@ -74,6 +74,26 @@ export interface Task {
   outputs?: TaskOutput[];
 }
 
+// -- Deal Types --
+
+export type DealStatus = 'screening' | 'underwriting' | 'approved' | 'funded' | 'closed' | 'passed' | 'monitoring';
+
+export interface Deal {
+  id: string;
+  address: string;
+  city: string;
+  state: string;
+  strategy: string;
+  status: DealStatus;
+  score?: number;
+  source_agent?: string;
+  drive_doc_url?: string;
+  notes?: string;
+  org: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // -- Approval Types --
 
 export type ApprovalCategory = 'deployment' | 'cost' | 'access' | 'other';
