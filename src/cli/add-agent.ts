@@ -2,8 +2,10 @@ import { Command } from 'commander';
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
-import { OrgContext } from '../types';
+import type { AgentConfig, OrgContext } from '../types';
 import { validateAgentName, validateOrgName } from '../utils/validate';
+import { readEnabledAgents } from './enable-agent.js';
+import { validateClaudeWorkingDirectoryPolicy } from '../utils/agent-session-isolation.js';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -21,8 +23,10 @@ export const addAgentCommand = new Command('add-agent')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
   .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
+  .option('--working-directory <path>', 'Override the agent working_directory in config.json')
+  .option('--allow-external-cwd', 'Allow a non-agent-dir working_directory for Claude agents')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string; workingDirectory?: string; allowExternalCwd?: boolean }) => {
     if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
       console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
       process.exit(1);
@@ -94,6 +98,23 @@ export const addAgentCommand = new Command('add-agent')
       process.exit(1);
     }
 
+    const intendedConfig: AgentConfig = {
+      runtime: options.runtime as AgentConfig['runtime'],
+      working_directory: options.workingDirectory ?? '',
+    };
+    const validation = validateClaudeWorkingDirectoryPolicy({
+      agentName: name,
+      agentDir,
+      config: intendedConfig,
+      projectRoot,
+      enabledAgents: readEnabledAgents(options.instance),
+      allowExternalCwd: options.allowExternalCwd,
+    });
+    if (!validation.ok) {
+      console.error(`Error: ${validation.error}`);
+      process.exit(1);
+    }
+
     console.log(`\nAdding agent: ${name}`);
     console.log(`  Template: ${options.template}`);
     console.log(`  Organization: ${org}`);
@@ -161,6 +182,7 @@ export const addAgentCommand = new Command('add-agent')
         startup_delay: 0,
         max_session_seconds: 255600,
         enabled: true,
+        working_directory: options.workingDirectory ?? '',
         crons: [],
       }, null, 2) + '\n', 'utf-8');
     }
@@ -173,6 +195,7 @@ export const addAgentCommand = new Command('add-agent')
       try {
         const existingCfg = JSON.parse(readFileSync(configPath, 'utf-8'));
         existingCfg.runtime = options.runtime;
+        existingCfg.working_directory = options.workingDirectory ?? '';
         writeFileSync(configPath, JSON.stringify(existingCfg, null, 2) + '\n', 'utf-8');
       } catch (err) {
         console.error(`Warning: failed to set runtime field in config.json: ${(err as Error).message}`);

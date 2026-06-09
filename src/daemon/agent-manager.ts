@@ -244,34 +244,25 @@ export class AgentManager {
   }
 
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
-    if (this.agents.has(name)) {
-      // BUG-031: this branch was the workaround for the BUG-011 PTY race
-      // (restart-all could send stop+start simultaneously, and the new
-      // start would arrive while the old stop's PTY exit was still in
-      // flight). PR #11 closed BUG-011 by making `AgentProcess.stop()`
-      // await the actual PTY exit before resolving — which means this
-      // branch should NEVER fire under normal restart paths.
-      //
-      // We log a regression warning here instead of deleting the branch
-      // entirely, so we'll know IMMEDIATELY if BUG-011 ever regresses
-      // (a future change accidentally breaks the exit-await). Phase 4 of
-      // the core stability test plan + cycle 2 of PR #13 both confirmed
-      // this branch is dormant. Once we have weeks of zero-warning
-      // production data, we can delete the queue mechanism entirely.
-      if (this.daemonJustCrashed) {
-        // Post-crash startup. The previous daemon exited via
-        // uncaughtException without running stopAll(), so the in-memory
-        // registry from the prior process is gone — but the post-crash
-        // discoverAndStart pass can briefly re-enter startAgent for an
-        // agent whose pendingRestarts entry survived. This is benign and
-        // distinct from the BUG-011 in-flight race PR #11 closed. Log at
-        // info level so operators don't think PR #11 has regressed.
-        console.log(`[agent-manager] ${name} already in registry (post-crash discovery overlap, expected). Queueing restart.`);
+    const existing = this.agents.get(name);
+    if (existing) {
+      const currentStatus = existing.process.getStatus();
+      if (currentStatus.status === 'stopped' || currentStatus.status === 'crashed' || currentStatus.status === 'halted') {
+        console.warn(`[agent-manager] ${name} remained in registry with stale status=${currentStatus.status}. Clearing stale slot before start.`);
+        this.agents.delete(name);
       } else {
-        console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
+        console.warn(`[agent-manager] ${name} already in registry with live slot (status=${currentStatus.status}, pid=${currentStatus.pid ?? '-'}) — stopping it once before start.`);
+        try {
+          await this.stopAgent(name);
+        } catch (err) {
+          console.error(`[agent-manager] Failed to clear occupied slot for ${name}:`, err);
+        }
+        if (this.agents.has(name)) {
+          console.warn(`[agent-manager] ${name} still in registry after occupied-slot stop attempt — queueing restart via pendingRestarts safety net.`);
+          this.pendingRestarts.add(name);
+          return;
+        }
       }
-      this.pendingRestarts.add(name);
-      return;
     }
 
     // BUG-043 fix: resolve the agent's true org instead of using `this.org`.

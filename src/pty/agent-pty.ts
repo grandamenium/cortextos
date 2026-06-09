@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
+import { getDeterministicAgentSessionId } from '../utils/agent-session-isolation.js';
 
 // node-pty types
 interface IPty {
@@ -174,7 +175,13 @@ export class AgentPTY {
     const autoAcceptDialogs = () => {
       if (!this.pty) return;
       const recent = this.outputBuffer.getRecent();
-      if (recent.includes('trust') || recent.includes('Yes') || recent.includes('bypass permissions')) {
+      const normalized = recent.toLowerCase();
+      if (normalized.includes('settings warning')) {
+        this.outputBuffer.push('\n[cortextos] ERROR: Claude Settings Warning detected in the target working_directory. Fix the referenced .claude/settings.json before restarting this agent.\n');
+        this.kill();
+        return;
+      }
+      if (normalized.includes('trust') || recent.includes('Yes') || normalized.includes('bypass permissions')) {
         this.pty.write('\r');
       }
     };
@@ -217,9 +224,12 @@ export class AgentPTY {
    */
   protected buildClaudeArgs(mode: 'fresh' | 'continue', prompt: string): string[] {
     const args: string[] = [];
+    const sessionId = getDeterministicAgentSessionId(this.env.agentName, this.env.org);
 
     if (mode === 'continue') {
-      args.push('--continue');
+      args.push('--resume', sessionId);
+    } else {
+      args.push('--session-id', sessionId);
     }
 
     args.push('--dangerously-skip-permissions');
