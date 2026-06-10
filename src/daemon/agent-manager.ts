@@ -408,6 +408,17 @@ export class AgentManager {
     // Start agent
     await agentProcess.start();
 
+    // Spawn-verify (gen-B): if the PTY could not be spawned after retries
+    // (posix_spawnp / OS resource exhaustion), the agent is NOT running. Do not
+    // start its cron scheduler, fast-checker, or pollers — the fast-checker's
+    // bootstrap-timeout would otherwise log "Bootstrap complete" for a corpse
+    // and leave a zombie registry entry. The fleet-wide operator alert is
+    // drained + sent by the daemon's periodic check.
+    if (agentProcess.getStatus().status === 'spawn-failed') {
+      log(`[agent-manager] ${name}: SPAWN-FAILED — not starting checker/crons/pollers (agent is not running)`);
+      return;
+    }
+
     // Subtask 2.2: Auto-migrate crons from config.json → crons.json before
     // starting the scheduler, so the scheduler always has a populated crons.json
     // to read from.  The migration is idempotent (marker file prevents re-runs).

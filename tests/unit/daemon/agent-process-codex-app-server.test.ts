@@ -6,7 +6,7 @@ const mockCodexAppServerPty = {
   spawn: vi.fn().mockResolvedValue(undefined),
   kill: vi.fn(),
   write: vi.fn(),
-  getPid: vi.fn().mockReturnValue(24680),
+  getPid: vi.fn().mockReturnValue(process.pid), // LIVE pid so spawn-verify's isPidAlive() passes
   isAlive: vi.fn().mockReturnValue(true),
   onExit: vi.fn().mockImplementation((cb: (exitCode: number, signal?: number) => void) => {
     capturedOnExit = cb;
@@ -117,7 +117,7 @@ describe('AgentProcess codex-app-server runtime', () => {
     await ap.start();
 
     expect(mockCodexAppServerPty.spawn).toHaveBeenCalledWith('fresh', expect.any(String));
-    expect(ap.getStatus().pid).toBe(24680);
+    expect(ap.getStatus().pid).toBe(process.pid); // mock getPid → live pid (spawn-verify)
   });
 
   it('wires Telegram handle to CodexAppServerPTY before start', async () => {
