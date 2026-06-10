@@ -851,6 +851,12 @@ export class AgentProcess {
     const POLL_MS = 10 * 60 * 1000; // 10 min — bloat accrues over hours, not seconds
     const thresholdBytes = maxMb * 1024 * 1024;
 
+    // Arm log (observability): fires ONLY when the native guard actually arms — i.e. past the
+    // absent-maxMb and codex/hermes early-returns above, for a claude agent at boot. Gives a greppable
+    // proof the native size-guard is active, so a sidecar->native handoff is demonstrable (0 hits =
+    // not-armed) instead of by-construction-only. Pairs with the rotate/disable logs below.
+    this.log(`Size guard armed: max=${maxMb}MB, poll ${POLL_MS / 60000}m`);
+
     this.sizeTimer = setInterval(() => {
       // Only act on a live, settled session — never interrupt start/stop, a
       // daemon shutdown, or a rotation already in flight (the in-flight guard
