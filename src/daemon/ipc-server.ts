@@ -932,4 +932,22 @@ export class IPCClient {
       return false;
     }
   }
+
+  /**
+   * Distinguish a definitely-offline daemon from one that is merely
+   * unresponsive. `cortextos start <agent>` uses this to avoid bouncing the
+   * entire fleet when the daemon socket is timing out under load.
+   */
+  async probeAvailability(source = 'ipc-probe'): Promise<'running' | 'offline' | 'unresponsive'> {
+    try {
+      const response = await this.send({ type: 'status', source });
+      if (response.success) return 'running';
+      if (response.error === 'Daemon is not running. Start it with: cortextos start') {
+        return 'offline';
+      }
+      return 'unresponsive';
+    } catch {
+      return 'unresponsive';
+    }
+  }
 }

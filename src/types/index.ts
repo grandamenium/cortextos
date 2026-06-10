@@ -210,6 +210,15 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * Enables the FastChecker loop-stall watchdog. Defaults to false when absent
+   * so the detector can be rolled out per-agent first.
+   */
+  stall_watchdog_enabled?: boolean;
+  /**
+   * Override for the loop-stall watchdog threshold in minutes. Defaults to 20.
+   */
+  stall_watchdog_threshold_minutes?: number;
 }
 
 export interface CronEntry {

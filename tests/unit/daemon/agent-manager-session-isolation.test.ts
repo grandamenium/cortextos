@@ -62,7 +62,7 @@ describe('AgentManager occupied-slot recovery', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('clears a live occupied slot once before starting, without pendingRestarts noise', async () => {
+  it('reconciles a dead occupied slot before starting, without pendingRestarts noise', async () => {
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
     const fakeEntry = {
       process: {
@@ -75,18 +75,16 @@ describe('AgentManager occupied-slot recovery', () => {
     };
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', fakeEntry);
 
-    const stopSpy = vi.spyOn(am, 'stopAgent').mockImplementation(async (name: string) => {
-      (am as unknown as { agents: Map<string, unknown> }).agents.delete(name);
-    });
+    const stopSpy = vi.spyOn(am, 'stopAgent');
 
     await am.startAgent('alice', agentDir, {}, 'acme');
 
-    expect(stopSpy).toHaveBeenCalledWith('alice');
+    expect(stopSpy).not.toHaveBeenCalled();
     expect((am as unknown as { pendingRestarts: Set<string> }).pendingRestarts.has('alice')).toBe(false);
     expect((am as unknown as { agents: Map<string, unknown> }).agents.has('alice')).toBe(true);
   });
 
-  it('falls back to pendingRestarts only when the occupied slot still survives stopAgent()', async () => {
+  it('falls back to pendingRestarts when a live occupied slot survives PID reconciliation', async () => {
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
     const fakeEntry = {
       process: {
@@ -99,6 +97,7 @@ describe('AgentManager occupied-slot recovery', () => {
     };
     (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', fakeEntry);
 
+    vi.spyOn(am as unknown as { isPidAlive(pid: number): boolean }, 'isPidAlive').mockReturnValue(true);
     vi.spyOn(am, 'stopAgent').mockResolvedValue();
 
     await am.startAgent('alice', agentDir, {}, 'acme');

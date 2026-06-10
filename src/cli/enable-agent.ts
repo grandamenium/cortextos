@@ -11,6 +11,7 @@ import {
   readAgentConfigSafe,
   validateClaudeWorkingDirectoryPolicy,
 } from '../utils/agent-session-isolation.js';
+import { resolveInstanceId } from './resolve-instance-id.js';
 
 /**
  * BUG-035 fix: discover the cortextOS framework root without depending on
@@ -128,11 +129,12 @@ function writeEnabledAgents(instanceId: string, agents: Record<string, any>): vo
 
 export const enableAgentCommand = new Command('enable')
   .argument('<agent>', 'Agent name to enable')
-  .option('--instance <id>', 'Instance ID', 'default')
+  .option('--instance <id>', 'Instance ID')
   .option('--org <org>', 'Organization name')
   .option('--allow-external-cwd', 'Allow a non-agent-dir working_directory for Claude agents')
   .description('Enable an agent (register and start)')
-  .action(async (agent: string, options: { instance: string; org?: string; allowExternalCwd?: boolean }) => {
+  .action(async (agent: string, options: { instance?: string; org?: string; allowExternalCwd?: boolean }) => {
+    const instanceId = resolveInstanceId(options.instance);
     // Becky bug preflight: verify .env has BOT_TOKEN and CHAT_ID before registering.
     // Without this, the agent starts, inherits parent-process credentials silently,
     // appears alive on the dashboard but cannot receive any Telegram messages.
@@ -229,7 +231,7 @@ export const enableAgentCommand = new Command('enable')
       console.error('  Continuing enable. Investigate the validator if this recurs.');
     }
 
-    const agents = readEnabledAgents(options.instance);
+    const agents = readEnabledAgents(instanceId);
     if (!agentLocation) {
       console.error(`Error: Could not locate agent directory for "${agent}" under ${projectRoot}.`);
       process.exit(1);
@@ -247,16 +249,15 @@ export const enableAgentCommand = new Command('enable')
       console.error(`Error: ${validation.error}`);
       process.exit(1);
     }
-
     agents[agent] = {
       enabled: true,
       status: 'configured',
       ...(options.org ? { org: options.org } : {}),
     };
-    writeEnabledAgents(options.instance, agents);
+    writeEnabledAgents(instanceId, agents);
 
     // Create per-agent state directories
-    const ctxRoot = join(homedir(), '.cortextos', options.instance);
+    const ctxRoot = join(homedir(), '.cortextos', instanceId);
     const agentDirs = [
       join(ctxRoot, 'inbox', agent),
       join(ctxRoot, 'inflight', agent),
@@ -272,7 +273,7 @@ export const enableAgentCommand = new Command('enable')
     console.log(`Agent "${agent}" enabled.`);
 
     // Try to start via daemon IPC
-    const ipc = new IPCClient(options.instance);
+    const ipc = new IPCClient(instanceId);
     const running = await ipc.isDaemonRunning();
     if (running) {
       const response = await ipc.send({ type: 'start-agent', agent, source: 'cortextos enable' });
@@ -286,10 +287,11 @@ export const enableAgentCommand = new Command('enable')
 
 export const disableAgentCommand = new Command('disable')
   .argument('<agent>', 'Agent name to disable')
-  .option('--instance <id>', 'Instance ID', 'default')
+  .option('--instance <id>', 'Instance ID')
   .description('Disable an agent (stop and deregister)')
-  .action(async (agent: string, options: { instance: string }) => {
-    const agents = readEnabledAgents(options.instance);
+  .action(async (agent: string, options: { instance?: string }) => {
+    const instanceId = resolveInstanceId(options.instance);
+    const agents = readEnabledAgents(instanceId);
     const projectRoot = discoverProjectRoot();
     const agentLocation = findAgentDirAndOrg(projectRoot, agent, agents[agent]?.org);
     const agentConfig = agentLocation ? readAgentConfigSafe(agentLocation.agentDir) : {};
@@ -299,10 +301,10 @@ export const disableAgentCommand = new Command('disable')
     if (agents[agent]) {
       agents[agent].enabled = false;
     }
-    writeEnabledAgents(options.instance, agents);
+    writeEnabledAgents(instanceId, agents);
 
     // Try to stop via daemon IPC
-    const ipc = new IPCClient(options.instance);
+    const ipc = new IPCClient(instanceId);
     const running = await ipc.isDaemonRunning();
     let archiveSessionStore = !running;
     if (running) {
@@ -311,7 +313,7 @@ export const disableAgentCommand = new Command('disable')
       // this was an intentional disable and not a crash. Without this,
       // the hook defaults to "crash" and the user gets a false 🚨 CRASH alarm.
       // Pattern matches src/cli/bus.ts:1285-1289.
-      writeDisableMarker(options.instance, agent, 'disabled via cortextos disable');
+      writeDisableMarker(instanceId, agent, 'disabled via cortextos disable');
 
       const response = await ipc.send({ type: 'stop-agent', agent, source: 'cortextos disable' });
       if (response.success) {

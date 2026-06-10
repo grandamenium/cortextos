@@ -1,13 +1,15 @@
 import { Command } from 'commander';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { writeStopMarker } from './stop.js';
+import { resolveInstanceId } from './resolve-instance-id.js';
 
 export const restartCommand = new Command('restart')
   .argument('<agent>', 'Agent name to restart')
-  .option('--instance <id>', 'Instance ID', 'default')
+  .option('--instance <id>', 'Instance ID')
   .description('Restart a running agent (stop + start). Re-reads config.json and .env, respawns the PTY. Does NOT restart the daemon process itself — use `pm2 restart cortextos-daemon` for that.')
-  .action(async (agent: string, options: { instance: string }) => {
-    const ipc = new IPCClient(options.instance);
+  .action(async (agent: string, options: { instance?: string }) => {
+    const instanceId = resolveInstanceId(options.instance);
+    const ipc = new IPCClient(instanceId);
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (!daemonRunning) {
@@ -20,7 +22,7 @@ export const restartCommand = new Command('restart')
     // Stop phase mirrors `cortextos stop <agent>` — write the .user-stop marker
     // before the IPC stop so the SessionEnd crash-alert hook does not fire a
     // false 🚨 CRASH alarm during the brief stop window. (BUG-036 pattern.)
-    writeStopMarker(options.instance, agent, 'stopped via cortextos restart');
+    writeStopMarker(instanceId, agent, 'stopped via cortextos restart');
     const stopResponse = await ipc.send({ type: 'stop-agent', agent, source: 'cortextos restart' });
     if (!stopResponse.success) {
       console.error(`  Stop failed: ${stopResponse.error}`);

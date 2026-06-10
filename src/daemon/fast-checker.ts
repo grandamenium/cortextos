@@ -6,6 +6,7 @@ import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
+import { readCronState } from '../bus/cron-state.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
@@ -61,6 +62,16 @@ export class FastChecker {
   private ctxEmergencyAlertedAt: number = 0; // dedup: only one Telegram alert per emergency burst
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
+  // Stall watchdog state
+  private stallLastProgressSignalAt: number = 0;
+  private stallLastToolActivityAt: number = 0;
+  private stallLastOutboundSize: number = -1;
+  private stallLastOutboundProgressAt: number = 0;
+  private stallLastProgressObservedAt: number = 0;
+  private lastWorkInjectedAt: number = 0;
+  private stallCircuitRestarts: number[] = [];
+  private stallCircuitBrokenAt: number | null = null;
+  private stallCircuitFile: string = '';
 
   constructor(
     agent: AgentProcess,
@@ -84,6 +95,8 @@ export class FastChecker {
     // Load persisted circuit breaker state so --continue restarts don't reset it
     this.ctxCircuitFile = join(paths.stateDir, '.ctx-circuit.json');
     this.loadCtxCircuit();
+    this.stallCircuitFile = join(paths.stateDir, '.stall-circuit.json');
+    this.loadStallCircuit();
   }
 
   /**
@@ -171,6 +184,7 @@ export class FastChecker {
   private async pollCycle(): Promise<void> {
     let messageBlock = '';
     const ackIds: string[] = [];
+    const queuedTelegramCount = this.telegramMessages.length;
 
     // Process queued Telegram messages
     let hasTelegramMessage = false;
@@ -182,6 +196,7 @@ export class FastChecker {
 
     // Check agent inbox
     const inboxMessages = checkInbox(this.paths);
+    const unreadInboxCount = inboxMessages.length + queuedTelegramCount;
     for (const msg of inboxMessages) {
       messageBlock += this.formatInboxMessage(msg);
       ackIds.push(msg.id);
@@ -196,11 +211,13 @@ export class FastChecker {
           ackInbox(this.paths, id);
         }
         this.log(`Injected ${messageBlock.length} bytes`);
+        this.lastWorkInjectedAt = Date.now();
+        this.noteObservedProgress(this.lastWorkInjectedAt);
         // Only update typing timestamp for Telegram messages, not inbox/cron.
         // Inbox messages (agent-to-agent, session continuations) must not
         // restart the typing indicator after Stop has cleared it.
         if (hasTelegramMessage) {
-          this.lastMessageInjectedAt = Date.now();
+          this.lastMessageInjectedAt = this.lastWorkInjectedAt;
         }
         // Cooldown after injection
         await sleep(5000);
@@ -210,6 +227,10 @@ export class FastChecker {
     // Typing indicator: send while Claude is actively working
     if (this.chatId && this.telegramApi && this.isAgentActive()) {
       await this.sendTyping(this.telegramApi, this.chatId);
+    }
+
+    if (this.evaluateStallWatchdog(unreadInboxCount)) {
+      return;
     }
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
@@ -903,11 +924,11 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
-   * Read ctx thresholds from config.json with mtime-based caching (BUG-048 pattern).
-   * Re-reads from disk only when the file has changed so dashboard updates take effect
-   * within one poll cycle without a daemon restart.
+   * Refresh cached config fields from config.json with mtime-based caching.
+   * Re-reads from disk only when the file has changed so dashboard updates take
+   * effect within one poll cycle without a daemon restart.
    */
-  private getCtxThresholds(): { warn: number; handoff: number } {
+  private refreshConfigCache(): void {
     try {
       const configPath = join(this.agent.getAgentDir(), 'config.json');
       const mtime = statSync(configPath).mtimeMs;
@@ -916,14 +937,227 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         const config = this.agent.getConfig();
         config.ctx_warning_threshold = cfg.ctx_warning_threshold;
         config.ctx_handoff_threshold = cfg.ctx_handoff_threshold;
+        config.stall_watchdog_enabled = cfg.stall_watchdog_enabled;
+        config.stall_watchdog_threshold_minutes = cfg.stall_watchdog_threshold_minutes;
         this.ctxConfigMtime = mtime;
       }
     } catch { /* keep stale values */ }
+  }
+
+  /**
+   * Read ctx thresholds from config.json with mtime-based caching (BUG-048 pattern).
+   */
+  private getCtxThresholds(): { warn: number; handoff: number } {
+    this.refreshConfigCache();
     const config = this.agent.getConfig();
     return {
       warn: config.ctx_warning_threshold ?? 70,
       handoff: config.ctx_handoff_threshold ?? 80,
     };
+  }
+
+  private getStallWatchdogSettings(): { enabled: boolean; thresholdMs: number } {
+    this.refreshConfigCache();
+    const config = this.agent.getConfig();
+    const thresholdMinutes = config.stall_watchdog_threshold_minutes ?? 20;
+    return {
+      enabled: config.stall_watchdog_enabled === true,
+      thresholdMs: Math.max(1, thresholdMinutes) * 60_000,
+    };
+  }
+
+  private readTimestampFileMs(filePath: string): number {
+    try {
+      if (!existsSync(filePath)) return 0;
+      const raw = readFileSync(filePath, 'utf-8').trim();
+      const numeric = Number(raw);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        return numeric >= 1_000_000_000_000 ? numeric : numeric * 1000;
+      }
+      const parsed = Date.parse(raw);
+      if (!Number.isNaN(parsed)) return parsed;
+      return statSync(filePath).mtimeMs;
+    } catch {
+      return 0;
+    }
+  }
+
+  private getLastIdleAt(): number {
+    return this.readTimestampFileMs(join(this.paths.stateDir, 'last_idle.flag'));
+  }
+
+  private getLastToolActivityAt(): number {
+    return this.readTimestampFileMs(join(this.paths.stateDir, 'last_tool_activity.flag'));
+  }
+
+  private getLastCronFireAt(): number {
+    const state = readCronState(this.paths.stateDir);
+    return state.crons.reduce((latest, record) => {
+      const ts = Date.parse(record.last_fire);
+      return Number.isNaN(ts) ? latest : Math.max(latest, ts);
+    }, 0);
+  }
+
+  /**
+   * P1 progress accessor: existing Stop hook + persisted cron fire state.
+   */
+  private getLastProgressAt(): number {
+    return Math.max(this.getLastIdleAt(), this.getLastCronFireAt());
+  }
+
+  private readOutboundLogSize(): number {
+    const outboundPath = join(this.paths.logDir, 'outbound-messages.jsonl');
+    try {
+      return existsSync(outboundPath) ? statSync(outboundPath).size : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private noteObservedProgress(now: number): void {
+    this.stallLastProgressObservedAt = now;
+  }
+
+  private seedStallBaselines(now: number): void {
+    if (this.stallLastProgressObservedAt !== 0) return;
+    this.stallLastProgressSignalAt = this.getLastProgressAt();
+    this.stallLastToolActivityAt = this.getLastToolActivityAt();
+    this.stallLastOutboundSize = this.readOutboundLogSize();
+    this.stallLastProgressObservedAt = now;
+  }
+
+  private updateObservedProgress(now: number): {
+    lastProgressAt: number;
+    lastIdleAt: number;
+    lastCronFireAt: number;
+    lastCompletionAt: number;
+    progressed: boolean;
+  } {
+    this.seedStallBaselines(now);
+
+    const lastIdleAt = this.getLastIdleAt();
+    const lastCronFireAt = this.getLastCronFireAt();
+    const lastProgressAt = Math.max(lastIdleAt, lastCronFireAt);
+    const lastToolActivityAt = this.getLastToolActivityAt();
+    const outboundSize = this.readOutboundLogSize();
+
+    let progressed = false;
+
+    if (lastProgressAt > this.stallLastProgressSignalAt) {
+      this.stallLastProgressSignalAt = lastProgressAt;
+      progressed = true;
+    }
+
+    if (lastToolActivityAt > this.stallLastToolActivityAt) {
+      this.stallLastToolActivityAt = lastToolActivityAt;
+      progressed = true;
+    }
+
+    if (this.stallLastOutboundSize === -1) {
+      this.stallLastOutboundSize = outboundSize;
+    } else if (outboundSize > this.stallLastOutboundSize) {
+      this.stallLastOutboundProgressAt = now;
+      this.stallLastOutboundSize = outboundSize;
+      progressed = true;
+    } else {
+      this.stallLastOutboundSize = outboundSize;
+    }
+
+    if (progressed) {
+      this.noteObservedProgress(now);
+    }
+
+    return {
+      lastProgressAt,
+      lastIdleAt,
+      lastCronFireAt,
+      lastCompletionAt: Math.max(lastIdleAt, this.stallLastOutboundProgressAt),
+      progressed,
+    };
+  }
+
+  private hasPendingWork(
+    unreadInboxCount: number,
+    lastCompletionAt: number,
+    lastCronFireAt: number,
+  ): boolean {
+    if (unreadInboxCount > 0) return true;
+    if (this.lastWorkInjectedAt > lastCompletionAt) return true;
+    return lastCronFireAt > lastCompletionAt;
+  }
+
+  private loadStallCircuit(): void {
+    try {
+      if (!existsSync(this.stallCircuitFile)) return;
+      const data = JSON.parse(readFileSync(this.stallCircuitFile, 'utf-8'));
+      this.stallCircuitRestarts = Array.isArray(data.restarts) ? data.restarts : [];
+      this.stallCircuitBrokenAt = typeof data.brokenAt === 'number' ? data.brokenAt : null;
+    } catch {
+      // Start fresh on error
+    }
+  }
+
+  private saveStallCircuit(): void {
+    try {
+      writeFileSync(this.stallCircuitFile, JSON.stringify({
+        restarts: this.stallCircuitRestarts,
+        brokenAt: this.stallCircuitBrokenAt,
+      }), 'utf-8');
+    } catch {
+      // Non-critical
+    }
+  }
+
+  private forceLoopStallRestart(reason: string): void {
+    const now = Date.now();
+
+    this.stallCircuitRestarts = this.stallCircuitRestarts.filter(t => now - t < 15 * 60_000);
+    if (this.stallCircuitRestarts.length >= 3) {
+      this.stallCircuitBrokenAt = now;
+      this.saveStallCircuit();
+      const msg = `Loop-stall circuit breaker TRIPPED for ${this.agent.name}: 3 watchdog restarts in 15min. Auto-restarts paused for 30min.`;
+      this.log(msg);
+      if (this.telegramApi && this.chatId) {
+        this.telegramApi.sendMessage(this.chatId, msg).catch(() => {});
+      }
+      return;
+    }
+
+    this.stallCircuitRestarts.push(now);
+    this.saveStallCircuit();
+    hardRestart(this.paths, this.agent.name, `WATCHDOG-HARD-RESTART: ${reason}`);
+    this.agent.sessionRefresh().catch(err => this.log(`Loop-stall restart failed: ${err}`));
+  }
+
+  private evaluateStallWatchdog(unreadInboxCount: number): boolean {
+    const now = Date.now();
+    const { enabled, thresholdMs } = this.getStallWatchdogSettings();
+    if (!enabled) return false;
+
+    if (this.stallCircuitBrokenAt !== null) {
+      if (now - this.stallCircuitBrokenAt >= 30 * 60_000) {
+        this.stallCircuitBrokenAt = null;
+        this.stallCircuitRestarts = [];
+        this.saveStallCircuit();
+        this.log('Loop-stall circuit breaker reset after 30min pause');
+      } else {
+        return false;
+      }
+    }
+
+    const { lastProgressAt, lastCronFireAt, lastCompletionAt } = this.updateObservedProgress(now);
+    const pendingWork = this.hasPendingWork(unreadInboxCount, lastCompletionAt, lastCronFireAt);
+    if (!pendingWork) return false;
+
+    if (now - this.stallLastProgressObservedAt < thresholdMs) return false;
+
+    const ageMinutes = Math.floor((now - this.stallLastProgressObservedAt) / 60_000);
+    this.log(
+      `Loop-stall watchdog firing after ${ageMinutes} min without progress ` +
+      `(last_progress=${lastProgressAt || 0}, last_completion=${lastCompletionAt || 0}, last_tool=${this.stallLastToolActivityAt || 0}, last_work_injected=${this.lastWorkInjectedAt || 0})`,
+    );
+    this.forceLoopStallRestart(`loop_stall — no progress for ${ageMinutes} min with pending work`);
+    return true;
   }
 
   /**

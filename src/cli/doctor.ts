@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import { existsSync, readFileSync, readdirSync, statSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { resolveInstanceId } from './resolve-instance-id.js';
 
 interface Check {
   name: string;
@@ -12,9 +13,10 @@ interface Check {
 }
 
 export const doctorCommand = new Command('doctor')
-  .option('--instance <id>', 'Instance ID', 'default')
+  .option('--instance <id>', 'Instance ID')
   .description('Diagnose common issues')
-  .action(async (options: { instance: string }) => {
+  .action(async (options: { instance?: string }) => {
+    const instanceId = resolveInstanceId(options.instance);
     console.log('\ncortextOS Doctor\n');
 
     const checks: Check[] = [];
@@ -148,7 +150,7 @@ export const doctorCommand = new Command('doctor')
     }
 
     // Check state directory
-    const ctxRoot = join(homedir(), '.cortextos', options.instance);
+    const ctxRoot = join(homedir(), '.cortextos', instanceId);
     checks.push({
       name: 'State directory',
       status: existsSync(ctxRoot) ? 'pass' : 'warn',
@@ -225,7 +227,7 @@ export const doctorCommand = new Command('doctor')
       });
 
       // Tunnel URL saved?
-      const tunnelConfigPath = join(homedir(), '.cortextos', options.instance, 'tunnel.json');
+      const tunnelConfigPath = join(homedir(), '.cortextos', instanceId, 'tunnel.json');
       let tunnelUrl: string | undefined;
       try {
         const tc = JSON.parse(readFileSync(tunnelConfigPath, 'utf-8'));

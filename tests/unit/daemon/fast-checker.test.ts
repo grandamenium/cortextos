@@ -1,19 +1,29 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('child_process', () => ({ execFile: vi.fn() }));
+vi.mock('../../../src/bus/system', () => ({ hardRestart: vi.fn() }));
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { FastChecker } from '../../../src/daemon/fast-checker';
+import { hardRestart } from '../../../src/bus/system';
 import type { BusPaths, TelegramCallbackQuery } from '../../../src/types';
 
 // Minimal mock for AgentProcess
-function createMockAgent(name = 'test-agent') {
+function createMockAgent(
+  name = 'test-agent',
+  config: Record<string, unknown> = {},
+  agentDir = '/tmp/test-agent',
+) {
   return {
     name,
     isBootstrapped: vi.fn().mockReturnValue(true),
     injectMessage: vi.fn().mockReturnValue(true),
     write: vi.fn(),
+    getAgentDir: vi.fn().mockReturnValue(agentDir),
+    getConfig: vi.fn().mockReturnValue(config),
+    getOutputBuffer: vi.fn().mockReturnValue({ getRecent: vi.fn().mockReturnValue('') }),
+    sessionRefresh: vi.fn().mockResolvedValue(undefined),
   } as any;
 }
 
@@ -72,6 +82,7 @@ describe('FastChecker', () => {
   });
 
   afterEach(() => {
+    vi.clearAllMocks();
     rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -316,6 +327,170 @@ describe('FastChecker', () => {
       const sendTyping = (checker as any).sendTyping.bind(checker);
       // Should not throw
       await expect(sendTyping(api, '12345')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('stall watchdog', () => {
+    it('reads progress from the instance-resolved idle flag and cron state', () => {
+      const agent = createMockAgent('test-agent', {}, testDir);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      writeFileSync(join(paths.stateDir, 'last_idle.flag'), '1710000000');
+      writeFileSync(join(paths.stateDir, 'cron-state.json'), JSON.stringify({
+        updated_at: '2026-06-10T00:00:00.000Z',
+        crons: [
+          { name: 'heartbeat', last_fire: '2026-06-10T00:00:05.000Z', interval: '6h' },
+        ],
+      }));
+
+      expect((checker as any).getLastProgressAt()).toBe(Date.parse('2026-06-10T00:00:05.000Z'));
+    });
+
+    it('fires a loop_stall restart when pending work sits with no progress', () => {
+      const agent = createMockAgent('test-agent', {
+        stall_watchdog_enabled: true,
+        stall_watchdog_threshold_minutes: 1,
+      }, testDir);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      const now = Date.now();
+
+      (checker as any).stallLastProgressObservedAt = now - 2 * 60_000;
+      (checker as any).stallLastProgressSignalAt = 0;
+      (checker as any).stallLastToolActivityAt = 0;
+      (checker as any).stallLastOutboundSize = 0;
+      (checker as any).lastWorkInjectedAt = now - 2 * 60_000;
+
+      expect((checker as any).evaluateStallWatchdog(0)).toBe(true);
+      expect(hardRestart).toHaveBeenCalledWith(
+        paths,
+        'test-agent',
+        expect.stringContaining('WATCHDOG-HARD-RESTART: loop_stall'),
+      );
+      expect(agent.sessionRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not restart a long live turn while tool activity keeps advancing', () => {
+      const agent = createMockAgent('test-agent', {
+        stall_watchdog_enabled: true,
+        stall_watchdog_threshold_minutes: 1,
+      }, testDir);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      const now = Date.now();
+
+      (checker as any).stallLastProgressObservedAt = now - 2 * 60_000;
+      (checker as any).stallLastProgressSignalAt = 0;
+      (checker as any).stallLastToolActivityAt = now - 3 * 60_000;
+      (checker as any).stallLastOutboundSize = 0;
+      (checker as any).lastWorkInjectedAt = now - 2 * 60_000;
+      writeFileSync(join(paths.stateDir, 'last_tool_activity.flag'), String(now));
+
+      expect((checker as any).evaluateStallWatchdog(1)).toBe(false);
+      expect(hardRestart).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
+    it('never restarts a quiet idle agent with no pending work', () => {
+      const agent = createMockAgent('test-agent', {
+        stall_watchdog_enabled: true,
+        stall_watchdog_threshold_minutes: 1,
+      }, testDir);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      (checker as any).stallLastProgressObservedAt = Date.now() - 2 * 60_000;
+      (checker as any).stallLastProgressSignalAt = 0;
+      (checker as any).stallLastToolActivityAt = 0;
+      (checker as any).stallLastOutboundSize = 0;
+
+      expect((checker as any).evaluateStallWatchdog(0)).toBe(false);
+      expect(hardRestart).not.toHaveBeenCalled();
+    });
+
+    it('excludes stdout growth as a progress signal', () => {
+      const agent = createMockAgent('test-agent', {
+        stall_watchdog_enabled: true,
+        stall_watchdog_threshold_minutes: 1,
+      }, testDir);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      const now = Date.now();
+
+      writeFileSync(join(paths.logDir, 'stdout.log'), 'spinner noise keeps growing\n');
+      (checker as any).stallLastProgressObservedAt = now - 2 * 60_000;
+      (checker as any).stallLastProgressSignalAt = 0;
+      (checker as any).stallLastToolActivityAt = 0;
+      (checker as any).stallLastOutboundSize = 0;
+      (checker as any).lastWorkInjectedAt = now - 2 * 60_000;
+
+      expect((checker as any).evaluateStallWatchdog(0)).toBe(true);
+      expect(hardRestart).toHaveBeenCalledTimes(1);
+    });
+
+    it('stays inert when stall_watchdog_enabled is false', () => {
+      const agent = createMockAgent('test-agent', {
+        stall_watchdog_enabled: false,
+        stall_watchdog_threshold_minutes: 1,
+      }, testDir);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+
+      (checker as any).stallLastProgressObservedAt = Date.now() - 10 * 60_000;
+      (checker as any).lastWorkInjectedAt = Date.now() - 10 * 60_000;
+
+      expect((checker as any).evaluateStallWatchdog(1)).toBe(false);
+      expect(hardRestart).not.toHaveBeenCalled();
+    });
+
+    it('opens the stall circuit breaker instead of restart-looping', () => {
+      const agent = createMockAgent('test-agent', {
+        stall_watchdog_enabled: true,
+        stall_watchdog_threshold_minutes: 1,
+      }, testDir);
+      const api = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', {
+        telegramApi: api,
+        chatId: '12345',
+      });
+      const now = Date.now();
+
+      (checker as any).stallLastProgressObservedAt = now - 2 * 60_000;
+      (checker as any).stallLastProgressSignalAt = 0;
+      (checker as any).stallLastToolActivityAt = 0;
+      (checker as any).stallLastOutboundSize = 0;
+      (checker as any).lastWorkInjectedAt = now - 2 * 60_000;
+      (checker as any).stallCircuitRestarts = [
+        now - 14 * 60_000,
+        now - 10 * 60_000,
+        now - 5 * 60_000,
+      ];
+
+      expect((checker as any).evaluateStallWatchdog(1)).toBe(true);
+      expect(hardRestart).not.toHaveBeenCalled();
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect((checker as any).stallCircuitBrokenAt).not.toBeNull();
+    });
+
+    it('pollCycle still reaches the stall path when context_status is stale', async () => {
+      const agent = createMockAgent('test-agent', {
+        stall_watchdog_enabled: true,
+        stall_watchdog_threshold_minutes: 1,
+        ctx_handoff_threshold: 80,
+      }, testDir);
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      const now = Date.now();
+
+      writeFileSync(join(paths.stateDir, 'context_status.json'), JSON.stringify({
+        used_percentage: 95,
+        exceeds_200k_tokens: false,
+        written_at: new Date(now - 11 * 60_000).toISOString(),
+      }));
+      (checker as any).stallLastProgressObservedAt = now - 2 * 60_000;
+      (checker as any).stallLastProgressSignalAt = 0;
+      (checker as any).stallLastToolActivityAt = 0;
+      (checker as any).stallLastOutboundSize = 0;
+      (checker as any).lastWorkInjectedAt = now - 2 * 60_000;
+
+      await (checker as any).pollCycle();
+
+      expect(hardRestart).toHaveBeenCalledTimes(1);
+      expect(agent.injectMessage).not.toHaveBeenCalledWith(expect.stringContaining('[CONTEXT HANDOFF REQUIRED]'));
     });
   });
 
