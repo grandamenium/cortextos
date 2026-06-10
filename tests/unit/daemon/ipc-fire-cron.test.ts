@@ -157,7 +157,7 @@ describe('handleFireCron — input validation', () => {
   it('returns error when agent is missing', async () => {
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn();
-    const result = handleFireCron(undefined, 'heartbeat', fn);
+    const result = await handleFireCron(undefined, 'heartbeat', fn);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/agent/i);
   });
@@ -165,7 +165,7 @@ describe('handleFireCron — input validation', () => {
   it('returns error when agent is empty string', async () => {
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn();
-    const result = handleFireCron('', 'heartbeat', fn);
+    const result = await handleFireCron('', 'heartbeat', fn);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/agent/i);
   });
@@ -173,7 +173,7 @@ describe('handleFireCron — input validation', () => {
   it('returns error when cronName is missing', async () => {
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn();
-    const result = handleFireCron('boris', undefined, fn);
+    const result = await handleFireCron('boris', undefined, fn);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/cron/i);
   });
@@ -181,7 +181,7 @@ describe('handleFireCron — input validation', () => {
   it('returns error when cronName is empty string', async () => {
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn();
-    const result = handleFireCron('boris', '', fn);
+    const result = await handleFireCron('boris', '', fn);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/cron/i);
   });
@@ -196,7 +196,7 @@ describe('handleFireCron — cron not found', () => {
     writeCronsJson('boris', [makeCron()]);
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn();
-    const result = handleFireCron('boris', 'nonexistent', fn);
+    const result = await handleFireCron('boris', 'nonexistent', fn);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('nonexistent');
     expect(result.error).toContain('boris');
@@ -206,7 +206,7 @@ describe('handleFireCron — cron not found', () => {
     writeCronsJson('boris', []);
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn();
-    const result = handleFireCron('boris', 'heartbeat', fn);
+    const result = await handleFireCron('boris', 'heartbeat', fn);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('heartbeat');
   });
@@ -221,7 +221,7 @@ describe('handleFireCron — manualFireDisabled', () => {
     writeCronsJson('boris', [makeCron({ manualFireDisabled: true })]);
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn, calls } = makeInjectFn();
-    const result = handleFireCron('boris', 'heartbeat', fn);
+    const result = await handleFireCron('boris', 'heartbeat', fn);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('Manual fire disabled');
     expect(calls).toHaveLength(0);
@@ -231,7 +231,7 @@ describe('handleFireCron — manualFireDisabled', () => {
     writeCronsJson('boris', [makeCron({ manualFireDisabled: false })]);
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn([true]);
-    const result = handleFireCron('boris', 'heartbeat', fn, 1_000_000);
+    const result = await handleFireCron('boris', 'heartbeat', fn, 1_000_000);
     expect(result.ok).toBe(true);
   });
 
@@ -239,7 +239,7 @@ describe('handleFireCron — manualFireDisabled', () => {
     writeCronsJson('boris', [makeCron()]);
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn([true]);
-    const result = handleFireCron('boris', 'heartbeat', fn, 1_000_000);
+    const result = await handleFireCron('boris', 'heartbeat', fn, 1_000_000);
     expect(result.ok).toBe(true);
   });
 });
@@ -255,11 +255,11 @@ describe('handleFireCron — cooldown', () => {
     const { fn } = makeInjectFn([true, true]);
 
     const t0 = 1_000_000_000;
-    const first = handleFireCron('boris', 'heartbeat', fn, t0);
+    const first = await handleFireCron('boris', 'heartbeat', fn, t0);
     expect(first.ok).toBe(true);
 
     // 15s later — still on cooldown
-    const second = handleFireCron('boris', 'heartbeat', fn, t0 + 15_000);
+    const second = await handleFireCron('boris', 'heartbeat', fn, t0 + 15_000);
     expect(second.ok).toBe(false);
     expect(second.error).toContain('Cooldown active');
     expect(second.error).toMatch(/\d+s/); // should mention remaining seconds
@@ -271,10 +271,10 @@ describe('handleFireCron — cooldown', () => {
     const { fn } = makeInjectFn([true, true]);
 
     const t0 = 1_000_000_000;
-    handleFireCron('boris', 'heartbeat', fn, t0);
+    await handleFireCron('boris', 'heartbeat', fn, t0);
 
     // Exactly at cooldown expiry
-    const second = handleFireCron('boris', 'heartbeat', fn, t0 + MANUAL_FIRE_COOLDOWN_MS);
+    const second = await handleFireCron('boris', 'heartbeat', fn, t0 + MANUAL_FIRE_COOLDOWN_MS);
     expect(second.ok).toBe(true);
   });
 
@@ -287,10 +287,10 @@ describe('handleFireCron — cooldown', () => {
     const { fn } = makeInjectFn([true, true]);
 
     const t0 = 1_000_000_000;
-    handleFireCron('boris', 'heartbeat', fn, t0);
+    await handleFireCron('boris', 'heartbeat', fn, t0);
 
     // daily-report — different cron, no cooldown
-    const result = handleFireCron('boris', 'daily-report', fn, t0 + 5_000);
+    const result = await handleFireCron('boris', 'daily-report', fn, t0 + 5_000);
     expect(result.ok).toBe(true);
   });
 
@@ -300,9 +300,9 @@ describe('handleFireCron — cooldown', () => {
     const { fn } = makeInjectFn([true, true]);
 
     const t0 = 1_000_000_000;
-    handleFireCron('boris', 'heartbeat', fn, t0);
+    await handleFireCron('boris', 'heartbeat', fn, t0);
 
-    const second = handleFireCron('boris', 'heartbeat', fn, t0 + 10_000);
+    const second = await handleFireCron('boris', 'heartbeat', fn, t0 + 10_000);
     expect(second.ok).toBe(false);
     // Should say "20s" remaining (30 - 10)
     expect(second.error).toContain('20s');
@@ -318,7 +318,7 @@ describe('handleFireCron — happy path', () => {
     writeCronsJson('boris', [makeCron({ prompt: 'Run heartbeat workflow.' })]);
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn, calls } = makeInjectFn([true]);
-    handleFireCron('boris', 'heartbeat', fn, 1_000_000);
+    await handleFireCron('boris', 'heartbeat', fn, 1_000_000);
     expect(calls).toHaveLength(1);
     expect(calls[0].agent).toBe('boris');
     expect(calls[0].text).toBe('[CRON: heartbeat] Run heartbeat workflow.');
@@ -329,7 +329,7 @@ describe('handleFireCron — happy path', () => {
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn([true]);
     const now = 1_234_567_890;
-    const result = handleFireCron('boris', 'heartbeat', fn, now);
+    const result = await handleFireCron('boris', 'heartbeat', fn, now);
     expect(result.ok).toBe(true);
     expect(result.firedAt).toBe(now);
   });
@@ -339,7 +339,7 @@ describe('handleFireCron — happy path', () => {
     const { handleFireCron, _manualFireLastFired } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn([true]);
     const now = 1_234_567_890;
-    handleFireCron('boris', 'heartbeat', fn, now);
+    await handleFireCron('boris', 'heartbeat', fn, now);
     expect(_manualFireLastFired.get('boris::heartbeat')).toBe(now);
   });
 
@@ -347,7 +347,7 @@ describe('handleFireCron — happy path', () => {
     writeCronsJson('boris', [makeCron()]);
     const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn([false]);
-    const result = handleFireCron('boris', 'heartbeat', fn, 1_000_000);
+    const result = await handleFireCron('boris', 'heartbeat', fn, 1_000_000);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('not found or not running');
   });
@@ -357,7 +357,7 @@ describe('handleFireCron — happy path', () => {
     const { handleFireCron, _manualFireLastFired } = await import('../../../src/daemon/ipc-server.js');
     const { fn } = makeInjectFn([false]);
     const now = 1_000_000;
-    handleFireCron('boris', 'heartbeat', fn, now);
+    await handleFireCron('boris', 'heartbeat', fn, now);
     expect(_manualFireLastFired.has('boris::heartbeat')).toBe(false);
   });
 });
@@ -464,7 +464,7 @@ describe('handleAddCron — manualFireDisabled round-trip', () => {
       manualFireDisabled: true,
     });
 
-    const result = handleFireCron('boris', 'locked-cron', fn, 1_000_000);
+    const result = await handleFireCron('boris', 'locked-cron', fn, 1_000_000);
     expect(result.ok).toBe(false);
     expect(result.error).toContain('Manual fire disabled');
   });

@@ -90,8 +90,16 @@ export class WorkerProcess {
    */
   inject(text: string): boolean {
     if (!this.pty || this.status !== 'running') return false;
-    injectMessage((data) => this.pty?.write(data), text);
-    return true;
+    // Fire-and-forget: workers inject single nudges with no collision risk, so we
+    // don't await the PASTE+ENTER cycle here (#510 serialization is per-agent).
+    // Guard the synchronous PASTE write so a torn-down PTY honours the boolean
+    // contract (return false) instead of throwing out of inject().
+    try {
+      void injectMessage((data) => this.pty?.write(data), text);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

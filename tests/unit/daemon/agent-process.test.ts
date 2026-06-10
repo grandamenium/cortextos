@@ -21,7 +21,7 @@ vi.mock('../../../src/pty/agent-pty.js', () => ({
 const mockInjectMessage = vi.fn();
 vi.mock('../../../src/pty/inject.js', () => ({
   injectMessage: mockInjectMessage,
-  MessageDedup: class { isDuplicate() { return false; } },
+  MessageDedup: class { isDuplicate() { return false; } forget() {} },
 }));
 
 vi.mock('../../../src/utils/atomic.js', () => ({
@@ -414,5 +414,89 @@ describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', ()
     }
     // Should be 'crashed' (recovering), NOT 'halted', because daily max is 5
     expect(ap.getStatus().status).not.toBe('halted');
+  });
+});
+
+describe('AgentProcess - inject serialization (#510)', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('serializes injects so the second PASTE waits for the first to finish', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // First inject hangs until we release it; second resolves immediately.
+    let release1!: () => void;
+    const p1 = new Promise<boolean>((r) => { release1 = () => r(true); });
+    mockInjectMessage.mockReturnValueOnce(p1).mockReturnValueOnce(Promise.resolve(true));
+
+    const call1 = ap.injectMessageDetailed('first');
+    const call2 = ap.injectMessageDetailed('second');
+
+    await flush();
+    // Only the first inject has started — the second is queued behind it.
+    expect(mockInjectMessage).toHaveBeenCalledTimes(1);
+    expect(mockInjectMessage.mock.calls[0][1]).toBe('first');
+
+    release1();
+    await call1;
+    await call2;
+
+    expect(mockInjectMessage).toHaveBeenCalledTimes(2);
+    expect(mockInjectMessage.mock.calls[1][1]).toBe('second');
+  });
+
+  it('propagates an inject failure (INJECT_FAILED) so cron retries fire, and keeps the queue usable', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    mockInjectMessage.mockRejectedValueOnce(new Error('pty write failed'));
+    const r = await ap.injectMessageDetailed('boom');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('INJECT_FAILED');
+
+    // The barrier was released despite the failure — the next inject still runs.
+    mockInjectMessage.mockResolvedValueOnce(true);
+    const r2 = await ap.injectMessageDetailed('next');
+    expect(r2.ok).toBe(true);
+    expect(mockInjectMessage.mock.calls[mockInjectMessage.mock.calls.length - 1][1]).toBe('next');
+  });
+
+  it('reports INJECT_FAILED (not false success) when the PTY is torn down mid-inject', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // TOCTOU window: the NOT_RUNNING guard passes, then the PTY is torn down
+    // before the write lands. The write callback must surface the torn-down PTY
+    // (throw) so INJECT_FAILED fires — an optional-chain no-op would silently
+    // report success and lose the message on a cron retry (#510, codex).
+    mockInjectMessage.mockImplementationOnce((write: (d: string) => void) => {
+      (ap as unknown as { pty: unknown }).pty = null;
+      write('paste'); // closure reads the now-null PTY and must throw
+      return Promise.resolve(true);
+    });
+
+    const r = await ap.injectMessageDetailed('msg');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('INJECT_FAILED');
+  });
+
+  it('does not bleed a queued inject into a restarted session — fails it instead (#510)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // The inject was accepted against this session, but the agent restarts
+    // (new lifecycleGeneration + fresh PTY) before the PASTE lands. The write
+    // must refuse to submit into the new session and report INJECT_FAILED, so
+    // the stale message never bleeds into the wrong turn (#510, codex).
+    mockInjectMessage.mockImplementationOnce((write: (d: string) => void) => {
+      (ap as unknown as { lifecycleGeneration: number }).lifecycleGeneration += 1;
+      write('paste'); // closure detects the generation bump and must throw
+      return Promise.resolve(true);
+    });
+
+    const r = await ap.injectMessageDetailed('stale');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe('INJECT_FAILED');
   });
 });

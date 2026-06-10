@@ -765,9 +765,10 @@ export interface IPCResponse {
   /**
    * Structured error code for failed responses. Lets operators distinguish
    * "agent does not exist" (NOT_FOUND) from "request collapsed against an
-   * in-flight identical op" (DEDUPED). See issue #346.
+   * in-flight identical op" (DEDUPED) from "the PASTE+ENTER cycle never
+   * submitted" (INJECT_FAILED — PTY torn down mid-inject, #510). See issue #346.
    */
-  code?: 'NOT_FOUND' | 'DEDUPED' | 'INVALID_INPUT' | 'NOT_RUNNING';
+  code?: 'NOT_FOUND' | 'DEDUPED' | 'INVALID_INPUT' | 'NOT_RUNNING' | 'INJECT_FAILED';
 }
 
 // Agent Discovery Types

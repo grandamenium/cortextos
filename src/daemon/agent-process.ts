@@ -58,6 +58,11 @@ export class AgentProcess {
   private exitPromise: Promise<void> | null = null;
   private resolveExit: (() => void) | null = null;
   private dedup: MessageDedup;
+  // Serializes PTY injects so each PASTE+ENTER cycle completes before the next
+  // starts — otherwise simultaneously-firing crons collide and all but the first
+  // are silently dropped at the TUI (#510). Ordering barrier only; per-call
+  // success/failure is returned to each caller, not swallowed here.
+  private injectChain: Promise<void> = Promise.resolve();
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
   // Issue #330: held here so CodexAppServerPTY can be re-wired across session refresh
@@ -329,7 +334,7 @@ export class AgentProcess {
    * See issue #346 — both used to surface as a bare `false` and got mistaken
    * for "agent not found" by operators investigating restart/cron failures.
    */
-  injectMessageDetailed(content: string): { ok: true } | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED'; message: string } {
+  async injectMessageDetailed(content: string): Promise<{ ok: true } | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED' | 'INJECT_FAILED'; message: string }> {
     if (!this.pty || this.status !== 'running') {
       return { ok: false, code: 'NOT_RUNNING', message: `agent "${this.name}" is registered but not running (status: ${this.status})` };
     }
@@ -339,8 +344,52 @@ export class AgentProcess {
       return { ok: false, code: 'DEDUPED', message: `inject for "${this.name}" deduped — content matches MessageDedup hash window` };
     }
 
-    injectMessage((data) => this.pty?.write(data), content);
-    return { ok: true };
+    // Pin the session this inject was accepted against. If the agent restarts
+    // while this inject waits its turn in the queue, the generation advances and
+    // the write below refuses to submit into the new session (#510).
+    const acceptedGeneration = this.lifecycleGeneration;
+
+    // Serialize against any in-flight inject so each PASTE+ENTER cycle completes
+    // before the next begins (#510). injectChain is an ordering barrier only: we
+    // ignore the predecessor's failure for sequencing but return OUR OWN
+    // success/failure to the caller (cron retry depends on it), and always
+    // release the barrier so one bad inject can't wedge the agent's queue.
+    const prior = this.injectChain;
+    let release!: () => void;
+    this.injectChain = new Promise<void>((r) => { release = r; });
+    try {
+      await prior.catch(() => {});
+      // Throw (don't optional-chain to a no-op) if the PTY was torn down, or the
+      // session was restarted, in the window after the NOT_RUNNING guard. A silent
+      // no-op would let injectMessage resolve true and falsely report success,
+      // losing the message on a cron retry; throwing routes us to INJECT_FAILED.
+      // The generation check stops a queued inject from bleeding into a freshly
+      // restarted session and landing in the wrong turn (#510).
+      const submitted = await injectMessage((data) => {
+        if (!this.pty) throw new Error('PTY torn down during inject');
+        if (this.lifecycleGeneration !== acceptedGeneration) {
+          throw new Error('session restarted during inject');
+        }
+        this.pty.write(data);
+      }, content);
+      if (!submitted) {
+        // The deferred ENTER write failed (PTY likely torn down) — the prompt
+        // never submitted. Roll back the dedup hash so the caller's retry of the
+        // same content isn't swallowed as a duplicate, and report failure (#510).
+        this.dedup.forget(content);
+        const message = `inject for "${this.name}" did not submit (deferred ENTER failed)`;
+        this.log(message);
+        return { ok: false, code: 'INJECT_FAILED', message };
+      }
+      return { ok: true };
+    } catch (err) {
+      this.dedup.forget(content);
+      const message = `inject for "${this.name}" failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.log(message);
+      return { ok: false, code: 'INJECT_FAILED', message };
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -348,8 +397,8 @@ export class AgentProcess {
    * New callers that need to distinguish DEDUPED from NOT_RUNNING should use
    * `injectMessageDetailed()` instead.
    */
-  injectMessage(content: string): boolean {
-    return this.injectMessageDetailed(content).ok;
+  async injectMessage(content: string): Promise<boolean> {
+    return (await this.injectMessageDetailed(content)).ok;
   }
 
   /**

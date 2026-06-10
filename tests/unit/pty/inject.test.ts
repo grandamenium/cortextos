@@ -90,4 +90,22 @@ describe('injectMessage — deferred Enter crash safety', () => {
     expect(writes[writes.length - 1]).toBe(KEYS.ENTER);
     expect(warnSpy).not.toHaveBeenCalled();
   });
+
+  it('returns a promise that resolves only after the deferred ENTER is written (#510)', async () => {
+    const writes: string[] = [];
+    const write = (data: string) => { writes.push(data); };
+
+    let resolved = false;
+    const p = injectMessage(write, 'hi', 300).then(() => { resolved = true; });
+
+    // PASTE is synchronous, but ENTER and resolution must wait for the timer.
+    expect(writes.includes(KEYS.ENTER)).toBe(false);
+    expect(resolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(300);
+    await p;
+
+    expect(writes[writes.length - 1]).toBe(KEYS.ENTER);
+    expect(resolved).toBe(true);
+  });
 });
