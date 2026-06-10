@@ -428,22 +428,40 @@ export class AgentProcess {
       // pty.kill() on an already-exited PTY tears down the file descriptor,
       // which can send SIGHUP (exit code 129) to a process that was in the
       // middle of flushing. Polling first eliminates the remaining SIGHUP risk.
+      //
+      // Capture the OS pid BEFORE pty.kill() — the wrapper nulls its handle and
+      // flips isAlive() to false on the first kill(), so a later liveness recheck
+      // through the wrapper is impossible. The pid lets us confirm a real exit
+      // and escalate a wedged child (#202).
+      let childPid: number | null = null;
       if (pty.isAlive()) {
+        childPid = pty.getPid();
         try {
-          pty.kill();
+          pty.kill(); // graceful SIGTERM via node-pty
         } catch {
           // PTY may have exited between the check and the kill — ignore
         }
       }
 
       // BUG-011 fix: AWAIT the exit handler before resolving stop().
-      // BUG-040 fix: bumped timeout from 5s to 15s to give the PTY plenty of
-      // time to exit cleanly even when BUG-032's slow graceful shutdown stacks
-      // on top of pty.kill() lag. The functional correctness no longer depends
-      // on this timeout (stopRequested handles late exits), but a generous
-      // timeout reduces "Ignoring late exit from previous lifecycle" log noise.
+      // #202 hard-restart fix: SIGTERM alone never escalates, so a wedged child
+      // (and its descendants) could survive `bus hard-restart` as a zombie. Wait
+      // a bounded window for the graceful exit; if the pid is still alive,
+      // SIGKILL the whole PROCESS GROUP so no orphaned children survive (node-pty
+      // spawns the child as a session leader, so the negative-pid signal reaps
+      // the descendant tree — orphaned grandchildren are exactly the OS resource
+      // exhaustion this class produced). pid-fallback + a kill(pid,0) liveness
+      // guard keep it from signalling a recycled pid.
       if (exitPromise) {
-        await Promise.race([exitPromise, sleep(15000)]);
+        const exitedGracefully = await Promise.race([
+          exitPromise.then(() => true),
+          sleep(HARD_KILL_GRACE_MS).then(() => false),
+        ]);
+        if (!exitedGracefully && childPid !== null && isPidAlive(childPid)) {
+          this.log(`PTY pid ${childPid} still alive ${HARD_KILL_GRACE_MS}ms after SIGTERM — escalating to SIGKILL on the process group (#202)`);
+          hardKillProcessGroup(childPid);
+          await Promise.race([exitPromise, sleep(5000)]);
+        }
       }
     }
 
@@ -1394,6 +1412,8 @@ const MAX_SPAWN_ATTEMPTS = 3;
 /** Base backoff between spawn retries (×2^(attempt-1) → 1s, 2s). */
 const SPAWN_RETRY_BASE_MS = 1000;
 
+const HARD_KILL_GRACE_MS = 8000;
+
 /** True if `pid` is a live process. `process.kill(pid, 0)` only probes. */
 export function isPidAlive(pid: number): boolean {
   try {
@@ -1406,9 +1426,6 @@ export function isPidAlive(pid: number): boolean {
 
 /**
  * Classify a spawn failure into a coarse CLASS for fleet-wide alert dedup.
- * posix_spawnp / EAGAIN / ENOMEM all mean OS process/resource exhaustion — the
- * gen-B cause — and should collapse into one operator alert. Unknown errors
- * get a generic class so they still dedup per-class.
  */
 export function classifySpawnFailure(err: unknown): string {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
@@ -1416,10 +1433,23 @@ export function classifySpawnFailure(err: unknown): string {
     return 'posix_spawnp';
   }
   if (msg.includes('no live process')) {
-    // Our own verification failure — node-pty returned a corpse (the classic
-    // gen-B shape); treat as the exhaustion class so it dedups with it.
     return 'posix_spawnp';
   }
   if (msg.includes('enoent')) return 'ENOENT';
   return 'spawn-error';
+}
+
+/**
+ * Hard-kill a wedged PTY child AND its descendants (#202).
+ */
+export function hardKillProcessGroup(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
 }

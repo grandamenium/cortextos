@@ -290,14 +290,17 @@ export class AgentPTY {
   }
 
   /**
-   * Kill the PTY process.
+   * Kill the PTY process. Forwards an optional signal to node-pty (default
+   * SIGTERM); callers escalate to 'SIGKILL' for a wedged child that ignores the
+   * graceful path (#202). Previously the signal arg was dropped, so a
+   * hard-restart could never escalate past SIGTERM.
    */
-  kill(): void {
+  kill(signal?: string): void {
     const pty = this.pty;
     if (pty) {
       this._alive = false;
       this.pty = null;
-      pty.kill();
+      pty.kill(signal);
     }
   }
 

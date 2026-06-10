@@ -275,7 +275,6 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     const markerWriteOrder = fsMocks.writeFileSync.mock.invocationCallOrder[writeIdx];
     expect(markerWriteOrder).toBeLessThan(stopSpy.mock.invocationCallOrder[0]);
   });
-<<<<<<< HEAD
 
   // Q1 (Area-4): codex agents' session-cap rollover routes through this SAME
   // generic sessionRefresh() — the max_session timer (agent-process.ts) calls it
@@ -333,8 +332,6 @@ describe('AgentProcess - Area 4.4 wedge-detection (mechanism B)', () => {
       expect(String(sendMessage.mock.calls[0][1])).toMatch(/RESTART-WEDGED/);
     } finally { AgentProcess.wedgeDetectMs = 5 * 60 * 1000; vi.useRealTimers(); }
   });
-=======
->>>>>>> fb227ff (fix(daemon): kill false-positive crash detection — no-unlink markers + first-heartbeat clear (#445))
 });
 
 describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {

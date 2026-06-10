@@ -1,9 +1,10 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
+import { AGENT_LIFECYCLE_MARKERS } from '../bus/heartbeat.js';
 
 /**
  * BUG-035 fix: discover the cortextOS framework root without depending on
@@ -110,6 +111,34 @@ export function writeDisableMarker(instanceId: string, agent: string, reason: st
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, '.user-disable'), reason);
   } catch { /* don't block disable on marker-write failure */ }
+}
+
+/**
+ * Consume an agent's stale start/stop lifecycle markers on `cortextos enable`.
+ *
+ * A prior `disable`/`stop`/`restart` writes `.user-disable`/`.user-stop`/etc and
+ * those markers are NOT cleaned up by the disabling command. Re-enabling starts
+ * a fresh session, so any such marker is stale — and a stale one makes the
+ * SessionEnd crash-alert hook misread the new session's FIRST genuine crash as
+ * an intentional stop/disable, suppressing the alarm and leaving the daemon to
+ * kill the fresh boot (live overnight: paul died this way twice across
+ * disable->enable recycles). Consuming them here closes that recycle.
+ *
+ * Returns the marker names actually removed, so the caller can log what it
+ * cleaned (observability for this whole class).
+ */
+export function clearLifecycleMarkers(instanceId: string, agent: string): string[] {
+  const cleared: string[] = [];
+  try {
+    const stateDir = join(homedir(), '.cortextos', instanceId, 'state', agent);
+    for (const marker of AGENT_LIFECYCLE_MARKERS) {
+      const p = join(stateDir, marker);
+      try {
+        if (existsSync(p)) { unlinkSync(p); cleared.push(marker); }
+      } catch { /* per-marker best effort */ }
+    }
+  } catch { /* never block enable on cleanup */ }
+  return cleared;
 }
 
 function writeEnabledAgents(instanceId: string, agents: Record<string, any>): void {
@@ -243,6 +272,14 @@ export const enableAgentCommand = new Command('enable')
     }
 
     console.log(`Agent "${agent}" enabled.`);
+
+    // Consume any stale lifecycle markers from a prior disable/stop/restart so
+    // the fresh session's first genuine crash isn't misread as an intentional
+    // stop (and silently killed by the daemon). Done BEFORE the daemon start.
+    const clearedMarkers = clearLifecycleMarkers(options.instance, agent);
+    if (clearedMarkers.length > 0) {
+      console.log(`  Consumed stale lifecycle markers: ${clearedMarkers.join(', ')}`);
+    }
 
     // Try to start via daemon IPC
     const ipc = new IPCClient(options.instance);
