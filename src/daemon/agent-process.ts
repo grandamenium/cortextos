@@ -64,6 +64,12 @@ export class AgentProcess {
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
   private telegramChatId: string | null = null;
+  // Area 4.2 (B:F-09 re-scope): once-per-incident latch for the post-bootstrap
+  // MCP-degraded alert. Cleared on a later warning-free boot, so a recovered
+  // .mcp.json re-arms the alert for the next incident. (The original handleExit
+  // crash-detector is obsolete on current claude — a broken .mcp.json no longer
+  // crashes, it boots DEGRADED; see MCP-FLAP-REPRO-FINDING.)
+  private mcpDegradedAlerted = false;
   // Issue #392: tracks whether the most recently built startup prompt consumed
   // a handoff doc marker. start() reads this after spawn to decide whether the
   // daemon should fire the codex-app-server back-online Telegram directly
@@ -456,6 +462,40 @@ export class AgentProcess {
       }
     } catch {
       return '';
+    }
+  }
+
+  // The exact non-fatal warning claude surfaces on a broken .mcp.json (captured
+  // in the repro on v2.1.170): "⚠ N setup issues: …, MCP, … · /doctor". Anchored
+  // on the setup-issues + MCP + /doctor triple so normal output that merely
+  // mentions "mcp" cannot false-positive.
+  private static readonly MCP_SETUP_WARNING_RE = /setup issues:[^\n]*\bMCP\b[^\n]*\/doctor/i;
+
+  /**
+   * Post-bootstrap MCP-degraded surface (Area 4.2, B:F-09 re-scope). A broken
+   * .mcp.json no longer crashes claude — it boots DEGRADED with a non-fatal
+   * "setup issues … MCP … /doctor" warning, leaving the agent running WITHOUT its
+   * MCP tools (a silent-failure class). Called once bootstrap completes: scan the
+   * boot stdout tail and emit ONE operator alert naming .mcp.json. Surface-only:
+   * NO restart/backoff (the agent is alive). Once-per-incident — the latch clears
+   * here on a warning-free boot, so a fixed .mcp.json re-arms for the next time.
+   */
+  checkMcpSetupWarningOnBoot(bootOutput?: string): void {
+    const clean = (bootOutput ?? this.tailStdoutLog(16384)).replace(/\x1b\[[0-9;]*[a-zA-Z]/g, ''); // strip ANSI/TUI codes
+    if (!AgentProcess.MCP_SETUP_WARNING_RE.test(clean)) {
+      this.mcpDegradedAlerted = false; // warning-free boot → recovery, re-arm
+      return;
+    }
+    if (this.mcpDegradedAlerted) return; // already alerted this incident
+    this.mcpDegradedAlerted = true;
+    this.log(`MCP setup issue on boot — running DEGRADED (MCP tools unavailable); check this agent's .mcp.json (claude /doctor for detail)`);
+    if (this.telegramApi && this.telegramChatId) {
+      this.telegramApi
+        .sendMessage(
+          this.telegramChatId,
+          `⚠️ Agent ${this.name} booted DEGRADED: MCP setup issue — its MCP tools are unavailable. Check .mcp.json (run claude /doctor for detail).`,
+        )
+        .catch(() => {});
     }
   }
 

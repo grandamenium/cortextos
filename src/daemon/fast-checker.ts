@@ -106,6 +106,11 @@ export class FastChecker {
     await this.waitForBootstrap();
     this.log('Bootstrap complete. Beginning poll loop.');
 
+    // Area 4.2 (B:F-09 re-scope): surface a degraded MCP boot (broken .mcp.json
+    // no longer crashes claude — it boots without its MCP tools). Scan the boot
+    // stdout tail once; emit ONE alert per incident. Surface-only, never blocks.
+    this.agent.checkMcpSetupWarningOnBoot();
+
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
