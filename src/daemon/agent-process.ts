@@ -18,12 +18,61 @@ type LogFn = (msg: string) => void;
  * Manages a single agent's lifecycle.
  * Replaces agent-wrapper.sh for one agent.
  */
+// G1 (Area 4.3): auto-unhalt notices are BATCHED across agents — multiple agents
+// crossing midnight halted must produce ONE telegram naming all + count, never one
+// per agent (gen-B lesson, same shape as the spawn-failure alerter). The top-of-hour
+// daily-reset timer fires all agents together at the day-roll; a module-level
+// collector with a short debounce coalesces their unhalts into a single notice.
+const _unhaltBatch: {
+  names: Set<string>;
+  timer: ReturnType<typeof setTimeout> | null;
+  api: TelegramAPI | null;
+  chatId: string | null;
+} = { names: new Set(), timer: null, api: null, chatId: null };
+let unhaltBatchDebounceMs = 10_000; // injectable for tests
+
+function recordAutoUnhalt(name: string, api: TelegramAPI | null, chatId: string | null): void {
+  _unhaltBatch.names.add(name);
+  if (api && chatId) { _unhaltBatch.api = api; _unhaltBatch.chatId = chatId; } // any agent's handle (shared operator chat)
+  if (_unhaltBatch.timer) clearTimeout(_unhaltBatch.timer);
+  _unhaltBatch.timer = setTimeout(() => {
+    const names = [..._unhaltBatch.names];
+    const api2 = _unhaltBatch.api;
+    const chatId2 = _unhaltBatch.chatId;
+    _unhaltBatch.names.clear();
+    _unhaltBatch.timer = null;
+    _unhaltBatch.api = null;
+    _unhaltBatch.chatId = null;
+    if (api2 && chatId2 && names.length > 0) {
+      api2
+        .sendMessage(chatId2, `Auto-unhalted ${names.length} agent(s) on day-roll (crash budget reset): ${names.join(', ')}`)
+        .catch(() => {});
+    }
+  }, unhaltBatchDebounceMs);
+  if (typeof _unhaltBatch.timer.unref === 'function') _unhaltBatch.timer.unref();
+}
+
+/** Test seam: drain + clear the auto-unhalt batch synchronously. */
+export function _resetUnhaltBatch(debounceMs?: number): void {
+  if (_unhaltBatch.timer) clearTimeout(_unhaltBatch.timer);
+  _unhaltBatch.names.clear();
+  _unhaltBatch.timer = null;
+  _unhaltBatch.api = null;
+  _unhaltBatch.chatId = null;
+  if (debounceMs !== undefined) unhaltBatchDebounceMs = debounceMs;
+}
+
 export class AgentProcess {
   readonly name: string;
   private env: CtxEnv;
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  // Area 4.3 (B:F-04): top-of-hour daily timer that resets the crash budget on a
+  // new UTC day and auto-unhalts crash-budget-halted agents (so a halt from
+  // yesterday doesn't survive midnight in a long-running daemon, no manual wipe).
+  private dailyResetTimer: ReturnType<typeof setInterval> | null = null;
+  private lastBudgetDay: string = '';
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
   // CrashLoopPauser (instar-inspired): sliding-window crash detection.
@@ -93,6 +142,13 @@ export class AgentProcess {
       this.log('Already running');
       return;
     }
+
+    // Area 4.3 (B:F-04): clear a stale crash budget up front so the FIRST start of
+    // a new day gets a fresh budget without a manual wipe, and arm the top-of-hour
+    // daily-reset timer (handles the long-running-daemon case where no start() runs
+    // across midnight). Non-incrementing — start() is not a crash.
+    this.resetCrashBudgetIfNewDay(new Date().toISOString().split('T')[0]);
+    this.armDailyResetTimer();
 
     // Apply startup delay
     const delay = this.config.startup_delay || 0;
@@ -212,6 +268,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearDailyResetTimer(); // intentional stop ends the day-roll auto-unhalt watch
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -941,6 +998,86 @@ export class AgentProcess {
       ensureDir(join(this.env.ctxRoot, 'logs', this.name));
       writeFileSync(crashFile, `${today}:${this.crashCount}`, 'utf-8');
     } catch { /* ignore */ }
+  }
+
+  /**
+   * NON-incrementing budget reset (Area 4.3, B:F-04). Unlike resetCrashCountIfNewDay
+   * (the crash-path version, which +1's because a crash just happened), this loads or
+   * resets the budget WITHOUT counting a crash — for start() and the daily check. On
+   * a new UTC day it zeroes the count and clears the stale date file; same day it
+   * loads the stored count. Returns true iff it rolled to a new day.
+   */
+  private resetCrashBudgetIfNewDay(today: string): boolean {
+    const crashFile = join(this.env.ctxRoot, 'logs', this.name, '.crash_count_today');
+    let rolled = false;
+    try {
+      if (existsSync(crashFile)) {
+        const [storedDate, count] = readFileSync(crashFile, 'utf-8').trim().split(':');
+        if (storedDate === today) {
+          this.crashCount = parseInt(count, 10) || 0; // same day: load only, no write
+        } else {
+          // Stale date from a previous day → clear it (this is the B:F-04 fix).
+          this.crashCount = 0;
+          rolled = true;
+          ensureDir(join(this.env.ctxRoot, 'logs', this.name));
+          writeFileSync(crashFile, `${today}:0`, 'utf-8');
+        }
+      } else {
+        this.crashCount = 0; // no file: nothing to clear, no write (created on first real crash)
+      }
+    } catch { /* ignore — budget reset is best-effort */ }
+    this.lastBudgetDay = today;
+    return rolled;
+  }
+
+  /** G2: operator-intent markers mean an agent must NOT auto-restart on day-roll. */
+  private hasUserIntentMarker(): boolean {
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    return existsSync(join(stateDir, '.user-disable')) || existsSync(join(stateDir, '.user-stop'));
+  }
+
+  /**
+   * Top-of-hour daily-reset timer (Area 4.3, B:F-04). Aligned to :00 so all agents
+   * tick together at the day-roll, which lets the auto-unhalt notice BATCH (G1).
+   * Each tick, once a new UTC day is crossed: reset the crash budget; a crash-budget
+   * HALTED agent that is NOT operator-disabled (G2) is auto-unhalted + restarted and
+   * recorded into the shared batch for ONE coalesced notice. Armed once per lifecycle
+   * and left running across crash-recovery + halt (so a halt survives no longer than
+   * the day-roll); cleared on intentional stop.
+   */
+  private armDailyResetTimer(): void {
+    if (this.dailyResetTimer) return; // already armed for this lifecycle
+    const now = new Date();
+    this.lastBudgetDay = now.toISOString().split('T')[0];
+    const msToNextHour = (60 - now.getUTCMinutes()) * 60_000 - now.getUTCSeconds() * 1000 - now.getUTCMilliseconds();
+    const tick = () => {
+      const today = new Date().toISOString().split('T')[0];
+      if (today === this.lastBudgetDay) return; // crossed-UTC-day guard
+      this.resetCrashBudgetIfNewDay(today);
+      if (this.status !== 'halted') return;
+      if (this.hasUserIntentMarker()) {
+        this.log('Day-roll: crash budget reset, but operator marker present — NOT auto-restarting (G2)');
+        return;
+      }
+      this.log('Day-roll auto-unhalt: new UTC day, crash budget reset — restarting');
+      this.status = 'stopped';
+      recordAutoUnhalt(this.name, this.telegramApi, this.telegramChatId);
+      this.start().catch(err => this.log(`Auto-unhalt restart failed: ${err}`));
+    };
+    this.dailyResetTimer = setTimeout(() => {
+      tick();
+      this.dailyResetTimer = setInterval(tick, 60 * 60_000);
+      if (typeof this.dailyResetTimer.unref === 'function') this.dailyResetTimer.unref();
+    }, Math.max(0, msToNextHour));
+    if (typeof this.dailyResetTimer.unref === 'function') this.dailyResetTimer.unref();
+  }
+
+  private clearDailyResetTimer(): void {
+    if (this.dailyResetTimer) {
+      clearTimeout(this.dailyResetTimer);
+      clearInterval(this.dailyResetTimer);
+      this.dailyResetTimer = null;
+    }
   }
 
   private notifyStatusChange(): void {

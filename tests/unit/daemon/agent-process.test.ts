@@ -79,7 +79,7 @@ vi.mock('fs', async () => {
   };
 });
 
-const { AgentProcess } = await import('../../../src/daemon/agent-process.js');
+const { AgentProcess, _resetUnhaltBatch } = await import('../../../src/daemon/agent-process.js');
 
 const mockEnv = {
   instanceId: 'test',
@@ -414,5 +414,89 @@ describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', ()
     }
     // Should be 'crashed' (recovering), NOT 'halted', because daily max is 5
     expect(ap.getStatus().status).not.toBe('halted');
+  });
+});
+
+describe('AgentProcess - Area 4.3 midnight crash-budget reset (B:F-04)', () => {
+  const DAY1 = Date.UTC(2026, 5, 10, 23, 59, 0); // 2026-06-10 23:59Z (1min to day-roll)
+
+  beforeEach(() => { _resetUnhaltBatch(50); }); // short debounce for batch tests
+
+  it('start() on a new day clears a stale crash budget (no manual wipe)', async () => {
+    // .crash_count_today carries YESTERDAY's exhausted budget.
+    fsMocks.existsSync.mockImplementation((p: any) => String(p).endsWith('.crash_count_today'));
+    fsMocks.readFileSync.mockImplementation((p: any) =>
+      String(p).endsWith('.crash_count_today') ? '2026-06-09:10' : '');
+    vi.useFakeTimers(); vi.setSystemTime(Date.UTC(2026, 5, 10, 12, 0, 0));
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+      expect(ap.getStatus().crashCount).toBe(0); // fresh budget
+      const wrote = fsMocks.writeFileSync.mock.calls.find((c: any) => String(c[0]).endsWith('.crash_count_today'));
+      expect(wrote).toBeTruthy();
+      expect(String(wrote[1])).toBe('2026-06-10:0'); // stale date cleared to today:0
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('daily check auto-unhalts a crash-budget-halted agent on the day-roll + restarts it', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(DAY1);
+    try {
+      const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 1 });
+      await ap.start();
+      capturedOnExit?.(1, 0);                         // 1 crash >= max(1) → halted
+      expect(ap.getStatus().status).toBe('halted');
+      const startSpy = vi.spyOn(ap, 'start').mockResolvedValue();
+      await vi.advanceTimersByTimeAsync(60_000 + 10); // cross into 2026-06-11 00:00 → top-of-hour tick
+      expect(ap.getStatus().status).not.toBe('halted'); // auto-unhalted
+      expect(ap.getStatus().crashCount).toBe(0);        // budget reset
+      expect(startSpy).toHaveBeenCalled();              // restarted
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('G2: a user-disabled halted agent stays DOWN on the day-roll (no auto-restart)', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(DAY1);
+    try {
+      const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 1 });
+      await ap.start();
+      capturedOnExit?.(1, 0);
+      expect(ap.getStatus().status).toBe('halted');
+      // operator-intent marker present
+      fsMocks.existsSync.mockImplementation((p: any) => String(p).endsWith('.user-disable'));
+      const startSpy = vi.spyOn(ap, 'start').mockResolvedValue();
+      await vi.advanceTimersByTimeAsync(60_000 + 10);
+      expect(ap.getStatus().status).toBe('halted'); // stays down
+      expect(startSpy).not.toHaveBeenCalled();      // NOT restarted
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('G1: two agents halted across midnight → ONE batched telegram naming both', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(DAY1);
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    try {
+      // Halt each agent in turn — the global capturedOnExit holds the LAST started
+      // agent's exit cb, so start+halt them one at a time.
+      const a = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 1 });
+      a.setTelegramHandle({ sendMessage } as any, '999');
+      await a.start();
+      capturedOnExit?.(1, 0);
+      expect(a.getStatus().status).toBe('halted');
+
+      const b = new AgentProcess('bob', { ...mockEnv, agentName: 'bob' }, { max_crashes_per_day: 1 });
+      b.setTelegramHandle({ sendMessage } as any, '999');
+      await b.start();
+      capturedOnExit?.(1, 0);
+      expect(b.getStatus().status).toBe('halted');
+
+      vi.spyOn(a, 'start').mockResolvedValue();
+      vi.spyOn(b, 'start').mockResolvedValue();
+      await vi.advanceTimersByTimeAsync(60_000 + 10); // both top-of-hour timers tick the day-roll
+      await vi.advanceTimersByTimeAsync(100);          // debounce (50ms) flush
+
+      const calls = sendMessage.mock.calls.filter((c: any) => /Auto-unhalted/.test(String(c[1])));
+      expect(calls.length).toBe(1);                    // ONE notice, not per-agent (G1)
+      expect(String(calls[0][1])).toMatch(/Auto-unhalted 2 agent\(s\)/);
+      expect(String(calls[0][1])).toContain('alice');
+      expect(String(calls[0][1])).toContain('bob');
+    } finally { vi.useRealTimers(); }
   });
 });
