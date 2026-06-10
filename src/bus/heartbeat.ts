@@ -13,7 +13,7 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
  * past the grace window below. The hook's TTL is the backstop for a start that
  * fails before ever heartbeating.
  */
-const END_TYPE_MARKERS = [
+export const END_TYPE_MARKERS = [
   '.restart-planned',
   '.session-refresh',
   '.user-restart',
@@ -21,6 +21,22 @@ const END_TYPE_MARKERS = [
   '.user-stop',
   '.daemon-crashed',
   '.daemon-stop',
+];
+
+/**
+ * The subset of END_TYPE_MARKERS that belong to a single agent's start/stop
+ * lifecycle (not the daemon-wide `.daemon-*` markers). These are what a fresh
+ * `cortextos enable` must consume and what the daemon boot sweep reaps when
+ * stale — leaving one behind makes the crash-alert hook misread a NEW session's
+ * genuine crash as an intentional stop/disable/restart, silently masking a real
+ * death (#609; live overnight: paul, donna).
+ */
+export const AGENT_LIFECYCLE_MARKERS = [
+  '.restart-planned',
+  '.session-refresh',
+  '.user-restart',
+  '.user-disable',
+  '.user-stop',
 ];
 
 /**
