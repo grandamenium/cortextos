@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
+import { buildReplyContext, parseSpawnStaggerMs, DEFAULT_SPAWN_STAGGER_MS } from '../../../src/daemon/agent-manager.js';
 
 // Mock the PTY layer so we don't load native bindings or spawn real processes.
 // AgentManager → AgentProcess → AgentPTY → node-pty. We mock at AgentProcess.
@@ -45,6 +45,39 @@ vi.mock('../../../src/telegram/poller.js', () => ({
 }));
 
 const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+
+// Disable the inter-spawn stagger (default 4s in prod) for the whole file so
+// multi-agent discoverAndStart tests don't incur real delays / time out. The
+// stagger is timing-only (rate-limit-burst mitigation), not under test here.
+beforeEach(() => { process.env.CTX_SPAWN_STAGGER_MS = '0'; });
+afterEach(() => { delete process.env.CTX_SPAWN_STAGGER_MS; });
+
+describe('parseSpawnStaggerMs (CTX_SPAWN_STAGGER_MS env parsing)', () => {
+  it('unset / empty → default (does NOT disable the mitigation)', () => {
+    expect(parseSpawnStaggerMs(undefined)).toBe(DEFAULT_SPAWN_STAGGER_MS);
+    expect(parseSpawnStaggerMs('')).toBe(DEFAULT_SPAWN_STAGGER_MS);
+    expect(parseSpawnStaggerMs('   ')).toBe(DEFAULT_SPAWN_STAGGER_MS);
+  });
+  it('invalid / NaN / Infinity → default (fall back, never silently disable)', () => {
+    expect(parseSpawnStaggerMs('4s')).toBe(DEFAULT_SPAWN_STAGGER_MS);
+    expect(parseSpawnStaggerMs('abc')).toBe(DEFAULT_SPAWN_STAGGER_MS);
+    expect(parseSpawnStaggerMs('false')).toBe(DEFAULT_SPAWN_STAGGER_MS);
+    expect(parseSpawnStaggerMs('Infinity')).toBe(DEFAULT_SPAWN_STAGGER_MS);
+  });
+  it('explicit 0 → 0 (intentional disable, e.g. tests)', () => {
+    expect(parseSpawnStaggerMs('0')).toBe(0);
+  });
+  it('negative → clamped to 0', () => {
+    expect(parseSpawnStaggerMs('-5000')).toBe(0);
+  });
+  it('valid positive → used as-is', () => {
+    expect(parseSpawnStaggerMs('100')).toBe(100);
+    expect(parseSpawnStaggerMs('4000')).toBe(4000);
+  });
+  it('absurdly large → clamped to the 60s cap (misconfig must not stall startup)', () => {
+    expect(parseSpawnStaggerMs('999999999')).toBe(60_000);
+  });
+});
 
 describe('AgentManager.discoverAndStart - BUG-028 fix', () => {
   let testDir: string;

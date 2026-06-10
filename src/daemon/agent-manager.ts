@@ -19,6 +19,28 @@ import { stripBom } from '../utils/strip-bom.js';
 
 type LogFn = (msg: string) => void;
 
+/** Default + safety cap for the inter-spawn stagger (ms). */
+export const DEFAULT_SPAWN_STAGGER_MS = 4000;
+const MAX_SPAWN_STAGGER_MS = 60_000;
+
+/**
+ * Parse the CTX_SPAWN_STAGGER_MS env knob into a safe stagger delay (ms).
+ *
+ * Reliability-fix hardening: an INVALID value must NOT silently disable the
+ * stagger (that would re-expose the rate-limit-burst this mitigates). So:
+ *   - unset            → DEFAULT (4000)
+ *   - invalid/NaN/±Inf → DEFAULT (fall back, do NOT disable)
+ *   - explicit 0       → 0 (intentional disable, e.g. tests)
+ *   - negative         → clamped to 0
+ *   - > MAX            → clamped to MAX (a misconfig shouldn't stall startup)
+ */
+export function parseSpawnStaggerMs(raw: string | undefined): number {
+  if (raw == null || raw.trim() === '') return DEFAULT_SPAWN_STAGGER_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_SPAWN_STAGGER_MS;
+  return Math.min(MAX_SPAWN_STAGGER_MS, Math.max(0, n));
+}
+
 /**
  * Manages all agents in a cortextOS instance.
  */
@@ -121,6 +143,18 @@ export class AgentManager {
     // re-discover and re-start any agent dir on disk regardless of user intent.
     const instanceEnabled = this.readInstanceEnableList();
 
+    // Stagger agent spawns. `await startAgent` returns once the PTY is spawned
+    // (not once the agent's Claude CLI finishes booting), so without a delay all
+    // agents' boots hit the shared per-account Anthropic API ~simultaneously on a
+    // fleet (re)start → a rate-limit burst. Observed 2026-06-10 deploy: a 9-agent
+    // simultaneous --continue restart throttled one agent (valor) for ~12min on
+    // retry while the rest came back in 1-2min. A few seconds between spawns
+    // spaces the boot API-calls out and removes the burst. Scales with fleet size
+    // (AXL = 24 agents — bigger burst risk). Tunable via STAGGER_MS.
+    // Tunable/disable-able via CTX_SPAWN_STAGGER_MS (set 0 to disable, e.g. tests).
+    // Invalid values fall back to the default rather than silently disabling.
+    const STAGGER_MS = parseSpawnStaggerMs(process.env.CTX_SPAWN_STAGGER_MS);
+    let startedCount = 0;
     for (const { name, dir, org, config } of agentDirs) {
       // Per-agent config.json `enabled: false` (existing behavior, unchanged)
       if (config.enabled === false) {
@@ -133,9 +167,14 @@ export class AgentManager {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
         continue;
       }
+      // Space out boots after the first actual start (skipped agents don't count).
+      if (startedCount > 0) {
+        await new Promise(r => setTimeout(r, STAGGER_MS));
+      }
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead
       // of falling back to `this.org` (the daemon's startup org).
       await this.startAgent(name, dir, config, org);
+      startedCount++;
     }
 
     // Successful startup pass — clear .daemon-crashed markers from disk
@@ -407,6 +446,25 @@ export class AgentManager {
 
     // Start agent
     await agentProcess.start();
+
+    // Clear any stale .daemon-stop marker now that the agent has (re)started.
+    // stopAll() writes this marker so the SessionEnd crash-alert hook reports a
+    // clean daemon shutdown instead of a false crash. Left in place after a
+    // successful restart it would MASK a subsequent REAL crash — the hook would
+    // misread the next unexpected exit as an intentional stop — and can also
+    // mislead a peer agent reading it mid-boot (observed 2026-06-10 deploy:
+    // valor read a stale snackbot .daemon-stop). Best-effort cleanup; erring
+    // toward a (false) crash alarm is the safe direction vs masking a crash.
+    // RACE (acknowledged, low-severity): if a concurrent stopAll() writes the
+    // marker for this agent while we clear it here, the clear could erase a
+    // legitimate intentional-stop marker → a false crash alert on the imminent
+    // exit. That failure mode is the SAFE direction (alarm, never mask), the
+    // window is one syscall, and stopping an agent mid-startup is pathological;
+    // not worth a lock. Revisit only if IPC-driven stop-during-startup is real.
+    try {
+      const stopMarker = join(this.ctxRoot, 'state', name, '.daemon-stop');
+      if (existsSync(stopMarker)) unlinkSync(stopMarker);
+    } catch { /* best-effort marker cleanup — never block a start on it */ }
 
     // Subtask 2.2: Auto-migrate crons from config.json → crons.json before
     // starting the scheduler, so the scheduler always has a populated crons.json
