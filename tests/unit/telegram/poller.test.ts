@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { TelegramPoller } from '../../../src/telegram/poller';
+import { TelegramPoller, planPollError } from '../../../src/telegram/poller';
 import type { TelegramAPI } from '../../../src/telegram/api';
 import type { TelegramUpdate } from '../../../src/types/index';
 
@@ -221,5 +221,67 @@ describe('TelegramPoller — offset-after-handler', () => {
       const persisted = readFileSync(offsetFile, 'utf-8').trim();
       expect(persisted).toBe('0');
     }
+  });
+});
+
+describe('TelegramPoller — long-poll window (A:F-08, #6.1)', () => {
+  let stateDir: string;
+  beforeEach(() => { stateDir = mkdtempSync(join(tmpdir(), 'cortextos-poller-lp-')); });
+  afterEach(() => { rmSync(stateDir, { recursive: true, force: true }); });
+
+  it('calls getUpdates with a 25s long-poll window, not the old 1s short-poll', async () => {
+    const seen: Array<[number, number | undefined]> = [];
+    const api = {
+      getUpdates: vi.fn(async (offset: number, timeout?: number) => {
+        seen.push([offset, timeout]);
+        return { result: [] };
+      }),
+    } as unknown as TelegramAPI;
+
+    const poller = new TelegramPoller(api, stateDir);
+    await poller.pollOnce();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0][1]).toBe(25); // long-poll seconds — the 25x idle-traffic cut
+  });
+});
+
+describe('planPollError — poll-error split (C#1, #6.3)', () => {
+  it('409 Conflict → self-die (supervisor retakes the lock)', () => {
+    expect(planPollError('Telegram API error: Conflict: terminated by other getUpdates', 0))
+      .toEqual({ type: 'conflict' });
+  });
+
+  it('429 → honours the "retry after N" value Telegram sends and resets the network streak', () => {
+    const plan = planPollError('Telegram API error: Too Many Requests: retry after 7', 3);
+    expect(plan).toEqual({ type: 'rate-limit', delayMs: 7000, nextNetFailures: 0 });
+  });
+
+  it('429 without a parseable N falls back to a 1s floor', () => {
+    const plan = planPollError('Telegram API error: Too Many Requests', 0);
+    expect(plan).toEqual({ type: 'rate-limit', delayMs: 1000, nextNetFailures: 0 });
+  });
+
+  it('network error → exponential backoff base*2^(n-1), capped at 60s', () => {
+    expect(planPollError('Telegram API request failed: fetch failed', 0))
+      .toMatchObject({ type: 'network', delayMs: 1000, nextNetFailures: 1, circuitTripped: false });
+    expect(planPollError('Telegram API request failed: fetch failed', 1))
+      .toMatchObject({ type: 'network', delayMs: 2000, nextNetFailures: 2 });
+    expect(planPollError('Telegram API request failed: fetch failed', 2))
+      .toMatchObject({ type: 'network', delayMs: 4000, nextNetFailures: 3 });
+    // base*2^9 = 512000 → capped
+    expect(planPollError('Telegram API request timed out after 30s: getUpdates', 9))
+      .toMatchObject({ type: 'network', delayMs: 60000, nextNetFailures: 10 });
+  });
+
+  it('trips the circuit-breaker flag at exactly the 5th consecutive network failure', () => {
+    expect(planPollError('fetch failed', 3).type).toBe('network');
+    expect((planPollError('fetch failed', 3) as { circuitTripped: boolean }).circuitTripped).toBe(false);
+    expect((planPollError('fetch failed', 4) as { circuitTripped: boolean }).circuitTripped).toBe(true); // 5th
+    expect((planPollError('fetch failed', 5) as { circuitTripped: boolean }).circuitTripped).toBe(false);
+  });
+
+  it('a timed-out long-poll is treated as a network failure, not a rate-limit', () => {
+    expect(planPollError('Telegram API request timed out after 30s: getUpdates', 0).type).toBe('network');
   });
 });

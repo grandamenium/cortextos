@@ -365,11 +365,15 @@ export class TelegramAPI {
    * Get updates via long polling.
    */
   async getUpdates(offset: number, timeout: number = 1): Promise<any> {
+    // Long-poll: the request blocks server-side up to `timeout` seconds, so the
+    // client abort must sit ABOVE it (+5s slack) or a long-poll would always
+    // abort mid-wait. Short polls keep the default 15s abort (A:F-08).
+    const abortMs = Math.max(15000, (timeout + 5) * 1000);
     return this.post('getUpdates', {
       offset,
       timeout,
       allowed_updates: ['message', 'callback_query', 'message_reaction'],
-    });
+    }, abortMs);
   }
 
   /**
@@ -611,13 +615,13 @@ export class TelegramAPI {
   /**
    * Make a POST request to the Telegram API.
    */
-  private async post(method: string, data: object): Promise<any> {
+  private async post(method: string, data: object, timeoutMs: number = 15000): Promise<any> {
     try {
       const response = await fetch(`${this.baseUrl}/${method}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       const result = await response.json() as any;
       if (!result.ok) {
@@ -632,7 +636,7 @@ export class TelegramAPI {
       // Surface as a clean retryable error so the poller loop recovers next tick
       // instead of silently hanging on a wedged TCP connection.
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-        throw new Error(`Telegram API request timed out after 15s: ${method}`);
+        throw new Error(`Telegram API request timed out after ${Math.round(timeoutMs / 1000)}s: ${method}`);
       }
       throw new Error(`Telegram API request failed: ${err}`);
     }
