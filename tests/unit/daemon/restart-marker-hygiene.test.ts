@@ -11,8 +11,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { spawn } from 'child_process';
 import { AgentManager } from '../../../src/daemon/agent-manager';
-import { isPidAlive, hardKillProcessGroup } from '../../../src/daemon/agent-process';
+import { isPidAlive, hardKillProcessGroup, collectDescendants } from '../../../src/daemon/agent-process';
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe('sweepStaleLifecycleMarkers (daemon boot self-heals orphaned markers)', () => {
   let testDir: string;
@@ -109,5 +112,35 @@ describe('hard-restart kill escalation helpers (#202)', () => {
 
     expect(calls[0]).toEqual([-777, 'SIGKILL']); // tried the group first
     expect(calls[1]).toEqual([777, 'SIGKILL']);  // then the single pid
+  });
+});
+
+describe('collectDescendants + tree-walk reap (own-pgroup orphans, #202 (b) completion)', () => {
+  it('captures an OWN-process-group child and the tree-walk reap leaves 0 survivors', async () => {
+    // bash leader with job control (`set -m`) → the backgrounded sleep gets its
+    // OWN process group, the exact survivor a leader-group SIGKILL misses.
+    const leader = spawn('bash', ['-c', 'set -m; sleep 30 & sleep 30'], { stdio: 'ignore' });
+    await wait(700); // let the children spawn
+    const leaderPid = leader.pid!;
+
+    const descendants = collectDescendants(leaderPid);
+    expect(descendants.length).toBeGreaterThanOrEqual(1); // found the own-pgroup child by ppid
+
+    // Simulate the escalation reap: SIGKILL the leader's group + each captured
+    // descendant by pid (the tree-walk). The own-pgroup child is NOT in the
+    // leader's group, so per-pid is what kills it.
+    try { process.kill(-leaderPid, 'SIGKILL'); } catch { /* group may be gone */ }
+    for (const pid of descendants) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+    try { process.kill(leaderPid, 'SIGKILL'); } catch { /* gone */ }
+
+    await wait(400);
+    const survivors = descendants.filter(isPidAlive);
+    expect(survivors).toEqual([]); // 0 survivors — own-pgroup orphan reaped
+    expect(isPidAlive(leaderPid)).toBe(false);
+  });
+
+  it('returns [] for a pid with no children', () => {
+    // a very-high pid that does not exist → no descendants, no throw
+    expect(collectDescendants(2_000_000_000)).toEqual([]);
   });
 });

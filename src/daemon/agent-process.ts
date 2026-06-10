@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { execSync } from 'child_process';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -434,8 +435,16 @@ export class AgentProcess {
       // through the wrapper is impossible. The pid lets us confirm a real exit
       // and escalate a wedged child (#202).
       let childPid: number | null = null;
+      let descendantPids: number[] = [];
       if (pty.isAlive()) {
         childPid = pty.getPid();
+        // Snapshot the descendant tree NOW, while it is still attached to the
+        // leader (children are ppid-children until the leader dies). A child
+        // that put itself in its OWN process group (job control / setpgid /
+        // detached helper) survives a leader process-group SIGKILL and reparents
+        // to pid 1 — the group signal alone misses it. Capturing by ppid here
+        // lets the escalation SIGKILL each survivor by pid regardless of group.
+        if (childPid !== null) descendantPids = collectDescendants(childPid);
         try {
           pty.kill(); // graceful SIGTERM via node-pty
         } catch {
@@ -461,6 +470,19 @@ export class AgentProcess {
           this.log(`PTY pid ${childPid} still alive ${HARD_KILL_GRACE_MS}ms after SIGTERM — escalating to SIGKILL on the process group (#202)`);
           hardKillProcessGroup(childPid);
           await Promise.race([exitPromise, sleep(5000)]);
+        }
+        // Regardless of how the leader exited, reap any descendant that outlived
+        // it. Own-pgroup children orphan to pid 1 and escape BOTH the
+        // SIGHUP-on-leader-death and a leader-group SIGKILL, so the group signal
+        // is not sufficient — SIGKILL each snapshotted descendant still alive.
+        // (This is the completion of (b): orphaned descendants are the suspected
+        // OS process-exhaustion mechanism.)
+        const survivors = descendantPids.filter(isPidAlive);
+        if (survivors.length > 0) {
+          this.log(`Reaping ${survivors.length} surviving PTY descendant(s) by pid after teardown — own-pgroup orphans escape the group signal (#202)`);
+          for (const pid of survivors) {
+            try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+          }
         }
       }
     }
@@ -1437,6 +1459,39 @@ export function classifySpawnFailure(err: unknown): string {
   }
   if (msg.includes('enoent')) return 'ENOENT';
   return 'spawn-error';
+}
+
+/**
+ * Collect all descendant pids of `pid` by walking ps ppid tree.
+ */
+export function collectDescendants(pid: number): number[] {
+  let rows: Array<[number, number]>;
+  try {
+    const out = execSync('ps -axo pid=,ppid=', { encoding: 'utf8' });
+    rows = out.trim().split('\n')
+      .map(l => l.trim().split(/\s+/).map(Number))
+      .filter((r): r is [number, number] => r.length === 2 && r.every(n => Number.isInteger(n) && n > 0));
+  } catch {
+    return [];
+  }
+  const childrenOf = new Map<number, number[]>();
+  for (const [p, pp] of rows) {
+    const arr = childrenOf.get(pp);
+    if (arr) arr.push(p); else childrenOf.set(pp, [p]);
+  }
+  const descendants: number[] = [];
+  const stack = [pid];
+  const seen = new Set<number>();
+  while (stack.length) {
+    const cur = stack.pop()!;
+    for (const k of childrenOf.get(cur) ?? []) {
+      if (seen.has(k)) continue;
+      seen.add(k);
+      descendants.push(k);
+      stack.push(k);
+    }
+  }
+  return descendants;
 }
 
 /**
