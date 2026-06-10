@@ -6,6 +6,7 @@ import { AgentPTY } from '../pty/agent-pty.js';
 import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
+import { recordSpawnFailure } from './spawn-failure-alerter.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
@@ -129,74 +130,91 @@ export class AgentProcess {
     const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
     ensureDir(join(this.env.ctxRoot, 'logs', this.name));
     this.log(`Log path: ${logPath}`);
-    this.pty = this.config.runtime === 'hermes'
-      ? new HermesPTY(this.env, this.config, logPath)
-      : this.config.runtime === 'codex-app-server'
-        ? new CodexAppServerPTY(this.env, this.config, logPath)
-        : new AgentPTY(this.env, this.config, logPath);
 
-    // Issue #330: re-wire the Telegram handle on every start() (session refresh
-    // creates a fresh CodexAppServerPTY). Only CodexAppServerPTY uses this — Claude / Hermes
-    // typing indicators flow through fast-checker.
-    if (this.config.runtime === 'codex-app-server' && this.telegramApi && this.telegramChatId) {
-      (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
-    }
+    // Spawn with verification + bounded retry (gen-B spawn-verify). node-pty's
+    // spawn() returns a pty object even when posix_spawnp fails — the error
+    // surfaces async on the fd and getPid() can hold a corpse pid — so a bare
+    // spawn that "resolves" can report a dead process as 'running' and the
+    // fast-checker's bootstrap-timeout then declares "Bootstrap complete" for a
+    // process that never existed (the gen-B zombie registry). Here we VERIFY a
+    // live child before declaring running, RETRY with backoff on failure, and
+    // on exhaustion record SPAWN-FAILED registry truth (NOT running) so the
+    // daemon can fire ONE fleet-wide operator alert instead of 4.5h of silence.
+    for (let attempt = 1; attempt <= MAX_SPAWN_ATTEMPTS; attempt++) {
+      this.pty = this.config.runtime === 'hermes'
+        ? new HermesPTY(this.env, this.config, logPath)
+        : this.config.runtime === 'codex-app-server'
+          ? new CodexAppServerPTY(this.env, this.config, logPath)
+          : new AgentPTY(this.env, this.config, logPath);
 
-    // BUG-011 fix: create a fresh exit signal for this run. resolveExit is
-    // called from the onExit handler below; stop() awaits exitPromise to
-    // guarantee the exit handler has fired before clearing stopping.
-    this.exitPromise = new Promise<void>((resolve) => {
-      this.resolveExit = resolve;
-    });
+      // Issue #330: re-wire the Telegram handle (only CodexAppServerPTY uses it).
+      if (this.config.runtime === 'codex-app-server' && this.telegramApi && this.telegramChatId) {
+        (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
+      }
 
-    // Handle exit
-    this.pty.onExit((exitCode, signal) => {
-      // BUG-040 fix: if the lifecycle has moved on (a new start() incremented
-      // the generation since this PTY was spawned), this is an old PTY's late
-      // exit. Ignore it entirely — we don't want it to trigger handleExit on
-      // the current PTY's state.
-      if (myGeneration !== this.lifecycleGeneration) {
-        this.log(`Ignoring late exit from previous lifecycle gen ${myGeneration} (current: ${this.lifecycleGeneration})`);
+      // BUG-011 fix: fresh exit signal per attempt; stop() awaits exitPromise.
+      this.exitPromise = new Promise<void>((resolve) => {
+        this.resolveExit = resolve;
+      });
+      this.pty.onExit((exitCode, signal) => {
+        // BUG-040 fix: ignore a late exit from a superseded lifecycle generation.
+        if (myGeneration !== this.lifecycleGeneration) {
+          this.log(`Ignoring late exit from previous lifecycle gen ${myGeneration} (current: ${this.lifecycleGeneration})`);
+          return;
+        }
+        this.log(`Exited with code ${exitCode} signal ${signal}`);
+        this.handleExit(exitCode);
+        this.resolveExit?.();
+        this.resolveExit = null;
+      });
+
+      try {
+        await this.pty.spawn(mode, prompt);
+
+        // Codex exec-per-turn race / legit fast exit: onExit may have already
+        // fired and nulled this.pty. handleExit owns recovery — unchanged, and
+        // NOT a spawn failure (do not retry a legitimate exit).
+        if (!this.pty) {
+          this.log('PTY exited during spawn — handleExit will recover');
+          return;
+        }
+
+        // SPAWN VERIFICATION: require a real, live pid. A posix_spawnp corpse
+        // has no live process — getPid() is null/0 or already dead — so the
+        // immediate probe catches it (this.pty set but pid dead → retry), while
+        // a legit fast exit (this.pty nulled by onExit) was handled above. The
+        // rarer "alive at this instant, dies moments later" corpse is caught
+        // downstream by handleExit + the fast-checker's pid-aware bootstrap wait.
+        const spawnedPid = this.pty.getPid();
+        if (spawnedPid === null || spawnedPid <= 0 || !isPidAlive(spawnedPid)) {
+          throw new Error(`spawn produced no live process (pid=${spawnedPid ?? 'null'})`);
+        }
+
+        // Verified alive.
+        this.status = 'running';
+        this.sessionStart = new Date();
+        this.log(`Running (pid: ${spawnedPid})`);
+        this.maybeSendCodexBootNotification();
+        this.startSessionTimer();
+        this.notifyStatusChange();
+        return; // success
+      } catch (err) {
+        // Tear down the dead PTY before retrying so a half-spawn can't linger.
+        try { this.pty?.kill(); } catch { /* already dead */ }
+        this.pty = null;
+        const failureClass = classifySpawnFailure(err);
+        this.log(`Spawn attempt ${attempt}/${MAX_SPAWN_ATTEMPTS} failed (${failureClass}): ${err}`);
+        if (attempt < MAX_SPAWN_ATTEMPTS) {
+          await sleep(SPAWN_RETRY_BASE_MS * 2 ** (attempt - 1)); // 1s, 2s
+          continue;
+        }
+        // Exhausted — registry TRUTH (not 'running'/'crashed') + fleet alert hook.
+        this.status = 'spawn-failed';
+        this.notifyStatusChange();
+        recordSpawnFailure(this.name, failureClass);
+        this.log(`SPAWN-FAILED after ${MAX_SPAWN_ATTEMPTS} attempts (${failureClass}) — agent is NOT running`);
         return;
       }
-      this.log(`Exited with code ${exitCode} signal ${signal}`);
-      this.handleExit(exitCode);
-      // Signal anyone awaiting this PTY's exit (e.g. stop() — BUG-011 fix)
-      this.resolveExit?.();
-      this.resolveExit = null;
-    });
-
-    try {
-      await this.pty.spawn(mode, prompt);
-      // Codex exec-per-turn race: the new PTY's onExit can fire BEFORE this
-      // line if `codex exec` completes its prompt quickly (CodexAppServerPTY's spawn
-      // resolves once exec is launched, but the process may exit moments
-      // later as it finishes the bootstrap turn). handleExit() nulls
-      // this.pty and schedules crash recovery — we must not claim 'running'
-      // or call getPid() on null in that window.
-      if (!this.pty) {
-        this.log('PTY exited during spawn — handleExit will recover');
-        return;
-      }
-      this.status = 'running';
-      this.sessionStart = new Date();
-      this.log(`Running (pid: ${this.pty.getPid()})`);
-
-      // Issue #392: codex-app-server does not reliably execute the inline
-      // "Send a Telegram message saying you are back online" instruction the
-      // way claude-code does, so fire the back-online ping directly from the
-      // daemon for that runtime. Skipped on handoff restart — the agent
-      // sends its own contextual "back — ..." reply in that case.
-      this.maybeSendCodexBootNotification();
-
-      // Start session timer
-      this.startSessionTimer();
-
-      this.notifyStatusChange();
-    } catch (err) {
-      this.log(`Failed to start: ${err}`);
-      this.status = 'crashed';
-      this.notifyStatusChange();
     }
   }
 
@@ -357,6 +375,18 @@ export class AgentProcess {
    */
   isBootstrapped(): boolean {
     return this.pty?.getOutputBuffer().isBootstrapped() ?? false;
+  }
+
+  /**
+   * True if the agent's PTY process is alive at the OS level. Unlike the PTY
+   * wrapper's optimistic `_alive` flag (set true on spawn and only cleared by
+   * onExit — a posix_spawnp corpse keeps it true), this probes the real pid, so
+   * the fast-checker can distinguish a dead process from an alive-but-quiet one
+   * during the bootstrap wait (gen-B: never log "Bootstrap complete" for a corpse).
+   */
+  isProcessAlive(): boolean {
+    const pid = this.pty?.getPid();
+    return pid != null && pid > 0 && isPidAlive(pid);
   }
 
   /**
@@ -952,4 +982,39 @@ export class AgentProcess {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Max spawn attempts before declaring SPAWN-FAILED (gen-B spawn-verify). */
+const MAX_SPAWN_ATTEMPTS = 3;
+/** Base backoff between spawn retries (×2^(attempt-1) → 1s, 2s). */
+const SPAWN_RETRY_BASE_MS = 1000;
+
+/** True if `pid` is a live process. `process.kill(pid, 0)` only probes. */
+export function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Classify a spawn failure into a coarse CLASS for fleet-wide alert dedup.
+ * posix_spawnp / EAGAIN / ENOMEM all mean OS process/resource exhaustion — the
+ * gen-B cause — and should collapse into one operator alert. Unknown errors
+ * get a generic class so they still dedup per-class.
+ */
+export function classifySpawnFailure(err: unknown): string {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  if (msg.includes('posix_spawnp') || msg.includes('eagain') || msg.includes('enomem') || msg.includes('resource temporarily unavailable')) {
+    return 'posix_spawnp';
+  }
+  if (msg.includes('no live process')) {
+    // Our own verification failure — node-pty returned a corpse (the classic
+    // gen-B shape); treat as the exhaustion class so it dedups with it.
+    return 'posix_spawnp';
+  }
+  if (msg.includes('enoent')) return 'ENOENT';
+  return 'spawn-error';
 }
