@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -8,8 +8,37 @@ vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { readMaxCrashesPerDay, notifyAgents, classifyFromMarkers } from '../../../src/hooks/hook-crash-alert';
+import { readMaxCrashesPerDay, notifyAgents, classifyFromMarkers, writeExitReasonSnapshot } from '../../../src/hooks/hook-crash-alert';
 import { clearEndMarkers } from '../../../src/bus/heartbeat';
+
+describe('writeExitReasonSnapshot (#339)', () => {
+  let tmp: string;
+  beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'exitreason-')); });
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+
+  it('writes exit-reason.json with the 4 schema fields mirroring crashes.log', () => {
+    writeExitReasonSnapshot(tmp, { type: 'session-refresh', timestamp: '2026-06-10T12:00:00Z', reason: 'session-time-cap rollover', lastTask: 'idle' });
+    const j = JSON.parse(readFileSync(join(tmp, 'exit-reason.json'), 'utf-8'));
+    expect(j).toEqual({ type: 'session-refresh', timestamp: '2026-06-10T12:00:00Z', reason: 'session-time-cap rollover', last_task: 'idle' });
+  });
+
+  it('is a point-in-time snapshot — OVERWRITTEN, not appended', () => {
+    writeExitReasonSnapshot(tmp, { type: 'crash', timestamp: 't1', reason: 'a', lastTask: '' });
+    writeExitReasonSnapshot(tmp, { type: 'user-stop', timestamp: 't2', reason: 'b', lastTask: 'x' });
+    const raw = readFileSync(join(tmp, 'exit-reason.json'), 'utf-8').trim();
+    expect(raw.split('\n').length).toBe(1); // single JSON object, not an append log
+    expect(JSON.parse(raw).type).toBe('user-stop');
+  });
+
+  it('empty reason defaults to "none" (mirrors crashes.log reason||none)', () => {
+    writeExitReasonSnapshot(tmp, { type: 'crash', timestamp: 't', reason: '', lastTask: '' });
+    expect(JSON.parse(readFileSync(join(tmp, 'exit-reason.json'), 'utf-8')).reason).toBe('none');
+  });
+
+  it('never throws on an unwritable target dir (best-effort)', () => {
+    expect(() => writeExitReasonSnapshot(join(tmp, 'does', 'not', 'exist'), { type: 'crash', timestamp: 't', reason: '', lastTask: '' })).not.toThrow();
+  });
+});
 
 describe('readMaxCrashesPerDay', () => {
   let tmp: string;
@@ -53,17 +82,14 @@ describe('readMaxCrashesPerDay', () => {
 
 describe('notifyAgents', () => {
   let savedFrameworkRoot: string | undefined;
-
   beforeEach(() => {
     execFileMock.mockReset();
     savedFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
     delete process.env.CTX_FRAMEWORK_ROOT;
   });
-
   afterEach(() => {
-    if (savedFrameworkRoot !== undefined) {
-      process.env.CTX_FRAMEWORK_ROOT = savedFrameworkRoot;
-    }
+    if (savedFrameworkRoot === undefined) delete process.env.CTX_FRAMEWORK_ROOT;
+    else process.env.CTX_FRAMEWORK_ROOT = savedFrameworkRoot;
   });
 
   it('sends one bus send-message per recipient', () => {
@@ -139,6 +165,40 @@ describe('notifyAgents', () => {
     const body: string = execFileMock.mock.calls[0][1][4];
     expect(body).toContain('reason: none');
     expect(body).toContain('last status: unknown');
+  });
+
+  it('SET branch: CTX_FRAMEWORK_ROOT set → process.execPath + <fw>/dist/cli.js, args shifted, body at [5]', () => {
+    process.env.CTX_FRAMEWORK_ROOT = '/tmp/fw';
+    notifyAgents({
+      agentName: 'dev',
+      endType: 'daemon-crashed',
+      reason: 'PTY null write',
+      lastTask: 'idle',
+      crashCount: 3,
+      restartAttempted: false,
+      recipients: ['analyst'],
+    });
+    const [cmd, args] = execFileMock.mock.calls[0];
+    expect(cmd).toBe(process.execPath);
+    expect(args[0]).toBe(join('/tmp/fw', 'dist', 'cli.js')); // ENOENT-safe absolute cli.js
+    expect(args.slice(1, 5)).toEqual(['bus', 'send-message', 'analyst', 'high']);
+    const body: string = args[5]; // body shifts to [5] when the cli path is prepended
+    expect(body).toContain('agent=dev');
+    expect(body).toContain('type=daemon-crashed');
+    expect(body).toContain('reason: PTY null write');
+    expect(body).toContain('restart attempted: no');
+  });
+
+  it('FALLBACK branch: CTX_FRAMEWORK_ROOT unset → cortextos on PATH, body at [4]', () => {
+    delete process.env.CTX_FRAMEWORK_ROOT;
+    notifyAgents({
+      agentName: 'dev', endType: 'crash', reason: 'r', lastTask: 't',
+      crashCount: 1, restartAttempted: true, recipients: ['chief'],
+    });
+    const [cmd, args] = execFileMock.mock.calls[0];
+    expect(cmd).toBe('cortextos');
+    expect(args.slice(0, 4)).toEqual(['bus', 'send-message', 'chief', 'high']);
+    expect(String(args[4])).toContain('agent=dev');
   });
 
   it('does not throw when execFile throws synchronously', () => {

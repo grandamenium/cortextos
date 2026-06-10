@@ -275,6 +275,63 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     const markerWriteOrder = fsMocks.writeFileSync.mock.invocationCallOrder[writeIdx];
     expect(markerWriteOrder).toBeLessThan(stopSpy.mock.invocationCallOrder[0]);
   });
+
+  // Q1 (Area-4): codex agents' session-cap rollover routes through this SAME
+  // generic sessionRefresh() — the max_session timer (agent-process.ts) calls it
+  // for ALL runtimes, and codex-app-server-pty has no own rollover path — so the
+  // marker-before-stop ordering above already covers codex. (A codex-runtime
+  // instantiation can't be unit-driven here without mocking CodexAppServerPTY; the
+  // coverage is the shared-path code-read, documented in DELIVERY.)
+});
+
+describe('AgentProcess - Area 4.4 wedge-detection (mechanism B)', () => {
+  // A crash-recovery restart re-spawns the PTY; mechanism B then requires a
+  // heartbeat STRICTLY NEWER than the restart within wedgeDetectMs. Present =>
+  // resumed; absent => one force-fresh re-restart (cap=1) => still absent => ONE alert.
+  function heartbeatAt(ms: number) {
+    fsMocks.existsSync.mockImplementation((p: any) => String(p).endsWith('heartbeat.json'));
+    fsMocks.readFileSync.mockImplementation((p: any) =>
+      String(p).endsWith('heartbeat.json') ? JSON.stringify({ last_heartbeat: new Date(ms).toISOString() }) : '',
+    );
+  }
+
+  it('RESUMES (heartbeat newer than restart) → no force-fresh, no alert', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1_000_000);
+    AgentProcess.wedgeDetectMs = 2000;
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+      capturedOnExit?.(1, 0);                   // unintentional exit → crash-recovery
+      await vi.advanceTimersByTimeAsync(5000);  // backoff → restart (restartAt ≈ 1_005_000)
+      heartbeatAt(1_006_000);                   // a heartbeat AFTER the restart
+      fsMocks.writeFileSync.mockClear();
+      await vi.advanceTimersByTimeAsync(2500);  // wedge window elapses
+      const forcedFresh = fsMocks.writeFileSync.mock.calls.some((c: any) => String(c[0]).endsWith('.force-fresh'));
+      expect(forcedFresh).toBe(false);
+    } finally { AgentProcess.wedgeDetectMs = 5 * 60 * 1000; vi.useRealTimers(); }
+  });
+
+  it('WEDGED (no heartbeat) → force-fresh re-restart (cap=1) → still wedged → ONE alert', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1_000_000);
+    AgentProcess.wedgeDetectMs = 2000;
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      ap.setTelegramHandle({ sendMessage } as any, '12345');
+      await ap.start();
+      vi.spyOn(ap, 'stop').mockResolvedValue(); // the wedge re-restart's stop() resolves (mock PTY never auto-exits)
+      // heartbeat NEVER appears → existsSync stays false (beforeEach default) → wedged
+      capturedOnExit?.(1, 0);
+      await vi.advanceTimersByTimeAsync(5000);  // restart #1 + arm watchdog
+      fsMocks.writeFileSync.mockClear();
+      await vi.advanceTimersByTimeAsync(2500);  // 1st wedge window → force-fresh + re-restart
+      const ff = fsMocks.writeFileSync.mock.calls.filter((c: any) => String(c[0]).endsWith('.force-fresh'));
+      expect(ff.length).toBe(1);                // EXACTLY one force-fresh
+      await vi.advanceTimersByTimeAsync(3000);  // retry restart + 2nd wedge window → ALERT
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(String(sendMessage.mock.calls[0][1])).toMatch(/RESTART-WEDGED/);
+    } finally { AgentProcess.wedgeDetectMs = 5 * 60 * 1000; vi.useRealTimers(); }
+  });
 });
 
 describe('AgentProcess - BUG-048 fix (session timer re-reads config)', () => {
