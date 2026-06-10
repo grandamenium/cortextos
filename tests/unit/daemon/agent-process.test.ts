@@ -18,6 +18,11 @@ vi.mock('../../../src/pty/agent-pty.js', () => ({
   AgentPTY: function AgentPTY() { return mockPty; },
 }));
 
+const mockExecFileSync = vi.fn().mockReturnValue('Wed Jun 10 07:03:41 2026');
+vi.mock('child_process', () => ({
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+}));
+
 const mockInjectMessage = vi.fn();
 vi.mock('../../../src/pty/inject.js', () => ({
   injectMessage: mockInjectMessage,
@@ -50,6 +55,7 @@ const fsMocks = {
   statSync: vi.fn(),
   readdirSync: vi.fn(),
   renameSync: vi.fn(),
+  unlinkSync: vi.fn(),
 };
 
 vi.mock('fs', async () => {
@@ -80,10 +86,12 @@ vi.mock('fs', async () => {
     get statSync() { return fsMocks.statSync; },
     get readdirSync() { return fsMocks.readdirSync; },
     get renameSync() { return fsMocks.renameSync; },
+    get unlinkSync() { return fsMocks.unlinkSync; },
   };
 });
 
 const { AgentProcess } = await import('../../../src/daemon/agent-process.js');
+const { atomicWriteSync } = await import('../../../src/utils/atomic.js');
 
 const mockEnv = {
   instanceId: 'test',
@@ -111,6 +119,8 @@ beforeEach(() => {
   fsMocks.statSync.mockReset();
   fsMocks.readdirSync.mockReset().mockReturnValue([]);
   fsMocks.renameSync.mockReset();
+  fsMocks.unlinkSync.mockReset();
+  mockExecFileSync.mockClear().mockReturnValue('Wed Jun 10 07:03:41 2026');
 });
 
 describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
@@ -549,5 +559,49 @@ describe('AgentProcess - size-aware session guard (max_session_mb)', () => {
     // Simulate an unintentional PTY exit (crash) — handleExit must clear it.
     capturedOnExit!(1, 0);
     expect((ap as any).sizeTimer).toBeNull();
+  });
+});
+
+describe('AgentProcess — process_alive pidfile (zeus 1781114839073)', () => {
+  it('writeAgentPidFile records "<pid>\\n<starttime>\\n" at state/<name>/agent.pid', () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    vi.mocked(atomicWriteSync).mockClear();
+    (ap as any).writeAgentPidFile(12345);
+    expect(atomicWriteSync).toHaveBeenCalledTimes(1);
+    const [path, content] = vi.mocked(atomicWriteSync).mock.calls[0];
+    expect(path).toBe('/tmp/test-ctx/state/alice/agent.pid');
+    // pid on line 1; non-blank start-time on line 2 (the incarnation binding the reader requires)
+    expect(content).toBe('12345\nWed Jun 10 07:03:41 2026\n');
+  });
+
+  it('writeAgentPidFile is a no-op for an invalid pid (never writes a bogus record)', () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    vi.mocked(atomicWriteSync).mockClear();
+    (ap as any).writeAgentPidFile(0);
+    (ap as any).writeAgentPidFile(null);
+    (ap as any).writeAgentPidFile(-1);
+    expect(atomicWriteSync).not.toHaveBeenCalled();
+  });
+
+  it('removeAgentPidFile unlinks the pidfile when present', () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    fsMocks.existsSync.mockReturnValue(true);
+    (ap as any).removeAgentPidFile();
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith('/tmp/test-ctx/state/alice/agent.pid');
+  });
+
+  it('removeAgentPidFile is a no-op (no throw) when the pidfile is absent', () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    fsMocks.existsSync.mockReturnValue(false);
+    expect(() => (ap as any).removeAgentPidFile()).not.toThrow();
+    expect(fsMocks.unlinkSync).not.toHaveBeenCalled();
+  });
+
+  it('handleExit removes the pidfile (dead agent leaves no live pid)', () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    fsMocks.existsSync.mockReturnValue(true);
+    (ap as any).pty = mockPty;
+    (ap as any).handleExit(0);
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith('/tmp/test-ctx/state/alice/agent.pid');
   });
 });

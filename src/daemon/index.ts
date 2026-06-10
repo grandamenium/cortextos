@@ -257,6 +257,29 @@ class Daemon {
       } catch { /* best effort */ }
     }
 
+    // process_alive capability sentinel (zeus 1781114839073). This daemon writes per-agent
+    // state/<name>/agent.pid for definitive liveness. The sentinel — keyed to THIS daemon's pid AND
+    // start-time — lets a box-sync reader tell "feature supported, agent is genuinely DOWN" (no agent.pid)
+    // apart from "old daemon that never wrote pidfiles" (UNKNOWN), independent of whether any agent is
+    // currently up. The start-time line defends against daemon-pid REUSE (a downgraded/pre-feature daemon
+    // reassigned the same pid would otherwise look capable); a different start-time => reader treats it as
+    // unsupported => UNKNOWN, never a false-DOWN storm. Best-effort; absence => readers degrade to UNKNOWN.
+    try {
+      const stateRoot = join(this.ctxRoot, 'state');
+      ensureDir(stateRoot);
+      let selfStart = '';
+      try {
+        if (process.platform !== 'darwin' && existsSync('/proc/self/stat')) {
+          const after = readFileSync('/proc/self/stat', 'utf-8');
+          selfStart = after.slice(after.lastIndexOf(')') + 1).trim().split(/\s+/)[19] || '';
+        } else {
+          const r = spawnSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { encoding: 'utf-8', timeout: 5000 });
+          selfStart = r.status === 0 ? r.stdout.trim() : '';
+        }
+      } catch { /* leave blank -> reader treats sentinel as untrusted -> UNKNOWN */ }
+      writeFileSync(join(stateRoot, '.process-alive-capable'), `${process.pid}\n${selfStart}\n`, 'utf-8');
+    } catch { /* best effort: reader treats absence as pre-feature -> UNKNOWN */ }
+
     // Create agent manager
     this.agentManager = new AgentManager(this.instanceId, this.ctxRoot, frameworkRoot, org);
 

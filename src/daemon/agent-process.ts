@@ -1,13 +1,14 @@
 import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
+import { execFileSync } from 'child_process';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
-import { ensureDir } from '../utils/atomic.js';
+import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
@@ -185,6 +186,14 @@ export class AgentProcess {
       this.status = 'running';
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
+
+      // Authoritative per-agent liveness record (process_alive monitoring, zeus 1781114839073). The
+      // daemon is the ONLY component that knows which pid IS this managed agent — an external /proc scan
+      // cannot distinguish the managed agent from a daemon-spawned WORKER in the same cwd, nor honor a
+      // custom working_directory / no-skip-flag launch. So the daemon writes the pid here; box-sync
+      // readers read THIS file (+ verify the pid is alive) for a definitive UP/DOWN. Removed in
+      // handleExit so a dead agent leaves no live pid. Best-effort: never let it block startup.
+      this.writeAgentPidFile(this.pty.getPid());
 
       // Issue #392: codex-app-server does not reliably execute the inline
       // "Send a Telegram message saying you are back online" instruction the
@@ -369,6 +378,62 @@ export class AgentProcess {
     return this.pty?.getOutputBuffer().isBootstrapped() ?? false;
   }
 
+  /** Path to the daemon-written per-agent pidfile (process_alive monitoring). */
+  private agentPidFilePath(): string {
+    return join(this.env.ctxRoot, 'state', this.name, 'agent.pid');
+  }
+
+  /**
+   * Read the kernel start-time of a pid, identically derivable by the reader, so a recorded pid that was
+   * later RECYCLED to a different process is rejected (the reused pid has a different start-time). Linux:
+   * /proc/<pid>/stat field 22 (clock ticks since boot). macOS/other: `ps -o lstart=` (start timestamp).
+   * null if undeterminable -> the reader simply skips the start-time check (still has alive+claude+ppid).
+   */
+  private getProcessStartTime(pid: number): string | null {
+    try {
+      if (process.platform !== 'darwin' && existsSync(`/proc/${pid}/stat`)) {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8');
+        // "pid (comm) state ppid ..."; comm may hold spaces/parens -> fields resume after the LAST ')'.
+        // After ')': index0=state(field3); starttime is field22 -> index 19.
+        const after = stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/);
+        return after[19] || null;
+      }
+      const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf-8', timeout: 5000,
+      }).trim();
+      return out || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Record THIS managed agent's pid (+ its start-time) so an external reader can derive a definitive
+   * UP/DOWN. The daemon is authoritative: it knows the exact pid of the managed agent, which a /proc
+   * heuristic cannot tell apart from a daemon-spawned worker in the same cwd. The second line is the
+   * process start-time, which binds the record to this exact incarnation (defeats pid-reuse aliasing).
+   * Best-effort — a write failure never blocks start.
+   */
+  private writeAgentPidFile(pid: number | null): void {
+    if (!pid || pid <= 0) return;
+    try {
+      const startTime = this.getProcessStartTime(pid);
+      atomicWriteSync(this.agentPidFilePath(), `${pid}\n${startTime ?? ''}\n`);
+    } catch (err) {
+      this.log(`Could not write agent.pid: ${err}`);
+    }
+  }
+
+  /** Remove the per-agent pidfile (on exit). Best-effort; absent file is fine. */
+  private removeAgentPidFile(): void {
+    try {
+      const p = this.agentPidFilePath();
+      if (existsSync(p)) unlinkSync(p);
+    } catch {
+      // best-effort: a stale pidfile is caught by the reader's pid-alive + identity check
+    }
+  }
+
   /**
    * Get current agent status.
    */
@@ -514,6 +579,7 @@ export class AgentProcess {
     const recentOutput = this.tailStdoutLog(16384);
 
     this.pty = null;
+    this.removeAgentPidFile();  // the agent process is gone -> no stale live-pid (process_alive monitoring)
     this.clearSessionTimer();
     this.clearSizeMonitor();
 
