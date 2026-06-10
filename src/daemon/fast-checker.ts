@@ -102,16 +102,19 @@ export class FastChecker {
       process.on('SIGUSR1', sigusr1Handler);
     }
 
-    // Wait for bootstrap. If the agent process DIED during the wait (crash, or
-    // a corpse that slipped past start verification), do NOT declare "Bootstrap
-    // complete" and do NOT start the poll loop — that false-positive is the
-    // gen-B lie. A timeout with a LIVE process is a legitimate slow boot and
-    // proceeds as before.
+    // Wait for bootstrap. If the agent gives up (SPAWN-FAILED after exhausting
+    // its pre-bootstrap retry budget), do NOT declare "Bootstrap complete" and do
+    // NOT start the poll loop — that false-positive is the gen-B lie. A momentary
+    // death mid-retry is NOT a give-up (the agent re-spawns). A timeout with a
+    // LIVE process is a legitimate slow boot and proceeds as before.
     const bootstrapped = await this.waitForBootstrap();
     if (!bootstrapped) {
-      this.log('Bootstrap aborted — agent process is not alive (no false "Bootstrap complete").');
+      this.log('Bootstrap aborted — agent did not reach bootstrap (spawn-failed or never came alive). No false "Bootstrap complete".');
       return;
     }
+    // Hand the agent over to crash-recovery for any future exit + reset its
+    // pre-bootstrap spawn-retry budget.
+    this.agent.markBootstrapped();
     this.log('Bootstrap complete. Beginning poll loop.');
 
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
@@ -423,16 +426,23 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (this.agent.isBootstrapped()) {
         return true;
       }
-      // gen-B guard: if the process died during the wait, bail as dead so the
-      // caller does NOT log "Bootstrap complete" for a non-existent process.
-      if (!this.agent.isProcessAlive()) {
-        this.log('Agent process died during bootstrap wait — aborting bootstrap.');
+      // gen-B guard: if the agent GAVE UP (spawn-failed after exhausting its
+      // pre-bootstrap retry budget), abort — never declare "Bootstrap complete".
+      // A momentary death mid-retry is NOT a give-up (the agent re-spawns), so
+      // we keep waiting; only the terminal spawn-failed state aborts.
+      if (this.agent.getStatus().status === 'spawn-failed') {
+        this.log('Agent reached SPAWN-FAILED during bootstrap wait — aborting bootstrap.');
         return false;
       }
       await sleep(2000);
     }
-    // Timed out but the process is ALIVE — a legitimate slow/quiet boot (e.g.
-    // donna). Proceed as before. Only a DEAD process aborts.
+    // Timed out. Proceed only if the agent is actually ALIVE (legitimate
+    // slow/quiet boot, e.g. donna); a process that is neither bootstrapped nor
+    // alive at timeout is not a real boot.
+    if (!this.agent.isProcessAlive()) {
+      this.log('Bootstrap timeout and agent not alive — aborting bootstrap.');
+      return false;
+    }
     this.log('Bootstrap timeout - proceeding anyway (process alive but quiet)');
     return true;
   }
