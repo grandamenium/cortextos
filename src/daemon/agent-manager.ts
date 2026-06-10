@@ -162,6 +162,37 @@ export class AgentManager {
     }
   }
 
+  private isPidAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'EPERM';
+    }
+  }
+
+  private reconcileDeadRegistryEntry(name: string): boolean {
+    const entry = this.agents.get(name);
+    if (!entry) return false;
+
+    const pid = entry.process.getStatus().pid;
+    if (!pid || this.isPidAlive(pid)) return false;
+
+    console.warn(`[agent-manager] Reconciled dead registry entry for ${name} (pid ${pid} is no longer alive)`);
+    entry.poller?.stop();
+    entry.activityPoller?.stop();
+    entry.checker.stop();
+    this.agents.delete(name);
+    this.pendingRestarts.delete(name);
+
+    const scheduler = this.cronSchedulers.get(name);
+    if (scheduler) {
+      scheduler.stop();
+      this.cronSchedulers.delete(name);
+    }
+    return true;
+  }
+
   /**
    * BUG-043 fix: resolve the canonical org for a given agent without
    * defaulting to the daemon's startup `this.org`.
@@ -229,8 +260,11 @@ export class AgentManager {
    * the IPC layer enough info to set IPCResponse.code. See issue #346.
    */
   inspectAgentOp(op: 'start' | 'stop' | 'restart', name: string): { ok: true } | { ok: false; code: 'DEDUPED' | 'NOT_FOUND'; message: string } {
-    const inRegistry = this.agents.has(name);
+    let inRegistry = this.agents.has(name);
     if (op === 'start') {
+      if (inRegistry && this.reconcileDeadRegistryEntry(name)) {
+        inRegistry = false;
+      }
       if (inRegistry) {
         return { ok: false, code: 'DEDUPED', message: `start request for "${name}" deduped — agent already in registry (in-flight start or already running)` };
       }
@@ -244,6 +278,7 @@ export class AgentManager {
   }
 
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
+    this.reconcileDeadRegistryEntry(name);
     if (this.agents.has(name)) {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
       // (restart-all could send stop+start simultaneously, and the new
@@ -403,10 +438,20 @@ export class AgentManager {
       });
     }
 
-    this.agents.set(name, { process: agentProcess, checker });
+    const registryEntry = { process: agentProcess, checker } as {
+      process: AgentProcess;
+      checker: FastChecker;
+      poller?: TelegramPoller;
+      activityPoller?: TelegramPoller;
+      telegramRejectCount?: number;
+      telegramLastRejectAlertAt?: number;
+    };
+    this.agents.set(name, registryEntry);
+    let registryReady = false;
 
-    // Start agent
-    await agentProcess.start();
+    try {
+      // Start agent
+      await agentProcess.start();
 
     // Subtask 2.2: Auto-migrate crons from config.json → crons.json before
     // starting the scheduler, so the scheduler always has a populated crons.json
@@ -420,30 +465,30 @@ export class AgentManager {
     // The scheduler reads crons.json, fires crons, and injects prompts into
     // the agent PTY via injectAgent().  This is the Phase 2 daemon-managed
     // external cron system — agents no longer need to call CronCreate on boot.
-    this.startAgentCronScheduler(name);
+      this.startAgentCronScheduler(name);
 
     // Start fast checker in background
-    checker.start().catch(err => {
-      console.error(`[${name}] Fast checker error:`, err);
-    });
+      checker.start().catch(err => {
+        console.error(`[${name}] Fast checker error:`, err);
+      });
 
     // Register Telegram slash commands at startup (fix for issue #1)
-    if (telegramApi && botToken) {
-      const scanDirs = [agentDir, this.frameworkRoot].filter(Boolean);
-      const commands = collectTelegramCommands(scanDirs);
-      registerTelegramCommands(botToken, commands).then((result) => {
-        if (result.status === 'ok') {
-          log(`Telegram commands registered (${result.count} commands)`);
-        }
-      }).catch(() => { /* non-fatal */ });
-    }
+      if (telegramApi && botToken) {
+        const scanDirs = [agentDir, this.frameworkRoot].filter(Boolean);
+        const commands = collectTelegramCommands(scanDirs);
+        registerTelegramCommands(botToken, commands).then((result) => {
+          if (result.status === 'ok') {
+            log(`Telegram commands registered (${result.count} commands)`);
+          }
+        }).catch(() => { /* non-fatal */ });
+      }
 
     // Start Telegram poller if credentials are available and not explicitly disabled.
     // Set telegram_polling: false in config.json to prevent a specialist agent from
     // running its own poller (only the designated orchestrator agent should poll).
-    if (telegramApi && chatId && config.telegram_polling !== false) {
-      const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir);
+      if (telegramApi && chatId && config.telegram_polling !== false) {
+        const stateDir = join(this.ctxRoot, 'state', name);
+        const poller = new TelegramPoller(telegramApi, stateDir);
 
       const REJECT_ALERT_THRESHOLD = 3;
       const REJECT_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
@@ -702,7 +747,25 @@ export class AgentManager {
       // — follow-up task_1776054009969_099 tracks migrating to a dedicated
       // singleton or Telegram webhook if the coupling ever causes real
       // operator pain. Non-orchestrator agents skip this entirely.
-      await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+        await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+      }
+
+      registryReady = true;
+    } finally {
+      if (!registryReady && this.agents.get(name) === registryEntry) {
+        registryEntry.poller?.stop();
+        registryEntry.activityPoller?.stop();
+        registryEntry.checker.stop();
+        await registryEntry.process.stop().catch(() => undefined);
+        this.agents.delete(name);
+        this.pendingRestarts.delete(name);
+
+        const scheduler = this.cronSchedulers.get(name);
+        if (scheduler) {
+          scheduler.stop();
+          this.cronSchedulers.delete(name);
+        }
+      }
     }
   }
 

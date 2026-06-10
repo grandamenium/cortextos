@@ -27,6 +27,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
 import { readStdin, parseHookInput } from './index.js';
+import { atomicWriteSync } from '../utils/atomic.js';
 
 export const HISTORY_SIZE = 30;
 export const REPETITION_BLOCK = 15;
@@ -109,6 +110,14 @@ function saveState(stateDir: string, state: LoopDetectorState): void {
     writeFileSync(statePath(stateDir), JSON.stringify(state, null, 2) + '\n', 'utf-8');
   } catch {
     // Best-effort; never break a hook.
+  }
+}
+
+function recordToolActivity(stateDir: string, nowMs: number): void {
+  try {
+    atomicWriteSync(join(stateDir, 'last_tool_activity.flag'), String(nowMs));
+  } catch {
+    // Best-effort; never block a tool call on telemetry.
   }
 }
 
@@ -262,6 +271,8 @@ async function main(): Promise<void> {
     blockCall(decision.reason);
     return;
   }
+
+  recordToolActivity(stateDir, Date.now());
 
   if (decision.action === 'escape' && decision.alertMessage) {
     process.stderr.write(decision.alertMessage + '\n');

@@ -22,9 +22,9 @@ describe('issue #328: cortextos restart <agent>', () => {
     expect(args[0].name()).toBe('agent');
   });
 
-  it('accepts --instance with a default of "default"', () => {
+  it('accepts --instance without hardcoding a default', () => {
     const opts = restartCommand.opts();
-    expect(opts.instance).toBe('default');
+    expect(opts.instance).toBeUndefined();
   });
 
   it('describes itself as a stop+start (not a daemon restart)', () => {

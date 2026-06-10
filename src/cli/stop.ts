@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
+import { resolveInstanceId } from './resolve-instance-id.js';
 
 /**
  * BUG-036 fix: write a `.user-stop` marker before the agent's PTY is killed,
@@ -21,10 +22,11 @@ export function writeStopMarker(instanceId: string, agent: string, reason: strin
 
 export const stopCommand = new Command('stop')
   .argument('[agent]', 'Agent name to stop. Omit and pass --all to stop every running agent.')
-  .option('--instance <id>', 'Instance ID', 'default')
+  .option('--instance <id>', 'Instance ID')
   .option('--all', 'Stop every running agent (required when no agent name is given)')
   .description('Stop a running agent. Use --all to stop every agent. Does NOT stop the daemon process itself — use `pm2 stop cortextos-daemon` for that.')
-  .action(async (agent: string | undefined, options: { instance: string; all?: boolean }) => {
+  .action(async (agent: string | undefined, options: { instance?: string; all?: boolean }) => {
+    const instanceId = resolveInstanceId(options.instance);
     // Safety: refuse to stop the entire fleet unless the user explicitly opted in.
     if (!agent && !options.all) {
       console.error('Refusing to stop all agents without an explicit target.');
@@ -42,7 +44,7 @@ export const stopCommand = new Command('stop')
       process.exit(2);
     }
 
-    const ipc = new IPCClient(options.instance);
+    const ipc = new IPCClient(instanceId);
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (!daemonRunning) {
@@ -52,7 +54,7 @@ export const stopCommand = new Command('stop')
 
     if (agent) {
       console.log(`Stopping agent: ${agent}`);
-      writeStopMarker(options.instance, agent, 'stopped via cortextos stop');
+      writeStopMarker(instanceId, agent, 'stopped via cortextos stop');
       const response = await ipc.send({ type: 'stop-agent', agent, source: 'cortextos stop' });
       if (response.success) {
         console.log(`  ${response.data}`);
@@ -76,7 +78,7 @@ export const stopCommand = new Command('stop')
       return;
     }
     for (const a of agents) {
-      writeStopMarker(options.instance, a, 'stopped via cortextos stop --all');
+      writeStopMarker(instanceId, a, 'stopped via cortextos stop --all');
       const response = await ipc.send({ type: 'stop-agent', agent: a, source: 'cortextos stop --all' });
       console.log(`  ${a}: ${response.success ? 'stopped' : response.error}`);
     }

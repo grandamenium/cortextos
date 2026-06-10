@@ -37,6 +37,7 @@ describe('AgentManager.inspectAgentOp — issue #346 (DEDUPED vs NOT_FOUND)', ()
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -49,7 +50,11 @@ describe('AgentManager.inspectAgentOp — issue #346 (DEDUPED vs NOT_FOUND)', ()
     // Simulate an in-flight start by injecting an entry into the private map.
     // This is the exact precondition that triggers the BUG-011 dedup branch
     // in startAgent — we need to confirm it surfaces as DEDUPED, not NOT_FOUND.
-    (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', { /* sentinel */ } as unknown);
+    (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', {
+      process: { getStatus: () => ({ pid: 1234 }) },
+      checker: { stop() {} },
+    } as unknown);
+    vi.spyOn(process, 'kill').mockImplementation(() => undefined);
 
     const r = am.inspectAgentOp('start', 'alice');
     expect(r.ok).toBe(false);
@@ -58,6 +63,29 @@ describe('AgentManager.inspectAgentOp — issue #346 (DEDUPED vs NOT_FOUND)', ()
       expect(r.message).toMatch(/already in registry/);
       expect(r.message).toContain('alice');
     }
+  });
+
+  it('start reconciles a dead registry PID before deduping', () => {
+    const stopSpy = vi.fn();
+    const schedulerStopSpy = vi.fn();
+    (am as unknown as { agents: Map<string, unknown> }).agents.set('alice', {
+      process: { getStatus: () => ({ pid: 4321 }) },
+      checker: { stop: stopSpy },
+    } as unknown);
+    (am as unknown as { cronSchedulers: Map<string, unknown> }).cronSchedulers.set('alice', {
+      stop: schedulerStopSpy,
+    } as unknown);
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      const error = new Error('no such process') as NodeJS.ErrnoException;
+      error.code = 'ESRCH';
+      throw error;
+    });
+
+    const r = am.inspectAgentOp('start', 'alice');
+    expect(r.ok).toBe(true);
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(schedulerStopSpy).toHaveBeenCalledTimes(1);
+    expect((am as unknown as { agents: Map<string, unknown> }).agents.has('alice')).toBe(false);
   });
 
   it('stop on empty registry: NOT_FOUND (the misreport bug — must distinguish)', () => {

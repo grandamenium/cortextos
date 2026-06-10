@@ -287,6 +287,40 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
   });
 });
 
+describe('AgentManager.startAgent - daemon supervision hardening', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-am-supervision-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), { recursive: true });
+    writeFileSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice', 'config.json'), JSON.stringify({ enabled: true }));
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('releases the registry slot when startup fails after registry insertion', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    vi.spyOn(am as any, 'startAgentCronScheduler').mockImplementation(() => {
+      throw new Error('scheduler wiring failed');
+    });
+
+    await expect(
+      am.startAgent('alice', join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice')),
+    ).rejects.toThrow('scheduler wiring failed');
+
+    expect((am as any).agents.has('alice')).toBe(false);
+    expect((am as any).pendingRestarts.has('alice')).toBe(false);
+    expect((am as any).cronSchedulers.has('alice')).toBe(false);
+  });
+});
+
 describe('buildReplyContext - Telegram reply context (BUG fix: media replies lost)', () => {
   it('returns undefined when no reply message', () => {
     expect(buildReplyContext(undefined)).toBeUndefined();

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { homedir, platform } from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { IPCClient } from '../daemon/ipc-server.js';
+import { resolveInstanceId } from './resolve-instance-id.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const SAFE_CMD = /^[@a-z0-9._/-]+$/i;
@@ -15,16 +16,28 @@ function commandExists(cmd: string): boolean {
   return result.status === 0;
 }
 
+export async function requireDaemonOfflineForBootstrap(ipc: IPCClient): Promise<boolean> {
+  const availability = await ipc.probeAvailability('cortextos start probe');
+  if (availability === 'running') return false;
+  if (availability === 'offline') return true;
+
+  console.error('Daemon appears to be running but is not responding to IPC health checks.');
+  console.error('Refusing to auto-restart it from `cortextos start`, because that would bounce the entire fleet.');
+  console.error('Use `cortextos status` or inspect `~/.pm2/logs/cortextos-daemon-*.log`, then restart explicitly if needed.');
+  process.exit(1);
+}
+
 export const startCommand = new Command('start')
   .argument('[agent]', 'Specific agent to start (starts all if omitted)')
-  .option('--instance <id>', 'Instance ID', 'default')
+  .option('--instance <id>', 'Instance ID')
   .option('--foreground', 'Run daemon in foreground (no PM2, for debugging)')
   .description('Start the cortextOS daemon and agents')
-  .action(async (agent: string | undefined, options: { instance: string; foreground?: boolean }) => {
-    const ipc = new IPCClient(options.instance);
-    const daemonRunning = await ipc.isDaemonRunning();
+  .action(async (agent: string | undefined, options: { instance?: string; foreground?: boolean }) => {
+    const instanceId = resolveInstanceId(options.instance);
+    const ipc = new IPCClient(instanceId);
+    const shouldBootstrapDaemon = await requireDaemonOfflineForBootstrap(ipc);
 
-    if (!daemonRunning) {
+    if (shouldBootstrapDaemon) {
       const projectRoot = process.cwd();
       const daemonScript = join(projectRoot, 'dist', 'daemon.js');
 
@@ -33,7 +46,7 @@ export const startCommand = new Command('start')
         process.exit(1);
       }
 
-      const ctxRoot = join(homedir(), '.cortextos', options.instance);
+      const ctxRoot = join(homedir(), '.cortextos', instanceId);
 
       // Try reading org from enabled-agents.json
       let org = '';
@@ -48,7 +61,7 @@ export const startCommand = new Command('start')
 
       const daemonEnv = {
         ...process.env,
-        CTX_INSTANCE_ID: options.instance,
+        CTX_INSTANCE_ID: instanceId,
         CTX_ROOT: ctxRoot,
         CTX_FRAMEWORK_ROOT: projectRoot,
         CTX_PROJECT_ROOT: projectRoot,
@@ -59,7 +72,7 @@ export const startCommand = new Command('start')
         // Run in foreground (blocking) — useful for debugging
         console.log('Starting cortextOS daemon in foreground...');
         console.log('(Press Ctrl+C to stop)\n');
-        const child = spawn(process.execPath, [daemonScript, '--instance', options.instance], {
+        const child = spawn(process.execPath, [daemonScript, '--instance', instanceId], {
           stdio: 'inherit',
           env: daemonEnv,
         });
@@ -124,11 +137,11 @@ export const startCommand = new Command('start')
         // exit non-zero so the operator gets an actionable error.
         const MAX_SPAWN_ATTEMPTS = 3;
         const SPAWN_RETRY_BACKOFF_MS = 2000;
-        const ipc2 = new IPCClient(options.instance);
+        const ipc2 = new IPCClient(instanceId);
         let running = false;
 
         for (let attempt = 1; attempt <= MAX_SPAWN_ATTEMPTS && !running; attempt++) {
-          const child = spawn(process.execPath, [daemonScript, '--instance', options.instance], {
+          const child = spawn(process.execPath, [daemonScript, '--instance', instanceId], {
             detached: true,
             stdio: ['ignore', 'ignore', 'ignore'],
             env: daemonEnv,
@@ -164,7 +177,7 @@ export const startCommand = new Command('start')
     // Daemon already running
     if (agent) {
       // Auto-register in enabled-agents.json if not already present
-      const ctxRoot = join(homedir(), '.cortextos', options.instance);
+      const ctxRoot = join(homedir(), '.cortextos', instanceId);
       const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
       let enabledAgents: Record<string, any> = {};
       try {
