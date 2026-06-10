@@ -428,33 +428,63 @@ describe('AgentProcess - size-aware session guard (max_session_mb)', () => {
   // ~/.claude/projects/-tmp-fw-orgs-acme-agents-alice — the actual path is
   // irrelevant to these tests since readdirSync/statSync are mocked.
 
-  it('getConversationBytes() sums only .jsonl files and ignores other files', () => {
+  it('getActiveConversationBytes() measures the ACTIVE (most-recent-mtime) session, ignoring other files', () => {
     const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
     fsMocks.readdirSync.mockReturnValue(['session.jsonl', 'notes.txt', 'old.jsonl']);
     const isFile = () => true;
+    const now = Date.now();
     fsMocks.statSync.mockImplementation((p: string) => {
-      if (p.endsWith('session.jsonl')) return { size: 10 * 1024 * 1024, isFile };
-      if (p.endsWith('old.jsonl')) return { size: 5 * 1024 * 1024, isFile };
-      return { size: 999, isFile }; // notes.txt — filtered by extension, not isFile
+      if (p.endsWith('session.jsonl')) return { size: 10 * 1024 * 1024, isFile, mtimeMs: now };          // active (recent)
+      if (p.endsWith('old.jsonl')) return { size: 5 * 1024 * 1024, isFile, mtimeMs: now - 3_600_000 };   // stale (1h old)
+      return { size: 999, isFile, mtimeMs: now }; // notes.txt — filtered by extension, not isFile
     });
-    const bytes = (ap as any).getConversationBytes();
-    expect(bytes).toBe(15 * 1024 * 1024);
+    // Active session is 10MB — NOT the 15MB dir-total. Stale .jsonl must not count.
+    expect((ap as any).getActiveConversationBytes()).toBe(10 * 1024 * 1024);
   });
 
-  it('getConversationBytes() returns 0 when the conversation dir is unreadable', () => {
+  it('getActiveConversationBytes() does NOT count a large STALE session (regression: false-rotation bug)', () => {
+    // moses scenario: tiny healthy active session + a large abandoned old one.
+    // The old summing logic returned 32MB (would false-rotate at a 25MB cap);
+    // active-session detection must return only the 6MB active size.
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 25 });
+    fsMocks.readdirSync.mockReturnValue(['active.jsonl', 'stale.jsonl']);
+    const isFile = () => true;
+    const now = Date.now();
+    fsMocks.statSync.mockImplementation((p: string) => {
+      if (p.endsWith('active.jsonl')) return { size: 6 * 1024 * 1024, isFile, mtimeMs: now };               // active, small
+      return { size: 26 * 1024 * 1024, isFile, mtimeMs: now - 5 * 24 * 3_600_000 }; // stale, large (5d old)
+    });
+    expect((ap as any).getActiveConversationBytes()).toBe(6 * 1024 * 1024);
+  });
+
+  it('getActiveConversationBytes() breaks an equal-mtime tie by larger size (deterministic, no under-rotation)', () => {
+    const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 25 });
+    fsMocks.readdirSync.mockReturnValue(['a.jsonl', 'b.jsonl']);
+    const isFile = () => true;
+    const t = Date.now();
+    fsMocks.statSync.mockImplementation((p: string) => {
+      if (p.endsWith('a.jsonl')) return { size: 8 * 1024 * 1024, isFile, mtimeMs: t };
+      return { size: 30 * 1024 * 1024, isFile, mtimeMs: t }; // same mtime, bigger — must win
+    });
+    expect((ap as any).getActiveConversationBytes()).toBe(30 * 1024 * 1024);
+  });
+
+  it('getActiveConversationBytes() returns 0 when the conversation dir is unreadable', () => {
     const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
     fsMocks.readdirSync.mockImplementation(() => { throw new Error('ENOENT'); });
-    expect((ap as any).getConversationBytes()).toBe(0);
+    expect((ap as any).getActiveConversationBytes()).toBe(0);
   });
 
-  it('getConversationBytes() ignores a directory that happens to end in .jsonl', () => {
+  it('getActiveConversationBytes() ignores a directory that happens to end in .jsonl', () => {
     const ap = new AgentProcess('alice', mockEnv, { max_session_mb: 50 });
     fsMocks.readdirSync.mockReturnValue(['real.jsonl', 'weird.jsonl']);
+    const now = Date.now();
     fsMocks.statSync.mockImplementation((p: string) => ({
       size: 4 * 1024 * 1024,
       isFile: () => p.endsWith('real.jsonl'), // weird.jsonl is a directory
+      mtimeMs: p.endsWith('weird.jsonl') ? now : now - 1000, // dir is "newer" but must be skipped (not a file)
     }));
-    expect((ap as any).getConversationBytes()).toBe(4 * 1024 * 1024);
+    expect((ap as any).getActiveConversationBytes()).toBe(4 * 1024 * 1024);
   });
 
   it('archiveAndRefresh() is a no-op while a rotation is already in flight (in-flight guard)', async () => {

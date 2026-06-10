@@ -711,25 +711,51 @@ export class AgentProcess {
   }
 
   /**
-   * Total size, in bytes, of all .jsonl transcripts in the conversation dir.
-   * Returns 0 when the dir is missing/unreadable (treated as "nothing to
-   * rotate"). A long-running --continue session appends to a single growing
-   * JSONL; heavy recurring crons can bloat it to tens of MB and eventually
-   * exhaust context on resume.
+   * Size, in bytes, of the ACTIVE conversation transcript — the most-recently-
+   * modified .jsonl in the conversation dir.
+   *
+   * Detection deliberately keys off the ACTIVE session, NOT the directory total.
+   * The active session is the one currently being appended to, so by definition
+   * it carries the newest mtime; a stale/abandoned session has an older mtime
+   * and is not loaded by a --continue resume (which picks up the most-recent
+   * conversation). Summing ALL .jsonl caused FALSE rotations: an agent with a
+   * small healthy active session but a large stale one got force-fresh-restarted
+   * unnecessarily, discarding its --continue context — the opposite of the
+   * reliability this guard provides. Only the active session's growth can
+   * actually exhaust context on resume, so that is what we measure.
+   *
+   * Newest-mtime is a robust proxy here because nothing in normal operation
+   * touches an old session JSONL: archiveAndRefresh() MOVES stale transcripts
+   * out (it does not touch them in place), so a stale file cannot spuriously
+   * become "newest". Ties on mtime are broken by larger size so an equal-mtime
+   * collision can never cause UNDER-rotation.
+   *
+   * Returns 0 when the dir is missing/unreadable or has no .jsonl file (treated
+   * as "nothing to rotate"). NOTE: archiveAndRefresh() still archives ALL
+   * .jsonl files — required so shouldContinue() returns false for a clean fresh
+   * start; only the size DETECTION here is active-session-scoped.
    */
-  private getConversationBytes(): number {
+  private getActiveConversationBytes(): number {
     const convDir = this.getConversationDir();
     if (!convDir) return 0;
     try {
-      let total = 0;
+      let activeMtime = -Infinity;
+      let activeSize = 0;
       for (const f of readdirSync(convDir)) {
         if (!f.endsWith('.jsonl')) continue;
         try {
           const st = statSync(join(convDir, f));
-          if (st.isFile()) total += st.size;
+          if (!st.isFile()) continue;
+          // Newest mtime wins (the actively-appended session). Break ties by
+          // larger size so an equal-mtime collision can never under-rotate, and
+          // so selection is deterministic regardless of readdir() order.
+          if (st.mtimeMs > activeMtime || (st.mtimeMs === activeMtime && st.size > activeSize)) {
+            activeMtime = st.mtimeMs;
+            activeSize = st.size;
+          }
         } catch { /* file vanished between readdir and stat — skip */ }
       }
-      return total;
+      return activeSize;
     } catch {
       return 0;
     }
@@ -785,11 +811,11 @@ export class AgentProcess {
         }
       } catch { /* transient read error — keep the start-time threshold */ }
 
-      const bytes = this.getConversationBytes();
+      const bytes = this.getActiveConversationBytes();
       if (bytes < currentThreshold) return;
 
       const mb = (bytes / 1024 / 1024).toFixed(1);
-      this.log(`Size guard: transcript ${mb}MB >= ${(currentThreshold / 1024 / 1024).toFixed(0)}MB cap — archiving + fresh restart`);
+      this.log(`Size guard: active transcript ${mb}MB >= ${(currentThreshold / 1024 / 1024).toFixed(0)}MB cap — archiving + fresh restart`);
       this.archiveAndRefresh().catch(err => this.log(`Size-guard rotation failed: ${err}`));
     }, POLL_MS);
 
