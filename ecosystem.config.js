@@ -17,6 +17,11 @@ module.exports = {
         CTX_FRAMEWORK_ROOT: "C:\\cortext-test\\cortextos",
         CTX_PROJECT_ROOT: "C:\\cortext-test\\cortextos",
         CTX_ORG: process.env.CTX_ORG || "atlasos",
+        // Ensure the globally-installed `cortextos` CLI resolves for the daemon
+        // AND the agent child processes it spawns. Without the npm global bin on
+        // PATH, `cortextos bus send-telegram` (how agents reply) fails ENOENT, so
+        // agents receive messages but can't reply. (Added manually 2026-06-09.)
+        PATH: "C:\\Users\\jenni\\AppData\\Roaming\\npm;" + (process.env.PATH || ""),
       },
       max_restarts: 50,
       restart_delay: 5000,
