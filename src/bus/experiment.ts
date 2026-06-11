@@ -471,7 +471,7 @@ export function manageCycle(
   switch (action) {
     case 'create': {
       if (!options.name || !options.agent || !options.metric) {
-        throw new Error('Cycle create requires name, agent, and metric');
+        throw new Error('Cycle create requires --cycle <name>, an agent, and --metric <name>');
       }
       const cycle: ExperimentCycle = {
         name: options.name,
@@ -494,7 +494,7 @@ export function manageCycle(
 
     case 'modify': {
       if (!options.name) {
-        throw new Error('Cycle modify requires name');
+        throw new Error('Cycle modify requires --cycle <name>');
       }
       const idx = config.cycles.findIndex(c => c.name === options.name);
       if (idx === -1) {
@@ -515,7 +515,7 @@ export function manageCycle(
 
     case 'remove': {
       if (!options.name) {
-        throw new Error('Cycle remove requires name');
+        throw new Error('Cycle remove requires --cycle <name>');
       }
       const removeIdx = config.cycles.findIndex(c => c.name === options.name);
       if (removeIdx === -1) {
