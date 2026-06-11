@@ -376,7 +376,14 @@ busCommand
     const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
 
     console.log(`\n  Tasks (${tasks.length})\n`);
-    const header = '  Status  Pri  ID                        Assignee         Title';
+    // Task ids are `task_<13-digit epoch>_<8-digit rand>` = 27 chars. Never
+    // truncate them in the table: a clipped id copy-pasted into
+    // complete-task/update-task silently targets the wrong (or no) task. One
+    // constant drives both the header column and the row so they can't drift
+    // out of sync the way the hardcoded 26 did (#587). Width = 27-char id + 1
+    // trailing space so a full id never butts against the Assignee column.
+    const ID_W = 28;
+    const header = `  Status  Pri  ${'ID'.padEnd(ID_W)}Assignee         Title`;
     const separator = '  ' + '-'.repeat(header.length - 2);
     console.log(header);
     console.log(separator);
@@ -384,7 +391,7 @@ busCommand
     for (const t of tasks) {
       const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
       const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
-      const id = t.id.substring(0, 26).padEnd(26);
+      const id = t.id.padEnd(ID_W);
       const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
       const title = t.title.substring(0, 50);
       console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
