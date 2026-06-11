@@ -161,7 +161,7 @@ function convertEntry(
   entry: CronEntry,
   agentName: string,
 ): { cron: CronDefinition } | { skip: string } {
-  const { name, type, interval, cron: cronExpr, fire_at, prompt, enabled } = entry;
+  const { name, type, interval, cron: cronExpr, fire_at, prompt, enabled, engine } = entry;
 
   // Treat absent `type` as "recurring" (spec requirement)
   const effectiveType = type ?? 'recurring';
@@ -181,6 +181,7 @@ function convertEntry(
       created_at: new Date().toISOString(),
       description: `Migrated from config.json (was disabled)`,
       metadata: { migrated_from_config: true, original_type: effectiveType },
+      ...(engine !== undefined ? { engine } : {}),
     };
     return { cron: def };
   }
@@ -233,6 +234,7 @@ function convertEntry(
     enabled: enabled !== false,
     created_at: new Date().toISOString(),
     metadata: { migrated_from_config: true, original_type: effectiveType },
+    ...(engine !== undefined ? { engine } : {}),
   };
 
   return { cron: def };
@@ -500,7 +502,18 @@ export function resyncCronsFromConfig(
       description: cfg.description ?? cur.description,
       metadata: { ...cur.metadata, migrated_from_config: true },
     };
-    if (merged.schedule !== cur.schedule || merged.prompt !== cur.prompt) {
+    // engine is config-owned like schedule/prompt: pull it forward, including
+    // removal (config dropped the field → revert to default PTY dispatch).
+    if (cfg.engine !== undefined) {
+      merged.engine = cfg.engine;
+    } else {
+      delete merged.engine;
+    }
+    if (
+      merged.schedule !== cur.schedule ||
+      merged.prompt !== cur.prompt ||
+      merged.engine !== cur.engine
+    ) {
       updated.push(cur.name);
     }
     result.push(merged);
