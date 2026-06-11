@@ -39,6 +39,8 @@ export interface CatalogBrowseOptions {
   type?: string;
   tag?: string;
   search?: string;
+  /** Agent dir whose `.claude/skills/` is checked for on-disk install state (#295). */
+  agentDir?: string;
 }
 
 export interface InstallResult {
@@ -141,6 +143,31 @@ function writeInstalled(ctxRoot: string, data: Record<string, unknown>): void {
   writeFileSync(p, JSON.stringify(data, null, 2) + '\n', 'utf-8');
 }
 
+/**
+ * Resolve the on-disk directory a catalog item installs to, mirroring the
+ * target logic in installCommunityItem. Returns null for unknown types.
+ *
+ * Skills land under `.claude/skills/` because that is where the Claude Code
+ * harness actually discovers them. Shared so browseCatalog's installed-state
+ * detection (#295) can never drift from where installCommunityItem writes.
+ */
+function resolveItemTargetDir(
+  frameworkRoot: string,
+  agentDir: string | undefined,
+  item: { name: string; type: string },
+): string | null {
+  switch (item.type) {
+    case 'skill':
+      return join(agentDir || frameworkRoot, '.claude', 'skills', item.name);
+    case 'agent':
+      return join(frameworkRoot, 'templates', 'personas', item.name);
+    case 'org':
+      return join(frameworkRoot, 'templates', 'orgs', item.name);
+    default:
+      return null;
+  }
+}
+
 // --- browseCatalog ---
 
 export function browseCatalog(
@@ -186,12 +213,18 @@ export function browseCatalog(
     );
   }
 
-  // Enrich with installed status
+  // Enrich with installed status. An item counts as installed when it is
+  // recorded in the registry OR its target directory exists on disk — the
+  // latter catches shipped/default skills and manual copies that the registry
+  // never tracks (#295).
   const installed = readInstalled(ctxRoot);
-  items = items.map(i => ({
-    ...i,
-    installed: installed[i.name] != null,
-  }));
+  items = items.map(i => {
+    const targetDir = resolveItemTargetDir(frameworkRoot, options.agentDir, i);
+    return {
+      ...i,
+      installed: installed[i.name] != null || (targetDir != null && existsSync(targetDir)),
+    };
+  });
 
   return { status: 'ok', count: items.length, items };
 }
@@ -253,24 +286,10 @@ export function installCommunityItem(
     return { status: 'error', name: itemName, error: 'source directory not found', hint: 'Run check-upstream to fetch latest catalog' };
   }
 
-  // Determine target based on type
-  let targetDir: string;
-  switch (item.type) {
-    case 'skill':
-      // Skills must land under .claude/skills/ because that is where the
-      // Claude Code harness actually discovers them. Writing to a bare
-      // skills/ directory meant installs silently didn't load without a
-      // manual cp into .claude/skills/ after the fact.
-      targetDir = join(options.agentDir || frameworkRoot, '.claude', 'skills', itemName);
-      break;
-    case 'agent':
-      targetDir = join(frameworkRoot, 'templates', 'personas', itemName);
-      break;
-    case 'org':
-      targetDir = join(frameworkRoot, 'templates', 'orgs', itemName);
-      break;
-    default:
-      return { status: 'error', name: itemName, error: `unknown item type: ${item.type}` };
+  // Determine target based on type (shared with browseCatalog — see #295).
+  const targetDir = resolveItemTargetDir(frameworkRoot, options.agentDir, item);
+  if (!targetDir) {
+    return { status: 'error', name: itemName, error: `unknown item type: ${item.type}` };
   }
 
   // Check for existing installation

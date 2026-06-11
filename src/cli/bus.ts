@@ -850,6 +850,7 @@ busCommand
       type: opts.type,
       tag: opts.tag,
       search: opts.search,
+      agentDir: env.agentDir,
     });
     console.log(JSON.stringify(result, null, 2));
   });
