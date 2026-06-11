@@ -79,6 +79,44 @@ describe('executeShellCron', () => {
     expect(Date.now() - start).toBeLessThan(5_000);
   });
 
+  it('settles promptly when a backgrounded grandchild inherits stderr (tez audit finding 1)', async () => {
+    // Pre-companion behavior: settling on 'close' waits for the stderr pipe,
+    // which the backgrounded sleep holds open — the promise hung for the
+    // grandchild's full lifetime and the scheduler's firing flag stuck.
+    const start = Date.now();
+    const result = await executeShellCron('sleep 15 & exit 0', {
+      env: baseEnv(),
+      cwd: tmpRoot,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(Date.now() - start).toBeLessThan(5_000); // not the grandchild's 15s
+  });
+
+  it('kills the whole process group on timeout — grandchildren do not survive', async () => {
+    const pidFile = join(tmpRoot, 'grandchild.pid');
+    await expect(
+      executeShellCron(`sleep 30 & echo $! > "${pidFile}"; wait`, {
+        env: baseEnv(),
+        cwd: tmpRoot,
+        timeoutMs: 300,
+      }),
+    ).rejects.toThrow(/timed out/);
+
+    // Give SIGTERM a moment to be delivered to the group, then verify the
+    // backgrounded sleep is gone (kill -0 fails for dead pids).
+    await new Promise((r) => setTimeout(r, 500));
+    const { readFileSync } = await import('fs');
+    const grandchildPid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10);
+    expect(grandchildPid).toBeGreaterThan(0);
+    let alive = true;
+    try {
+      process.kill(grandchildPid, 0);
+    } catch {
+      alive = false;
+    }
+    expect(alive).toBe(false);
+  });
+
   it('caps retained stderr to the tail', async () => {
     // Emit ~64KB of stderr; the error message must contain the END of the
     // stream (the part that explains the failure), not blow up the log.
@@ -150,5 +188,23 @@ describe('buildShellCronEnv', () => {
     const env = buildShellCronEnv(ctxEnv, { timezone: 'America/Los_Angeles' } as AgentConfig);
     expect(env['CTX_TIMEZONE']).toBe('America/Los_Angeles');
     expect(env['TZ']).toBe('America/Los_Angeles');
+  });
+
+  it('sets CTX_ORCHESTRATOR_AGENT from org context.json (PTY parity)', () => {
+    const ctxEnv = makeCtxEnv();
+    const orgDir = join(ctxEnv.projectRoot, 'orgs', 'testorg');
+    writeFileSync(join(orgDir, 'context.json'), JSON.stringify({ orchestrator: 'big-boss' }), 'utf-8');
+
+    const env = buildShellCronEnv(ctxEnv, {} as AgentConfig);
+    expect(env['CTX_ORCHESTRATOR_AGENT']).toBe('big-boss');
+  });
+
+  it('leaves CTX_ORCHESTRATOR_AGENT unset when context.json is absent or malformed', () => {
+    const ctxEnv = makeCtxEnv();
+    expect(buildShellCronEnv(ctxEnv, {} as AgentConfig)['CTX_ORCHESTRATOR_AGENT']).toBeUndefined();
+
+    const orgDir = join(ctxEnv.projectRoot, 'orgs', 'testorg');
+    writeFileSync(join(orgDir, 'context.json'), '{not json', 'utf-8');
+    expect(buildShellCronEnv(ctxEnv, {} as AgentConfig)['CTX_ORCHESTRATOR_AGENT']).toBeUndefined();
   });
 });

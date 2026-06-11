@@ -105,6 +105,20 @@ export function buildShellCronEnv(env: CtxEnv, config: AgentConfig): Record<stri
     result['TZ'] = tz;
   }
 
+  // CTX_ORCHESTRATOR_AGENT from org context.json (parity with the PTY env —
+  // scripts route escalations via `bus send-message $CTX_ORCHESTRATOR_AGENT`).
+  if (env.org && env.projectRoot) {
+    try {
+      const contextPath = join(env.projectRoot, 'orgs', env.org, 'context.json');
+      if (existsSync(contextPath)) {
+        const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
+        if (ctx.orchestrator) {
+          result['CTX_ORCHESTRATOR_AGENT'] = ctx.orchestrator;
+        }
+      }
+    } catch { /* leave unset if context.json is missing or malformed */ }
+  }
+
   return result;
 }
 
@@ -132,11 +146,25 @@ export function executeShellCron(
   const start = Date.now();
 
   return new Promise<ShellCronResult>((resolve, reject) => {
+    // detached:true puts bash in its OWN process group so kill paths can
+    // signal the whole group (-pid) — otherwise grandchildren that survive
+    // their parent are unkillable orphans (tez audit, PR #7 finding 1).
     const child = spawn('bash', ['-c', prompt], {
       cwd: opts.cwd,
       env: opts.env,
       stdio: ['ignore', 'ignore', 'pipe'],
+      detached: true,
     });
+
+    /** Signal the child's entire process group; fall back to the pid alone. */
+    const killGroup = (sig: NodeJS.Signals): void => {
+      try {
+        if (child.pid) process.kill(-child.pid, sig);
+        else child.kill(sig);
+      } catch {
+        try { child.kill(sig); } catch { /* already gone */ }
+      }
+    };
 
     let stderrTail = '';
     let timedOut = false;
@@ -144,11 +172,9 @@ export function executeShellCron(
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
+      killGroup('SIGTERM');
       // Escalate if SIGTERM is ignored — the scheduler must get its thread back.
-      setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch { /* already gone */ }
-      }, 5_000).unref();
+      setTimeout(() => killGroup('SIGKILL'), 5_000).unref();
     }, timeoutMs);
 
     child.stderr!.on('data', (chunk: Buffer) => {
@@ -162,27 +188,37 @@ export function executeShellCron(
       reject(new Error(`shell cron spawn failed: ${err.message}`));
     });
 
-    child.on('close', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      const durationMs = Date.now() - start;
+    // Settle on 'exit', NOT 'close' (tez audit, PR #7 finding 1): 'close'
+    // additionally waits for the stdio pipes to drain, and a backgrounded
+    // grandchild that inherits stderr holds the pipe open indefinitely —
+    // bash exits, the promise never settles, the scheduler's `firing` flag
+    // sticks, and the cron silently never fires again. 'exit' fires when
+    // bash itself terminates, which is the contract we actually want.
+    // One macrotask of grace lets already-delivered stderr chunks land
+    // before we build the error message (best-effort tail, not a sync).
+    child.on('exit', (code, signal) => {
+      setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const durationMs = Date.now() - start;
 
-      if (timedOut) {
-        reject(new Error(
-          `shell cron timed out after ${timeoutMs}ms (killed with ${signal ?? 'SIGTERM'})` +
-          (stderrTail ? ` — stderr tail: ${stderrTail.trim()}` : ''),
-        ));
-        return;
-      }
-      if (code !== 0) {
-        reject(new Error(
-          `shell cron exited ${code ?? `signal:${signal}`}` +
-          (stderrTail ? ` — stderr tail: ${stderrTail.trim()}` : ''),
-        ));
-        return;
-      }
-      resolve({ exitCode: 0, durationMs });
+        if (timedOut) {
+          reject(new Error(
+            `shell cron timed out after ${timeoutMs}ms (killed with ${signal ?? 'SIGTERM'})` +
+            (stderrTail ? ` — stderr tail: ${stderrTail.trim()}` : ''),
+          ));
+          return;
+        }
+        if (code !== 0) {
+          reject(new Error(
+            `shell cron exited ${code ?? `signal:${signal}`}` +
+            (stderrTail ? ` — stderr tail: ${stderrTail.trim()}` : ''),
+          ));
+          return;
+        }
+        resolve({ exitCode: 0, durationMs });
+      }, 25);
     });
   });
 }
