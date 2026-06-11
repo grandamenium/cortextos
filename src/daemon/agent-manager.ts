@@ -6,6 +6,7 @@ import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent, resyncCronsFromConfig } from './cron-migration.js';
+import { buildShellCronEnv, executeShellCron } from './shell-cron.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -1143,6 +1144,26 @@ export class AgentManager {
 
     const onFire = async (cron: CronDefinition): Promise<void> => {
       const prompt = cron.prompt ?? `[cron] ${cron.name} fired`;
+
+      // F1-lite: engine:"shell" crons run directly in the daemon — no PTY
+      // injection, no model turn. Exit 0 resolves (logged "fired"); nonzero /
+      // timeout throws and rides the scheduler's retry + execution-log path.
+      // Runs even while the agent session is down: a pure-script cron does
+      // not need the PTY alive.
+      if (cron.engine === 'shell') {
+        const liveEntry = this.agents.get(agentName);
+        if (!liveEntry) {
+          throw new Error(`shell cron "${cron.name}": agent "${agentName}" not registered`);
+        }
+        const agentEnv = liveEntry.process['env'] as CtxEnv;
+        const agentConfig = liveEntry.process['config'] as AgentConfig;
+        await executeShellCron(prompt, {
+          env: buildShellCronEnv(agentEnv, agentConfig),
+          cwd: agentConfig.working_directory || agentEnv.agentDir,
+        });
+        return;
+      }
+
       // Salt with the fire timestamp so MessageDedup (which hashes the last 100
       // injects) does not reject identical cron prompts on subsequent fires.
       // Without the salt, every recurring cron after its first fire would be

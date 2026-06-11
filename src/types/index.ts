@@ -257,6 +257,15 @@ export interface CronEntry {
   /** "recurring" (default) restores on every session start.
    *  "once" restores only if fire_at is still in the future; deleted after firing. */
   type?: 'recurring' | 'once' | 'disabled';
+  /**
+   * Dispatch engine. "shell" runs the prompt as `bash -c <prompt>` directly in
+   * the daemon (zero model tokens); absent or "claude" injects the prompt into
+   * the agent's PTY session (default, pre-F1-lite behavior).
+   *
+   * NOTE: values other than "shell" are treated as "claude" — historical
+   * configs contain dead tags like "ollama" from the removed PTY executor.
+   */
+  engine?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -444,6 +453,21 @@ export interface CronDefinition {
    * @default false (manual fire is allowed by default — opt-out model)
    */
   manualFireDisabled?: boolean;
+
+  /**
+   * Dispatch engine (F1-lite). `"shell"` makes the daemon run the prompt as
+   * `bash -c <prompt>` directly — no PTY injection, no model tokens. The
+   * process gets the agent's CTX_* env, org secrets.env, and agent .env
+   * (see src/daemon/shell-cron.ts), cwd = agent dir, 5-minute timeout.
+   * Nonzero exit / timeout flows through the scheduler's normal retry +
+   * execution-log path.
+   *
+   * Absent or any other value → prompt is injected into the agent's PTY
+   * session (default behavior, unchanged).
+   *
+   * @example "shell"
+   */
+  engine?: string;
 }
 
 // ---------------------------------------------------------------------------
