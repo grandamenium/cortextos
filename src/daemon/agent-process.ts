@@ -622,17 +622,19 @@ export class AgentProcess {
       return;
     }
 
-    // F17: intentional restart (cortextos bus self-restart / hard-restart wrote
-    // .restart-planned). The exit is on purpose, so do NOT charge the crash
-    // counter or write a CRASH line — but DO bring the agent back up, since a
-    // restart was the whole point. Consume the marker so a later genuine crash
-    // is still classified correctly. Checked after isDaemonShuttingDown() (a
-    // daemon-wide stop wins) and before crash classification.
+    // F17 + F17-extension: intentional restart — cortextos bus self-restart /
+    // hard-restart writes .restart-planned; sessionRefresh() (session-cap
+    // rollover, RSS restart, F10-P2) writes .session-refresh. Both are
+    // deliberate exits: do NOT charge the crash counter or write a CRASH line —
+    // but DO bring the agent back up. Consume whichever marker matched so a
+    // later genuine crash is still classified correctly. Checked after
+    // isDaemonShuttingDown() (a daemon-wide stop wins) and before crash
+    // classification.
     if (this.isPlannedRestart()) {
-      this.log('Planned restart detected (.restart-planned marker) — respawning without counting as crash');
-      try {
-        unlinkSync(join(this.env.ctxRoot, 'state', this.name, '.restart-planned'));
-      } catch { /* marker cleanup is best-effort */ }
+      this.log('Planned restart detected (.restart-planned or .session-refresh marker) — respawning without counting as crash');
+      const stateDir = join(this.env.ctxRoot, 'state', this.name);
+      try { unlinkSync(join(stateDir, '.restart-planned')); } catch { /* best-effort */ }
+      try { unlinkSync(join(stateDir, '.session-refresh')); } catch { /* best-effort */ }
       this.appendCrashToRestartsLog(exitCode, 2000, 'PLANNED_RESTART');
       this.status = 'crashed';
       this.notifyStatusChange();
@@ -1176,11 +1178,14 @@ export class AgentProcess {
    * next exit is classified on its own merits.
    */
   private isPlannedRestart(): boolean {
-    const marker = join(this.env.ctxRoot, 'state', this.name, '.restart-planned');
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    const markers = ['.restart-planned', '.session-refresh'];
     try {
-      if (!existsSync(marker)) return false;
-      const ageMs = Date.now() - statSync(marker).mtimeMs;
-      return ageMs < 60_000;
+      for (const name of markers) {
+        const p = join(stateDir, name);
+        if (existsSync(p) && Date.now() - statSync(p).mtimeMs < 60_000) return true;
+      }
+      return false;
     } catch {
       return false;
     }

@@ -257,6 +257,8 @@ export interface CronEntry {
   /** "recurring" (default) restores on every session start.
    *  "once" restores only if fire_at is still in the future; deleted after firing. */
   type?: 'recurring' | 'once' | 'disabled';
+  /** Explicit enabled flag. Absent = enabled. Explicitly false = disabled (honoured by resync ADD path). */
+  enabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
