@@ -78,6 +78,11 @@ async function runUpdate(opts: UpdateOptions): Promise<void> {
     process.exit(0);
   }
 
+  if (status.status === 'local_ahead') {
+    console.log(`Local branch is ${status.commits ?? '?'} commit(s) ahead of upstream — no upstream changes to pull.`);
+    process.exit(0);
+  }
+
   // Updates available.
   const commitCount = status.commits ?? '?';
   const diffStat = status.diff_stat || '';
