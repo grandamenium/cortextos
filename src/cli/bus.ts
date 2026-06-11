@@ -1723,27 +1723,19 @@ busCommand
   .option('--format <fmt>', 'Output format: json|text', 'json')
   .option('--all-orgs', 'Scan all orgs under CTX_ROOT (matches dashboard view)', false)
   .action((opts: { format?: string; allOrgs?: boolean }) => {
-    const { listPendingApprovals } = require('../bus/approval.js');
-    const { readdirSync, existsSync } = require('fs');
-    const { join, homedir: _homedir } = require('path');
+    const { listPendingApprovals, collectAllPendingApprovals } = require('../bus/approval.js');
+    const { join } = require('path');
     const { homedir } = require('os');
     const env = resolveEnv();
 
     let approvals: unknown[] = [];
 
     if (opts.allOrgs) {
-      // Scan every org directory under CTX_ROOT — mirrors dashboard syncAll() behaviour
+      // System-wide: root + every org's pending dir, status-filtered and
+      // deduped — the same source `collect-metrics` counts, so the two agree
+      // (#193). Replaces the prior org-only loop that omitted root approvals.
       const ctxRoot = join(homedir(), '.cortextos', env.instanceId);
-      const orgsDir = join(ctxRoot, 'orgs');
-      const orgs: string[] = existsSync(orgsDir)
-        ? readdirSync(orgsDir, { withFileTypes: true })
-            .filter((d: { isDirectory(): boolean }) => d.isDirectory())
-            .map((d: { name: string }) => d.name)
-        : [];
-      for (const org of orgs) {
-        const orgPaths = resolvePaths(env.agentName, env.instanceId, org);
-        approvals = approvals.concat(listPendingApprovals(orgPaths));
-      }
+      approvals = collectAllPendingApprovals(ctxRoot);
     } else {
       const paths = resolvePaths(env.agentName, env.instanceId, env.org);
       approvals = listPendingApprovals(paths);

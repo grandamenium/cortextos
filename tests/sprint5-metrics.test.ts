@@ -84,10 +84,17 @@ describe('Sprint 5: Observability & Metrics', () => {
       expect(report.system.agents_healthy).toBe(0);
     });
 
-    it('counts pending approvals', () => {
+    it('counts only genuinely-pending approvals (#193)', () => {
       writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), '{}', 'utf-8');
-      writeFileSync(join(ctxRoot, 'approvals', 'pending', 'ap1.json'), '{}', 'utf-8');
-      writeFileSync(join(ctxRoot, 'approvals', 'pending', 'ap2.json'), '{}', 'utf-8');
+      const ap = (id: string, status: string) => JSON.stringify({
+        id, title: id, requesting_agent: 'a', org: '', category: 'other',
+        status, description: 'd', created_at: '2026-04-20T09:00:00Z',
+        updated_at: '2026-04-20T09:00:00Z', resolved_at: null, resolved_by: null,
+      });
+      writeFileSync(join(ctxRoot, 'approvals', 'pending', 'ap1.json'), ap('ap1', 'pending'), 'utf-8');
+      writeFileSync(join(ctxRoot, 'approvals', 'pending', 'ap2.json'), ap('ap2', 'pending'), 'utf-8');
+      // A resolved approval left in pending/ must NOT inflate the count (#193).
+      writeFileSync(join(ctxRoot, 'approvals', 'pending', 'ap3.json'), ap('ap3', 'approved'), 'utf-8');
 
       const report = collectMetrics(ctxRoot);
       expect(report.system.approvals_pending).toBe(2);

@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, m
 import { join, basename, dirname } from 'path';
 import { execSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
+import { collectAllPendingApprovals } from './approval.js';
 
 // --- Types ---
 
@@ -203,26 +204,10 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
     };
   }
 
-  // Count pending approvals
-  let approvalsPending = 0;
-  const approvalPaths = [join(ctxRoot, 'approvals', 'pending')];
-  if (existsSync(orgsDir)) {
-    try {
-      for (const orgEntry of readdirSync(orgsDir, { withFileTypes: true })) {
-        if (orgEntry.isDirectory()) {
-          const p = join(orgsDir, orgEntry.name, 'approvals', 'pending');
-          if (existsSync(p)) approvalPaths.push(p);
-        }
-      }
-    } catch { /* ignore */ }
-  }
-  for (const apDir of approvalPaths) {
-    if (existsSync(apDir)) {
-      try {
-        approvalsPending += readdirSync(apDir).filter(f => f.endsWith('.json')).length;
-      } catch { /* ignore */ }
-    }
-  }
+  // Count pending approvals system-wide via the shared helper so this metric
+  // can never drift from `list-approvals --all-orgs` (status-filtered, deduped
+  // by id — the stale/double-counted backlog in #193).
+  const approvalsPending = collectAllPendingApprovals(ctxRoot).length;
 
   const report: MetricsReport = {
     timestamp,
