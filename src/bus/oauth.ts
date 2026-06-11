@@ -190,13 +190,15 @@ export async function checkUsageApi(
     const store = loadAccounts(ctxRoot);
     const acct = store?.accounts[opts.account];
     if (!acct) throw new Error(`Account "${opts.account}" not found in accounts.json`);
-    accessToken = acct.access_token;
+    const fresh = await refreshIfExpiringSoon(ctxRoot, opts.account, acct);
+    accessToken = fresh.access_token;
     accountName = opts.account;
   } else {
     // Fall back to env / Keychain
     const active = getActiveAccount(ctxRoot);
     if (active) {
-      accessToken = active.account.access_token;
+      const fresh = await refreshIfExpiringSoon(ctxRoot, active.name, active.account);
+      accessToken = fresh.access_token;
       accountName = active.name;
     } else {
       accessToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -264,6 +266,22 @@ export async function checkUsageApi(
   }
 
   return { ...snapshot, cached: false };
+}
+
+async function refreshIfExpiringSoon(
+  ctxRoot: string,
+  accountName: string,
+  account: OAuthAccount,
+): Promise<OAuthAccount> {
+  if (account.expires_at - Date.now() >= 5 * 60 * 1000) {
+    return account;
+  }
+
+  await refreshOAuthToken(ctxRoot, accountName);
+  const refreshed = loadAccounts(ctxRoot);
+  const refreshedAccount = refreshed?.accounts[accountName];
+  if (!refreshedAccount) throw new Error(`Account "${accountName}" missing after refresh`);
+  return refreshedAccount;
 }
 
 // --- refresh-oauth-token ---
