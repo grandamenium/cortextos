@@ -34,6 +34,7 @@ export class FastChecker {
   private telegramApi?: TelegramAPI;
   private chatId?: string;
   private allowedUserId?: number;
+  private allowedUserIds?: Set<number>;
 
   // External Telegram handler (set by daemon)
   private telegramMessages: Array<{ formatted: string; ackIds: string[] }> = [];
@@ -63,7 +64,7 @@ export class FastChecker {
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number; allowedUserIds?: Set<number> } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
@@ -73,6 +74,7 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+    this.allowedUserIds = options.allowedUserIds;
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
@@ -466,12 +468,13 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const data = stripControlChars(query.data || '');
     const callbackQueryId = query.id;
 
-    // SECURITY: callbacks must come from the whitelisted user. Identical
+    // SECURITY: callbacks must come from a whitelisted user. Identical
     // check to handleCallback — approval clicks are as sensitive as
-    // permission clicks and the same gate applies.
+    // permission clicks and the same gate applies. Supports multi-user list.
     if (this.allowedUserId !== undefined) {
       const fromUserId = query.from?.id;
-      if (fromUserId !== this.allowedUserId) {
+      const allowed = this.allowedUserIds ? this.allowedUserIds.has(fromUserId ?? -1) : fromUserId === this.allowedUserId;
+      if (!allowed) {
         this.log(`SECURITY: activity-channel callback from unauthorized user ${fromUserId} - rejecting`);
         try { await activityApi.answerCallbackQuery(callbackQueryId, 'Not authorized'); } catch { /* ignore */ }
         return;
@@ -551,11 +554,13 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const messageId = query.message?.message_id;
     const callbackQueryId = query.id;
 
-    // SECURITY: callbacks must come from the whitelisted user. Without this,
+    // SECURITY: callbacks must come from a whitelisted user. Without this,
     // anyone who sees a button (forwarded message, group, etc.) could click it.
+    // Supports multi-user allowlist.
     if (this.allowedUserId !== undefined) {
       const fromUserId = query.from?.id;
-      if (fromUserId !== this.allowedUserId) {
+      const allowed = this.allowedUserIds ? this.allowedUserIds.has(fromUserId ?? -1) : fromUserId === this.allowedUserId;
+      if (!allowed) {
         this.log(`SECURITY: callback from unauthorized user ${fromUserId} - rejecting`);
         return;
       }
