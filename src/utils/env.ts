@@ -136,6 +136,43 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
 }
 
 /**
+ * Resolve another agent's directory from the caller's environment.
+ *
+ * Commands that take a target agent argument (e.g. manage-cycle) must
+ * operate on the TARGET agent's files, not the caller's — writing to the
+ * caller's dir creates a second, diverging registry the target never reads
+ * (manage-cycle create was a silent no-op for autoresearch). Targets
+ * are resolved as a sibling of the caller's agentDir first (matches every
+ * deployment layout), then via the same projectRoot conventions resolveEnv
+ * uses. Returns null when no candidate directory exists on disk, so callers
+ * can fail loudly instead of writing into a directory no agent reads.
+ * Throws on invalid agent names (path-traversal guard).
+ */
+export function resolveTargetAgentDir(env: CtxEnv, targetAgent: string): string | null {
+  validateAgentName(targetAgent);
+  if (targetAgent === env.agentName && env.agentDir) {
+    return env.agentDir;
+  }
+  const candidates: string[] = [];
+  if (env.agentDir) {
+    candidates.push(join(env.agentDir, '..', targetAgent));
+  }
+  if (env.projectRoot && env.org) {
+    candidates.push(join(env.projectRoot, 'orgs', env.org, 'agents', targetAgent));
+  }
+  if (env.projectRoot) {
+    candidates.push(join(env.projectRoot, 'agents', targetAgent));
+  }
+  for (const candidate of candidates) {
+    const dir = resolvePath(candidate);
+    if (existsSync(dir)) {
+      return dir;
+    }
+  }
+  return null;
+}
+
+/**
  * Write .cortextos-env file for backward compatibility with bash bus scripts.
  * Per D6: maintain this pattern.
  */
