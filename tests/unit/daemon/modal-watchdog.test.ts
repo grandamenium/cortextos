@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyOutput, currentScreen, normalizeForDiff } from '../../../src/daemon/modal-watchdog';
+import { classifyOutput, currentScreen, normalizeForDiff, confirmTrapped } from '../../../src/daemon/modal-watchdog';
 
 describe('modal-watchdog classifyOutput', () => {
   it('detects the feedback survey (routine, not human-required)', () => {
@@ -19,11 +19,25 @@ describe('modal-watchdog classifyOutput', () => {
     expect(classifyOutput("What's new in Claude Code\n- stuff").known?.name).toBe('whats-new');
   });
 
-  it('auth-expiry and weekly-cap are HUMAN-REQUIRED (alert, can\'t be keyed away)', () => {
+  it('auth-expiry and usage-cap are HUMAN-REQUIRED (alert, can\'t be keyed away)', () => {
     expect(classifyOutput('Authentication expired. Please run /login to continue.').known?.humanRequired)
       .toBe(true);
-    expect(classifyOutput("You've reached your weekly limit").known?.humanRequired)
-      .toBe(true);
+  });
+
+  it('★ LIVE-FIRE: detects the REAL cap-modal text captured off trapped agents (weekly + session + curly apostrophe)', () => {
+    // The actual on-screen text — "hit your <weekly|session> limit · resets <time>". The
+    // old anchor ("reached your weekly/usage limit") matched NONE of these (silent FN).
+    for (const s of [
+      'You’ve HIT your SESSION limit · resets 12:20am',   // curly U+2019 apostrophe
+      "You've hit your WEEKLY limit · resets 1pm",
+      'You’ve hit your session limit · resets 6pm',
+    ]) {
+      const c = classifyOutput(s);
+      expect(c.known?.name).toBe('usage-cap');
+      expect(c.known?.humanRequired).toBe(true);
+    }
+    // Chrome co-anchor ('resets') keeps a prose mention from matching:
+    expect(classifyOutput("we hit our weekly limit earlier but have headroom now").trapped).toBe(false);
   });
 
   it('the module exposes NO keypress payload (detection-only invariant)', () => {
@@ -33,11 +47,20 @@ describe('modal-watchdog classifyOutput', () => {
     expect((c.known as Record<string, unknown>).key).toBeUndefined();
   });
 
-  it('detects a generic await-input prompt (unknown modal)', () => {
-    const c = classifyOutput('[Pasted text #1 +500 lines] paste again to expand');
+  it('detects a genuinely BLOCKING generic prompt (unknown modal)', () => {
+    const c = classifyOutput('Some output\nPress any key to continue');
     expect(c.trapped).toBe(true);
     expect(c.genericPrompt).toBe(true);
     expect(c.known).toBeUndefined();
+  });
+
+  it('★ does NOT trap on the benign "paste again to expand" artifact (the 79-flood trigger)', () => {
+    // This collapsed-bracketed-paste hint is rendered on a perfectly HEALTHY prompt; it is
+    // NOT a blocking modal and was removed from the signatures. classifyOutput must read it
+    // as clean so a frozen idle screen can never be classified trapped on its account.
+    expect(classifyOutput('[Pasted text #1 +500 lines] paste again to expand').trapped).toBe(false);
+    expect(classifyOutput('> tell me about the box\n[Pasted text #2 +1200 lines] paste again to expand')
+      .trapped).toBe(false);
   });
 
   it('does NOT trap on ordinary agent output', () => {
@@ -87,5 +110,53 @@ describe('modal-watchdog normalizeForDiff', () => {
 
   it('a changing screen yields a different digest (not frozen)', () => {
     expect(normalizeForDiff('working: step 1 of 5')).not.toBe(normalizeForDiff('working: step 2 of 5'));
+  });
+});
+
+describe('modal-watchdog confirmTrapped (corroboration gate)', () => {
+  const knownModal = classifyOutput('How is Claude doing this session?\n0: Dismiss'); // trapped + known
+  const genericPrompt = classifyOutput('Some output\nPress any key to continue');     // trapped + generic
+  const clean = classifyOutput('Running tests... 1953 passed. All green.');            // not trapped
+
+  it('★ EXACT FAILING CASE: a healthy, heartbeating, cron-firing agent showing "paste again to expand" → NOT trapped, ZERO alert', () => {
+    // The real PTY screen of the agent that caused the 79-flood: a normal idle prompt with
+    // the benign collapsed-paste hint.
+    const screen = currentScreen(
+      'old output\n\x1b[2J\x1b[H' +
+      '╭─────────────────────────────────────────╮\n' +
+      '│ > [Pasted text #1 +500 lines] paste again to expand │\n' +
+      '╰─────────────────────────────────────────╯',
+    );
+    const cls = classifyOutput(screen);
+    expect(cls.trapped).toBe(false); // no real signal on screen — classifies CLEAN
+    // No path can flag it: healthy (fresh heartbeat) OR even with every corroborator set,
+    // a non-trapped cls short-circuits to false → ZERO alert.
+    expect(confirmTrapped(cls, { frozen: true, injectUnanswered: false, heartbeatFresh: true })).toBe(false);
+    expect(confirmTrapped(cls, { frozen: true, injectUnanswered: true, heartbeatFresh: false })).toBe(false);
+  });
+
+  it('a KNOWN anchored modal on a FROZEN screen IS a trap — no pending message needed', () => {
+    // High-confidence chrome (auth/cap/survey/trust). Covers a modal up at startup or one
+    // that swallowed an INBOX/agent message (which sets no inject timer).
+    expect(confirmTrapped(knownModal, { frozen: true, injectUnanswered: false, heartbeatFresh: false })).toBe(true);
+  });
+
+  it('a fresh AGENT heartbeat VETOES even a known modal (demonstrably alive)', () => {
+    expect(confirmTrapped(knownModal, { frozen: true, injectUnanswered: false, heartbeatFresh: true })).toBe(false);
+  });
+
+  it('a known modal on a NON-frozen (streaming) screen is not a trap', () => {
+    expect(confirmTrapped(knownModal, { frozen: false, injectUnanswered: false, heartbeatFresh: false })).toBe(false);
+  });
+
+  it('a GENERIC prompt is looser → requires an UNANSWERED inject to corroborate', () => {
+    // Frozen generic prompt but nothing unanswered (healthy idle) → NOT trapped.
+    expect(confirmTrapped(genericPrompt, { frozen: true, injectUnanswered: false, heartbeatFresh: false })).toBe(false);
+    // Frozen generic prompt + a message left unanswered past the deadline → trapped.
+    expect(confirmTrapped(genericPrompt, { frozen: true, injectUnanswered: true, heartbeatFresh: false })).toBe(true);
+  });
+
+  it('no on-screen signature → never trapped regardless of corroboration', () => {
+    expect(confirmTrapped(clean, { frozen: true, injectUnanswered: true, heartbeatFresh: false })).toBe(false);
   });
 });

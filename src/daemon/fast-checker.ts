@@ -4,12 +4,12 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
-import { checkInbox, ackInbox } from '../bus/message.js';
+import { checkInbox, ackInbox, sendMessage } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
-import { classifyOutput, currentScreen } from './modal-watchdog.js';
+import { classifyOutput, currentScreen, confirmTrapped } from './modal-watchdog.js';
 import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
 
 type LogFn = (msg: string) => void;
@@ -21,6 +21,12 @@ type LogFn = (msg: string) => void;
 const OUTPUT_FROZEN_MS = 90 * 1000;
 // Edge-trigger dedup for the direct-to-operator stuck alert.
 const STUCK_ALERT_DEDUP_MS = 10 * 60 * 1000;
+// A Telegram message injected this long ago with no reply is "unanswered" — the decisive
+// trap corroborator (the agent got work it cannot process). Longer than a normal turn's
+// first output so a healthy slow turn isn't mistaken for stuck.
+const INJECT_REPLY_DEADLINE_MS = 3 * 60 * 1000;
+// An AGENT-authored heartbeat newer than this proves the agent is alive → vetoes any trap.
+const HEARTBEAT_FRESH_MS = 6 * 60 * 1000;
 
 /**
  * Fast message checker for a single agent.
@@ -43,6 +49,9 @@ export class FastChecker {
   private telegramApi?: TelegramAPI;
   private chatId?: string;
   private allowedUserId?: number;
+  // Org orchestrator: stuck-agent alerts route HERE (its inbox) for triage, NOT the
+  // founder-facing Telegram. Undefined => no operator (or this agent IS the orchestrator).
+  private operatorAgent?: string;
 
   // External Telegram handler (set by daemon)
   private telegramMessages: Array<{ formatted: string; ackIds: string[] }> = [];
@@ -78,7 +87,7 @@ export class FastChecker {
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number; operatorAgent?: string } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
@@ -88,6 +97,7 @@ export class FastChecker {
     this.telegramApi = options.telegramApi;
     this.chatId = options.chatId;
     this.allowedUserId = options.allowedUserId;
+    this.operatorAgent = options.operatorAgent;
 
     // Initialize persistent dedup
     this.dedupFilePath = join(paths.stateDir, '.message-dedup-hashes');
@@ -242,21 +252,28 @@ export class FastChecker {
 
   /**
    * Modal-trap watchdog — DETECTION ONLY (no automated recovery). A Claude Code TUI
-   * modal (feedback survey, trust prompt, auth-expiry, weekly-cap, …) can seize the PTY
+   * modal (feedback survey, trust prompt, auth-expiry, usage-cap, …) can seize the PTY
    * and swallow the daemon's bracketed-paste injection, leaving the agent
    * alive-but-unreachable with a green heartbeat and a permanent "typing…".
    *
    * This DETECTS that state and (a) marks the agent DEGRADED so the heartbeat can't
-   * paint it green, and (b) sends a direct, actionable alert to the operator via the
-   * agent's OWN bot. It presses NO keys and triggers NO restart — both can interrupt a
-   * healthy long turn if the discriminator is ever wrong, and a false action into a
-   * privileged REPL fleet-wide is far worse than the bug it fixes. Recovery is
-   * operator-triggered from the alert. (Automated recovery is a deferred, more-gated
-   * follow-up; the survey itself is already prevented by the suppression env var.)
+   * paint it green, and (b) sends a single, actionable alert to the OPERATOR (org
+   * orchestrator) via the bus for triage — NOT the founder-facing Telegram. It presses
+   * NO keys and triggers NO restart — both can interrupt a healthy long turn if the
+   * discriminator is ever wrong, and a false action into a privileged REPL fleet-wide is
+   * far worse than the bug it fixes. Recovery is operator-triggered from the alert.
    *
-   * To stay quiet on healthy work: classify only the CURRENT SCREEN (never scrollback),
-   * and only flag when a modal/await-input signature is on a FROZEN screen, or a pending
-   * message has gone unanswered past the deadline with a frozen screen.
+   * False-positive discipline (the ~79-alert founder-flood, 2026-06-12):
+   *   1. REAL SIGNAL ONLY — classify the CURRENT SCREEN (never scrollback) and require a
+   *      genuine modal/await-input signature. A benign artifact (the removed 'paste again
+   *      to expand' hint) is NOT a signal. Frozen-alone is never a trap (a healthy long
+   *      turn is also frozen).
+   *   2. CORROBORATION (confirmTrapped) — signature AND a frozen screen AND a Telegram
+   *      message left UNANSWERED past the deadline, VETOED by a fresh agent-authored
+   *      heartbeat. A healthy IDLE agent has nothing unanswered, so an artifact can't trip it.
+   *   3. EDGE-TRIGGER + OPERATOR ROUTING — alert ONCE on entering the trapped state, to the
+   *      orchestrator (it escalates to the founder only if real). A false alert must never
+   *      reach the founder N times; cry-wolf erodes the channel for the next real one.
    */
   private async checkModalTrap(): Promise<void> {
     const now = Date.now();
@@ -269,29 +286,63 @@ export class FastChecker {
     const frozen = now - (this.trapScreenChangedAt || now) > OUTPUT_FROZEN_MS;
     const cls = classifyOutput(screen);
 
-    // TRAPPED requires a REAL trap SIGNAL: a modal/await-input signature on a FROZEN live
-    // screen. NEVER frozen-alone — a healthy long turn (reading a big doc, a slow compose,
-    // a long build) is ALSO "message-unanswered + screen-frozen", and a frozen-alone gate
-    // cried wolf with a 'frozen' TRAPPED alert to the operator on a healthy mid-turn agent.
-    // The defining feature of a real trap is a modal/prompt ON SCREEN; without one, there
-    // is no trap to alert on. (Caught even with no pending message — e.g. a pre-existing
-    // modal at startup.)
-    if (!(cls.trapped && frozen)) {
+    // isAgentActive() is true ONLY while an injected Telegram message is still pending — it
+    // goes false the moment the agent replies (outbound grows) OR finishes its turn (the Stop
+    // hook's idle flag post-dates the inject) OR the 10-min window lapses. So "active for >
+    // the reply deadline" = a message the agent has neither answered nor idled past =
+    // genuinely UNANSWERED. Using the idle flag (not just outbound) avoids stale-arming when a
+    // turn completes without a send-telegram reply. A healthy IDLE agent is not active here.
+    const injectUnanswered =
+      this.isAgentActive() && now - this.lastMessageInjectedAt > INJECT_REPLY_DEADLINE_MS;
+    const heartbeatFresh = this.isHeartbeatFresh(now);
+
+    if (!confirmTrapped(cls, { frozen, injectUnanswered, heartbeatFresh })) {
       this.trapDegraded = false;
       return;
     }
 
+    // EDGE-TRIGGER: alert ONCE on entering the trapped state (false→true), never per-poll.
+    // This — with operator routing + the dedup backstop — is what prevents the per-check
+    // alert storm that flooded the founder ~79×.
+    const wasTrapped = this.trapDegraded;
     this.trapDegraded = true;
+    if (wasTrapped) return; // already alerted for this episode
     const sig = cls.known ? `modal:${cls.known.name}` : 'await-input';
-    this.alertStuck(sig, screen, now, cls.known?.humanRequired ?? false);
+    this.alertOperator(sig, screen, now, cls.known?.humanRequired ?? false);
   }
 
   /**
-   * Direct-to-operator stuck alert via the agent's OWN bot (NOT through the
-   * orchestrator — it may be the stuck one). Edge-triggered with a dedup window.
-   * Actionable: tells the operator to restart to recover (recovery is manual this round).
+   * True only if the AGENT ITSELF wrote a heartbeat within the freshness window — proof it
+   * is alive and processing (a trapped agent cannot). Excludes the daemon idle-watchdog's
+   * own writes (status prefixed '[watchdog]') so a watchdog heartbeat never self-vetoes
+   * detection. Fails toward detection (returns false) on any read/parse error.
    */
-  private alertStuck(signature: string, screen: string, now: number, humanRequired = false): void {
+  private isHeartbeatFresh(now: number): boolean {
+    try {
+      const hbPath = join(this.paths.stateDir, 'heartbeat.json');
+      if (!existsSync(hbPath)) return false;
+      const hb = JSON.parse(readFileSync(hbPath, 'utf-8'));
+      const status: string = typeof hb.status === 'string' ? hb.status : '';
+      if (status.startsWith('[watchdog]')) return false; // daemon-written, not the agent
+      const ts: string | undefined = hb.last_heartbeat || hb.timestamp;
+      if (!ts) return false;
+      const age = now - new Date(ts).getTime();
+      return age >= 0 && age < HEARTBEAT_FRESH_MS;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Route a confirmed stuck-agent alert to the OPERATOR (org orchestrator) via the bus —
+   * NOT the agent's own founder-facing Telegram. The orchestrator triages and escalates to
+   * the founder only if real, so a rare false-positive never reaches/erodes the founder
+   * channel (a false alert to the FOUNDER is never low-stakes — it trains the channel to be
+   * ignored). Edge-triggered by the caller; time-deduped here as a flap backstop. Falls
+   * back to the agent's own Telegram ONLY if no operator is configured (still edge+deduped,
+   * so it cannot flood).
+   */
+  private alertOperator(signature: string, screen: string, now: number, humanRequired = false): void {
     if (now - this.lastStuckAlertAt < STUCK_ALERT_DEDUP_MS) return;
     this.lastStuckAlertAt = now;
     const tail = screen.split('\n').slice(-3).join(' / ').slice(-240);
@@ -302,6 +353,18 @@ export class FastChecker {
       `⚠️ ${this.agent.name} appears TRAPPED (${signature}) — not responding (modal seized the PTY). ` +
       `${recover}. Screen tail: ${tail}`;
     this.log(`[modal-watchdog] ALERT ${text}`);
+
+    // Preferred: hand to the orchestrator's inbox; it triages + escalates to the founder.
+    if (this.operatorAgent && this.operatorAgent !== this.agent.name) {
+      try {
+        sendMessage(this.paths, this.agent.name, this.operatorAgent, 'normal', text);
+        return;
+      } catch (e) {
+        this.log(`[modal-watchdog] operator-route failed (${(e as Error).message}); falling back to Telegram`);
+      }
+    }
+    // Fallback only when no operator is configured (or this agent IS the orchestrator):
+    // the agent's own Telegram, but edge-triggered + deduped so it cannot flood.
     if (this.telegramApi && this.chatId) {
       this.telegramApi.sendMessage(this.chatId, text).catch(() => { /* best-effort */ });
     }
