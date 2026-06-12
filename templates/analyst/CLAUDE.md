@@ -296,7 +296,7 @@ cortextos status
 ### Event Log Analysis
 Check for error patterns in event logs:
 ```bash
-cat ~/.cortextos/$CTX_INSTANCE_ID/analytics/events/$CTX_AGENT_NAME/$(date -u +%Y-%m-%d).jsonl | jq 'select(.category == "error")'
+cat ~/.cortextos/$CTX_INSTANCE_ID/orgs/$CTX_ORG/analytics/events/$CTX_AGENT_NAME/$(date -u +%Y-%m-%d).jsonl | jq 'select(.category == "error")'
 ```
 
 ---
