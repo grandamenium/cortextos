@@ -5,6 +5,8 @@ import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { randomDigits } from '../utils/random.js';
 import { validatePriority, validateTaskId } from '../utils/validate.js';
 import { logEvent } from './event.js';
+import { readAllHeartbeats } from './heartbeat.js';
+import { parseDurationMs } from './cron-state.js';
 
 /**
  * Create a new task. Identical JSON format to bash create-task.sh.
@@ -615,9 +617,26 @@ function readAllTasks(taskDir: string): Task[] {
  */
 export function checkStaleTasks(paths: BusPaths): StaleTaskReport {
   const nowEpoch = Math.floor(Date.now() / 1000);
+  const nowMs = Date.now();
   const STALE_IN_PROGRESS = 7200;   // 2 hours
   const STALE_PENDING = 86400;      // 24 hours
   const STALE_HUMAN = 86400;        // 24 hours
+  const LONG_LIVED = 259200;        // 3 days — umbrella/epic tasks live in_progress by design
+  const DEFAULT_LOOP_MS = 4 * 3_600_000; // fallback when loop_interval is absent/unparseable (template default 4h)
+
+  // Map assignee -> last heartbeat age vs 2x their loop interval. A long-lived
+  // in_progress task on an agent whose heartbeat is fresh is NOT a stall — the
+  // agent is alive and the task is a known long-runner (e.g. a launch epic). We
+  // only suppress the in_progress flag for that combination; a short-lived
+  // in_progress task still flags even on a live agent (it may be forgotten).
+  const heartbeatFresh = new Map<string, boolean>();
+  for (const hb of readAllHeartbeats(paths)) {
+    const stamp = hb.last_heartbeat ?? hb.timestamp;
+    if (!stamp) { heartbeatFresh.set(hb.agent, false); continue; }
+    const ageMs = nowMs - new Date(stamp).getTime();
+    const loopMs = parseDurationMs(hb.loop_interval ?? '') || DEFAULT_LOOP_MS;
+    heartbeatFresh.set(hb.agent, ageMs >= 0 && ageMs < 2 * loopMs);
+  }
 
   const report: StaleTaskReport = {
     stale_in_progress: [],
@@ -637,9 +656,16 @@ export function checkStaleTasks(paths: BusPaths): StaleTaskReport {
     const age = nowEpoch - updatedEpoch;
     const createdAge = nowEpoch - createdEpoch;
 
-    // Stale in_progress: updated_at > 2 hours ago
+    // Stale in_progress: updated_at > 2 hours ago. Suppress the flag for a
+    // long-lived (>3d) umbrella/epic task whose assignee heartbeat is fresh —
+    // that is staleness-by-design on a live agent, not a crash. Short-lived
+    // in_progress tasks still flag even on a live agent (could be forgotten).
     if (task.status === 'in_progress' && age > STALE_IN_PROGRESS) {
-      report.stale_in_progress.push(task);
+      const longLivedOnLiveAgent =
+        createdAge > LONG_LIVED && heartbeatFresh.get(task.assigned_to) === true;
+      if (!longLivedOnLiveAgent) {
+        report.stale_in_progress.push(task);
+      }
     }
 
     // Stale pending: created_at > 24 hours ago

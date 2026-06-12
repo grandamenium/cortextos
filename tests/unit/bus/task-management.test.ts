@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createTask, updateTask, completeTask, checkStaleTasks, archiveTasks, checkHumanTasks } from '../../../src/bus/task';
-import { atomicWriteSync } from '../../../src/utils/atomic';
+import { atomicWriteSync, ensureDir } from '../../../src/utils/atomic';
 import type { BusPaths, Task } from '../../../src/types';
 
 /**
@@ -44,6 +44,29 @@ function hoursAgo(hours: number): string {
 
 function daysAgo(days: number): string {
   return hoursAgo(days * 24);
+}
+
+/** Write a heartbeat.json for an agent under <ctxRoot>/state/<agent>/. */
+function writeHeartbeat(
+  paths: BusPaths,
+  agent: string,
+  lastHeartbeat: string,
+  loopInterval = '2h',
+): void {
+  const dir = join(paths.ctxRoot, 'state', agent);
+  ensureDir(dir);
+  atomicWriteSync(
+    join(dir, 'heartbeat.json'),
+    JSON.stringify({
+      agent,
+      org: 'testorg',
+      status: 'online',
+      current_task: '',
+      mode: 'day',
+      last_heartbeat: lastHeartbeat,
+      loop_interval: loopInterval,
+    }),
+  );
 }
 
 describe('Advanced Task Management', () => {
@@ -134,6 +157,67 @@ describe('Advanced Task Management', () => {
       const report = checkStaleTasks(paths);
       expect(report.overdue.length).toBe(1);
       expect(report.overdue[0].id).toBe('task_005_005');
+    });
+
+    it('suppresses long-lived (>3d) in_progress when the assignee heartbeat is fresh', () => {
+      // Umbrella/epic task: in_progress for days by design, on a live agent.
+      createBackdatedTask(paths, {
+        id: 'task_020_020',
+        title: 'Launch epic',
+        status: 'in_progress',
+        assigned_to: 'epicagent',
+        updated_at: hoursAgo(6),
+        created_at: daysAgo(6),
+      });
+      writeHeartbeat(paths, 'epicagent', hoursAgo(1), '2h'); // fresh: 1h < 2x2h=4h
+
+      const report = checkStaleTasks(paths);
+      expect(report.stale_in_progress.map((t) => t.id)).not.toContain('task_020_020');
+    });
+
+    it('still flags long-lived in_progress when the assignee heartbeat is stale', () => {
+      createBackdatedTask(paths, {
+        id: 'task_021_021',
+        title: 'Stalled epic',
+        status: 'in_progress',
+        assigned_to: 'deadagent',
+        updated_at: hoursAgo(6),
+        created_at: daysAgo(6),
+      });
+      writeHeartbeat(paths, 'deadagent', hoursAgo(10), '2h'); // stale: 10h > 2x2h=4h
+
+      const report = checkStaleTasks(paths);
+      expect(report.stale_in_progress.map((t) => t.id)).toContain('task_021_021');
+    });
+
+    it('still flags long-lived in_progress when the assignee has no heartbeat', () => {
+      createBackdatedTask(paths, {
+        id: 'task_022_022',
+        title: 'Orphan epic',
+        status: 'in_progress',
+        assigned_to: 'ghostagent',
+        updated_at: hoursAgo(6),
+        created_at: daysAgo(6),
+      });
+      // No heartbeat written — no proof of life, so do not suppress.
+      const report = checkStaleTasks(paths);
+      expect(report.stale_in_progress.map((t) => t.id)).toContain('task_022_022');
+    });
+
+    it('still flags short-lived (>2h, <3d) in_progress even on a fresh-heartbeat agent', () => {
+      // Not long-lived: could be a forgotten task, so the live agent should still be nudged.
+      createBackdatedTask(paths, {
+        id: 'task_023_023',
+        title: 'Forgotten task',
+        status: 'in_progress',
+        assigned_to: 'liveagent',
+        updated_at: hoursAgo(3),
+        created_at: hoursAgo(5),
+      });
+      writeHeartbeat(paths, 'liveagent', hoursAgo(1), '2h');
+
+      const report = checkStaleTasks(paths);
+      expect(report.stale_in_progress.map((t) => t.id)).toContain('task_023_023');
     });
 
     it('skips completed tasks', () => {
