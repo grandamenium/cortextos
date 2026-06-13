@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "default_scope": "private",
+  "sources": [
+    {
+      "source_id": "manual-notes",
+      "name": "Manual notes drop",
+      "type": "manual",
+      "owner": "user",
+      "scope": "private",
+      "status": "active",
+      "collection": "private-agent-kb",
+      "path_or_url": "kb/raw/manual",
+      "connector": "local-files",
+      "allowed_content": ["markdown", "text", "pdf exports approved by the owner"],
+      "excluded_content": ["credentials", "private keys", "unapproved third-party data"],
+      "privacy_review": {
+        "reviewed_by": "user",
+        "reviewed_at": "not-yet-reviewed",
+        "shared_approved": false,
+        "notes": "Private until the user explicitly approves sharing."
+      },
+      "tags": ["manual", "seed"],
+      "last_ingested_at": null,
+      "next_review_at": "not-scheduled"
+    }
+  ]
+}

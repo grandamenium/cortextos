@@ -1,0 +1,32 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "timezone": "",
+  "mode": "day",
+  "template": "coding-agent",
+  "setup_skill": "setup",
+  "working_directory": "",
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update heartbeat, check inbox/tasks, write memory, and continue the highest-priority safe coding task."
+    },
+    {
+      "name": "coding-pr-review-queue",
+      "type": "recurring",
+      "cron": "0 10 * * 1-5",
+      "prompt": "Review configured PR queues from coding/repositories.json. Draft findings only; request approval before posting externally."
+    },
+    {
+      "name": "coding-ci-scan",
+      "type": "recurring",
+      "cron": "30 10 * * 1-5",
+      "prompt": "Scan configured CI failures and record notes in work/ci/. Create tasks for actionable failures."
+    }
+  ]
+}

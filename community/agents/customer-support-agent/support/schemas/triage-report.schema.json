@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "triage-report.schema.json",
+  "title": "Support Triage Report",
+  "type": "object",
+  "required": [
+    "date",
+    "tickets_processed",
+    "drafts_created",
+    "approvals_pending",
+    "escalations",
+    "kb_gaps",
+    "next_actions"
+  ],
+  "properties": {
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "tickets_processed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "drafts_created": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "approvals_pending": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "escalations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "kb_gaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sla_risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

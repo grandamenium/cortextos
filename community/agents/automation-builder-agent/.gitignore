@@ -1,0 +1,6 @@
+.env
+!AGENTS.md
+memory/*.md
+automations/runs/*.tmp
+automations/runs/*.log
+tmp/

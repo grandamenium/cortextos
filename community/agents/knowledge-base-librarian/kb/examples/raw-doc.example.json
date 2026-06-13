@@ -1,0 +1,18 @@
+{
+  "raw_doc_id": "raw-manual-notes-001",
+  "source_id": "manual-notes",
+  "path": "kb/raw/manual/example-note.md",
+  "original_name": "example-note.md",
+  "mime_type": "text/markdown",
+  "hash": {
+    "algorithm": "sha256",
+    "value": "example-hash-replace-during-ingestion"
+  },
+  "privacy": {
+    "scope": "private",
+    "shared_approved": false,
+    "notes": "Manual drop defaults to private."
+  },
+  "captured_at": "2026-01-01T00:00:00Z",
+  "notes": "Example manifest for a local manual file."
+}

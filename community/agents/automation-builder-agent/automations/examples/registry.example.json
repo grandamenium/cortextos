@@ -1,0 +1,20 @@
+{
+  "$schema": "../schemas/automation-registry.schema.json",
+  "version": 1,
+  "automations": [
+    {
+      "id": "local-file-inbox-summary",
+      "name": "Local file inbox summary",
+      "status": "example",
+      "risk_level": "low",
+      "target": "local-script",
+      "owner": "automation-builder-agent",
+      "spec_path": "automations/examples/local-file-inbox-summary.spec.json",
+      "runbook_path": "automations/examples/local-file-inbox-summary.runbook.json",
+      "handoff_path": "automations/examples/local-file-inbox-summary.handoff.json",
+      "last_run_path": "automations/examples/local-file-inbox-summary.run-record.json",
+      "blocked_by": [],
+      "next_action": "Use as the first local smoke fixture or replace with the user's highest-value automation candidate."
+    }
+  ]
+}

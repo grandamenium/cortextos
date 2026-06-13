@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.local/schemas/concierge/template-map.schema.json",
+  "title": "Concierge Template Map",
+  "type": "object",
+  "required": ["version", "templates"],
+  "properties": {
+    "version": { "type": "string" },
+    "templates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["template", "best_for", "first_task_examples"],
+        "properties": {
+          "template": { "type": "string" },
+          "best_for": { "type": "array", "items": { "type": "string" } },
+          "first_task_examples": { "type": "array", "items": { "type": "string" } },
+          "required_tools": { "type": "array", "items": { "type": "string" } },
+          "optional_native_analogs": {
+            "type": "array",
+            "description": "Educational role analogs only, never runtime dependencies.",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

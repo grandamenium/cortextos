@@ -1,0 +1,40 @@
+{
+  "version": "1.0",
+  "templates": [
+    {
+      "template": "knowledge-base-librarian",
+      "best_for": ["document ingestion", "private searchable memory", "source registry"],
+      "first_task_examples": ["Ingest a local folder privately", "Write a KB source registry", "Verify search with three queries"],
+      "required_tools": ["local files"],
+      "optional_native_analogs": ["librarian", "archivist"]
+    },
+    {
+      "template": "automation-builder-agent",
+      "best_for": ["repeatable workflows", "runbooks", "local scripts", "tool handoffs"],
+      "first_task_examples": ["Turn one manual process into a runbook", "Identify credential blockers"],
+      "required_tools": ["local files"],
+      "optional_native_analogs": ["automation engineer"]
+    },
+    {
+      "template": "customer-support-agent",
+      "best_for": ["ticket triage", "reply drafts", "macro gaps", "support reports"],
+      "first_task_examples": ["Classify local ticket samples", "Draft replies for approval"],
+      "required_tools": ["local ticket exports"],
+      "optional_native_analogs": ["support specialist"]
+    },
+    {
+      "template": "coding-agent",
+      "best_for": ["repository tasks", "code review", "CI triage", "patch handoff"],
+      "first_task_examples": ["Summarize repo status", "Draft a patch plan", "Inspect failing CI logs"],
+      "required_tools": ["git repository"],
+      "optional_native_analogs": ["software engineer"]
+    },
+    {
+      "template": "research-agent",
+      "best_for": ["source-backed briefs", "monitoring", "topic synthesis"],
+      "first_task_examples": ["Create a local research brief", "Define source list and scoring rubric"],
+      "required_tools": ["local or public sources"],
+      "optional_native_analogs": ["research analyst"]
+    }
+  ]
+}

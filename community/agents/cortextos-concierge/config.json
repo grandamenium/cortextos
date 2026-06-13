@@ -1,0 +1,48 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "{{timezone}}",
+  "mode": "day",
+  "template": "cortextos-concierge",
+  "setup_skill": "concierge-setup",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and .claude/skills/heartbeat/SKILL.md. Update heartbeat, check inbox, review pending onboarding tasks and approvals, write memory, and continue the smallest useful concierge setup step."
+    },
+    {
+      "name": "first-week-review",
+      "type": "recurring",
+      "cron": "0 10 * * *",
+      "prompt": "Create a task for this first-week review, mark it in_progress, then read .claude/skills/first-week-plan/SKILL.md. Review concierge/onboarding-profile.json, concierge/starter-team-recommendation.json, concierge/day-one-workflow.json, pending approvals, and handoffs. Update concierge/first-week-plan.md with progress and next smallest useful step. Complete or block the task appropriately."
+    }
+  ],
+  "concierge": {
+    "onboarding_profile": "concierge/onboarding-profile.json",
+    "starter_team_recommendation": "concierge/starter-team-recommendation.json",
+    "day_one_workflow": "concierge/day-one-workflow.json",
+    "first_week_plan": "concierge/first-week-plan.md",
+    "handoff_dir": "concierge/handoffs",
+    "workflow_dir": "concierge/workflows",
+    "template_map": "examples/template-map.json",
+    "requires_approval_for_agent_creation": true
+  },
+  "approval_rules": {
+    "always_ask": [
+      "agent-creation",
+      "template-install",
+      "external-comms",
+      "deployment",
+      "financial",
+      "data-deletion"
+    ],
+    "never_ask": []
+  }
+}

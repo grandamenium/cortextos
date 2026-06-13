@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.dev/schemas/social-media-agent/approval.schema.json",
+  "title": "Social Media Approval Packet",
+  "type": "object",
+  "required": ["id", "created_at", "draft_id", "platform", "action", "status", "summary", "approval_required"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "draft_id": { "type": "string" },
+    "platform": { "type": "string" },
+    "account": { "type": "string" },
+    "action": { "type": "string", "enum": ["schedule", "publish", "comment", "reply", "dm", "edit", "delete", "profile_change"] },
+    "status": { "type": "string", "enum": ["pending", "approved", "rejected", "cancelled"] },
+    "summary": { "type": "string" },
+    "requested_time": { "type": "string" },
+    "content_path": { "type": "string" },
+    "risk_notes": { "type": "array", "items": { "type": "string" } },
+    "rollback_plan": { "type": "string" },
+    "approval_required": { "type": "boolean", "const": true },
+    "bus_approval_id": { "type": "string" },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "decided_at": { "type": "string" },
+        "decision": { "type": "string", "enum": ["approved", "rejected"] },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

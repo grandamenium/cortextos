@@ -1,0 +1,8 @@
+{
+  "platforms": [],
+  "default_approval_policy": {
+    "external_actions_require_approval": true,
+    "allowed_without_approval": ["local research", "local drafts", "local analytics summaries"],
+    "always_requires_approval": ["publish", "schedule", "comment", "reply", "dm", "edit", "delete", "profile_change"]
+  }
+}

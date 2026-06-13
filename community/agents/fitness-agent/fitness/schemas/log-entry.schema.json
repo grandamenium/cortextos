@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fitness Log Entry",
+  "type": "object",
+  "required": ["date", "type", "name", "status", "source", "safety_flags"],
+  "properties": {
+    "date": { "type": "string", "format": "date" },
+    "type": { "type": "string", "enum": ["workout", "habit", "recovery", "sleep", "nutrition", "hydration", "mood", "note"] },
+    "name": { "type": "string" },
+    "status": { "type": "string" },
+    "quantity": { "type": ["number", "string", "null"] },
+    "unit": { "type": ["string", "null"] },
+    "notes": { "type": "string" },
+    "source": { "type": "string" },
+    "safety_flags": { "type": "array", "items": { "type": "string" } }
+  }
+}

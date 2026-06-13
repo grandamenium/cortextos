@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "created_at": "2026-06-13T10:10:00-04:00",
+  "name": "Private feedback notes ingestion",
+  "outcome": "Make product feedback notes searchable and produce a first themes report.",
+  "trigger": "User places notes in the selected local folder.",
+  "owner": "knowledge-base-librarian",
+  "steps": [
+    {
+      "order": 1,
+      "actor": "concierge",
+      "action": "Write handoff and first task for the approved KB librarian.",
+      "input": "onboarding profile and starter recommendation",
+      "output": "concierge/handoffs/kb-librarian.md"
+    },
+    {
+      "order": 2,
+      "actor": "knowledge-base-librarian",
+      "action": "Register the local source folder as private and ingest sample notes.",
+      "input": "selected notes folder",
+      "output": "kb/reports/first-ingestion.md"
+    }
+  ],
+  "approval_gates": ["Create kb-librarian agent", "Any external sharing of report"],
+  "outputs": ["concierge/handoffs/kb-librarian.md", "kb/reports/first-ingestion.md"],
+  "done_criteria": ["User can query the notes", "First themes report exists", "No external systems were modified"],
+  "pause_conditions": ["User has not selected a notes folder", "Agent creation approval is pending"]
+}

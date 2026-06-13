@@ -1,0 +1,28 @@
+{
+  "doc_id": "norm-manual-notes-001",
+  "source_id": "manual-notes",
+  "raw_doc_id": "raw-manual-notes-001",
+  "title": "Example Manual Note",
+  "content": "# Example Manual Note\n\nThis is a fixture showing the normalized document format. Replace with user-approved source content during real ingestion.",
+  "metadata": {
+    "source_path_or_url": "kb/raw/manual/example-note.md",
+    "hash": {
+      "algorithm": "sha256",
+      "value": "example-hash-replace-during-ingestion"
+    },
+    "author": "user",
+    "created_at": "2026-01-01T00:00:00Z",
+    "ingested_at": "2026-01-01T00:05:00Z",
+    "owner": "user",
+    "tags": ["manual", "example"],
+    "confidence": "high",
+    "freshness": "current",
+    "transformation_notes": "Markdown copied into normalized JSON for ingestion."
+  },
+  "privacy": {
+    "scope": "private",
+    "collection": "private-agent-kb",
+    "shared_approved": false,
+    "redactions": []
+  }
+}

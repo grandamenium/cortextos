@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "created_at": "2026-06-13T10:00:00-04:00",
+  "timezone": "America/New_York",
+  "outcome": "Make my product feedback notes searchable and turn repeated themes into weekly action items.",
+  "category": "operations",
+  "success_24h": "A small set of notes is ingested locally and a first themes report exists.",
+  "boundaries": {
+    "never_touch": ["billing systems", "production customer emails"],
+    "external_writes_require_approval": true,
+    "agent_creation_requires_approval": true
+  },
+  "tools": [
+    {
+      "name": "local-files",
+      "status": "available",
+      "access": "read_only",
+      "notes": "User will place notes in a local folder."
+    },
+    {
+      "name": "knowledge-base",
+      "status": "unknown",
+      "access": "unknown",
+      "notes": "Verify with kb-collections before ingest."
+    }
+  ],
+  "human_tasks": ["Choose the first notes folder to ingest."],
+  "approval_policy": {
+    "agent_creation": "required",
+    "external_writes": "required",
+    "data_deletion": "required"
+  }
+}

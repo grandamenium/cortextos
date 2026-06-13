@@ -1,0 +1,54 @@
+{
+  "setup_status": "complete",
+  "user": {
+    "display_name": "User",
+    "timezone": "America/New_York",
+    "privacy": "local_files_default"
+  },
+  "goals": [
+    {
+      "id": "primary",
+      "description": "Build a sustainable three-day-per-week movement routine.",
+      "why_it_matters": "More energy and consistency.",
+      "time_horizon": "12_weeks",
+      "success_markers": ["three planned sessions most weeks", "no pain escalation", "weekly review completed"]
+    }
+  ],
+  "baseline": {
+    "training_days_per_week": 1,
+    "movement": "occasional walks",
+    "sleep": "variable",
+    "recovery": "prefers gradual progress",
+    "available_equipment": ["walking shoes", "resistance bands"],
+    "available_time": "30 minutes on weekdays"
+  },
+  "constraints": {
+    "injuries_or_medical": [],
+    "professional_guidance": [],
+    "accessibility_needs": [],
+    "off_limits_topics": ["body shaming", "appearance criticism"]
+  },
+  "tracking": {
+    "source_of_truth": "local_files",
+    "metrics": ["workouts", "habits", "recovery"],
+    "external_tools": []
+  },
+  "coaching": {
+    "tone": "gentle",
+    "direct_accountability_opt_in": false,
+    "profanity_opt_in": false,
+    "intensity_escalation_opt_in": false
+  },
+  "schedule": {
+    "morning_plan": "07:00",
+    "evening_review": "20:00",
+    "weekly_review": "Sunday 09:00",
+    "quiet_hours": "21:00-07:00"
+  },
+  "safety": {
+    "no_medical_diagnosis": true,
+    "no_unsafe_restriction": true,
+    "no_body_shaming": true,
+    "route_to_professional_when_needed": true
+  }
+}

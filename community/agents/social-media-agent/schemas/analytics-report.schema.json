@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.dev/schemas/social-media-agent/analytics-report.schema.json",
+  "title": "Social Media Analytics Report",
+  "type": "object",
+  "required": ["id", "period", "created_at", "platforms", "summary", "recommendations"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "period": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "string", "format": "date" },
+        "end": { "type": "string", "format": "date" }
+      }
+    },
+    "platforms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "posts_reviewed", "metrics"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "posts_reviewed": { "type": "integer", "minimum": 0 },
+          "metrics": { "type": "object", "additionalProperties": { "type": ["number", "integer", "string", "null"] } },
+          "top_posts": { "type": "array", "items": { "type": "string" } },
+          "weak_posts": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["wins", "misses", "patterns", "data_gaps"],
+      "additionalProperties": false,
+      "properties": {
+        "wins": { "type": "array", "items": { "type": "string" } },
+        "misses": { "type": "array", "items": { "type": "string" } },
+        "patterns": { "type": "array", "items": { "type": "string" } },
+        "data_gaps": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "recommendations": { "type": "array", "items": { "type": "string" } }
+  }
+}

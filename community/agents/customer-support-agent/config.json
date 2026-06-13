@@ -1,0 +1,75 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "timezone": "{{timezone}}",
+  "mode": "day",
+  "template": "customer-support-agent",
+  "setup_skill": "setup",
+  "working_directory": "",
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and AGENTS.md. Update heartbeat, check inbox/tasks, review pending drafts, escalations, KB gaps, SLA risks, write memory, and continue the highest-priority safe support task."
+    },
+    {
+      "name": "support-triage",
+      "type": "recurring",
+      "cron": "0 9 * * 1-5",
+      "prompt": "Create or update a support triage task, mark it in_progress, then run .claude/skills/ticket-triage/SKILL.md against support/tickets.jsonl or configured support queues. Draft replies only; do not send externally without approval."
+    },
+    {
+      "name": "pending-drafts-review",
+      "type": "recurring",
+      "cron": "0 15 * * 1-5",
+      "prompt": "Create or update a pending drafts review task, mark it in_progress, then review support/drafts, pending approvals, escalations, SLA risk, and stale tickets. Create follow-up tasks or reports. Do not send externally without approval."
+    },
+    {
+      "name": "weekly-kb-gap-review",
+      "type": "recurring",
+      "cron": "0 11 * * 5",
+      "prompt": "Create or update a weekly KB gap review task, mark it in_progress, then run .claude/skills/support-kb-gap-review/SKILL.md. Review support/kb-gaps and reports for repeated issues, weak macros, missing docs, and product feedback."
+    }
+  ],
+  "support": {
+    "default_connector": "local_files",
+    "ticket_queue": "support/tickets.jsonl",
+    "config": "support/config.json",
+    "macros": "support/macros.md",
+    "escalation_policy": "support/escalation-policy.json",
+    "drafts_dir": "support/drafts",
+    "reports_dir": "support/reports",
+    "kb_gaps_dir": "support/kb-gaps",
+    "customer_sends_require_approval": true,
+    "optional_connectors": [
+      "zendesk",
+      "intercom",
+      "freshdesk",
+      "help_scout",
+      "gmail",
+      "outlook",
+      "github",
+      "linear",
+      "jira"
+    ]
+  },
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "customer-send",
+      "ticket-mutation",
+      "financial",
+      "data-deletion",
+      "account-access",
+      "legal",
+      "security",
+      "privacy",
+      "policy-exception"
+    ],
+    "never_ask": []
+  }
+}

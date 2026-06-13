@@ -1,0 +1,7 @@
+.env
+memory/*.md
+support/reports/*.md
+support/drafts/*.md
+support/kb-gaps/*.json
+support/tickets.jsonl
+tmp/

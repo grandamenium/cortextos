@@ -1,0 +1,55 @@
+{
+  "$schema": "../schemas/automation-spec.schema.json",
+  "id": "local-file-inbox-summary",
+  "name": "Local file inbox summary",
+  "request": "Summarize local .txt notes dropped into an inbox directory and write a markdown digest without sending anything externally.",
+  "target": "local-script",
+  "trigger": {
+    "type": "manual",
+    "description": "User or cron runs the workflow against a local inbox folder."
+  },
+  "inputs": [
+    {
+      "name": "inbox_directory",
+      "source": "local filesystem path containing .txt files",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "markdown_digest",
+      "destination": "local output file such as automations/runs/local-file-inbox-summary-digest.md"
+    }
+  ],
+  "actions": [
+    "List .txt files in the configured inbox directory.",
+    "Read each file locally.",
+    "Extract filename, first line, word count, and action-looking lines.",
+    "Write a markdown digest to a local output path."
+  ],
+  "approval_gates": [
+    "Approval is required before emailing, posting, deleting, moving, or syncing the digest outside the local machine."
+  ],
+  "risk": {
+    "level": "low",
+    "failure_modes": [
+      "No input files found",
+      "Unreadable file",
+      "Digest omits a file because the glob pattern is too narrow"
+    ],
+    "side_effects": [
+      "Writes one local markdown digest"
+    ]
+  },
+  "rollback": "Delete the generated digest file. Source files are read-only and are not modified.",
+  "verification": {
+    "local_dry_run": "Create a fixture inbox with two .txt files, run the script in dry-run/read-only mode, and verify the digest includes both filenames.",
+    "tests": [
+      "Input directory missing returns a clear error",
+      "Empty input directory creates a digest with zero items",
+      "Two fixture files produce two digest entries",
+      "Source files are not modified"
+    ]
+  },
+  "owner": "automation-builder-agent"
+}

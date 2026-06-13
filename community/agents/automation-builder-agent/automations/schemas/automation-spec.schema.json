@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Automation Spec",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "request",
+    "target",
+    "trigger",
+    "inputs",
+    "outputs",
+    "actions",
+    "approval_gates",
+    "risk",
+    "rollback",
+    "verification",
+    "owner"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "request": {
+      "type": "string"
+    },
+    "target": {
+      "enum": ["local-script", "github-actions", "n8n", "make", "zapier", "pipedream", "mcp-cli", "browser-automation", "cortextos-agent", "human-runbook", "other"]
+    },
+    "trigger": {
+      "type": "object",
+      "required": ["type", "description"],
+      "properties": {
+        "type": {
+          "enum": ["manual", "schedule", "event", "webhook", "file-change", "message", "other"]
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "source", "required"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "destination"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "approval_gates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk": {
+      "type": "object",
+      "required": ["level", "failure_modes", "side_effects"],
+      "properties": {
+        "level": {
+          "enum": ["low", "medium", "high"]
+        },
+        "failure_modes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "side_effects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "rollback": {
+      "type": "string"
+    },
+    "verification": {
+      "type": "object",
+      "required": ["local_dry_run", "tests"],
+      "properties": {
+        "local_dry_run": {
+          "type": "string"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "owner": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

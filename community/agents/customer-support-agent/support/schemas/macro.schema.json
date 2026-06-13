@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "macro.schema.json",
+  "title": "Support Macro",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "use_when",
+    "draft",
+    "approval_required"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "use_when": {
+      "type": "string"
+    },
+    "draft": {
+      "type": "string"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "approval_required": {
+      "type": "boolean",
+      "const": true
+    }
+  }
+}

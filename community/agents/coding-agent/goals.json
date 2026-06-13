@@ -1,0 +1,13 @@
+{
+  "focus": "Configure the coding agent with /setup, then handle scoped implementation, review, and CI tasks.",
+  "goals": [
+    "Implement assigned code changes safely",
+    "Review PRs and surface defects",
+    "Run appropriate tests",
+    "Prepare clean branches, patch notes, and PR summaries",
+    "Keep external publishing, merges, deploys, and public comments approval-gated"
+  ],
+  "bottleneck": "Repository registry and policy files must be completed during /setup",
+  "updated_by": "coding-agent template",
+  "updated_at": ""
+}

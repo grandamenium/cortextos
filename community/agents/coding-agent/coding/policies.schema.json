@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.dev/schemas/coding-agent/policies.schema.json",
+  "title": "Coding Agent Policy",
+  "type": "object",
+  "required": ["version", "defaults", "review", "testing", "approvals"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "defaults": {
+      "type": "object",
+      "required": ["planning_depth", "worktree_mode", "status_cadence"],
+      "additionalProperties": false,
+      "properties": {
+        "planning_depth": {
+          "type": "string",
+          "enum": ["brief", "standard", "detailed"]
+        },
+        "worktree_mode": {
+          "type": "string",
+          "enum": ["prefer-worktree", "branch-in-place", "ask"]
+        },
+        "status_cadence": {
+          "type": "string"
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "required": ["style", "severity_order"],
+      "additionalProperties": false,
+      "properties": {
+        "style": {
+          "type": "string",
+          "enum": ["bug-first", "balanced", "educational"]
+        },
+        "severity_order": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "nit"]
+          }
+        },
+        "require_line_refs": {
+          "type": "boolean"
+        }
+      }
+    },
+    "testing": {
+      "type": "object",
+      "required": ["minimum_for_code_change", "record_evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "minimum_for_code_change": {
+          "type": "string"
+        },
+        "record_evidence": {
+          "type": "boolean"
+        },
+        "skip_requires_reason": {
+          "type": "boolean"
+        }
+      }
+    },
+    "approvals": {
+      "type": "object",
+      "required": ["external_actions", "destructive_actions"],
+      "additionalProperties": false,
+      "properties": {
+        "external_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "destructive_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "default_category": {
+          "type": "string",
+          "enum": ["external-comms", "deployment", "data-deletion", "financial", "other"]
+        }
+      }
+    }
+  }
+}

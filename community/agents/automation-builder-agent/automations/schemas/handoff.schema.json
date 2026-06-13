@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Automation Handoff",
+  "type": "object",
+  "required": ["id", "spec_path", "runbook_path", "recommended_target", "implementation_owner", "blockers", "approval_required", "local_verification", "task"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "spec_path": {
+      "type": "string"
+    },
+    "runbook_path": {
+      "type": "string"
+    },
+    "recommended_target": {
+      "type": "string"
+    },
+    "implementation_owner": {
+      "type": "string"
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "description", "status"],
+        "properties": {
+          "type": {
+            "enum": ["credential", "human-decision", "approval", "data-sample", "account-access", "technical", "none"]
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["open", "resolved", "not-applicable"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "approval_required": {
+      "type": "boolean"
+    },
+    "local_verification": {
+      "type": "string"
+    },
+    "task": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": ["pending", "in_progress", "blocked", "completed", "not-created"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

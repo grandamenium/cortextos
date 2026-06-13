@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Automation Registry",
+  "type": "object",
+  "required": ["version", "automations"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "automations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "status", "risk_level", "target", "owner", "blocked_by", "next_action"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["example", "candidate", "specified", "runbook-ready", "blocked", "ready-for-implementation", "verified-local", "active", "retired"]
+          },
+          "risk_level": {
+            "enum": ["low", "medium", "high"]
+          },
+          "target": {
+            "enum": ["local-script", "github-actions", "n8n", "make", "zapier", "pipedream", "mcp-cli", "browser-automation", "cortextos-agent", "human-runbook", "other"]
+          },
+          "owner": {
+            "type": "string"
+          },
+          "spec_path": {
+            "type": "string"
+          },
+          "runbook_path": {
+            "type": "string"
+          },
+          "handoff_path": {
+            "type": "string"
+          },
+          "last_run_path": {
+            "type": "string"
+          },
+          "blocked_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "next_action": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

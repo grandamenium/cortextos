@@ -1,0 +1,28 @@
+{
+  "id": "analytics_2026-01-19_weekly",
+  "created_at": "2026-01-19T18:00:00Z",
+  "period": {
+    "start": "2026-01-12",
+    "end": "2026-01-18"
+  },
+  "platforms": [
+    {
+      "name": "LinkedIn",
+      "posts_reviewed": 3,
+      "metrics": {
+        "impressions": 1200,
+        "engagement_rate": 0.042,
+        "comments": 8
+      },
+      "top_posts": ["draft_2026-01-15_linkedin_workflow-design"],
+      "weak_posts": []
+    }
+  ],
+  "summary": {
+    "wins": ["Posts with concrete pipeline states earned the most saves."],
+    "misses": ["Broad commentary posts had weaker replies."],
+    "patterns": ["Specific process breakdowns outperformed generic takes."],
+    "data_gaps": ["No click tracking configured."]
+  },
+  "recommendations": ["Draft two more process breakdowns next week.", "Create a human task to configure click tracking if conversions matter."]
+}

@@ -382,10 +382,14 @@ function findTemplateDir(projectRoot: string, template: string): string | null {
   const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || projectRoot;
   const candidates = [
     join(projectRoot, 'templates', template),
+    join(projectRoot, 'templates', 'personas', template),
     join(frameworkRoot, 'templates', template),
+    join(frameworkRoot, 'templates', 'personas', template),
     join(projectRoot, 'node_modules', 'cortextos', 'templates', template),
+    join(projectRoot, 'node_modules', 'cortextos', 'templates', 'personas', template),
     // Relative to this file for development
     join(__dirname, '..', '..', 'templates', template),
+    join(__dirname, '..', '..', 'templates', 'personas', template),
   ];
 
   for (const dir of candidates) {

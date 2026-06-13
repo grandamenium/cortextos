@@ -1,0 +1,17 @@
+{
+  "id": "approval_2026-01-15_linkedin_workflow-design",
+  "created_at": "2026-01-15T14:45:00Z",
+  "draft_id": "draft_2026-01-15_linkedin_workflow-design",
+  "platform": "LinkedIn",
+  "account": "@example-studio",
+  "action": "schedule",
+  "status": "pending",
+  "summary": "Schedule one LinkedIn text post about approval-safe content pipelines.",
+  "requested_time": "2026-01-16T15:00:00-05:00",
+  "content_path": "examples/draft.example.json",
+  "risk_notes": ["External platform action.", "No private customer data included."],
+  "rollback_plan": "If scheduled incorrectly, delete or unschedule the post in the configured platform tool.",
+  "approval_required": true,
+  "bus_approval_id": "",
+  "decision": {}
+}

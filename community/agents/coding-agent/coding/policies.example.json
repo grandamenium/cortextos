@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "defaults": {
+    "planning_depth": "standard",
+    "worktree_mode": "prefer-worktree",
+    "status_cadence": "Send concise status when starting, when blocked, and when done."
+  },
+  "review": {
+    "style": "bug-first",
+    "severity_order": ["critical", "high", "medium", "low", "nit"],
+    "require_line_refs": true
+  },
+  "testing": {
+    "minimum_for_code_change": "Run the narrowest relevant local test or explain why it is unavailable.",
+    "record_evidence": true,
+    "skip_requires_reason": true
+  },
+  "approvals": {
+    "external_actions": ["open_pr", "update_pr", "post_comment", "merge", "deploy", "send_message"],
+    "destructive_actions": ["delete_branch", "delete_data", "force_push", "reset_shared_branch"],
+    "default_category": "other"
+  }
+}

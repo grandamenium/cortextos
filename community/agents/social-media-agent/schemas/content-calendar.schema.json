@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.dev/schemas/social-media-agent/content-calendar.schema.json",
+  "title": "Social Media Content Calendar",
+  "type": "object",
+  "required": ["timezone", "cadence", "slots"],
+  "additionalProperties": false,
+  "properties": {
+    "timezone": { "type": "string" },
+    "cadence": { "type": "string" },
+    "slots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["day", "time", "platform", "format", "pillar"],
+        "additionalProperties": false,
+        "properties": {
+          "day": { "type": "string" },
+          "time": { "type": "string" },
+          "platform": { "type": "string" },
+          "format": { "type": "string" },
+          "pillar": { "type": "string" },
+          "status": { "type": "string", "enum": ["idea_needed", "draft_needed", "pending_approval", "approved", "scheduled", "published", "skipped"] }
+        }
+      }
+    },
+    "blackout_dates": { "type": "array", "items": { "type": "string", "format": "date" } }
+  }
+}

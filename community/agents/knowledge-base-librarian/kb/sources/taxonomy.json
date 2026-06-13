@@ -1,0 +1,10 @@
+{
+  "version": "1.0",
+  "facets": {
+    "topics": ["operations", "projects", "reference", "decisions", "processes"],
+    "audiences": ["user", "team", "agents", "customers"],
+    "source_types": ["manual", "local_folder", "drive", "notion", "website", "repo", "video", "pdf"],
+    "freshness": ["current", "review-soon", "stale", "unknown"],
+    "confidence": ["low", "medium", "high"]
+  }
+}

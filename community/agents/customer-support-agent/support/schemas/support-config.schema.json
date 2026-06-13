@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "support-config.schema.json",
+  "title": "Support Config",
+  "type": "object",
+  "required": [
+    "product",
+    "intake",
+    "classification",
+    "approval"
+  ],
+  "properties": {
+    "product": {
+      "type": "object",
+      "required": [
+        "name",
+        "docs_sources"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "docs_sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "intake": {
+      "type": "object",
+      "required": [
+        "default_connector",
+        "local_ticket_file"
+      ],
+      "properties": {
+        "default_connector": {
+          "type": "string",
+          "enum": [
+            "local_files",
+            "zendesk",
+            "intercom",
+            "freshdesk",
+            "help_scout",
+            "gmail",
+            "outlook"
+          ]
+        },
+        "local_ticket_file": {
+          "type": "string"
+        },
+        "optional_connectors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "properties": {
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "priorities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          }
+        },
+        "sentiments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "sla": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "approval": {
+      "type": "object",
+      "required": [
+        "customer_sends_require_approval"
+      ],
+      "properties": {
+        "customer_sends_require_approval": {
+          "type": "boolean",
+          "const": true
+        },
+        "external_ticket_mutations_require_approval": {
+          "type": "boolean"
+        }
+      }
+    },
+    "handoffs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  }
+}

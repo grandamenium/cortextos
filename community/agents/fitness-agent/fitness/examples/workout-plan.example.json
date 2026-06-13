@@ -1,0 +1,39 @@
+{
+  "date": "2026-06-13",
+  "profile_goal_ids": ["primary"],
+  "safety_notes": ["Use the user's configured constraints and stop conditions."],
+  "workouts": [
+    {
+      "name": "Beginner strength circuit",
+      "intent": "Practice consistency and basic movement patterns.",
+      "duration_minutes": 25,
+      "intensity": "easy_to_moderate",
+      "steps": [
+        "5 minutes warm-up",
+        "2 rounds of sit-to-stand, wall push-up, band row, and easy carry",
+        "5 minutes cool-down"
+      ],
+      "modifications": [
+        "Reduce to one round if recovery is low",
+        "Skip or replace any movement that conflicts with professional guidance"
+      ]
+    }
+  ],
+  "habits": [
+    {
+      "id": "recovery-note",
+      "name": "Recovery note",
+      "target": "Write one sentence about energy or soreness",
+      "cadence": "after workout",
+      "tracking": "evening check-in",
+      "minimum_viable_version": "one word",
+      "off_limits": false
+    }
+  ],
+  "checkins": [
+    {
+      "time": "20:00",
+      "prompt": "Did the strength circuit happen as planned, as a smaller version, or should I log the blocker?"
+    }
+  ]
+}

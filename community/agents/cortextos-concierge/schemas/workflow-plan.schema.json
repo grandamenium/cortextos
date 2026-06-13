@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.local/schemas/concierge/workflow-plan.schema.json",
+  "title": "Concierge Day-One Workflow Plan",
+  "type": "object",
+  "required": ["version", "created_at", "name", "outcome", "trigger", "steps", "approval_gates", "outputs", "done_criteria"],
+  "properties": {
+    "version": { "type": "string" },
+    "created_at": { "type": "string" },
+    "name": { "type": "string" },
+    "outcome": { "type": "string" },
+    "trigger": { "type": "string" },
+    "owner": { "type": "string" },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["order", "actor", "action"],
+        "properties": {
+          "order": { "type": "integer", "minimum": 1 },
+          "actor": { "type": "string" },
+          "action": { "type": "string" },
+          "input": { "type": "string" },
+          "output": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "approval_gates": { "type": "array", "items": { "type": "string" } },
+    "outputs": { "type": "array", "items": { "type": "string" } },
+    "done_criteria": { "type": "array", "items": { "type": "string" } },
+    "pause_conditions": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}
