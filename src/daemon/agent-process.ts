@@ -24,6 +24,7 @@ export class AgentProcess {
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  private bootTimer: ReturnType<typeof setTimeout> | null = null;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
   // CrashLoopPauser (instar-inspired): sliding-window crash detection.
@@ -192,6 +193,13 @@ export class AgentProcess {
       // Start session timer
       this.startSessionTimer();
 
+      // Start boot watchdog — catches MCP connection hangs and other
+      // init-time deadlocks that leave the agent "running" but never
+      // bootstrapped. If the agent hasn't shown the ready-for-input signal
+      // within boot_timeout_seconds, kill it, arm .force-fresh (in case
+      // --continue context is contributing to the hang), and restart.
+      this.startBootWatchdog();
+
       this.notifyStatusChange();
     } catch (err) {
       this.log(`Failed to start: ${err}`);
@@ -212,6 +220,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearBootWatchdog();
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -505,6 +514,7 @@ export class AgentProcess {
 
     this.pty = null;
     this.clearSessionTimer();
+    this.clearBootWatchdog();
 
     // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
     // the whole process group and reaches each PTY's Claude Code child
@@ -871,6 +881,50 @@ export class AgentProcess {
     if (this.sessionTimer) {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
+    }
+  }
+
+  private startBootWatchdog(): void {
+    this.clearBootWatchdog();
+    const DEFAULT_BOOT_TIMEOUT_S = 300;
+    const timeoutS = this.config.boot_timeout_seconds ?? DEFAULT_BOOT_TIMEOUT_S;
+    if (timeoutS <= 0) return;
+
+    this.bootTimer = setTimeout(() => {
+      this.bootTimer = null;
+      if (this.status !== 'running') return;
+      if (this.isBootstrapped()) return;
+
+      this.log(
+        `BOOT_TIMEOUT: agent did not bootstrap within ${timeoutS}s — killing and restarting fresh`,
+      );
+      this.appendCrashToRestartsLog(0, 5000, 'CRASH');
+      this.armForceFresh('boot-timeout auto-recovery');
+      // Bypass the normal stop() flow: we are inside the running lifecycle
+      // and need to kill the hung PTY directly. Set stopRequested so handleExit
+      // treats the imminent exit as intentional and doesn't also trigger crash
+      // recovery (we handle recovery ourselves below).
+      this.stopRequested = true;
+      if (this.pty) {
+        try {
+          (this.pty as AgentPTY).kill();
+        } catch { /* PTY may have exited between the check and the kill */ }
+      }
+      // Schedule a fresh restart after the PTY exits. The .force-fresh marker
+      // ensures shouldContinue() returns false, so the next start() is a clean
+      // session (no --continue), sidestepping any context-level hang cause.
+      setTimeout(() => {
+        if (this.status === 'stopped' || this.status === 'crashed') {
+          this.start().catch(err => this.log(`Boot-timeout restart failed: ${err}`));
+        }
+      }, 5000);
+    }, timeoutS * 1000);
+  }
+
+  private clearBootWatchdog(): void {
+    if (this.bootTimer) {
+      clearTimeout(this.bootTimer);
+      this.bootTimer = null;
     }
   }
 
