@@ -49,23 +49,33 @@ function getAllowedOrigin(requestOrigin: string | null): string | null {
   return null;
 }
 
+// Security (CORS-001): Only set Access-Control-Allow-Origin when the request
+// origin is in the allowlist. Setting it to the literal string "null" (the
+// previous ??"null" fallback) allows null-origin contexts (sandboxed iframes,
+// data: URLs) to make credentialed cross-origin requests.
+function setCorsOrigin(response: NextResponse, origin: string | null): void {
+  if (origin) response.headers.set('Access-Control-Allow-Origin', origin);
+  response.headers.set('Vary', 'Origin');
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const requestOrigin = request.headers.get('origin');
-  const corsOrigin = getAllowedOrigin(requestOrigin) ?? 'null';
+  const corsOrigin = getAllowedOrigin(requestOrigin);
 
   // Handle CORS preflight requests
   if (request.method === 'OPTIONS') {
-    return new NextResponse(null, {
+    const res = new NextResponse(null, {
       status: 204,
       headers: {
-        'Access-Control-Allow-Origin': corsOrigin,
         'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         'Access-Control-Max-Age': '86400',
         'Vary': 'Origin',
       },
     });
+    if (corsOrigin) res.headers.set('Access-Control-Allow-Origin', corsOrigin);
+    return res;
   }
 
   // Allow public paths
@@ -81,8 +91,7 @@ export async function middleware(request: NextRequest) {
     pathname === '/api/workflows/health'
   ) {
     const response = NextResponse.next();
-    response.headers.set('Access-Control-Allow-Origin', corsOrigin);
-    response.headers.set('Vary', 'Origin');
+    setCorsOrigin(response, corsOrigin);
     return response;
   }
 
@@ -119,8 +128,7 @@ export async function middleware(request: NextRequest) {
       { error: 'Server misconfiguration: auth secret not configured' },
       { status: 500 },
     );
-    res.headers.set('Access-Control-Allow-Origin', corsOrigin);
-    res.headers.set('Vary', 'Origin');
+    setCorsOrigin(res, corsOrigin);
     return res;
   }
 
@@ -142,8 +150,7 @@ export async function middleware(request: NextRequest) {
           { error: 'Server misconfiguration: auth secret not configured' },
           { status: 500 },
         );
-        res.headers.set('Access-Control-Allow-Origin', corsOrigin);
-        res.headers.set('Vary', 'Origin');
+        setCorsOrigin(res, corsOrigin);
         return res;
       }
       try {
@@ -160,8 +167,7 @@ export async function middleware(request: NextRequest) {
     // For API routes, return 401 instead of redirect
     if (pathname.startsWith('/api/')) {
       const res = NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      res.headers.set('Access-Control-Allow-Origin', corsOrigin);
-      res.headers.set('Vary', 'Origin');
+      setCorsOrigin(res, corsOrigin);
       return res;
     }
     const loginUrl = new URL('/login', request.url);
@@ -170,8 +176,7 @@ export async function middleware(request: NextRequest) {
   }
 
   const response = NextResponse.next();
-  response.headers.set('Access-Control-Allow-Origin', corsOrigin);
-  response.headers.set('Vary', 'Origin');
+  setCorsOrigin(response, corsOrigin);
   // Standard security headers
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
