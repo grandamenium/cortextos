@@ -9,7 +9,7 @@
   "timezone": "{{timezone}}",
   "mode": "day",
   "template": "fitness-agent",
-  "setup_skill": "fitness-setup",
+  "setup_skill": "setup",
   "crons": [
     {
       "name": "heartbeat",
@@ -64,5 +64,6 @@
       "data-deletion"
     ],
     "never_ask": []
-  }
+  },
+  "domain_setup_skill": "fitness-setup"
 }

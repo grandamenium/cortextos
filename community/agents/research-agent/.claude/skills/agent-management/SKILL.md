@@ -2,6 +2,7 @@
 name: agent-management
 description: "You need to create a new agent, restart a crashed agent, change an agent's model or config, fix a Telegram bot token, troubleshoot why an agent is not responding, enable or disable an agent, spawn an agent for another user, manage PM2 process management, reset crash limits, or do anything that touches an agent's lifecycle, configuration, or credentials. This is the definitive guide for every agent operation in cortextOS."
 triggers: ["new agent", "create agent", "spawn agent", "add agent", "restart", "soft restart", "hard restart", "disable agent", "enable agent", "change model", "switch model", "bot token", "BotFather", "agent not responding", "agent crashed", "agent down", "crash limit", "reset crashes", "agent health", "list agents", "heartbeat", "onboard", "setup agent", "configure agent", ".env", "config.json", "pm2", "ecosystem.config", "cross-org", "agent for someone else", "agent management", "agent lifecycle", "agent credentials", "telegram bot", "token not working"]
+external_calls: ["api.telegram.org"]
 ---
 
 # Agent Management
@@ -13,7 +14,7 @@ triggers: ["new agent", "create agent", "spawn agent", "add agent", "restart", "
 ## CRITICAL RULES
 
 1. **ALWAYS use the CLI.** Never manually edit state files or .env without using the proper command.
-2. **ALWAYS create .env before enabling.** An agent without .env may inherit parent credentials.
+2. **ALWAYS create .env before enabling.** An agent without .env will inherit parent credentials (the Becky bug).
 3. **ALWAYS write restart markers before /exit.** Use `cortextos bus self-restart`, never raw /exit.
 4. **ALWAYS use `cortextos enable` to start agents.** Never manually edit PM2 config.
 5. **NEVER share bot tokens between agents.** Each agent gets its own bot from @BotFather.
@@ -119,7 +120,7 @@ cortextos enable "$AGENT_NAME" --org "$ORG"
 # If messages come to you instead of them, the .env has wrong CHAT_ID
 ```
 
-**Common Mistake:** If you skip the .env creation, the agent can inherit credentials from the parent environment. Messages meant for the new agent may route through the wrong identity. ALWAYS create .env BEFORE enabling.
+**Common Mistake (Becky Bug):** If you skip the .env creation, the agent inherits YOUR credentials from the parent environment. Messages meant for the other user go to YOU instead. ALWAYS create .env BEFORE enabling.
 
 ---
 
@@ -165,7 +166,7 @@ cortextos stop <agent> && cortextos start <agent>
 
 Both kill the existing PID and respawn a fresh process that re-reads `settings.json` from scratch. Verify by adding a one-line debug write to your hook script before testing — if the file shows up after a benign tool call, the hook is loaded.
 
-If `bus hard-restart` writes restart markers without actually stopping the process, the running fork may be stale. Fall back to external `stop && start` until the fork is updated.
+This bit us hard on the coder-telegram-guardrail wire-up before upstream PR #217 fixed `bus hard-restart` to actually signal the daemon. On any fork that has not pulled in #217 (commit `a38ef7a`), `bus hard-restart` writes markers without killing the PID — fall back to external `stop && start` until the fork is rebased.
 
 ### Restart from Another Agent
 
@@ -182,7 +183,7 @@ cortextos status
 ## 3. Changing Agent Model
 
 ```bash
-AGENT="sentinel"
+AGENT="example-agent"
 ORG="myorg"
 NEW_MODEL="claude-sonnet-4-6"  # or "claude-opus-4-6" or "claude-haiku-4-5-20251001"
 
@@ -203,8 +204,6 @@ cortextos bus send-message "$AGENT" high "soft-restart" "model change to $NEW_MO
 - `claude-opus-4-6` - Most capable, highest cost
 - `claude-sonnet-4-6` - Good balance, ~5x cheaper than Opus
 - `claude-haiku-4-5-20251001` - Fastest, cheapest, for simple tasks
-
-**Context window suffix:** Append `[1m]` to any model ID (e.g., `claude-opus-4-6[1m]`) to enable the extended 1M token context window. Without it, agents get the default shorter context window and will compact much sooner. Recommended for orchestrators and any agent doing complex multi-step work.
 
 **No model set = default (Opus).** Always set explicitly for cost control.
 
@@ -280,27 +279,35 @@ fi
 
 ## 6. Managing Crons
 
-Crons are daemon-managed and persisted to `${CTX_ROOT}/state/<agent>/crons.json`. The daemon dispatches them automatically — no agent-side restoration needed. Use the bus commands; do NOT edit `config.json` or use `/loop` / `CronCreate`.
-
 ### Adding a Cron
 ```bash
-cortextos bus add-cron <agent> <name> <interval-or-cron-expr> "<prompt>"
-# Example: cortextos bus add-cron sentinel new-cron 2h "Do the thing"
+AGENT="example-agent"
+ORG="myorg"
+
+node -e "
+const fs = require('fs');
+const path = '$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT/config.json';
+const c = JSON.parse(fs.readFileSync(path));
+if (!c.crons) c.crons = [];
+c.crons.push({ name: 'new-cron', interval: '2h', prompt: 'Do the thing' });
+fs.writeFileSync(path, JSON.stringify(c, null, 2));
+"
+
+# Notify agent that crons have been updated
+cortextos bus send-message "$AGENT" normal \
+  'Crons updated in crons.json. The daemon scheduler will pick up the change automatically. To verify: cortextos bus list-crons '"$AGENT"
 ```
 
 ### Removing a Cron
 ```bash
-cortextos bus remove-cron <agent> <name>
-```
-
-### Updating a Cron
-```bash
-cortextos bus update-cron <agent> <name> --interval <new>
-```
-
-### Listing Crons
-```bash
-cortextos bus list-crons <agent>
+node -e "
+const fs = require('fs');
+const path = '$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT/config.json';
+const c = JSON.parse(fs.readFileSync(path));
+c.crons = (c.crons || []).filter(cr => cr.name !== 'cron-to-remove');
+fs.writeFileSync(path, JSON.stringify(c, null, 2));
+"
+cortextos bus send-message "$AGENT" normal 'Cron removed from config.json. Recreate your crons on next restart.'
 ```
 
 ---
@@ -370,18 +377,18 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 ### Agent Not Responding to Telegram
 1. Check .env exists and has BOT_TOKEN + CHAT_ID + ALLOWED_USER
 2. Check fast-checker is running: `ps aux | grep fast-checker | grep $AGENT`
-3. Check agent output: `tail -50 $HOME/.cortextos/default/logs/$AGENT/stdout.log` and `tail -20 $HOME/.cortextos/default/logs/$AGENT/crashes.log`
+3. Check fast-checker log: `tail -10 $HOME/.cortextos/default/logs/$AGENT/fast-checker.log`
 4. Check agent status: `cortextos status`
 
 ### Messages Going to Wrong Person
 1. Check .env CHAT_ID - is it the right person's chat ID?
 2. Check .env BOT_TOKEN - is it the right bot?
-3. If agent was spawned by another agent, the parent's env vars may have leaked
+3. If agent was spawned by another agent, the parent's env vars may have leaked (Becky bug)
 4. Fix: rewrite .env with correct credentials, soft restart
 
 ### Agent Keeps Crashing
 1. Check crash count: `cat $HOME/.cortextos/default/state/$AGENT/.crash_count_today`
-2. Check crashes/restarts: `tail -20 $HOME/.cortextos/default/logs/$AGENT/crashes.log` and `tail -20 $HOME/.cortextos/default/logs/$AGENT/stdout.log`
+2. Check stderr: `tail -20 $HOME/.cortextos/default/logs/$AGENT/stderr.log`
 3. Common causes: rate limit, auth expired, context exhaustion
 4. Fix: reset crash count, fix root cause, `cortextos enable <agent> --restart`
 
@@ -412,7 +419,7 @@ cortextos enable "$AGENT" --org "$ORG" --restart
 | Restart another agent | `cortextos bus send-message <agent> high "soft-restart" "<reason>"` |
 | Change model | Edit config.json model field + soft restart |
 | Update bot token | Edit .env BOT_TOKEN + soft restart |
-| Add cron | `cortextos bus add-cron <agent> <name> <interval> "<prompt>"` |
+| Add cron | Edit config.json crons + notify agent |
 | Check health | `cortextos status` or `cortextos bus read-all-heartbeats` |
 | List agents | `cortextos bus list-agents --format json` |
 | Check PM2 | `pm2 list` |

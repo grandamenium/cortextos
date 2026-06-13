@@ -2,6 +2,7 @@
 name: system-diagnostics
 description: "Something in the system feels stuck or wrong — tasks are not moving, an agent has gone quiet, goals have not been updated in days, or the orchestrator has asked for a system health report. You need to run a structured check: stale tasks, stale goals, overdue human tasks, fleet heartbeat status, and metrics. This is your diagnostic toolkit. Run it on every heartbeat (orchestrator) and whenever something seems off."
 triggers: ["system health", "health check", "stale tasks", "stale goals", "fleet health", "system status", "what's stuck", "blocked tasks", "overdue tasks", "goal staleness", "collect metrics", "metrics", "system check", "something seems wrong", "agent not progressing", "work stalled", "nothing moving", "check everything", "full health check", "morning health check", "diagnose system", "task stuck", "goals not updated"]
+external_calls: []
 ---
 
 # System Diagnostics

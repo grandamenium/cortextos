@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { addAgentCommand } from '../../../src/cli/add-agent';
@@ -77,5 +77,60 @@ describe('add-agent community persona template lookup', () => {
     expect(identityMd).not.toContain('a Agent for testorg');
     expect(config.template).toBe('community-special');
     expect(config.agent_name).toBe('spawned-persona');
+  });
+
+  it('rejects path traversal template names before creating an agent directory', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: string | number | null | undefined) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+
+    await expect(addAgentCommand.parseAsync([
+      'node', 'cli', 'stolen',
+      '--template', '../orgs/testorg/agents/private-agent',
+      '--org', 'testorg',
+      '--instance', 'persona-test',
+    ])).rejects.toThrow(/process\.exit\(1\)/);
+
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('invalid template name'));
+    expect(existsSync(join(tempRoot, 'orgs', 'testorg', 'agents', 'stolen'))).toBe(false);
+    exitSpy.mockRestore();
+  });
+
+  it('does not copy credential files or symlinks from a valid template', async () => {
+    const personaDir = join(tempRoot, 'templates', 'personas', 'community-special');
+    writeFileSync(join(personaDir, '.env'), 'BOT_TOKEN=secret\n');
+    writeFileSync(join(personaDir, '.env.local'), 'CHAT_ID=secret\n');
+    symlinkSync(join(personaDir, 'IDENTITY.md'), join(personaDir, 'IDENTITY_LINK.md'));
+
+    await addAgentCommand.parseAsync([
+      'node', 'cli', 'safe-persona',
+      '--template', 'community-special',
+      '--org', 'testorg',
+      '--instance', 'persona-test',
+    ]);
+
+    const agentDir = join(tempRoot, 'orgs', 'testorg', 'agents', 'safe-persona');
+    expect(existsSync(join(agentDir, '.env.local'))).toBe(false);
+    expect(readFileSync(join(agentDir, '.env'), 'utf-8')).toContain('BOT_TOKEN=');
+    expect(readFileSync(join(agentDir, '.env'), 'utf-8')).not.toContain('secret');
+    expect(existsSync(join(agentDir, 'IDENTITY_LINK.md'))).toBe(false);
+  });
+
+  it('rejects claude-only persona templates for codex-app-server runtime', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: string | number | null | undefined) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+
+    await expect(addAgentCommand.parseAsync([
+      'node', 'cli', 'bad-codex-persona',
+      '--template', 'community-special',
+      '--runtime', 'codex-app-server',
+      '--org', 'testorg',
+      '--instance', 'persona-test',
+    ])).rejects.toThrow(/process\.exit\(1\)/);
+
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('not codex-app-server'));
+    expect(existsSync(join(tempRoot, 'orgs', 'testorg', 'agents', 'bad-codex-persona'))).toBe(false);
+    exitSpy.mockRestore();
   });
 });

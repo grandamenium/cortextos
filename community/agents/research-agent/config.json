@@ -3,7 +3,7 @@
   "enabled": true,
   "runtime": "claude-code",
   "template": "research-agent",
-  "setup_skill": "research-agent-setup",
+  "setup_skill": "setup",
   "startup_delay": 0,
   "max_session_seconds": 255600,
   "max_crashes_per_day": 10,
@@ -67,5 +67,6 @@
       "data-deletion"
     ],
     "never_ask": []
-  }
+  },
+  "domain_setup_skill": "research-agent-setup"
 }

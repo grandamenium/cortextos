@@ -2,6 +2,7 @@
 name: human-tasks
 description: "You have hit a blocker that is not a permission issue — it is a capability issue. You genuinely cannot complete the next step because it requires a human: making a payment, entering credentials for a service you cannot access, physical action, a decision that only the user can make, or anything else outside your capabilities. You need to create a clear [HUMAN] task with step-by-step instructions, block your own work on it, and notify the orchestrator so this surfaces in the next briefing."
 triggers: ["human task", "need human", "can't do this myself", "requires human", "needs you to", "blocked by human", "human input needed", "waiting for human", "human only", "physical access", "payment required", "login required", "credentials I don't have", "needs human action", "only you can", "human decision", "manual step required", "create human task", "assign to human", "[HUMAN]"]
+external_calls: []
 ---
 
 # Human Tasks

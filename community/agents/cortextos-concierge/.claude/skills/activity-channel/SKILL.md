@@ -49,7 +49,7 @@ cortextos bus post-activity "Morning briefing complete. Today's focus: <goals>. 
 cortextos bus post-activity "researcher completed competitive analysis — 3 key findings in task task_abc123."
 
 # Agent coming online
-cortextos bus post-activity "analyst (sentinel) is online and running nightly metrics."
+cortextos bus post-activity "analyst (example-agent) is online and running nightly metrics."
 
 # System change
 cortextos bus post-activity "New agent 'writer' is now online and onboarding."

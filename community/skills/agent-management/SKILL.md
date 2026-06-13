@@ -183,7 +183,7 @@ cortextos status
 ## 3. Changing Agent Model
 
 ```bash
-AGENT="sentinel"
+AGENT="example-agent"
 ORG="myorg"
 NEW_MODEL="claude-sonnet-4-6"  # or "claude-opus-4-6" or "claude-haiku-4-5-20251001"
 
@@ -281,7 +281,7 @@ fi
 
 ### Adding a Cron
 ```bash
-AGENT="sentinel"
+AGENT="example-agent"
 ORG="myorg"
 
 node -e "

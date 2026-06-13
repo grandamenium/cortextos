@@ -2,6 +2,7 @@
 name: heartbeat
 description: "Your heartbeat cron has fired and you need to update your status so the dashboard shows you as alive. Or you are checking whether another agent is responsive before sending them work. Or an agent appears offline or stale in the dashboard and you need to investigate whether their session is still running. A dead heartbeat means the system thinks you are down — update it proactively and check fleet health on every heartbeat cycle."
 triggers: ["heartbeat", "update heartbeat", "check health", "agent health", "fleet health", "agent status", "is agent alive", "agent offline", "agent stale", "read heartbeats", "heartbeat cron", "i'm alive", "prove alive", "agent not responding", "stale agent", "check fleet", "fleet status", "who is online", "agent last seen"]
+external_calls: []
 ---
 
 # Heartbeat
@@ -12,7 +13,7 @@ The heartbeat is how the dashboard and other agents know you are alive. If you s
 
 ## Your Heartbeat Cron
 
-Your `config.json` has a heartbeat cron (default every 4h). When it fires:
+Your heartbeat cron is daemon-managed (default every 4h). It lives in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` and fires even after restarts — no manual restoration needed. When it fires:
 
 ```bash
 # 1. Update your heartbeat with what you're doing
@@ -43,7 +44,7 @@ Call this:
 - When starting a new significant task
 - Before going into a long-running operation
 
-**Never claim a status you haven't verified.** If your crons were reset on restart, check `cortextos bus list-crons $CTX_AGENT_NAME` before saying "crons running."
+**Never claim a status you haven't verified.** To confirm your crons are active: `cortextos bus list-crons $CTX_AGENT_NAME` (shows each cron's `next_fire_at`). Crons are daemon-managed and survive restarts — if a cron is missing, add it via `cortextos bus add-cron`.
 
 ---
 

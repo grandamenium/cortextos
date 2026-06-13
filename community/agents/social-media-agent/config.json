@@ -9,7 +9,7 @@
   "timezone": "{{timezone}}",
   "mode": "day",
   "template": "social-media-agent",
-  "setup_skill": "social-media-setup",
+  "setup_skill": "setup",
   "crons": [
     {
       "name": "heartbeat",
@@ -70,5 +70,6 @@
     "local_version_control": {
       "enabled": true
     }
-  }
+  },
+  "domain_setup_skill": "social-media-setup"
 }

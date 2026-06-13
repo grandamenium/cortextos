@@ -31,6 +31,7 @@ import { join, relative } from 'path';
 
 const COMMUNITY_AGENTS = join(process.cwd(), 'community', 'agents');
 const COMMUNITY_SKILLS = join(process.cwd(), 'community', 'skills');
+const COMMUNITY_CATALOG = join(process.cwd(), 'community', 'catalog.json');
 
 const REQUIRED_COMMON_SKILLS = [
   'agent-management',
@@ -49,15 +50,29 @@ const REQUIRED_COMMON_SKILLS = [
   'tasks',
 ];
 
-const STRICT_COMMUNITY_TEMPLATE_AGENTS = new Set([
-  'automation-builder-agent',
-  'coding-agent',
-  'cortextos-concierge',
-  'customer-support-agent',
-  'fitness-agent',
-  'knowledge-base-librarian',
-  'social-media-agent',
-]);
+type CatalogItem = {
+  name?: string;
+  type?: string;
+  review_status?: string;
+  install_path?: string;
+};
+
+function getCatalogCommunityTemplateAgents(): string[] {
+  const catalog = JSON.parse(readFileSync(COMMUNITY_CATALOG, 'utf-8')) as { items?: CatalogItem[] };
+  expect(Array.isArray(catalog.items), 'community/catalog.json items must be an array').toBe(true);
+
+  return (catalog.items ?? [])
+    .filter((item) => (
+      item.type === 'agent' &&
+      item.review_status === 'community' &&
+      typeof item.install_path === 'string' &&
+      item.install_path.startsWith('community/agents/')
+    ))
+    .map((item) => item.install_path!.replace(/^community\/agents\//, ''))
+    .sort();
+}
+
+const STRICT_COMMUNITY_TEMPLATE_AGENTS = new Set(getCatalogCommunityTemplateAgents());
 
 /** Return list of top-level agent directories under community/agents/ */
 function getAgentDirs(): string[] {
@@ -106,6 +121,10 @@ function readConfig(agentDir: string): Record<string, any> {
   const configPath = join(agentDir, 'config.json');
   expect(existsSync(configPath), 'config.json must exist').toBe(true);
   return JSON.parse(readFileSync(configPath, 'utf-8'));
+}
+
+function normalizeText(content: string): string {
+  return content.replace(/\r\n/g, '\n').trimEnd();
 }
 
 /** Collect all cron-management SKILL.md files under community/ */
@@ -251,6 +270,19 @@ describe('community templates: no stale cron restoration references', () => {
     expect(agents.length).toBeGreaterThan(0);
   });
 
+  it('checks every cataloged community template agent', () => {
+    expect([...STRICT_COMMUNITY_TEMPLATE_AGENTS]).toEqual([
+      'automation-builder-agent',
+      'coding-agent',
+      'cortextos-concierge',
+      'customer-support-agent',
+      'fitness-agent',
+      'knowledge-base-librarian',
+      'research-agent',
+      'social-media-agent',
+    ]);
+  });
+
   for (const agent of agents) {
     const agentDir = join(COMMUNITY_AGENTS, agent);
 
@@ -279,13 +311,44 @@ describe('community templates: no stale cron restoration references', () => {
         expect(missing).toEqual([]);
       });
 
-      it('ships a setup wrapper and domain setup skill when config.setup_skill is set', () => {
+      it('ships a universal setup wrapper plus domain setup skill', () => {
         if (!STRICT_COMMUNITY_TEMPLATE_AGENTS.has(agent)) return;
         const config = readConfig(agentDir);
-        if (typeof config.setup_skill !== 'string' || config.setup_skill.trim() === '') return;
+        expect(config.setup_skill).toBe('setup');
+        expect(typeof config.domain_setup_skill).toBe('string');
+        expect(config.domain_setup_skill.trim()).not.toBe('');
 
         expect(existsSync(join(agentDir, '.claude', 'skills', 'setup', 'SKILL.md'))).toBe(true);
-        expect(existsSync(join(agentDir, '.claude', 'skills', config.setup_skill, 'SKILL.md'))).toBe(true);
+        expect(existsSync(join(agentDir, '.claude', 'skills', config.domain_setup_skill, 'SKILL.md'))).toBe(true);
+      });
+
+      it('keeps vendored common skills byte-identical to canonical community skills', () => {
+        if (!STRICT_COMMUNITY_TEMPLATE_AGENTS.has(agent)) return;
+        const drift = REQUIRED_COMMON_SKILLS.filter((skill) => {
+          const canonical = join(COMMUNITY_SKILLS, skill, 'SKILL.md');
+          const vendored = join(agentDir, '.claude', 'skills', skill, 'SKILL.md');
+          return normalizeText(readFileSync(canonical, 'utf-8')) !== normalizeText(readFileSync(vendored, 'utf-8'));
+        });
+
+        expect(drift).toEqual([]);
+      });
+
+      it('common operating skill files do not leak private/internal agent names', () => {
+        if (!STRICT_COMMUNITY_TEMPLATE_AGENTS.has(agent)) return;
+        const leakPatterns = [
+          /\bsentinel\b/i,
+          /\baamcp\b/i,
+          /\blifeos\b/i,
+        ];
+        const leaked = REQUIRED_COMMON_SKILLS.flatMap((skill) => {
+          const file = join(agentDir, '.claude', 'skills', skill, 'SKILL.md');
+          const content = readFileSync(file, 'utf-8');
+          return leakPatterns.some((pattern) => pattern.test(content))
+            ? [relative(process.cwd(), file)]
+            : [];
+        });
+
+        expect(leaked).toEqual([]);
       });
 
       it('config.json contains valid non-empty cron definitions', () => {

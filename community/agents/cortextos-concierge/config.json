@@ -9,7 +9,7 @@
   "timezone": "{{timezone}}",
   "mode": "day",
   "template": "cortextos-concierge",
-  "setup_skill": "concierge-setup",
+  "setup_skill": "setup",
   "crons": [
     {
       "name": "heartbeat",
@@ -44,5 +44,6 @@
       "data-deletion"
     ],
     "never_ask": []
-  }
+  },
+  "domain_setup_skill": "concierge-setup"
 }

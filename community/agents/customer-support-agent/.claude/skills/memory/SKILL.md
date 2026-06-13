@@ -2,6 +2,7 @@
 name: memory
 description: "You need to write or update memory. This happens at session start, heartbeat, session end, or when you learn something worth keeping. Memory is how you maintain continuity across restarts and context compactions — without it, every session starts blind."
 triggers: ["memory", "remember", "write memory", "update memory", "session memory", "what was I working on", "resume", "working on", "memory file", "daily memory", "long-term memory", "memory protocol", "session start", "record progress", "note this", "save for later", "persist learning", "write to memory", "check memory", "read memory", "what did I do yesterday", "context snapshot", "state snapshot"]
+external_calls: []
 ---
 
 # Memory
@@ -28,7 +29,7 @@ cat >> "memory/$TODAY.md" << MEMEOF
 
 ## Session Start - $(date -u +%H:%M:%S UTC)
 - Status: online
-- Crons active: <list from CronList>
+- Crons active: <output of `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
 - Current state: <where things stand — what is in progress, pending, or needs attention>
 - Resuming: <what to do next and why, with enough context to act without re-reading everything>

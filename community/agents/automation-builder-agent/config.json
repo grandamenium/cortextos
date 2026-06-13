@@ -28,5 +28,6 @@
       "cron": "0 11 * * 5",
       "prompt": "Create or update a task for runbook quality review. Read .claude/skills/automation-runbook/SKILL.md, inspect automations/runbooks and automations/runs, flag missing tests, rollback, observability, owner, approval gates, and credential blockers. Write findings to memory and registry."
     }
-  ]
+  ],
+  "domain_setup_skill": "automation-builder-setup"
 }

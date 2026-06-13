@@ -1,176 +1,238 @@
 ---
 name: cron-management
-description: "Manage scheduled tasks (crons). Crons are daemon-managed and stored in crons.json — they survive restarts automatically. Use when: verifying crons on session start, creating new recurring tasks, updating or removing crons, troubleshooting scheduled tasks, or using the dashboard test-fire button."
+description: "Manage persistent recurring scheduled tasks via the cortextos bus. Crons are stored in crons.json, loaded and dispatched by the daemon, and survive agent restarts. Use this skill for all cron CRUD: create, update, remove, list, test-fire, and inspect execution history. Never use CronCreate or /loop for persistent recurring work — those are session-only and die on restart."
+triggers: ["remind me", "every day", "every hour", "every week", "schedule", "recurring", "daily", "weekly", "cron", "loop", "check regularly", "monitor", "keep an eye on", "set up a reminder", "repeat every", "run every", "automate", "schedule task", "list crons", "show crons", "fire cron now", "test cron", "cron log", "cron history", "scheduled task", "cron not firing", "persist cron"]
+external_calls: []
 ---
 
 # Cron Management
 
-Crons are **daemon-managed**. They are stored in `${CTX_ROOT}/state/$CTX_AGENT_NAME/crons.json`
-and dispatched by the cortextOS daemon. Crons survive agent restarts, context compactions,
-and daemon restarts automatically. You do NOT need to recreate them on session start.
-
-**Daemon crons are the only persistent scheduling path on this runtime.** Session-local
-schedulers — anything that lives only inside the agent's process — die on restart and
-silently drop their work. Always register recurring or future-dated jobs via the bus
-commands below so the daemon owns dispatch.
-
-Editing `config.json.crons[]` while the agent is running does NOT hot-reload — the daemon
-only re-reads `config.json` on agent boot. Mid-session changes go through `bus add-cron` /
-`bus update-cron` / `bus remove-cron`, which trigger an automatic scheduler reload.
+Crons are stored in `crons.json` (per-agent) and dispatched by the cortextOS daemon. They survive agent restarts and session boundaries. `crons.json` is the source of truth — use these bus commands for all CRUD operations. Never write to `crons.json` directly; never use CronCreate or `/loop` for persistent recurring work.
 
 ---
 
-## Handling a Cron Fire
-
-When a registered cron fires, the daemon injects a message into your session in this exact
-shape:
-
-```
-[CRON FIRED <iso-timestamp>] <cron-name>: <prompt>
-```
-
-Treat the inject as if the user just sent you `<prompt>`. Run it to completion. Then —
-**mandatory** — close the loop with `update-cron-fire` so the daemon's gap-detection knows
-you actually handled it (not just that the prompt was injected):
-
-```bash
-cortextos bus update-cron-fire <cron-name> --interval <interval>
-```
-
-`<interval>` matches the cron's schedule shorthand (`6h`, `30m`, `1d`) or the expected gap
-between fires for a 5-field expression. If you skip this step the daemon will eventually
-nudge you with a "cron seems stuck" reminder even though you handled it. The audit trail
-lives in `state/<agent>/cron-state.json` — the daemon trusts that file, so write to it on
-every fire.
-
-**One-shot crons** (cron-expression form, see below) are the only exception: a one-shot
-removes itself at the end of its handler, so its `last_fire` never matters again.
-
----
-
-## On Session Start
-
-Check that your crons are registered. Do not recreate them unless they are missing.
+## Listing your crons
 
 ```bash
 cortextos bus list-crons $CTX_AGENT_NAME
 ```
 
-If a cron is missing from the list, add it:
+Sample output:
+```
+NAME          SCHEDULE   LAST_FIRE             NEXT_FIRE             PROMPT
+heartbeat     6h         2026-04-30T12:00:00Z  2026-04-30T18:00:00Z  Read HEARTBEAT.md and follow its instru...
+daily-report  0 9 * * *  2026-04-30T09:00:00Z  2026-05-01T09:00:00Z  Generate and send daily analytics repor...
+```
 
+For machine-readable output:
 ```bash
-cortextos bus add-cron $CTX_AGENT_NAME <name> <interval|cron-expr> "<prompt>"
+cortextos bus list-crons $CTX_AGENT_NAME --json
 ```
 
 ---
 
-## Adding a Recurring Cron
+## Adding a recurring cron
 
-**Interval shorthand** (s/m/h/d/w):
 ```bash
-cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h "Read HEARTBEAT.md and follow its instructions."
-cortextos bus add-cron $CTX_AGENT_NAME health-check 30m "Check system health and report anomalies."
+cortextos bus add-cron <agent> <name> <interval> <prompt...>
 ```
 
-**5-field cron expression** (minute hour dom month dow):
+**Interval form** — use for simple repeated intervals:
 ```bash
-cortextos bus add-cron $CTX_AGENT_NAME morning-report "0 9 * * 1-5" "Generate and send the daily analytics report."
-cortextos bus add-cron $CTX_AGENT_NAME weekly-summary "0 17 * * 5" "Compile and deliver the weekly summary."
+cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h Read HEARTBEAT.md and follow its instructions.
+cortextos bus add-cron $CTX_AGENT_NAME health-check 30m Check system health and report anomalies.
+cortextos bus add-cron $CTX_AGENT_NAME daily-sweep 1d Run the full daily workflow.
 ```
 
-The daemon reloads automatically after `add-cron`. Confirm with `list-crons`.
+**Cron expression form** — use for calendar-anchored schedules (specific time of day, weekdays only, etc.):
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME morning-report "0 9 * * 1-5" Generate and send the daily analytics report.
+cortextos bus add-cron $CTX_AGENT_NAME weekly-summary "0 17 * * 5" Compile and deliver the weekly summary.
+```
+
+The prompt argument is variadic — all remaining words are joined. Quoting is optional but recommended for clarity. Optionally add a human-readable description:
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h --desc "Agent liveness heartbeat" Read HEARTBEAT.md and follow its instructions.
+```
+
+The daemon scheduler reloads automatically after `add-cron` — no agent restart needed. Confirm with `list-crons`.
 
 ---
 
-## Updating a Cron
+## Updating a cron
+
+At least one option is required. All options may be combined.
 
 ```bash
-# Change the schedule
+# Change the interval
 cortextos bus update-cron $CTX_AGENT_NAME heartbeat --interval 4h
 
-# Update the prompt
-cortextos bus update-cron $CTX_AGENT_NAME heartbeat --prompt "New prompt text."
+# Switch to a cron expression
+cortextos bus update-cron $CTX_AGENT_NAME heartbeat --cron-expr "0 */4 * * *"
 
-# Disable (stops firing without removing it)
+# --cron-expr is an alias for --interval; both accept interval strings or 5-field expressions
+cortextos bus update-cron $CTX_AGENT_NAME morning-report --interval "0 8 * * 1-5"
+
+# Update the prompt
+cortextos bus update-cron $CTX_AGENT_NAME heartbeat --prompt "Read HEARTBEAT.md, follow instructions, then log state."
+
+# Disable a cron (stops firing without removing it)
 cortextos bus update-cron $CTX_AGENT_NAME heartbeat --enabled false
 
 # Re-enable
 cortextos bus update-cron $CTX_AGENT_NAME heartbeat --enabled true
+
+# Update multiple fields at once
+cortextos bus update-cron $CTX_AGENT_NAME heartbeat --interval 8h --prompt "Read HEARTBEAT.md and follow its instructions."
 ```
 
 ---
 
-## Removing a Cron
+## Removing a cron
 
 ```bash
 cortextos bus remove-cron $CTX_AGENT_NAME <name>
 ```
 
----
-
-## One-Shot Reminder via Cron Expression
-
-There is no daemon-side `fire_at` (yet). The pattern for "fire once at a specific time" is
-a future-dated 5-field cron expression plus a self-removing handler:
-
+Example:
 ```bash
-# Remind me on May 8 at 15:30 local time to send the weekly report.
-# Format: minute hour day month dow
-cortextos bus add-cron $CTX_AGENT_NAME may8-report "30 15 8 5 *" \
-  'Send the weekly report. Then remove this cron: cortextos bus remove-cron '"$CTX_AGENT_NAME"' may8-report'
+cortextos bus remove-cron $CTX_AGENT_NAME heartbeat
 ```
 
-When the cron fires, your handler does the work AND removes the cron. If you forget the
-remove step the cron will fire again next year on May 8 — same reason `update-cron-fire`
-is mandatory for recurring crons: the loop only closes when you say it does.
-
-If you need a reminder less than 24 hours out and the date math is awkward, use a short
-interval shorthand that you remove on first fire instead:
-
+Confirm the cron is gone:
 ```bash
-cortextos bus add-cron $CTX_AGENT_NAME quick-reminder 90m \
-  'Check the soak run. Then: cortextos bus remove-cron '"$CTX_AGENT_NAME"' quick-reminder'
+cortextos bus list-crons $CTX_AGENT_NAME
 ```
 
 ---
 
-## Testing a Cron Immediately
+## Testing a cron immediately
 
-From the dashboard (`/workflows/$CTX_AGENT_NAME/<name>`), click **Test Fire** to inject the
-cron's prompt immediately. A 30-second cooldown prevents accidental rapid-fires.
+```bash
+cortextos bus test-cron-fire $CTX_AGENT_NAME <name>
+```
 
-Set `manualFireDisabled: true` on a cron definition to block dashboard test-fires (e.g. for
-crons that must only fire on schedule).
+Fires the cron's prompt into the agent's PTY right now via daemon IPC, without waiting for the next scheduled time. Use this to verify the prompt works correctly before relying on the schedule.
+
+```bash
+cortextos bus test-cron-fire $CTX_AGENT_NAME heartbeat
+```
 
 ---
 
-## Checking Execution History
+## Inspecting execution history
 
+**All crons for this agent:**
 ```bash
-# All crons for this agent
 cortextos bus get-cron-log $CTX_AGENT_NAME
-
-# Filter to a specific cron
-cortextos bus get-cron-log $CTX_AGENT_NAME <name>
 ```
 
-Each log entry: `ts`, `cron`, `status` (fired/retried/failed), `attempt`, `duration_ms`, `error`.
+**Filter by cron name:**
+```bash
+cortextos bus get-cron-log $CTX_AGENT_NAME heartbeat
+```
+
+**Limit entries (default 50):**
+```bash
+cortextos bus get-cron-log $CTX_AGENT_NAME heartbeat --limit 20
+```
+
+**Machine-readable JSON:**
+```bash
+cortextos bus get-cron-log $CTX_AGENT_NAME heartbeat --json
+```
+
+Each log entry contains:
+- `ts` — ISO timestamp of the execution attempt
+- `cron` — cron name
+- `status` — `fired` | `retried` | `failed`
+- `attempt` — attempt number (1 = first try)
+- `duration_ms` — execution duration in milliseconds
+- `error` — error message if status is `failed`
+
+---
+
+## One-shot reminders (gap — not yet supported)
+
+The persistent cron system does not currently support one-shot (fire-once) entries. `CronDefinition` has no `fire_at` field.
+
+For one-time reminders, fall back to the Claude Code built-in CronCreate with `recurring: false`:
+```
+CronCreate — name: "remind-user-3pm", prompt: "Remind the user about the 3pm call.", schedule: "0 15 * * *", recurring: false
+```
+
+**Important**: this cron is session-only. It will NOT survive an agent restart. Until persistent one-shot support is added to `crons.json`, one-shot reminders must be recreated manually if the agent restarts before they fire.
 
 ---
 
 ## Troubleshooting
 
-**Cron not firing:**
-1. `cortextos bus list-crons $CTX_AGENT_NAME` — confirm it is registered and not disabled.
-2. `cortextos bus get-cron-log $CTX_AGENT_NAME <name>` — check for `status: failed` entries.
-3. Check daemon log: `~/.cortextos/$CTX_INSTANCE_ID/logs/$CTX_AGENT_NAME/`
+**Cron not firing on schedule**
+1. Check `list-crons` — confirm `next_fire_at` is in the future and the cron is not disabled.
+2. Check `get-cron-log` for recent entries — `status: failed` entries show the error field.
+3. If `next_fire_at` is stale, the daemon may not have reloaded. Restart the agent or run `cortextos bus migrate-crons $CTX_AGENT_NAME --force`.
 
-**`crons.json` corrupted:**
-- `readCrons` automatically falls back to `crons.json.bak` on parse failure. Usually self-healing.
-- If both files are bad, re-add crons via `add-cron` or force re-migration:
-  `cortextos bus migrate-crons $CTX_AGENT_NAME --force`
+**Cron failing repeatedly**
+- `get-cron-log $CTX_AGENT_NAME <name>` — look for `status: failed` and read the `error` field.
+- Common causes: prompt syntax error, permission issue, or dependency unavailable.
 
-**Scheduler retained stale schedule after reload:**
-- If a reload produces an empty schedule (transient corruption), the daemon keeps the last-good
-  schedule in memory (`lastGoodSchedule`). Crons keep firing. Repair `crons.json` and the
-  scheduler recovers automatically on the next reload.
+**Just-added cron not registered**
+- The daemon reloads automatically after `add-cron`. If the cron still does not appear in `list-crons`, force a reload:
+  ```bash
+  cortextos bus migrate-crons $CTX_AGENT_NAME --force
+  ```
+
+**Disabling without deleting**
+- Use `update-cron --enabled false` to pause a cron. It remains in `crons.json` and can be re-enabled later with `--enabled true`.
+
+**`crons.json` corrupted or emptied**
+- Every `writeCrons` call preserves the previous file as `crons.json.bak`. If the primary file is unreadable, `readCrons` automatically falls back to `.bak` — no operator intervention needed for a single corruption event.
+- If both files are bad, restore via `add-cron` or re-migrate: `cortextos bus migrate-crons $CTX_AGENT_NAME --force`.
+
+**Scheduler retained stale schedule after reload (lastGoodSchedule)**
+- If a reload produces an empty schedule (transient corruption), the daemon keeps the last-good schedule in memory and logs `WARNING: reload produced empty schedule`. Crons keep firing. Repair `crons.json` and the scheduler recovers automatically on the next reload.
+
+**Preventing dashboard test-fires**
+- Set `manualFireDisabled: true` on a cron definition to block test-fire requests from the dashboard (HTTP 403). Use for crons that must only fire on schedule.
+
+---
+
+## Examples
+
+### Add a heartbeat cron every 6 hours
+
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME heartbeat 6h Read HEARTBEAT.md and follow its instructions.
+cortextos bus list-crons $CTX_AGENT_NAME
+```
+
+### Schedule a weekday 9am report
+
+```bash
+cortextos bus add-cron $CTX_AGENT_NAME morning-report "0 9 * * 1-5" Generate and send the daily analytics report.
+cortextos bus list-crons $CTX_AGENT_NAME
+```
+
+### Test that a cron fires correctly
+
+```bash
+cortextos bus test-cron-fire $CTX_AGENT_NAME morning-report
+# Watch agent PTY — the prompt should inject immediately
+cortextos bus get-cron-log $CTX_AGENT_NAME morning-report --limit 1
+```
+
+### Debug why a cron is not firing on schedule
+
+```bash
+# Step 1: confirm the cron exists and is enabled
+cortextos bus list-crons $CTX_AGENT_NAME
+
+# Step 2: check execution history for errors
+cortextos bus get-cron-log $CTX_AGENT_NAME morning-report --limit 10
+
+# Step 3: if no log entries and cron looks correct, force daemon reload
+cortextos bus migrate-crons $CTX_AGENT_NAME --force
+
+# Step 4: test-fire to verify prompt works
+cortextos bus test-cron-fire $CTX_AGENT_NAME morning-report
+```

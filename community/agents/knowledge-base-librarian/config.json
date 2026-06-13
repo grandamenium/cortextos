@@ -28,5 +28,6 @@
       "cron": "0 11 * * 1",
       "prompt": "Create or update a task for weekly source registry review. Read kb/sources/source-registry.json and kb/sources/privacy-policy.json. Verify every source has owner, privacy scope, connector status, collection target, and next review date. Default unknown sources to private and create follow-up tasks for missing approvals or stale sources."
     }
-  ]
+  ],
+  "domain_setup_skill": "knowledge-base-librarian-setup"
 }

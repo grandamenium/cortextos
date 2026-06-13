@@ -28,5 +28,6 @@
       "cron": "30 10 * * 1-5",
       "prompt": "Scan configured CI failures and record notes in work/ci/. Create tasks for actionable failures."
     }
-  ]
+  ],
+  "domain_setup_skill": "coding-setup"
 }

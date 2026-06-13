@@ -1,12 +1,19 @@
 import { Command } from 'commander';
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, relative, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName, validateOrgName } from '../utils/validate';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
+const TEMPLATE_NAME_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
+const SENSITIVE_TEMPLATE_FILENAMES = new Set([
+  '.env',
+  'secrets.env',
+  'id_rsa',
+  'id_ed25519',
+]);
 
 // Templates that don't have a codex variant yet. Pairing any of these with
 // --runtime codex-app-server used to silently scaffold claude-only bootstrap
@@ -14,6 +21,27 @@ type RuntimeKind = typeof VALID_RUNTIMES[number];
 // codex agent — degrading on first boot. Reject the combo until codex
 // variants exist (PR 11+).
 const NON_CODEX_TEMPLATES = ['orchestrator', 'analyst', 'm2c1-worker', 'hermes'] as const;
+
+function validateTemplateName(template: string): void {
+  if (!TEMPLATE_NAME_REGEX.test(template)) {
+    throw new Error(`invalid template name "${template}". Template names must match /^[a-z0-9][a-z0-9_-]*$/`);
+  }
+}
+
+function isUnderRoot(root: string, candidate: string): boolean {
+  const rel = relative(resolve(root), resolve(candidate));
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function shouldSkipTemplateEntry(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  return (
+    SENSITIVE_TEMPLATE_FILENAMES.has(lower) ||
+    lower.startsWith('.env.') ||
+    lower.endsWith('.pem') ||
+    lower.endsWith('.key')
+  );
+}
 
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
@@ -94,6 +122,29 @@ export const addAgentCommand = new Command('add-agent')
       process.exit(1);
     }
 
+    // For codex-app-server, skills live under plugins/cortextos-agent-skills/skills
+    // and are copied in by the template; .claude/skills is Claude-Code-only.
+    const isCodexAppServer = options.runtime === 'codex-app-server';
+
+    // Resolve template name. Codex agents created with the default --template agent
+    // get the codex-specific bootstrap in templates/agent-codex/. Any explicit
+    // --template choice is honored as-is so orchestrator/analyst/etc still work.
+    const effectiveTemplate = (isCodexAppServer && options.template === 'agent')
+      ? 'agent-codex'
+      : options.template;
+
+    try {
+      validateTemplateName(effectiveTemplate);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    const templateDir = findTemplateDir(projectRoot, effectiveTemplate);
+    if (templateDir) {
+      assertTemplateSupportsRuntime(templateDir, effectiveTemplate, options.runtime as RuntimeKind);
+    }
+
     console.log(`\nAdding agent: ${name}`);
     console.log(`  Template: ${options.template}`);
     console.log(`  Organization: ${org}`);
@@ -103,22 +154,11 @@ export const addAgentCommand = new Command('add-agent')
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(join(agentDir, 'memory'), { recursive: true });
 
-    // For codex-app-server, skills live under plugins/cortextos-agent-skills/skills
-    // and are copied in by the template; .claude/skills is Claude-Code-only.
-    const isCodexAppServer = options.runtime === 'codex-app-server';
     if (!isCodexAppServer) {
       mkdirSync(join(agentDir, '.claude', 'skills'), { recursive: true });
     }
 
-    // Resolve template name. Codex agents created with the default --template agent
-    // get the codex-specific bootstrap in templates/agent-codex/. Any explicit
-    // --template choice is honored as-is so orchestrator/analyst/etc still work.
-    const effectiveTemplate = (isCodexAppServer && options.template === 'agent')
-      ? 'agent-codex'
-      : options.template;
-
     // Copy template files
-    const templateDir = findTemplateDir(projectRoot, effectiveTemplate);
     if (templateDir) {
       copyTemplateFiles(templateDir, agentDir, name, org);
       console.log(`  Copied template files from ${effectiveTemplate}`);
@@ -379,32 +419,67 @@ function installCodexSkillSymlinks(agentDir: string, agentName: string): number 
 }
 
 function findTemplateDir(projectRoot: string, template: string): string | null {
+  validateTemplateName(template);
   const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || projectRoot;
-  const candidates = [
-    join(projectRoot, 'templates', template),
-    join(projectRoot, 'templates', 'personas', template),
-    join(frameworkRoot, 'templates', template),
-    join(frameworkRoot, 'templates', 'personas', template),
-    join(projectRoot, 'node_modules', 'cortextos', 'templates', template),
-    join(projectRoot, 'node_modules', 'cortextos', 'templates', 'personas', template),
+  const roots = [
+    join(projectRoot, 'templates'),
+    join(projectRoot, 'templates', 'personas'),
+    join(frameworkRoot, 'templates'),
+    join(frameworkRoot, 'templates', 'personas'),
+    join(projectRoot, 'node_modules', 'cortextos', 'templates'),
+    join(projectRoot, 'node_modules', 'cortextos', 'templates', 'personas'),
     // Relative to this file for development
-    join(__dirname, '..', '..', 'templates', template),
-    join(__dirname, '..', '..', 'templates', 'personas', template),
+    join(__dirname, '..', '..', 'templates'),
+    join(__dirname, '..', '..', 'templates', 'personas'),
   ];
 
-  for (const dir of candidates) {
-    if (existsSync(dir)) return dir;
+  for (const root of roots) {
+    const dir = resolve(root, template);
+    if (isUnderRoot(root, dir) && existsSync(dir)) return dir;
   }
   return null;
+}
+
+function getTemplateSupportedRuntimes(templateDir: string): RuntimeKind[] {
+  const configPath = join(templateDir, 'config.json');
+  if (!existsSync(configPath)) return ['claude-code'];
+
+  try {
+    const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+    if (Array.isArray(cfg.supported_runtimes)) {
+      return cfg.supported_runtimes.filter((runtime: unknown): runtime is RuntimeKind => (
+        typeof runtime === 'string' && (VALID_RUNTIMES as readonly string[]).includes(runtime)
+      ));
+    }
+    if (typeof cfg.runtime === 'string' && (VALID_RUNTIMES as readonly string[]).includes(cfg.runtime)) {
+      return [cfg.runtime as RuntimeKind];
+    }
+  } catch { /* unreadable metadata means claude-code-only fallback */ }
+
+  return ['claude-code'];
+}
+
+function assertTemplateSupportsRuntime(templateDir: string, template: string, runtime: RuntimeKind): void {
+  const supported = getTemplateSupportedRuntimes(templateDir);
+  if (!supported.includes(runtime)) {
+    console.error(`Error: template "${template}" supports ${supported.join(', ') || 'no runtimes'}, not ${runtime}.`);
+    if (runtime === 'codex-app-server') {
+      console.error('Use --template agent for a codex agent, or add a codex-compatible template that declares "supported_runtimes": ["codex-app-server"].');
+    }
+    process.exit(1);
+  }
 }
 
 function copyTemplateFiles(templateDir: string, agentDir: string, name: string, org: string): void {
   const files = readdirSync(templateDir);
   for (const file of files) {
+    if (shouldSkipTemplateEntry(file)) continue;
+
     const srcPath = join(templateDir, file);
     const destPath = join(agentDir, file);
     try {
-      const stat = require('fs').statSync(srcPath);
+      const stat = lstatSync(srcPath);
+      if (stat.isSymbolicLink()) continue;
       if (stat.isFile()) {
         let content = readFileSync(srcPath, 'utf-8');
         // Replace template placeholders
