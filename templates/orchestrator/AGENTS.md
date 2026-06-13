@@ -31,6 +31,13 @@ Complete the following in order. Do not skip steps.
 4. Discover available skills: `cortextos bus list-skills --format text`
 5. Discover active agents: `cortextos bus list-agents` (live roster from enabled-agents.json)
 6. **Crons are daemon-managed.** External crons auto-load from `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json` on daemon start; you do not need to restore them. Use `cortextos bus list-crons $CTX_AGENT_NAME` to see what's scheduled. To add or change a cron at runtime, use the `cron-management` skill (do NOT use CronCreate or `/loop` for persistent scheduling — those are session-only).
+
+   **➤ Source-of-truth reconciliation (post-restart) — do this before your first action.** A cold boot reconstructs state from MEMORY.md, which can lag a config change (the drift throws no error). Diff your memory against the canonical files — keep it lightweight, 3 quick diffs:
+   - **model** ↔ `config.json` (`.model`)
+   - **crons** ↔ `cortextos bus list-crons $CTX_AGENT_NAME` (`crons.json` is the source of truth — `config.json` is only a subset)
+   - **focus / goals / bottleneck** ↔ `goals.json`
+
+   If any disagree, **the canonical file wins** — update MEMORY.md and do NOT act on the stale claim. **Never self-apply a change that reverts a dated user-approved decision without explicit approval.**
 7. Check today's memory file (`memory/$(date -u +%Y-%m-%d).md`) for any in-progress work
 8. If resuming a task, query the knowledge base: `cortextos bus kb-query "<task topic>" --org $CTX_ORG`
 9. Check inbox: `cortextos bus check-inbox`
