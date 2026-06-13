@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -24,6 +25,12 @@ export class AgentProcess {
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  // F10 Phase 2: proactive RSS monitor. rssTimer is the sampling interval;
+  // rssOverCount tracks consecutive over-threshold samples so a single
+  // transient spike never triggers a restart (mirrors rss-monitor.sh's
+  // confirm-before-act guard).
+  private rssTimer: ReturnType<typeof setInterval> | null = null;
+  private rssOverCount: number = 0;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
   // CrashLoopPauser (instar-inspired): sliding-window crash detection.
@@ -192,6 +199,10 @@ export class AgentProcess {
       // Start session timer
       this.startSessionTimer();
 
+      // F10 Phase 2: start the proactive RSS monitor (no-op unless
+      // rss_restart_threshold_mb is configured for this agent).
+      this.startRssMonitor();
+
       this.notifyStatusChange();
     } catch (err) {
       this.log(`Failed to start: ${err}`);
@@ -212,6 +223,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearRssMonitor();
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -296,9 +308,23 @@ export class AgentProcess {
    * AFTER the NEW pty was set up, nulling out the wrong reference.
    * `start()` will pick up `continue` mode automatically because the
    * conversation directory still has .jsonl files (shouldContinue() is true).
+   *
+   * F15: if 3+ compaction events occurred in the last 30 minutes, the agent
+   * is in a compaction loop (--continue reloads saturated context → immediate
+   * re-compaction). In that case, archive the conversation history so
+   * shouldContinue() returns false and start() uses a fresh session.
    */
   async sessionRefresh(): Promise<void> {
     this.log('Session refresh (--continue restart)');
+
+    // F15: if --continue would reload saturated context and immediately
+    // re-compact, archive the conversation so shouldContinue() returns false
+    // and start() spins up a fresh session instead of re-wedging.
+    if (this.isCompactionLoop()) {
+      this.log('[F15] Compaction loop detected (3+ compactions in 30min) — archiving conversation, restarting fresh');
+      this.archiveConversationHistory();
+    }
+
     // Write .session-refresh marker so the SessionEnd crash-alert hook
     // (src/hooks/hook-crash-alert.ts) classifies the imminent PTY exit as a
     // session refresh rather than a crash. The hook's marker handler +
@@ -319,6 +345,72 @@ export class AgentProcess {
     await this.stop();
     await this.start();
     this.log('Session refreshed');
+  }
+
+  /**
+   * F15: detect if the agent is in a compaction loop.
+   * Returns true if there are 3+ compaction events in the last 30 minutes.
+   * Events are written by hook-compact-telegram.ts on every PreCompact fire.
+   */
+  private isCompactionLoop(): boolean {
+    const eventsFile = join(this.env.ctxRoot, 'state', this.name, 'compaction-events.jsonl');
+    if (!existsSync(eventsFile)) return false;
+
+    try {
+      const lines = readFileSync(eventsFile, 'utf-8').trim().split('\n').filter(Boolean);
+      const now = Date.now();
+      const windowMs = 30 * 60 * 1000; // 30-minute detection window
+      const threshold = 3;
+
+      const recentCount = lines.reduce((count, line) => {
+        try {
+          const { ts } = JSON.parse(line);
+          return (typeof ts === 'number' && now - ts < windowMs) ? count + 1 : count;
+        } catch {
+          return count;
+        }
+      }, 0);
+
+      return recentCount >= threshold;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * F15: archive .jsonl conversation files to <convDir>/.archived/<timestamp>/
+   * so shouldContinue() returns false and the next start() is a fresh session.
+   * Reversible — files are moved, not deleted.
+   */
+  private archiveConversationHistory(): void {
+    const launchDir = this.config.working_directory || this.env.agentDir;
+    if (!launchDir) return;
+
+    const convDir = join(homedir(), '.claude', 'projects', launchDir.split(sep).join('-'));
+
+    try {
+      const files = readdirSync(convDir).filter(f => f.endsWith('.jsonl'));
+      if (files.length === 0) return;
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const archivedDir = join(convDir, '.archived', timestamp);
+      mkdirSync(archivedDir, { recursive: true });
+
+      for (const file of files) {
+        renameSync(join(convDir, file), join(archivedDir, file));
+      }
+
+      this.log(`[F15] Archived ${files.length} conversation file(s) to ${archivedDir}`);
+
+      // Append an escalation marker to compaction-events.jsonl so future
+      // sessions can see this happened (e.g. for reporting).
+      try {
+        const eventsFile = join(this.env.ctxRoot, 'state', this.name, 'compaction-events.jsonl');
+        appendFileSync(eventsFile, JSON.stringify({ ts: Date.now(), escalated: true, archived_dir: archivedDir }) + '\n');
+      } catch { /* best-effort */ }
+    } catch (err) {
+      this.log(`[F15] Failed to archive conversation: ${err}`);
+    }
   }
 
   /**
@@ -505,6 +597,7 @@ export class AgentProcess {
 
     this.pty = null;
     this.clearSessionTimer();
+    this.clearRssMonitor();
 
     // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
     // the whole process group and reaches each PTY's Claude Code child
@@ -526,6 +619,30 @@ export class AgentProcess {
     // cleanup stays with agent-manager / hook-crash-alert per the existing
     // separation of concerns.
     if (this.isDaemonShuttingDown()) {
+      return;
+    }
+
+    // F17 + F17-extension: intentional restart — cortextos bus self-restart /
+    // hard-restart writes .restart-planned; sessionRefresh() (session-cap
+    // rollover, RSS restart, F10-P2) writes .session-refresh. Both are
+    // deliberate exits: do NOT charge the crash counter or write a CRASH line —
+    // but DO bring the agent back up. Consume whichever marker matched so a
+    // later genuine crash is still classified correctly. Checked after
+    // isDaemonShuttingDown() (a daemon-wide stop wins) and before crash
+    // classification.
+    if (this.isPlannedRestart()) {
+      this.log('Planned restart detected (.restart-planned or .session-refresh marker) — respawning without counting as crash');
+      const stateDir = join(this.env.ctxRoot, 'state', this.name);
+      try { unlinkSync(join(stateDir, '.restart-planned')); } catch { /* best-effort */ }
+      try { unlinkSync(join(stateDir, '.session-refresh')); } catch { /* best-effort */ }
+      this.appendCrashToRestartsLog(exitCode, 2000, 'PLANNED_RESTART');
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(err => this.log(`Planned restart failed: ${err}`));
+        }
+      }, 2000);
       return;
     }
 
@@ -639,6 +756,15 @@ export class AgentProcess {
   }
 
   private shouldContinue(): boolean {
+    // F15-expansion: agents configured to hard-restart on rollover always
+    // start fresh, regardless of runtime or existing conversation state. This
+    // short-circuits before any runtime-specific continuity check so an agent
+    // that accumulates context faster than the rollover window never resumes
+    // into a compaction loop.
+    if (this.config.hard_restart_on_rollover) {
+      return false;
+    }
+
     // Hermes: session continuity is determined by whether the SQLite DB exists.
     // HERMES_HOME env var overrides the default ~/.hermes path.
     if (this.config.runtime === 'hermes') {
@@ -875,6 +1001,147 @@ export class AgentProcess {
   }
 
   /**
+   * F10 Phase 2: start the proactive RSS monitor.
+   *
+   * Opt-in per agent via rss_restart_threshold_mb. When set, the daemon samples
+   * this agent's own process RSS every rss_check_interval_seconds (default 300)
+   * and, once RSS stays at/above the threshold across two consecutive samples
+   * AND system soft-available memory is above the configured floor, fires a
+   * planned session refresh to reclaim the bloat. No-op when the threshold is
+   * absent or <= 0, so existing agents are unaffected.
+   */
+  private startRssMonitor(): void {
+    const thresholdMb = this.config.rss_restart_threshold_mb;
+    if (!thresholdMb || thresholdMb <= 0) return; // opt-in; off by default
+
+    const intervalMs = (this.config.rss_check_interval_seconds || 300) * 1000;
+    this.rssOverCount = 0;
+    this.rssTimer = setInterval(() => {
+      this.checkRss(thresholdMb).catch(err => this.log(`[F10-P2] RSS check failed: ${err}`));
+    }, intervalMs);
+    this.log(`[F10-P2] RSS monitor armed: threshold=${thresholdMb}MB, interval=${intervalMs / 1000}s`);
+  }
+
+  private clearRssMonitor(): void {
+    if (this.rssTimer) {
+      clearInterval(this.rssTimer);
+      this.rssTimer = null;
+    }
+    this.rssOverCount = 0;
+  }
+
+  /**
+   * F10 Phase 2: one RSS sample + act decision.
+   *
+   * Acts only when ALL hold:
+   *  1. agent is genuinely running with a live PTY and a readable PID;
+   *  2. RSS has been at/above threshold for two consecutive samples (a single
+   *     transient spike resets the counter — mirrors rss-monitor.sh's confirm
+   *     guard);
+   *  3. the pre-restart check passes: system soft-available memory (free +
+   *     inactive) is at/above the floor, so the ~490MB fresh-session cost will
+   *     not tip the box into pressure. If soft-avail is below the floor we
+   *     DEFER (keep the over-count) — restarting into low memory is the
+   *     restart-inversion the Phase 1 reactive stop exists to avoid.
+   *
+   * The restart itself reuses sessionRefresh() so it is classified as a planned
+   * refresh (F17 marker → not a crash) and respects shouldContinue() /
+   * compaction-loop archival for fresh-vs-resume (F15 / F15-expansion).
+   */
+  private async checkRss(thresholdMb: number): Promise<void> {
+    if (this.status !== 'running' || !this.pty || this.stopping || this.stopRequested) {
+      this.rssOverCount = 0;
+      return;
+    }
+    const pid = this.pty.getPid();
+    if (!pid) {
+      this.rssOverCount = 0;
+      return;
+    }
+
+    const rssMb = this.readProcessRssMb(pid);
+    if (rssMb <= 0) return; // read failed — skip this sample, leave counter intact
+
+    if (rssMb < thresholdMb) {
+      if (this.rssOverCount > 0) {
+        this.log(`[F10-P2] RSS back under threshold (${rssMb}MB < ${thresholdMb}MB) — resetting`);
+      }
+      this.rssOverCount = 0;
+      return;
+    }
+
+    this.rssOverCount++;
+    this.log(`[F10-P2] RSS ${rssMb}MB >= threshold ${thresholdMb}MB (consecutive=${this.rssOverCount})`);
+    if (this.rssOverCount < 2) return; // require sustained over-threshold
+
+    // Pre-restart check: only refresh while there is memory headroom.
+    const floorMb = this.config.rss_restart_soft_avail_floor_mb || 1500;
+    const softAvailMb = this.readSystemSoftAvailMb();
+    if (softAvailMb > 0 && softAvailMb < floorMb) {
+      this.log(`[F10-P2] Deferring RSS restart: soft_avail=${softAvailMb}MB < floor=${floorMb}MB (restart would worsen pressure; Phase 1 reactive stop owns acute pressure)`);
+      return; // keep rssOverCount so we re-evaluate next tick
+    }
+
+    this.log(`[F10-P2] Proactive RSS restart firing: rss=${rssMb}MB >= ${thresholdMb}MB, soft_avail=${softAvailMb || 'unknown'}MB`);
+    try {
+      const logDir = join(this.env.ctxRoot, 'logs', this.name);
+      ensureDir(logDir);
+      appendFileSync(
+        join(logDir, 'restarts.log'),
+        `[${new Date().toISOString()}] RSS_RESTART: rss_mb=${rssMb} threshold_mb=${thresholdMb} soft_avail_mb=${softAvailMb} (F10-P2 proactive, planned refresh)\n`,
+        'utf-8',
+      );
+    } catch { /* best-effort logging */ }
+
+    this.rssOverCount = 0;
+    await this.sessionRefresh();
+  }
+
+  /**
+   * F10 Phase 2: read a single process's RSS in MB via `ps -o rss=`.
+   * Returns 0 on any failure (treated as "unknown" — skip the sample).
+   * Absolute path avoids the PATH-unaware-execFile class fixed in #459.
+   */
+  private readProcessRssMb(pid: number): number {
+    try {
+      const out = execFileSync('/bin/ps', ['-o', 'rss=', '-p', String(pid)], {
+        encoding: 'utf-8',
+        timeout: 5000,
+      }).trim();
+      const kb = parseInt(out, 10);
+      return Number.isFinite(kb) && kb > 0 ? Math.round(kb / 1024) : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * F10 Phase 2: read system soft-available memory (free + inactive) in MB.
+   *
+   * Matches rss-monitor.sh's soft-avail definition: macOS's inactive pool is
+   * genuinely reclaimable, so hard-free alone is too noisy a pre-restart
+   * signal. Returns 0 on non-darwin or any read failure, which the caller
+   * treats as "unknown" and proceeds (the soft-avail guard only blocks on a
+   * known-low reading, never on an unreadable one).
+   */
+  private readSystemSoftAvailMb(): number {
+    if (process.platform !== 'darwin') return 0;
+    try {
+      const out = execFileSync('/usr/bin/vm_stat', [], { encoding: 'utf-8', timeout: 5000 });
+      const pageSizeMatch = out.match(/page size of (\d+) bytes/);
+      const freeMatch = out.match(/Pages free:\s+(\d+)/);
+      const inactiveMatch = out.match(/Pages inactive:\s+(\d+)/);
+      if (!pageSizeMatch || !freeMatch || !inactiveMatch) return 0;
+      const pageSize = parseInt(pageSizeMatch[1], 10);
+      const pages = parseInt(freeMatch[1], 10) + parseInt(inactiveMatch[1], 10);
+      if (!Number.isFinite(pageSize) || !Number.isFinite(pages)) return 0;
+      return Math.round((pages * pageSize) / 1048576);
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
    * Check whether the daemon is currently in its shutdown sequence.
    *
    * Returns true iff a `.daemon-stop` marker exists in this agent's state
@@ -895,6 +1162,36 @@ export class AgentProcess {
   }
 
   /**
+   * F17: check whether this exit is an intentional restart.
+   *
+   * `cortextos bus self-restart` / `hard-restart` (src/bus/system.ts) write a
+   * `.restart-planned` marker before the agent's PTY exits. The SessionEnd
+   * crash-alert hook already reads this marker to suppress the user-facing
+   * Telegram alert, but the daemon's handleExit() crash counter never did —
+   * so every voluntary restart still incremented .crash_count_today and wrote
+   * a spurious CRASH line to restarts.log, eventually tripping max_crashes and
+   * halting an agent that only ever restarted on purpose.
+   *
+   * Mirrors isDaemonShuttingDown(): the marker counts only if written within
+   * the last 60s, so a stale marker from a prior restart cannot mask a genuine
+   * crash later. The caller consumes the marker on a positive match so the
+   * next exit is classified on its own merits.
+   */
+  private isPlannedRestart(): boolean {
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+    const markers = ['.restart-planned', '.session-refresh'];
+    try {
+      for (const name of markers) {
+        const p = join(stateDir, name);
+        if (existsSync(p) && Date.now() - statSync(p).mtimeMs < 60_000) return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Append an unplanned-exit entry to restarts.log. Complements the planned
    * SELF-RESTART / HARD-RESTART entries written by src/bus/system.ts so that
    * a single file gives the complete restart history for an agent.
@@ -907,7 +1204,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY' | 'PLANNED_RESTART',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -918,7 +1215,9 @@ export class AgentProcess {
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
           : kind === 'IMAGE_POISON_RECOVERY'
             ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
-            : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+            : kind === 'PLANNED_RESTART'
+              ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (intentional restart, not counted toward max_crashes)`
+              : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
+import { atomicWriteSync } from '../utils/atomic.js';
 
 /**
  * BUG-035 fix: discover the cortextOS framework root without depending on
@@ -116,7 +117,9 @@ function writeEnabledAgents(instanceId: string, agents: Record<string, any>): vo
   const path = getEnabledAgentsPath(instanceId);
   const dir = join(homedir(), '.cortextos', instanceId, 'config');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(agents, null, 2) + '\n', 'utf-8');
+  // F12 fix: use atomicWriteSync (write-to-temp + rename) instead of plain
+  // writeFileSync to prevent partial-write corruption under concurrent starts.
+  atomicWriteSync(path, JSON.stringify(agents, null, 2));
 }
 
 export const enableAgentCommand = new Command('enable')
@@ -220,13 +223,17 @@ export const enableAgentCommand = new Command('enable')
       console.error('  Continuing enable. Investigate the validator if this recurs.');
     }
 
+    // F12 fix: re-read just before write so concurrent `cortextos enable`
+    // calls merge rather than clobber each other.
     const agents = readEnabledAgents(options.instance);
     agents[agent] = {
       enabled: true,
       status: 'configured',
       ...(options.org ? { org: options.org } : {}),
     };
-    writeEnabledAgents(options.instance, agents);
+    const freshForEnable = readEnabledAgents(options.instance);
+    freshForEnable[agent] = agents[agent];
+    writeEnabledAgents(options.instance, freshForEnable);
 
     // Create per-agent state directories
     const ctxRoot = join(homedir(), '.cortextos', options.instance);
@@ -262,6 +269,8 @@ export const disableAgentCommand = new Command('disable')
   .option('--instance <id>', 'Instance ID', 'default')
   .description('Disable an agent (stop and deregister)')
   .action(async (agent: string, options: { instance: string }) => {
+    // F12 fix: single read-modify-write with atomicWriteSync (via
+    // writeEnabledAgents) — no stale snapshot to clobber concurrent changes.
     const agents = readEnabledAgents(options.instance);
     if (agents[agent]) {
       agents[agent].enabled = false;

@@ -1,9 +1,11 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { IPCClient } from '../daemon/ipc-server.js';
+import { atomicWriteSync } from '../utils/atomic.js';
+import { discoverProjectRoot } from './enable-agent.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const SAFE_CMD = /^[@a-z0-9._/-]+$/i;
@@ -174,16 +176,49 @@ export const startCommand = new Command('start')
       } catch { /* ignore */ }
 
       if (!enabledAgents[agent]) {
-        // Try to detect org from existing entries or project structure
-        const existingOrg = Object.values(enabledAgents as Record<string, any>).find((e: any) => e.org)?.org;
-        enabledAgents[agent] = {
-          enabled: true,
-          status: 'configured',
-          ...(existingOrg ? { org: existingOrg } : {}),
-        };
-        mkdirSync(join(ctxRoot, 'config'), { recursive: true });
-        writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
-        console.log(`  Registered ${agent} in enabled-agents.json`);
+        // F13 fix: scan orgs/*/agents/<name>/ to resolve org instead of
+        // picking the first enabled-agents.json entry (which could be from a
+        // different org if foreverdell/pantheon agents appear first).
+        const frameworkRoot = discoverProjectRoot();
+        let resolvedOrg: string | undefined;
+        const orgsBase = join(frameworkRoot, 'orgs');
+        if (existsSync(orgsBase)) {
+          try {
+            const orgs = readdirSync(orgsBase, { withFileTypes: true })
+              .filter(d => d.isDirectory())
+              .map(d => d.name);
+            for (const org of orgs) {
+              if (existsSync(join(orgsBase, org, 'agents', agent))) {
+                resolvedOrg = org;
+                break;
+              }
+            }
+          } catch { /* ignore read errors */ }
+        }
+        // Fall back to existing-entry scan if filesystem scan finds nothing
+        if (!resolvedOrg) {
+          resolvedOrg = Object.values(enabledAgents as Record<string, any>).find((e: any) => e.org)?.org;
+        }
+
+        // F12 fix: re-read just before write and use atomicWriteSync to
+        // prevent concurrent `cortextos start` calls from clobbering each
+        // other (last-writer-wins when using plain writeFileSync).
+        let fresh: Record<string, any> = {};
+        try {
+          if (existsSync(enabledPath)) {
+            fresh = JSON.parse(readFileSync(enabledPath, 'utf-8'));
+          }
+        } catch { /* ignore */ }
+        if (!fresh[agent]) {
+          fresh[agent] = {
+            enabled: true,
+            status: 'configured',
+            ...(resolvedOrg ? { org: resolvedOrg } : {}),
+          };
+          mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+          atomicWriteSync(enabledPath, JSON.stringify(fresh, null, 2));
+          console.log(`  Registered ${agent} in enabled-agents.json`);
+        }
       }
 
       console.log(`Starting agent: ${agent}`);

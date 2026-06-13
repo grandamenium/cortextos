@@ -209,6 +209,40 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * F15-expansion: when true, the agent always starts a fresh session on a
+   * rollover restart instead of resuming with --continue. shouldContinue()
+   * short-circuits to false. Use for agents that accumulate context faster
+   * than the rollover window and would otherwise compaction-loop. Reuses the
+   * existing .force-fresh fresh-session path. Default (absent) = resume.
+   */
+  hard_restart_on_rollover?: boolean;
+  /**
+   * F10 Phase 2: proactive RSS-driven restart threshold in MB. When set (> 0),
+   * the daemon samples this agent's own process RSS on a timer and, once RSS
+   * stays at/above this threshold across two consecutive samples, triggers a
+   * planned session refresh (the same --continue rollover path used at the
+   * session-time cap) to reclaim the bloat before it forces a system-wide OOM.
+   * Absent or <= 0 disables the monitor (default). The complement to the
+   * external Phase 1 rss-monitor.sh, which reactively STOPS idle agents under
+   * acute system pressure; Phase 2 proactively refreshes a single bloated agent
+   * while there is still memory headroom to absorb the fresh-session cost.
+   */
+  rss_restart_threshold_mb?: number;
+  /**
+   * F10 Phase 2: how often (seconds) to sample this agent's RSS. Default 300.
+   * Only consulted when rss_restart_threshold_mb is set.
+   */
+  rss_check_interval_seconds?: number;
+  /**
+   * F10 Phase 2 pre-restart check: minimum system soft-available memory
+   * (free + inactive, MB) required before an RSS restart will fire. If
+   * soft-avail is below this floor, the restart is deferred — restarting into
+   * low memory would worsen pressure (a fresh session costs ~490MB), and the
+   * Phase 1 reactive stop owns acute-pressure handling. Default 1500 (aligned
+   * with the fleet's 1.5GB restoration gate).
+   */
+  rss_restart_soft_avail_floor_mb?: number;
 }
 
 export interface CronEntry {
@@ -223,6 +257,17 @@ export interface CronEntry {
   /** "recurring" (default) restores on every session start.
    *  "once" restores only if fire_at is still in the future; deleted after firing. */
   type?: 'recurring' | 'once' | 'disabled';
+  /** Explicit enabled flag. Absent = enabled. Explicitly false = disabled (honoured by resync ADD path). */
+  enabled?: boolean;
+  /**
+   * Dispatch engine. "shell" runs the prompt as `bash -c <prompt>` directly in
+   * the daemon (zero model tokens); absent or "claude" injects the prompt into
+   * the agent's PTY session (default, pre-F1-lite behavior).
+   *
+   * NOTE: values other than "shell" are treated as "claude" — historical
+   * configs contain dead tags like "ollama" from the removed PTY executor.
+   */
+  engine?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +455,21 @@ export interface CronDefinition {
    * @default false (manual fire is allowed by default — opt-out model)
    */
   manualFireDisabled?: boolean;
+
+  /**
+   * Dispatch engine (F1-lite). `"shell"` makes the daemon run the prompt as
+   * `bash -c <prompt>` directly — no PTY injection, no model tokens. The
+   * process gets the agent's CTX_* env, org secrets.env, and agent .env
+   * (see src/daemon/shell-cron.ts), cwd = agent dir, 5-minute timeout.
+   * Nonzero exit / timeout flows through the scheduler's normal retry +
+   * execution-log path.
+   *
+   * Absent or any other value → prompt is injected into the agent's PTY
+   * session (default behavior, unchanged).
+   *
+   * @example "shell"
+   */
+  engine?: string;
 }
 
 // ---------------------------------------------------------------------------
