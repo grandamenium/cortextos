@@ -29,7 +29,7 @@
     {
       "name": "weekly-review",
       "type": "recurring",
-      "cron": "3 10 * * 0",
+      "cron": "42 10 * * 0",
       "prompt": "Read .claude/skills/weekly-review/SKILL.md and run the full weekly review. Review all agent outputs, evaluate performance, plan next week. Then call: cortextos bus update-cron-fire weekly-review --interval 7d."
     },
     {

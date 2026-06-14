@@ -59,7 +59,7 @@
     {
       "name": "coding-standards-weekly",
       "type": "recurring",
-      "cron": "3 14 * * 0",
+      "cron": "44 14 * * 0",
       "prompt": "Sunday 14:00. Read .claude/skills/coding-standards-curator/SKILL.md and execute the FULL re-cluster cycle (not just incremental). Re-walk all 28 pattern signatures against entire greptile-cache/. Detect: regressions (rule exists, pattern reappears), fading patterns (rule active, no new violations 4 weeks). Send weekly digest via platform-director with iteration-rate trend (target <1.5). Re-distribute to GUARDRAILS + PR template if anything changed."
     },
     {
@@ -77,7 +77,7 @@
     {
       "name": "weekly-performance-report",
       "type": "cron",
-      "cron": "5 19 * * 0",
+      "cron": "46 19 * * 0",
       "prompt": "Sunday 19:00. Compile weekly digest: (1) total token cost per agent (read .cortextos analytics/cost.json if exists, else estimate from PM2 + Anthropic billing), (2) tasks-per-token efficiency, (3) prod LCP/CWV trend (Vercel Analytics API if accessible, else skip), (4) error-budget burn-rate, (5) Greptile iteration rate change-week-over-week, (6) cron-drift incidents this week. SECTION 7 — REPEAT BUGS: read memory/repeat-bugs.md, list each bug closed >1x this week with count + last-closure date + root-cause summary from post-mortem if exists. SECTION 8 — TWO-TRACK EVIDENCE COVERAGE: Read latest memory/agent-scorecards/*.jsonl (most recent date). Report per-agent: UI-track rate (screenshot required, frontend/product-owner only) and non-UI-track rate (VERIFIED-block required, all agents). Flag agents where UI-rate < 80% (>=3 UI tasks in period) or non-UI-rate < 80% (>=3 non-UI tasks). DO NOT count non-UI backend tasks in the screenshot denominator — that inflates the deficit and is not a quality signal. If no scorecard file for today exists: run the scorecard from .claude/skills/agent-scorecard/SKILL.md first, then report. Send via platform-director Telegram with 2-3 specific optimization recommendations + expected $-impact. Save report to memory/performance-report-YYYY-Wnn.md."
     },
     {
@@ -113,7 +113,7 @@
     {
       "name": "fleet-cascade-sync",
       "type": "recurring",
-      "cron": "17 7 * * *",
+      "cron": "41 7 * * *",
       "prompt": "Read .claude/skills/fleet-cascade-sync/SKILL.md and execute the full algorithm. Cascade-eligible commits are pure cross-cutting quality/process changes (.github/PULL_REQUEST_TEMPLATE.md, tests/quality/CODING_STANDARDS.md, tests/quality/lint-rules.yaml) that all open claude/* branches should carry. Steps: (1) cortextos bus update-cron-fire fleet-cascade-sync --interval 1440. (2) Fetch origin. (3) Find cascade-eligible commits on main last 7 days (pure cascade files only — no functional code). (4) For each open claude/* branch: check if cascade commit is already an ancestor (git merge-base --is-ancestor). (5) Missing pairs: attempt cherry-pick in isolated worktree. (6) Clean cherry-pick: push cascade/<sha>/<branch> + gh pr create --base <branch> --label no-ui-change. (7) Conflict: create cortextos task '[CASCADE] cherry-pick <sha> into <branch> — manual needed' with git command. (8) Track all pairs in memory/cascade-state.json (idempotent). Max 5 PRs per run. (9) Update heartbeat with summary. MANDATORY LAST STEP: cortextos bus update-cron-fire fleet-cascade-sync --interval 1440."
     },
     {

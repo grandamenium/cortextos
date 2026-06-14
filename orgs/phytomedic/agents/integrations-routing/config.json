@@ -35,13 +35,13 @@
     {
       "name": "weekly-risk-report",
       "type": "cron",
-      "cron": "19 5 * * 0",
+      "cron": "27 5 * * 0",
       "prompt": "Read skills/weekly-risk-report/SKILL.md and produce the weekly integration risk summary. Include dependency map, top risks, V1 readiness, and recommended priorities. MANDATORY LAST STEP: cortextos bus update-cron-fire weekly-risk-report --interval 168h && cortextos bus update-heartbeat alive"
     },
     {
       "name": "provider-change-review",
       "type": "cron",
-      "cron": "24 5 * * 0",
+      "cron": "36 5 * * 0",
       "prompt": "Read skills/provider-change-review/SKILL.md and execute the weekly provider documentation and change review. Detect external changes that could break integrations. MANDATORY LAST STEP: cortextos bus update-cron-fire provider-change-review --interval 168h && cortextos bus update-heartbeat alive"
     },
     {
