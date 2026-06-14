@@ -21,6 +21,13 @@ export interface AssigneeMetrics {
   completed: number;
   pending: number;
   in_progress: number;
+  /**
+   * Bundle-collapsed in_progress count used by the wip_cap_breach threshold.
+   * Tasks whose titles share a leading `[BUNDLE-KEY ...]` prefix collapse to a
+   * single effort unit; non-bracketed tasks each count as 1. Equals
+   * `in_progress` when no titles share a bundle prefix.
+   */
+  in_progress_effective: number;
   /** completed / (completed + pending), or null when both are 0 */
   completion_ratio: number | null;
 }
@@ -155,6 +162,28 @@ interface TaskRecord {
   status?: string;
   created_at?: string;
   archived?: boolean;
+  title?: string;
+}
+
+/**
+ * Extract a bundle key from a task title. Bundles are signalled by a leading
+ * bracketed token (`[B-2.x ...]`, `[OVERNIGHT-CRON-HEALTH PHASE-B-2]`,
+ * `[SYS-MET-02] ...`). The key is the first whitespace-delimited token inside
+ * the leading bracket, upper-cased. Titles without a leading bracket return
+ * null so they count as standalone efforts.
+ *
+ * Examples:
+ *   "[OVERNIGHT-CRON-HEALTH] Generic detector"        -> "OVERNIGHT-CRON-HEALTH"
+ *   "[OVERNIGHT-CRON-HEALTH PHASE-B-2] Retrofit"      -> "OVERNIGHT-CRON-HEALTH"
+ *   "[SYS-MET-02] Bundle-aware threshold"             -> "SYS-MET-02"
+ *   "[B2.3c][P1] Standort-gefilterte Slots"           -> "B2.3C"
+ *   "Plain title without brackets"                     -> null
+ */
+function bundleKey(title?: string): string | null {
+  if (!title) return null;
+  const m = title.match(/^\s*\[([^\]\s][^\]]*?)(?:\s|\])/);
+  if (!m) return null;
+  return m[1].toUpperCase();
 }
 
 /**
@@ -214,7 +243,10 @@ function detectAnomalies(role: RoleConfig, metrics: Omit<RoleMetrics, 'anomalies
         && metrics.assignee.completion_ratio < t.assignee_completion_ratio_min) {
       out.push('assignee_low_completion_ratio');
     }
-    if (typeof t.wip_cap_max === 'number' && metrics.assignee.in_progress > t.wip_cap_max) {
+    // Compare against the bundle-collapsed count: a 7-task `[OVERNIGHT-CRON-HEALTH ...]`
+    // cluster is one coordinated effort, not seven independent commitments. Raw
+    // `in_progress` stays in the report for transparency.
+    if (typeof t.wip_cap_max === 'number' && metrics.assignee.in_progress_effective > t.wip_cap_max) {
       out.push('assignee_wip_cap_breach');
     }
   }
@@ -298,6 +330,10 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
     let completed = 0, pending = 0, inProgress = 0;
     let authoredTotal = 0, pendingDispatch = 0;
     const pendingDispatchAges: number[] = [];
+    // Bundle-prefix → 1 effort unit; non-bracketed in_progress tasks each
+    // count standalone. effective_wip = bundles.size + standaloneInProgress.
+    const inProgressBundles = new Set<string>();
+    let inProgressStandalone = 0;
 
     for (const task of allTasks) {
       // Archived tasks are excluded from listTasks (src/bus/task.ts), so
@@ -308,7 +344,13 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
         switch (task.status) {
           case 'completed': completed++; break;
           case 'pending': pending++; break;
-          case 'in_progress': inProgress++; break;
+          case 'in_progress': {
+            inProgress++;
+            const key = bundleKey(task.title);
+            if (key) inProgressBundles.add(key);
+            else inProgressStandalone++;
+            break;
+          }
         }
       }
       if (task.created_by === agent) {
@@ -372,6 +414,7 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       completed,
       pending,
       in_progress: inProgress,
+      in_progress_effective: inProgressBundles.size + inProgressStandalone,
       completion_ratio: denom === 0 ? null : completed / denom,
     };
     const authoring: AuthoringMetrics = {

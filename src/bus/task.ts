@@ -489,6 +489,16 @@ export function completeTask(
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     task.completed_at = task.updated_at;
     if (result) {
+      // Reject results that contain unsubstituted template placeholders.
+      // The pattern <word>:<word> (two angle-bracket tokens joined by a colon)
+      // is characteristic of copy-pasted task-audit templates like <file>:<lines>
+      // and has no legitimate use in a completion result string.
+      if (/<[a-z_][a-z0-9_-]*>:<[a-z_][a-z0-9_-]*>/.test(result)) {
+        throw new Error(
+          `Task ${taskId} complete rejected: result contains unsubstituted placeholder tokens (e.g. <file>:<lines>). ` +
+          `Replace angle-bracket placeholders with actual file paths and line numbers before completing.`
+        );
+      }
       task.result = result;
     }
     atomicWriteSync(filePath, JSON.stringify(task));

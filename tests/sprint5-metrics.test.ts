@@ -425,6 +425,80 @@ describe('Sprint 5: Observability & Metrics', () => {
 
       const role = collectMetrics(ctxRoot).agents['frontend-dev'].role;
       expect(role.anomalies).toContain('assignee_wip_cap_breach');
+      // Untitled tasks have no bundle key, so each counts standalone.
+      expect(role.assignee.in_progress).toBe(7);
+      expect(role.assignee.in_progress_effective).toBe(7);
+    });
+
+    it('bundle-collapses in_progress titles into 1 effort for wip_cap', () => {
+      // PD calibration ask 2026-06-14: 7 `[OVERNIGHT-CRON-HEALTH ...]` tasks are
+      // one coordinated effort, not seven. Raw count is preserved for transparency;
+      // the threshold compares against the bundle-collapsed count.
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      const bundleTitles = [
+        '[OVERNIGHT-CRON-HEALTH] Generic cron-silent-fail detector',
+        '[OVERNIGHT-CRON-HEALTH PHASE-B-2] Retrofit remaining ~37 crons',
+        '[OVERNIGHT-CRON-HEALTH] Variant retrofit pass 2',
+        '[OVERNIGHT-CRON-HEALTH] Variant retrofit pass 3',
+        '[OVERNIGHT-CRON-HEALTH] Variant retrofit pass 4',
+        '[OVERNIGHT-CRON-HEALTH] Variant retrofit pass 5',
+        '[OVERNIGHT-CRON-HEALTH] Variant retrofit pass 6',
+      ];
+      bundleTitles.forEach((title, i) => {
+        writeFileSync(join(ctxRoot, 'tasks', `bundle${i}.json`), JSON.stringify({
+          assigned_to: 'frontend-dev', status: 'in_progress', title,
+        }), 'utf-8');
+      });
+
+      const role = collectMetrics(ctxRoot).agents['frontend-dev'].role;
+      expect(role.assignee.in_progress).toBe(7); // raw preserved
+      expect(role.assignee.in_progress_effective).toBe(1); // collapsed
+      expect(role.anomalies).not.toContain('assignee_wip_cap_breach');
+    });
+
+    it('counts bundle + standalone tasks correctly for effective_wip', () => {
+      // Realistic snapshot: one bundle of 4 + 3 standalone titled tasks =
+      // 1 + 3 = 4 effective efforts. Default cap is 5 so no breach.
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      const titles = [
+        '[B-2.x] Variant a',
+        '[B-2.x] Variant b',
+        '[B-2.x] Variant c',
+        '[B-2.x] Variant d',
+        '[CI-CALIBRATION-FIX] lint-rules-enforcement.yml',
+        '[GAP-HERSTELLER-SPONSORING-STRIPE] Stripe Checkout Wire-Up',
+        '[STRAIN-DI-3] upsertStrainFields FK validation',
+      ];
+      titles.forEach((title, i) => {
+        writeFileSync(join(ctxRoot, 'tasks', `mix${i}.json`), JSON.stringify({
+          assigned_to: 'frontend-dev', status: 'in_progress', title,
+        }), 'utf-8');
+      });
+
+      const role = collectMetrics(ctxRoot).agents['frontend-dev'].role;
+      expect(role.assignee.in_progress).toBe(7);
+      expect(role.assignee.in_progress_effective).toBe(4);
+      expect(role.anomalies).not.toContain('assignee_wip_cap_breach');
+    });
+
+    it('still breaches wip_cap when effective count exceeds threshold', () => {
+      // 6 distinct bundles → effective_wip=6 > cap=5 → breach fires even though
+      // every task is bracketed.
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      const titles = [
+        '[ALPHA] one', '[BETA] two', '[GAMMA] three',
+        '[DELTA] four', '[EPSILON] five', '[ZETA] six',
+      ];
+      titles.forEach((title, i) => {
+        writeFileSync(join(ctxRoot, 'tasks', `dist${i}.json`), JSON.stringify({
+          assigned_to: 'frontend-dev', status: 'in_progress', title,
+        }), 'utf-8');
+      });
+
+      const role = collectMetrics(ctxRoot).agents['frontend-dev'].role;
+      expect(role.assignee.in_progress).toBe(6);
+      expect(role.assignee.in_progress_effective).toBe(6);
+      expect(role.anomalies).toContain('assignee_wip_cap_breach');
     });
 
     it('analyst-hybrid carries BOTH assignee and authoring thresholds', () => {
