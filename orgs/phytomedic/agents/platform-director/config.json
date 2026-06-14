@@ -1,0 +1,48 @@
+{
+  "agent_name": "platform-director",
+  "enabled": true,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "16 */4 * * *",
+      "prompt": "Heartbeat-Tick. Run: cortextos bus update-heartbeat alive. Then: cortextos bus check-inbox | head -50. If inbox has urgent msgs, process them. Else end. NO bootstrap-file-reading. End: cortextos bus update-cron-fire heartbeat --interval 240."
+    },
+    {
+      "name": "work-pull-nudge",
+      "type": "cron",
+      "cron": "26 */6 * * *",
+      "prompt": "Work-Pull-Nudge (idle-fleet activator). PENDING=$(cortextos bus list-tasks --status pending --format json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'); IN_PROGRESS=$(cortextos bus list-tasks --status in_progress --format json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))'); echo \"Status: $IN_PROGRESS in_progress, $PENDING pending\". If IN_PROGRESS < 3 AND PENDING > 10: send activation to idle agents. for a in backend-architect frontend-dev product-owner cannametrics-data systems-analyst integrations-routing cortextos-improver devops-monitor; do cortextos bus send-message $a high \"WORK-PULL: cortextos bus list-tasks --status pending --agent $a | head -3 → update-task in_progress on top → execute. Bundle-Plan = source of truth. No idle.\" 2>&1 | tail -1; done. End: cortextos bus update-cron-fire work-pull-nudge --interval 360."
+    },
+    {
+      "name": "morning-review",
+      "type": "recurring",
+      "cron": "3 10 * * *",
+      "prompt": "Read .claude/skills/morning-review/SKILL.md and execute the full morning review workflow. Include goal cascade from .claude/skills/goal-management/SKILL.md. Then call: cortextos bus update-cron-fire morning-review --interval 24h."
+    },
+    {
+      "name": "evening-review",
+      "type": "recurring",
+      "cron": "3 18 * * *",
+      "prompt": "Read .claude/skills/evening-review/SKILL.md and execute the full evening review workflow. Summarize the day, propose overnight tasks, queue nighttime work. Then call: cortextos bus update-cron-fire evening-review --interval 24h."
+    },
+    {
+      "name": "weekly-review",
+      "type": "recurring",
+      "cron": "3 10 * * 0",
+      "prompt": "Read .claude/skills/weekly-review/SKILL.md and run the full weekly review. Review all agent outputs, evaluate performance, plan next week. Then call: cortextos bus update-cron-fire weekly-review --interval 7d."
+    },
+    {
+      "name": "daily-upstream-summary",
+      "type": "cron",
+      "cron": "29 9 * * *",
+      "prompt": "Daily 9:30 framework summary in Telegram digest: (1) Last upstream check timestamp from memory/upstream-notified.json (2) Commits applied in last 24h (auto-merged fixes) (3) Pending features awaiting your approval. Format: 🔄 cortextOS Upstream: X commits applied (auto), Y pending review. Then call: cortextos bus update-cron-fire daily-upstream-summary --interval 24h."
+    },
+    {
+      "name": "agent-proposal-curator",
+      "type": "cron",
+      "cron": "6 18 * * 0",
+      "prompt": "Read .claude/skills/agent-proposal-curator/SKILL.md and execute one full proposal cycle (Sun 18:00). Mine fleet data from last 7 days, score 8 standing candidates (cortextos-improver, seo-optimizer, legal-compliance-officer, content-strategist, growth-analyst, partnership-coordinator, customer-support-agent, devops-monitor) + any new patterns surfaced. Send TOP 1-3 proposals via Telegram for user approval. PRE-STAGED: cortextos-improver proposal already in proposals/agent-2026-04-25-cortextos-improver.md — surface this on first cycle if not already approved/rejected. Skip if user has 3+ unaddressed proposals. Then call: cortextos bus update-cron-fire agent-proposal-curator --interval 7d."
+    }
+  ]
+}

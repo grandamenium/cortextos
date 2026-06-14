@@ -1,0 +1,84 @@
+{
+  "agent_name": "systems-analyst",
+  "enabled": true,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "18 */4 * * *",
+      "prompt": "Heartbeat-Tick. Run: cortextos bus update-heartbeat alive. Then: cortextos bus check-inbox | head -50. If inbox has urgent msgs, process them. Else end. NO bootstrap-file-reading. End: cortextos bus update-cron-fire heartbeat --interval 240."
+    },
+    {
+      "name": "nightly-metrics",
+      "type": "recurring",
+      "cron": "3 19 * * *",
+      "prompt": "Run nightly metrics collection: cortextos bus collect-metrics. Review the output and report any anomalies to platform-director. cortextos bus update-cron-fire nightly-metrics --interval 1440"
+    },
+    {
+      "name": "catalog-browse",
+      "type": "recurring",
+      "cron": "4 19 * * 0",
+      "prompt": "Browse community catalog: cortextos bus browse-catalog. Surface ONE relevant new item to user via Telegram. If they say install it: cortextos bus install-community-item <name>. If they decline, skip that item for 30 days. cortextos bus update-cron-fire catalog-browse --interval 10080"
+    },
+    {
+      "name": "morning-executive-briefing",
+      "type": "recurring",
+      "cron": "47 8 * * *",
+      "prompt": "Morning OPERATIONAL briefing — feed platform-director (orchestrator owns the SINGLE founder-facing briefing + goal cascade; do NOT send a parallel summary to the user, per PD lane-lock 2026-05-27). Compile and send via cortextos bus send-message platform-director: active/idle/blocked agents, critical path progress, open approvals, overnight anomalies, Cannametrics foundation health, integration status (Cannaleo/HiGreen/QES), top risks, decisions needed. Use reporting format: Context, Observed pattern, Why it matters, Risk level, Recommendation, Decision needed. Only message the founder directly for an analyst-specific escalation PD has explicitly delegated. cortextos bus update-cron-fire morning-executive-briefing --interval 1440"
+    },
+    {
+      "name": "daily-strategic-drift",
+      "type": "recurring",
+      "cron": "13 14 * * *",
+      "prompt": "Daily strategic drift check. Evaluate whether agent work is drifting away from: pharmacy utility, Cannametrics foundation, end-to-end care loop readiness. Check if output is tilting too heavily toward doctor-only workflows. Report drift indicators to platform-director. Escalate to user only if material drift detected. Use format: Context, Observed pattern, Why it matters, Risk level, Recommendation, Decision needed. cortextos bus update-cron-fire daily-strategic-drift --interval 1440"
+    },
+    {
+      "name": "daily-integration-health",
+      "type": "recurring",
+      "cron": "23 11 * * *",
+      "prompt": "Daily integration health check. Check: Cannaleo availability/routing dependency, HiGreen availability/feed health, QES dependency status, webhook response reliability, known callback failures, sync freshness. Alert platform-director if sustained error rate >15% for 30+ min on core workflow. Alert both if >25% or compliance/routing/data-integrity/security issues. cortextos bus update-cron-fire daily-integration-health --interval 1440"
+    },
+    {
+      "name": "daily-cannametrics-foundation",
+      "type": "recurring",
+      "cron": "37 12 * * *",
+      "prompt": "Daily Cannametrics foundation check. Check: catalog sync freshness, snapshot jobs executed, price history append integrity, routing outcome logging continuity, prescription-product linkage continuity, schema/data model anomalies, missing historical capture windows. Treat as first-class health category. Alert platform-director on any data integrity breaks. Alert user immediately on corruption risk or missing capture windows. cortextos bus update-cron-fire daily-cannametrics-foundation --interval 1440"
+    },
+    {
+      "name": "weekly-theta-wave-prep",
+      "type": "recurring",
+      "cron": "47 16 * * 5",
+      "prompt": "Weekly theta-wave review prep. Compile: briefing quality trends, approval routing speed trends, goal cascade alignment, repeated blockers, agent drift patterns, coordination inefficiencies, experiment candidates. Prepare summary for theta-wave cycle. cortextos bus update-cron-fire weekly-theta-wave-prep --interval 10080"
+    },
+    {
+      "name": "theta-wave",
+      "type": "cron",
+      "cron": "6 20 * * *",
+      "prompt": "Read .claude/skills/theta-wave/SKILL.md. Initiate the theta wave cycle. First action: message the orchestrator that theta wave is starting and share your initial system scan. cortextos bus update-cron-fire theta-wave --interval 1440"
+    },
+    {
+      "name": "overnight-phase-1-e2e",
+      "type": "cron",
+      "cron": "8 23 * * *",
+      "prompt": "Read .claude/skills/overnight-hardening/SKILL.md Phase 1. Run full Playwright E2E suite against production (BASE_URL=https://www.phytomedic.de). Parse results, create tasks for each failed test with category=bug, priority based on criticality (checkout/auth=urgent, navigation=high, visual=normal). Route to correct agent based on failure area. Dedupe against existing open bug tasks. cortextos bus update-cron-fire overnight-phase-1-e2e --interval 1440"
+    },
+    {
+      "name": "overnight-phase-2-visual",
+      "type": "cron",
+      "cron": "31 23 * * *",
+      "prompt": "Read .claude/skills/overnight-hardening/SKILL.md Phase 2. Visual consistency sweep: browse critical pages (/, /medizin/produkte, /medizin/produkte/[first-product], /medizin/sorten, /login, /checkout) with Playwright, capture screenshots, check for broken images, console errors, missing styles, placeholder text, undefined/NaN/€0.00 values. File bugs for frontend-dev or cannametrics-data. cortextos bus update-cron-fire overnight-phase-2-visual --interval 1440"
+    },
+    {
+      "name": "overnight-phase-3-data",
+      "type": "cron",
+      "cron": "9 0 * * *",
+      "prompt": "Read .claude/skills/overnight-hardening/SKILL.md Phase 3. Data integrity sweep via Convex queries: products with missing imageUrl/manufacturer, cbdPercent>35, slug missing, price=0; orders stuck in_progress>7d; pharmacies missing deliveryOptions. File tasks with reproducible query. cortextos bus update-cron-fire overnight-phase-3-data --interval 1440"
+    },
+    {
+      "name": "morning-briefing-9-30",
+      "type": "cron",
+      "cron": "29 9 * * *",
+      "prompt": "Read .claude/skills/overnight-hardening/SKILL.md Phase 5. Compile the overnight-hardening summary (E2E results, bugs found/fixed/open, site health, PR status) and FEED IT TO platform-director via cortextos bus send-message — do NOT Telegram the founder (orchestrator owns the SINGLE founder briefing + goal cascade; per PD lane-lock 2026-05-27, avoid parallel founder summaries). Structure: Overnight Summary, Fixed, Open, Site Health, Recommendation. If this fires close to morning-executive-briefing, fold into one operational feed to PD (no duplicate). cortextos bus update-cron-fire morning-briefing-9-30 --interval 1440"
+    }
+  ]
+}

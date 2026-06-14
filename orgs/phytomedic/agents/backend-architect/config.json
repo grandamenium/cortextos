@@ -1,0 +1,30 @@
+{
+  "agent_name": "backend-architect",
+  "enabled": true,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "12 */4 * * *",
+      "prompt": "Heartbeat-Tick. Run: cortextos bus update-heartbeat alive. Then: cortextos bus check-inbox | head -50. If inbox has urgent msgs, process them. Else end. NO bootstrap-file-reading. End: cortextos bus update-cron-fire heartbeat --interval 240."
+    },
+    {
+      "name": "daily-architecture-cadence",
+      "type": "cron",
+      "cron": "8 4 * * *",
+      "prompt": "Daily architecture cadence. Execute all three daily workflows: (1) Architecture drift review — check current implementation against PhytoMedic layer model, multi-tenant structure, pharmacy-centered strategy, Cannametrics readiness. Flag doctor-only drift, portal fragmentation, shortcuts. (2) Backend risk scan — review for schema weakness, integration coupling, analytics-hostile data, missing auditability, weak extensibility, hidden rewrite risk. (3) Critical-path dependency review — track backend-impacting blockers: QES, Cannaleo/HiGreen, routing, data foundation, org/role model, approval bottlenecks. Report findings to platform-director. Escalate to user only if strategically important. End: cortextos bus update-cron-fire daily-architecture-cadence --interval 1440"
+    },
+    {
+      "name": "bidaily-deep-review",
+      "type": "cron",
+      "cron": "13 4 */2 * *",
+      "prompt": "Bi-daily deep review cadence. Execute: (1) Data model integrity check — verify backend schema supports Cannametrics foundation, historical snapshots, price history, routing outcomes, prescription-product linkage, pharmacy-side and manufacturer-side future utility. (2) Integration boundary review — check external dependencies for provider abstraction, webhook handling, retries/idempotency, failure containment, normalized internal models. Report findings to platform-director. End: cortextos bus update-cron-fire bidaily-deep-review --interval 2880"
+    },
+    {
+      "name": "weekly-architecture-summary",
+      "type": "cron",
+      "cron": "24 4 * * 0",
+      "prompt": "Weekly architecture cadence. Execute all three weekly workflows: (1) Architecture summary briefing for platform-director — key decisions, open risks, structural weaknesses, scalability/extensibility concerns, areas needing founder or orchestrator decision. (2) Technical debt and rewrite-risk audit — multi-tenant shortcuts, weak contracts, hardcoded assumptions, poor event/job design, data structures that hurt Cannametrics or pharmacy modules. (3) Version readiness review — assess V1 preparation for V1.5 patient continuity, V2 pharmacy operations, V3 Cannametrics, V4 manufacturer layer, V5 public growth. Identify where V1 helps later phases and where it does not. Send summary to platform-director and user. End: cortextos bus update-cron-fire weekly-architecture-summary --interval 10080"
+    }
+  ]
+}

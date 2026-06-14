@@ -1,0 +1,48 @@
+{
+  "agent_name": "cannametrics-data",
+  "enabled": true,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "7,37 * * * *",
+      "prompt": "Heartbeat-Tick. Run: cortextos bus update-heartbeat alive. Then: cortextos bus check-inbox | head -50. If inbox has urgent msgs, process them. Else end. NO bootstrap-file-reading. End: cortextos bus update-cron-fire heartbeat --interval 30."
+    },
+    {
+      "name": "daily-foundation-health",
+      "type": "cron",
+      "cron": "6 3 * * *",
+      "prompt": "Daily Cannametrics Foundation Health Check. Review: schema readiness, required tables and relationships, historical capture continuity, price history logic, routing outcome capture, prescription-product linkage, data freshness assumptions, append-only vs mutable data decisions, anything that could damage future analytics value. Output a short daily health note with risks, missing pieces, and recommended next actions. Send findings to user via Telegram using the reporting format: Context, Observation, Why it matters, Risk level, Recommendation, Decision needed. Then record fire: cortextos bus update-cron-fire daily-foundation-health --interval 1440. Then: cortextos bus update-heartbeat alive."
+    },
+    {
+      "name": "backend-schema-review",
+      "type": "cron",
+      "cron": "9 4 */2 * *",
+      "prompt": "Backend Schema Review for Cannametrics. Check backend-architect's recent work: new tables, changed fields, renamed concepts, deleted fields, relationships affecting analytics, indexes and query-readiness for future analytics, whether backend decisions preserve future pharmacy and manufacturer insights. Send schema impact review note to user via Telegram if anything material found. Coordinate with backend-architect via agent messages if clarification needed. Then record fire: cortextos bus update-cron-fire backend-schema-review --interval 2880. Then: cortextos bus update-heartbeat alive."
+    },
+    {
+      "name": "integration-dataflow-review",
+      "type": "cron",
+      "cron": "14 4 */2 * *",
+      "prompt": "Integration Data-Flow Review for Cannametrics. Review: Cannaleo data mapping, HiGreen data mapping, WaWiCan/Greeners availability data, Cannaflow inputs, routing event outputs, webhook payload usefulness, whether source data is sufficient for Cannametrics, where normalization or enrichment is still missing. Coordinate with integrations-routing. Send integration-to-data capture review to user via Telegram if material findings. Then record fire: cortextos bus update-cron-fire integration-dataflow-review --interval 2880. Then: cortextos bus update-heartbeat alive."
+    },
+    {
+      "name": "weekly-readiness-report",
+      "type": "cron",
+      "cron": "9 4 * * 0",
+      "prompt": "Weekly Cannametrics Readiness Report. Strategic status report: current readiness by data domain, biggest gaps, biggest risks, dependencies on backend or integrations, risk to pharmacy-centered value, recommended priorities for next week. Send via Telegram using reporting format. Then record fire: cortextos bus update-cron-fire weekly-readiness-report --interval 10080. Then: cortextos bus update-heartbeat alive."
+    },
+    {
+      "name": "weekly-pharmacy-value-alignment",
+      "type": "cron",
+      "cron": "14 4 * * 0",
+      "prompt": "Weekly Pharmacy-Value Alignment Check. Review whether current work enables future: procurement insights, assortment intelligence, price benchmarking, routing quality analysis, reorder and sell-through visibility, market visibility by pharmacy and product. Flag if Cannametrics is drifting toward generic reporting instead of real pharmacy utility. Send findings via Telegram. Then record fire: cortextos bus update-cron-fire weekly-pharmacy-value-alignment --interval 10080. Then: cortextos bus update-heartbeat alive."
+    },
+    {
+      "name": "weekly-strategic-drift",
+      "type": "cron",
+      "cron": "19 4 * * 0",
+      "prompt": "Weekly Strategic Drift Check. Detect whether platform work is becoming too doctor-workflow-centric and not preserving the data layer needed for the real long-term moat. This is about direction, not code. Review whether Cannametrics intelligence layer is getting proper attention relative to clinical features. Send findings via Telegram. Then record fire: cortextos bus update-cron-fire weekly-strategic-drift --interval 10080. Then: cortextos bus update-heartbeat alive."
+    }
+  ]
+}

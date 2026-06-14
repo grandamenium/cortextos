@@ -14,6 +14,20 @@ orgs/
 # But community subdirectories ARE part of the framework
 !community/
 !community/**
+# Agent config.json holds cron schedules — persist across daemon reinstalls.
+# Must un-ignore each directory level so git can traverse to the file.
+!orgs/
+!orgs/phytomedic/
+# Re-ignore org-level dirs that aren't agents (agent-shared, vault, etc.)
+orgs/phytomedic/agent-shared/
+orgs/phytomedic/vault/
+!orgs/phytomedic/agents/
+!orgs/phytomedic/agents/*/
+# Re-ignore everything inside agent dirs (runtime data, memory, goals, etc.)
+orgs/phytomedic/agents/*/**
+orgs/phytomedic/agents/*/*
+# Except the cron bootstrap config
+!orgs/phytomedic/agents/*/config.json
 
 # Secrets
 .env

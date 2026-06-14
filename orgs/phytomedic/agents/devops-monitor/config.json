@@ -1,0 +1,18 @@
+{
+  "agent_name": "devops-monitor",
+  "enabled": true,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "33 * * * *",
+      "prompt": "Heartbeat-Tick. Run: cortextos bus update-heartbeat alive. Then: cortextos bus check-inbox | head -50. If inbox has urgent msgs, process them. Else end. NO bootstrap-file-reading. End: cortextos bus update-cron-fire heartbeat --interval 240."
+    },
+    {
+      "name": "weekly-infra-report",
+      "type": "cron",
+      "cron": "9 9 * * 0",
+      "prompt": "Weekly infra report: aggregate memory/infra-ledger.jsonl from last 7d. Counts per service (alerts fired, root causes, MTTR). Top 3 recurring issues. Quota trends (% used now vs 7d ago). Send to platform-director inbox + Telegram summary to user."
+    }
+  ]
+}
