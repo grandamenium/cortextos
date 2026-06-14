@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Architecture-Pattern-Discovery — semantic-level scan via Claude API
-import { execFile, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -83,18 +83,15 @@ RETURN STRICT JSON ARRAY (no prose):
     messages: [{ role: 'user', content: prompt }],
   });
 
-  const apiResp = await new Promise((resolve, reject) => {
-    const p = execFile('curl', [
-      '-sS',
-      'https://api.anthropic.com/v1/messages',
-      '-H', `x-api-key: ${ANTHROPIC_KEY}`,
-      '-H', 'anthropic-version: 2023-06-01',
-      '-H', 'content-type: application/json',
-      '-d', '@-'
-    ], { maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => err ? reject(err) : resolve(stdout));
-    p.stdin.write(body);
-    p.stdin.end();
-  });
+  const apiResp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': ANTHROPIC_KEY,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body,
+  }).then(r => r.text());
 
   let parsed = [];
   try {

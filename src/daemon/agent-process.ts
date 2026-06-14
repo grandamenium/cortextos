@@ -509,9 +509,38 @@ export class AgentProcess {
   }
 
   /**
+   * Match context-exhaustion signatures in recent stdout output.
+   *
+   * When Claude Code exits at 100% context (exit 0), the JSONL conversation
+   * files still exist on disk. Without intervention, shouldContinue() returns
+   * true and the next start() launches --continue, which reloads the same
+   * exhausted context and immediately exits again — a crash loop that burns
+   * the daily crash budget and halts the agent. Detecting the exhaustion
+   * signature here lets handleExit() arm .force-fresh and restart cleanly
+   * without counting against max_crashes_per_day.
+   *
+   * Patterns observed:
+   *   "100% context used"           — Claude Code TUI status bar
+   *   "Extra usage is required for 1M context" — billing gate on 1M plans
+   *   "conversation too long"       — compaction failure in session reset
+   *
+   * ANSI codes are stripped before matching because the status bar wraps the
+   * text in terminal escape sequences (e.g. \x1b[Xm 100% context used \x1b[0m).
+   */
+  private detectContextExhaustion(recentOutput: string): boolean {
+    if (!recentOutput) return false;
+    const stripped = recentOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    return (
+      stripped.includes('100% context used') ||
+      stripped.includes('Extra usage is required for 1M context') ||
+      stripped.includes('conversation too long')
+    );
+  }
+
+  /**
    * Write the `.force-fresh` marker that AgentProcess.shouldContinue() reads
    * on the next start() to force a fresh Claude Code session (no --continue).
-   * Used by the image-poison auto-recovery in handleExit().
+   * Used by the image-poison auto-recovery and context-exhaustion recovery in handleExit().
    */
   private armForceFresh(reason: string): void {
     try {
@@ -605,6 +634,27 @@ export class AgentProcess {
       setTimeout(() => {
         if (this.status === 'crashed') {
           this.start().catch(err => this.log(`Image-poison restart failed: ${err}`));
+        }
+      }, 5000);
+      return;
+    }
+
+    // Context-exhaustion auto-recovery (SYS-DAEMON-CTX-01).
+    // When Claude Code exits cleanly at 100% context, JSONL files still exist on
+    // disk so shouldContinue() returns true on the next start(). That --continue
+    // session reloads the same exhausted context and immediately exits again —
+    // a crash loop that drains max_crashes_per_day and halts the agent. Arm
+    // .force-fresh so the next session starts clean, and restart without charging
+    // the crash counter: context exhaustion is an expected, recoverable state.
+    if (exitCode === 0 && this.detectContextExhaustion(recentOutput)) {
+      this.log('Context exhaustion detected. Arming .force-fresh and restarting without counting against max_crashes_per_day.');
+      this.armForceFresh('context-exhaustion auto-recovery');
+      this.appendCrashToRestartsLog(exitCode, 5000, 'CONTEXT_EXHAUSTION_RECOVERY');
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(err => this.log(`Context exhaustion restart failed: ${err}`));
         }
       }, 5000);
       return;
@@ -972,7 +1022,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY' | 'CONTEXT_EXHAUSTION_RECOVERY',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -981,7 +1031,7 @@ export class AgentProcess {
       const details =
         kind === 'HALTED'
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
-          : kind === 'IMAGE_POISON_RECOVERY'
+          : kind === 'IMAGE_POISON_RECOVERY' || kind === 'CONTEXT_EXHAUSTION_RECOVERY'
             ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
             : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;

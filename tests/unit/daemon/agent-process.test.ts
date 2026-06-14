@@ -416,3 +416,114 @@ describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', ()
     expect(ap.getStatus().status).not.toBe('halted');
   });
 });
+
+describe('AgentProcess — context exhaustion auto-recovery (SYS-DAEMON-CTX-01)', () => {
+  it('detects "100% context used" and restarts fresh without charging crash counter', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // Simulate tailStdoutLog returning context exhaustion signal
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('100% context used');
+
+    // Exit 0 — same as real context exhaustion
+    capturedOnExit!(0, 0);
+
+    // Must be in 'crashed' state (restart scheduled)
+    expect(ap.getStatus().status).toBe('crashed');
+
+    // .force-fresh marker must be written so the next start() skips --continue
+    expect(fsMocks.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('.force-fresh'),
+      expect.stringContaining('context-exhaustion'),
+      'utf-8',
+    );
+
+    // restarts.log must record CONTEXT_EXHAUSTION_RECOVERY, not CRASH
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    const [logPath, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logPath)).toContain('/logs/alice/restarts.log');
+    expect(String(logLine)).toContain('CONTEXT_EXHAUSTION_RECOVERY');
+    expect(String(logLine)).toContain('not counted toward max_crashes');
+    // Crash counter must NOT have been incremented
+    expect(ap.getCrashCount()).toBe(0);
+  });
+
+  it('detects "Extra usage is required for 1M context" billing gate', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue(
+      'Extra usage is required for 1M context',
+    );
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('CONTEXT_EXHAUSTION_RECOVERY');
+    expect(ap.getCrashCount()).toBe(0);
+  });
+
+  it('detects "conversation too long" compaction failure', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue(
+      'conversation too long to continue without compaction',
+    );
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('CONTEXT_EXHAUSTION_RECOVERY');
+    expect(ap.getCrashCount()).toBe(0);
+  });
+
+  it('ANSI-stripped context string is still detected', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // Simulate TUI status bar with ANSI escape codes around the text
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue(
+      '\x1b[32m100% context used\x1b[0m',
+    );
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('CONTEXT_EXHAUSTION_RECOVERY');
+  });
+
+  it('clean exit 0 WITHOUT context signal goes through regular crash path', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // No context exhaustion string — tailStdoutLog returns empty (default: no log file)
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('');
+
+    capturedOnExit!(0, 0);
+
+    // Regular crash path — crash counter incremented
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getCrashCount()).toBe(1);
+    // Should be CRASH in log, not CONTEXT_EXHAUSTION_RECOVERY
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('] CRASH:');
+    expect(String(logLine)).not.toContain('CONTEXT_EXHAUSTION_RECOVERY');
+  });
+
+  it('non-zero exit code with context string goes through regular crash path', async () => {
+    // Regression guard: context exhaustion check is gated on exitCode === 0.
+    // If Claude exits non-zero (e.g. SIGKILL) with context strings in the log,
+    // it should be treated as a real crash, not a context exhaustion.
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('100% context used');
+    capturedOnExit!(1, 0);
+
+    expect(ap.getCrashCount()).toBe(1);
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('] CRASH:');
+  });
+});
