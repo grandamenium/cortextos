@@ -1,5 +1,7 @@
-import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
+
+const CORRUPT_LOCK_STALE_MS = 5 * 60 * 1000;
 
 /**
  * Acquire a mutex lock using mkdir (atomic on all filesystems).
@@ -35,15 +37,23 @@ export function acquireLock(dir: string): boolean {
       storedPidRaw = readFileSync(pidFile, 'utf-8').trim();
     } catch {
       // PID file not yet written.  Holder is between mkdir and writeFileSync.
-      // Refuse the lock — the caller's retry loop will try again.
+      // Refuse fresh locks — the caller's retry loop will try again.  If the
+      // lock is old, it is a crash leftover from the mkdir/write gap and can
+      // otherwise blind inbox polling forever.
+      if (recoverStaleCorruptLock(lockDir, lockDir)) {
+        return acquireAfterStaleRemoval(lockDir, pidFile);
+      }
       return false;
     }
 
     const storedPid = parseInt(storedPidRaw, 10);
     if (isNaN(storedPid) || storedPidRaw === '') {
-      // Corrupt PID file.  Don't steal — let caller retry; if it persists
-      // the holder is broken and a future stale-detection pass (process.kill
-      // check below, after the PID is written cleanly) will recover.
+      // Corrupt PID file.  Don't steal fresh locks — this can be a process
+      // mid-write.  If it is old, self-heal; no numeric PID will ever reach
+      // the process.kill stale-detection path below.
+      if (recoverStaleCorruptLock(lockDir, pidFile)) {
+        return acquireAfterStaleRemoval(lockDir, pidFile);
+      }
       return false;
     }
 
@@ -54,16 +64,33 @@ export function acquireLock(dir: string): boolean {
       return false;
     } catch {
       // Process is dead - stale lock, remove and re-acquire atomically.
-      try {
-        rmSync(lockDir, { recursive: true, force: true });
-        mkdirSync(lockDir);
-        writeFileSync(pidFile, String(process.pid));
-        return true;
-      } catch {
-        // Another process beat us to the steal — let caller retry.
-        return false;
-      }
+      return acquireAfterStaleRemoval(lockDir, pidFile);
     }
+  }
+}
+
+function recoverStaleCorruptLock(lockDir: string, agePath: string): boolean {
+  try {
+    const ageMs = Date.now() - statSync(agePath).mtimeMs;
+    if (ageMs < CORRUPT_LOCK_STALE_MS) {
+      return false;
+    }
+    rmSync(lockDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireAfterStaleRemoval(lockDir: string, pidFile: string): boolean {
+  try {
+    rmSync(lockDir, { recursive: true, force: true });
+    mkdirSync(lockDir);
+    writeFileSync(pidFile, String(process.pid));
+    return true;
+  } catch {
+    // Another process beat us to the steal — let caller retry.
+    return false;
   }
 }
 

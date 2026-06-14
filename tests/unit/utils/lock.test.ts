@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { acquireLock, releaseLock } from '../../../src/utils/lock';
@@ -36,4 +36,49 @@ describe('mkdir-based locking', () => {
     expect(acquireLock(testDir)).toBe(true);
     releaseLock(testDir);
   });
+
+  it('does not steal a fresh lock with a missing pid file', () => {
+    mkdirSync(join(testDir, '.lock.d'));
+
+    expect(acquireLock(testDir)).toBe(false);
+  });
+
+  it('self-heals an old lock with a missing pid file', () => {
+    const lockDir = join(testDir, '.lock.d');
+    mkdirSync(lockDir);
+    makeOld(lockDir);
+
+    expect(acquireLock(testDir)).toBe(true);
+    expect(readFileSync(join(lockDir, 'pid'), 'utf-8')).toBe(String(process.pid));
+    releaseLock(testDir);
+  });
+
+  it('self-heals an old lock with an empty pid file', () => {
+    const lockDir = join(testDir, '.lock.d');
+    const pidFile = join(lockDir, 'pid');
+    mkdirSync(lockDir);
+    writeFileSync(pidFile, '');
+    makeOld(pidFile);
+
+    expect(acquireLock(testDir)).toBe(true);
+    expect(readFileSync(pidFile, 'utf-8')).toBe(String(process.pid));
+    releaseLock(testDir);
+  });
+
+  it('self-heals an old lock with a non-numeric pid file', () => {
+    const lockDir = join(testDir, '.lock.d');
+    const pidFile = join(lockDir, 'pid');
+    mkdirSync(lockDir);
+    writeFileSync(pidFile, 'not-a-pid');
+    makeOld(pidFile);
+
+    expect(acquireLock(testDir)).toBe(true);
+    expect(readFileSync(pidFile, 'utf-8')).toBe(String(process.pid));
+    releaseLock(testDir);
+  });
 });
+
+function makeOld(path: string): void {
+  const old = new Date(Date.now() - 10 * 60 * 1000);
+  utimesSync(path, old, old);
+}
