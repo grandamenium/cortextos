@@ -203,11 +203,11 @@ if [ -f "$PAUSED_FILE" ]; then
     --meta "{\"remaining_pct\":$REMAINING_PCT,\"method\":\"$METHOD\",\"agents_resumed\":$AGENTS_JSON,\"paused_at\":\"$PAUSED_AT\",\"trigger\":\"auto\"}" \
     >> "$LOG" 2>&1 || log "  log-event failed"
 
-  AGENT_LIST=$(echo "$AGENTS_JSON" | "$JQ" -r 'join(", ")')
-  MSG="✅ Quota watchdog auto-resumed $COUNT agents — remaining ${REMAINING_PCT}% (above ${RESUME_PCT}% buffer). Started: $AGENT_LIST."
-  "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$MSG" --plain-text >> "$LOG" 2>&1 || log "  telegram failed"
-
-  log "AUTO-RESUMED $COUNT agents"
+  # Routine auto-resume is logged via log-event (above) but NOT sent to Telegram.
+  # The Founder's chat only hears about quota events that require action (API-degraded
+  # alert above, or the PAUSE alert below).  Resume data is included in the
+  # weekly-performance-report under "Quota Events".
+  log "AUTO-RESUMED $COUNT agents (no Telegram — routine resume above ${RESUME_PCT}%)"
   exit 0
 fi
 
