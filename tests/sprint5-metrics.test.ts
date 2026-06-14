@@ -7,6 +7,7 @@ import {
   parseUsageOutput,
   storeUsageData,
   collectTelegramCommands,
+  detectCronCollisions,
 } from '../src/bus/metrics.js';
 import {
   defaultRoleType,
@@ -776,6 +777,155 @@ describe('Sprint 5: Observability & Metrics', () => {
       const cmds = collectTelegramCommands([scanDir]);
       const names = cmds.map((c) => c.command).sort();
       expect(names).toEqual(['claude_only', 'codex_only']);
+    });
+  });
+
+  describe('detectCronCollisions (SYS-CRON-STAMPEDE-DETECTOR)', () => {
+    // Anchor "now" so window filtering is deterministic.
+    const NOW = Date.parse('2026-06-14T19:00:00Z');
+
+    function writeCronState(agent: string, fires: Array<{ name: string; last_fire: string; interval?: string }>) {
+      const stateAgent = join(ctxRoot, 'state', agent);
+      mkdirSync(stateAgent, { recursive: true });
+      writeFileSync(
+        join(stateAgent, 'cron-state.json'),
+        JSON.stringify({ updated_at: '2026-06-14T19:00:00Z', crons: fires }),
+        'utf-8',
+      );
+    }
+
+    it('returns empty detector with no state dir', () => {
+      const det = detectCronCollisions(ctxRoot, { now: NOW });
+      expect(det.source).toBe('cron-state-snapshot');
+      expect(det.top_buckets).toEqual([]);
+      expect(det.warn_buckets).toEqual([]);
+      expect(det.alert_buckets).toEqual([]);
+      expect(det.per_agent_stampedes).toEqual([]);
+      expect(det.max_per_agent_fires).toBeNull();
+      expect(det.anomalies).toEqual([]);
+    });
+
+    it('truncates to ISO minute bucket and aggregates fleet-wide', () => {
+      writeCronState('agent-a', [
+        { name: 'c1', last_fire: '2026-06-14T18:40:13.231Z' },
+        { name: 'c2', last_fire: '2026-06-14T18:40:45.946Z' },
+      ]);
+      writeCronState('agent-b', [
+        { name: 'c3', last_fire: '2026-06-14T18:40:02.398Z' },
+      ]);
+
+      const det = detectCronCollisions(ctxRoot, { now: NOW });
+      const xx40 = det.top_buckets.find(b => b.minute_bucket === '2026-06-14T18:40Z');
+      expect(xx40).toBeTruthy();
+      expect(xx40!.fire_count).toBe(3);
+      expect(xx40!.agent_breakdown).toEqual({ 'agent-a': 2, 'agent-b': 1 });
+      expect(xx40!.cron_name_breakdown).toEqual({ c1: 1, c2: 1, c3: 1 });
+    });
+
+    it('reproduces 2026-06-14 xx:40Z 9-fire stampede as cron_stampede_agent', () => {
+      // Faithful to the incident: 9 crons all firing at 18:40:xx on a single agent.
+      const fires = [
+        { name: 'upstream-watch',                last_fire: '2026-06-14T18:40:13.231Z' },
+        { name: 'heartbeat',                     last_fire: '2026-06-14T18:40:02.398Z' },
+        { name: 'cron-drift-watchdog',           last_fire: '2026-06-14T18:40:45.946Z' },
+        { name: 'coding-standards-realtime-poll',last_fire: '2026-06-14T18:40:25.251Z' },
+        { name: 'vault-sweep-hourly',            last_fire: '2026-06-14T18:40:31.000Z' },
+        { name: 'pattern-graduator',             last_fire: '2026-06-14T18:40:08.000Z' },
+        { name: 'morning-briefing',              last_fire: '2026-06-14T18:40:11.000Z' },
+        { name: 'dashboard-sync',                last_fire: '2026-06-14T18:40:50.000Z' },
+        { name: 'feedback-extractor',            last_fire: '2026-06-14T18:40:55.000Z' },
+      ];
+      writeCronState('cortextos-improver', fires);
+
+      const det = detectCronCollisions(ctxRoot, { now: NOW });
+      expect(det.anomalies).toContain('cron_stampede_agent');
+      expect(det.anomalies).toContain('cron_stampede_fleet');     // 9 > fleet_alert (8)
+      expect(det.alert_buckets.length).toBe(1);
+      expect(det.alert_buckets[0].minute_bucket).toBe('2026-06-14T18:40Z');
+      expect(det.alert_buckets[0].fire_count).toBe(9);
+      expect(det.max_per_agent_fires?.agent).toBe('cortextos-improver');
+      expect(det.max_per_agent_fires?.count).toBe(9);
+      expect(det.max_per_agent_fires?.cron_names).toEqual(fires.map(f => f.name).sort());
+    });
+
+    it('fires fleet warn (>5) but not alert (>8) at exactly 6 fleet fires', () => {
+      // 3 agents × 2 crons each at 18:40 → 6 fleet fires, 2/agent (not per-agent stampede).
+      ['a','b','c'].forEach(a => writeCronState(`agent-${a}`, [
+        { name: 'c1', last_fire: '2026-06-14T18:40:01.000Z' },
+        { name: 'c2', last_fire: '2026-06-14T18:40:02.000Z' },
+      ]));
+      const det = detectCronCollisions(ctxRoot, { now: NOW });
+      expect(det.warn_buckets.length).toBe(1);
+      expect(det.warn_buckets[0].fire_count).toBe(6);
+      expect(det.alert_buckets.length).toBe(0);
+      expect(det.anomalies).toContain('cron_stampede_fleet');
+      expect(det.anomalies).not.toContain('cron_stampede_agent');     // each agent fired 2 — exactly at warn (>2 required)
+    });
+
+    it('per-agent threshold uses strict inequality: count must exceed per_agent_warn', () => {
+      writeCronState('agent-a', [
+        { name: 'c1', last_fire: '2026-06-14T18:40:01.000Z' },
+        { name: 'c2', last_fire: '2026-06-14T18:40:02.000Z' },
+      ]);
+      const det = detectCronCollisions(ctxRoot, { now: NOW, perAgentWarn: 2 });
+      expect(det.per_agent_stampedes).toEqual([]);
+      expect(det.anomalies).not.toContain('cron_stampede_agent');
+
+      writeCronState('agent-a', [
+        { name: 'c1', last_fire: '2026-06-14T18:40:01.000Z' },
+        { name: 'c2', last_fire: '2026-06-14T18:40:02.000Z' },
+        { name: 'c3', last_fire: '2026-06-14T18:40:03.000Z' },
+      ]);
+      const det2 = detectCronCollisions(ctxRoot, { now: NOW, perAgentWarn: 2 });
+      expect(det2.per_agent_stampedes).toHaveLength(1);
+      expect(det2.per_agent_stampedes[0].count).toBe(3);
+    });
+
+    it('ignores fires older than the window', () => {
+      writeCronState('agent-a', [
+        { name: 'old', last_fire: '2026-06-12T18:40:00.000Z' },     // 48h+ before NOW
+        { name: 'recent', last_fire: '2026-06-14T18:40:00.000Z' },
+      ]);
+      const det = detectCronCollisions(ctxRoot, { now: NOW, windowHours: 24 });
+      const bucketNames = det.top_buckets.flatMap(b => Object.keys(b.cron_name_breakdown));
+      expect(bucketNames).toContain('recent');
+      expect(bucketNames).not.toContain('old');
+    });
+
+    it('ignores future-dated fires (clock-skew defensive)', () => {
+      writeCronState('agent-a', [
+        { name: 'future', last_fire: '2026-06-14T19:30:00.000Z' },     // 30min after NOW
+        { name: 'past', last_fire: '2026-06-14T18:40:00.000Z' },
+      ]);
+      const det = detectCronCollisions(ctxRoot, { now: NOW });
+      const bucketNames = det.top_buckets.flatMap(b => Object.keys(b.cron_name_breakdown));
+      expect(bucketNames).toContain('past');
+      expect(bucketNames).not.toContain('future');
+    });
+
+    it('survives malformed cron-state.json files', () => {
+      const stateAgent = join(ctxRoot, 'state', 'broken-agent');
+      mkdirSync(stateAgent, { recursive: true });
+      writeFileSync(join(stateAgent, 'cron-state.json'), '{not json', 'utf-8');
+
+      writeCronState('healthy-agent', [
+        { name: 'c1', last_fire: '2026-06-14T18:40:00.000Z' },
+      ]);
+      const det = detectCronCollisions(ctxRoot, { now: NOW });
+      expect(det.top_buckets[0].cron_name_breakdown).toEqual({ c1: 1 });
+    });
+
+    it('is included in collectMetrics report under cron_collision_detector', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      writeCronState('bot1', [
+        { name: 'c1', last_fire: new Date(Date.now() - 60_000).toISOString() },
+      ]);
+      const report = collectMetrics(ctxRoot);
+      expect(report.cron_collision_detector).toBeTruthy();
+      expect(report.cron_collision_detector.source).toBe('cron-state-snapshot');
+      expect(report.cron_collision_detector.thresholds.fleet_warn).toBe(5);
+      expect(report.cron_collision_detector.thresholds.fleet_alert).toBe(8);
+      expect(report.cron_collision_detector.thresholds.per_agent_warn).toBe(2);
     });
   });
 });

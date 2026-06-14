@@ -78,10 +78,57 @@ export interface SystemMetrics {
   approvals_pending: number;
 }
 
+/**
+ * Fleet-wide cron-fire bucket. fire_count = sum of distinct (agent, cron) pairs
+ * whose latest fire (per cron-state.json snapshot) landed in this UTC minute.
+ */
+export interface CronStampedeBucket {
+  minute_bucket: string;                          // 'YYYY-MM-DDTHH:MMZ'
+  fire_count: number;
+  agent_breakdown: Record<string, number>;
+  cron_name_breakdown: Record<string, number>;
+}
+
+export interface PerAgentStampede {
+  agent: string;
+  minute_bucket: string;
+  count: number;
+  cron_names: string[];
+}
+
+/**
+ * Fleet-wide cron-collision detector. Source = state/<agent>/cron-state.json
+ * snapshot (latest fire per cron per agent). A stampede shows up the moment
+ * AFTER it lands; later fires of the same cron overwrite the signature, so
+ * this is a current-state probe, not a fire-history aggregator.
+ *
+ * Thresholds (SYS-CRON-STAMPEDE-DETECTOR spec, 2026-06-14):
+ *   - per_agent_warn: any agent with >N fires in one minute = per-agent stampede.
+ *   - fleet_warn:     any minute with >N fires fleet-wide   = warn.
+ *   - fleet_alert:    any minute with >N fires fleet-wide   = alert.
+ */
+export interface CronCollisionDetector {
+  collected_at: string;
+  source: 'cron-state-snapshot';
+  window_hours: number;
+  thresholds: {
+    fleet_warn: number;
+    fleet_alert: number;
+    per_agent_warn: number;
+  };
+  top_buckets: CronStampedeBucket[];
+  warn_buckets: CronStampedeBucket[];
+  alert_buckets: CronStampedeBucket[];
+  per_agent_stampedes: PerAgentStampede[];
+  max_per_agent_fires: PerAgentStampede | null;
+  anomalies: string[];
+}
+
 export interface MetricsReport {
   timestamp: string;
   agents: Record<string, AgentMetrics>;
   system: SystemMetrics;
+  cron_collision_detector: CronCollisionDetector;
 }
 
 export interface UsageData {
@@ -271,6 +318,149 @@ function detectAnomalies(role: RoleConfig, metrics: Omit<RoleMetrics, 'anomalies
   }
 
   return out;
+}
+
+/**
+ * Truncate an ISO timestamp to its UTC minute bucket: `2026-06-14T18:40Z`.
+ * Returns null when the input does not parse to a finite Date.
+ */
+function isoMinuteBucket(iso: string): string | null {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
+export interface CronCollisionDetectorOptions {
+  /** Window in hours; fires older than this are ignored. Default 24. */
+  windowHours?: number;
+  /** Fleet-wide minute fire-count for warn. Default 5 (>5 fires). */
+  fleetWarn?: number;
+  /** Fleet-wide minute fire-count for alert. Default 8 (>8 fires). */
+  fleetAlert?: number;
+  /** Per-agent minute fire-count for stampede. Default 2 (>2 fires). */
+  perAgentWarn?: number;
+  /** Cap on top_buckets returned. Default 50. */
+  topN?: number;
+  /** Override Date.now() for tests. */
+  now?: number;
+}
+
+/**
+ * Walk every agent's `state/<agent>/cron-state.json` snapshot and aggregate
+ * cron fires into UTC minute-buckets. Surfaces fleet-wide collisions
+ * (multiple distinct crons landing in the same minute across the fleet) and
+ * per-agent stampedes (one agent firing N crons in one minute). Result feeds
+ * `MetricsReport.cron_collision_detector` so nightly metrics can flag the
+ * pattern that caused the 2026-06-14 xx:40Z silent-stop incident.
+ */
+export function detectCronCollisions(
+  ctxRoot: string,
+  opts: CronCollisionDetectorOptions = {},
+): CronCollisionDetector {
+  const now = opts.now ?? Date.now();
+  const windowHours = opts.windowHours ?? 24;
+  const fleetWarn = opts.fleetWarn ?? 5;
+  const fleetAlert = opts.fleetAlert ?? 8;
+  const perAgentWarn = opts.perAgentWarn ?? 2;
+  const topN = opts.topN ?? 50;
+  const windowMs = windowHours * 3_600_000;
+
+  // bucket → { count, agent_breakdown, cron_name_breakdown }
+  const buckets = new Map<string, CronStampedeBucket>();
+  // (agent|bucket) → { count, cron_names }
+  const perAgent = new Map<string, { agent: string; bucket: string; count: number; crons: Set<string> }>();
+
+  const stateDir = join(ctxRoot, 'state');
+  if (existsSync(stateDir)) {
+    let entries: string[] = [];
+    try { entries = readdirSync(stateDir); } catch { /* unreadable state root */ }
+
+    for (const agent of entries) {
+      const cronStatePath = join(stateDir, agent, 'cron-state.json');
+      if (!existsSync(cronStatePath)) continue;
+
+      let parsed: unknown;
+      try { parsed = JSON.parse(readFileSync(cronStatePath, 'utf-8')); }
+      catch { continue; }
+
+      const crons = (parsed && typeof parsed === 'object' && Array.isArray((parsed as { crons?: unknown }).crons))
+        ? (parsed as { crons: Array<{ name?: unknown; last_fire?: unknown }> }).crons
+        : [];
+
+      for (const rec of crons) {
+        if (typeof rec.name !== 'string' || typeof rec.last_fire !== 'string') continue;
+        const fireMs = Date.parse(rec.last_fire);
+        if (!Number.isFinite(fireMs)) continue;
+        if (now - fireMs > windowMs) continue;     // outside window
+        if (fireMs > now) continue;                // future timestamp, skip
+
+        const bucket = isoMinuteBucket(rec.last_fire);
+        if (!bucket) continue;
+
+        let b = buckets.get(bucket);
+        if (!b) {
+          b = { minute_bucket: bucket, fire_count: 0, agent_breakdown: {}, cron_name_breakdown: {} };
+          buckets.set(bucket, b);
+        }
+        b.fire_count++;
+        b.agent_breakdown[agent] = (b.agent_breakdown[agent] ?? 0) + 1;
+        b.cron_name_breakdown[rec.name] = (b.cron_name_breakdown[rec.name] ?? 0) + 1;
+
+        const paKey = `${agent}|${bucket}`;
+        let pa = perAgent.get(paKey);
+        if (!pa) {
+          pa = { agent, bucket, count: 0, crons: new Set() };
+          perAgent.set(paKey, pa);
+        }
+        pa.count++;
+        pa.crons.add(rec.name);
+      }
+    }
+  }
+
+  const sortedBuckets = [...buckets.values()].sort((a, b) => {
+    if (b.fire_count !== a.fire_count) return b.fire_count - a.fire_count;
+    return a.minute_bucket < b.minute_bucket ? 1 : -1;     // newer first on tie
+  });
+  const top_buckets = sortedBuckets.slice(0, topN);
+  const warn_buckets = sortedBuckets.filter(b => b.fire_count > fleetWarn);
+  const alert_buckets = sortedBuckets.filter(b => b.fire_count > fleetAlert);
+
+  const perAgentList: PerAgentStampede[] = [...perAgent.values()]
+    .filter(p => p.count > perAgentWarn)
+    .map(p => ({ agent: p.agent, minute_bucket: p.bucket, count: p.count, cron_names: [...p.crons].sort() }))
+    .sort((a, b) => b.count - a.count || (a.minute_bucket < b.minute_bucket ? 1 : -1));
+
+  let max_per_agent_fires: PerAgentStampede | null = null;
+  for (const p of perAgent.values()) {
+    if (!max_per_agent_fires || p.count > max_per_agent_fires.count) {
+      max_per_agent_fires = {
+        agent: p.agent,
+        minute_bucket: p.bucket,
+        count: p.count,
+        cron_names: [...p.crons].sort(),
+      };
+    }
+  }
+
+  const anomalies: string[] = [];
+  if (perAgentList.length > 0) anomalies.push('cron_stampede_agent');
+  if (warn_buckets.length > 0) anomalies.push('cron_stampede_fleet');
+
+  return {
+    collected_at: new Date(now).toISOString(),
+    source: 'cron-state-snapshot',
+    window_hours: windowHours,
+    thresholds: { fleet_warn: fleetWarn, fleet_alert: fleetAlert, per_agent_warn: perAgentWarn },
+    top_buckets,
+    warn_buckets,
+    alert_buckets,
+    per_agent_stampedes: perAgentList,
+    max_per_agent_fires,
+    anomalies,
+  };
 }
 
 export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
@@ -468,6 +658,13 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
     }
   }
 
+  // Fleet-wide cron-collision detector reads state/ directly (not org-scoped:
+  // agent state directories are shared across org reports). The 2026-06-14
+  // xx:40Z silent-stop incident motivated this — 9 simultaneous cron fires
+  // on a single agent at the xx:40 boundary stalled it for ~7 minutes with
+  // no metric surfacing the collision.
+  const cronCollisionDetector = detectCronCollisions(ctxRoot, { now });
+
   const report: MetricsReport = {
     timestamp,
     agents,
@@ -477,6 +674,7 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       agents_total: agentsTotal,
       approvals_pending: approvalsPending,
     },
+    cron_collision_detector: cronCollisionDetector,
   };
 
   // Write to analytics reports
