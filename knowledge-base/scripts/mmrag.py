@@ -484,6 +484,63 @@ def chunk_audio(audio_path, chunk_seconds=DEFAULT_AUDIO_CHUNK_SECONDS,
     return chunks
 
 # ---------------------------------------------------------------------------
+# Ingest checkpoint (file-level resumability)
+# ---------------------------------------------------------------------------
+
+class CheckpointStore:
+    """Persist per-file ingest state so interrupted runs resume from where they stopped.
+
+    Checkpoint file: ~/.mmrag/checkpoint-<collection>.json
+    Key: absolute file path. Value: content hash + chunk count + timestamp.
+    Hash is content-based (not path-based), so re-edited files are re-ingested.
+    """
+
+    def __init__(self, collection_name: str):
+        self._path = MMRAG_DIR / f"checkpoint-{collection_name}.json"
+        self._data: dict = {}
+        self._load()
+
+    def _load(self) -> None:
+        if self._path.exists():
+            try:
+                with open(self._path) as f:
+                    raw = json.load(f)
+                self._data = raw.get("files", {})
+            except Exception:
+                self._data = {}
+
+    def _content_hash(self, file_path: Path) -> str:
+        h = hashlib.md5()
+        h.update(file_path.read_bytes())
+        return h.hexdigest()
+
+    def already_done(self, file_path: Path) -> bool:
+        """Return True if this file's current content was already fully ingested."""
+        key = str(file_path.resolve())
+        entry = self._data.get(key)
+        if not entry:
+            return False
+        try:
+            return entry["content_hash"] == self._content_hash(file_path)
+        except Exception:
+            return False
+
+    def mark_done(self, file_path: Path, chunks_ingested: int) -> None:
+        """Atomically record that this file was fully ingested."""
+        key = str(file_path.resolve())
+        self._data[key] = {
+            "content_hash": self._content_hash(file_path),
+            "chunks_ingested": chunks_ingested,
+            "ingested_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        MMRAG_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_suffix(".tmp")
+        with open(tmp, "w") as f:
+            json.dump({"version": 1, "files": self._data}, f, indent=2)
+        tmp.replace(self._path)
+
+
+# ---------------------------------------------------------------------------
 # File ID helper
 # ---------------------------------------------------------------------------
 def file_id(path, chunk_idx=None):
@@ -1077,12 +1134,38 @@ def cmd_ingest(args):
     collection_name = args.collection or config.get("default_collection", "default")
     collection = get_chroma_collection(collection_name)
 
+    # File-level checkpoint — skip files whose content hash was already fully ingested.
+    # --force bypasses checkpoint reads but still writes new checkpoint entries.
+    checkpoint = CheckpointStore(collection_name)
+
     if args_force:
-        print(f"Force mode: will re-ingest existing files")
+        print(f"Force mode: will re-ingest existing files (checkpoint reads skipped)")
 
     total = 0
     skipped = 0
+    checkpoint_skipped = 0
     errors = 0
+
+    def _ingest_one(file_path: Path, display_path: str) -> None:
+        nonlocal total, skipped, checkpoint_skipped
+        if not args_force and checkpoint.already_done(file_path):
+            print(f"  CHECKPOINT: {display_path}")
+            checkpoint_skipped += 1
+            return
+        try:
+            count = ingest_file(client, config, collection, file_path)
+            total += count
+            if count > 0:
+                print(f"    Added {count} chunk(s)")
+                checkpoint.mark_done(file_path, count)
+            else:
+                skipped += 1
+        except Exception as e:
+            print(f"    ERROR: {e}")
+            # Do not mark as done — next run will retry this file.
+            errors_ref.append(e)
+
+    errors_ref: list = []  # mutable cell so nested func can append
 
     try:
         for path_str in args.paths:
@@ -1092,32 +1175,20 @@ def cmd_ingest(args):
                 print(f"Ingesting directory: {p} ({len(files)} files)")
                 for f in files:
                     print(f"  Processing: {f.relative_to(p)}")
-                    try:
-                        count = ingest_file(client, config, collection, f)
-                        total += count
-                        if count > 0:
-                            print(f"    Added {count} chunk(s)")
-                        elif count == 0:
-                            skipped += 1
-                    except Exception as e:
-                        print(f"    ERROR: {e}")
-                        errors += 1
+                    _ingest_one(f, str(f.relative_to(p)))
             elif p.is_file():
                 print(f"Ingesting: {p.name}")
-                try:
-                    count = ingest_file(client, config, collection, p)
-                    total += count
-                    if count > 0:
-                        print(f"  Added {count} chunk(s)")
-                except Exception as e:
-                    print(f"  ERROR: {e}")
-                    errors += 1
+                _ingest_one(p, p.name)
             else:
                 print(f"NOT FOUND: {p}")
     finally:
         _tracker.persist()
 
+    errors = len(errors_ref)
+
     print(f"\nDone! Ingested {total} new chunk(s) into '{collection_name}'")
+    if checkpoint_skipped:
+        print(f"  Checkpoint-skipped: {checkpoint_skipped} (content hash unchanged — no API calls)")
     if skipped:
         print(f"  Skipped: {skipped} (already existed or empty)")
     if errors:
