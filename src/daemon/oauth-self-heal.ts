@@ -44,16 +44,17 @@ export function classifyClaudeAgentHealth(input: ClaudeAgentHealthInput): Claude
   }
 
   const nowMs = input.nowMs ?? Date.now();
-  const heartbeatStaleMs = input.heartbeatStaleMs ?? DEFAULT_HEARTBEAT_STALE_MS;
   const heartbeatAgeMs = parseHeartbeatAge(input.heartbeatIso, nowMs);
-  if (heartbeatAgeMs !== undefined && heartbeatAgeMs > heartbeatStaleMs) {
-    return { healthy: false, reason: 'heartbeat-stale', heartbeatAgeMs };
-  }
 
   const oauthLogRecentMs = input.oauthLogRecentMs ?? DEFAULT_OAUTH_LOG_RECENT_MS;
   const stdoutRecent = input.stdoutMtimeMs === undefined || nowMs - input.stdoutMtimeMs <= oauthLogRecentMs;
   if (stdoutRecent && containsClaudeOAuthStall(input.stdoutTail || '')) {
     return { healthy: false, reason: 'oauth-401-log', heartbeatAgeMs };
+  }
+
+  const heartbeatStaleMs = input.heartbeatStaleMs ?? DEFAULT_HEARTBEAT_STALE_MS;
+  if (heartbeatAgeMs !== undefined && heartbeatAgeMs > heartbeatStaleMs) {
+    return { healthy: false, reason: 'heartbeat-stale', heartbeatAgeMs };
   }
 
   return { healthy: true, reason: 'healthy', heartbeatAgeMs };
@@ -92,6 +93,18 @@ export function readStdoutTail(ctxRoot: string, agentName: string, maxBytes = 64
   } catch {
     return { text: '' };
   }
+}
+
+export function heartbeatIsFreshAfter(
+  heartbeatIso: string | null | undefined,
+  startedMs: number,
+  nowMs: number = Date.now(),
+  maxAgeMs: number = Number.POSITIVE_INFINITY,
+): boolean {
+  if (!heartbeatIso) return false;
+  const parsed = Date.parse(heartbeatIso);
+  if (Number.isNaN(parsed)) return false;
+  return parsed >= startedMs - 5000 && nowMs - parsed <= maxAgeMs;
 }
 
 function parseHeartbeatAge(heartbeatIso: string | null | undefined, nowMs: number): number | undefined {

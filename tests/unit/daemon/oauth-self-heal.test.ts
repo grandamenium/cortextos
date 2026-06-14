@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyClaudeAgentHealth,
   containsClaudeOAuthStall,
+  heartbeatIsFreshAfter,
 } from '../../../src/daemon/oauth-self-heal.js';
 
 describe('Claude OAuth self-heal health classification', () => {
@@ -51,6 +52,23 @@ describe('Claude OAuth self-heal health classification', () => {
     expect(result.reason).toBe('oauth-401-log');
   });
 
+  it('treats recent OAuth 401/login logs as immediate even when heartbeat is stale', () => {
+    const result = classifyClaudeAgentHealth({
+      runtime: 'claude-code',
+      processStatus: 'running',
+      heartbeatIso: '2026-06-13T17:00:00Z',
+      stdoutTail: 'Please run /login · API Error: 401 Invalid authentication credentials',
+      stdoutMtimeMs: now - 60_000,
+      nowMs: now,
+      heartbeatStaleMs: 15 * 60 * 1000,
+      oauthLogRecentMs: 30 * 60 * 1000,
+    });
+
+    expect(result.healthy).toBe(false);
+    expect(result.reason).toBe('oauth-401-log');
+    expect(result.heartbeatAgeMs).toBe(60 * 60 * 1000);
+  });
+
   it('does not trigger recovery from old OAuth logs', () => {
     const result = classifyClaudeAgentHealth({
       runtime: 'claude-code',
@@ -88,5 +106,19 @@ describe('Claude OAuth self-heal health classification', () => {
     expect(containsClaudeOAuthStall('Please run /login')).toBe(true);
     expect(containsClaudeOAuthStall('API Error: 401 Invalid authentication credentials')).toBe(true);
     expect(containsClaudeOAuthStall('API Error: 429 rate limited')).toBe(false);
+  });
+
+  it('recognizes a heartbeat produced after a healthcheck ping', () => {
+    const pingStarted = Date.parse('2026-06-13T18:00:00Z');
+
+    expect(
+      heartbeatIsFreshAfter('2026-06-13T18:00:03Z', pingStarted, pingStarted + 5_000, 60_000),
+    ).toBe(true);
+    expect(
+      heartbeatIsFreshAfter('2026-06-13T17:59:00Z', pingStarted, pingStarted + 5_000, 60_000),
+    ).toBe(false);
+    expect(
+      heartbeatIsFreshAfter('2026-06-13T18:00:03Z', pingStarted, pingStarted + 120_000, 60_000),
+    ).toBe(false);
   });
 });

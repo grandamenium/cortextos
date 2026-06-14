@@ -20,6 +20,7 @@ import { refreshOAuthToken } from '../bus/oauth.js';
 import { ackInbox, checkInbox, sendMessage } from '../bus/message.js';
 import {
   classifyClaudeAgentHealth,
+  heartbeatIsFreshAfter,
   readHeartbeatIso,
   readStdoutTail,
   type ClaudeAgentUnhealthyReason,
@@ -44,6 +45,7 @@ export class AgentManager {
   private org: string;
   private oauthSelfHealTimer: NodeJS.Timeout | null = null;
   private oauthRecoveryInProgress: Set<string> = new Set();
+  private oauthPingInProgress: Set<string> = new Set();
   private oauthLastRecoveryAt: Map<string, number> = new Map();
 
   // Set true at construction time if any agent in state/ has a stale
@@ -1028,6 +1030,11 @@ export class AgentManager {
       if (result.healthy) continue;
       if (result.reason !== 'heartbeat-stale' && result.reason !== 'oauth-401-log') continue;
 
+      if (result.reason === 'heartbeat-stale') {
+        const stillStale = await this.confirmHeartbeatStaleWithPing(name, result.heartbeatAgeMs);
+        if (!stillStale) continue;
+      }
+
       const lastRecoveryAt = this.oauthLastRecoveryAt.get(name) ?? 0;
       if (nowMs - lastRecoveryAt < cooldownMs) {
         console.warn(`[oauth-self-heal] ${name} unhealthy (${result.reason}) but recovery is cooling down`);
@@ -1036,6 +1043,45 @@ export class AgentManager {
 
       await this.recoverClaudeOAuthStall(name, result.reason);
     }
+  }
+
+  private async confirmHeartbeatStaleWithPing(name: string, heartbeatAgeMs?: number): Promise<boolean> {
+    if (this.oauthPingInProgress.has(name)) {
+      console.log(`[oauth-self-heal] ${name} heartbeat stale but ping confirmation is already in progress`);
+      return false;
+    }
+
+    this.oauthPingInProgress.add(name);
+    const pingStartedMs = Date.now();
+    const verifyMs = parsePositiveInt(process.env.CORTEXTOS_OAUTH_STALE_PING_VERIFY_MS, 60 * 1000);
+    const ageNote = heartbeatAgeMs !== undefined ? ` (${Math.round(heartbeatAgeMs / 1000)}s)` : '';
+    console.log(`[oauth-self-heal] ${name} heartbeat stale${ageNote}; sending healthcheck ping before recovery`);
+
+    try {
+      this.writeUrgentHealthcheckSignal(name);
+      await sleep(verifyMs);
+      const heartbeatIso = readHeartbeatIso(this.ctxRoot, name);
+      if (heartbeatIsFreshAfter(heartbeatIso, pingStartedMs, Date.now(), verifyMs + 30_000)) {
+        const heartbeatAge = heartbeatIso ? Math.round((Date.now() - Date.parse(heartbeatIso)) / 1000) : '?';
+        console.log(`[oauth-self-heal] ${name} responded to heartbeat-stale ping; heartbeat age ${heartbeatAge}s; skipping restart`);
+        return false;
+      }
+      console.warn(`[oauth-self-heal] ${name} did not respond to heartbeat-stale ping within ${Math.round(verifyMs / 1000)}s`);
+      return true;
+    } finally {
+      this.oauthPingInProgress.delete(name);
+    }
+  }
+
+  private writeUrgentHealthcheckSignal(name: string): void {
+    const signalDir = join(this.ctxRoot, 'state', name);
+    mkdirSync(signalDir, { recursive: true });
+    const signal = {
+      from: 'oauth-self-heal',
+      message: 'WATCHDOG_HEALTHCHECK_PING: idle heartbeat is stale. Please run: cortextos bus update-heartbeat "watchdog ping ok". Do not send any agent-to-agent reply.',
+      timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    };
+    writeFileSync(join(signalDir, '.urgent-signal'), JSON.stringify(signal));
   }
 
   private async recoverClaudeOAuthStall(name: string, reason: ClaudeAgentUnhealthyReason): Promise<void> {
