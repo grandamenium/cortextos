@@ -1006,6 +1006,9 @@ export class AgentManager {
     const oauthLogRecentMs = parsePositiveInt(process.env.CORTEXTOS_OAUTH_LOG_RECENT_MS, 30 * 60 * 1000);
     const cooldownMs = parsePositiveInt(process.env.CORTEXTOS_OAUTH_RECOVERY_COOLDOWN_MS, 5 * 60 * 1000);
 
+    // Check every registered agent; classifyClaudeAgentHealth filters to
+    // runtime=claude-code so coordinator/analyst/reviewer are all covered
+    // while Codex/Hermes agents are ignored.
     for (const [name, entry] of this.agents) {
       if (this.oauthRecoveryInProgress.has(name)) continue;
 
