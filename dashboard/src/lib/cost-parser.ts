@@ -30,9 +30,11 @@ interface ModelPricing {
 // one rate over-counted Claude 4.x Opus agents by ~3x. resolvePricingKey()
 // selects the right generation key per model id.
 const MODEL_PRICING: Record<string, ModelPricing> = {
-  // Claude Opus — 4.x ($5/$25) vs the retired Claude 3 Opus ($15/$75).
-  'opus-4': { inputPerMillion: 5, outputPerMillion: 25, cacheWritePerMillion: 6.25, cacheReadPerMillion: 0.50 },
-  'opus-3': { inputPerMillion: 15, outputPerMillion: 75, cacheWritePerMillion: 18.75, cacheReadPerMillion: 1.50 },
+  // Claude Opus pricing splits by PRICE TIER, not a clean 3-vs-4 line: the
+  // $5/$25 tier arrived with Opus 4.5. Opus 4.0 and 4.1 (and Claude 3 Opus)
+  // are still $15/$75 per platform.claude.com/pricing.
+  'opus-current': { inputPerMillion: 5, outputPerMillion: 25, cacheWritePerMillion: 6.25, cacheReadPerMillion: 0.50 },   // Opus 4.5+
+  'opus-legacy': { inputPerMillion: 15, outputPerMillion: 75, cacheWritePerMillion: 18.75, cacheReadPerMillion: 1.50 },  // Opus 3, 4.0, 4.1
   // Claude Sonnet — 3.x and 4.x both $3/$15.
   sonnet: { inputPerMillion: 3, outputPerMillion: 15, cacheWritePerMillion: 3.75, cacheReadPerMillion: 0.30 },
   // Claude Haiku — 4.5 ($1/$5) vs the retired Haiku 3.5 ($0.80/$4).
@@ -46,22 +48,36 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
 };
 
 /**
- * Resolve a model name to a pricing key by family AND generation. Substring
- * matching alone is insufficient because generations of the same family are
- * priced differently (Claude 4.x Opus $5/$25 vs Claude 3 Opus $15/$75) — see
- * #520. The retired Claude 3 family carries a `claude-3` segment in its ids
- * (e.g. `claude-3-opus-20240229`, `claude-3-5-haiku-...`); everything else is
- * priced at current rates. Defaulting an untagged/future Opus or Haiku to the
- * CURRENT generation (not the retired one) avoids re-introducing the ~3x
- * over-count this fix removes. gpt-5-codex (and bare "codex"/"gpt-5") map to
- * codex pricing rather than silently defaulting to sonnet.
+ * Resolve a model name to a pricing key by family AND price tier. Substring
+ * matching alone is insufficient because tiers of the same family are priced
+ * differently (#520). For Opus the split is NOT a clean 3-vs-4 line: the
+ * $5/$25 tier started at Opus 4.5, so Opus 4.0 / 4.1 are still $15/$75 like
+ * Claude 3 Opus. resolveOpusKey() reads the minor version to route correctly.
+ * Haiku splits cleanly (4.5 $1/$5 vs retired 3.5 $0.80/$4 — no 4.0/4.1). An
+ * untagged/future Opus or Haiku defaults to the CURRENT tier, so the ~3x
+ * over-count this fix removes cannot silently return. gpt-5-codex (and bare
+ * "codex"/"gpt-5") map to codex pricing rather than defaulting to sonnet.
  */
+function resolveOpusKey(lower: string): string {
+  // $15/$75 tier: Claude 3 Opus + Opus 4.0–4.4 (the $5/$25 price drop landed
+  // at Opus 4.5). $5/$25 tier: Opus 4.5 and later.
+  if (lower.includes('claude-3') || lower.includes('opus-3')) return 'opus-legacy'; // Opus 3 (any alias)
+  const m = lower.match(/opus-4-(\d+)/); // minor version after "opus-4-"
+  if (m) {
+    const n = Number(m[1]);
+    // A bare dated id `claude-opus-4-YYYYMMDD` is Opus 4.0 — the captured number
+    // is a date, not a minor version (>= 1000 ⇒ date).
+    if (n >= 1000) return 'opus-legacy';
+    return n < 5 ? 'opus-legacy' : 'opus-current'; // price drop at 4.5
+  }
+  return 'opus-current'; // bare / future Opus → current tier
+}
+
 function resolvePricingKey(model: string): string {
   const lower = model.toLowerCase();
-  const legacy3 = lower.includes('claude-3'); // retired Claude 3 family ids
   if (lower.includes('fable') || lower.includes('mythos')) return 'fable';
-  if (lower.includes('opus')) return legacy3 ? 'opus-3' : 'opus-4';
-  if (lower.includes('haiku')) return legacy3 ? 'haiku-3' : 'haiku-4';
+  if (lower.includes('opus')) return resolveOpusKey(lower);
+  if (lower.includes('haiku')) return lower.includes('claude-3') ? 'haiku-3' : 'haiku-4';
   if (lower.includes('codex') || lower.includes('gpt-5')) return 'gpt-5-codex';
   // Default to sonnet for all other claude models (3.x and 4.x are same price).
   return 'sonnet';

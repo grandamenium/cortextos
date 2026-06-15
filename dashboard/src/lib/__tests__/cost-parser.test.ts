@@ -141,6 +141,42 @@ describe('calculateCost — Claude 4.x / Fable generation pricing (#520)', () =>
   });
 });
 
+describe('calculateCost — Opus price-tier split (#520, Opus 4.0/4.1 still $15)', () => {
+  // The $5/$25 Opus tier started at Opus 4.5. Opus 4.0 and 4.1 are still
+  // $15/$75 like Claude 3 Opus — they must NOT be priced at the 4.5+ rate.
+  it('prices Opus 4.0 and 4.1 at the legacy $15/$75 (alias + dated ids)', () => {
+    expect(calculateCost('claude-opus-4-0', 1_000_000, 0)).toBeCloseTo(15, 5);
+    expect(calculateCost('claude-opus-4-1', 1_000_000, 0)).toBeCloseTo(15, 5);
+    expect(calculateCost('claude-opus-4-1-20250805', 1_000_000, 0)).toBeCloseTo(15, 5);
+    expect(calculateCost('claude-opus-4-20250514', 1_000_000, 0)).toBeCloseTo(15, 5); // dated Opus 4.0
+  });
+
+  it('prices Opus 4.5+ at the current $5/$25 (alias + dated + multi-digit-minor ids)', () => {
+    expect(calculateCost('claude-opus-4-5', 1_000_000, 0)).toBeCloseTo(5, 5);
+    expect(calculateCost('claude-opus-4-5-20251101', 1_000_000, 0)).toBeCloseTo(5, 5);
+    expect(calculateCost('claude-opus-4-6', 1_000_000, 0)).toBeCloseTo(5, 5);
+    expect(calculateCost('claude-opus-4-8', 1_000_000, 0)).toBeCloseTo(5, 5);
+    // multi-digit minor (>= 4.5) must not be misparsed as a date
+    expect(calculateCost('claude-opus-4-10-20260101', 1_000_000, 0)).toBeCloseTo(5, 5);
+  });
+
+  it('prices any Opus 3 alias at legacy $15, including the bare opus-3 form', () => {
+    expect(calculateCost('claude-3-opus-20240229', 1_000_000, 0)).toBeCloseTo(15, 5);
+    expect(calculateCost('claude-opus-3', 1_000_000, 0)).toBeCloseTo(15, 5);
+  });
+
+  it('treats pre-4.5 Opus minors (4.2-4.4) as legacy $15 (price drop is at 4.5)', () => {
+    expect(calculateCost('claude-opus-4-2', 1_000_000, 0)).toBeCloseTo(15, 5);
+    expect(calculateCost('claude-opus-4-4', 1_000_000, 0)).toBeCloseTo(15, 5);
+  });
+
+  it('defaults a malformed Opus id to the current tier without throwing', () => {
+    // `opus-4-abc` has no numeric minor → no NaN path, falls to current ($5).
+    expect(() => calculateCost('claude-opus-4-abc', 1_000_000, 0)).not.toThrow();
+    expect(calculateCost('claude-opus-4-abc', 1_000_000, 0)).toBeCloseTo(5, 5);
+  });
+});
+
 describe('scanCodexLogsCosts', () => {
   it('returns [] when no codex log files exist', () => {
     expect(scanCodexLogsCosts()).toEqual([]);
