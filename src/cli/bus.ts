@@ -361,7 +361,8 @@ busCommand
   .argument('<id>', 'Task ID')
   .argument('[result]', 'Completion result (optional positional form)')
   .option('--result <text>', 'Completion result')
-  .action((id: string, resultArg: string | undefined, opts: { result?: string }) => {
+  .option('--force', 'Allow overwriting an existing non-empty result (use when adding richer context)')
+  .action((id: string, resultArg: string | undefined, opts: { result?: string; force?: boolean }) => {
     // Accept result as either positional arg or --result flag (P1 fix #8)
     const effectiveResult = opts.result ?? resultArg;
     const env = resolveEnv();
@@ -376,7 +377,7 @@ busCommand
       }
     }
 
-    completeTask(paths, id, effectiveResult);
+    completeTask(paths, id, effectiveResult, { force: opts.force });
     console.log(`Completed ${id}`);
   });
 

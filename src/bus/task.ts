@@ -286,6 +286,14 @@ export function updateTask(
     assignee = task.assigned_to;
     task.status = status;
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    // Re-opening a completed task must clear completed_at so the task does not
+    // appear simultaneously in_progress and done. Without this, the read-modify-
+    // write in completeTask followed by an updateTask("in_progress") revert leaves
+    // completed_at set with status≠completed — the inconsistency that caused the
+    // IMPROVE-frontend-dev-01 audit finding (2026-06-15).
+    if (status !== 'completed') {
+      task.completed_at = null;
+    }
     atomicWriteSync(filePath, JSON.stringify(task));
   } catch (err) {
     throw new Error(`Task ${taskId} update failed: ${err}`);
@@ -469,6 +477,7 @@ export function completeTask(
   paths: BusPaths,
   taskId: string,
   result?: string,
+  options: { force?: boolean } = {},
 ): void {
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
@@ -485,6 +494,23 @@ export function completeTask(
     prevStatus = task.status;
     assignee = task.assigned_to;
     taskOrg = task.org || '';
+    // Guard: never silently clobber a non-empty VERIFIED result with an empty or
+    // shorter/generic one. This prevents the double-close pattern where an agent
+    // completes a task with a detailed VERIFIED result, then a post-merge scan
+    // completes it again with a generic "Auto-closed via PR #N" note — overwriting
+    // the original and triggering a false reopen (IMPROVE-frontend-dev-01, 2026-06-15).
+    // Pass force:true to allow explicit result updates (e.g. richer context added later).
+    if (task.status === 'completed' && task.result && !options.force) {
+      const incomingLen = result?.length ?? 0;
+      const existingLen = task.result.length;
+      if (incomingLen < existingLen) {
+        throw new Error(
+          `Task ${taskId} already completed with a longer result (${existingLen} chars). ` +
+          `Refusing to overwrite with shorter/empty result (${incomingLen} chars) — this would lose VERIFIED context. ` +
+          `Use --force to override, or skip re-closing if the task is already done.`
+        );
+      }
+    }
     task.status = 'completed';
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     task.completed_at = task.updated_at;
