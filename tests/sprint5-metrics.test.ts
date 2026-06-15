@@ -8,6 +8,9 @@ import {
   storeUsageData,
   collectTelegramCommands,
   detectCronCollisions,
+  appendCollisionHistory,
+  loadCollisionHistory,
+  type CronCollisionDetector,
 } from '../src/bus/metrics.js';
 import {
   defaultRoleType,
@@ -926,6 +929,126 @@ describe('Sprint 5: Observability & Metrics', () => {
       expect(report.cron_collision_detector.thresholds.fleet_warn).toBe(5);
       expect(report.cron_collision_detector.thresholds.fleet_alert).toBe(8);
       expect(report.cron_collision_detector.thresholds.per_agent_warn).toBe(2);
+    });
+  });
+
+  describe('cron-collision history persistence (SYS-CRON-STAMPEDE-DETECTOR-02)', () => {
+    const NOW = Date.parse('2026-06-14T19:00:00Z');
+    const histPath = () => join(ctxRoot, 'analytics', 'cron-collision-history.jsonl');
+
+    function detector(over: Partial<CronCollisionDetector> = {}): CronCollisionDetector {
+      return {
+        collected_at: new Date(NOW).toISOString(),
+        source: 'cron-state-snapshot',
+        window_hours: 24,
+        thresholds: { fleet_warn: 5, fleet_alert: 8, per_agent_warn: 2 },
+        top_buckets: [{
+          minute_bucket: '2026-06-14T18:40Z',
+          fire_count: 9,
+          agent_breakdown: { 'cortextos-improver': 9 },
+          cron_name_breakdown: { heartbeat: 1, 'upstream-watch': 1 },
+        }],
+        warn_buckets: [],
+        alert_buckets: [],
+        per_agent_stampedes: [{
+          agent: 'cortextos-improver', minute_bucket: '2026-06-14T18:40Z', count: 9, cron_names: ['heartbeat'],
+        }],
+        max_per_agent_fires: null,
+        anomalies: ['cron_stampede_agent', 'cron_stampede_fleet'],
+        ...over,
+      };
+    }
+
+    function lines(): string[] {
+      return readFileSync(histPath(), 'utf-8').split('\n').filter(l => l.trim());
+    }
+
+    it('materializes a slim NDJSON entry with the spec shape', () => {
+      appendCollisionHistory(ctxRoot, detector(), undefined, { now: NOW });
+      expect(existsSync(histPath())).toBe(true);
+      const recs = lines().map(l => JSON.parse(l));
+      expect(recs).toHaveLength(1);
+      expect(recs[0]).toEqual({
+        collected_at: '2026-06-14T19:00:00.000Z',
+        source: 'collectMetrics',
+        top_buckets: detector().top_buckets,
+        per_agent_stampedes: detector().per_agent_stampedes,
+        anomalies: detector().anomalies,
+      });
+    });
+
+    it('appends without dedup — same minute twice yields two lines', () => {
+      appendCollisionHistory(ctxRoot, detector(), undefined, { now: NOW });
+      appendCollisionHistory(ctxRoot, detector(), undefined, { now: NOW });
+      expect(lines()).toHaveLength(2);
+    });
+
+    it('prunes entries older than the retention window on write', () => {
+      const old = detector({ collected_at: '2026-04-01T00:00:00.000Z' }); // ~74d before NOW
+      appendCollisionHistory(ctxRoot, old, undefined, { now: NOW });
+      expect(lines()).toHaveLength(1);
+      // Next write prunes the stale entry, keeping only the fresh one.
+      appendCollisionHistory(ctxRoot, detector(), undefined, { now: NOW, retentionDays: 30 });
+      const recs = lines().map(l => JSON.parse(l));
+      expect(recs).toHaveLength(1);
+      expect(recs[0].collected_at).toBe('2026-06-14T19:00:00.000Z');
+    });
+
+    it('keeps an entry exactly at the 30d boundary', () => {
+      const boundary = new Date(NOW - 30 * 86_400_000).toISOString();
+      appendCollisionHistory(ctxRoot, detector({ collected_at: boundary }), undefined, { now: NOW });
+      // Re-write at NOW: boundary entry is exactly 30d old → kept (prune is strict >).
+      appendCollisionHistory(ctxRoot, detector(), undefined, { now: NOW, retentionDays: 30 });
+      const stamps = lines().map(l => JSON.parse(l).collected_at);
+      expect(stamps).toContain(boundary);
+      expect(stamps).toHaveLength(2);
+    });
+
+    it('survives malformed pre-existing lines (skip-not-throw)', () => {
+      mkdirSync(join(ctxRoot, 'analytics'), { recursive: true });
+      writeFileSync(histPath(), '{not json\n' + JSON.stringify({ collected_at: new Date(NOW).toISOString(), source: 'collectMetrics' }) + '\n', 'utf-8');
+      expect(() => appendCollisionHistory(ctxRoot, detector(), undefined, { now: NOW })).not.toThrow();
+      // Malformed line dropped; valid old line + new entry remain.
+      expect(lines()).toHaveLength(2);
+    });
+
+    it('loadCollisionHistory returns entries and filters by sinceMs', () => {
+      appendCollisionHistory(ctxRoot, detector({ collected_at: '2026-06-10T00:00:00.000Z' }), undefined, { now: NOW });
+      appendCollisionHistory(ctxRoot, detector({ collected_at: '2026-06-14T00:00:00.000Z' }), undefined, { now: NOW });
+
+      const all = loadCollisionHistory(ctxRoot);
+      expect(all).toHaveLength(2);
+
+      const recent = loadCollisionHistory(ctxRoot, { sinceMs: Date.parse('2026-06-12T00:00:00Z') });
+      expect(recent).toHaveLength(1);
+      expect(recent[0].collected_at).toBe('2026-06-14T00:00:00.000Z');
+    });
+
+    it('loadCollisionHistory returns [] when no history file exists', () => {
+      expect(loadCollisionHistory(ctxRoot)).toEqual([]);
+    });
+
+    it('loadCollisionHistory skips malformed lines', () => {
+      mkdirSync(join(ctxRoot, 'analytics'), { recursive: true });
+      writeFileSync(histPath(), 'garbage\n' + JSON.stringify({ collected_at: '2026-06-14T00:00:00.000Z', source: 'collectMetrics', top_buckets: [], per_agent_stampedes: [], anomalies: [] }) + '\n', 'utf-8');
+      const recs = loadCollisionHistory(ctxRoot);
+      expect(recs).toHaveLength(1);
+      expect(recs[0].collected_at).toBe('2026-06-14T00:00:00.000Z');
+    });
+
+    it('collectMetrics writes the history file with >=1 entry (DONE-WHEN)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ bot1: { enabled: true } }), 'utf-8');
+      const stateAgent = join(ctxRoot, 'state', 'bot1');
+      mkdirSync(stateAgent, { recursive: true });
+      writeFileSync(join(stateAgent, 'cron-state.json'), JSON.stringify({
+        crons: [{ name: 'c1', last_fire: new Date(Date.now() - 60_000).toISOString() }],
+      }), 'utf-8');
+
+      collectMetrics(ctxRoot);
+      expect(existsSync(histPath())).toBe(true);
+      const recs = loadCollisionHistory(ctxRoot);
+      expect(recs.length).toBeGreaterThanOrEqual(1);
+      expect(recs[0].source).toBe('collectMetrics');
     });
   });
 });

@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, mkdirSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { execSync } from 'child_process';
-import { ensureDir } from '../utils/atomic.js';
+import { ensureDir, atomicWriteSync } from '../utils/atomic.js';
 import { resolveRoleConfig, type RoleConfig, type RoleType } from './role-config.js';
 
 // --- Types ---
@@ -129,6 +129,29 @@ export interface MetricsReport {
   agents: Record<string, AgentMetrics>;
   system: SystemMetrics;
   cron_collision_detector: CronCollisionDetector;
+}
+
+/**
+ * Slim, append-friendly record of one collision-detector run, persisted to
+ * `analytics/cron-collision-history.jsonl` (NDJSON) so theta-wave consumers can
+ * correlate stampede signatures across DAYS — the live detector is current-state
+ * only (cron-state.json snapshots), so a stampede outside the rolling window or
+ * overwritten by a later fire is invisible to future analyses (SYS-CRON-STAMPEDE-
+ * DETECTOR-02, follow-up to PR #41).
+ */
+export interface CronCollisionHistoryEntry {
+  collected_at: string;
+  source: 'collectMetrics';
+  top_buckets: CronStampedeBucket[];
+  per_agent_stampedes: PerAgentStampede[];
+  anomalies: string[];
+}
+
+export interface CollisionHistoryOptions {
+  /** Retention window in days; entries older than this are pruned on every write. Default 30. */
+  retentionDays?: number;
+  /** Override Date.now() for tests / for prune-window consistency with the caller. */
+  now?: number;
 }
 
 export interface UsageData {
@@ -463,6 +486,106 @@ export function detectCronCollisions(
   };
 }
 
+const COLLISION_HISTORY_FILE = 'cron-collision-history.jsonl';
+
+/**
+ * Append one collision-detector run to an analytics dir's
+ * `cron-collision-history.jsonl`, pruning entries older than the retention
+ * window in the same pass (idempotent prune-on-write). NDJSON for append-
+ * friendly + greppable. Read-filter-rewrite rather than raw append because the
+ * prune step must drop stale lines; the file is bounded (one entry per metrics
+ * run within the window) so the rewrite cost is negligible.
+ *
+ * No dedup: appending the same minute twice yields two lines (dedup is the
+ * caller's job — see SYS-CRON-STAMPEDE-DETECTOR-02 spec). Malformed pre-existing
+ * lines are skipped, not thrown on.
+ */
+function appendCollisionHistoryFile(
+  filePath: string,
+  entry: CronCollisionHistoryEntry,
+  retentionMs: number,
+  now: number,
+): void {
+  const kept: string[] = [];
+  if (existsSync(filePath)) {
+    let raw = '';
+    try { raw = readFileSync(filePath, 'utf-8'); } catch { raw = ''; }
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: { collected_at?: unknown };
+      try { parsed = JSON.parse(trimmed); } catch { continue; }   // skip malformed
+      const t = typeof parsed.collected_at === 'string' ? Date.parse(parsed.collected_at) : NaN;
+      if (!Number.isFinite(t)) continue;                          // undated → drop
+      if (now - t > retentionMs) continue;                        // outside retention → prune
+      kept.push(trimmed);
+    }
+  }
+  kept.push(JSON.stringify(entry));
+  ensureDir(dirname(filePath));
+  atomicWriteSync(filePath, kept.join('\n') + '\n');
+}
+
+/**
+ * Persist a collision-detector run to the cron-collision-history NDJSON log(s).
+ * Writes to `<org>/analytics/` when org-scoped and always mirrors to the root
+ * `analytics/` (parity with the latest.json report fan-out) so theta-wave's
+ * fleet-level consumer has a single greppable source.
+ */
+export function appendCollisionHistory(
+  ctxRoot: string,
+  detector: CronCollisionDetector,
+  org?: string,
+  opts: CollisionHistoryOptions = {},
+): void {
+  const now = opts.now ?? Date.now();
+  const retentionMs = (opts.retentionDays ?? 30) * 86_400_000;
+  const entry: CronCollisionHistoryEntry = {
+    collected_at: detector.collected_at,
+    source: 'collectMetrics',
+    top_buckets: detector.top_buckets,
+    per_agent_stampedes: detector.per_agent_stampedes,
+    anomalies: detector.anomalies,
+  };
+
+  const orgBase = org ? join(ctxRoot, 'orgs', org) : ctxRoot;
+  appendCollisionHistoryFile(join(orgBase, 'analytics', COLLISION_HISTORY_FILE), entry, retentionMs, now);
+  if (org) {
+    appendCollisionHistoryFile(join(ctxRoot, 'analytics', COLLISION_HISTORY_FILE), entry, retentionMs, now);
+  }
+}
+
+/**
+ * Load persisted collision-history entries from the root analytics log for
+ * theta-wave correlation. Skips malformed lines (resilience). `sinceMs` is an
+ * absolute epoch-ms lower bound — entries with `collected_at >= sinceMs` are
+ * returned, oldest first (file/append order).
+ */
+export function loadCollisionHistory(
+  ctxRoot: string,
+  opts: { sinceMs?: number } = {},
+): CronCollisionHistoryEntry[] {
+  const filePath = join(ctxRoot, 'analytics', COLLISION_HISTORY_FILE);
+  if (!existsSync(filePath)) return [];
+  let raw = '';
+  try { raw = readFileSync(filePath, 'utf-8'); } catch { return []; }
+
+  const out: CronCollisionHistoryEntry[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let parsed: CronCollisionHistoryEntry;
+    try { parsed = JSON.parse(trimmed); } catch { continue; }     // skip malformed
+    if (typeof parsed.collected_at !== 'string') continue;
+    if (opts.sinceMs !== undefined) {
+      const t = Date.parse(parsed.collected_at);
+      if (!Number.isFinite(t) || t < opts.sinceMs) continue;
+    }
+    out.push(parsed);
+  }
+  return out;
+}
+
 export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
   const timestamp = new Date().toISOString();
   const today = timestamp.split('T')[0];
@@ -664,6 +787,11 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
   // on a single agent at the xx:40 boundary stalled it for ~7 minutes with
   // no metric surfacing the collision.
   const cronCollisionDetector = detectCronCollisions(ctxRoot, { now });
+
+  // Persist a slim history record so theta-wave can correlate stampede
+  // signatures across days (SYS-CRON-STAMPEDE-DETECTOR-02). Prune-on-write is
+  // idempotent; uses the same `now` as the detector for a consistent window.
+  appendCollisionHistory(ctxRoot, cronCollisionDetector, org, { now });
 
   const report: MetricsReport = {
     timestamp,
