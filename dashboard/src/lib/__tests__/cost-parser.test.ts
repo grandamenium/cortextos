@@ -82,6 +82,65 @@ describe('calculateCost — gpt-5-codex pricing', () => {
   });
 });
 
+describe('calculateCost — Claude 4.x / Fable generation pricing (#520)', () => {
+  it('prices Claude 4.x Opus at $5/$25, not the retired $15/$75', () => {
+    expect(calculateCost('claude-opus-4-8', 1_000_000, 0)).toBeCloseTo(5, 5);
+    // input 1M x $5 + output 1M x $25 = $30
+    expect(calculateCost('claude-opus-4-8', 1_000_000, 1_000_000)).toBeCloseTo(30, 5);
+    // regression guard: must NOT fall back to the Claude 3 Opus rate
+    expect(calculateCost('claude-opus-4-8', 1_000_000, 0)).not.toBeCloseTo(15, 5);
+  });
+
+  it('still prices the retired Claude 3 Opus at $15/$75', () => {
+    expect(calculateCost('claude-3-opus-20240229', 1_000_000, 0)).toBeCloseTo(15, 5);
+  });
+
+  it('prices Haiku 4.5 at $1/$5 (Haiku 3.5 stays $0.80/$4)', () => {
+    expect(calculateCost('claude-haiku-4-5', 1_000_000, 0)).toBeCloseTo(1, 5);
+    expect(calculateCost('claude-3-5-haiku-20241022', 1_000_000, 0)).toBeCloseTo(0.8, 5);
+  });
+
+  it('prices Sonnet 4.x at $3/$15 (unchanged from 3.x)', () => {
+    expect(calculateCost('claude-sonnet-4-6', 1_000_000, 0)).toBeCloseTo(3, 5);
+  });
+
+  it('prices Claude Fable 5 at $10/$50 (no silent sonnet downgrade)', () => {
+    expect(calculateCost('claude-fable-5', 1_000_000, 0)).toBeCloseTo(10, 5);
+    expect(calculateCost('claude-fable-5', 0, 1_000_000)).toBeCloseTo(50, 5);
+  });
+
+  it('applies generation-correct cache pricing for Claude 4.x Opus', () => {
+    // cacheWrite 1M x $6.25 + cacheRead 1M x $0.50 = $6.75
+    expect(calculateCost('claude-opus-4-8', 0, 0, 1_000_000, 1_000_000)).toBeCloseTo(6.75, 5);
+  });
+
+  it('applies cache pricing for Haiku 4.5', () => {
+    // cacheWrite 1M x $1.25 + cacheRead 1M x $0.10 = $1.35
+    expect(calculateCost('claude-haiku-4-5', 0, 0, 1_000_000, 1_000_000)).toBeCloseTo(1.35, 5);
+  });
+
+  it('applies cache pricing for Fable 5', () => {
+    // cacheWrite 1M x $12.50 + cacheRead 1M x $1.00 = $13.50
+    expect(calculateCost('claude-fable-5', 0, 0, 1_000_000, 1_000_000)).toBeCloseTo(13.5, 5);
+  });
+
+  it('defaults an untagged/future Opus id (no "claude-3") to the current rate, not the retired $15', () => {
+    // representative future-Opus id without the legacy "claude-3" segment → current ($5)
+    expect(calculateCost('claude-opus-9-9', 1_000_000, 0)).toBeCloseTo(5, 5);
+  });
+
+  it('prices Mythos 5 the same as Fable 5 ($10/$50)', () => {
+    expect(calculateCost('claude-mythos-5', 1_000_000, 0)).toBeCloseTo(10, 5);
+    expect(calculateCost('claude-mythos-5', 0, 1_000_000)).toBeCloseTo(50, 5);
+  });
+
+  it('uses the shared sonnet key for Sonnet 4.x cache pricing ($3.75 write / $0.30 read)', () => {
+    // cacheWrite 1M x $3.75 + cacheRead 1M x $0.30 = $4.05 — guards the shared
+    // sonnet key from silently drifting off the 3.x baseline.
+    expect(calculateCost('claude-sonnet-4-6', 0, 0, 1_000_000, 1_000_000)).toBeCloseTo(4.05, 5);
+  });
+});
+
 describe('scanCodexLogsCosts', () => {
   it('returns [] when no codex log files exist', () => {
     expect(scanCodexLogsCosts()).toEqual([]);

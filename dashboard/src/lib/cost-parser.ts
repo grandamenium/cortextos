@@ -18,26 +18,52 @@ interface ModelPricing {
   cacheReadPerMillion: number;
 }
 
+// Approximate list prices per million tokens. APPROXIMATIONS for dashboard
+// display only — for authoritative billing consult the Anthropic console
+// (platform.claude.com). Claude rates current as of 2026-06 from
+// platform.claude.com/pricing; cache-write is 1.25x input (5-min TTL) and
+// cache-read is 0.1x input. Update on model releases.
+//
+// Keys are GENERATION-SPECIFIC because substring matching alone collapses
+// model generations that are priced differently (#520): Claude 4.x Opus is
+// $5/$25, but the retired Claude 3 Opus was $15/$75 — mapping every "opus" to
+// one rate over-counted Claude 4.x Opus agents by ~3x. resolvePricingKey()
+// selects the right generation key per model id.
 const MODEL_PRICING: Record<string, ModelPricing> = {
-  opus: { inputPerMillion: 15, outputPerMillion: 75, cacheWritePerMillion: 3.75, cacheReadPerMillion: 1.50 },
+  // Claude Opus — 4.x ($5/$25) vs the retired Claude 3 Opus ($15/$75).
+  'opus-4': { inputPerMillion: 5, outputPerMillion: 25, cacheWritePerMillion: 6.25, cacheReadPerMillion: 0.50 },
+  'opus-3': { inputPerMillion: 15, outputPerMillion: 75, cacheWritePerMillion: 18.75, cacheReadPerMillion: 1.50 },
+  // Claude Sonnet — 3.x and 4.x both $3/$15.
   sonnet: { inputPerMillion: 3, outputPerMillion: 15, cacheWritePerMillion: 3.75, cacheReadPerMillion: 0.30 },
-  haiku: { inputPerMillion: 0.8, outputPerMillion: 4, cacheWritePerMillion: 1.00, cacheReadPerMillion: 0.08 },
+  // Claude Haiku — 4.5 ($1/$5) vs the retired Haiku 3.5 ($0.80/$4).
+  'haiku-4': { inputPerMillion: 1, outputPerMillion: 5, cacheWritePerMillion: 1.25, cacheReadPerMillion: 0.10 },
+  'haiku-3': { inputPerMillion: 0.8, outputPerMillion: 4, cacheWritePerMillion: 1.00, cacheReadPerMillion: 0.08 },
+  // Claude Fable 5 — most-capable tier, above Opus ($10/$50).
+  fable: { inputPerMillion: 10, outputPerMillion: 50, cacheWritePerMillion: 12.50, cacheReadPerMillion: 1.00 },
   // gpt-5-codex: OpenAI list pricing as of 2026-01. cache write n/a (no separate
   // write cost on cached input). Update when codex pricing changes upstream.
   'gpt-5-codex': { inputPerMillion: 1.25, outputPerMillion: 10, cacheWritePerMillion: 0, cacheReadPerMillion: 0.125 },
 };
 
 /**
- * Resolve model name to pricing key. Matches substrings: claude variants map to
- * opus/sonnet/haiku; gpt-5-codex (and bare "codex" / "gpt-5" variants) map to
- * gpt-5-codex pricing rather than silently defaulting to sonnet.
+ * Resolve a model name to a pricing key by family AND generation. Substring
+ * matching alone is insufficient because generations of the same family are
+ * priced differently (Claude 4.x Opus $5/$25 vs Claude 3 Opus $15/$75) — see
+ * #520. The retired Claude 3 family carries a `claude-3` segment in its ids
+ * (e.g. `claude-3-opus-20240229`, `claude-3-5-haiku-...`); everything else is
+ * priced at current rates. Defaulting an untagged/future Opus or Haiku to the
+ * CURRENT generation (not the retired one) avoids re-introducing the ~3x
+ * over-count this fix removes. gpt-5-codex (and bare "codex"/"gpt-5") map to
+ * codex pricing rather than silently defaulting to sonnet.
  */
 function resolvePricingKey(model: string): string {
   const lower = model.toLowerCase();
-  if (lower.includes('opus')) return 'opus';
-  if (lower.includes('haiku')) return 'haiku';
+  const legacy3 = lower.includes('claude-3'); // retired Claude 3 family ids
+  if (lower.includes('fable') || lower.includes('mythos')) return 'fable';
+  if (lower.includes('opus')) return legacy3 ? 'opus-3' : 'opus-4';
+  if (lower.includes('haiku')) return legacy3 ? 'haiku-3' : 'haiku-4';
   if (lower.includes('codex') || lower.includes('gpt-5')) return 'gpt-5-codex';
-  // Default to sonnet for all other claude models
+  // Default to sonnet for all other claude models (3.x and 4.x are same price).
   return 'sonnet';
 }
 
