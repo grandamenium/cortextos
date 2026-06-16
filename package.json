@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "postbuild": "git rev-parse HEAD > dist/.build-sha 2>/dev/null || true",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
