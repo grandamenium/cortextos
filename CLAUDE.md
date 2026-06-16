@@ -23,6 +23,7 @@ npm test
 - `bus/` — Shell wrapper scripts (delegate to `dist/cli.js bus`)
 - `dashboard/` — Next.js 14 web dashboard
 - `templates/` — Agent templates (agent, orchestrator, analyst)
+  - `templates/agent-shared/` — Shared rule templates. Orgs copy these to `orgs/<org>/agent-shared/` and customise. The `standing-orders.template.md` is the canonical baseline for agent standing orders; replace every `{{PLACEHOLDER}}` with org-specific values after copying.
 - `community/` — Community skills and agent catalog
 - `tests/` — Unit, integration, and E2E tests
 
