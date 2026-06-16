@@ -41,6 +41,7 @@ export function createTask(
   } = options;
 
   validatePriority(priority);
+  if (!org) throw new Error('createTask: org must be non-empty (CTX_ORG not set?)');
 
   const epoch = Date.now();
   // 8 digits: same-millisecond collision probability is ~1e-8 instead of ~1e-3.
@@ -302,16 +303,58 @@ export function updateTask(
 }
 
 /**
+ * Reassign a task to a different agent. Validates the target exists in the
+ * registered agent list (guards against phantom-alias orphan assignments),
+ * then atomically updates assigned_to and appends a 'reassign' audit entry.
+ */
+export function reassignTask(
+  paths: BusPaths,
+  taskId: string,
+  newAssignee: string,
+  actorAgent: string,
+  registeredAgents?: string[],
+): void {
+  if (!newAssignee) throw new Error('reassignTask: newAssignee must be non-empty');
+
+  // Validate target exists if a registry was provided.
+  if (registeredAgents && registeredAgents.length > 0 && !registeredAgents.includes(newAssignee)) {
+    throw new Error(
+      `reassignTask: agent '${newAssignee}' is not in the registered agent list. ` +
+      `Known agents: ${registeredAgents.join(', ')}`,
+    );
+  }
+
+  const filePath = findTaskFile(paths, taskId);
+  if (!filePath) {
+    throw new Error(`Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`);
+  }
+  const content = readFileSync(filePath, 'utf-8');
+  const task: Task = JSON.parse(content);
+  const prevAssignee = task.assigned_to;
+  task.assigned_to = newAssignee;
+  task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  atomicWriteSync(filePath, JSON.stringify(task));
+  appendTaskAudit(paths, taskId, {
+    event: 'reassign',
+    agent: actorAgent,
+    from_assignee: prevAssignee,
+    to_assignee: newAssignee,
+  });
+}
+
+/**
  * One audit entry written to a task's append-only JSONL log. Every
  * status transition, claim, and completion emits one of these so the
  * full lifecycle can be replayed from disk.
  */
 export interface TaskAuditEntry {
   ts: string; // ISO 8601
-  event: 'create' | 'claim' | 'update' | 'complete';
+  event: 'create' | 'claim' | 'update' | 'complete' | 'reassign';
   agent: string; // who caused the event
   from?: TaskStatus;
   to?: TaskStatus;
+  from_assignee?: string;
+  to_assignee?: string;
   note?: string;
 }
 

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName, validateTaskId } from '../utils/validate.js';
-import { createTask, updateTask, completeTask, claimTask, selectAndClaimNext, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { createTask, updateTask, reassignTask, completeTask, claimTask, selectAndClaimNext, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { decomposeBundle } from '../bus/bundle.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
@@ -210,6 +210,32 @@ busCommand
 
     updateTask(paths, id, status as TaskStatus);
     console.log(`Updated ${id} -> ${status}`);
+  });
+
+busCommand
+  .command('reassign-task')
+  .description('Reassign a task to a different agent. Validates target exists in the agent registry and appends an audit entry.')
+  .argument('<id>', 'Task ID')
+  .argument('<agent>', 'Target agent name')
+  .action((id: string, agent: string) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    try {
+      // Best-effort: load registered agents from list-agents for validation.
+      let registeredAgents: string[] | undefined;
+      try {
+        const result = spawnSync('cortextos', ['bus', 'list-agents', '--format', 'json'], { encoding: 'utf-8' });
+        if (result.status === 0) {
+          const agents: Array<{ name: string }> = JSON.parse(result.stdout);
+          registeredAgents = agents.map((a) => a.name);
+        }
+      } catch { /* skip validation if list-agents unavailable */ }
+      reassignTask(paths, id, agent, env.agentName, registeredAgents);
+      console.log(`Reassigned ${id} -> ${agent}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
   });
 
 busCommand
