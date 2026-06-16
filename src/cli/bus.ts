@@ -187,9 +187,9 @@ busCommand
 busCommand
   .command('update-task')
   .argument('<id>', 'Task ID')
-  .argument('<status>', 'New status (pending, in_progress, completed, blocked, cancelled)')
+  .argument('<status>', 'New status (pending, in_progress, verifying, completed, blocked, cancelled)')
   .action((id: string, status: string) => {
-    const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
+    const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'verifying', 'completed', 'blocked', 'cancelled'];
     if (!validStatuses.includes(status as TaskStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
       process.exit(1);

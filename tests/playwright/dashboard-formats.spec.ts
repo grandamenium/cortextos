@@ -91,7 +91,7 @@ test.describe('Task JSON format (dashboard sync compatibility)', () => {
 
     // status: task.status ?? 'pending'
     expect(task.status).toBe('pending');
-    expect(['pending', 'in_progress', 'blocked', 'completed', 'done']).toContain(task.status);
+    expect(['pending', 'in_progress', 'verifying', 'blocked', 'completed', 'done']).toContain(task.status);
 
     // priority: task.priority ?? 'normal'
     expect(task.priority).toBe('high');
