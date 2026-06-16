@@ -505,6 +505,57 @@ describe('Sprint 5: Observability & Metrics', () => {
       expect(role.anomalies).toContain('assignee_wip_cap_breach');
     });
 
+    it('suppresses wip_cap_breach when all excess tasks share the same bundle_id (healthy bundling)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      // 7 in_progress, all sharing bundle_id='t-sequence' → largest group = 7
+      // wip_cap=5, nonBundleCount = 7-7 = 0 < 5 → suppress
+      for (let i = 0; i < 7; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `ip${i}.json`), JSON.stringify({
+          assigned_to: 'frontend-dev', status: 'in_progress', bundle_id: 't-sequence',
+        }), 'utf-8');
+      }
+
+      const role = collectMetrics(ctxRoot).agents['frontend-dev'].role;
+      expect(role.assignee.in_progress_bundle_max).toBe(7);
+      expect(role.anomalies).not.toContain('assignee_wip_cap_breach');
+    });
+
+    it('suppresses wip_cap_breach when excess tasks share a common title prefix (≥3)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      // 7 in_progress: 5 share [T-A..T-E] prefix, 2 are unrelated → bundleMax=5, nonBundle=2 < 5 → suppress
+      for (let i = 0; i < 5; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `bundle${i}.json`), JSON.stringify({
+          assigned_to: 'frontend-dev', status: 'in_progress',
+          title: `[AVL-FIX] task variant ${i}`,
+        }), 'utf-8');
+      }
+      for (let i = 0; i < 2; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `other${i}.json`), JSON.stringify({
+          assigned_to: 'frontend-dev', status: 'in_progress',
+          title: `[UNRELATED-${i}] standalone task`,
+        }), 'utf-8');
+      }
+
+      const role = collectMetrics(ctxRoot).agents['frontend-dev'].role;
+      expect(role.assignee.in_progress_bundle_max).toBe(5);
+      expect(role.anomalies).not.toContain('assignee_wip_cap_breach');
+    });
+
+    it('fires wip_cap_breach when 7 in_progress tasks have 7 distinct bundle groups (scattered)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'frontend-dev': { enabled: true } }), 'utf-8');
+      // 7 tasks, all with distinct title prefixes → bundleMax=1 (<3) → no suppression
+      for (let i = 0; i < 7; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `ip${i}.json`), JSON.stringify({
+          assigned_to: 'frontend-dev', status: 'in_progress',
+          title: `[TASK-${i}] unrelated work item`,
+        }), 'utf-8');
+      }
+
+      const role = collectMetrics(ctxRoot).agents['frontend-dev'].role;
+      expect(role.assignee.in_progress_bundle_max).toBe(1);
+      expect(role.anomalies).toContain('assignee_wip_cap_breach');
+    });
+
     it('analyst-hybrid carries BOTH assignee and authoring thresholds', () => {
       writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'systems-analyst': { enabled: true } }), 'utf-8');
       // 6 in_progress (> 5 cap) AS assignee
