@@ -11,6 +11,8 @@ ecosystem.config.js
 
 # User-created org data (not part of the framework)
 orgs/
+# Archived/retired agents (contain .env secrets — never commit)
+.archived-agents/
 # But community subdirectories ARE part of the framework
 !community/
 !community/**
