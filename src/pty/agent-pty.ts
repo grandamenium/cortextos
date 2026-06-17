@@ -167,25 +167,36 @@ export class AgentPTY {
       }
     });
 
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+    // Claude Code can show two first-run gates before the agent is usable:
+    //  1. The "Bypass Permissions mode" warning (shown whenever the agent is
+    //     launched with --dangerously-skip-permissions, even after the global
+    //     bypassPermissionsModeAccepted flag is set). Its default cursor sits
+    //     on "1. No, exit" — so a bare Enter EXITS the process (code 1) and the
+    //     agent crash-loops. We must arrow DOWN to "2. Yes, I accept" first.
+    //  2. The "trust this folder?" prompt on first run in a new directory,
+    //     whose default IS the accept option — a bare Enter accepts it.
+    // Both render a few seconds after spawn. Retry on a short schedule and
+    // handle each screen at most once, so repeated key presses can't toggle
+    // the selection back off the accept option.
+    let bypassHandled = false;
+    let trustHandled = false;
+    const handleFirstRunGates = () => {
+      if (!this.pty) return;
+      const recent = this.outputBuffer.getRecent();
+      if (!bypassHandled && recent.includes('Bypass Permissions')) {
+        this.pty.write('\x1b[B'); // arrow down: "1. No, exit" -> "2. Yes, I accept"
+        this.pty.write('\r');     // confirm acceptance
+        bypassHandled = true;
+        return; // give the next tick a chance to clear any trust prompt
       }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+      if (!trustHandled && recent.includes('trust')) {
+        this.pty.write('\r'); // trust dialog default is the accept option
+        trustHandled = true;
       }
-    }, 8000);
+    };
+    for (const delay of [4000, 6000, 8000, 11000, 14000]) {
+      setTimeout(handleFirstRunGates, delay);
+    }
   }
 
   /**
