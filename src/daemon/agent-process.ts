@@ -113,6 +113,13 @@ export class AgentProcess {
       writeCortextosEnv(this.env.agentDir, this.env);
     }
 
+    // Size/age-based rotation: before we decide whether to --continue, archive
+    // the active conversation if it has grown past the configured size or age
+    // threshold, so the next session starts fresh instead of resuming into a
+    // bloated transcript. No-op for non-Claude runtimes and when thresholds are
+    // disabled. Reuses the F15 archive path (reversible).
+    this.maybeRotateTranscriptBySizeOrAge();
+
     // Determine start mode
     const mode = this.shouldContinue() ? 'continue' : 'fresh';
     const prompt = mode === 'fresh'
@@ -411,6 +418,64 @@ export class AgentProcess {
     } catch (err) {
       this.log(`[F15] Failed to archive conversation: ${err}`);
     }
+  }
+
+  /**
+   * Size/age-based transcript rotation.
+   *
+   * Inspects the active (newest) .jsonl in the agent's Claude conversation
+   * directory. If it exceeds config.max_transcript_mb (default 50MB) OR its
+   * mtime is older than config.max_transcript_age_days (default 14d), archive
+   * the conversation via archiveConversationHistory() so the next start()
+   * begins a fresh session instead of resuming a bloated/stale transcript.
+   *
+   * Only applies to the Claude runtime (hermes / codex-app-server track
+   * continuity elsewhere). Defaults preserve current behavior when the config
+   * fields are unset; either check is disabled when its threshold is <= 0.
+   */
+  private maybeRotateTranscriptBySizeOrAge(): void {
+    // Only the Claude runtime uses .jsonl files for session continuity.
+    if (this.config.runtime === 'hermes' || this.config.runtime === 'codex-app-server') {
+      return;
+    }
+
+    const maxMb = this.config.max_transcript_mb ?? 50;
+    const maxAgeDays = this.config.max_transcript_age_days ?? 14;
+
+    const launchDir = this.config.working_directory || this.env.agentDir;
+    if (!launchDir) return;
+
+    const convDir = join(homedir(), '.claude', 'projects', launchDir.split(sep).join('-'));
+
+    // Find the active (newest by mtime) .jsonl in the conversation dir.
+    let newest: { file: string; mtimeMs: number; size: number } | null = null;
+    try {
+      const files = readdirSync(convDir).filter((f) => f.endsWith('.jsonl'));
+      for (const file of files) {
+        const st = statSync(join(convDir, file));
+        if (!newest || st.mtimeMs > newest.mtimeMs) {
+          newest = { file, mtimeMs: st.mtimeMs, size: st.size };
+        }
+      }
+    } catch {
+      return; // no conversation dir / unreadable — nothing to rotate
+    }
+    if (!newest) return;
+
+    const sizeMb = newest.size / (1024 * 1024);
+    const ageDays = (Date.now() - newest.mtimeMs) / (24 * 60 * 60 * 1000);
+
+    const overSize = maxMb > 0 && sizeMb > maxMb;
+    const overAge = maxAgeDays > 0 && ageDays > maxAgeDays;
+
+    if (!overSize && !overAge) return;
+
+    const reasons: string[] = [];
+    if (overSize) reasons.push(`size ${sizeMb.toFixed(1)}MB > ${maxMb}MB`);
+    if (overAge) reasons.push(`age ${ageDays.toFixed(1)}d > ${maxAgeDays}d`);
+    this.log(`[rotation] Active transcript ${newest.file} tripped threshold (${reasons.join(', ')}) — archiving for a fresh session`);
+
+    this.archiveConversationHistory();
   }
 
   /**

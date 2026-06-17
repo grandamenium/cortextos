@@ -246,6 +246,31 @@ export class AgentManager {
 
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
     if (this.agents.has(name)) {
+      // Restart-race wedge fix: the queueing path below assumes an in-flight
+      // stop() is still draining this entry. But if the agent's PROCESS already
+      // EXITED (dead) while the registry entry was never deleted, queueing
+      // dedupes forever and the agent wedges ("status: stopped" yet start says
+      // "already in registry"). Detect that case here: an entry whose process
+      // reports a non-live status ('stopped' / 'crashed' / 'halted') is stale —
+      // there is no in-flight stop to honor the queue. Tear it down like
+      // stopAgent() does and fall through to a normal start.
+      const staleEntry = this.agents.get(name)!;
+      const procStatus = staleEntry.process.getStatus().status;
+      const procAlive = procStatus === 'running' || procStatus === 'starting';
+      if (!procAlive) {
+        console.warn(`[agent-manager] ${name} already in registry but its process is dead (status: ${procStatus}) — removing stale entry and starting fresh (restart-race wedge fix)`);
+        if (staleEntry.poller) staleEntry.poller.stop();
+        if (staleEntry.activityPoller) staleEntry.activityPoller.stop();
+        staleEntry.checker.stop();
+        this.agents.delete(name);
+        const scheduler = this.cronSchedulers.get(name);
+        if (scheduler) {
+          scheduler.stop();
+          this.cronSchedulers.delete(name);
+        }
+        this.pendingRestarts.delete(name);
+        // Fall through: proceed with a normal start below.
+      } else {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
       // (restart-all could send stop+start simultaneously, and the new
       // start would arrive while the old stop's PTY exit was still in
@@ -273,6 +298,7 @@ export class AgentManager {
       }
       this.pendingRestarts.add(name);
       return;
+      }
     }
 
     // BUG-043 fix: resolve the agent's true org instead of using `this.org`.
