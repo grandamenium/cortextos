@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -95,25 +95,127 @@ describe('Hook Utilities', () => {
     });
   });
 
-  describe('isClaudeDirOperation', () => {
-    it('auto-approves Bash commands containing .claude/', () => {
-      expect(isClaudeDirOperation('Bash', { command: 'cat .claude/settings.json' })).toBe(true);
+  describe('isClaudeDirOperation (permission-gate hardening)', () => {
+    const agentDir = '/agents/alice';
+
+    it('NEVER auto-approves Bash, even when the command mentions .claude/', () => {
+      // A shell command string cannot be proven to act only within .claude/, and
+      // under bypassPermissions this hook is the only approval gate (#1/#15).
+      expect(isClaudeDirOperation('Bash', { command: 'cat .claude/settings.json' }, agentDir)).toBe(false);
+      expect(isClaudeDirOperation('Bash', { command: 'rm -rf ~/work; ls .claude/' }, agentDir)).toBe(false);
     });
 
-    it('auto-approves Edit with /.claude/ in file_path', () => {
-      expect(isClaudeDirOperation('Edit', { file_path: '/home/user/.claude/CLAUDE.md' })).toBe(true);
+    it('auto-approves Edit/Write within the agent\'s own .claude/ directory', () => {
+      expect(isClaudeDirOperation('Edit', { file_path: '/agents/alice/.claude/settings.json' }, agentDir)).toBe(true);
+      expect(isClaudeDirOperation('Write', { file_path: '/agents/alice/.claude/skills/x/SKILL.md' }, agentDir)).toBe(true);
     });
 
-    it('auto-approves Write with /.claude/ in file_path', () => {
-      expect(isClaudeDirOperation('Write', { file_path: '/project/.claude/settings.json' })).toBe(true);
+    it('resolves a relative file_path against the agent directory', () => {
+      expect(isClaudeDirOperation('Edit', { file_path: '.claude/settings.json' }, agentDir)).toBe(true);
+    });
+
+    it('refuses traversal that escapes the agent\'s .claude/ directory (#18)', () => {
+      expect(isClaudeDirOperation('Write', { file_path: '/agents/alice/.claude/../../etc/passwd' }, agentDir)).toBe(false);
+      expect(isClaudeDirOperation('Edit', { file_path: '/agents/alice/.claude/../.ssh/authorized_keys' }, agentDir)).toBe(false);
+    });
+
+    it('refuses a .claude/ directory that is not the agent\'s own (#18)', () => {
+      expect(isClaudeDirOperation('Edit', { file_path: '/home/victim/.claude/settings.json' }, agentDir)).toBe(false);
+      expect(isClaudeDirOperation('Write', { file_path: '/agents/bob/.claude/settings.json' }, agentDir)).toBe(false);
+    });
+
+    it('refuses the prefix trick (.claude-evil is not .claude)', () => {
+      expect(isClaudeDirOperation('Edit', { file_path: '/agents/alice/.claude-evil/x' }, agentDir)).toBe(false);
     });
 
     it('does not auto-approve regular paths', () => {
-      expect(isClaudeDirOperation('Edit', { file_path: '/home/user/project/src/main.ts' })).toBe(false);
+      expect(isClaudeDirOperation('Edit', { file_path: '/agents/alice/src/main.ts' }, agentDir)).toBe(false);
     });
 
     it('does not auto-approve other tool types', () => {
-      expect(isClaudeDirOperation('Read', { file_path: '/.claude/foo' })).toBe(false);
+      expect(isClaudeDirOperation('Read', { file_path: '/agents/alice/.claude/foo' }, agentDir)).toBe(false);
+    });
+
+    it('refuses a write that escapes via a symlink inside .claude (#18, codex)', () => {
+      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      try {
+        const realAgentDir = join(base, 'agent');
+        mkdirSync(join(realAgentDir, '.claude'), { recursive: true });
+        const outside = join(base, 'outside');
+        mkdirSync(outside, { recursive: true });
+        // .claude/escape is a symlink that leaves the .claude tree.
+        symlinkSync(outside, join(realAgentDir, '.claude', 'escape'));
+
+        // A write "inside" .claude/escape/ actually lands in outside/ — must be refused.
+        expect(isClaudeDirOperation('Write',
+          { file_path: join(realAgentDir, '.claude', 'escape', 'evil.txt') }, realAgentDir)).toBe(false);
+        // Sanity: a genuine (not-yet-existing) file directly inside .claude is still allowed.
+        expect(isClaudeDirOperation('Write',
+          { file_path: join(realAgentDir, '.claude', 'ok.txt') }, realAgentDir)).toBe(true);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses a symlinked .claude root that redirects the gate (codex)', () => {
+      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      try {
+        const realAgentDir = join(base, 'agent');
+        mkdirSync(realAgentDir, { recursive: true });
+        const outside = join(base, 'outside');
+        mkdirSync(outside, { recursive: true });
+        // .claude itself is a symlink pointing out of the agent tree.
+        symlinkSync(outside, join(realAgentDir, '.claude'));
+        expect(isClaudeDirOperation('Write',
+          { file_path: join(realAgentDir, '.claude', 'x.txt') }, realAgentDir)).toBe(false);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses a write through a DANGLING symlink inside .claude (codex blocker)', () => {
+      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      try {
+        const realAgentDir = join(base, 'agent');
+        mkdirSync(join(realAgentDir, '.claude'), { recursive: true });
+        // .claude/dangle points at a non-existent target — realpath can't resolve
+        // it, so a lexical check would wrongly treat the path as contained.
+        symlinkSync(join(base, 'does-not-exist'), join(realAgentDir, '.claude', 'dangle'));
+        expect(isClaudeDirOperation('Write',
+          { file_path: join(realAgentDir, '.claude', 'dangle', 'evil.txt') }, realAgentDir)).toBe(false);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+
+    it('handles a symlinked agent-dir ancestor without leaking (mmax)', () => {
+      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      try {
+        const realRoot = join(base, 'real');
+        mkdirSync(join(realRoot, '.claude'), { recursive: true });
+        const linkDir = join(base, 'link');
+        symlinkSync(realRoot, linkDir); // agentDir reached via a symlink
+        // The agent dir is canonicalized, so a normal relative write to .claude
+        // is still allowed even when agentDir is expressed via the symlink.
+        expect(isClaudeDirOperation('Write',
+          { file_path: '.claude/ok.txt' }, linkDir)).toBe(true);
+        // Traversal still cannot escape the canonicalized .claude root.
+        expect(isClaudeDirOperation('Write',
+          { file_path: '.claude/../../etc/passwd' }, linkDir)).toBe(false);
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+
+    it('does not auto-approve without an explicit agent-dir boundary (no cwd fallback)', () => {
+      const saved = process.env.CTX_AGENT_DIR;
+      delete process.env.CTX_AGENT_DIR;
+      try {
+        // No agentDir arg + no CTX_AGENT_DIR → must NOT auto-approve, even for a .claude path.
+        expect(isClaudeDirOperation('Edit', { file_path: '/tmp/.claude/settings.json' })).toBe(false);
+      } finally {
+        if (saved !== undefined) process.env.CTX_AGENT_DIR = saved;
+      }
     });
   });
 
@@ -165,10 +267,19 @@ describe('Hook Utilities', () => {
       expect(summary.indexOf('a'.repeat(301))).toBe(-1);
     });
 
-    it('truncates Bash command at 200 chars', () => {
-      const longCmd = 'x'.repeat(300);
-      const summary = formatToolSummary('Bash', { command: longCmd });
-      expect(summary.length).toBeLessThanOrEqual('Command: '.length + 200);
+    it('shows the full Bash command up to 1500 chars (no early hidden payload, #39)', () => {
+      const cmd = 'x'.repeat(300);
+      const summary = formatToolSummary('Bash', { command: cmd });
+      // 300-char command is well under the cap — shown in full, no truncation marker.
+      expect(summary).toBe(`Command: ${cmd}`);
+    });
+
+    it('marks truncation when a Bash command exceeds 1500 chars (#39)', () => {
+      const cmd = 'x'.repeat(2000);
+      const summary = formatToolSummary('Bash', { command: cmd });
+      expect(summary).toContain('x'.repeat(1500));
+      expect(summary).not.toContain('x'.repeat(1501));
+      expect(summary).toContain('truncated');
     });
 
     it('formats unknown tools as JSON', () => {
