@@ -21,6 +21,7 @@ import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/kn
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
+import { distillTranscript } from '../utils/transcript-distill.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -2768,6 +2769,61 @@ busCommand
     if (!opts.dryRun && patched > 0) {
       console.log('\nRestart affected agents to apply the new settings:');
       console.log('  cortextos restart <agent-name>');
+    }
+  });
+
+busCommand
+  .command('distill-transcript')
+  .description('Deterministically pre-filter a Claude Code .jsonl transcript (drop noise/API-error/boilerplate, extract signal)')
+  .argument('<jsonlPath>', 'Path to the .jsonl transcript to distill')
+  .option('--out <path>', 'Write clean text to <path> and a JSON summary to <path>.summary.json')
+  .action((jsonlPath: string, opts: { out?: string }) => {
+    if (!existsSync(jsonlPath)) {
+      console.error(`Transcript not found: ${jsonlPath}`);
+      process.exit(1);
+    }
+
+    const result = distillTranscript(jsonlPath);
+    const cleanBytes = Buffer.byteLength(result.cleanText, 'utf-8');
+    const reduction = result.rawBytes > 0
+      ? Math.round((1 - cleanBytes / result.rawBytes) * 1000) / 10
+      : 0;
+
+    if (opts.out) {
+      const { writeFileSync, mkdirSync } = require('fs');
+      const { dirname } = require('path');
+      mkdirSync(dirname(opts.out), { recursive: true });
+      writeFileSync(opts.out, result.cleanText, 'utf-8');
+      const summary = {
+        rawBytes: result.rawBytes,
+        cleanBytes,
+        reductionPct: reduction,
+        recordsTotal: result.recordsTotal,
+        droppedNoise: result.droppedNoise,
+        apiErrors: result.apiErrors,
+        boilerplate: result.boilerplate,
+        kept: result.kept,
+        signal: result.signal,
+      };
+      writeFileSync(`${opts.out}.summary.json`, JSON.stringify(summary, null, 2) + '\n', 'utf-8');
+    }
+
+    console.log(`Distilled ${jsonlPath}`);
+    console.log(`  size:        ${result.rawBytes} B -> ${cleanBytes} B (${reduction}% reduction)`);
+    console.log(`  records:     ${result.recordsTotal} total | ${result.kept} kept`);
+    console.log(`  dropped:     ${result.droppedNoise} noise | ${result.apiErrors} api-errors`);
+    const boilerplateEntries = Object.entries(result.boilerplate);
+    console.log(`  boilerplate: ${boilerplateEntries.length ? boilerplateEntries.map(([k, v]) => `${k}=${v}`).join(', ') : 'none'}`);
+    console.log(`  signal:`);
+    console.log(`    PRs:       ${result.signal.prs.length ? result.signal.prs.join(', ') : 'none'}`);
+    const busBySender = result.signal.busThreads.reduce((acc, t) => { acc[t.sender] = (acc[t.sender] ?? 0) + 1; return acc; }, {} as Record<string, number>);
+    const busSummary = Object.entries(busBySender).sort((a, b) => b[1] - a[1]).map(([s, n]) => `${s} x${n}`).join(', ');
+    console.log(`    bus:       ${result.signal.busThreads.length} thread(s)${busSummary ? ' from ' + busSummary : ''}`);
+    console.log(`    decisions: ${result.signal.decisions.length}`);
+    const toolEntries = Object.entries(result.signal.tools);
+    console.log(`    tools:     ${toolEntries.length ? toolEntries.map(([k, v]) => `${k}=${v}`).join(', ') : 'none'}`);
+    if (opts.out) {
+      console.log(`  wrote:       ${opts.out} (+ ${opts.out}.summary.json)`);
     }
   });
 
