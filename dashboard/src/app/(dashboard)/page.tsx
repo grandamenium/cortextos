@@ -1,13 +1,16 @@
 import Link from 'next/link';
 import { getOrgs } from '@/lib/config';
-import { getPendingCount } from '@/lib/data/approvals';
+import { getPendingCount, getPendingApprovals } from '@/lib/data/approvals';
 import { getTasks, getTasksCompletedToday } from '@/lib/data/tasks';
 import { getGoals } from '@/lib/data/goals';
 import { getHealthSummary, getAllHeartbeats } from '@/lib/data/heartbeats';
 import { getRecentEvents, getMilestones } from '@/lib/data/events';
 import { discoverAgents } from '@/lib/data/agents';
+import { getInboxDigest } from '@/lib/data/inbox';
 
 import { ActionRequired } from '@/components/overview/action-required';
+import { ActionItemsPanel } from '@/components/overview/action-items-panel';
+import { InboxDigest } from '@/components/overview/inbox-digest';
 import { CurrentFocus } from '@/components/overview/current-focus';
 import { TodaysProgress } from '@/components/overview/todays-progress';
 import { LiveActivity } from '@/components/overview/live-activity';
@@ -31,6 +34,7 @@ export default async function OverviewPage({
   // Fetch all data in parallel
   const [
     pendingCount,
+    pendingApprovals,
     blockedTasks,
     allTasks,
     goalsData,
@@ -42,6 +46,7 @@ export default async function OverviewPage({
     heartbeatsList,
   ] = await Promise.all([
     Promise.resolve(getPendingCount(org || undefined)),
+    Promise.resolve(getPendingApprovals(org || undefined)),
     Promise.resolve(getTasks({ status: 'blocked', org: org || undefined })),
     Promise.resolve(getTasks({ org: org || undefined })),
     Promise.resolve(getGoals(org || 'default')),
@@ -53,6 +58,8 @@ export default async function OverviewPage({
     getAllHeartbeats(),
   ]);
 
+  const inboxDigest = getInboxDigest(15);
+
   // Convert heartbeats array to lookup map
   const heartbeats: Record<string, typeof heartbeatsList[number]> = {};
   for (const hb of heartbeatsList) {
@@ -62,7 +69,10 @@ export default async function OverviewPage({
   const staleAgentCount = healthSummary.stale + healthSummary.down;
   const inProgressTasks = allTasks.filter(t => t.status === 'in_progress').length;
   const pendingTasks = allTasks.filter(t => t.status === 'pending').length;
-  const humanTasks = allTasks.filter(t => t.assignee === 'human' && t.status !== 'completed').length;
+  const humanTasksList = allTasks.filter(
+    t => (t.assignee === 'human' || t.assignee === 'user' || t.title.startsWith('[HUMAN]')) && t.status !== 'completed'
+  );
+  const humanTasks = humanTasksList.length;
   const totalActions = pendingCount + blockedTasks.length + staleAgentCount + humanTasks;
 
   return (
@@ -97,13 +107,23 @@ export default async function OverviewPage({
         blockedTasks={blockedTasks.length}
       />
 
-      {/* Action Required - only show if there are actions */}
-      {totalActions > 0 && (
+      {/* Action Items Panel + Priority Inbox Digest */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <ActionItemsPanel
+          humanTasks={humanTasksList.slice(0, 8)}
+          pendingApprovals={pendingApprovals.slice(0, 5)}
+          blockedTasks={blockedTasks.slice(0, 5)}
+        />
+        <InboxDigest items={inboxDigest} />
+      </div>
+
+      {/* Legacy action-required summary strip — only when old ActionRequired had items */}
+      {staleAgentCount > 0 && (
         <ActionRequired
-          pendingApprovals={pendingCount}
-          blockedTasks={blockedTasks.length}
+          pendingApprovals={0}
+          blockedTasks={0}
           staleAgents={staleAgentCount}
-          humanTasks={humanTasks}
+          humanTasks={0}
         />
       )}
 
