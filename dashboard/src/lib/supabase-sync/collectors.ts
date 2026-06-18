@@ -59,12 +59,16 @@ export function collectAgents(): AgentRow[] {
     // Filesystem safety net: scan the agents dir for dirs that list-agents missed.
     // Agents with malformed configs (or no org registration) may be silently omitted by
     // list-agents → their runtime sentinels would never reach Supabase → escape-both.
+    // LOW: wrap per-org readdirSync so a perm/race on one org doesn't abort the whole sync.
     const agentsDir = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents');
-    const fromFs: Array<Record<string, unknown>> = fs.existsSync(agentsDir)
-      ? fs.readdirSync(agentsDir, { withFileTypes: true })
+    let fromFs: Array<Record<string, unknown>> = [];
+    try {
+      if (fs.existsSync(agentsDir)) {
+        fromFs = fs.readdirSync(agentsDir, { withFileTypes: true })
           .filter((d) => d.isDirectory() && !fromCliNames.has(d.name))
-          .map((d) => ({ name: d.name, enabled: true }))
-      : [];
+          .map((d) => ({ name: d.name, enabled: true }));
+      }
+    } catch { /* best-effort — CLI output is the primary source; skip on error */ }
     for (const a of [...fromCli, ...fromFs]) {
       const name = String(a.name ?? '');
       if (!name) continue;
@@ -121,16 +125,20 @@ function largestJsonlMb(dir: string): number | null {
   }
 }
 
-/** Claude Code session .jsonl dir for an agent: ~/.claude/projects/<encoded-agentDir>/.
- *  Encoding: leading slash stripped, remaining slashes replaced with dashes. */
-function claudeSessionDir(agentDir: string): string {
-  const encoded = agentDir.replace(/^\//, '').replace(/\//g, '-');
+/** Claude Code session .jsonl dir for an agent.
+ *  Encoding matches the daemon (agent-process.ts:820):
+ *    launchDir.split(sep).join('-')
+ *  Leading path separator becomes a leading dash (e.g. /home/... → -home-...).
+ *  Pass the EFFECTIVE launch dir (config.working_directory || agentDir). */
+function claudeSessionDir(launchDir: string): string {
+  const encoded = launchDir.split(path.sep).join('-');
   return path.join(require('os').homedir(), '.claude', 'projects', encoded);
 }
 
-/** Largest active Claude Code session .jsonl for a given agent dir, in MB. */
-function sessionMbForAgent(agentDir: string): number | null {
-  return largestJsonlMb(claudeSessionDir(agentDir));
+/** Largest active Claude Code session .jsonl for a given EFFECTIVE launch dir, in MB.
+ *  Pass config.working_directory || agentDir to match the daemon's PTY cwd. */
+function sessionMbForAgent(effectiveLaunchDir: string): number | null {
+  return largestJsonlMb(claudeSessionDir(effectiveLaunchDir));
 }
 
 /** Resolve the cwd of a running process — cross-platform.
@@ -152,9 +160,10 @@ function getProcessCwd(pid: number): string | null {
   return null; // unsupported platform
 }
 
-/** True if the daemon's pidfile cwd for this agent matches the registered agent dir.
+/** True if the daemon's pidfile cwd for this agent matches the EFFECTIVE launch dir.
+ *  expectedDir = config.working_directory || agentDir (matches PTY cwd in agent-pty.ts:63).
  *  Pass runtime so codex-app-server agents are skipped (app-server cwd ≠ agent dir). */
-function launchPathCanonical(agentName: string, org: string, runtime?: string | null): boolean | null {
+function launchPathCanonical(agentName: string, expectedDir: string, runtime?: string | null): boolean | null {
   // MED-C: codex-app-server spawns an app-server process whose cwd is NOT the agent dir.
   // Comparing would always false-flag healthy codex agents as stranded.
   if (runtime === 'codex-app-server') return null;
@@ -169,7 +178,6 @@ function launchPathCanonical(agentName: string, org: string, runtime?: string | 
   // HIGH-A: /proc/<pid>/cwd is Linux-only; use cross-platform helper.
   const actualCwd = getProcessCwd(pid);
   if (!actualCwd) return null;
-  const expectedDir = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', agentName);
   return actualCwd === expectedDir;
 }
 
@@ -183,9 +191,14 @@ export function collectHeartbeats(): HeartbeatRow[] {
     if (!hb || !hb.org) continue;
     const org = hb.org as string;
     const agentDir = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', d.name);
-    // Read runtime from config.json so launchPathCanonical can skip codex-app-server (MED-C).
+    // Read runtime + working_directory from config.json.
+    // MED: PTY uses config.working_directory || agentDir (agent-pty.ts:63 + agent-process.ts:820).
+    // Both launchPathCanonical and sessionMbForAgent must use the same effective dir.
     const agentCfg = readJson<Record<string, unknown>>(path.join(agentDir, 'config.json')) ?? {};
     const agentRuntime = typeof agentCfg.runtime === 'string' ? agentCfg.runtime : null;
+    const effectiveDir = (typeof agentCfg.working_directory === 'string' && agentCfg.working_directory)
+      ? agentCfg.working_directory
+      : agentDir;
     out.push({
       org_slug: org,
       agent_name: hb.agent ?? d.name,
@@ -194,8 +207,8 @@ export function collectHeartbeats(): HeartbeatRow[] {
       mode: hb.mode ?? null,
       last_heartbeat: hb.last_heartbeat ?? hb.timestamp ?? null,
       loop_interval: hb.loop_interval ?? null,
-      launch_path_canonical: launchPathCanonical(d.name, org, agentRuntime),
-      session_mb: sessionMbForAgent(agentDir),
+      launch_path_canonical: launchPathCanonical(d.name, effectiveDir, agentRuntime),
+      session_mb: sessionMbForAgent(effectiveDir),
     });
   }
   return out;
