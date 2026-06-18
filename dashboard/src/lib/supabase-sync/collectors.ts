@@ -18,7 +18,13 @@ const logsDir = () => path.join(CTX_ROOT, 'logs');
 // AgentInfo: name/role/enabled/running/...). Runs on the box where the CLI exists.
 function listAgents(org: string): Array<Record<string, unknown>> {
   try {
-    const out = execFileSync('cortextos', ['bus', 'list-agents', '--org', org, '--format', 'json'], { encoding: 'utf-8', timeout: 15000 });
+    // MED-D: pass resolved CTX_ROOT + CTX_FRAMEWORK_ROOT so the subprocess uses the same
+    // paths as the sync process regardless of its cwd (dashboard/ vs project root).
+    const out = execFileSync('cortextos', ['bus', 'list-agents', '--org', org, '--format', 'json'], {
+      encoding: 'utf-8',
+      timeout: 15000,
+      env: { ...process.env, CTX_ROOT, CTX_FRAMEWORK_ROOT },
+    });
     const parsed = JSON.parse(out);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -59,18 +65,23 @@ export function collectAgents(): AgentRow[] {
       const cfgMalformed = cfgRaw === null && fs.existsSync(cfgPath);
       const cfg = (cfgRaw ?? {}) as Record<string, unknown>;
       const hb = readJson<Record<string, string>>(path.join(stateDir(), name, 'heartbeat.json'));
-      // HIGH-2: cfg.runtime ?? null collapses explicit runtime:null → "unset".
-      // Daemon REJECTS explicit null (guard: undefined passes, everything else is
-      // checked against VALID_RUNTIMES). Preserve the distinction: absent key → null
-      // (safe default); key present but null/invalid → emit as-is so monitor flags it.
+      // HIGH-2 + HIGH-B: cfg.runtime ?? null collapses explicit runtime:null → "unset"
+      // (null → monitor skips). Daemon REJECTS explicit null and non-string values.
+      // Preserve every distinction:
+      //   absent key         → null           (unset; defaults to claude-code — valid)
+      //   explicit null      → '__explicit_null__'       (invalid; daemon rejects)
+      //   non-string value   → '__nonstring_runtime__'   (invalid; daemon rejects)
+      //   string value       → the value itself (valid or invalid, monitor checks)
       const runtimeRaw = cfg.runtime;
       const runtime: string | null = cfgMalformed
         ? '__malformed_config__'
         : !Object.prototype.hasOwnProperty.call(cfg, 'runtime')
-          ? null // key absent → unset, defaults to claude-code (valid)
+          ? null
           : runtimeRaw == null
-            ? '__explicit_null__' // explicit runtime:null → invalid; daemon rejects this
-            : String(runtimeRaw);
+            ? '__explicit_null__'
+            : typeof runtimeRaw !== 'string'
+              ? '__nonstring_runtime__'
+              : runtimeRaw;
       out.push({
         org_slug: org,
         name,
@@ -111,13 +122,32 @@ function sessionMbForAgent(agentDir: string): number | null {
   return largestJsonlMb(claudeSessionDir(agentDir));
 }
 
-/** True if the daemon's pidfile cwd for this agent matches the registered agent dir. */
-function launchPathCanonical(agentName: string, org: string): boolean | null {
-  // Pidfile written by the daemon at state/<name>/pid; the process's /proc/<pid>/cwd (or lsof
-  // equivalent on macOS) tells us the actual launch dir. We use the simpler heuristic:
-  // compare the symlink target of /proc/<pid>/cwd (Linux) against the expected agent dir.
-  // On macOS /proc doesn't exist; we skip and return null (unknown).
-  // HIGH-1: daemon writes state/<name>/agent.pid (agent-process.ts:427), not 'pid'.
+/** Resolve the cwd of a running process — cross-platform.
+ *  Linux: /proc/<pid>/cwd symlink. macOS: lsof -a -p <pid> -d cwd -Fn (n-prefixed line). */
+function getProcessCwd(pid: number): string | null {
+  if (process.platform === 'linux') {
+    try { return fs.realpathSync(`/proc/${pid}/cwd`); } catch { return null; }
+  }
+  if (process.platform === 'darwin') {
+    try {
+      const out = execFileSync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+        encoding: 'utf-8',
+        timeout: 3000,
+      });
+      const nLine = out.split('\n').find((l) => l.startsWith('n'));
+      return nLine ? nLine.slice(1).trim() : null;
+    } catch { return null; }
+  }
+  return null; // unsupported platform
+}
+
+/** True if the daemon's pidfile cwd for this agent matches the registered agent dir.
+ *  Pass runtime so codex-app-server agents are skipped (app-server cwd ≠ agent dir). */
+function launchPathCanonical(agentName: string, org: string, runtime?: string | null): boolean | null {
+  // MED-C: codex-app-server spawns an app-server process whose cwd is NOT the agent dir.
+  // Comparing would always false-flag healthy codex agents as stranded.
+  if (runtime === 'codex-app-server') return null;
+  // HIGH-1: daemon writes state/<name>/agent.pid (agent-process.ts:427).
   const pidPath = path.join(stateDir(), agentName, 'agent.pid');
   let pid: number | null = null;
   try {
@@ -125,10 +155,9 @@ function launchPathCanonical(agentName: string, org: string): boolean | null {
     if (isNaN(pid) || pid <= 0) pid = null;
   } catch { /* no pidfile = unknown */ }
   if (!pid) return null;
-  // Linux only: /proc/<pid>/cwd is a symlink to the process's working dir
-  const procCwd = `/proc/${pid}/cwd`;
-  let actualCwd: string | null = null;
-  try { actualCwd = fs.realpathSync(procCwd); } catch { return null; }
+  // HIGH-A: /proc/<pid>/cwd is Linux-only; use cross-platform helper.
+  const actualCwd = getProcessCwd(pid);
+  if (!actualCwd) return null;
   const expectedDir = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', agentName);
   return actualCwd === expectedDir;
 }
@@ -143,6 +172,9 @@ export function collectHeartbeats(): HeartbeatRow[] {
     if (!hb || !hb.org) continue;
     const org = hb.org as string;
     const agentDir = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', d.name);
+    // Read runtime from config.json so launchPathCanonical can skip codex-app-server (MED-C).
+    const agentCfg = readJson<Record<string, unknown>>(path.join(agentDir, 'config.json')) ?? {};
+    const agentRuntime = typeof agentCfg.runtime === 'string' ? agentCfg.runtime : null;
     out.push({
       org_slug: org,
       agent_name: hb.agent ?? d.name,
@@ -151,7 +183,7 @@ export function collectHeartbeats(): HeartbeatRow[] {
       mode: hb.mode ?? null,
       last_heartbeat: hb.last_heartbeat ?? hb.timestamp ?? null,
       loop_interval: hb.loop_interval ?? null,
-      launch_path_canonical: launchPathCanonical(d.name, org),
+      launch_path_canonical: launchPathCanonical(d.name, org, agentRuntime),
       session_mb: sessionMbForAgent(agentDir),
     });
   }
