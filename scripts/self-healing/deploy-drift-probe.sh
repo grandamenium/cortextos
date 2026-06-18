@@ -18,9 +18,16 @@
 #   1. SOURCE drift   — origin/main has commits NOT contained in dist/.build-sha
 #                       (ancestry-aware: a merge commit that includes origin/main
 #                        is up-to-date). => dist needs rebuild.
-#   2. RESTART drift  — dist/daemon.js mtime is NEWER than the running daemon's
-#                       process start time => on-disk build is ahead of the code
-#                       actually running in memory. => daemon needs restart.
+#   2. RESTART drift  — the on-disk dist/daemon.js CONTENT differs from what the
+#                       running daemon loaded at boot => on-disk build is ahead of
+#                       the code actually running in memory. => daemon needs restart.
+#                       Keyed off a per-pid content-hash fingerprint, NOT mtime: a
+#                       full `tsc` rebuild bumps daemon.js mtime even when its bytes
+#                       are unchanged (e.g. the rebuild's only real change was a
+#                       non-daemon bin/ script), and an mtime-only check over-pages
+#                       PD on those content-identical rebuilds (observed 2026-06-18,
+#                       the #52 bin-only rebuild). Falls back to the mtime heuristic
+#                       only when no trustworthy fingerprint exists for this pid.
 #   3. SHA staleness  — dist/daemon.js mtime is NEWER than dist/.build-sha mtime
 #                       => dist was rebuilt without postbuild writing the sha, so
 #                        .build-sha can no longer be trusted for (1).
@@ -74,6 +81,12 @@ LSTART=$(LC_ALL=C ps -o lstart= -p "$DAEMON_PID" 2>/dev/null | sed 's/^ *//;s/ *
 PROC_START_EPOCH=$(LC_ALL=C date -j -f "%a %b %e %T %Y" "$LSTART" +%s 2>/dev/null \
   || LC_ALL=C date -d "$LSTART" +%s 2>/dev/null || echo "0")
 
+# Content hash of the on-disk daemon.js (the artifact a restart would load). This is
+# what restart_drift compares against the running daemon's boot-time fingerprint, so
+# byte-identical rebuilds don't read as "needs restart". shasum on macOS, sha256sum on Linux.
+DAEMON_HASH=$(shasum -a 256 "$DAEMON_JS" 2>/dev/null | awk '{print $1}' \
+  || sha256sum "$DAEMON_JS" 2>/dev/null | awk '{print $1}' || echo "")
+
 # --- 3. Evaluate the three drift dimensions -----------------------------------
 SOURCE_DRIFT="false"; RESTART_DRIFT="false"; SHA_STALE="false"
 REASONS=()
@@ -88,9 +101,37 @@ elif [ -z "$BUILD_SHA" ]; then
   REASONS+=("SHA: $BUILD_SHA_FILE missing/empty — cannot verify source freshness")
 fi
 
+# RESTART drift via per-pid content fingerprint (see header note). The fingerprint
+# file stores "<pid>:<daemon.js hash>" = the content this running daemon loaded at
+# boot. When on-disk daemon.js is newer than proc start we decide by CONTENT, not
+# mtime; we (re)baseline whenever on-disk == loaded so byte-identical rebuilds are
+# silent. NEW_FP, if set, is persisted after the state dir is ensured (section 4).
+FINGERPRINT_FILE="$FRAMEWORK_ROOT/state/.deploy-daemon-fingerprint"
+FP_PID=""; FP_HASH=""
+if [ -f "$FINGERPRINT_FILE" ]; then
+  FP_PID=$(awk -F: 'NR==1{print $1}' "$FINGERPRINT_FILE" 2>/dev/null)
+  FP_HASH=$(awk -F: 'NR==1{print $2}' "$FINGERPRINT_FILE" 2>/dev/null)
+fi
+NEW_FP=""
+
 if [ "$PROC_START_EPOCH" -gt 0 ] && [ "$DAEMON_MTIME" -gt "$PROC_START_EPOCH" ]; then
-  RESTART_DRIFT="true"
-  REASONS+=("RESTART: dist/daemon.js rebuilt after the daemon started (proc has stale in-memory code) — daemon needs restart")
+  # On-disk daemon.js was written after this pid booted. Decide by content.
+  if [ "$FP_PID" = "$DAEMON_PID" ] && [ -n "$FP_HASH" ] && [ -n "$DAEMON_HASH" ]; then
+    if [ "$DAEMON_HASH" != "$FP_HASH" ]; then
+      RESTART_DRIFT="true"
+      REASONS+=("RESTART: dist/daemon.js content changed since the running daemon (pid $DAEMON_PID) loaded it — daemon needs restart")
+    fi
+    # else: byte-identical rebuild — NOT a restart condition (mtime-only false-positive suppressed).
+  else
+    # No trustworthy content baseline for this pid (first sighting already post-rebuild).
+    # Conservative: fall back to the mtime heuristic so a genuine drift is never MISSED.
+    RESTART_DRIFT="true"
+    REASONS+=("RESTART: dist/daemon.js rebuilt after the daemon started (no content baseline for pid $DAEMON_PID; mtime-based) — daemon may need restart")
+  fi
+elif [ "$PROC_START_EPOCH" -gt 0 ] && [ -n "$DAEMON_HASH" ]; then
+  # On-disk daemon.js is NOT newer than proc start => it IS what the daemon loaded.
+  # (Re)baseline this pid's fingerprint to the current content hash.
+  NEW_FP="${DAEMON_PID}:${DAEMON_HASH}"
 fi
 
 if [ "$SHA_MTIME" -gt 0 ] && [ "$DAEMON_MTIME" -gt "$SHA_MTIME" ]; then
@@ -106,6 +147,12 @@ fi
 # --- 4. Write the machine-readable topology/status artifact -------------------
 STATE_DIR="$FRAMEWORK_ROOT/state"
 mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# Persist the running daemon's content fingerprint (baselined above when on-disk
+# daemon.js == what this pid loaded). Lets the next run decide restart_drift by
+# content rather than mtime. Best-effort — never block the probe.
+if [ -n "$NEW_FP" ]; then echo "$NEW_FP" > "$FINGERPRINT_FILE" 2>/dev/null || true; fi
+
 TOPOLOGY_FILE="$STATE_DIR/deploy-topology.json"
 REASONS_JSON=$(printf '%s\n' "${REASONS[@]:-}" | python3 -c "import json,sys; print(json.dumps([l for l in sys.stdin.read().splitlines() if l]))" 2>/dev/null || echo "[]")
 
@@ -116,6 +163,8 @@ cat > "$TOPOLOGY_FILE" <<EOF
   "daemon_js": "$DAEMON_JS",
   "build_sha": "$BUILD_SHA",
   "origin_main_sha": "$REMOTE_SHA",
+  "daemon_js_hash": "$DAEMON_HASH",
+  "daemon_loaded_hash": "${FP_HASH:-}",
   "daemon_js_mtime": $DAEMON_MTIME,
   "build_sha_mtime": $SHA_MTIME,
   "proc_start_epoch": $PROC_START_EPOCH,
