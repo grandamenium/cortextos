@@ -72,6 +72,39 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
   fi
 fi
 
+# ── Probe-Blind Guard (SYS-PROBE-BLIND-01) ──────────────────────────────────
+# If no auth credential exists from any source after the acquisition block,
+# the watchdog cannot obtain a trustworthy usage reading. Skip ALL
+# pause/resume decisions to prevent the 2026-06-18 false-pause class:
+# token-loss → stale-cache-0%-remaining → fleet-wide pause despite low real
+# utilization. This is orthogonal to the API-degraded path below: that path
+# handles network/API failures when auth IS available; this handles the case
+# where we have no valid auth identity at all.
+PROBE_BLIND=no
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
+   && [ ! -f "$CTX_ROOT/state/oauth/accounts.json" ]; then
+  PROBE_BLIND=yes
+  log "PROBE_BLIND: no auth token from env/keychain/accounts.json — skipping pause/resume (no fleet action)"
+  cat > "$CHECK_FILE" <<EOF
+{
+  "ts": "$(ts)",
+  "method": "probe-blind",
+  "probe_blind": true,
+  "reason": "no_auth_token",
+  "paused": $([ -f "$PAUSED_FILE" ] && echo true || echo false)
+}
+EOF
+  BLIND_FLAG="$STATE_DIR/.probe-blind-since"
+  if [ ! -f "$BLIND_FLAG" ]; then
+    ALERT_MSG="⚠️ Quota watchdog PROBE-BLIND: no OAuth token found (env/keychain/accounts.json all miss). No pause/resume decisions will be made until a valid token is available. Log: $LOG"
+    "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$ALERT_MSG" --plain-text >> "$LOG" 2>&1 || log "  telegram alert failed"
+    echo "$(ts)" > "$BLIND_FLAG"
+  fi
+  exit 0
+fi
+# Auth available — clear any stale probe-blind flag from a prior episode
+[ -f "$STATE_DIR/.probe-blind-since" ] && rm -f "$STATE_DIR/.probe-blind-since"
+
 # ---------------------------------------------------------------------------
 # 1. Determine remaining_pct — API is the ONLY authoritative source for
 #    pause/resume decisions. ccusage was used as a fallback in v1+v2 but
