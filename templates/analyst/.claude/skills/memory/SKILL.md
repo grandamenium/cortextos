@@ -26,7 +26,7 @@ TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
 cat >> "memory/$TODAY.md" << MEMEOF
 
-## Session Start - $(date -u +%H:%M:%S UTC)
+## Session Start - $(date -u +'%H:%M:%S UTC')
 - Status: online
 - Crons active: <output of `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
@@ -37,7 +37,7 @@ MEMEOF
 
 ### Mid-work inline note (write immediately when something important happens)
 ```bash
-echo "NOTE $(date -u +%H:%M UTC): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
+echo "NOTE $(date -u +'%H:%M UTC'): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
 ```
 Don't wait for the heartbeat. Use for: significant decisions, user preferences learned, non-obvious situations, anything you would want the next session to know. One line.
 
@@ -46,7 +46,7 @@ Don't wait for the heartbeat. Use for: significant decisions, user preferences l
 TODAY=$(date -u +%Y-%m-%d)
 cat >> "memory/$TODAY.md" << MEMEOF
 
-## Heartbeat - $(date -u +%H:%M:%S UTC)
+## Heartbeat - $(date -u +'%H:%M:%S UTC')
 - Current focus: <what I am working on and why>
 - Active threads: <anything in progress or being monitored — state of each>
 - Key decisions: <decisions made since last entry with brief rationale>
@@ -60,7 +60,7 @@ MEMEOF
 TODAY=$(date -u +%Y-%m-%d)
 cat >> "memory/$TODAY.md" << MEMEOF
 
-## Session End - $(date -u +%H:%M:%S UTC)
+## Session End - $(date -u +'%H:%M:%S UTC')
 - Status: [done/interrupted/context-full]
 - Current state: [where things stand — specific enough that the next session can resume cold]
 - Active threads: [anything in progress or mid-task with current state]
@@ -105,7 +105,7 @@ Update at every heartbeat and session end. Ingest to KB after updating.
 Re-ingest MEMORY.md and today's daily memory on every heartbeat so they stay semantically searchable:
 ```bash
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force
 ```
 
 ---
