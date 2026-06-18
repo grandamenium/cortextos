@@ -13,6 +13,8 @@ import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
 import { readCrashCount, incrementCrashCount } from './crash-counter.js';
 import { ensureWorktree } from './worktree-manager.js';
+import { writeAgentPidFile, clearAgentPidFile } from './agent-pid-file.js';
+import { repairConversationDir } from './jsonl-repair.js';
 
 type LogFn = (msg: string) => void;
 
@@ -64,7 +66,11 @@ export class AgentProcess {
   private resolveExit: (() => void) | null = null;
   private dedup: MessageDedup;
   private log: LogFn;
-  private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // SYS-DAEMON-RESILIENCE-01 Fix 3: multiple subscribers (was a single
+  // overwriting handler). The daemon registers a registry-cleanup handler for
+  // terminal 'halted' AND, when Telegram is configured, a notification handler —
+  // a single slot let the second registration silently clobber the first.
+  private onStatusChangeHandlers: Array<(status: AgentStatus) => void> = [];
   // Issue #330: held here so CodexAppServerPTY can be re-wired across session refresh
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
@@ -135,6 +141,25 @@ export class AgentProcess {
 
     // Determine start mode
     const mode = this.shouldContinue() ? 'continue' : 'fresh';
+
+    // SYS-DAEMON-RESILIENCE-01 Fix 2 (mitigation ii): before a --continue resume,
+    // repair any truncated trailing JSONL line (e.g. left by a mid-write SIGTERM
+    // when reaping an orphan). Deterministic + in our control rather than relying
+    // on undocumented `claude --continue` partial-line tolerance. Claude runtime
+    // only — Hermes/codex track continuity via their own state files.
+    if (mode === 'continue' && this.config.runtime !== 'hermes' && this.config.runtime !== 'codex-app-server') {
+      const launchDir = this.config.working_directory || this.env.agentDir;
+      if (launchDir) {
+        const convDir = join(homedir(), '.claude', 'projects', launchDir.split(sep).join('-'));
+        try {
+          const changed = repairConversationDir(convDir);
+          if (changed > 0) this.log(`Repaired ${changed} JSONL file(s) with a truncated trailing line before --continue`);
+        } catch (err) {
+          this.log(`JSONL repair skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
     const prompt = mode === 'fresh'
       ? this.buildStartupPrompt()
       : this.buildContinuePrompt();
@@ -208,6 +233,21 @@ export class AgentProcess {
       this.status = 'running';
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
+
+      // SYS-DAEMON-RESILIENCE-01 Fix 2: persist the PTY PID synchronously the
+      // instant it is available, so a later daemon CRASH-exit (which skips
+      // stopAll) leaves a restart-durable record reconcileOrphans() can find +
+      // reap. instanceId is recorded for the instance-membership guard; spawnedAt
+      // (the process start time) backs the 3-part PID-reuse guard. Cleared only
+      // on a CLEAN stop() — a crash/halt deliberately leaves it for reconcile.
+      const livePid = this.pty.getPid();
+      if (typeof livePid === 'number') {
+        try {
+          writeAgentPidFile(this.env.ctxRoot, this.env.instanceId, this.name, livePid, this.sessionStart.toISOString());
+        } catch (err) {
+          this.log(`Failed to write pty.pid (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
 
       // Issue #392: codex-app-server does not reliably execute the inline
       // "Send a Telegram message saying you are back online" instruction the
@@ -310,6 +350,11 @@ export class AgentProcess {
     // cleared by handleExit when the intentional exit fires (or by start()
     // when a new lifecycle begins). See BUG-040 fix in handleExit().
     this.status = 'stopped';
+    // SYS-DAEMON-RESILIENCE-01 Fix 2: clean stop -> remove the pid-file so a
+    // subsequent boot's reconcile does not treat this (intentionally stopped)
+    // agent as a survived orphan. A crash/halt skips this path, leaving the
+    // pid-file for reconcile to liveness-check + reap.
+    clearAgentPidFile(this.env.ctxRoot, this.name);
     this.notifyStatusChange();
     this.log('Stopped');
   }
@@ -407,7 +452,7 @@ export class AgentProcess {
    * Register a status change handler.
    */
   onStatusChanged(handler: (status: AgentStatus) => void): void {
-    this.onStatusChange = handler;
+    this.onStatusChangeHandlers.push(handler);
   }
 
   /**
@@ -1054,8 +1099,12 @@ export class AgentProcess {
   }
 
   private notifyStatusChange(): void {
-    if (this.onStatusChange) {
-      this.onStatusChange(this.getStatus());
+    const status = this.getStatus();
+    for (const handler of this.onStatusChangeHandlers) {
+      // One bad subscriber must not break the others (or the status path).
+      try { handler(status); } catch (err) {
+        this.log(`status-change handler error: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 }

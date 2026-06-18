@@ -222,6 +222,14 @@ class Daemon {
     this.ipcServer = new IPCServer(this.agentManager, this.instanceId);
     await this.ipcServer.start();
 
+    // SYS-DAEMON-RESILIENCE-01 Fix 2: reconcile orphaned PTYs from a prior
+    // crash-exit BEFORE (re)starting agents. A SIGHUP-handling claude child
+    // survives a daemon crash (reparented to PID 1) but is unreachable by the
+    // new daemon; reap the confirmed-own survivor first so discoverAndStart
+    // cold-starts it cleanly with --continue (context from the on-disk JSONL),
+    // instead of leaving a cron-less orphan + a duplicate fresh spawn.
+    this.agentManager.reconcileOrphans();
+
     // Discover and start agents
     await this.agentManager.discoverAndStart();
 

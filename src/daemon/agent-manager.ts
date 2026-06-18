@@ -15,6 +15,15 @@ import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHi
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
+import { execFileSync } from 'child_process';
+import {
+  listAgentPidFiles,
+  classifyOrphan,
+  clearAgentPidFile,
+  parseEtimeMs,
+  type OrphanProbe,
+  type LiveProcessInfo,
+} from './agent-pid-file.js';
 
 type LogFn = (msg: string) => void;
 
@@ -39,6 +48,108 @@ export class AgentManager {
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
+  }
+
+  /**
+   * SYS-DAEMON-RESILIENCE-01 Fix 2: reconcile orphaned agent PTYs left by a
+   * previous daemon CRASH-exit (which skips stopAll, so SIGHUP-handling `claude`
+   * children orphan-survive, reparented to PID 1). Runs BEFORE discoverAndStart
+   * so a survivor is reaped first and then cold-started cleanly with --continue
+   * (context restored from the on-disk JSONL), rather than leaving an
+   * unreachable orphan with no crons + a duplicate fresh spawn.
+   *
+   * SAFETY — only ever SIGTERMs a CONFIRMED own live agent PTY:
+   *  - path-scoped: reads only THIS instance's own ctxRoot state pid-files, so a
+   *    foreign instance's PTYs are structurally invisible (+ instanceId re-checked).
+   *  - never a daemon PID (own daemon.pid + this process excluded).
+   *  - 3-part PID-REUSE guard (classifyOrphan): kill-0 AND ps-command matches the
+   *    agent pattern AND ps start-time ~= the recorded spawnedAt. Any miss =>
+   *    stale-unlink (NEVER kill) — guards a recycled PID that is an unrelated
+   *    process OR another/other-instance agent that took over the dead PID.
+   *
+   * Pure decision logic is in classifyOrphan (unit-tested); this method only
+   * supplies the real probes + performs the side effects (SIGTERM / unlink).
+   */
+  reconcileOrphans(): { reaped: string[]; unlinked: string[] } {
+    const reaped: string[] = [];
+    const unlinked: string[] = [];
+    const pidFiles = listAgentPidFiles(this.ctxRoot);
+    if (pidFiles.length === 0) return { reaped, unlinked };
+
+    const daemonPids = this.collectDaemonPids();
+    const probe: OrphanProbe = {
+      isAlive: (pid: number): boolean => {
+        try { process.kill(pid, 0); return true; } catch { return false; }
+      },
+      getLiveProcess: (pid: number): LiveProcessInfo | null => this.psProcessInfo(pid),
+    };
+
+    for (const { record } of pidFiles) {
+      const verdict = classifyOrphan(record, this.instanceId, daemonPids, probe);
+      if (verdict === 'reap') {
+        try {
+          // SIGTERM (not SIGKILL): claude-code exits fast + flushes its JSONL on
+          // SIGTERM. We do NOT waitpid/drain here before discoverAndStart re-spawns
+          // this agent — in the rare case a PTY lingers >tolerance after SIGTERM,
+          // the fresh --continue spawn could briefly overlap the dying orphan on
+          // the same conversation JSONL. Acceptable: claude exits fast on SIGTERM
+          // and discoverAndStart's own per-agent setup latency covers the gap. If
+          // this ever proves racy, add a bounded drain (poll kill-0 on `reaped`
+          // PIDs, ~few s) before returning. (review note: cortextos-improver 2026-06-18)
+          process.kill(record.pid, 'SIGTERM');
+          reaped.push(record.agent);
+          console.log(`[agent-manager] reconcile: reaped orphaned PTY for "${record.agent}" (pid ${record.pid}) — will cold-start with --continue.`);
+        } catch (err) {
+          console.error(`[agent-manager] reconcile: SIGTERM failed for "${record.agent}" pid ${record.pid}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        clearAgentPidFile(this.ctxRoot, record.agent);
+      } else if (verdict === 'stale-unlink') {
+        clearAgentPidFile(this.ctxRoot, record.agent);
+        unlinked.push(record.agent);
+      }
+      // foreign-skip: leave another instance's file untouched (shouldn't occur).
+    }
+    if (reaped.length || unlinked.length) {
+      console.log(`[agent-manager] reconcile complete: reaped=[${reaped.join(',')}] unlinked-stale=[${unlinked.join(',')}]`);
+    }
+    return { reaped, unlinked };
+  }
+
+  /** PIDs that must NEVER be reaped (this daemon + its recorded daemon.pid). */
+  private collectDaemonPids(): number[] {
+    const pids = new Set<number>([process.pid]);
+    try {
+      const p = join(this.ctxRoot, 'daemon.pid');
+      if (existsSync(p)) {
+        const n = parseInt(readFileSync(p, 'utf-8').trim(), 10);
+        if (Number.isFinite(n)) pids.add(n);
+      }
+    } catch { /* best effort */ }
+    return [...pids];
+  }
+
+  /** OS identity of a live PID via `ps` (macOS has no /proc). Returns the full
+   *  command + actual start-time (epoch ms) for the 3-part PID-reuse guard.
+   *
+   *  Uses `etime` (elapsed, LOCALE-INDEPENDENT) rather than `lstart` — `lstart`
+   *  renders in the system locale (e.g. German "Do. 18 Juni …") which Date.parse
+   *  handles only by luck. startedAtMs = now - elapsed, which for a genuine orphan
+   *  equals its recorded spawnedAt, and for a recycled (later-started) PID does
+   *  not — exactly the discriminator the guard needs. */
+  private psProcessInfo(pid: number): LiveProcessInfo | null {
+    try {
+      const out = execFileSync('ps', ['-p', String(pid), '-o', 'etime=,command='], { encoding: 'utf-8' }).trim();
+      if (!out) return null;
+      const firstSpace = out.indexOf(' ');
+      if (firstSpace === -1) return null;
+      const etime = out.slice(0, firstSpace).trim();
+      const command = out.slice(firstSpace + 1).trim();
+      const elapsedMs = parseEtimeMs(etime);
+      if (elapsedMs === null) return null;
+      return { command, startedAtMs: Date.now() - elapsedMs };
+    } catch {
+      return null; // ps failed / process gone between kill-0 and ps
+    }
   }
 
   /**
@@ -71,9 +182,63 @@ export class AgentManager {
     // external IPC start-agent calls to race with discoverAndStart and trigger
     // the BUG-011 pendingRestarts cascade. Each agent's startup_delay now runs
     // concurrently instead of blocking the whole queue.
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       toStart.map(({ name, dir, config, org }) => this.startAgent(name, dir, config, org)),
     );
+
+    // SYS-DAEMON-RESILIENCE-01 Fix 1: do-NOT-swallow + assert-outcome.
+    // `startAgent` registers the agent (this.agents.set) and only AFTER an
+    // awaited `agentProcess.start()` wires the cron scheduler. A rejection
+    // between those points used to be discarded by `Promise.allSettled`,
+    // leaving an agent with a live session but NO cron scheduler — a silent
+    // partial-start that masked a failed mechanism behind a "booted fine"
+    // surface. Now: log every rejected start (no swallow), then ASSERT that
+    // every enabled agent ended with the cron scheduler it requires.
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        console.error(
+          `[agent-manager] startAgent REJECTED for "${toStart[i].name}": ${r.reason instanceof Error ? r.reason.stack ?? r.reason.message : String(r.reason)}`,
+        );
+      }
+    });
+    this.assertBootOutcomes(toStart.map(({ name }) => name));
+  }
+
+  /**
+   * SYS-DAEMON-RESILIENCE-01 Fix 1: post-boot outcome assertion.
+   *
+   * For every agent that SHOULD have started, verify it ended in the required
+   * state — registered AND (for non-Hermes runtimes) wired to a cron scheduler.
+   * A registered-but-scheduler-less agent is the partial-start failure mode:
+   * recover it by lazy-wiring the scheduler (same path `reloadCrons` uses for
+   * the start-window gap), and log loudly if recovery still fails. This turns a
+   * silently-swallowed partial start into an observable, self-healed outcome.
+   */
+  private assertBootOutcomes(names: string[]): void {
+    for (const name of names) {
+      const entry = this.agents.get(name);
+      if (!entry) {
+        console.error(
+          `[agent-manager] BOOT-ASSERT FAIL: "${name}" was enabled but is NOT registered (start failed before registry insert) — agent has no session and no crons.`,
+        );
+        continue;
+      }
+      // Hermes manages its own crons natively — no daemon scheduler expected.
+      if (entry.process['config']?.runtime === 'hermes') continue;
+      if (this.cronSchedulers.has(name)) continue;
+
+      console.error(
+        `[agent-manager] BOOT-ASSERT: "${name}" registered but has NO cron scheduler (partial start) — recovering via lazy-wire.`,
+      );
+      this.startAgentCronScheduler(name);
+      if (!this.cronSchedulers.has(name)) {
+        console.error(
+          `[agent-manager] BOOT-ASSERT FAIL: "${name}" still has no cron scheduler after recovery — crons will not fire for this agent.`,
+        );
+      } else {
+        console.log(`[agent-manager] BOOT-ASSERT: "${name}" cron scheduler recovered.`);
+      }
+    }
   }
 
   /**
@@ -261,6 +426,26 @@ export class AgentManager {
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
+
+    // SYS-DAEMON-RESILIENCE-01 Fix 3: clean the registry corpse on terminal halt.
+    // When an agent exceeds its crash budget it reaches 'halted' and will NOT
+    // self-restart. If its registry entry lingers, a later `start`/`restart`
+    // dedups against the corpse ("already in registry") and the agent can never
+    // be revived without a full daemon restart. On 'halted' (terminal only —
+    // NOT transient 'crashed', which schedules its own restart), remove the
+    // entry + its cron scheduler so a subsequent start cold-starts cleanly.
+    // The identity guard ensures we only reap THIS process's entry, never a
+    // freshly-restarted replacement that reused the name.
+    agentProcess.onStatusChanged((status) => {
+      if (status.status !== 'halted') return;
+      if (this.agents.get(name)?.process !== agentProcess) return;
+      console.error(
+        `[agent-manager] "${name}" HALTED (terminal, crash-budget exhausted) — removing its registry entry + cron scheduler so a future start is not deduped against a dead corpse.`,
+      );
+      const sched = this.cronSchedulers.get(name);
+      if (sched) { sched.stop(); this.cronSchedulers.delete(name); }
+      this.agents.delete(name);
+    });
     // Issue #330: pass the Telegram handle into AgentProcess so CodexAppServerPTY
     // can emit sendChatAction directly from the JSONL stream. Has no effect for
     // claude-code / hermes runtimes — those still use fast-checker.
