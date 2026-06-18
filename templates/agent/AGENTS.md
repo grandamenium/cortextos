@@ -55,7 +55,7 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
    TODAY=$(date -u +%Y-%m-%d)
    cat >> "memory/$TODAY.md" << MEMEOF
 
-## Session End - $(date -u +%H:%M:%S UTC)
+## Session End - $(date -u +'%H:%M:%S UTC')
 - Status: [done/interrupted/context-full]
 - Current state: [where things stand — specific enough that the next session can resume cold]
 - Active threads: [anything in progress or mid-task with current state]
@@ -266,7 +266,7 @@ Each entry should answer: **"if my context was wiped right now, what would I nee
 
 **Mid-work inline notes — write immediately, don't wait for heartbeat:**
 ```bash
-echo "NOTE $(date -u +%H:%M UTC): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
+echo "NOTE $(date -u +'%H:%M UTC'): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
 ```
 Use this when: you make a significant decision, learn something about the user, hit a non-obvious situation, or encounter anything you would want the next session to know. One line is enough. The heartbeat is for structured summaries — inline notes capture the moment.
 
@@ -275,7 +275,7 @@ TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
 cat >> "memory/$TODAY.md" << MEMEOF
 
-## Session Start - $(date -u +%H:%M:%S UTC)
+## Session Start - $(date -u +'%H:%M:%S UTC')
 - Status: online
 - Crons active: <list from `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
@@ -330,7 +330,7 @@ The knowledge base is a semantic vector store (ChromaDB, Gemini Embedding 2). Th
 ```bash
 # Run on every heartbeat
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force
 ```
 
 **When to query — before starting any task:**
@@ -352,7 +352,7 @@ cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
 cortextos bus kb-query "your question" --org $CTX_ORG --agent $CTX_AGENT_NAME
 
 # Query only your memory (past experiences, patterns)
-cortextos bus kb-query "question" --org $CTX_ORG --collection memory-$CTX_AGENT_NAME
+cortextos bus kb-query "question" --org $CTX_ORG --scope private --agent $CTX_AGENT_NAME
 
 # Ingest output to your private collection
 cortextos bus kb-ingest /path/to/output --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private
@@ -412,7 +412,14 @@ Messages arrive in real time via the fast-checker daemon:
 Reply using: cortextos bus send-telegram <chat_id> '<reply>'
 ```
 
-**CRITICAL: When a Telegram message arrives, you MUST reply BEFORE doing any work.** The user is waiting. Acknowledge immediately, then execute. Never leave the user as the last person to have sent a message — always follow up when work is done, when something changes, or when you are waiting on something. The user should never have to ask "are you still there?"
+**Group chat gate — applies before the reply-first rule.** In group chats, default to silence. Reply ONLY when:
+- The message names or @-mentions this agent by name or bot handle
+- The message is a reply to one of this agent's previous messages
+- Capitan explicitly routes the message to this agent
+
+If a group message is addressed to another agent or another person, do not reply at all. The reply-first rule below applies only to DMs/private chats and to group messages that pass this gate.
+
+**CRITICAL: When a Telegram message arrives (and passes the group gate), you MUST reply BEFORE doing any work.** The user is waiting. Acknowledge immediately, then execute. Never leave the user as the last person to have sent a message — always follow up when work is done, when something changes, or when you are waiting on something. The user should never have to ask "are you still there?"
 
 Photos include a `local_file:` path. Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
 
