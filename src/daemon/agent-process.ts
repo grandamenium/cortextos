@@ -25,6 +25,7 @@ export class AgentProcess {
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
+  private bootTimer: ReturnType<typeof setTimeout> | null = null;
   private crashCount: number = 0;
   private maxCrashesPerDay: number = 10;
   // CrashLoopPauser (instar-inspired): sliding-window crash detection.
@@ -234,6 +235,7 @@ export class AgentProcess {
       this.log(`Running (pid: ${spawnedPid})`);
       this.maybeSendCodexBootNotification();
       this.startSessionTimer();
+      this.startBootWatchdog();
       this.notifyStatusChange();
     } catch (err) {
       try { this.pty?.kill(); } catch { /* already dead */ }
@@ -253,6 +255,7 @@ export class AgentProcess {
   private onPreBootstrapExit(reason: string): void {
     if (this.everBootstrapped || this.status === 'spawn-failed' || this.stopRequested) return;
     this.clearSessionTimer();
+    this.clearBootWatchdog();
     this.pty = null;
     const failureClass = classifySpawnFailure(reason);
     if (this.spawnAttempts >= MAX_SPAWN_ATTEMPTS) {
@@ -281,6 +284,7 @@ export class AgentProcess {
     this.status = 'spawn-failed';
     this.pty = null;
     this.clearSessionTimer();
+    this.clearBootWatchdog();
     this.notifyStatusChange();
     recordSpawnFailure(this.name, failureClass);
     this.log(`SPAWN-FAILED after ${MAX_SPAWN_ATTEMPTS} attempts (${failureClass}) — agent is NOT running (recover via re-enable or daemon restart)`);
@@ -314,6 +318,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearBootWatchdog();
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -626,6 +631,7 @@ export class AgentProcess {
 
     this.pty = null;
     this.clearSessionTimer();
+    this.clearBootWatchdog();
 
     // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
     // the whole process group and reaches each PTY's Claude Code child
@@ -1003,6 +1009,43 @@ export class AgentProcess {
     if (this.sessionTimer) {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
+    }
+  }
+
+  private startBootWatchdog(): void {
+    this.clearBootWatchdog();
+    const DEFAULT_BOOT_TIMEOUT_S = 300;
+    const timeoutS = this.config.boot_timeout_seconds ?? DEFAULT_BOOT_TIMEOUT_S;
+    if (timeoutS <= 0) return;
+
+    this.bootTimer = setTimeout(() => {
+      this.bootTimer = null;
+      if (this.status !== 'running') return;
+      if (this.isBootstrapped()) return;
+
+      this.log(
+        `BOOT_TIMEOUT: agent did not bootstrap within ${timeoutS}s — killing and restarting fresh`,
+      );
+      this.appendCrashToRestartsLog(0, 5000, 'CRASH');
+      this.armForceFresh('boot-timeout auto-recovery');
+      this.stopRequested = true;
+      if (this.pty) {
+        try {
+          (this.pty as AgentPTY).kill();
+        } catch { /* PTY may have exited between the check and the kill */ }
+      }
+      setTimeout(() => {
+        if (this.status === 'stopped' || this.status === 'crashed') {
+          this.start().catch(err => this.log(`Boot-timeout restart failed: ${err}`));
+        }
+      }, 5000);
+    }, timeoutS * 1000);
+  }
+
+  private clearBootWatchdog(): void {
+    if (this.bootTimer) {
+      clearTimeout(this.bootTimer);
+      this.bootTimer = null;
     }
   }
 
