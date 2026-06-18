@@ -128,9 +128,18 @@ cat > "$TOPOLOGY_FILE" <<EOF
 EOF
 log "wrote $TOPOLOGY_FILE (drift=$DRIFT)"
 
-# --- 5. Escalate on NEW drift state (idempotent — no spam) --------------------
+# --- 5. Escalate on MATERIAL drift change (dedup — no spam) -------------------
+# Per platform-director directive (OPS-DAEMON-RESTART, 2026-06-18): a restart_drift
+# that PD has already acknowledged + ticketed must NOT re-page every 15 min. Re-page
+# ONLY when the situation MATERIALLY changes — source_drift flips true, sha_stale
+# flips true, or a NEW daemon pid appears. The dedup key therefore deliberately
+# EXCLUDES restart_drift, build_sha and mtime: a same-pid restart_drift (incl. repeated
+# improver rebuilds of the daemon while it awaits its planned restart) keeps the same
+# key and is suppressed after the first page. A fresh pid (the restart landed, or a
+# crash-respawn) changes the key, which both clears the old condition and surfaces any
+# new one. The topology artifact is still rewritten every run regardless of paging.
 MARKER="$STATE_DIR/.deploy-drift-last"
-DRIFT_KEY="${SOURCE_DRIFT}-${RESTART_DRIFT}-${SHA_STALE}-${REMOTE_SHA:0:8}-${BUILD_SHA:0:8}-${DAEMON_MTIME}"
+DRIFT_KEY="src=${SOURCE_DRIFT};sha=${SHA_STALE};pid=${DAEMON_PID}"
 LAST_KEY=$(cat "$MARKER" 2>/dev/null || echo "")
 
 if [ "$DRIFT" = "true" ]; then
