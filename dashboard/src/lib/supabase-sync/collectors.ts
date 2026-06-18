@@ -51,17 +51,35 @@ export function collectAgents(): AgentRow[] {
     for (const a of listAgents(org)) {
       const name = String(a.name ?? '');
       if (!name) continue;
-      const cfg = readJson<Record<string, string>>(path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', name, 'config.json')) ?? {};
+      const cfgPath = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', name, 'config.json');
+      // HIGH-3: distinguish parse-failure (null) from absent-key ({}).
+      // readJson returns null when the file is missing OR malformed; we surface
+      // malformed-config as a distinct sentinel so the monitor can flag it.
+      const cfgRaw = readJson<Record<string, unknown>>(cfgPath);
+      const cfgMalformed = cfgRaw === null && fs.existsSync(cfgPath);
+      const cfg = (cfgRaw ?? {}) as Record<string, unknown>;
       const hb = readJson<Record<string, string>>(path.join(stateDir(), name, 'heartbeat.json'));
+      // HIGH-2: cfg.runtime ?? null collapses explicit runtime:null → "unset".
+      // Daemon REJECTS explicit null (guard: undefined passes, everything else is
+      // checked against VALID_RUNTIMES). Preserve the distinction: absent key → null
+      // (safe default); key present but null/invalid → emit as-is so monitor flags it.
+      const runtimeRaw = cfg.runtime;
+      const runtime: string | null = cfgMalformed
+        ? '__malformed_config__'
+        : !Object.prototype.hasOwnProperty.call(cfg, 'runtime')
+          ? null // key absent → unset, defaults to claude-code (valid)
+          : runtimeRaw == null
+            ? '__explicit_null__' // explicit runtime:null → invalid; daemon rejects this
+            : String(runtimeRaw);
       out.push({
         org_slug: org,
         name,
         display_name: (a.display_name as string) ?? hb?.display_name ?? name,
         role: (a.role as string) ?? null,
         enabled: a.enabled !== false,
-        runtime: cfg.runtime ?? null,
-        model: cfg.model ?? null,
-        timezone: cfg.timezone ?? null,
+        runtime,
+        model: cfg.model != null ? String(cfg.model) : null,
+        timezone: cfg.timezone != null ? String(cfg.timezone) : null,
       });
     }
   }
@@ -99,7 +117,8 @@ function launchPathCanonical(agentName: string, org: string): boolean | null {
   // equivalent on macOS) tells us the actual launch dir. We use the simpler heuristic:
   // compare the symlink target of /proc/<pid>/cwd (Linux) against the expected agent dir.
   // On macOS /proc doesn't exist; we skip and return null (unknown).
-  const pidPath = path.join(stateDir(), agentName, 'pid');
+  // HIGH-1: daemon writes state/<name>/agent.pid (agent-process.ts:427), not 'pid'.
+  const pidPath = path.join(stateDir(), agentName, 'agent.pid');
   let pid: number | null = null;
   try {
     pid = parseInt(fs.readFileSync(pidPath, 'utf-8').trim(), 10);

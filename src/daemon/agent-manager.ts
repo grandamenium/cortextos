@@ -364,9 +364,13 @@ export class AgentManager {
           'utf-8'
         );
       } catch { /* non-fatal — log is the primary signal */ }
-      // C2: LOUD operator alert via the agent bus. Always operator-routed (never reaches
-      // the customer chat), works on both control and customer boxes. The line-421 pattern
-      // sends to chatId (customer) — NOT used here.
+      // C2: LOUD operator alert via the agent bus.
+      // On control-plane boxes (CTX_IS_CUSTOMER_BOX unset): delivers to local zeus inbox.
+      // On customer boxes (CTX_IS_CUSTOMER_BOX=1): 'zeus' is not a local agent → this
+      // dead-ends silently (known MED-6 gap). The control-plane monitor (reads agent_health
+      // view) is the backstop on customer boxes — fail-CLOSED behavior is unaffected.
+      // If this ever needs direct customer-box operator delivery, add a CTX_OPERATOR_CHAT_ID
+      // path here (same pattern as hook-crash-alert CTX_IS_CUSTOMER_BOX routing).
       try {
         const cliPath = join(this.frameworkRoot, 'dist', 'cli.js');
         execFile(

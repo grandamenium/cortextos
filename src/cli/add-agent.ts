@@ -3,8 +3,10 @@ import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { validateAgentName, validateOrgName } from '../utils/validate';
 import { addAgent, AgentAlreadyExistsError } from '../scaffold/agent.js';
+import { VALID_RUNTIMES as VALID_RUNTIMES_SET } from '../daemon/runtimes.js';
 
-const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
+// Derive array form from the canonical Set so add-agent stays in sync with the daemon gate.
+const VALID_RUNTIMES = [...VALID_RUNTIMES_SET] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
 
 // Templates that don't have a codex variant yet. Pairing any of these with
