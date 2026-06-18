@@ -178,7 +178,14 @@ function launchPathCanonical(agentName: string, expectedDir: string, runtime?: s
   // HIGH-A: /proc/<pid>/cwd is Linux-only; use cross-platform helper.
   const actualCwd = getProcessCwd(pid);
   if (!actualCwd) return null;
-  return actualCwd === expectedDir;
+  // MED: canonicalize both paths before comparing — on macOS /tmp is a symlink to
+  // /private/tmp, so actualCwd (lsof returns resolved path) would never match a raw
+  // /tmp-prefixed expectedDir. Try/catch: expectedDir may not exist for a stopped agent.
+  try {
+    return fs.realpathSync(actualCwd) === fs.realpathSync(expectedDir);
+  } catch {
+    return null;
+  }
 }
 
 /** One heartbeat row per agent that has a state/<agent>/heartbeat.json. */
@@ -208,7 +215,11 @@ export function collectHeartbeats(): HeartbeatRow[] {
       last_heartbeat: hb.last_heartbeat ?? hb.timestamp ?? null,
       loop_interval: hb.loop_interval ?? null,
       launch_path_canonical: launchPathCanonical(d.name, effectiveDir, agentRuntime),
-      session_mb: sessionMbForAgent(effectiveDir),
+      // LOW: codex-app-server + hermes have no claude-code session jsonl; returning null
+      // avoids false-bloat alerts from stale claude jsonl in the same dir.
+      session_mb: (agentRuntime === 'codex-app-server' || agentRuntime === 'hermes')
+        ? null
+        : sessionMbForAgent(effectiveDir),
     });
   }
   return out;
