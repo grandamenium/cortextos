@@ -1,5 +1,7 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, relative } from 'path';
+import { execFile } from 'child_process';
+import { VALID_RUNTIMES } from './runtimes.js';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
@@ -18,6 +20,9 @@ import { processMediaMessage } from '../telegram/media.js';
 import { stripBom } from '../utils/strip-bom.js';
 
 type LogFn = (msg: string) => void;
+
+// Re-export so callers that import VALID_RUNTIMES from agent-manager continue to work.
+export { VALID_RUNTIMES } from './runtimes.js';
 
 /** Default + safety cap for the inter-spawn stagger (ms). */
 export const DEFAULT_SPAWN_STAGGER_MS = 4000;
@@ -335,7 +340,8 @@ export class AgentManager {
     // The type system only enforces this at compile time; a hand-edited config.json
     // (e.g. runtime="codex" instead of "codex-app-server") silently fell back to
     // claude-code at PTY selection — running the wrong engine invisibly. Never again.
-    const VALID_RUNTIMES = new Set(['claude-code', 'hermes', 'codex-app-server']);
+    // VALID_RUNTIMES is the module-level export — single source of truth for L1, L2,
+    // apollo's monitor, and fleet audit scripts. One edit = everywhere aligned.
     if (config.runtime !== undefined && !VALID_RUNTIMES.has(config.runtime)) {
       const msg =
         `[agent-manager] INVALID runtime '${config.runtime}' for agent '${name}' ` +
@@ -343,7 +349,7 @@ export class AgentManager {
         `REFUSING to start — fix config.json runtime field and restart. ` +
         `(Omit the field to default to claude-code.)`;
       console.error(msg);
-      // Write a sentinel file so the health monitor can detect this without polling logs.
+      // Write sentinel so the health monitor + W4 crash-notification guard can detect this.
       try {
         const stateDir = join(this.ctxRoot, 'state', name);
         mkdirSync(stateDir, { recursive: true });
@@ -353,6 +359,20 @@ export class AgentManager {
           'utf-8'
         );
       } catch { /* non-fatal — log is the primary signal */ }
+      // C2: LOUD operator alert via the agent bus. Always operator-routed (never reaches
+      // the customer chat), works on both control and customer boxes. The line-421 pattern
+      // sends to chatId (customer) — NOT used here.
+      try {
+        const cliPath = join(this.frameworkRoot, 'dist', 'cli.js');
+        execFile(
+          process.execPath,
+          [cliPath, 'bus', 'send-message', 'zeus', 'high',
+           `⚠️ DAEMON: agent '${name}' refused to start — INVALID runtime '${config.runtime}'. ` +
+           `Fix ${agentDir}/config.json (valid: claude-code | hermes | codex-app-server) and restart.`],
+          { timeout: 8000 },
+          () => {}
+        );
+      } catch { /* non-fatal — console.error above is always present */ }
       return; // fail-CLOSED: do not spawn the agent
     }
 
@@ -456,6 +476,12 @@ export class AgentManager {
       let prevStatus: string | null = null;
       agentProcess.onStatusChanged((status) => {
         if (status.status === 'crashed') {
+          // W4: if .invalid_runtime_error sentinel exists, this crash came from the
+          // Layer 2 defense-in-depth guard (not a real agent crash). C2's bus alert
+          // already fired when Layer 1 wrote the sentinel. Do NOT send "auto-restarting"
+          // for a config error that will never auto-restart.
+          const sentinelPath = join(this.ctxRoot, 'state', name, '.invalid_runtime_error');
+          if (existsSync(sentinelPath)) return;
           const crashNum = status.crashCount ?? '?';
           tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
         } else if (status.status === 'halted') {

@@ -265,6 +265,13 @@ async function main(): Promise<void> {
   const instanceId = process.env.CTX_INSTANCE_ID || 'default';
   if (!agentName) return;
 
+  // Subagent (`claude -p`) SessionEnds fire this hook too, with CLAUDE_CODE_CHILD_SESSION=1 — they are task
+  // completions, NOT crashes. Gate them out HERE (before the crash counter) so a busy agent spawning many
+  // subagents can't inflate "crashes today" (the P&S/portia "63 crashes" false alarm was exactly this — ~70
+  // subagent exits miscounted). The main daemon-managed PTY session never sets this var. (Discriminator from
+  // sage, 2026-06-18; pairs with the customer-routing/suppress gate near the Telegram send below.)
+  if (process.env.CLAUDE_CODE_CHILD_SESSION === '1') return;
+
   const ctxRoot = join(homedir(), '.cortextos', instanceId);
   const stateDir = join(ctxRoot, 'state', agentName);
   const logDir = join(ctxRoot, 'logs', agentName);
@@ -434,13 +441,40 @@ async function main(): Promise<void> {
       break;
   }
 
+  // --- Customer-box noise suppression + operator routing (2026-06-18, Bode-direct) ---
+  // On a CUSTOMER box, NO raw system-hook alert may reach the customer's CHAT_ID — the customer hears only
+  // from their agent, in its own voice (not from a system hook). This covers EVERY endType (crash, session-
+  // refresh, rate-limited, planned-restart, ...) because all of them currently send to CHAT_ID and a customer
+  // (e.g. Jordan/P&S) should see none of it. Route to the OPERATOR channel if configured (OPERATOR_BOT_TOKEN/
+  // OPERATOR_CHAT_ID — path 1, dormant until an ops bot is provisioned); else SUPPRESS (fail-CLOSED: never
+  // spam the customer). Suppressing here can NOT cause a silent crash: the control-plane health monitor
+  // (customer-agent-health-monitor.sh) is the guaranteed, config-independent operator-delivery backstop.
+  // On an operator/internal box (CTX_IS_CUSTOMER_BOX unset), CHAT_ID is the operator (Bode) → unchanged.
+  let sendToken = botToken;
+  let sendChat = chatId;
+  if (process.env.CTX_IS_CUSTOMER_BOX === '1') {
+    const opChat = process.env.OPERATOR_CHAT_ID;
+    if (opChat) {
+      sendToken = process.env.OPERATOR_BOT_TOKEN || botToken;
+      sendChat = opChat;
+    } else {
+      try {
+        appendFileSync(
+          join(logDir, 'crashes.log'),
+          `${new Date().toISOString()} SUPPRESSED-CUSTOMER-HOOK-ALERT type=${endType} (customer box, no OPERATOR_CHAT_ID; operator is covered by the control-plane health monitor)\n`,
+        );
+      } catch { /* ignore */ }
+      return; // fail-closed: never send a raw system-hook alert to a customer
+    }
+  }
+
   if (message) {
     try {
-      const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+      const url = `https://api.telegram.org/bot${sendToken}/sendMessage`;
       await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text: message }),
+        body: JSON.stringify({ chat_id: sendChat, text: message }),
       });
     } catch { /* ignore send failures */ }
   }

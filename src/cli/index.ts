@@ -25,6 +25,7 @@ import { setupCommand } from './setup.js';
 import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
 import { importAgentCommand } from './import-agent.js';
 import { updateCommand } from './update.js';
+import { VALID_RUNTIMES } from '../daemon/runtimes.js';
 
 const program = new Command();
 
@@ -70,5 +71,13 @@ const crashAlertCommand = new Command('crash-alert')
     process.exit(result.status ?? 0);
   });
 program.addCommand(crashAlertCommand);
+
+// valid-runtimes: machine-readable canonical set for bash monitors + audit scripts
+const validRuntimesCommand = new Command('valid-runtimes')
+  .description('Print the canonical set of valid agent runtime tokens as JSON (for bash monitors + audit)')
+  .action(() => {
+    process.stdout.write(JSON.stringify([...VALID_RUNTIMES]) + '\n');
+  });
+program.addCommand(validRuntimesCommand);
 
 program.parse();

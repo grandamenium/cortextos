@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import { execFileSync } from 'child_process';
@@ -9,6 +9,7 @@ import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { MessageDedup, injectMessage } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { VALID_RUNTIMES } from './runtimes.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
@@ -134,56 +135,73 @@ export class AgentProcess {
     const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
     ensureDir(join(this.env.ctxRoot, 'logs', this.name));
     this.log(`Log path: ${logPath}`);
-    // Defense-in-depth: if an invalid runtime somehow reaches here (should have been
-    // caught by agent-manager's pete-class fail-CLOSED guard), throw loudly rather
-    // than silently running as claude-code on the wrong engine.
-    if (this.config.runtime !== undefined &&
-        this.config.runtime !== 'claude-code' &&
-        this.config.runtime !== 'hermes' &&
-        this.config.runtime !== 'codex-app-server') {
-      throw new Error(
-        `[agent-process] INVALID runtime '${this.config.runtime}' — ` +
-        `this should have been caught at startAgent(); refusing to silently fall back to claude-code`
-      );
-    }
-    this.pty = this.config.runtime === 'hermes'
-      ? new HermesPTY(this.env, this.config, logPath)
-      : this.config.runtime === 'codex-app-server'
-        ? new CodexAppServerPTY(this.env, this.config, logPath)
-        : new AgentPTY(this.env, this.config, logPath);
 
-    // Issue #330: re-wire the Telegram handle on every start() (session refresh
-    // creates a fresh CodexAppServerPTY). Only CodexAppServerPTY uses this — Claude / Hermes
-    // typing indicators flow through fast-checker.
-    if (this.config.runtime === 'codex-app-server' && this.telegramApi && this.telegramChatId) {
-      (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
-    }
-
-    // BUG-011 fix: create a fresh exit signal for this run. resolveExit is
-    // called from the onExit handler below; stop() awaits exitPromise to
-    // guarantee the exit handler has fired before clearing stopping.
-    this.exitPromise = new Promise<void>((resolve) => {
-      this.resolveExit = resolve;
-    });
-
-    // Handle exit
-    this.pty.onExit((exitCode, signal) => {
-      // BUG-040 fix: if the lifecycle has moved on (a new start() incremented
-      // the generation since this PTY was spawned), this is an old PTY's late
-      // exit. Ignore it entirely — we don't want it to trigger handleExit on
-      // the current PTY's state.
-      if (myGeneration !== this.lifecycleGeneration) {
-        this.log(`Ignoring late exit from previous lifecycle gen ${myGeneration} (current: ${this.lifecycleGeneration})`);
-        return;
-      }
-      this.log(`Exited with code ${exitCode} signal ${signal}`);
-      this.handleExit(exitCode);
-      // Signal anyone awaiting this PTY's exit (e.g. stop() — BUG-011 fix)
-      this.resolveExit?.();
-      this.resolveExit = null;
-    });
-
+    // Outer try/catch: wraps Layer 2 guard + PTY creation + spawn. Any throw here
+    // (including the invalid-runtime guard below) is caught and sets status='crashed'
+    // + fires notifyStatusChange(). The W4 sentinel check in agent-manager's
+    // onStatusChanged then suppresses the misleading "auto-restarting" notification
+    // for the invalid-runtime case.
     try {
+      // Defense-in-depth: if an invalid runtime somehow reaches here (should have been
+      // caught by agent-manager's pete-class fail-CLOSED guard), throw loudly rather
+      // than silently running as claude-code on the wrong engine. Uses the same
+      // VALID_RUNTIMES set as Layer 1 (imported from runtimes.ts) — single source of
+      // truth means adding a new runtime updates BOTH layers automatically.
+      if (this.config.runtime !== undefined && !VALID_RUNTIMES.has(this.config.runtime)) {
+        // Write sentinel so the onStatusChanged crash-notification handler can distinguish
+        // this from a real agent crash (W4: don't send "auto-restarting" for a config error).
+        try {
+          const stateDir = join(this.env.ctxRoot, 'state', this.name);
+          mkdirSync(stateDir, { recursive: true });
+          writeFileSync(
+            join(stateDir, '.invalid_runtime_error'),
+            `${new Date().toISOString()} [agent-process] defense-in-depth: INVALID runtime '${this.config.runtime}' reached PTY selection\n`,
+            'utf-8'
+          );
+        } catch { /* non-fatal */ }
+        throw new Error(
+          `[agent-process] INVALID runtime '${this.config.runtime}' — ` +
+          `this should have been caught at startAgent(); refusing to silently fall back to claude-code`
+        );
+      }
+
+      this.pty = this.config.runtime === 'hermes'
+        ? new HermesPTY(this.env, this.config, logPath)
+        : this.config.runtime === 'codex-app-server'
+          ? new CodexAppServerPTY(this.env, this.config, logPath)
+          : new AgentPTY(this.env, this.config, logPath);
+
+      // Issue #330: re-wire the Telegram handle on every start() (session refresh
+      // creates a fresh CodexAppServerPTY). Only CodexAppServerPTY uses this — Claude / Hermes
+      // typing indicators flow through fast-checker.
+      if (this.config.runtime === 'codex-app-server' && this.telegramApi && this.telegramChatId) {
+        (this.pty as CodexAppServerPTY).setTelegramHandle(this.telegramApi, this.telegramChatId);
+      }
+
+      // BUG-011 fix: create a fresh exit signal for this run. resolveExit is
+      // called from the onExit handler below; stop() awaits exitPromise to
+      // guarantee the exit handler has fired before clearing stopping.
+      this.exitPromise = new Promise<void>((resolve) => {
+        this.resolveExit = resolve;
+      });
+
+      // Handle exit
+      this.pty.onExit((exitCode, signal) => {
+        // BUG-040 fix: if the lifecycle has moved on (a new start() incremented
+        // the generation since this PTY was spawned), this is an old PTY's late
+        // exit. Ignore it entirely — we don't want it to trigger handleExit on
+        // the current PTY's state.
+        if (myGeneration !== this.lifecycleGeneration) {
+          this.log(`Ignoring late exit from previous lifecycle gen ${myGeneration} (current: ${this.lifecycleGeneration})`);
+          return;
+        }
+        this.log(`Exited with code ${exitCode} signal ${signal}`);
+        this.handleExit(exitCode);
+        // Signal anyone awaiting this PTY's exit (e.g. stop() — BUG-011 fix)
+        this.resolveExit?.();
+        this.resolveExit = null;
+      });
+
       await this.pty.spawn(mode, prompt);
       // Codex exec-per-turn race: the new PTY's onExit can fire BEFORE this
       // line if `codex exec` completes its prompt quickly (CodexAppServerPTY's spawn

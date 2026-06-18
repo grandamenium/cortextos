@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "postbuild": "node dist/cli.js valid-runtimes > dist/valid-runtimes.json",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",

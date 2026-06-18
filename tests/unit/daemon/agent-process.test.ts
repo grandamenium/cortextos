@@ -605,3 +605,56 @@ describe('AgentProcess — process_alive pidfile (zeus 1781114839073)', () => {
     expect(fsMocks.unlinkSync).toHaveBeenCalledWith('/tmp/test-ctx/state/alice/agent.pid');
   });
 });
+
+describe('AgentProcess — Layer 2 defense-in-depth runtime validation (pete-class)', () => {
+  // Layer 2 is the backstop inside start() for cases where an invalid runtime somehow
+  // bypasses the Layer 1 agent-manager guard (e.g. crash-recovery restart with a mutated
+  // in-memory config, or a future caller that skips agent-manager entirely).
+  // These tests verify the throw-path is correct and fail-CLOSED (no PTY spawned, no
+  // silent fallback to claude-code, sentinel file written).
+
+  it('start() throws on an invalid runtime (Layer 2 defense-in-depth)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { runtime: 'bad-engine' });
+    await ap.start();
+    // After Layer 2 throws, status transitions to 'crashed' — agent.agents never gains the process
+    // (that's an agent-manager concern). Here we just verify: no PTY spawn, status=crashed.
+    expect(mockPty.spawn).not.toHaveBeenCalled();
+    expect((ap as any).status).toBe('crashed');
+  });
+
+  it.each(['codex', 'gpt4', 'claude', 'hermes-v2', ''])(
+    'Layer 2 blocks runtime "%s" — same set as Layer 1',
+    async (bad) => {
+      const ap = new AgentProcess('alice', mockEnv, { runtime: bad });
+      await ap.start();
+      expect(mockPty.spawn).not.toHaveBeenCalled();
+      expect((ap as any).status).toBe('crashed');
+    }
+  );
+
+  it('Layer 2 writes .invalid_runtime_error sentinel so onStatusChanged can suppress the misleading "auto-restarting" notification', async () => {
+    const ap = new AgentProcess('alice', mockEnv, { runtime: 'bad-engine' });
+    await ap.start();
+    // sentinel written to state dir
+    expect(fsMocks.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('.invalid_runtime_error'),
+      expect.stringContaining('bad-engine'),
+      'utf-8'
+    );
+  });
+
+  it('start() does NOT block when runtime is undefined (implicit claude-code — Layer 2 is transparent)', async () => {
+    // Only test the undefined/claude-code case here — hermes/codex-app-server PTYs are tested
+    // in their own dedicated test files (agent-process-hermes.test.ts, agent-process-codex-app-server.test.ts)
+    // which mock the right PTY class. This test just confirms Layer 2 does NOT fire for claude-code.
+    const ap = new AgentProcess('alice', mockEnv, {});  // no runtime = implicit claude-code
+    await ap.start();
+    // No .invalid_runtime_error sentinel for a valid (default) runtime
+    const sentinelCalls = fsMocks.writeFileSync.mock.calls.filter(
+      (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('.invalid_runtime_error')
+    );
+    expect(sentinelCalls).toHaveLength(0);
+    // PTY was spawned (not blocked by Layer 2)
+    expect(mockPty.spawn).toHaveBeenCalled();
+  });
+});
