@@ -7,7 +7,7 @@ const mockPty = {
   spawn: vi.fn().mockResolvedValue(undefined),
   kill: vi.fn(),
   write: vi.fn(),
-  getPid: vi.fn().mockReturnValue(12345),
+  getPid: vi.fn().mockReturnValue(process.pid), // LIVE pid so spawn-verify's isPidAlive() passes
   isAlive: vi.fn().mockReturnValue(true),
   onExit: vi.fn().mockImplementation((cb: (exitCode: number, signal?: number) => void) => {
     capturedOnExit = cb;

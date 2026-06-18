@@ -102,8 +102,16 @@ export class FastChecker {
       process.on('SIGUSR1', sigusr1Handler);
     }
 
-    // Wait for bootstrap
-    await this.waitForBootstrap();
+    // Wait for bootstrap. If the agent process DIED during the wait (crash, or
+    // a corpse that slipped past start verification), do NOT declare "Bootstrap
+    // complete" and do NOT start the poll loop — that false-positive is the
+    // gen-B lie. A timeout with a LIVE process is a legitimate slow boot and
+    // proceeds as before.
+    const bootstrapped = await this.waitForBootstrap();
+    if (!bootstrapped) {
+      this.log('Bootstrap aborted — agent process is not alive (no false "Bootstrap complete").');
+      return;
+    }
     this.log('Bootstrap complete. Beginning poll loop.');
 
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
@@ -409,15 +417,24 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   /**
    * Wait for the agent to finish bootstrapping.
    */
-  private async waitForBootstrap(timeoutMs: number = 30000): Promise<void> {
+  private async waitForBootstrap(timeoutMs: number = 30000): Promise<boolean> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (this.agent.isBootstrapped()) {
-        return;
+        return true;
+      }
+      // gen-B guard: if the process died during the wait, bail as dead so the
+      // caller does NOT log "Bootstrap complete" for a non-existent process.
+      if (!this.agent.isProcessAlive()) {
+        this.log('Agent process died during bootstrap wait — aborting bootstrap.');
+        return false;
       }
       await sleep(2000);
     }
-    this.log('Bootstrap timeout - proceeding anyway');
+    // Timed out but the process is ALIVE — a legitimate slow/quiet boot (e.g.
+    // donna). Proceed as before. Only a DEAD process aborts.
+    this.log('Bootstrap timeout - proceeding anyway (process alive but quiet)');
+    return true;
   }
 
   /**
