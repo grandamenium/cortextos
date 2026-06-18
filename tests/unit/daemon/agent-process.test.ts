@@ -301,6 +301,7 @@ describe('AgentProcess - Area 4.4 wedge-detection (mechanism B)', () => {
     try {
       const ap = new AgentProcess('alice', mockEnv, {});
       await ap.start();
+      ap.markBootstrapped(); // post-bootstrap crash (spawn-verify boundary)
       capturedOnExit?.(1, 0);                   // unintentional exit → crash-recovery
       await vi.advanceTimersByTimeAsync(5000);  // backoff → restart (restartAt ≈ 1_005_000)
       heartbeatAt(1_006_000);                   // a heartbeat AFTER the restart
@@ -319,6 +320,7 @@ describe('AgentProcess - Area 4.4 wedge-detection (mechanism B)', () => {
       const ap = new AgentProcess('alice', mockEnv, {});
       ap.setTelegramHandle({ sendMessage } as any, '12345');
       await ap.start();
+      ap.markBootstrapped(); // post-bootstrap crash (spawn-verify boundary)
       vi.spyOn(ap, 'stop').mockResolvedValue(); // the wedge re-restart's stop() resolves (mock PTY never auto-exits)
       // heartbeat NEVER appears → existsSync stays false (beforeEach default) → wedged
       capturedOnExit?.(1, 0);
@@ -615,6 +617,7 @@ describe('AgentProcess - Area 4.3 midnight crash-budget reset (B:F-04)', () => {
     try {
       const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 1 });
       await ap.start();
+      ap.markBootstrapped(); // post-bootstrap crash (spawn-verify boundary)
       capturedOnExit?.(1, 0);                         // 1 crash >= max(1) → halted
       expect(ap.getStatus().status).toBe('halted');
       const startSpy = vi.spyOn(ap, 'start').mockResolvedValue();
@@ -630,6 +633,7 @@ describe('AgentProcess - Area 4.3 midnight crash-budget reset (B:F-04)', () => {
     try {
       const ap = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 1 });
       await ap.start();
+      ap.markBootstrapped(); // post-bootstrap crash (spawn-verify boundary)
       capturedOnExit?.(1, 0);
       expect(ap.getStatus().status).toBe('halted');
       // operator-intent marker present
@@ -650,12 +654,14 @@ describe('AgentProcess - Area 4.3 midnight crash-budget reset (B:F-04)', () => {
       const a = new AgentProcess('alice', mockEnv, { max_crashes_per_day: 1 });
       a.setTelegramHandle({ sendMessage } as any, '999');
       await a.start();
+      a.markBootstrapped(); // post-bootstrap crash (spawn-verify boundary)
       capturedOnExit?.(1, 0);
       expect(a.getStatus().status).toBe('halted');
 
       const b = new AgentProcess('bob', { ...mockEnv, agentName: 'bob' }, { max_crashes_per_day: 1 });
       b.setTelegramHandle({ sendMessage } as any, '999');
       await b.start();
+      b.markBootstrapped(); // post-bootstrap crash (spawn-verify boundary)
       capturedOnExit?.(1, 0);
       expect(b.getStatus().status).toBe('halted');
 
