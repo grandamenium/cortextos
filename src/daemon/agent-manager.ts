@@ -336,6 +336,11 @@ export class AgentManager {
       config = this.loadAgentConfig(agentDir);
     }
 
+    // Q4 fix: clear any stale .invalid_runtime_error sentinel from a previous failed start.
+    // If the operator fixed the config and the agent now passes the guard, real crash alerts
+    // must not be suppressed by a sentinel written during the broken config era.
+    try { unlinkSync(join(this.ctxRoot, 'state', name, '.invalid_runtime_error')); } catch { /* absent — fine */ }
+
     // pete-class guardrail: FAIL-CLOSED on an unrecognized runtime token.
     // The type system only enforces this at compile time; a hand-edited config.json
     // (e.g. runtime="codex" instead of "codex-app-server") silently fell back to

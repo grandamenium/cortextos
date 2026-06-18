@@ -243,6 +243,20 @@ export class AgentProcess {
       // agent doesn't keep firing the session/size timers in the background.
       this.clearSessionTimer();
       this.clearSizeMonitor();
+      // Q3 fix: if this was an invalid-runtime guard throw and the inner sentinel write
+      // failed (disk full, permissions), retry here so W4's existsSync check can still
+      // suppress the misleading "auto-restarting" Telegram notification.
+      if (err instanceof Error && err.message.startsWith('[agent-process] INVALID runtime')) {
+        try {
+          const stateDir = join(this.env.ctxRoot, 'state', this.name);
+          mkdirSync(stateDir, { recursive: true });
+          writeFileSync(
+            join(stateDir, '.invalid_runtime_error'),
+            `${new Date().toISOString()} [agent-process catch] sentinel retry for '${this.config.runtime}'\n`,
+            'utf-8'
+          );
+        } catch { /* best effort — console output above is always present */ }
+      }
       this.status = 'crashed';
       this.notifyStatusChange();
     }
