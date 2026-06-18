@@ -180,12 +180,14 @@ function launchPathCanonical(agentName: string, expectedDir: string, runtime?: s
   if (!actualCwd) return null;
   // MED: canonicalize both paths before comparing — on macOS /tmp is a symlink to
   // /private/tmp, so actualCwd (lsof returns resolved path) would never match a raw
-  // /tmp-prefixed expectedDir. Try/catch: expectedDir may not exist for a stopped agent.
-  try {
-    return fs.realpathSync(actualCwd) === fs.realpathSync(expectedDir);
-  } catch {
-    return null;
-  }
+  // /tmp-prefixed expectedDir. Fall back to the RAW string on realpath failure (not null):
+  // returning null would hide a real stranded agent when expectedDir is missing/wrong-base
+  // (monitor correctly skips null=unknown; the collector must not suppress a real mismatch).
+  let canonActual: string;
+  let canonExpected: string;
+  try { canonActual = fs.realpathSync(actualCwd); } catch { canonActual = actualCwd; }
+  try { canonExpected = fs.realpathSync(expectedDir); } catch { canonExpected = expectedDir; }
+  return canonActual === canonExpected;
 }
 
 /** One heartbeat row per agent that has a state/<agent>/heartbeat.json. */
@@ -203,8 +205,13 @@ export function collectHeartbeats(): HeartbeatRow[] {
     // Both launchPathCanonical and sessionMbForAgent must use the same effective dir.
     const agentCfg = readJson<Record<string, unknown>>(path.join(agentDir, 'config.json')) ?? {};
     const agentRuntime = typeof agentCfg.runtime === 'string' ? agentCfg.runtime : null;
-    const effectiveDir = (typeof agentCfg.working_directory === 'string' && agentCfg.working_directory)
-      ? agentCfg.working_directory
+    const rawWorkDir = typeof agentCfg.working_directory === 'string' && agentCfg.working_directory
+      ? agentCfg.working_directory : null;
+    // MED: resolve relative working_directory against CTX_FRAMEWORK_ROOT (the daemon's cwd
+    // per ecosystem.ts:135), not the sync process cwd — a relative "." would otherwise
+    // resolve to /repo/dashboard instead of /repo, false-flagging healthy agents stranded.
+    const effectiveDir = rawWorkDir
+      ? (path.isAbsolute(rawWorkDir) ? rawWorkDir : path.resolve(CTX_FRAMEWORK_ROOT, rawWorkDir))
       : agentDir;
     out.push({
       org_slug: org,
