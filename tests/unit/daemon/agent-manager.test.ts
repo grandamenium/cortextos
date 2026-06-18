@@ -24,7 +24,7 @@ vi.mock('../../../src/daemon/agent-process.js', () => ({
 // Mock FastChecker so it doesn't try to spawn anything either.
 vi.mock('../../../src/daemon/fast-checker.js', () => ({
   FastChecker: class {
-    start() { /* no-op */ }
+    async start() { /* no-op */ }
     stop() { /* no-op */ }
     wake() { /* no-op */ }
   },
@@ -478,4 +478,90 @@ describe('AgentManager.reloadCrons - silent-success bug fix (iter 7)', () => {
     expect(result).toBe(false);
     expect((am as any).cronSchedulers.has('ghost')).toBe(false);
   });
+});
+
+describe('AgentManager.startAgent — pete-class runtime validation (fail-closed)', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-runtime-guard-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    mkdirSync(join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('FAILS CLOSED: does not spawn AgentProcess when runtime is an invalid token', async () => {
+    writeFileSync(
+      join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete', 'config.json'),
+      JSON.stringify({ runtime: 'codex' }),  // the pete-class typo: "codex" not "codex-app-server"
+    );
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const AgentProcessMock = (await import('../../../src/daemon/agent-process.js')).AgentProcess;
+    const constructorSpy = vi.spyOn(AgentProcessMock.prototype, 'constructor' as any);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await (am as any).startAgent('pete', join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete'));
+
+    // Must not have started an agent process
+    expect(constructorSpy).not.toHaveBeenCalled();
+    expect((am as any).agents.has('pete')).toBe(false);
+    // Must have logged a clear error naming the agent and the invalid value
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("INVALID runtime 'codex'"));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("pete"));
+  });
+
+  it('FAILS CLOSED on any unrecognized string (not just "codex")', async () => {
+    for (const bad of ['gpt4', 'claude', 'hermes-v2', '']) {
+      writeFileSync(
+        join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete', 'config.json'),
+        JSON.stringify({ runtime: bad }),
+      );
+      const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await (am as any).startAgent('pete', join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete'));
+
+      expect((am as any).agents.has('pete')).toBe(false);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('INVALID runtime'));
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('starts normally when runtime is undefined (implicit claude-code default)', async () => {
+    writeFileSync(
+      join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete', 'config.json'),
+      JSON.stringify({}),  // no runtime field
+    );
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await (am as any).startAgent('pete', join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete'));
+
+    // No INVALID runtime error — undefined is the silent default, that is correct
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('INVALID runtime'));
+  });
+
+  it.each(['claude-code', 'hermes', 'codex-app-server'])(
+    'does not block valid runtime "%s"',
+    async (validRuntime) => {
+      writeFileSync(
+        join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete', 'config.json'),
+        JSON.stringify({ runtime: validRuntime }),
+      );
+      const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await (am as any).startAgent('pete', join(frameworkRoot, 'orgs', 'acme', 'agents', 'pete'));
+
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('INVALID runtime'));
+    }
+  );
 });

@@ -134,6 +134,18 @@ export class AgentProcess {
     const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
     ensureDir(join(this.env.ctxRoot, 'logs', this.name));
     this.log(`Log path: ${logPath}`);
+    // Defense-in-depth: if an invalid runtime somehow reaches here (should have been
+    // caught by agent-manager's pete-class fail-CLOSED guard), throw loudly rather
+    // than silently running as claude-code on the wrong engine.
+    if (this.config.runtime !== undefined &&
+        this.config.runtime !== 'claude-code' &&
+        this.config.runtime !== 'hermes' &&
+        this.config.runtime !== 'codex-app-server') {
+      throw new Error(
+        `[agent-process] INVALID runtime '${this.config.runtime}' — ` +
+        `this should have been caught at startAgent(); refusing to silently fall back to claude-code`
+      );
+    }
     this.pty = this.config.runtime === 'hermes'
       ? new HermesPTY(this.env, this.config, logPath)
       : this.config.runtime === 'codex-app-server'

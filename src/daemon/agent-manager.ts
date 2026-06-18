@@ -331,6 +331,31 @@ export class AgentManager {
       config = this.loadAgentConfig(agentDir);
     }
 
+    // pete-class guardrail: FAIL-CLOSED on an unrecognized runtime token.
+    // The type system only enforces this at compile time; a hand-edited config.json
+    // (e.g. runtime="codex" instead of "codex-app-server") silently fell back to
+    // claude-code at PTY selection — running the wrong engine invisibly. Never again.
+    const VALID_RUNTIMES = new Set(['claude-code', 'hermes', 'codex-app-server']);
+    if (config.runtime !== undefined && !VALID_RUNTIMES.has(config.runtime)) {
+      const msg =
+        `[agent-manager] INVALID runtime '${config.runtime}' for agent '${name}' ` +
+        `(${agentDir}/config.json) — valid values: codex-app-server | hermes | claude-code. ` +
+        `REFUSING to start — fix config.json runtime field and restart. ` +
+        `(Omit the field to default to claude-code.)`;
+      console.error(msg);
+      // Write a sentinel file so the health monitor can detect this without polling logs.
+      try {
+        const stateDir = join(this.ctxRoot, 'state', name);
+        mkdirSync(stateDir, { recursive: true });
+        writeFileSync(
+          join(stateDir, '.invalid_runtime_error'),
+          `${new Date().toISOString()} ${msg}\n`,
+          'utf-8'
+        );
+      } catch { /* non-fatal — log is the primary signal */ }
+      return; // fail-CLOSED: do not spawn the agent
+    }
+
     const env: CtxEnv = {
       instanceId: this.instanceId,
       ctxRoot: this.ctxRoot,
