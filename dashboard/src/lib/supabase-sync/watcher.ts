@@ -4,17 +4,23 @@
 // idempotent push. Runs on the box (server-side).
 import { watch, type FSWatcher } from 'chokidar';
 import path from 'path';
-import { CTX_ROOT } from '../config';
+import { CTX_ROOT, CTX_FRAMEWORK_ROOT } from '../config';
 import { syncAll } from './sync';
 
 const DEBOUNCE_MS = 1500;
 
-// M1 watch targets (heartbeats, crons, crash logs). Other sources join in later milestones.
+// Watch targets: heartbeats + crons + crash logs (M1) PLUS config.json + agent.pid
+// so runtime-sentinel transitions and stranded-path changes trigger an immediate sync
+// rather than waiting for the next heartbeat write.
 function watchPaths(): string[] {
   return [
     path.join(CTX_ROOT, 'state', '*', 'heartbeat.json'),
     path.join(CTX_ROOT, 'state', '*', 'crons.json'),
     path.join(CTX_ROOT, 'logs', '*', 'crashes.log'),
+    // Runtime config changes: catches the moment a config.json is edited to an invalid runtime.
+    path.join(CTX_FRAMEWORK_ROOT, 'orgs', '*', 'agents', '*', 'config.json'),
+    // Stranded-path changes: agent.pid written/replaced when agent spawns or restarts.
+    path.join(CTX_ROOT, 'state', '*', 'agent.pid'),
   ];
 }
 

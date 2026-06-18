@@ -54,7 +54,18 @@ export function collectOrgs(): OrgRow[] {
 export function collectAgents(): AgentRow[] {
   const out: AgentRow[] = [];
   for (const org of getOrgs()) {
-    for (const a of listAgents(org)) {
+    const fromCli = listAgents(org);
+    const fromCliNames = new Set(fromCli.map((a) => String(a.name ?? '')).filter(Boolean));
+    // Filesystem safety net: scan the agents dir for dirs that list-agents missed.
+    // Agents with malformed configs (or no org registration) may be silently omitted by
+    // list-agents → their runtime sentinels would never reach Supabase → escape-both.
+    const agentsDir = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents');
+    const fromFs: Array<Record<string, unknown>> = fs.existsSync(agentsDir)
+      ? fs.readdirSync(agentsDir, { withFileTypes: true })
+          .filter((d) => d.isDirectory() && !fromCliNames.has(d.name))
+          .map((d) => ({ name: d.name, enabled: true }))
+      : [];
+    for (const a of [...fromCli, ...fromFs]) {
       const name = String(a.name ?? '');
       if (!name) continue;
       const cfgPath = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', name, 'config.json');
