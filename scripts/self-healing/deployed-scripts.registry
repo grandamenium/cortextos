@@ -1,0 +1,35 @@
+# deployed-scripts.registry — source-of-truth map for launchd jobs that run a
+# DEPLOYED COPY of a repo script (i.e. NOT executed straight from a worktree).
+#
+# WHY THIS EXISTS (SYS-DEPLOY-SOT, deployed-copy class):
+#   Several launchd jobs run a self-contained copy under
+#   ${CTX_ROOT}/scripts/<name>.sh instead of the live worktree. Those copies have
+#   NO auto-sync from the repo, so a merge to origin/main is INERT to the running
+#   job until someone re-deploys by hand. quota-watchdog silently ran ~2wks stale
+#   this way (deployed copy lagged the repo false-pause guard) — the running-code
+#   != tested-code masking class behind the 2026-06-18 fleet false-pause.
+#
+# This registry is the shared SoT consumed by BOTH:
+#   - deploy-drift-probe.sh  (DETECTION: deployed copy != origin/main:<sot> -> page PD)
+#   - sync-deployed-scripts.sh (REMEDIATION: copy origin/main:<sot> -> deployed path)
+#
+# FORMAT (pipe-delimited, '#' starts a comment, blank lines ignored):
+#   <deployed-rel-to-CTX_ROOT>  |  <repo-sot-rel-to-repo-root>
+#
+#   - deployed path is resolved against ${CTX_ROOT:-$HOME/.cortextos/default}
+#   - repo SoT path is resolved against origin/main (the MERGED truth), via
+#     `git show origin/main:<sot>` — NOT the local worktree, so the probe measures
+#     "is the running copy what main says it should be", independent of dirty trees.
+#   - use the literal token NONE as the SoT for an ORPHAN deployed script that has
+#     no repo source yet (detection flags it as un-recoverable; sync skips it).
+#
+# AUDIT (2026-06-19, GENERALIZE pass — every launchd job's ProgramArguments):
+#   quota-watchdog       -> deployed copy, SoT bin/quota-watchdog.sh           (covered)
+#   dispatch-marker      -> deployed copy, SoT scripts/self-healing/dispatch-marker.sh (covered)
+#   project-state-writer -> deployed copy, was ORPHAN (no repo source) -> adopted into
+#                           scripts/self-healing/project-state-writer.sh        (covered)
+#   wedge-watchdog       -> runs DIRECTLY from the worktree .mjs = OK by construction (NOT listed)
+
+scripts/quota-watchdog.sh        | bin/quota-watchdog.sh
+scripts/dispatch-marker.sh       | scripts/self-healing/dispatch-marker.sh
+scripts/project-state-writer.sh  | scripts/self-healing/project-state-writer.sh

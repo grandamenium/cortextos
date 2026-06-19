@@ -61,6 +61,18 @@ else
   exit 1
 fi
 
+# Re-sync DEPLOYED launchd-script copies (quota-watchdog, dispatch-marker,
+# project-state-writer) now that origin/main is merged in. These run self-contained
+# copies under ${CTX_ROOT}/scripts/ with NO auto-sync of their own, so without this
+# step a merge stays inert to them until a manual re-deploy — the root-cause class of
+# the 2026-06-18 fleet false-pause (deployed quota-watchdog lagged the repo guard
+# ~2wks). Best-effort: a sync failure must not abort the dist self-heal; the
+# deploy-drift-probe still DETECTS and pages PD on any residual gap.
+if [ -f "$REPO_ROOT/scripts/self-healing/sync-deployed-scripts.sh" ]; then
+  bash "$REPO_ROOT/scripts/self-healing/sync-deployed-scripts.sh" apply 2>&1 \
+    | sed 's/^/[cortextos-src-watch] /' || true
+fi
+
 # Broadcast to other alive agents so they also rebuild.
 if [ -f "$REPO_ROOT/scripts/broadcast-rebuild.sh" ]; then
   bash "$REPO_ROOT/scripts/broadcast-rebuild.sh" 2>&1 | sed 's/^/[cortextos-src-watch] /' || true

@@ -13,7 +13,8 @@
 #
 # It resolves the LIVE daemon process from `ps` (NOT a static topology file or
 # pgrep, which can miss the node process), derives the dist path it is actually
-# executing, and checks three drift dimensions:
+# executing, and checks four drift dimensions (3 for the daemon dist + 1 for the
+# deployed-copy launchd-script class):
 #
 #   1. SOURCE drift   — origin/main has commits NOT contained in dist/.build-sha
 #                       (ancestry-aware: a merge commit that includes origin/main
@@ -31,6 +32,15 @@
 #   3. SHA staleness  — dist/daemon.js mtime is NEWER than dist/.build-sha mtime
 #                       => dist was rebuilt without postbuild writing the sha, so
 #                        .build-sha can no longer be trusted for (1).
+#   4. DEPLOYED drift — a launchd job that runs a SELF-CONTAINED copy under
+#                       ${CTX_ROOT}/scripts/<name>.sh (quota-watchdog, dispatch-marker,
+#                       project-state-writer) has content != origin/main:<sot>. Those
+#                       copies have NO auto-sync from the repo, so a merge is inert to
+#                       the running job until a manual re-deploy (root-cause class of
+#                       the 2026-06-18 fleet false-pause — deployed lagged the repo
+#                       guard ~2wks). Map lives in deployed-scripts.registry; remediate
+#                       with sync-deployed-scripts.sh apply. Also flags ORPHAN deployed
+#                       copies (SoT == NONE) that have no repo source to recover from.
 #
 # Output: writes a machine-readable <FRAMEWORK_ROOT>/state/deploy-topology.json
 # (consumable by cortextos-src-watch / improver tooling per SYS-DEPLOY-SOT improver
@@ -139,8 +149,58 @@ if [ "$SHA_MTIME" -gt 0 ] && [ "$DAEMON_MTIME" -gt "$SHA_MTIME" ]; then
   REASONS+=("SHA: daemon.js newer than .build-sha — sha not rewritten by postbuild, source check unreliable")
 fi
 
+# --- 3b. DEPLOYED-COPY drift (SYS-DEPLOY-SOT, deployed-copy class) -------------
+# Several launchd jobs run a SELF-CONTAINED copy under ${CTX_ROOT}/scripts/<name>.sh
+# rather than executing from a worktree. Those copies have NO auto-sync from the
+# repo, so a merge to origin/main is INERT to the running job until a manual
+# re-deploy. quota-watchdog silently ran ~2wks stale this way (deployed copy lagged
+# the repo false-pause guard) = the running-code != tested-code class behind the
+# 2026-06-18 fleet false-pause. We compare each deployed copy's content hash to
+# origin/main:<sot> (the MERGED truth — independent of any dirty worktree). The
+# (deployed-path -> repo-SoT) map is the shared registry that sync-deployed-scripts.sh
+# also consumes; remediation is `sync-deployed-scripts.sh apply`.
+DEPLOYED_DRIFT="false"
+DEPLOYED_ORPHAN="false"
+DEPLOYED_DRIFT_FILES=()   # feeds the dedup key + topology artifact
+REGISTRY="$(dirname "${BASH_SOURCE[0]}")/deployed-scripts.registry"
+CTX_ROOT="${CTX_ROOT:-$HOME/.cortextos/default}"
+
+if [ -f "$REGISTRY" ]; then
+  while IFS='|' read -r dep sot; do
+    dep="$(echo "$dep" | sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+    sot="$(echo "${sot:-}" | sed 's/#.*//; s/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -z "$dep" ] && continue
+    dep_path="$CTX_ROOT/$dep"
+
+    if [ "$sot" = "NONE" ] || [ -z "$sot" ]; then
+      DEPLOYED_ORPHAN="true"
+      DEPLOYED_DRIFT_FILES+=("orphan:$dep")
+      REASONS+=("DEPLOYED-ORPHAN: $dep runs from a deployed copy with NO repo source — un-recoverable if lost; adopt it into the repo")
+      continue
+    fi
+
+    git -C "$FRAMEWORK_ROOT" cat-file -e "origin/main:$sot" 2>/dev/null || {
+      REASONS+=("DEPLOYED: registry SoT origin/main:$sot does not exist — registry stale?")
+      continue
+    }
+    src_hash="$(git -C "$FRAMEWORK_ROOT" show "origin/main:$sot" 2>/dev/null | { shasum -a 256 2>/dev/null || sha256sum 2>/dev/null; } | awk '{print $1}')"
+    dep_hash="$( { shasum -a 256 "$dep_path" 2>/dev/null || sha256sum "$dep_path" 2>/dev/null; } | awk '{print $1}')"
+
+    if [ -z "$dep_hash" ]; then
+      DEPLOYED_DRIFT="true"; DEPLOYED_DRIFT_FILES+=("$dep")
+      REASONS+=("DEPLOYED: $dep MISSING at $dep_path but registered (SoT $sot) — run sync-deployed-scripts.sh apply")
+    elif [ -n "$src_hash" ] && [ "$dep_hash" != "$src_hash" ]; then
+      DEPLOYED_DRIFT="true"; DEPLOYED_DRIFT_FILES+=("$dep")
+      REASONS+=("DEPLOYED: $dep (${dep_hash:0:8}) != origin/main:$sot (${src_hash:0:8}) — deployed copy lags repo; run sync-deployed-scripts.sh apply")
+    fi
+  done < "$REGISTRY"
+else
+  log "WARNING: deployed-scripts registry not found at $REGISTRY — skipping deployed-copy dimension"
+fi
+
 DRIFT="false"
-if [ "$SOURCE_DRIFT" = "true" ] || [ "$RESTART_DRIFT" = "true" ] || [ "$SHA_STALE" = "true" ]; then
+if [ "$SOURCE_DRIFT" = "true" ] || [ "$RESTART_DRIFT" = "true" ] || [ "$SHA_STALE" = "true" ] \
+   || [ "$DEPLOYED_DRIFT" = "true" ] || [ "$DEPLOYED_ORPHAN" = "true" ]; then
   DRIFT="true"
 fi
 
@@ -155,6 +215,7 @@ if [ -n "$NEW_FP" ]; then echo "$NEW_FP" > "$FINGERPRINT_FILE" 2>/dev/null || tr
 
 TOPOLOGY_FILE="$STATE_DIR/deploy-topology.json"
 REASONS_JSON=$(printf '%s\n' "${REASONS[@]:-}" | python3 -c "import json,sys; print(json.dumps([l for l in sys.stdin.read().splitlines() if l]))" 2>/dev/null || echo "[]")
+DEPLOYED_DRIFT_JSON=$(printf '%s\n' "${DEPLOYED_DRIFT_FILES[@]:-}" | python3 -c "import json,sys; print(json.dumps([l for l in sys.stdin.read().splitlines() if l]))" 2>/dev/null || echo "[]")
 
 cat > "$TOPOLOGY_FILE" <<EOF
 {
@@ -172,6 +233,9 @@ cat > "$TOPOLOGY_FILE" <<EOF
   "source_drift": $SOURCE_DRIFT,
   "restart_drift": $RESTART_DRIFT,
   "sha_stale": $SHA_STALE,
+  "deployed_drift": $DEPLOYED_DRIFT,
+  "deployed_orphan": $DEPLOYED_ORPHAN,
+  "deployed_drift_files": $DEPLOYED_DRIFT_JSON,
   "reasons": $REASONS_JSON
 }
 EOF
@@ -187,8 +251,13 @@ log "wrote $TOPOLOGY_FILE (drift=$DRIFT)"
 # key and is suppressed after the first page. A fresh pid (the restart landed, or a
 # crash-respawn) changes the key, which both clears the old condition and surfaces any
 # new one. The topology artifact is still rewritten every run regardless of paging.
+#
+# The deployed-copy dimension joins the key by its SORTED drifted-file SET (not just a
+# bool): a new file drifting changes the key (re-page), and a sync that clears it flips
+# the key back (recovered) — same page-once-per-distinct-state semantics as source_drift.
 MARKER="$STATE_DIR/.deploy-drift-last"
-DRIFT_KEY="src=${SOURCE_DRIFT};sha=${SHA_STALE};pid=${DAEMON_PID}"
+DEPLOYED_SIG=$(printf '%s\n' "${DEPLOYED_DRIFT_FILES[@]:-}" | sort | tr '\n' ',' )
+DRIFT_KEY="src=${SOURCE_DRIFT};sha=${SHA_STALE};pid=${DAEMON_PID};dep=${DEPLOYED_SIG}"
 LAST_KEY=$(cat "$MARKER" 2>/dev/null || echo "")
 
 if [ "$DRIFT" = "true" ]; then
@@ -199,7 +268,7 @@ if [ "$DRIFT" = "true" ]; then
       "[deploy-drift-probe] Live daemon (pid $DAEMON_PID) deploy drift in $FRAMEWORK_ROOT. ${SUMMARY}Detail: $TOPOLOGY_FILE" \
       2>/dev/null && log "escalated to platform-director" || log "WARNING: PD escalation failed"
     cortextos bus log-event action deploy_drift_detected warn \
-      --meta "{\"pid\":$DAEMON_PID,\"source_drift\":$SOURCE_DRIFT,\"restart_drift\":$RESTART_DRIFT,\"sha_stale\":$SHA_STALE}" 2>/dev/null || true
+      --meta "{\"pid\":$DAEMON_PID,\"source_drift\":$SOURCE_DRIFT,\"restart_drift\":$RESTART_DRIFT,\"sha_stale\":$SHA_STALE,\"deployed_drift\":$DEPLOYED_DRIFT,\"deployed_orphan\":$DEPLOYED_ORPHAN}" 2>/dev/null || true
     echo "$DRIFT_KEY" > "$MARKER"
   else
     log "drift unchanged since last fire — escalation suppressed (idempotent)"
