@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -80,6 +81,12 @@ export class AgentProcess {
   // daemon should fire the codex-app-server back-online Telegram directly
   // (skipped on handoff restart — the agent sends its own contextual reply).
   private lastSpawnWasHandoff = false;
+  // SYS-1M-DETECT: once-per-halt-episode latch for the MODEL_BILLING_CONFIG
+  // escalation (modelled on the wedge-watchdog holdAlerted latch). Set when we
+  // escalate a 1M-billing-config HALT to platform-director; reset only when the
+  // agent next reaches 'running' (i.e. the config was fixed and it cleared the
+  // gate). A halted/retried agent therefore never re-spams PD within one episode.
+  private modelBillingConfigEscalated = false;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -232,6 +239,10 @@ export class AgentProcess {
       }
       this.status = 'running';
       this.sessionStart = new Date();
+      // SYS-1M-DETECT: the agent cleared session start, so any prior
+      // model-1M-billing-config gate is resolved. Reset the escalation latch
+      // so a future billing-config HALT re-escalates (end of the halt-episode).
+      this.modelBillingConfigEscalated = false;
       this.log(`Running (pid: ${this.pty.getPid()})`);
 
       // SYS-DAEMON-RESILIENCE-01 Fix 2: persist the PTY PID synchronously the
@@ -566,8 +577,13 @@ export class AgentProcess {
    *
    * Patterns observed:
    *   "100% context used"           — Claude Code TUI status bar
-   *   "Extra usage is required for 1M context" — billing gate on 1M plans
    *   "conversation too long"       — compaction failure in session reset
+   *
+   * NOTE — the 1M-context billing strings are deliberately NOT matched here.
+   * They are a CONFIG-class error, not context exhaustion: force-fresh on the
+   * same explicit model re-hits the same billing gate and produces a restart
+   * loop. They are handled separately by detectModelBillingConfigError() +
+   * the MODEL_BILLING_CONFIG escalate-not-restart path in handleExit().
    *
    * ANSI codes are stripped before matching because the status bar wraps the
    * text in terminal escape sequences (e.g. \x1b[Xm 100% context used \x1b[0m).
@@ -577,9 +593,83 @@ export class AgentProcess {
     const stripped = recentOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
     return (
       stripped.includes('100% context used') ||
-      stripped.includes('Extra usage is required for 1M context') ||
       stripped.includes('conversation too long')
     );
+  }
+
+  /**
+   * Match a 1M-context billing/config error in recent stdout output.
+   *
+   * Claude Code v2.1.111+ gives Sonnet/Haiku a 1M context window by default.
+   * On plans without "extra usage" billing, startup fails at the gate with a
+   * billing error and Claude Code exits 0. This is NOT context exhaustion:
+   *
+   *   - It fires at SESSION START (an empty context), not at 100% usage.
+   *   - It is a property of the (model, plan) CONFIG, not the conversation, so
+   *     .force-fresh does NOT help — the next session relaunches the SAME
+   *     explicit model and re-hits the SAME gate, producing a restart loop
+   *     (the exact failure mode SYS-1M-DETECT exists to prevent).
+   *
+   * The wording changed across Claude Code releases; both are matched so a
+   * future stale-string regression cannot silently collapse this class back
+   * into the force-fresh path:
+   *   "Extra usage is required for 1M context" — Claude Code <= v2.1.110
+   *   "Usage credits required for 1M context"  — Claude Code v2.1.111+
+   *
+   * ANSI codes are stripped before matching (TUI wraps the text in escapes).
+   */
+  private detectModelBillingConfigError(recentOutput: string): boolean {
+    if (!recentOutput) return false;
+    const stripped = recentOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    return (
+      stripped.includes('Extra usage is required for 1M context') ||
+      stripped.includes('Usage credits required for 1M context')
+    );
+  }
+
+  /**
+   * Escalate a MODEL_BILLING_CONFIG halt to the orchestrator (SYS-1M-DETECT).
+   *
+   * A 1M-billing-config error is NOT auto-recoverable by the daemon — it needs
+   * a CONFIG fix (unpin/strip config.model), which is an orchestrator action.
+   * We surface it on two channels so it can never fall through to manual catch:
+   *   (1) Telegram to the agent's own chat (founder/PD-visible), and
+   *   (2) a bus message to platform-director's inbox (auto-routes to the
+   *       orchestrator's queue — closes the gap where an improver HALT used to
+   *       need a human/SA to read the logs to notice it).
+   *
+   * Guarded by the modelBillingConfigEscalated latch so a halted/retried agent
+   * escalates ONCE per halt-episode, never re-spamming PD on each restart
+   * attempt. The latch resets when the agent next reaches 'running'.
+   */
+  private escalateModelBillingConfig(): void {
+    if (this.modelBillingConfigEscalated) return;
+    this.modelBillingConfigEscalated = true;
+
+    const msg =
+      `Agent ${this.name} HALTED on a model/billing CONFIG error ` +
+      `(1M-context default without credits). This needs a CONFIG fix ` +
+      `(unpin/strip config.model), NOT a restart — force-fresh would re-hit ` +
+      `the same gate (restart loop). Surfaced by SYS-1M-DETECT.`;
+
+    // (1) Telegram to the agent's own chat (best-effort, observability only).
+    if (this.telegramApi && this.telegramChatId) {
+      this.telegramApi
+        .sendMessage(this.telegramChatId, msg)
+        .catch(() => { /* non-fatal: bus message below is the durable channel */ });
+    }
+
+    // (2) Bus message to platform-director — shelled like the wedge-watchdog
+    // escalate (no in-process bus-to-agent primitive in the daemon). Best-effort:
+    // a messaging failure must never break the halt path.
+    try {
+      execFileSync('cortextos', ['bus', 'send-message', 'platform-director', 'high', msg], {
+        timeout: 10000,
+        stdio: 'ignore',
+      });
+    } catch (err) {
+      this.log(`MODEL_BILLING_CONFIG escalation bus-message failed: ${err}`);
+    }
   }
 
   /**
@@ -681,6 +771,27 @@ export class AgentProcess {
           this.start().catch(err => this.log(`Image-poison restart failed: ${err}`));
         }
       }, 5000);
+      return;
+    }
+
+    // Model-1M-billing-config error (SYS-1M-DETECT).
+    // Claude Code v2.1.111+ defaults Sonnet/Haiku to a 1M context window; an
+    // agent spawned with an explicit config.model inherits that default and, on
+    // a plan without "extra usage" credits, fails at the billing gate at SESSION
+    // START (an empty context) and exits 0. This is a CONFIG error, NOT context
+    // exhaustion: .force-fresh relaunches the SAME explicit model and re-hits the
+    // SAME gate — a restart loop (the exact failure SYS-1M-DETECT exists to
+    // prevent). So classify as config, HALT without charging the crash counter,
+    // and escalate ONCE to platform-director (telegram + bus) for a config fix
+    // (unpin/strip config.model). Checked BEFORE detectContextExhaustion so the
+    // string-discriminated partition between the two classes can never collapse:
+    // a 1M-billing string must never reach the force-fresh path.
+    if (exitCode === 0 && this.detectModelBillingConfigError(recentOutput)) {
+      this.log('MODEL_BILLING_CONFIG: 1M-context billing/config error at session start. This is a CONFIG error, not context exhaustion — force-fresh would re-hit the same gate (restart loop). HALTING without counting against max_crashes_per_day and escalating to platform-director for a config fix.');
+      this.appendCrashToRestartsLog(exitCode, 0, 'MODEL_BILLING_CONFIG');
+      this.status = 'halted';
+      this.notifyStatusChange();
+      this.escalateModelBillingConfig();
       return;
     }
 
@@ -1067,7 +1178,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY' | 'CONTEXT_EXHAUSTION_RECOVERY',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY' | 'CONTEXT_EXHAUSTION_RECOVERY' | 'MODEL_BILLING_CONFIG',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -1076,9 +1187,11 @@ export class AgentProcess {
       const details =
         kind === 'HALTED'
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
-          : kind === 'IMAGE_POISON_RECOVERY' || kind === 'CONTEXT_EXHAUSTION_RECOVERY'
-            ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
-            : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+          : kind === 'MODEL_BILLING_CONFIG'
+            ? `exit_code=${exitCode} (not counted toward max_crashes; HALTED pending config-fix; escalated to platform-director)`
+            : kind === 'IMAGE_POISON_RECOVERY' || kind === 'CONTEXT_EXHAUSTION_RECOVERY'
+              ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
+              : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {

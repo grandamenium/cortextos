@@ -137,6 +137,29 @@ export class AgentPTY {
     ptyEnv['CLAUDE_CODE_DISABLE_AUTOUPDATE'] = 'true';
     ptyEnv['DISABLE_AUTOUPDATER'] = 'true';
 
+    // ┌─ SYS-1M-PREVENT: BEST-EFFORT FORWARD-GUARD; NO-OP ON CURRENT CC (v2.1.162)
+    // │  because auto-1M is OPUS-ONLY there. DETECT (agent-process.ts handleExit)
+    // └─ is the LOAD-BEARING, VERSION-AGNOSTIC guard. Do NOT treat this as active
+    //    prevention — keep this label so a future refactor knows it is a no-op now
+    //    and does not let it silently re-become a false-prevention.
+    // For an explicit non-Opus model with
+    // no .env choice already made, default CLAUDE_CODE_DISABLE_1M_CONTEXT=true to
+    // force the standard window. Honoured by current Claude Code (v2.1.162 reads
+    // it and disables 1M — see shouldDisable1MContext), but effectiveness against
+    // the original improver-1M incident is LIMITED, by design and by version:
+    //   - On v2.1.162 the auto-1M default is OPUS-ONLY; explicit Sonnet/Haiku do
+    //     not auto-1M, so this env-set is a NO-OP for the models it targets here.
+    //   - It only bites on a CC version that BOTH auto-1M's a non-Opus model AND
+    //     honours this var. v2.1.111 (the incident version) auto-1M'd Sonnet but
+    //     did NOT honour the var — improver's .env already had it set and still
+    //     looped; the effective fix was unpinning config.model (PR #62).
+    // So this is forward-looking belt-and-suspenders for a future CC regression.
+    // Set ONLY when the agent's .env (sourced above) did not already choose —
+    // opt-in/opt-out respected. The real guard if 1M ever gates is DETECT.
+    if (AgentPTY.shouldDisable1MContext(this.config, ptyEnv['CLAUDE_CODE_DISABLE_1M_CONTEXT'] !== undefined)) {
+      ptyEnv['CLAUDE_CODE_DISABLE_1M_CONTEXT'] = 'true';
+    }
+
     // CTX_ORCHESTRATOR_AGENT: read from org context.json so agents can route to orchestrator
     if (this.env.projectRoot && this.env.org) {
       try {
@@ -291,6 +314,48 @@ export class AgentPTY {
     args.push(prompt);
 
     return args;
+  }
+
+  /**
+   * SYS-1M-PREVENT — decide whether to export CLAUDE_CODE_DISABLE_1M_CONTEXT=true
+   * for this agent, forcing the standard (non-1M) context window.
+   *
+   * Claude Code defaults certain models to a 1M-token context window (in the
+   * installed build this auto-default applies to Opus, but the `<model>[1m]`
+   * suffix opts any model in). An agent spawned with an EXPLICIT config.model
+   * inherits that default; on a plan without 1M usage credits the session fails
+   * at the billing gate at SESSION START (an empty context) and Claude Code
+   * exits 0 — the daemon then halts the agent in a restart loop (the live
+   * improver-1M incident, fixed by the PR #62 config.model unpin).
+   *
+   * This is BEST-EFFORT defense-in-depth, NOT the load-bearing guard — that is
+   * SYS-1M-DETECT (agent-process.ts handleExit), which catches + escalates the
+   * gate regardless of version. The env var is honoured by current Claude Code
+   * (v2.1.162: it disables both the [1m]-suffix and auto-default 1M paths), but
+   * on v2.1.162 the auto-default is Opus-only, so for the explicit Sonnet/Haiku
+   * this returns true for, there is no 1M to disable (a no-op on current CC). It
+   * was also ineffective on v2.1.111 (improver's .env already set it and still
+   * looped). So it only bites on a future CC that both auto-1M's a non-Opus
+   * model AND honours this var — forward-looking belt-and-suspenders.
+   *
+   * Scoping is least-surprise:
+   *   - explicitSetting → the agent's .env already set the var (true OR false);
+   *     respect the operator's choice, never override.
+   *   - no config.model → model:none agents inherit the harness default and
+   *     sidestep the gate entirely; leave them untouched.
+   *   - Opus models → Opus on Max/Team/Enterprise includes 1M natively (no
+   *     billing gate); disabling it would be a needless context regression.
+   *   - "[1m]" suffix → a deliberate per-model opt-in to 1M; honour it (a
+   *     no-credit halt then surfaces via SYS-1M-DETECT — the operator's choice).
+   * Everything else (explicit Sonnet/Haiku/unknown) defaults to the safe
+   * standard window.
+   */
+  static shouldDisable1MContext(config: AgentConfig, explicitSetting: boolean): boolean {
+    if (explicitSetting) return false;
+    if (!config.model) return false;
+    if (/opus/i.test(config.model)) return false;
+    if (/\[1m\]/i.test(config.model)) return false;
+    return true;
   }
 
   /**

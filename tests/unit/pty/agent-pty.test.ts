@@ -60,3 +60,46 @@ describe('AgentPTY --dangerously-skip-permissions toggle', () => {
     }
   });
 });
+
+describe('AgentPTY.shouldDisable1MContext (SYS-1M-PREVENT)', () => {
+  // An explicit non-Opus model on a no-credit plan is the failure mode the guard
+  // exists to prevent: default the standard window so it cannot billing-gate-halt.
+  it('disables 1M for an explicit Sonnet model (the gated class)', () => {
+    expect(AgentPTY.shouldDisable1MContext({ model: 'claude-sonnet-4-6' } as any, false)).toBe(true);
+  });
+
+  it('disables 1M for an explicit Haiku model', () => {
+    expect(AgentPTY.shouldDisable1MContext({ model: 'haiku' } as any, false)).toBe(true);
+  });
+
+  it('disables 1M for an explicit alias / unknown model', () => {
+    expect(AgentPTY.shouldDisable1MContext({ model: 'sonnet' } as any, false)).toBe(true);
+  });
+
+  // model:none agents inherit the harness default and sidestep the gate entirely.
+  it('does NOT touch agents with no explicit config.model', () => {
+    expect(AgentPTY.shouldDisable1MContext({} as any, false)).toBe(false);
+    expect(AgentPTY.shouldDisable1MContext({ model: '' } as any, false)).toBe(false);
+  });
+
+  // Opus on Max/Team/Enterprise includes 1M natively (no billing gate) — disabling
+  // it would be a needless context regression.
+  it('exempts Opus models (native 1M, no gate)', () => {
+    expect(AgentPTY.shouldDisable1MContext({ model: 'opus' } as any, false)).toBe(false);
+    expect(AgentPTY.shouldDisable1MContext({ model: 'claude-opus-4-8' } as any, false)).toBe(false);
+    expect(AgentPTY.shouldDisable1MContext({ model: 'CLAUDE-OPUS-4-7' } as any, false)).toBe(false);
+  });
+
+  // A "[1m]" suffix is a deliberate per-model opt-in; honour it (a no-credit halt
+  // then surfaces via SYS-1M-DETECT — the operator's choice, not a silent default).
+  it('honours an explicit [1m] opt-in suffix', () => {
+    expect(AgentPTY.shouldDisable1MContext({ model: 'claude-sonnet-4-6[1m]' } as any, false)).toBe(false);
+    expect(AgentPTY.shouldDisable1MContext({ model: 'sonnet[1M]' } as any, false)).toBe(false);
+  });
+
+  // The agent's .env already chose (true OR false): never override the operator.
+  it('respects an explicit .env setting (opt-out/opt-in) and never overrides it', () => {
+    expect(AgentPTY.shouldDisable1MContext({ model: 'claude-sonnet-4-6' } as any, true)).toBe(false);
+    expect(AgentPTY.shouldDisable1MContext({ model: 'opus' } as any, true)).toBe(false);
+  });
+});
