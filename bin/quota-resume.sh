@@ -35,8 +35,9 @@ export CTX_ROOT CTX_FRAMEWORK_ROOT CTX_ORG
 export CTX_AGENT_NAME="$BUS_AGENT"
 export CTX_AGENT_DIR="$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/$BUS_AGENT"
 
-CORTEXTOS=/usr/bin/cortextos
-JQ=/usr/bin/jq
+# Tool paths — env-overridable for portability (macOS Homebrew vs Linux).
+CORTEXTOS="${CORTEXTOS:-$(command -v cortextos || echo /usr/bin/cortextos)}"
+JQ="${JQ:-$(command -v jq || echo /usr/bin/jq)}"
 
 if [ ! -f "$PAUSED_FILE" ]; then
   echo "No paused state at $PAUSED_FILE — watchdog has not tripped (or already resumed)."
@@ -56,8 +57,11 @@ COUNT=$(echo "$AGENTS_JSON" | "$JQ" 'length')
 echo "Resuming $COUNT agents (paused at $PAUSED_AT):"
 log "resume requested: $COUNT agents (paused_at=$PAUSED_AT)"
 
+# Process substitution keeps the loop in the parent shell so FAILED survives —
+# a piped `echo|jq|while` runs the loop in a subshell and silently discards the
+# accumulated failures (#534 Bug B).
 FAILED=()
-echo "$AGENTS_JSON" | "$JQ" -r '.[]' | while IFS= read -r AGENT; do
+while IFS= read -r AGENT; do
   [ -z "$AGENT" ] && continue
   echo "  starting: $AGENT"
   if "$CORTEXTOS" start "$AGENT" >> "$LOG" 2>&1; then
@@ -66,7 +70,13 @@ echo "$AGENTS_JSON" | "$JQ" -r '.[]' | while IFS= read -r AGENT; do
     log "  start failed: $AGENT"
     FAILED+=("$AGENT")
   fi
-done
+done < <(echo "$AGENTS_JSON" | "$JQ" -r '.[]')
+
+if [ "${#FAILED[@]}" -gt 0 ]; then
+  log "resume partial: ${#FAILED[@]} of $COUNT failed: ${FAILED[*]}"
+  MSG="⚠️ Quota resume: ${#FAILED[@]} of $COUNT agents failed to start: ${FAILED[*]}. Investigate and retry manually."
+  "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$MSG" --plain-text >> "$LOG" 2>&1 || true
+fi
 
 # Archive the paused-state file rather than delete (auditability)
 ARCHIVE_DIR="$STATE_DIR/history"

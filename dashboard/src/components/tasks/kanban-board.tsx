@@ -30,6 +30,11 @@ export function KanbanBoard({ tasks, completedTodayTasks, onTaskClick }: KanbanB
       tasks: tasks.filter((t) => t.status === 'in_progress'),
     },
     {
+      status: 'verifying',
+      label: 'Verifying',
+      tasks: tasks.filter((t) => t.status === 'verifying'),
+    },
+    {
       status: 'blocked',
       label: 'Blocked',
       tasks: tasks.filter((t) => t.status === 'blocked'),
@@ -42,7 +47,7 @@ export function KanbanBoard({ tasks, completedTodayTasks, onTaskClick }: KanbanB
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
       {columns.map((col) => (
         <div key={col.status} className="flex flex-col gap-2">
           <div className="flex items-center justify-between px-1">

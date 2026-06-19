@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# post-merge hook — installed by scripts/setup-hooks.sh
+#
+# Fires after every successful git merge or git pull in this repo.
+# Rebuilds dist/ (so the symlinked cortextos CLI picks up the latest source)
+# and broadcasts a rebuild nudge to all other alive agents.
+#
+# Non-blocking: hook failures do not abort the merge. A broken rebuild
+# is surfaced via stderr but does not revert the merge.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "[post-merge] cortextos source changed — rebuilding dist..."
+if npm run build --silent 2>&1; then
+  echo "[post-merge] Build OK."
+else
+  echo "[post-merge] WARNING: build failed — dist/ may be stale. Run 'npm run build' manually." >&2
+fi
+
+# Stamp the build SHA so cortextos-src-watch can detect future drift.
+git rev-parse HEAD > dist/.build-sha 2>/dev/null || true
+
+# Nudge other alive agents so they also rebuild.
+if [ -f "$REPO_ROOT/scripts/broadcast-rebuild.sh" ]; then
+  bash "$REPO_ROOT/scripts/broadcast-rebuild.sh" 2>&1 | sed 's/^/[post-merge] /' || true
+fi

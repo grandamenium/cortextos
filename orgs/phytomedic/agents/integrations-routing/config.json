@@ -1,0 +1,60 @@
+{
+  "agent_name": "integrations-routing",
+  "enabled": true,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "9,39 * * * *",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task. MANDATORY LAST STEP: cortextos bus update-cron-fire heartbeat --interval 4h"
+    },
+    {
+      "name": "integration-health-check-morning",
+      "type": "cron",
+      "cron": "11 8 * * *",
+      "prompt": "Read skills/integration-health-check/SKILL.md and execute the integration health check. Review all external dependency health, produce the health note, and report risks. MANDATORY LAST STEP: cortextos bus update-cron-fire integration-health-check-morning --interval 12h && cortextos bus update-heartbeat alive"
+    },
+    {
+      "name": "integration-health-check-evening",
+      "type": "cron",
+      "cron": "16 20 * * *",
+      "prompt": "Read skills/integration-health-check/SKILL.md and execute the integration health check. Review all external dependency health, produce the health note, and report risks. MANDATORY LAST STEP: cortextos bus update-cron-fire integration-health-check-evening --interval 12h && cortextos bus update-heartbeat alive"
+    },
+    {
+      "name": "routing-callback-review",
+      "type": "cron",
+      "cron": "19 5 * * *",
+      "prompt": "Read skills/routing-callback-review/SKILL.md and execute the routing and callback integrity review. This is highest priority — ensure the care loop is viable. MANDATORY LAST STEP: cortextos bus update-cron-fire routing-callback-review --interval 24h && cortextos bus update-heartbeat alive"
+    },
+    {
+      "name": "integration-boundary-review",
+      "type": "cron",
+      "cron": "24 5 */2 * *",
+      "prompt": "Read skills/integration-boundary-review/SKILL.md and execute the integration boundary review. Validate normalization boundaries and check for provider-specific logic leaking into platform. MANDATORY LAST STEP: cortextos bus update-cron-fire integration-boundary-review --interval 48h && cortextos bus update-heartbeat alive"
+    },
+    {
+      "name": "weekly-risk-report",
+      "type": "cron",
+      "cron": "27 5 * * 0",
+      "prompt": "Read skills/weekly-risk-report/SKILL.md and produce the weekly integration risk summary. Include dependency map, top risks, V1 readiness, and recommended priorities. MANDATORY LAST STEP: cortextos bus update-cron-fire weekly-risk-report --interval 168h && cortextos bus update-heartbeat alive"
+    },
+    {
+      "name": "provider-change-review",
+      "type": "cron",
+      "cron": "36 5 * * 0",
+      "prompt": "Read skills/provider-change-review/SKILL.md and execute the weekly provider documentation and change review. Detect external changes that could break integrations. MANDATORY LAST STEP: cortextos bus update-cron-fire provider-change-review --interval 168h && cortextos bus update-heartbeat alive"
+    },
+    {
+      "name": "experiment-normalization-drift",
+      "type": "cron",
+      "cron": "29 5 */3 * *",
+      "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop for normalization-drift cycle. MANDATORY LAST STEP: cortextos bus update-cron-fire experiment-normalization-drift --interval 72h && cortextos bus update-heartbeat alive"
+    },
+    {
+      "name": "stale-offer-cleanup",
+      "type": "cron",
+      "cron": "34 5 * * *",
+      "prompt": "Check stale offer status: run 'cd /Users/arndt/phytomedic-saas && npx convex run functions/cannametrics:cannametricsMorningKpis {}' and review providerSyncHealth freshness. If any provider shows hoursSince>25, flag it. Note: stale offer deactivation (markStaleOffersUnavailable) runs automatically via Convex internal cron at 06:45 UTC — do not attempt to call it via npx convex run (it is an internalMutation). Report current offer freshness by provider. MANDATORY LAST STEP: cortextos bus update-cron-fire stale-offer-cleanup --interval 24h && cortextos bus update-heartbeat alive"
+    }
+  ]
+}

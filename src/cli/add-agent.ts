@@ -1,9 +1,12 @@
 import { Command } from 'commander';
-import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync, appendFileSync, symlinkSync, lstatSync, unlinkSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir } from 'os';
-import { OrgContext } from '../types';
+import { OrgContext, AgentRole } from '../types';
 import { validateAgentName, validateOrgName } from '../utils/validate';
+
+/** Roles that have a skill pack in templates/roles/<role>/ */
+const KNOWN_ROLES: AgentRole[] = ['frontend', 'backend', 'data', 'devops', 'design', 'research', 'content', 'qa'];
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -18,11 +21,12 @@ const NON_CODEX_TEMPLATES = ['orchestrator', 'analyst', 'm2c1-worker', 'hermes']
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
   .option('--template <type>', 'Agent template (orchestrator, analyst, agent, agent-codex)', 'agent')
+  .option('--role <role>', 'Agent role — auto-installs role-specific skills (frontend, backend, data, devops, design, research, content, qa)')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
   .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+  .action(async (name: string, options: { template: string; role?: string; org?: string; instance: string; runtime: string }) => {
     if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
       console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
       process.exit(1);
@@ -47,6 +51,13 @@ export const addAgentCommand = new Command('add-agent')
       console.error(`Error: ${(err as Error).message}`);
       console.error(`Agent names must match /^[a-z0-9_-]+$/ (lowercase letters, numbers, underscores, hyphens).`);
       console.error(`Examples of valid names: paul, sentinel, cortext-designer, m2c1-worker, agent_1`);
+      process.exit(1);
+    }
+
+    // Validate role if provided
+    if (options.role && !KNOWN_ROLES.includes(options.role as AgentRole)) {
+      console.error(`Error: Unknown role "${options.role}".`);
+      console.error(`Available roles: ${KNOWN_ROLES.join(', ')}`);
       process.exit(1);
     }
 
@@ -96,6 +107,7 @@ export const addAgentCommand = new Command('add-agent')
 
     console.log(`\nAdding agent: ${name}`);
     console.log(`  Template: ${options.template}`);
+    if (options.role) console.log(`  Role: ${options.role}`);
     console.log(`  Organization: ${org}`);
     console.log(`  Directory: ${agentDir}\n`);
 
@@ -128,6 +140,17 @@ export const addAgentCommand = new Command('add-agent')
       console.log('  Created minimal agent files');
     }
 
+    // Install role-specific skills if --role was provided
+    if (options.role) {
+      const roleDir = findRoleDir(projectRoot, options.role);
+      if (roleDir) {
+        installRoleSkills(roleDir, agentDir, name, org);
+        console.log(`  Installed role skills: ${options.role}`);
+      } else {
+        console.log(`  Warning: No skill pack found for role "${options.role}" — skipping role setup`);
+      }
+    }
+
     // Codex agents: link each local skill into ~/.codex/skills/<agent>__<skill>
     // so codex-app-server's host-wide skill discovery sees the per-agent set.
     if (isCodexAppServer) {
@@ -156,13 +179,38 @@ export const addAgentCommand = new Command('add-agent')
     // Create config.json
     const configPath = join(agentDir, 'config.json');
     if (!existsSync(configPath)) {
-      writeFileSync(configPath, JSON.stringify({
+      const configData: Record<string, any> = {
         agent_name: name,
         startup_delay: 0,
         max_session_seconds: 255600,
         enabled: true,
         crons: [],
-      }, null, 2) + '\n', 'utf-8');
+      };
+      if (options.role) {
+        configData.role = options.role;
+      }
+      writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf-8');
+    } else if (options.role) {
+      // config.json already exists (from template copy) — merge the role in
+      try {
+        const existingConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
+        existingConfig.role = options.role;
+        writeFileSync(configPath, JSON.stringify(existingConfig, null, 2) + '\n', 'utf-8');
+      } catch { /* leave config as-is if unreadable */ }
+    }
+
+    // Persist non-default runtime into config.json regardless of whether the
+    // file came from a template or was created above. The template-supplied
+    // config.json wins file existence, so we read-merge-write to inject the
+    // runtime field that agent-process.ts branches on.
+    if (options.runtime !== 'claude-code' && existsSync(configPath)) {
+      try {
+        const existingCfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+        existingCfg.runtime = options.runtime;
+        writeFileSync(configPath, JSON.stringify(existingCfg, null, 2) + '\n', 'utf-8');
+      } catch (err) {
+        console.error(`Warning: failed to set runtime field in config.json: ${(err as Error).message}`);
+      }
     }
 
     // Persist non-default runtime into config.json regardless of whether the
@@ -432,6 +480,83 @@ function createMinimalAgent(agentDir: string, name: string, org: string, templat
   // CLAUDE.md is a thin wrapper that imports AGENTS.md (works with Claude Code's @ import syntax)
   writeFileSync(join(agentDir, 'CLAUDE.md'), '@AGENTS.md\n');
   writeFileSync(join(agentDir, 'AGENTS.md'), createAgentsMd(name, org, template));
+}
+
+/**
+ * Find the role skill-pack directory under templates/roles/<role>/
+ */
+function findRoleDir(projectRoot: string, role: string): string | null {
+  const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || projectRoot;
+  const candidates = [
+    join(projectRoot, 'templates', 'roles', role),
+    join(frameworkRoot, 'templates', 'roles', role),
+    join(projectRoot, 'node_modules', 'cortextos', 'templates', 'roles', role),
+    join(__dirname, '..', '..', 'templates', 'roles', role),
+  ];
+  for (const dir of candidates) {
+    if (existsSync(dir)) return dir;
+  }
+  return null;
+}
+
+/**
+ * Install role-specific skills into the agent directory.
+ *
+ * 1. Copy skills/active/*.md into the agent's skills/active/ directory
+ * 2. If CLAUDE_APPEND.md exists, append its content to the agent's CLAUDE.md
+ * 3. Update the session start checklist to include DESIGN.md if role is frontend
+ */
+function installRoleSkills(roleDir: string, agentDir: string, name: string, org: string): void {
+  // 1. Copy role skills into agent's skills/active/
+  const roleSkillsDir = join(roleDir, 'skills', 'active');
+  if (existsSync(roleSkillsDir)) {
+    const destSkillsDir = join(agentDir, 'skills', 'active');
+    mkdirSync(destSkillsDir, { recursive: true });
+    const skillFiles = readdirSync(roleSkillsDir);
+    for (const file of skillFiles) {
+      const srcPath = join(roleSkillsDir, file);
+      const destPath = join(destSkillsDir, file);
+      try {
+        const stat = require('fs').statSync(srcPath);
+        if (stat.isFile()) {
+          let content = readFileSync(srcPath, 'utf-8');
+          content = content.replace(/\{\{agent_name\}\}/g, name);
+          content = content.replace(/\{\{org\}\}/g, org);
+          writeFileSync(destPath, content, 'utf-8');
+        }
+      } catch { /* skip unreadable files */ }
+    }
+  }
+
+  // 2. Append CLAUDE_APPEND.md to the agent's CLAUDE.md
+  const appendPath = join(roleDir, 'CLAUDE_APPEND.md');
+  if (existsSync(appendPath)) {
+    const claudeMdPath = join(agentDir, 'CLAUDE.md');
+    if (existsSync(claudeMdPath)) {
+      try {
+        let appendContent = readFileSync(appendPath, 'utf-8');
+        appendContent = appendContent.replace(/\{\{agent_name\}\}/g, name);
+        appendContent = appendContent.replace(/\{\{org\}\}/g, org);
+        appendFileSync(claudeMdPath, '\n' + appendContent, 'utf-8');
+      } catch { /* skip on error */ }
+    }
+  }
+
+  // 3. Update bootstrap checklist in CLAUDE.md to include DESIGN.md for frontend roles
+  const claudeMdPath = join(agentDir, 'CLAUDE.md');
+  if (existsSync(claudeMdPath)) {
+    try {
+      let claudeContent = readFileSync(claudeMdPath, 'utf-8');
+      // Add DESIGN.md to the session start bootstrap file list
+      if (!claudeContent.includes('DESIGN.md') && claudeContent.includes('SYSTEM.md')) {
+        claudeContent = claudeContent.replace(
+          /Read all bootstrap files:([^\n]*SYSTEM\.md)/,
+          'Read all bootstrap files:$1, **DESIGN.md**',
+        );
+        writeFileSync(claudeMdPath, claudeContent, 'utf-8');
+      }
+    } catch { /* skip on error */ }
+  }
 }
 
 function createAgentsMd(name: string, org: string, template: string): string {

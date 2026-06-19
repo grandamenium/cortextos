@@ -27,7 +27,7 @@ export interface InboxMessage {
 
 // Task Types
 
-export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled';
+export type TaskStatus = 'pending' | 'in_progress' | 'verifying' | 'completed' | 'blocked' | 'cancelled';
 
 export interface TaskOutput {
   /** Output kind. "file" links to a saved deliverable; other shapes reserved. */
@@ -57,6 +57,16 @@ export interface Task {
   due_date: string | null;
   archived: boolean;
   result?: string;
+  /**
+   * Feature-bundle grouping key. A bundle is one shared goal spanning the
+   * product roles (patient/doctor/pharmacy/manufacturer/admin); every sub-task
+   * of the bundle shares this id. Optional so existing task files stay valid.
+   * `claim-next --bundle <id>` selects only tasks carrying this id, so agents
+   * work a coordinated feature instead of isolated random tasks.
+   */
+  bundle_id?: string;
+  /** Which product role this sub-task belongs to within its bundle. */
+  role?: string;
   /** Linked deliverables (files saved via `cortextos bus save-output`). */
   outputs?: TaskOutput[];
   /**
@@ -153,6 +163,12 @@ export interface EcosystemConfig {
   community_publish?: EcosystemFeatureConfig;
 }
 
+/**
+ * Known agent roles. Each role maps to a skill pack under `templates/roles/<role>/`
+ * that gets merged into the agent directory during `add-agent --role <role>`.
+ */
+export type AgentRole = 'frontend' | 'backend' | 'data' | 'devops' | 'design' | 'research' | 'content' | 'qa';
+
 export interface AgentConfig {
   startup_delay?: number;
   max_session_seconds?: number;
@@ -209,6 +225,34 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /** Enable stale-heartbeat watchdog auto-restart. Default: true */
+  stale_watchdog_enabled?: boolean;
+  /** Minutes before a heartbeat is considered stale. Default: 15 */
+  stale_threshold_minutes?: number;
+  /** Restart priority after rate-limit resets. Lower = restarts first. Default: 5 */
+  restart_priority?: number;
+  /** Sleep schedule: 'always' (24/7), 'day' (active during hours), 'on-demand' (wake on message). Default: 'day' */
+  schedule?: 'always' | 'day' | 'on-demand';
+  /** Custom active-hours start (HH:MM). Defaults to day_mode_start or '09:00'. */
+  schedule_start?: string;
+  /** Custom active-hours end (HH:MM). Defaults to day_mode_end or '22:00'. */
+  schedule_end?: string;
+  /** Agent role — determines which skill pack is auto-installed. */
+  role?: AgentRole;
+  /**
+   * Absolute path to a git repository the agent should work inside via an
+   * isolated worktree. When set, the daemon provisions a per-agent worktree
+   * (under `<worktree_repo>/.cortextos-worktrees/<agent>`) before spawning
+   * the PTY and uses it as the agent's working directory. When unset,
+   * behavior falls back to `working_directory`/`agentDir`/cwd as before.
+   */
+  worktree_repo?: string;
+  /**
+   * Branch checked out in the per-agent worktree. Created from current HEAD
+   * if it doesn't exist. Defaults to `claude/<agentName>` if unset but
+   * `worktree_repo` is set.
+   */
+  worktree_branch?: string;
 }
 
 export interface CronEntry {

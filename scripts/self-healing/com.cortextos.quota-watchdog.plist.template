@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cortextos.quota-watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{FRAMEWORK_ROOT}/bin/quota-watchdog.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{HOME}/.cortextos/{INSTANCE}/logs/quota-watchdog.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{HOME}/.cortextos/{INSTANCE}/logs/quota-watchdog.stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>{HOME}</string>
+        <key>CTX_INSTANCE_ID</key>
+        <string>{INSTANCE}</string>
+        <key>CTX_ROOT</key>
+        <string>{HOME}/.cortextos/{INSTANCE}</string>
+        <key>CTX_FRAMEWORK_ROOT</key>
+        <string>{FRAMEWORK_ROOT}</string>
+        <key>CTX_ORG</key>
+        <string>{ORG}</string>
+        <key>WATCHDOG_BUS_AGENT</key>
+        <string>{BUS_AGENT}</string>
+        <key>WATCHDOG_CHAT_ID</key>
+        <string>{CHAT_ID}</string>
+        <key>QUOTA_THRESHOLD_PCT</key>
+        <string>10</string>
+        <key>QUOTA_RESUME_PCT</key>
+        <string>50</string>
+    </dict>
+</dict>
+</plist>

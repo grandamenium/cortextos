@@ -12,6 +12,9 @@ import {
   IconAlertCircle,
   IconLoader2,
   IconChevronDown,
+  IconBrandGit,
+  IconFolder,
+  IconNote,
 } from '@tabler/icons-react';
 import { KnowledgeBaseView } from './kb-view';
 
@@ -27,6 +30,28 @@ interface SearchResult {
 interface Collection {
   name: string;
   count: number;
+}
+
+interface VaultFile {
+  path: string;
+  name: string;
+  folder: string;
+  size: number;
+  modified: string;
+  preview: string;
+}
+
+interface VaultFolder {
+  name: string;
+  count: number;
+}
+
+interface VaultData {
+  configured: boolean;
+  vaultPath: string;
+  files: VaultFile[];
+  folders: VaultFolder[];
+  totalFiles: number;
 }
 
 interface KnowledgeBaseClientProps {
@@ -58,6 +83,8 @@ export function KnowledgeBaseClient({ org, markdownContent, filePath }: Knowledg
   const [collections, setCollections] = useState<Collection[]>([]);
   const [collectionsLoading, setCollectionsLoading] = useState(true);
   const [totalDocs, setTotalDocs] = useState(0);
+  const [vault, setVault] = useState<VaultData | null>(null);
+  const [vaultLoading, setVaultLoading] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -72,6 +99,14 @@ export function KnowledgeBaseClient({ org, markdownContent, filePath }: Knowledg
       .catch(() => {})
       .finally(() => setCollectionsLoading(false));
   }, [org]);
+
+  useEffect(() => {
+    fetch('/api/kb/vault')
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) setVault(data); })
+      .catch(() => {})
+      .finally(() => setVaultLoading(false));
+  }, []);
 
   const handleSearch = async () => {
     if (!query.trim()) return;
@@ -150,6 +185,15 @@ export function KnowledgeBaseClient({ org, markdownContent, filePath }: Knowledg
           {!collectionsLoading && collections.length > 0 && (
             <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium">
               {collections.length}
+            </span>
+          )}
+        </TabsTrigger>
+        <TabsTrigger value="vault">
+          <IconNote size={14} className="mr-1.5" />
+          Obsidian Vault
+          {vault && vault.totalFiles > 0 && (
+            <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium">
+              {vault.totalFiles}
             </span>
           )}
         </TabsTrigger>
@@ -369,6 +413,99 @@ export function KnowledgeBaseClient({ org, markdownContent, filePath }: Knowledg
               </code>
             </CardContent>
           </Card>
+        )}
+      </TabsContent>
+
+      {/* Obsidian Vault Tab */}
+      <TabsContent value="vault" className="space-y-4 mt-3">
+        {vaultLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
+            <IconLoader2 size={14} className="animate-spin" />
+            Loading vault...
+          </div>
+        ) : !vault?.configured ? (
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-10 text-center">
+              <div className="rounded-full bg-muted p-3 mb-3">
+                <IconNote size={22} className="text-muted-foreground/50" />
+              </div>
+              <h3 className="text-sm font-medium mb-1">Obsidian vault not found</h3>
+              <p className="text-xs text-muted-foreground max-w-sm">
+                Create a vault at <code className="font-mono bg-muted px-1 rounded">~/cortextos/obsidian-vault/</code> and agents will write decisions and milestones there.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <>
+            {/* Vault summary */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm">
+                <IconNote size={16} className="text-muted-foreground" />
+                <span className="text-muted-foreground">
+                  {vault.totalFiles} note{vault.totalFiles !== 1 ? 's' : ''} across {vault.folders.length} folder{vault.folders.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <code className="text-[10px] font-mono text-muted-foreground/50 bg-muted px-1.5 py-0.5 rounded">
+                {vault.vaultPath}
+              </code>
+            </div>
+
+            {/* Folders grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              {vault.folders.map((folder) => (
+                <Card key={folder.name} className="hover:bg-muted/20 transition-colors">
+                  <CardContent className="py-3 px-3">
+                    <div className="flex items-center gap-2">
+                      <IconFolder size={14} className="text-muted-foreground shrink-0" />
+                      <span className="text-xs font-medium truncate">{folder.name}</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mt-1 pl-[22px]">
+                      {folder.count} note{folder.count !== 1 ? 's' : ''}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {/* Recent notes */}
+            <div>
+              <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
+                Recently Modified
+              </h3>
+              <div className="space-y-1">
+                {vault.files.slice(0, 20).map((file) => (
+                  <div
+                    key={file.path}
+                    className="flex items-start gap-2 py-2 px-2 rounded-md hover:bg-muted/40 transition-colors"
+                  >
+                    <IconFileText size={14} className="text-muted-foreground shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium truncate">{file.name}</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground/50 bg-muted px-1 rounded">
+                          {file.folder}
+                        </span>
+                      </div>
+                      {file.preview && (
+                        <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
+                          {file.preview}
+                        </p>
+                      )}
+                    </div>
+                    <span className="shrink-0 text-[10px] text-muted-foreground/50">
+                      {new Date(file.modified).toLocaleDateString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Sync info */}
+            <div className="rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              <span className="font-medium">Auto-sync:</span> platform-director ingestet den Vault alle 4h in ChromaDB.
+              Agents schreiben Entscheidungen via <code className="font-mono bg-muted px-1 rounded">obsidian-log</code> Skill.
+            </div>
+          </>
         )}
       </TabsContent>
     </Tabs>

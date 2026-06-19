@@ -1,0 +1,243 @@
+- generic [active] [ref=e1]:
+  - link "Zum Hauptinhalt springen" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]:
+        - link "PhytoMedic · Clinic" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e8]: PhytoMedic
+          - generic [ref=e9]: · Clinic
+        - navigation "Hauptnavigation" [ref=e10]:
+          - link "Produkte" [ref=e11] [cursor=pointer]:
+            - /url: /medizin/produkte
+          - link "Sorten" [ref=e12] [cursor=pointer]:
+            - /url: /medizin/sorten
+          - link "Vergleich" [ref=e13] [cursor=pointer]:
+            - /url: /medizin/sorten/vergleich
+          - link "Arzt finden" [ref=e14] [cursor=pointer]:
+            - /url: /medizin/arzt-finden
+          - link "Apotheke finden" [ref=e15] [cursor=pointer]:
+            - /url: /medizin/apotheke-finden
+          - link "Wissen" [ref=e16] [cursor=pointer]:
+            - /url: /wissen
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - generic [ref=e22]:
+            - generic [ref=e23]:
+              - generic [ref=e24]:
+                - generic [ref=e25]: § 00
+                - generic [ref=e27]: Wegweiser · Verzeichnis
+              - heading "Medizinisches Cannabis — wissen, was möglich ist." [level=1] [ref=e28]:
+                - text: Medizinisches Cannabis —
+                - text: wissen, was möglich ist.
+              - paragraph [ref=e29]: Zehn Werkzeuge, die den Weg von der ersten Frage bis zur belieferten Apotheke nachvollziehbar machen. Keine Werbeflächen, keine Zwischenhändler — ein geordnetes Verzeichnis für Patientinnen, Patienten und Angehörige in Deutschland.
+            - complementary [ref=e30]:
+              - generic [ref=e31]:
+                - generic [ref=e32]:
+                  - term [ref=e33]: Umfang
+                  - definition [ref=e34]: 10 Einträge
+                - generic [ref=e35]:
+                  - term [ref=e36]: Gegliedert in
+                  - definition [ref=e37]: 3 Kapitel
+                - generic [ref=e38]:
+                  - term [ref=e39]: Sprache
+                  - definition [ref=e40]: DE · de-DE
+          - generic:
+            - generic: Phyto · Medic · Clinic
+            - generic: Kapitel 00 — 03
+        - generic [ref=e42]:
+          - generic [ref=e43]:
+            - generic [ref=e44]:
+              - paragraph [ref=e45]: § 01 · Kapitel
+              - heading "Selbstprüfung" [level=2] [ref=e46]
+            - paragraph [ref=e47]: Beginnen Sie hier, wenn Sie prüfen wollen, ob Cannabis für Sie infrage kommt — bevor Sie eine Praxis kontaktieren.
+          - list [ref=e48]:
+            - listitem [ref=e49]:
+              - link "01 Eignungstest Eine strukturierte Selbsteinschätzung, bevor Sie Zeit und Geld für einen Termin investieren. Anonym, in unter fünf Minuten, mit einer klaren Empfehlung am Ende. ≈ 3 Min · anonym" [ref=e50] [cursor=pointer]:
+                - /url: /medizin/eignungstest
+                - generic [ref=e51]: "01"
+                - generic [ref=e52]:
+                  - heading "Eignungstest" [level=3] [ref=e53]
+                  - paragraph [ref=e54]: Eine strukturierte Selbsteinschätzung, bevor Sie Zeit und Geld für einen Termin investieren. Anonym, in unter fünf Minuten, mit einer klaren Empfehlung am Ende.
+                - generic [ref=e55]: ≈ 3 Min · anonym
+                - img [ref=e57]
+            - listitem [ref=e60]:
+              - 'link "02 Blütenfinder Von Symptom zu Sorte: führen Sie Beschwerden, Tageszeit und gewünschte Wirkung zusammen — das Ergebnis ist ein begründeter Vorschlag, keine Blackbox. Genetik · Terpene" [ref=e61] [cursor=pointer]':
+                - /url: /medizin/bluetenfinder
+                - generic [ref=e62]: "02"
+                - generic [ref=e63]:
+                  - heading "Blütenfinder" [level=3] [ref=e64]
+                  - paragraph [ref=e65]: "Von Symptom zu Sorte: führen Sie Beschwerden, Tageszeit und gewünschte Wirkung zusammen — das Ergebnis ist ein begründeter Vorschlag, keine Blackbox."
+                - generic [ref=e66]: Genetik · Terpene
+                - img [ref=e68]
+            - listitem [ref=e71]:
+              - link "03 THC-Rechner Dosisberechnung auf Basis von Körpergewicht, Konsumform und Produktprofil. Nachvollziehbar, nicht bevormundend — und immer nur ein Startpunkt für das Arztgespräch. Gewicht · Form · Profil" [ref=e72] [cursor=pointer]:
+                - /url: /medizin/thc-rechner
+                - generic [ref=e73]: "03"
+                - generic [ref=e74]:
+                  - heading "THC-Rechner" [level=3] [ref=e75]
+                  - paragraph [ref=e76]: Dosisberechnung auf Basis von Körpergewicht, Konsumform und Produktprofil. Nachvollziehbar, nicht bevormundend — und immer nur ein Startpunkt für das Arztgespräch.
+                - generic [ref=e77]: Gewicht · Form · Profil
+                - img [ref=e79]
+            - listitem [ref=e82]:
+              - link "04 Sorten-Datenbank Redaktionell kuratierte Sortenprofile mit Genetik, Terpenprofil, typischer Wirkung und medizinischen Anwendungsfällen. Nachschlagewerk, nicht Marketingkatalog. Kuratiert · DE" [ref=e83] [cursor=pointer]:
+                - /url: /medizin/sorten
+                - generic [ref=e84]: "04"
+                - generic [ref=e85]:
+                  - heading "Sorten-Datenbank" [level=3] [ref=e86]
+                  - paragraph [ref=e87]: Redaktionell kuratierte Sortenprofile mit Genetik, Terpenprofil, typischer Wirkung und medizinischen Anwendungsfällen. Nachschlagewerk, nicht Marketingkatalog.
+                - generic [ref=e88]: Kuratiert · DE
+                - img [ref=e90]
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - generic [ref=e96]:
+              - paragraph [ref=e97]: § 02 · Kapitel
+              - heading "Versorgung" [level=2] [ref=e98]
+            - paragraph [ref=e99]: "Der tatsächliche Weg zur Therapie: vom ärztlichen Erstkontakt über das Rezept bis zur belieferten Apotheke."
+          - list [ref=e100]:
+            - listitem [ref=e101]:
+              - link "05 Arzt finden Approbierte Ärzte mit dokumentierter Cannabis-Erfahrung — Videosprechstunde oder Praxisbesuch. Keine Rezeptautomaten, echte ärztliche Verantwortung. Video · Präsenz" [ref=e102] [cursor=pointer]:
+                - /url: /medizin/arzt-finden
+                - generic [ref=e103]: "05"
+                - generic [ref=e104]:
+                  - heading "Arzt finden" [level=3] [ref=e105]
+                  - paragraph [ref=e106]: Approbierte Ärzte mit dokumentierter Cannabis-Erfahrung — Videosprechstunde oder Praxisbesuch. Keine Rezeptautomaten, echte ärztliche Verantwortung.
+                - generic [ref=e107]: Video · Präsenz
+                - img [ref=e109]
+            - listitem [ref=e112]:
+              - link "06 Online-Rezept Telemedizin-Anbieter vergleichen, Erstkontakt strukturieren, Folgerezept digital anfordern. E-Rezept-fähig, BfArM-konform, in der Therapiekarte dokumentiert. E-Rezept · BfArM" [ref=e113] [cursor=pointer]:
+                - /url: /medizin/online-rezept
+                - generic [ref=e114]: "06"
+                - generic [ref=e115]:
+                  - heading "Online-Rezept" [level=3] [ref=e116]
+                  - paragraph [ref=e117]: Telemedizin-Anbieter vergleichen, Erstkontakt strukturieren, Folgerezept digital anfordern. E-Rezept-fähig, BfArM-konform, in der Therapiekarte dokumentiert.
+                - generic [ref=e118]: E-Rezept · BfArM
+                - img [ref=e120]
+            - listitem [ref=e123]:
+              - link "07 Produktkatalog Über 900 Präparate von zertifizierten Herstellern — vergleichbar nach THC/CBD-Profil, Genetik, Verfügbarkeit und Apothekenpreis. Aktualisiert täglich. 900+ Präparate" [ref=e124] [cursor=pointer]:
+                - /url: /medizin/produkte
+                - generic [ref=e125]: "07"
+                - generic [ref=e126]:
+                  - heading "Produktkatalog" [level=3] [ref=e127]
+                  - paragraph [ref=e128]: Über 900 Präparate von zertifizierten Herstellern — vergleichbar nach THC/CBD-Profil, Genetik, Verfügbarkeit und Apothekenpreis. Aktualisiert täglich.
+                - generic [ref=e129]: 900+ Präparate
+                - img [ref=e131]
+            - listitem [ref=e134]:
+              - link "08 Apotheke finden Partner-Apotheken mit realer Verfügbarkeit, sichtbaren Preisen und verbindlichen Lieferfenstern. Abholung oder Versand — die Apotheke Ihrer Wahl bleibt Ihre Apotheke. 310+ Partner" [ref=e135] [cursor=pointer]:
+                - /url: /medizin/apotheke-finden
+                - generic [ref=e136]: "08"
+                - generic [ref=e137]:
+                  - heading "Apotheke finden" [level=3] [ref=e138]
+                  - paragraph [ref=e139]: Partner-Apotheken mit realer Verfügbarkeit, sichtbaren Preisen und verbindlichen Lieferfenstern. Abholung oder Versand — die Apotheke Ihrer Wahl bleibt Ihre Apotheke.
+                - generic [ref=e140]: 310+ Partner
+                - img [ref=e142]
+        - generic [ref=e146]:
+          - generic [ref=e147]:
+            - generic [ref=e148]:
+              - paragraph [ref=e149]: § 03 · Kapitel
+              - heading "Orientierung" [level=2] [ref=e150]
+            - paragraph [ref=e151]: Was außerhalb der Sprechstunde und der Apotheke noch wichtig wird — geografisch, steuerlich, praktisch.
+          - list [ref=e152]:
+            - listitem [ref=e153]:
+              - link "09 Standorte Ärzte, Apotheken und Anlaufstellen für medizinisches Cannabis — bundesweit geordnet. Ein Überblick über die Versorgungslandschaft, nicht nur eine Kartenansicht. Bundesweit" [ref=e154] [cursor=pointer]:
+                - /url: /medizin/standorte
+                - generic [ref=e155]: "09"
+                - generic [ref=e156]:
+                  - heading "Standorte" [level=3] [ref=e157]
+                  - paragraph [ref=e158]: Ärzte, Apotheken und Anlaufstellen für medizinisches Cannabis — bundesweit geordnet. Ein Überblick über die Versorgungslandschaft, nicht nur eine Kartenansicht.
+                - generic [ref=e159]: Bundesweit
+                - img [ref=e161]
+            - listitem [ref=e164]:
+              - link "10 Steuererstattung Was ist außergewöhnliche Belastung, was nicht? Ein kompakter, aktueller Leitfaden zur steuerlichen Absetzbarkeit — mit Belegpflicht, Attest und Jahresübersicht. § 33 EStG" [ref=e165] [cursor=pointer]:
+                - /url: /medizin/steuererstattung
+                - generic [ref=e166]: "10"
+                - generic [ref=e167]:
+                  - heading "Steuererstattung" [level=3] [ref=e168]
+                  - paragraph [ref=e169]: Was ist außergewöhnliche Belastung, was nicht? Ein kompakter, aktueller Leitfaden zur steuerlichen Absetzbarkeit — mit Belegpflicht, Attest und Jahresübersicht.
+                - generic [ref=e170]: § 33 EStG
+                - img [ref=e172]
+        - generic [ref=e176]:
+          - generic [ref=e177]:
+            - paragraph [ref=e178]: § 04 · Erster Schritt
+            - heading "Noch unsicher, wo Sie anfangen?" [level=2] [ref=e179]
+            - paragraph [ref=e180]: Der Eignungstest ist die häufigste Einstiegstür — drei Minuten, anonym, mit konkreter nächster Handlung. Wer lieber vergleicht, beginnt beim Produktkatalog.
+          - generic [ref=e181]:
+            - link "Eignungstest beginnen" [ref=e182] [cursor=pointer]:
+              - /url: /medizin/eignungstest
+              - text: Eignungstest beginnen
+              - img [ref=e183]
+            - link "Produktkatalog öffnen" [ref=e186] [cursor=pointer]:
+              - /url: /medizin/produkte
+              - generic [ref=e187]: Produktkatalog öffnen
+              - img [ref=e188]
+      - generic [ref=e192]:
+        - generic [ref=e193]:
+          - generic [ref=e194]:
+            - text: PhytoMedic
+            - paragraph [ref=e195]: Medizinisches Cannabis. Einfach. Sicher. Digital.
+          - generic [ref=e196]:
+            - link "LinkedIn" [ref=e197] [cursor=pointer]:
+              - /url: https://linkedin.com
+              - img [ref=e198]
+            - link "Instagram" [ref=e202] [cursor=pointer]:
+              - /url: https://instagram.com
+              - img [ref=e203]
+        - navigation "Footer-Navigation" [ref=e206]:
+          - generic [ref=e207]:
+            - heading "Patienten" [level=4] [ref=e208]
+            - list [ref=e209]:
+              - listitem [ref=e210]:
+                - link "Produktkatalog" [ref=e211] [cursor=pointer]:
+                  - /url: /medizin/produkte
+              - listitem [ref=e212]:
+                - link "Arzt finden" [ref=e213] [cursor=pointer]:
+                  - /url: /medizin/arzt-finden
+              - listitem [ref=e214]:
+                - link "Apotheke finden" [ref=e215] [cursor=pointer]:
+                  - /url: /medizin/apotheke-finden
+              - listitem [ref=e216]:
+                - link "Eignungstest" [ref=e217] [cursor=pointer]:
+                  - /url: /medizin/eignungstest
+          - generic [ref=e218]:
+            - heading "Wissen" [level=4] [ref=e219]
+            - list [ref=e220]:
+              - listitem [ref=e221]:
+                - link "Sorten-Datenbank" [ref=e222] [cursor=pointer]:
+                  - /url: /medizin/sorten
+              - listitem [ref=e223]:
+                - link "Krankheitsbilder" [ref=e224] [cursor=pointer]:
+                  - /url: /krankheiten
+              - listitem [ref=e225]:
+                - link "Ratgeber" [ref=e226] [cursor=pointer]:
+                  - /url: /wissen
+              - listitem [ref=e227]:
+                - link "THC-Rechner" [ref=e228] [cursor=pointer]:
+                  - /url: /medizin/thc-rechner
+          - generic [ref=e229]:
+            - heading "Fachleute" [level=4] [ref=e230]
+            - list [ref=e231]:
+              - listitem [ref=e232]:
+                - link "Online-Rezept" [ref=e233] [cursor=pointer]:
+                  - /url: /medizin/online-rezept
+              - listitem [ref=e234]:
+                - link "Standorte" [ref=e235] [cursor=pointer]:
+                  - /url: /medizin/standorte
+              - listitem [ref=e236]:
+                - link "Registrierung" [ref=e237] [cursor=pointer]:
+                  - /url: /registrieren
+          - generic [ref=e238]:
+            - heading "PhytoMedic" [level=4] [ref=e239]
+            - list [ref=e240]:
+              - listitem [ref=e241]:
+                - link "Impressum" [ref=e242] [cursor=pointer]:
+                  - /url: /impressum
+              - listitem [ref=e243]:
+                - link "Datenschutz" [ref=e244] [cursor=pointer]:
+                  - /url: /datenschutz
+              - listitem [ref=e245]:
+                - link "AGB" [ref=e246] [cursor=pointer]:
+                  - /url: /agb
+        - paragraph [ref=e247]: © 2026 PhytoMedic. Alle Rechte vorbehalten.
+  - region "Notifications alt+T"
+  - alert [ref=e248]

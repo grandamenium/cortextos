@@ -1,0 +1,36 @@
+{
+  "agent_name": "user-proxy",
+  "enabled": true,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "38 * * * *",
+      "prompt": "Heartbeat-Tick. Run: cortextos bus update-heartbeat alive. Check inbox: cortextos bus check-inbox. For each founder-question agent-message: follow skill .claude/skills/answer-as-user-via-openai/SKILL.md (classify → call OpenAI → reply OR escalate). Log to memory/openai-cost-ledger.jsonl. NO bootstrap-file-reading. End: cortextos bus update-cron-fire heartbeat --interval 60."
+    },
+    {
+      "name": "cost-rollup-daily",
+      "type": "cron",
+      "cron": "6 22 * * *",
+      "prompt": "Daily OpenAI cost rollup. Read memory/openai-cost-ledger.jsonl from last 24h. Sum cost_usd, count by model, count escalations. If sum >$1.50 send Telegram to $CTX_TELEGRAM_CHAT_ID with breakdown. Otherwise quiet. Then: cortextos bus update-cron-fire cost-rollup-daily --interval 1440"
+    },
+    {
+      "name": "memory-distill",
+      "type": "cron",
+      "cron": "11 23 * * 0",
+      "prompt": "Weekly: distill OVERRIDE LEARNED entries from last 7 days of memory/*.md into MEMORY.md as long-term founder-style patterns. Drop duplicates. Goal: each pattern teaches future OpenAI calls. Then: cortextos bus update-cron-fire memory-distill --interval 10080"
+    },
+    {
+      "name": "feature-overview-morning",
+      "type": "cron",
+      "cron": "16 9 * * *",
+      "prompt": "Feature-Overview Digest morgens 09:00 Europe/Berlin. Hole: OV=$(cortextos bus overview --format telegram). IMMER senden (Founder will 2x/Tag fix): cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID \"$OV\". Snapshot speichern fuer Abend-Diff: cortextos bus overview --format json > memory/overview-morning.json. Dann: cortextos bus update-cron-fire feature-overview-morning --interval 1440"
+    },
+    {
+      "name": "feature-overview-evening",
+      "type": "cron",
+      "cron": "22 21 * * *",
+      "prompt": "Feature-Overview Digest abends 21:00 Europe/Berlin. Hole: OV=$(cortextos bus overview --format telegram). IMMER senden (Founder will 2x/Tag fix): cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID \"$OV\". Wenn memory/overview-morning.json existiert: kurz erwaehnen was sich seit heute morgen bewegt hat (vergleiche pulse.done + features done-counts). Dann: cortextos bus update-cron-fire feature-overview-evening --interval 1440"
+    }
+  ]
+}

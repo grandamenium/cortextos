@@ -34,4 +34,5 @@ install_hook() {
 
 echo "Installing cortextOS git hooks..."
 install_hook pre-push
+install_hook post-merge
 echo "Done. Hooks active for this repo clone."

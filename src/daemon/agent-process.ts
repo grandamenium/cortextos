@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -11,6 +12,10 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { readCrashCount, incrementCrashCount } from './crash-counter.js';
+import { ensureWorktree } from './worktree-manager.js';
+import { writeAgentPidFile, clearAgentPidFile } from './agent-pid-file.js';
+import { repairConversationDir } from './jsonl-repair.js';
 
 type LogFn = (msg: string) => void;
 
@@ -51,6 +56,9 @@ export class AgentProcess {
   // from an old PTY can race past stopRequested and trigger crash recovery on
   // the new agent.
   private lifecycleGeneration: number = 0;
+  // Guard: only one cron verification waiter in-flight per agent at a time.
+  // Rapid --continue restarts must not stack duplicate waiters. (Issue #182)
+  private cronVerificationPending: boolean = false;
   // BUG-011 fix: stop() awaits this promise (resolved by the onExit handler in start())
   // to guarantee the PTY exit has fired before stopping=false is reset. Without
   // this, the exit handler can fire after stopping=false and trigger spurious
@@ -59,7 +67,11 @@ export class AgentProcess {
   private resolveExit: (() => void) | null = null;
   private dedup: MessageDedup;
   private log: LogFn;
-  private onStatusChange: ((status: AgentStatus) => void) | null = null;
+  // SYS-DAEMON-RESILIENCE-01 Fix 3: multiple subscribers (was a single
+  // overwriting handler). The daemon registers a registry-cleanup handler for
+  // terminal 'halted' AND, when Telegram is configured, a notification handler —
+  // a single slot let the second registration silently clobber the first.
+  private onStatusChangeHandlers: Array<(status: AgentStatus) => void> = [];
   // Issue #330: held here so CodexAppServerPTY can be re-wired across session refresh
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
@@ -69,6 +81,12 @@ export class AgentProcess {
   // daemon should fire the codex-app-server back-online Telegram directly
   // (skipped on handoff restart — the agent sends its own contextual reply).
   private lastSpawnWasHandoff = false;
+  // SYS-1M-DETECT: once-per-halt-episode latch for the MODEL_BILLING_CONFIG
+  // escalation (modelled on the wedge-watchdog holdAlerted latch). Set when we
+  // escalate a 1M-billing-config HALT to platform-director; reset only when the
+  // agent next reaches 'running' (i.e. the config was fixed and it cleared the
+  // gate). A halted/retried agent therefore never re-spams PD within one episode.
+  private modelBillingConfigEscalated = false;
 
   constructor(name: string, env: CtxEnv, config: AgentConfig, log?: LogFn) {
     this.name = name;
@@ -83,6 +101,14 @@ export class AgentProcess {
     }
     this.dedup = new MessageDedup();
     this.log = log || ((msg) => console.log(`[${name}] ${msg}`));
+
+    // Restore crash count from disk so it survives daemon restarts.
+    // Without this, a PM2 restart resets the in-memory counter to 0
+    // and the max_crashes_per_day limit is never enforced.
+    this.crashCount = readCrashCount(env.ctxRoot, name);
+    if (this.crashCount > 0) {
+      this.log(`Restored crash count from disk: ${this.crashCount}/${this.maxCrashesPerDay}`);
+    }
   }
 
   /**
@@ -106,8 +132,41 @@ export class AgentProcess {
       writeCortextosEnv(this.env.agentDir, this.env);
     }
 
+    // Per-agent git worktree (opt-in via config.worktree_repo).
+    // Eliminates branch-contamination races when several agents share one
+    // working copy of the same repo. When unset, behavior is unchanged.
+    if (this.config.worktree_repo) {
+      const branch = this.config.worktree_branch || `claude/${this.name}`;
+      try {
+        const wt = ensureWorktree(this.config.worktree_repo, this.name, branch);
+        this.config.working_directory = wt.path;
+        this.log(`Worktree ${wt.created ? 'created' : 'attached'}: ${wt.path} (branch ${wt.branch})`);
+      } catch (err) {
+        this.log(`Worktree provisioning failed, falling back to shared repo: ${err}`);
+      }
+    }
+
     // Determine start mode
     const mode = this.shouldContinue() ? 'continue' : 'fresh';
+
+    // SYS-DAEMON-RESILIENCE-01 Fix 2 (mitigation ii): before a --continue resume,
+    // repair any truncated trailing JSONL line (e.g. left by a mid-write SIGTERM
+    // when reaping an orphan). Deterministic + in our control rather than relying
+    // on undocumented `claude --continue` partial-line tolerance. Claude runtime
+    // only — Hermes/codex track continuity via their own state files.
+    if (mode === 'continue' && this.config.runtime !== 'hermes' && this.config.runtime !== 'codex-app-server') {
+      const launchDir = this.config.working_directory || this.env.agentDir;
+      if (launchDir) {
+        const convDir = join(homedir(), '.claude', 'projects', launchDir.split(sep).join('-'));
+        try {
+          const changed = repairConversationDir(convDir);
+          if (changed > 0) this.log(`Repaired ${changed} JSONL file(s) with a truncated trailing line before --continue`);
+        } catch (err) {
+          this.log(`JSONL repair skipped (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
     const prompt = mode === 'fresh'
       ? this.buildStartupPrompt()
       : this.buildContinuePrompt();
@@ -180,7 +239,26 @@ export class AgentProcess {
       }
       this.status = 'running';
       this.sessionStart = new Date();
+      // SYS-1M-DETECT: the agent cleared session start, so any prior
+      // model-1M-billing-config gate is resolved. Reset the escalation latch
+      // so a future billing-config HALT re-escalates (end of the halt-episode).
+      this.modelBillingConfigEscalated = false;
       this.log(`Running (pid: ${this.pty.getPid()})`);
+
+      // SYS-DAEMON-RESILIENCE-01 Fix 2: persist the PTY PID synchronously the
+      // instant it is available, so a later daemon CRASH-exit (which skips
+      // stopAll) leaves a restart-durable record reconcileOrphans() can find +
+      // reap. instanceId is recorded for the instance-membership guard; spawnedAt
+      // (the process start time) backs the 3-part PID-reuse guard. Cleared only
+      // on a CLEAN stop() — a crash/halt deliberately leaves it for reconcile.
+      const livePid = this.pty.getPid();
+      if (typeof livePid === 'number') {
+        try {
+          writeAgentPidFile(this.env.ctxRoot, this.env.instanceId, this.name, livePid, this.sessionStart.toISOString());
+        } catch (err) {
+          this.log(`Failed to write pty.pid (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
 
       // Issue #392: codex-app-server does not reliably execute the inline
       // "Send a Telegram message saying you are back online" instruction the
@@ -283,6 +361,11 @@ export class AgentProcess {
     // cleared by handleExit when the intentional exit fires (or by start()
     // when a new lifecycle begins). See BUG-040 fix in handleExit().
     this.status = 'stopped';
+    // SYS-DAEMON-RESILIENCE-01 Fix 2: clean stop -> remove the pid-file so a
+    // subsequent boot's reconcile does not treat this (intentionally stopped)
+    // agent as a survived orphan. A crash/halt skips this path, leaving the
+    // pid-file for reconcile to liveness-check + reap.
+    clearAgentPidFile(this.env.ctxRoot, this.name);
     this.notifyStatusChange();
     this.log('Stopped');
   }
@@ -380,7 +463,7 @@ export class AgentProcess {
    * Register a status change handler.
    */
   onStatusChanged(handler: (status: AgentStatus) => void): void {
-    this.onStatusChange = handler;
+    this.onStatusChangeHandlers.push(handler);
   }
 
   /**
@@ -482,9 +565,117 @@ export class AgentProcess {
   }
 
   /**
+   * Match context-exhaustion signatures in recent stdout output.
+   *
+   * When Claude Code exits at 100% context (exit 0), the JSONL conversation
+   * files still exist on disk. Without intervention, shouldContinue() returns
+   * true and the next start() launches --continue, which reloads the same
+   * exhausted context and immediately exits again — a crash loop that burns
+   * the daily crash budget and halts the agent. Detecting the exhaustion
+   * signature here lets handleExit() arm .force-fresh and restart cleanly
+   * without counting against max_crashes_per_day.
+   *
+   * Patterns observed:
+   *   "100% context used"           — Claude Code TUI status bar
+   *   "conversation too long"       — compaction failure in session reset
+   *
+   * NOTE — the 1M-context billing strings are deliberately NOT matched here.
+   * They are a CONFIG-class error, not context exhaustion: force-fresh on the
+   * same explicit model re-hits the same billing gate and produces a restart
+   * loop. They are handled separately by detectModelBillingConfigError() +
+   * the MODEL_BILLING_CONFIG escalate-not-restart path in handleExit().
+   *
+   * ANSI codes are stripped before matching because the status bar wraps the
+   * text in terminal escape sequences (e.g. \x1b[Xm 100% context used \x1b[0m).
+   */
+  private detectContextExhaustion(recentOutput: string): boolean {
+    if (!recentOutput) return false;
+    const stripped = recentOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    return (
+      stripped.includes('100% context used') ||
+      stripped.includes('conversation too long')
+    );
+  }
+
+  /**
+   * Match a 1M-context billing/config error in recent stdout output.
+   *
+   * Claude Code v2.1.111+ gives Sonnet/Haiku a 1M context window by default.
+   * On plans without "extra usage" billing, startup fails at the gate with a
+   * billing error and Claude Code exits 0. This is NOT context exhaustion:
+   *
+   *   - It fires at SESSION START (an empty context), not at 100% usage.
+   *   - It is a property of the (model, plan) CONFIG, not the conversation, so
+   *     .force-fresh does NOT help — the next session relaunches the SAME
+   *     explicit model and re-hits the SAME gate, producing a restart loop
+   *     (the exact failure mode SYS-1M-DETECT exists to prevent).
+   *
+   * The wording changed across Claude Code releases; both are matched so a
+   * future stale-string regression cannot silently collapse this class back
+   * into the force-fresh path:
+   *   "Extra usage is required for 1M context" — Claude Code <= v2.1.110
+   *   "Usage credits required for 1M context"  — Claude Code v2.1.111+
+   *
+   * ANSI codes are stripped before matching (TUI wraps the text in escapes).
+   */
+  private detectModelBillingConfigError(recentOutput: string): boolean {
+    if (!recentOutput) return false;
+    const stripped = recentOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    return (
+      stripped.includes('Extra usage is required for 1M context') ||
+      stripped.includes('Usage credits required for 1M context')
+    );
+  }
+
+  /**
+   * Escalate a MODEL_BILLING_CONFIG halt to the orchestrator (SYS-1M-DETECT).
+   *
+   * A 1M-billing-config error is NOT auto-recoverable by the daemon — it needs
+   * a CONFIG fix (unpin/strip config.model), which is an orchestrator action.
+   * We surface it on two channels so it can never fall through to manual catch:
+   *   (1) Telegram to the agent's own chat (founder/PD-visible), and
+   *   (2) a bus message to platform-director's inbox (auto-routes to the
+   *       orchestrator's queue — closes the gap where an improver HALT used to
+   *       need a human/SA to read the logs to notice it).
+   *
+   * Guarded by the modelBillingConfigEscalated latch so a halted/retried agent
+   * escalates ONCE per halt-episode, never re-spamming PD on each restart
+   * attempt. The latch resets when the agent next reaches 'running'.
+   */
+  private escalateModelBillingConfig(): void {
+    if (this.modelBillingConfigEscalated) return;
+    this.modelBillingConfigEscalated = true;
+
+    const msg =
+      `Agent ${this.name} HALTED on a model/billing CONFIG error ` +
+      `(1M-context default without credits). This needs a CONFIG fix ` +
+      `(unpin/strip config.model), NOT a restart — force-fresh would re-hit ` +
+      `the same gate (restart loop). Surfaced by SYS-1M-DETECT.`;
+
+    // (1) Telegram to the agent's own chat (best-effort, observability only).
+    if (this.telegramApi && this.telegramChatId) {
+      this.telegramApi
+        .sendMessage(this.telegramChatId, msg)
+        .catch(() => { /* non-fatal: bus message below is the durable channel */ });
+    }
+
+    // (2) Bus message to platform-director — shelled like the wedge-watchdog
+    // escalate (no in-process bus-to-agent primitive in the daemon). Best-effort:
+    // a messaging failure must never break the halt path.
+    try {
+      execFileSync('cortextos', ['bus', 'send-message', 'platform-director', 'high', msg], {
+        timeout: 10000,
+        stdio: 'ignore',
+      });
+    } catch (err) {
+      this.log(`MODEL_BILLING_CONFIG escalation bus-message failed: ${err}`);
+    }
+  }
+
+  /**
    * Write the `.force-fresh` marker that AgentProcess.shouldContinue() reads
    * on the next start() to force a fresh Claude Code session (no --continue).
-   * Used by the image-poison auto-recovery in handleExit().
+   * Used by the image-poison auto-recovery and context-exhaustion recovery in handleExit().
    */
   private armForceFresh(reason: string): void {
     try {
@@ -583,6 +774,48 @@ export class AgentProcess {
       return;
     }
 
+    // Model-1M-billing-config error (SYS-1M-DETECT).
+    // Claude Code v2.1.111+ defaults Sonnet/Haiku to a 1M context window; an
+    // agent spawned with an explicit config.model inherits that default and, on
+    // a plan without "extra usage" credits, fails at the billing gate at SESSION
+    // START (an empty context) and exits 0. This is a CONFIG error, NOT context
+    // exhaustion: .force-fresh relaunches the SAME explicit model and re-hits the
+    // SAME gate — a restart loop (the exact failure SYS-1M-DETECT exists to
+    // prevent). So classify as config, HALT without charging the crash counter,
+    // and escalate ONCE to platform-director (telegram + bus) for a config fix
+    // (unpin/strip config.model). Checked BEFORE detectContextExhaustion so the
+    // string-discriminated partition between the two classes can never collapse:
+    // a 1M-billing string must never reach the force-fresh path.
+    if (exitCode === 0 && this.detectModelBillingConfigError(recentOutput)) {
+      this.log('MODEL_BILLING_CONFIG: 1M-context billing/config error at session start. This is a CONFIG error, not context exhaustion — force-fresh would re-hit the same gate (restart loop). HALTING without counting against max_crashes_per_day and escalating to platform-director for a config fix.');
+      this.appendCrashToRestartsLog(exitCode, 0, 'MODEL_BILLING_CONFIG');
+      this.status = 'halted';
+      this.notifyStatusChange();
+      this.escalateModelBillingConfig();
+      return;
+    }
+
+    // Context-exhaustion auto-recovery (SYS-DAEMON-CTX-01).
+    // When Claude Code exits cleanly at 100% context, JSONL files still exist on
+    // disk so shouldContinue() returns true on the next start(). That --continue
+    // session reloads the same exhausted context and immediately exits again —
+    // a crash loop that drains max_crashes_per_day and halts the agent. Arm
+    // .force-fresh so the next session starts clean, and restart without charging
+    // the crash counter: context exhaustion is an expected, recoverable state.
+    if (exitCode === 0 && this.detectContextExhaustion(recentOutput)) {
+      this.log('Context exhaustion detected. Arming .force-fresh and restarting without counting against max_crashes_per_day.');
+      this.armForceFresh('context-exhaustion auto-recovery');
+      this.appendCrashToRestartsLog(exitCode, 5000, 'CONTEXT_EXHAUSTION_RECOVERY');
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(err => this.log(`Context exhaustion restart failed: ${err}`));
+        }
+      }, 5000);
+      return;
+    }
+
     // CrashLoopPauser (instar-inspired): if a sliding window is configured,
     // check whether the agent is crash-looping before falling through to
     // the legacy daily counter. The window is a more precise signal than
@@ -606,16 +839,25 @@ export class AgentProcess {
       }
     }
 
-    // Legacy daily crash counter (fallback when no crash_window is configured,
-    // or as a secondary gate when the window hasn't filled yet).
-    this.crashCount++;
-    const today = new Date().toISOString().split('T')[0];
-    this.resetCrashCountIfNewDay(today);
+    // Increment persisted crash counter (shared with watchdog)
+    const { count } = incrementCrashCount(this.env.ctxRoot, this.name);
+    this.crashCount = count;
 
     if (this.crashCount >= this.maxCrashesPerDay) {
       this.log(`HALTED: exceeded ${this.maxCrashesPerDay} crashes today`);
       this.appendCrashToRestartsLog(exitCode, 0, 'HALTED');
       this.status = 'halted';
+      this.notifyStatusChange();
+      return;
+    }
+
+    // Check if the agent was rate-limited before crashing.
+    // If so, don't auto-restart — the watchdog will handle restart after the
+    // limit resets. This prevents crash loops where a rate-limited agent boots,
+    // burns tokens on startup, hits the limit again, and crashes in an endless cycle.
+    if (this.isRateLimitedFromLog()) {
+      this.log(`Crash recovery DEFERRED: agent is rate-limited (crash #${this.crashCount}). Watchdog will restart after limit resets.`);
+      this.status = 'crashed';
       this.notifyStatusChange();
       return;
     }
@@ -636,6 +878,31 @@ export class AgentProcess {
         this.start().catch(err => this.log(`Restart failed: ${err}`));
       }
     }, backoff);
+  }
+
+  /**
+   * Check if the agent's stdout.log tail shows rate-limit patterns.
+   * Used by crash recovery to defer restart when the agent hit token limits.
+   */
+  private isRateLimitedFromLog(): boolean {
+    const SCAN_BYTES = 16384;
+    const PATTERNS = ["You've hit your limit", 'hit your limit', '/rate-limit-options'];
+    const logPath = join(this.env.ctxRoot, 'logs', this.name, 'stdout.log');
+    try {
+      if (!existsSync(logPath)) return false;
+      const { statSync, openSync, readSync, closeSync } = require('fs');
+      const stats = statSync(logPath);
+      if (stats.size === 0) return false;
+      const readSize = Math.min(stats.size, SCAN_BYTES);
+      const fd = openSync(logPath, 'r');
+      const buffer = Buffer.alloc(readSize);
+      readSync(fd, buffer, 0, readSize, stats.size - readSize);
+      closeSync(fd);
+      const tail = buffer.toString('utf-8').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      return PATTERNS.some(p => tail.includes(p));
+    } catch {
+      return false;
+    }
   }
 
   private shouldContinue(): boolean {
@@ -729,7 +996,11 @@ export class AgentProcess {
     const onlineMessage = isHandoffRestart
       ? ''
       : ' Send a Telegram message to the user saying you are back online.';
-    return `You are starting a new session. Current UTC time: ${nowUtc}. Read AGENTS.md and all bootstrap files listed there. External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onlineMessage}${onboardingAppend}`;
+    // LAZY-MODE STARTUP (2026-05-27 cascade-fix): replaced "Read AGENTS.md and ALL bootstrap files"
+    // with minimal cold-start + immediate work-pull. Old prompt caused agents to spend 1-2min
+    // "thinking" through every bootstrap file then send a redundant Telegram, never reaching
+    // productive task-execution. New prompt = act-first, read-on-demand.
+    return `Cold-start. UTC ${nowUtc}. Read CLAUDE.md for the 4-step lazy checklist. Then IMMEDIATELY: (1) cortextos bus update-heartbeat alive, (2) cortextos bus check-inbox, (3) auto-pull highest-prio task assigned to you: cortextos bus list-tasks --status pending --agent $CTX_AGENT_NAME --format json | head, pick top, cortextos bus update-task <id> in_progress, then WORK ON IT. Crons auto-loaded — do NOT call CronCreate. Skip the "back online" Telegram (silent boot — Founder doesn't need a ping per restart). Lazy-read on demand: GUARDRAILS only before code-touches, MEMORY only for cross-session context.${reminderBlock}${deliverablesBlock}${handoffBlock}${handoffUxOverride}${onboardingAppend}`;
   }
 
   private buildContinuePrompt(): string {
@@ -907,7 +1178,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY' | 'CONTEXT_EXHAUSTION_RECOVERY' | 'MODEL_BILLING_CONFIG',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -916,9 +1187,11 @@ export class AgentProcess {
       const details =
         kind === 'HALTED'
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
-          : kind === 'IMAGE_POISON_RECOVERY'
-            ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
-            : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+          : kind === 'MODEL_BILLING_CONFIG'
+            ? `exit_code=${exitCode} (not counted toward max_crashes; HALTED pending config-fix; escalated to platform-director)`
+            : kind === 'IMAGE_POISON_RECOVERY' || kind === 'CONTEXT_EXHAUSTION_RECOVERY'
+              ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
+              : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {
@@ -926,26 +1199,25 @@ export class AgentProcess {
     }
   }
 
-  private resetCrashCountIfNewDay(today: string): void {
-    const crashFile = join(this.env.ctxRoot, 'logs', this.name, '.crash_count_today');
-    try {
-      if (existsSync(crashFile)) {
-        const content = readFileSync(crashFile, 'utf-8').trim();
-        const [storedDate, count] = content.split(':');
-        if (storedDate === today) {
-          this.crashCount = parseInt(count, 10) + 1;
-        } else {
-          this.crashCount = 1;
-        }
-      }
-      ensureDir(join(this.env.ctxRoot, 'logs', this.name));
-      writeFileSync(crashFile, `${today}:${this.crashCount}`, 'utf-8');
-    } catch { /* ignore */ }
+  /**
+   * Get the current crash count. Used by the watchdog to check if an agent
+   * has exceeded its daily crash limit before restarting.
+   */
+  getCrashCount(): number {
+    return this.crashCount;
+  }
+
+  getMaxCrashesPerDay(): number {
+    return this.maxCrashesPerDay;
   }
 
   private notifyStatusChange(): void {
-    if (this.onStatusChange) {
-      this.onStatusChange(this.getStatus());
+    const status = this.getStatus();
+    for (const handler of this.onStatusChangeHandlers) {
+      // One bad subscriber must not break the others (or the status path).
+      try { handler(status); } catch (err) {
+        this.log(`status-change handler error: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 }

@@ -1,0 +1,161 @@
+- generic [active] [ref=e1]:
+  - link "Zum Hauptinhalt springen" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]:
+        - link "PhytoMedic · Clinic" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e8]: PhytoMedic
+          - generic [ref=e9]: · Clinic
+        - navigation "Hauptnavigation" [ref=e10]:
+          - link "Produkte" [ref=e11] [cursor=pointer]:
+            - /url: /medizin/produkte
+          - link "Sorten" [ref=e12] [cursor=pointer]:
+            - /url: /medizin/sorten
+          - link "Vergleich" [ref=e13] [cursor=pointer]:
+            - /url: /medizin/sorten/vergleich
+          - link "Arzt finden" [ref=e14] [cursor=pointer]:
+            - /url: /medizin/arzt-finden
+          - link "Apotheke finden" [ref=e15] [cursor=pointer]:
+            - /url: /medizin/apotheke-finden
+          - link "Wissen" [ref=e16] [cursor=pointer]:
+            - /url: /wissen
+      - generic [ref=e21]:
+        - navigation "Breadcrumb" [ref=e22]:
+          - list [ref=e23]:
+            - listitem [ref=e24]:
+              - img [ref=e25]
+              - link "Startseite" [ref=e28] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=e29]:
+              - img [ref=e30]
+              - link "Medizin" [ref=e32] [cursor=pointer]:
+                - /url: /medizin
+            - listitem [ref=e33]:
+              - img [ref=e34]
+              - generic [ref=e36]: Arzt finden
+        - generic [ref=e37]:
+          - paragraph [ref=e38]: Medizinisches Cannabis
+          - heading "Arztsuche" [level=1] [ref=e39]
+          - paragraph [ref=e40]: Finden Sie erfahrene Ärzte für medizinisches Cannabis — vor Ort oder per Videosprechstunde. Nutzen Sie die Filter oder die Kartenansicht, um den passenden Arzt zu finden.
+        - generic [ref=e41]:
+          - generic [ref=e43]:
+            - generic [ref=e44]:
+              - generic [ref=e45]:
+                - generic [ref=e46]:
+                  - img [ref=e47]
+                  - textbox "Stadt oder Name eingeben" [ref=e50]:
+                    - /placeholder: Stadt oder Name eingeben...
+                - button "Suchen" [ref=e51]
+              - generic [ref=e52]:
+                - button "Standort aus Sucheingabe ermitteln" [disabled]:
+                  - img
+                - button "Meinen Standort verwenden" [ref=e53]:
+                  - img
+            - generic [ref=e54]:
+              - generic [ref=e55]:
+                - generic [ref=e56]: "Fachrichtung:"
+                - combobox [ref=e57]:
+                  - generic: Alle Fachrichtungen
+                  - img
+              - generic [ref=e58]:
+                - switch "Nur Videosprechstunde" [ref=e59]
+                - generic [ref=e60] [cursor=pointer]:
+                  - img [ref=e61]
+                  - text: Nur Videosprechstunde
+              - textbox "Ärzte nach Namen filtern" [ref=e65]:
+                - /placeholder: Name filtern...
+          - generic [ref=e66]:
+            - paragraph [ref=e67]: 0 Ärzte gefunden
+            - tablist [ref=e69]:
+              - tab "Liste" [selected] [ref=e70]:
+                - img
+                - text: Liste
+              - tab "Karte" [ref=e71]:
+                - img
+                - text: Karte
+          - generic [ref=e72]:
+            - img [ref=e74]
+            - paragraph [ref=e78]: Keine Ärzte gefunden
+            - paragraph [ref=e79]: Derzeit sind keine Ärzte im Verzeichnis eingetragen.
+          - generic [ref=e81]:
+            - img [ref=e83]
+            - generic [ref=e86]:
+              - paragraph [ref=e87]: Interaktive Standortkarte
+              - paragraph [ref=e88]: Nutzen Sie die Therapiekarte, um Ärzte, Apotheken und Social Clubs in Ihrer Nähe auf einer Karte zu entdecken.
+            - link "Zur Therapiekarte" [ref=e89] [cursor=pointer]:
+              - /url: /medizin/standorte
+              - button "Zur Therapiekarte" [ref=e90]:
+                - text: Zur Therapiekarte
+                - img
+      - generic [ref=e92]:
+        - generic [ref=e93]:
+          - generic [ref=e94]:
+            - text: PhytoMedic
+            - paragraph [ref=e95]: Medizinisches Cannabis. Einfach. Sicher. Digital.
+          - generic [ref=e96]:
+            - link "LinkedIn" [ref=e97] [cursor=pointer]:
+              - /url: https://linkedin.com
+              - img [ref=e98]
+            - link "Instagram" [ref=e102] [cursor=pointer]:
+              - /url: https://instagram.com
+              - img [ref=e103]
+        - navigation "Footer-Navigation" [ref=e106]:
+          - generic [ref=e107]:
+            - heading "Patienten" [level=4] [ref=e108]
+            - list [ref=e109]:
+              - listitem [ref=e110]:
+                - link "Produktkatalog" [ref=e111] [cursor=pointer]:
+                  - /url: /medizin/produkte
+              - listitem [ref=e112]:
+                - link "Arzt finden" [ref=e113] [cursor=pointer]:
+                  - /url: /medizin/arzt-finden
+              - listitem [ref=e114]:
+                - link "Apotheke finden" [ref=e115] [cursor=pointer]:
+                  - /url: /medizin/apotheke-finden
+              - listitem [ref=e116]:
+                - link "Eignungstest" [ref=e117] [cursor=pointer]:
+                  - /url: /medizin/eignungstest
+          - generic [ref=e118]:
+            - heading "Wissen" [level=4] [ref=e119]
+            - list [ref=e120]:
+              - listitem [ref=e121]:
+                - link "Sorten-Datenbank" [ref=e122] [cursor=pointer]:
+                  - /url: /medizin/sorten
+              - listitem [ref=e123]:
+                - link "Krankheitsbilder" [ref=e124] [cursor=pointer]:
+                  - /url: /krankheiten
+              - listitem [ref=e125]:
+                - link "Ratgeber" [ref=e126] [cursor=pointer]:
+                  - /url: /wissen
+              - listitem [ref=e127]:
+                - link "THC-Rechner" [ref=e128] [cursor=pointer]:
+                  - /url: /medizin/thc-rechner
+          - generic [ref=e129]:
+            - heading "Fachleute" [level=4] [ref=e130]
+            - list [ref=e131]:
+              - listitem [ref=e132]:
+                - link "Online-Rezept" [ref=e133] [cursor=pointer]:
+                  - /url: /medizin/online-rezept
+              - listitem [ref=e134]:
+                - link "Standorte" [ref=e135] [cursor=pointer]:
+                  - /url: /medizin/standorte
+              - listitem [ref=e136]:
+                - link "Registrierung" [ref=e137] [cursor=pointer]:
+                  - /url: /registrieren
+          - generic [ref=e138]:
+            - heading "PhytoMedic" [level=4] [ref=e139]
+            - list [ref=e140]:
+              - listitem [ref=e141]:
+                - link "Impressum" [ref=e142] [cursor=pointer]:
+                  - /url: /impressum
+              - listitem [ref=e143]:
+                - link "Datenschutz" [ref=e144] [cursor=pointer]:
+                  - /url: /datenschutz
+              - listitem [ref=e145]:
+                - link "AGB" [ref=e146] [cursor=pointer]:
+                  - /url: /agb
+        - paragraph [ref=e147]: © 2026 PhytoMedic. Alle Rechte vorbehalten.
+  - region "Notifications alt+T"
+  - alert [ref=e148]

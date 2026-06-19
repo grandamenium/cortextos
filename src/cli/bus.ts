@@ -4,7 +4,8 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName, validateTaskId } from '../utils/validate.js';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { createTask, updateTask, reassignTask, completeTask, claimTask, selectAndClaimNext, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { decomposeBundle } from '../bus/bundle.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -18,6 +19,8 @@ import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-stat
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
+import { loadBundlePlan, computeBundleProgress, renderBundleSummary, renderBundleDetail, renderBundleTelegram, diffBundleSnapshots, type BundleProgress } from '../bus/bundle-status.js';
+import { buildOverview, renderOverviewText, renderOverviewTelegram } from '../bus/feature-rollup.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
@@ -154,7 +157,9 @@ busCommand
   .option('--needs-approval', 'Require human approval before execution')
   .option('--blocked-by <ids>', 'Comma-separated task IDs that must complete before this task can progress')
   .option('--blocks <ids>', 'Comma-separated task IDs that this new task will block (symmetric reverse edge)')
-  .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; needsApproval?: boolean; blockedBy?: string; blocks?: string }) => {
+  .option('--bundle <id>', 'Feature-bundle id this task belongs to (coordinated work; see AGENTS.md)')
+  .option('--role <role>', 'Product role this sub-task covers (patient, doctor, pharmacy, manufacturer, admin)')
+  .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; needsApproval?: boolean; blockedBy?: string; blocks?: string; bundle?: string; role?: string }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const parseList = (raw?: string) => (raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []);
@@ -166,6 +171,8 @@ busCommand
       needsApproval: opts.needsApproval ?? false,
       blockedBy: parseList(opts.blockedBy),
       blocks: parseList(opts.blocks),
+      bundle: opts.bundle,
+      role: opts.role,
     });
     console.log(taskId);
     // Auto-notify assignee so the task is visible immediately (issue #78)
@@ -180,9 +187,9 @@ busCommand
 busCommand
   .command('update-task')
   .argument('<id>', 'Task ID')
-  .argument('<status>', 'New status (pending, in_progress, completed, blocked, cancelled)')
+  .argument('<status>', 'New status (pending, in_progress, verifying, completed, blocked, cancelled)')
   .action((id: string, status: string) => {
-    const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
+    const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'verifying', 'completed', 'blocked', 'cancelled'];
     if (!validStatuses.includes(status as TaskStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
       process.exit(1);
@@ -203,6 +210,32 @@ busCommand
 
     updateTask(paths, id, status as TaskStatus);
     console.log(`Updated ${id} -> ${status}`);
+  });
+
+busCommand
+  .command('reassign-task')
+  .description('Reassign a task to a different agent. Validates target exists in the agent registry and appends an audit entry.')
+  .argument('<id>', 'Task ID')
+  .argument('<agent>', 'Target agent name')
+  .action((id: string, agent: string) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    try {
+      // Best-effort: load registered agents from list-agents for validation.
+      let registeredAgents: string[] | undefined;
+      try {
+        const result = spawnSync('cortextos', ['bus', 'list-agents', '--format', 'json'], { encoding: 'utf-8' });
+        if (result.status === 0) {
+          const agents: Array<{ name: string }> = JSON.parse(result.stdout);
+          registeredAgents = agents.map((a) => a.name);
+        }
+      } catch { /* skip validation if list-agents unavailable */ }
+      reassignTask(paths, id, agent, env.agentName, registeredAgents);
+      console.log(`Reassigned ${id} -> ${agent}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
   });
 
 busCommand
@@ -293,11 +326,69 @@ busCommand
   });
 
 busCommand
+  .command('claim-next')
+  .description('Atomically claim the next workable task of a feature-bundle (coordinated work). Selects pending, dependency-met tasks for --bundle (optionally --role), DAG-ordered, and claims the first — the way builder agents pull coordinated work instead of isolated random tasks.')
+  .requiredOption('--bundle <id>', 'Feature-bundle id to pull the next task from')
+  .option('--role <role>', 'Only claim a sub-task for this product role')
+  .option('--agent <name>', 'Agent claiming the task (defaults to CTX_AGENT_NAME)')
+  .action((opts: { bundle: string; role?: string; agent?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const agent = opts.agent || env.agentName;
+    if (!agent) {
+      console.error('ERROR: --agent or CTX_AGENT_NAME required');
+      process.exit(1);
+    }
+    try {
+      const task = selectAndClaimNext(paths, agent, { bundle: opts.bundle, role: opts.role });
+      if (!task) {
+        const scope = opts.role ? `bundle ${opts.bundle} / role ${opts.role}` : `bundle ${opts.bundle}`;
+        console.log(`No workable (pending, dependency-met) task in ${scope}.`);
+        return;
+      }
+      console.log(`Claimed ${task.id} -> in_progress (assigned to ${agent})`);
+      console.log(`  Bundle: ${task.bundle_id ?? '-'}${task.role ? ` / role ${task.role}` : ''}`);
+      console.log(`  Title: ${task.title}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('bundle-decompose')
+  .description('Decompose a feature-bundle manifest (markdown) into bus tasks — one sub-task per role, sharing a bundle_id, with cross-role dependency edges. Idempotent: does nothing if the bundle already has tasks.')
+  .argument('<manifest-file>', 'Path to the bundle manifest markdown (e.g. obsidian-vault/agent-shared/bundles/<id>.md)')
+  .action((manifestFile: string) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    if (!existsSync(manifestFile)) {
+      console.error(`Manifest not found: ${manifestFile}`);
+      process.exit(1);
+    }
+    const markdown = readFileSync(manifestFile, 'utf-8');
+    try {
+      const res = decomposeBundle(paths, env.agentName, env.org, markdown);
+      if (res.skipped) {
+        console.log(`Bundle ${res.bundle} already has ${res.existingCount} task(s) — nothing created (idempotent).`);
+        return;
+      }
+      console.log(`Bundle ${res.bundle}: created ${res.created.length} sub-task(s):`);
+      for (const c of res.created) console.log(`  [${c.role}] ${c.taskId}`);
+      console.log(`Agents pull these with: cortextos bus claim-next --bundle ${res.bundle}`);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+busCommand
   .command('complete-task')
   .argument('<id>', 'Task ID')
   .argument('[result]', 'Completion result (optional positional form)')
   .option('--result <text>', 'Completion result')
-  .action((id: string, resultArg: string | undefined, opts: { result?: string }) => {
+  .option('--force', 'Allow overwriting an existing non-empty result (use when adding richer context)')
+  .action((id: string, resultArg: string | undefined, opts: { result?: string; force?: boolean }) => {
     // Accept result as either positional arg or --result flag (P1 fix #8)
     const effectiveResult = opts.result ?? resultArg;
     const env = resolveEnv();
@@ -312,7 +403,7 @@ busCommand
       }
     }
 
-    completeTask(paths, id, effectiveResult);
+    completeTask(paths, id, effectiveResult, { force: opts.force });
     console.log(`Completed ${id}`);
   });
 
@@ -390,6 +481,96 @@ busCommand
       console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
     }
     console.log('');
+  });
+
+busCommand
+  .command('bundle-status')
+  .description('Show feature-bundle progress from a sprint-plan markdown file')
+  .option('--plan <path>', 'Path to sprint-plan markdown', 'obsidian-vault/agent-shared/sprint-plans/2026-05-22-feature-bundle-plan.md')
+  .option('--bundle <n>', 'Show detailed view for one specific bundle number')
+  .option('--format <fmt>', 'Output format: text, json, or telegram', 'text')
+  .option('--watch', 'Refresh every N seconds and highlight diffs vs last snapshot')
+  .option('--interval <s>', 'Watch refresh interval in seconds', '30')
+  .action((opts: { plan: string; bundle?: string; format?: string; watch?: boolean; interval?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+
+    // Try the provided plan path, also try a phytomedic-saas-relative fallback if not absolute.
+    const candidatePaths = [
+      opts.plan,
+      join(process.cwd(), opts.plan),
+      join(process.cwd(), '..', '..', '..', 'phytomedic-saas', opts.plan),
+      join('/Users/arndt/phytomedic-saas', opts.plan),
+    ];
+    let planPath: string | null = null;
+    for (const p of candidatePaths) {
+      if (existsSync(p)) { planPath = p; break; }
+    }
+    if (!planPath) {
+      console.error(`Sprint-plan not found. Tried:`);
+      for (const p of candidatePaths) console.error(`  - ${p}`);
+      process.exit(1);
+    }
+
+    const renderOnce = (): BundleProgress[] => {
+      const tasks = listTasks(paths, {});
+      const bundles = loadBundlePlan(planPath!);
+      return computeBundleProgress(bundles, tasks);
+    };
+
+    const render = (progress: BundleProgress[]): string => {
+      if (opts.format === 'json') return JSON.stringify(progress, null, 2);
+      if (opts.format === 'telegram') return renderBundleTelegram(progress);
+      if (opts.bundle != null) return renderBundleDetail(progress, parseInt(opts.bundle, 10));
+      return renderBundleSummary(progress);
+    };
+
+    if (!opts.watch) {
+      console.log(render(renderOnce()));
+      return;
+    }
+
+    // Watch mode — clear screen + repaint each tick, show diff banner when something moved.
+    const intervalMs = Math.max(5, parseInt(opts.interval ?? '30', 10)) * 1000;
+    let prev = renderOnce();
+    const paint = (progress: BundleProgress[], changes: ReturnType<typeof diffBundleSnapshots>) => {
+      process.stdout.write('\x1b[2J\x1b[H'); // ANSI clear + home
+      console.log(`  Watching bundle-status — refresh every ${intervalMs / 1000}s — Ctrl+C to exit\n`);
+      console.log(render(progress));
+      if (changes.length > 0) {
+        console.log('  Changes since last snapshot:');
+        for (const c of changes) {
+          const sign = c.delta > 0 ? '+' : '';
+          console.log(`    B${c.bundle} ${c.field}: ${sign}${c.delta}  (${c.title})`);
+        }
+        console.log('');
+      }
+    };
+    paint(prev, []);
+    setInterval(() => {
+      const next = renderOnce();
+      const changes = diffBundleSnapshots(prev, next);
+      paint(next, changes);
+      prev = next;
+    }, intervalMs);
+  });
+
+busCommand
+  .command('overview')
+  .description('Feature-level project progress derived live from task [TAG]s (no sprint-plan file needed)')
+  .option('--format <fmt>', 'Output format: text, json, or telegram', 'text')
+  .action((opts: { format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const tasks = listTasks(paths, {});
+    const o = buildOverview(tasks);
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(o, null, 2));
+    } else if (opts.format === 'telegram') {
+      console.log(renderOverviewTelegram(o));
+    } else {
+      console.log(renderOverviewText(o));
+    }
   });
 
 busCommand
@@ -813,7 +994,16 @@ busCommand
   .option('--cycle <name>', 'Cycle name')
   .action((action: string, agent: string, opts: { metric?: string; metricType?: string; surface?: string; direction?: string; window?: string; measurement?: string; loopInterval?: string; enabled?: string; cycle?: string }) => {
     const env = resolveEnv();
-    const agentDir = env.agentDir || process.cwd();
+    // Resolve the TARGET agent's dir, not the invoker's. When <agent> differs from
+    // the invoking agent, derive the path from frameworkRoot + org + agent name.
+    // Without this, manage-cycle always writes to the invoker's config.json.
+    const invokerDir = env.agentDir || process.cwd();
+    const agentDir =
+      agent !== env.agentName && env.frameworkRoot && env.org
+        ? join(env.frameworkRoot, 'orgs', env.org, 'agents', agent)
+        : agent !== env.agentName && env.frameworkRoot
+          ? join(env.frameworkRoot, 'agents', agent)
+          : invokerDir;
     if (opts.direction && opts.direction !== 'higher' && opts.direction !== 'lower') {
       console.error(`Invalid --direction '${opts.direction}'. Must be 'higher' or 'lower'`);
       process.exit(1);
@@ -834,6 +1024,11 @@ busCommand
       loop_interval: opts.loopInterval,
       enabled: opts.enabled !== undefined ? opts.enabled === 'true' : undefined,
     });
+    if ((action === 'create' || action === 'modify' || action === 'remove') && agent !== env.agentName) {
+      const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+      logEvent(paths, env.agentName, env.org, 'action', 'cycle_cross_agent_write', 'info',
+        JSON.stringify({ action, invoker: env.agentName, target_agent: agent, cycle: opts.cycle }));
+    }
     console.log(JSON.stringify(cycles, null, 2));
   });
 
@@ -2770,6 +2965,293 @@ busCommand
       console.log('  cortextos restart <agent-name>');
     }
   });
+
+// ─── SO Tooling Commands ────────────────────────────────────────────────────
+import { enqueueEscalation, flushQueue, getCadenceStatus } from '../bus/cadence.js';
+
+busCommand
+  .command('cadence-queue')
+  .argument('<topic>', 'Topic identifier (e.g. "CI fail", "Yousign blocked")')
+  .argument('<message>', 'Message to queue for escalation to Founder')
+  .option('--severity <sev>', 'Severity: info|warning|urgent|critical', 'warning')
+  .option('--agent <name>', 'Agent queueing this (defaults to CTX_AGENT_NAME)')
+  .option('--chat-id <id>', 'Override Telegram chat ID (defaults to CTX_TELEGRAM_CHAT_ID)')
+  .action((topic: string, message: string, opts: { severity?: string; agent?: string; chatId?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const valid = ['info', 'warning', 'urgent', 'critical'];
+    const severity = (opts.severity || 'warning') as 'info' | 'warning' | 'urgent' | 'critical';
+    if (!valid.includes(severity)) {
+      console.error(`Invalid severity. Must be one of: ${valid.join(', ')}`);
+      process.exit(1);
+    }
+    enqueueEscalation(paths.stateDir, {
+      topic,
+      message,
+      agent: opts.agent || env.agentName,
+      severity,
+      chat_id: opts.chatId || process.env.CTX_TELEGRAM_CHAT_ID,
+    });
+    console.log(`Queued [${severity}] "${topic}" — flush via cadence-flush`);
+  });
+
+busCommand
+  .command('cadence-flush')
+  .description('Apply 5min aggregation + 30min debounce rules and output messages to send')
+  .option('--chat-id <id>', 'Default Telegram chat ID if event has none')
+  .option('--format <fmt>', 'Output format: text or json', 'text')
+  .action((opts: { chatId?: string; format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const defaultChatId = opts.chatId || process.env.CTX_TELEGRAM_CHAT_ID || '';
+    const result = flushQueue(paths.stateDir, defaultChatId);
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    if (result.messages.length === 0 && result.suppressed.length === 0) {
+      console.log('cadence-flush: queue empty');
+      return;
+    }
+    for (const msg of result.messages) {
+      console.log(`SEND chat_id=${msg.chat_id}`);
+      console.log(msg.text);
+      console.log('');
+    }
+    if (result.suppressed.length > 0) {
+      console.log(`Suppressed ${result.suppressed.length} event(s):`);
+      for (const s of result.suppressed) {
+        console.log(`  [${s.event.topic}] ${s.reason}`);
+      }
+    }
+  });
+
+busCommand
+  .command('cadence-status')
+  .description('Show cadence engine queue and debounce state')
+  .action(() => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const status = getCadenceStatus(paths.stateDir);
+    console.log(`Queue length:  ${status.queueLength}`);
+    console.log(`Topics:        ${status.topics.join(', ') || '(none)'}`);
+    console.log(`Last flush:    ${status.lastFlush || '(never)'}`);
+    if (Object.keys(status.debounceState).length > 0) {
+      console.log('\nDebounce state:');
+      for (const [topic, db] of Object.entries(status.debounceState)) {
+        const age = db.last_sent
+          ? `${Math.round((Date.now() - new Date(db.last_sent).getTime()) / 60000)}min ago`
+          : 'never';
+        console.log(`  ${topic}: last_sent=${age}, consecutive=${db.consecutive_count}`);
+      }
+    }
+  });
+
+busCommand
+  .command('diagnose')
+  .description('Show agent environment context: CWD, worktree state, task counts, last heartbeat')
+  .option('--format <fmt>', 'Output format: text or json', 'text')
+  .action((opts: { format?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+
+    // Worktree detection: .git is a file with "gitdir:" when inside a worktree
+    const gitPath = join(process.cwd(), '.git');
+    let isWorktree = false;
+    let gitBranch = '';
+    let gitMainWorktree = '';
+    try {
+      const gitStat = readFileSync(gitPath, 'utf-8');
+      if (gitStat.startsWith('gitdir:')) {
+        isWorktree = true;
+        const gitdirTarget = gitStat.replace('gitdir:', '').trim();
+        // e.g. ../.git/worktrees/<name>
+        gitMainWorktree = gitdirTarget.replace(/\.git\/worktrees\/.*/, '.git').replace(/\/$/, '');
+      }
+    } catch {
+      // .git directory (not a file) = main worktree
+    }
+    try {
+      const headPath = isWorktree
+        ? join(process.cwd(), '.git').replace(/\/.git$/, '') + '/.git'
+        : join(process.cwd(), '.git');
+      const headFile = join(process.cwd(), '.git').endsWith('.git')
+        ? join(process.cwd(), '.git')
+        : join(process.cwd(), '.git');
+      // Read HEAD from cwd
+      const head = readFileSync(join(process.cwd(), '.git') + '/HEAD', 'utf-8').trim();
+      gitBranch = head.startsWith('ref:') ? head.replace('ref: refs/heads/', '') : head.substring(0, 8);
+    } catch {
+      try {
+        const result = spawnSync('git', ['branch', '--show-current'], { cwd: process.cwd(), encoding: 'utf-8' });
+        gitBranch = result.stdout?.trim() || '(unknown)';
+      } catch { gitBranch = '(unknown)'; }
+    }
+
+    // Task counts
+    const allTasks = listTasks(paths, {});
+    const myTasks = listTasks(paths, { agent: env.agentName });
+    const myPending = myTasks.filter(t => t.status === 'pending').length;
+    const myInProgress = myTasks.filter(t => t.status === 'in_progress').length;
+
+    // Last heartbeat
+    let lastHeartbeat = '(none)';
+    let heartbeatAge = '';
+    try {
+      const hb = JSON.parse(readFileSync(join(paths.stateDir, 'heartbeat.json'), 'utf-8'));
+      const ts = hb.last_heartbeat || hb.updated_at || hb.timestamp;
+      if (ts) {
+        const age = Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
+        lastHeartbeat = new Date(ts).toISOString();
+        heartbeatAge = `${age}min ago`;
+      }
+    } catch { /* no heartbeat file */ }
+
+    const info = {
+      agent: env.agentName,
+      org: env.org,
+      cwd: process.cwd(),
+      framework_root: env.frameworkRoot || '(not set)',
+      is_worktree: isWorktree,
+      git_branch: gitBranch || '(not a git repo)',
+      tasks_total: allTasks.length,
+      tasks_mine: myTasks.length,
+      tasks_pending: myPending,
+      tasks_in_progress: myInProgress,
+      last_heartbeat: lastHeartbeat,
+      heartbeat_age: heartbeatAge,
+      ctx_root: paths.ctxRoot,
+    };
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(info, null, 2));
+      return;
+    }
+
+    console.log('\n🔍 cortextos diagnose\n');
+    console.log(`  Agent:           ${info.agent}`);
+    console.log(`  Org:             ${info.org}`);
+    console.log(`  CWD:             ${info.cwd}`);
+    console.log(`  Framework root:  ${info.framework_root}`);
+    console.log(`  Worktree:        ${info.is_worktree ? '✓ yes' : '✗ no (main worktree)'}`);
+    console.log(`  Git branch:      ${info.git_branch}`);
+    console.log(`  Tasks (total):   ${info.tasks_total}`);
+    console.log(`  Tasks (mine):    ${info.tasks_mine} (${info.tasks_pending} pending, ${info.tasks_in_progress} in-progress)`);
+    console.log(`  Last heartbeat:  ${info.last_heartbeat} ${info.heartbeat_age}`);
+    console.log(`  CTX_ROOT:        ${info.ctx_root}`);
+    console.log('');
+  });
+
+busCommand
+  .command('founder-search')
+  .argument('<topic>', 'Topic or keyword to search for in founder decisions')
+  .option('--vault <path>', 'Override vault root path')
+  .option('--context <n>', 'Lines of context around each match', '2')
+  .action((topic: string, opts: { vault?: string; context?: string }) => {
+    const env = resolveEnv();
+    const contextLines = parseInt(opts.context || '2', 10);
+
+    // Resolve vault root: explicit > framework_root/obsidian-vault > CWD search
+    const candidateVaults = [
+      opts.vault,
+      env.frameworkRoot ? join(env.frameworkRoot, 'obsidian-vault') : null,
+      join(process.cwd(), 'obsidian-vault'),
+      join(process.cwd(), '..', '..', '..', '..', 'obsidian-vault'),
+      join('/Users/arndt/cortextos', 'obsidian-vault'),
+    ].filter(Boolean) as string[];
+
+    let vaultRoot: string | null = null;
+    for (const v of candidateVaults) {
+      if (existsSync(join(v, 'agent-shared')) || existsSync(v)) {
+        vaultRoot = v;
+        break;
+      }
+    }
+    if (!vaultRoot) {
+      console.error('Cannot locate obsidian-vault. Set CTX_FRAMEWORK_ROOT or use --vault <path>.');
+      process.exit(1);
+    }
+
+    const founderDir = join(vaultRoot, 'founder-decisions');
+    if (!existsSync(founderDir)) {
+      console.log(`No founder-decisions directory found at ${founderDir}`);
+      console.log('(No decisions logged yet or vault path mismatch — use --vault to override)');
+      return;
+    }
+
+    // Use ripgrep if available, fall back to grep
+    const rg = spawnSync('rg', ['--version'], { encoding: 'utf-8' });
+    const useRg = rg.status === 0;
+
+    const args = useRg
+      ? ['--color=never', '-i', `-C${contextLines}`, '--heading', topic, founderDir]
+      : ['-r', '-i', `-C${contextLines}`, '--include=*.md', topic, founderDir];
+    const tool = useRg ? 'rg' : 'grep';
+    const result = spawnSync(tool, args, { encoding: 'utf-8' });
+
+    if (!result.stdout?.trim()) {
+      console.log(`No matches for "${topic}" in ${founderDir}`);
+      return;
+    }
+
+    console.log(`\n📋 founder-search: "${topic}"\n`);
+    console.log(result.stdout);
+  });
+
+busCommand
+  .command('founder-decision-log')
+  .argument('<topic>', 'Short topic title for the decision')
+  .argument('<decision>', 'The decision or learning to record')
+  .option('--vault <path>', 'Override vault root path')
+  .option('--context <ctx>', 'Additional context about the decision')
+  .option('--owner <owner>', 'Decision owner (default: user)', 'user')
+  .action((topic: string, decision: string, opts: { vault?: string; context?: string; owner?: string }) => {
+    const env = resolveEnv();
+    const { mkdirSync, appendFileSync } = require('fs');
+
+    const candidateVaults = [
+      opts.vault,
+      env.frameworkRoot ? join(env.frameworkRoot, 'obsidian-vault') : null,
+      join(process.cwd(), 'obsidian-vault'),
+      join(process.cwd(), '..', '..', '..', '..', 'obsidian-vault'),
+      join('/Users/arndt/cortextos', 'obsidian-vault'),
+    ].filter(Boolean) as string[];
+
+    let vaultRoot: string | null = null;
+    for (const v of candidateVaults) {
+      if (existsSync(join(v, 'agent-shared')) || existsSync(v)) {
+        vaultRoot = v;
+        break;
+      }
+    }
+    if (!vaultRoot) {
+      console.error('Cannot locate obsidian-vault. Set CTX_FRAMEWORK_ROOT or use --vault <path>.');
+      process.exit(1);
+    }
+
+    const founderDir = join(vaultRoot, 'founder-decisions');
+    mkdirSync(founderDir, { recursive: true });
+
+    const logPath = join(founderDir, 'decisions-log.md');
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 16);
+    const entry = [
+      `\n## ${now} — ${topic}`,
+      `**Decision:** ${decision}`,
+      opts.context ? `**Context:** ${opts.context}` : null,
+      `**Owner:** ${opts.owner || 'user'}`,
+      `**Tags:** #FOUNDER-LEARNED`,
+      `---`,
+    ].filter(Boolean).join('\n') + '\n';
+
+    appendFileSync(logPath, entry, 'utf-8');
+    console.log(`✓ Logged to ${logPath}`);
+    console.log(`  Topic: ${topic}`);
+    console.log(`  Decision: ${decision}`);
+  });
+
+// ────────────────────────────────────────────────────────────────────────────
 
 function sleepMs(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));

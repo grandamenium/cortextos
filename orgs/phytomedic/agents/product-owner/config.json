@@ -1,0 +1,24 @@
+{
+  "agent_name": "product-owner",
+  "enabled": true,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "8,38 * * * *",
+      "prompt": "Heartbeat-Tick. Run: cortextos bus update-heartbeat alive. Then: cortextos bus check-inbox | head -50. If inbox has urgent msgs, process them. Else end. NO bootstrap-file-reading. End: cortextos bus update-cron-fire heartbeat --interval 30."
+    },
+    {
+      "name": "scope-audit",
+      "type": "cron",
+      "cron": "22 */2 * * *",
+      "prompt": "Scope-audit cycle: read cortextos bus list-tasks --status pending --format json. For any task with description >2000 chars OR title containing 'BATCH/FULL/COMPLETE/komplett/alle/everything': flag as too-big — propose decomposition by sending a STALE-AUDIT-style ticket to original assignee with the smaller sub-tickets. Goal: never let a >2h task linger pending. Then: cortextos bus update-heartbeat alive. End: cortextos bus update-cron-fire scope-audit --interval 120."
+    },
+    {
+      "name": "morning-triage",
+      "type": "recurring",
+      "cron": "5 9 * * *",
+      "prompt": "Morning triage (FEED platform-director, do NOT ping founder directly — orchestrator owns the single consolidated founder briefing): (1) Check overnight Telegram + platform-director briefing for new wishes / 'scope unclear' flags. (2) Decompose each into tickets, file them. (3) For ANY decision that needs the founder, send it to platform-director (cortextos bus send-message platform-director) as a crisp decision-item for the consolidated briefing — never a parallel founder ask. (4) Set today's PM goal in goals.json. Then: cortextos bus update-heartbeat alive. End: cortextos bus update-cron-fire morning-triage --interval 1440."
+    }
+  ]
+}

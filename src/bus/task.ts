@@ -23,6 +23,8 @@ export function createTask(
     dueDate?: string;
     blockedBy?: string[];
     blocks?: string[];
+    bundle?: string;
+    role?: string;
   } = {},
 ): string {
   const {
@@ -34,9 +36,12 @@ export function createTask(
     dueDate = '',
     blockedBy = [],
     blocks = [],
+    bundle = '',
+    role = '',
   } = options;
 
   validatePriority(priority);
+  if (!org) throw new Error('createTask: org must be non-empty (CTX_ORG not set?)');
 
   const epoch = Date.now();
   // 8 digits: same-millisecond collision probability is ~1e-8 instead of ~1e-3.
@@ -78,6 +83,8 @@ export function createTask(
     completed_at: null,
     due_date: dueDate || null,
     archived: false,
+    ...(bundle ? { bundle_id: bundle } : {}),
+    ...(role ? { role } : {}),
     ...(blockedBy.length ? { blocked_by: [...blockedBy] } : {}),
     ...(blocks.length ? { blocks: [...blocks] } : {}),
   };
@@ -280,11 +287,59 @@ export function updateTask(
     assignee = task.assigned_to;
     task.status = status;
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    // Re-opening a completed task must clear completed_at so the task does not
+    // appear simultaneously in_progress and done. Without this, the read-modify-
+    // write in completeTask followed by an updateTask("in_progress") revert leaves
+    // completed_at set with status≠completed — the inconsistency that caused the
+    // IMPROVE-frontend-dev-01 audit finding (2026-06-15).
+    if (status !== 'completed') {
+      task.completed_at = null;
+    }
     atomicWriteSync(filePath, JSON.stringify(task));
   } catch (err) {
     throw new Error(`Task ${taskId} update failed: ${err}`);
   }
   appendTaskAudit(paths, taskId, { event: 'update', agent: assignee || 'unknown', from: prevStatus, to: status });
+}
+
+/**
+ * Reassign a task to a different agent. Validates the target exists in the
+ * registered agent list (guards against phantom-alias orphan assignments),
+ * then atomically updates assigned_to and appends a 'reassign' audit entry.
+ */
+export function reassignTask(
+  paths: BusPaths,
+  taskId: string,
+  newAssignee: string,
+  actorAgent: string,
+  registeredAgents?: string[],
+): void {
+  if (!newAssignee) throw new Error('reassignTask: newAssignee must be non-empty');
+
+  // Validate target exists if a registry was provided.
+  if (registeredAgents && registeredAgents.length > 0 && !registeredAgents.includes(newAssignee)) {
+    throw new Error(
+      `reassignTask: agent '${newAssignee}' is not in the registered agent list. ` +
+      `Known agents: ${registeredAgents.join(', ')}`,
+    );
+  }
+
+  const filePath = findTaskFile(paths, taskId);
+  if (!filePath) {
+    throw new Error(`Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`);
+  }
+  const content = readFileSync(filePath, 'utf-8');
+  const task: Task = JSON.parse(content);
+  const prevAssignee = task.assigned_to;
+  task.assigned_to = newAssignee;
+  task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  atomicWriteSync(filePath, JSON.stringify(task));
+  appendTaskAudit(paths, taskId, {
+    event: 'reassign',
+    agent: actorAgent,
+    from_assignee: prevAssignee,
+    to_assignee: newAssignee,
+  });
 }
 
 /**
@@ -294,10 +349,12 @@ export function updateTask(
  */
 export interface TaskAuditEntry {
   ts: string; // ISO 8601
-  event: 'create' | 'claim' | 'update' | 'complete';
+  event: 'create' | 'claim' | 'update' | 'complete' | 'reassign';
   agent: string; // who caused the event
   from?: TaskStatus;
   to?: TaskStatus;
+  from_assignee?: string;
+  to_assignee?: string;
   note?: string;
 }
 
@@ -463,6 +520,7 @@ export function completeTask(
   paths: BusPaths,
   taskId: string,
   result?: string,
+  options: { force?: boolean } = {},
 ): void {
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
@@ -479,10 +537,37 @@ export function completeTask(
     prevStatus = task.status;
     assignee = task.assigned_to;
     taskOrg = task.org || '';
+    // Guard: never silently clobber a non-empty VERIFIED result with an empty or
+    // shorter/generic one. This prevents the double-close pattern where an agent
+    // completes a task with a detailed VERIFIED result, then a post-merge scan
+    // completes it again with a generic "Auto-closed via PR #N" note — overwriting
+    // the original and triggering a false reopen (IMPROVE-frontend-dev-01, 2026-06-15).
+    // Pass force:true to allow explicit result updates (e.g. richer context added later).
+    if (task.status === 'completed' && task.result && !options.force) {
+      const incomingLen = result?.length ?? 0;
+      const existingLen = task.result.length;
+      if (incomingLen < existingLen) {
+        throw new Error(
+          `Task ${taskId} already completed with a longer result (${existingLen} chars). ` +
+          `Refusing to overwrite with shorter/empty result (${incomingLen} chars) — this would lose VERIFIED context. ` +
+          `Use --force to override, or skip re-closing if the task is already done.`
+        );
+      }
+    }
     task.status = 'completed';
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     task.completed_at = task.updated_at;
     if (result) {
+      // Reject results that contain unsubstituted template placeholders.
+      // The pattern <word>:<word> (two angle-bracket tokens joined by a colon)
+      // is characteristic of copy-pasted task-audit templates like <file>:<lines>
+      // and has no legitimate use in a completion result string.
+      if (/<[a-z_][a-z0-9_-]*>:<[a-z_][a-z0-9_-]*>/.test(result)) {
+        throw new Error(
+          `Task ${taskId} complete rejected: result contains unsubstituted placeholder tokens (e.g. <file>:<lines>). ` +
+          `Replace angle-bracket placeholders with actual file paths and line numbers before completing.`
+        );
+      }
       task.result = result;
     }
     atomicWriteSync(filePath, JSON.stringify(task));
@@ -527,6 +612,7 @@ export function listTasks(
     agent?: string;
     status?: TaskStatus;
     priority?: Priority;
+    bundle?: string;
     respectDeps?: boolean;
   },
 ): Task[] {
@@ -550,6 +636,9 @@ export function listTasks(
       if (filters?.agent && task.assigned_to !== filters.agent) continue;
       if (filters?.status && task.status !== filters.status) continue;
       if (filters?.priority && task.priority !== filters.priority) continue;
+      // Exact match — bundle_id is `<free>`, NOT a task-id prefix. A prefix
+      // compare would mis-bucket real ids (task_<epoch>_<rand>).
+      if (filters?.bundle && task.bundle_id !== filters.bundle) continue;
       if (task.archived) continue;
 
       tasks.push(task);
@@ -583,6 +672,44 @@ export function listTasks(
   const blocked: Task[] = [];
   for (const t of sorted) (isBlocked(t) ? blocked : unblocked).push(t);
   return [...unblocked, ...blocked];
+}
+
+/**
+ * Bundle-scoped atomic "claim the next workable task".
+ *
+ * Selects pending tasks for a given bundle_id (optionally narrowed to a role),
+ * orders them DAG-aware (unblocked first, then created_at DESC), skips any whose
+ * dependencies are not all completed, then atomically claimTask()s the first
+ * eligible one. Reuses the O_EXCL claim lock, so two agents racing claim-next on
+ * the same bundle can never grab the same task. Returns the claimed Task, or
+ * null if the bundle has no eligible pending task.
+ *
+ * This is how builder agents pull COORDINATED work — `claim-next --bundle <id>`
+ * instead of grabbing an isolated, self-filed random task.
+ */
+export function selectAndClaimNext(
+  paths: BusPaths,
+  agent: string,
+  opts: { bundle: string; role?: string },
+): Task | null {
+  const candidates = listTasks(paths, {
+    status: 'pending',
+    bundle: opts.bundle,
+    respectDeps: true,
+  }).filter((t) => !opts.role || t.role === opts.role);
+
+  for (const t of candidates) {
+    // Authoritative cross-store dependency check (listTasks only orders by
+    // in-list deps). Non-empty = unmet/missing deps → not yet workable.
+    if (checkTaskDependencies(paths, t.id).length > 0) continue;
+    try {
+      return claimTask(paths, t.id, agent);
+    } catch {
+      // Lost the race to another agent, or became unclaimable — try next.
+      continue;
+    }
+  }
+  return null;
 }
 
 /**

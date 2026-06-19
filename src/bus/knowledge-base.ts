@@ -12,13 +12,27 @@ import { normalizeOrgName } from '../utils/org.js';
 
 /**
  * Resolve the Python interpreter inside the knowledge-base venv,
- * accounting for Windows vs Unix layout.
+ * accounting for Windows vs Unix layout and git worktrees.
+ *
+ * Worktrees don't have their own venv — fall back to the main checkout's
+ * knowledge-base/venv when the local path doesn't exist.
+ * Pattern: <main-repo>/.claude/worktrees/<name>  →  <main-repo>
  */
 function getVenvPython(frameworkRoot: string): string {
   const isWin = process.platform === 'win32';
   const venvBin = isWin ? 'Scripts' : 'bin';
   const pythonExe = isWin ? 'python.exe' : 'python3';
-  return join(frameworkRoot, 'knowledge-base', 'venv', venvBin, pythonExe);
+  const localPath = join(frameworkRoot, 'knowledge-base', 'venv', venvBin, pythonExe);
+  if (existsSync(localPath)) return localPath;
+
+  // Worktree fallback: main repo is the grandparent of .claude/worktrees/<name>/
+  const worktreeMatch = frameworkRoot.match(/^(.+)[/\\]\.claude[/\\]worktrees[/\\][^/\\]+$/);
+  if (worktreeMatch) {
+    const mainPath = join(worktreeMatch[1], 'knowledge-base', 'venv', venvBin, pythonExe);
+    if (existsSync(mainPath)) return mainPath;
+  }
+
+  return localPath; // preserve original error behaviour if venv not found anywhere
 }
 
 /**

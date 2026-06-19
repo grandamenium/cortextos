@@ -79,6 +79,18 @@ vi.mock('fs', async () => {
   };
 });
 
+// SYS-1M-DETECT: the MODEL_BILLING_CONFIG escalation shells out to
+// `cortextos bus send-message platform-director ...` via execFileSync. Mock it
+// so tests never spawn a real process and can assert escalate-once behaviour.
+const mockExecFileSync = vi.fn();
+vi.mock('child_process', async () => {
+  const actual = await vi.importActual<typeof import('child_process')>('child_process');
+  return {
+    ...actual,
+    execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+  };
+});
+
 const { AgentProcess } = await import('../../../src/daemon/agent-process.js');
 
 const mockEnv = {
@@ -100,6 +112,7 @@ beforeEach(() => {
   mockPty.isAlive.mockReturnValue(true);
   mockPty.onExit.mockClear();
   mockInjectMessage.mockClear();
+  mockExecFileSync.mockClear();
   fsMocks.existsSync.mockReset().mockReturnValue(false);
   fsMocks.readFileSync.mockReset();
   fsMocks.writeFileSync.mockReset();
@@ -414,5 +427,193 @@ describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', ()
     }
     // Should be 'crashed' (recovering), NOT 'halted', because daily max is 5
     expect(ap.getStatus().status).not.toBe('halted');
+  });
+});
+
+describe('AgentProcess — context exhaustion auto-recovery (SYS-DAEMON-CTX-01)', () => {
+  it('detects "100% context used" and restarts fresh without charging crash counter', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    // Simulate tailStdoutLog returning context exhaustion signal
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('100% context used');
+
+    // Exit 0 — same as real context exhaustion
+    capturedOnExit!(0, 0);
+
+    // Must be in 'crashed' state (restart scheduled)
+    expect(ap.getStatus().status).toBe('crashed');
+
+    // .force-fresh marker must be written so the next start() skips --continue
+    expect(fsMocks.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('.force-fresh'),
+      expect.stringContaining('context-exhaustion'),
+      'utf-8',
+    );
+
+    // restarts.log must record CONTEXT_EXHAUSTION_RECOVERY, not CRASH
+    expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
+    const [logPath, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logPath)).toContain('/logs/alice/restarts.log');
+    expect(String(logLine)).toContain('CONTEXT_EXHAUSTION_RECOVERY');
+    expect(String(logLine)).toContain('not counted toward max_crashes');
+    // Crash counter must NOT have been incremented
+    expect(ap.getCrashCount()).toBe(0);
+  });
+
+  // NOTE: the 1M-context billing strings ("Extra usage is required for 1M
+  // context" / "Usage credits required for 1M context") are deliberately NOT
+  // tested here — they are a CONFIG class, handled by the MODEL_BILLING_CONFIG
+  // describe block below. A prior version of this test asserted the old 1M
+  // string => CONTEXT_EXHAUSTION_RECOVERY, which ENCODED the SYS-1M-DETECT bug
+  // (force-fresh on a billing gate = restart loop). See the anti-collapse test.
+
+  it('detects "conversation too long" compaction failure', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue(
+      'conversation too long to continue without compaction',
+    );
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('CONTEXT_EXHAUSTION_RECOVERY');
+    expect(ap.getCrashCount()).toBe(0);
+  });
+
+  it('ANSI-stripped context string is still detected', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // Simulate TUI status bar with ANSI escape codes around the text
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue(
+      '\x1b[32m100% context used\x1b[0m',
+    );
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('crashed');
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('CONTEXT_EXHAUSTION_RECOVERY');
+  });
+
+  it('clean exit 0 WITHOUT context signal goes through regular crash path', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    // No context exhaustion string — tailStdoutLog returns empty (default: no log file)
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('');
+
+    capturedOnExit!(0, 0);
+
+    // Regular crash path — crash counter incremented
+    expect(ap.getStatus().status).toBe('crashed');
+    expect(ap.getCrashCount()).toBe(1);
+    // Should be CRASH in log, not CONTEXT_EXHAUSTION_RECOVERY
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('] CRASH:');
+    expect(String(logLine)).not.toContain('CONTEXT_EXHAUSTION_RECOVERY');
+  });
+
+  it('non-zero exit code with context string goes through regular crash path', async () => {
+    // Regression guard: context exhaustion check is gated on exitCode === 0.
+    // If Claude exits non-zero (e.g. SIGKILL) with context strings in the log,
+    // it should be treated as a real crash, not a context exhaustion.
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('100% context used');
+    capturedOnExit!(1, 0);
+
+    expect(ap.getCrashCount()).toBe(1);
+    const [, logLine] = fsMocks.appendFileSync.mock.calls[0];
+    expect(String(logLine)).toContain('] CRASH:');
+  });
+});
+
+describe('AgentProcess — MODEL_BILLING_CONFIG 1M-billing partition (SYS-1M-DETECT)', () => {
+  // The load-bearing guard. A 1M-context billing/config error at session start
+  // (exit 0, empty context) must HALT-and-escalate, NEVER force-fresh — a
+  // force-fresh relaunches the SAME explicit model and re-hits the SAME gate
+  // (the restart loop this exists to prevent). The partition is string-
+  // discriminated and must never collapse into the context-exhaustion path.
+
+  // restarts.log lines accumulate across start() + every handleExit; search all
+  // of them rather than trusting a fixed index.
+  const allRestartsLogText = () =>
+    fsMocks.appendFileSync.mock.calls.map((c: any[]) => String(c[1])).join('\n');
+
+  it('v2.1.111+ string "Usage credits required for 1M context" → HALT + escalate, NOT force-fresh', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('Usage credits required for 1M context');
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('halted');
+    expect(ap.getCrashCount()).toBe(0); // NOT charged against max_crashes_per_day
+    const log = allRestartsLogText();
+    expect(log).toContain('MODEL_BILLING_CONFIG');
+    expect(log).not.toContain('CONTEXT_EXHAUSTION_RECOVERY');
+    // escalated to platform-director via the bus (shelled execFileSync)
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    const [cmd, cmdArgs] = mockExecFileSync.mock.calls[0];
+    expect(cmd).toBe('cortextos');
+    expect(cmdArgs).toEqual(expect.arrayContaining(['bus', 'send-message', 'platform-director']));
+  });
+
+  it('anti-collapse: legacy string "Extra usage is required for 1M context" also HALTs (never force-fresh)', async () => {
+    // Regression guard: a prior test asserted this legacy string =>
+    // CONTEXT_EXHAUSTION_RECOVERY, which ENCODED the bug (force-fresh on a
+    // billing gate). Both wordings must partition to MODEL_BILLING_CONFIG.
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('Extra usage is required for 1M context');
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('halted');
+    const log = allRestartsLogText();
+    expect(log).toContain('MODEL_BILLING_CONFIG');
+    expect(log).not.toContain('CONTEXT_EXHAUSTION_RECOVERY');
+  });
+
+  it('ANSI-wrapped billing string is still detected (TUI escape codes stripped)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue(
+      '\x1b[31mUsage credits required for 1M context\x1b[0m',
+    );
+    capturedOnExit!(0, 0);
+
+    expect(ap.getStatus().status).toBe('halted');
+    expect(allRestartsLogText()).toContain('MODEL_BILLING_CONFIG');
+  });
+
+  it('escalates ONCE per halt-episode (latch holds across repeated billing exits)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('Usage credits required for 1M context');
+    capturedOnExit!(0, 0);
+    capturedOnExit!(0, 0); // second billing exit in the SAME episode (no 'running' in between)
+
+    expect(ap.getStatus().status).toBe('halted');
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1); // latch: PD is not re-spammed
+  });
+
+  it('non-zero exit with a billing string is a real crash (partition gated on exitCode === 0)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    vi.spyOn(ap as any, 'tailStdoutLog').mockReturnValue('Usage credits required for 1M context');
+    capturedOnExit!(1, 0);
+
+    expect(ap.getCrashCount()).toBe(1);
+    expect(allRestartsLogText()).not.toContain('MODEL_BILLING_CONFIG');
+    expect(mockExecFileSync).not.toHaveBeenCalled();
   });
 });
