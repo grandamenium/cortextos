@@ -169,6 +169,59 @@ function computeNextFireAt(cron: CronDefinition, referenceMs: number): number {
 
 const RETRY_DELAYS_MS = [1_000, 4_000, 16_000];
 
+// onFire (PTY injection) is expected to return within milliseconds — it writes
+// a prompt to the agent's pseudo-terminal and returns a boolean; it does NOT
+// await the agent's reply.  If it does NOT settle quickly the agent session is
+// almost certainly WEDGED and the underlying inject is hanging (e.g. PTY write
+// backpressure on a session that has stopped reading).  Without a bound, a hung
+// onFire leaves the caller's `firing` flag stuck true forever, so the daemon
+// SILENTLY stops firing every later slot of that cron — a wedged agent then
+// gets ZERO further wake attempts (SYS-CRON-FIRING-FLAG, 2026-06-19 incident).
+// We bound each attempt with a generous timeout that rejects into the normal
+// retry/give-up path, guaranteeing the firing flag clears and the slot advances.
+const DEFAULT_ONFIRE_TIMEOUT_MS = 60_000;
+
+/** Resolve the per-attempt onFire timeout (env-overridable for tests/tuning). */
+function onFireTimeoutMs(): number {
+  const raw = process.env.CTX_CRON_ONFIRE_TIMEOUT_MS;
+  if (raw) {
+    const n = parseInt(raw, 10);
+    if (!isNaN(n) && n > 0) return n;
+  }
+  return DEFAULT_ONFIRE_TIMEOUT_MS;
+}
+
+/**
+ * Invoke onFire but reject if it has not settled within `timeoutMs`.
+ *
+ * A hung onFire promise cannot be cancelled (the wedged inject keeps its own
+ * pending promise alive), but rejecting here lets fireWithRetry move on so the
+ * scheduler never deadlocks on a single stuck fire.  The timer is unref'd so it
+ * never by itself keeps the process alive, and cleared on settle so a fast
+ * onFire leaves no dangling timer.
+ */
+function callOnFireWithTimeout(
+  onFire: (c: CronDefinition) => Promise<void> | void,
+  cron: CronDefinition,
+  timeoutMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(
+        `onFire timed out after ${timeoutMs}ms for cron "${cron.name}" — ` +
+        `agent session may be wedged (inject did not return)`
+      ));
+    }, timeoutMs);
+    if (timer && typeof (timer as { unref?: () => void }).unref === 'function') {
+      (timer as { unref: () => void }).unref();
+    }
+  });
+  return Promise.race([Promise.resolve(onFire(cron)), timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function fireWithRetry(
   cron: CronDefinition,
   agentName: string,
@@ -176,10 +229,11 @@ async function fireWithRetry(
   logger: (msg: string) => void,
 ): Promise<boolean> {
   const maxAttempts = RETRY_DELAYS_MS.length + 1; // 4 attempts total
+  const timeoutMs = onFireTimeoutMs();
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const start = Date.now();
     try {
-      await Promise.resolve(onFire(cron));
+      await callOnFireWithTimeout(onFire, cron, timeoutMs);
       appendExecutionLog(agentName, {
         ts: new Date().toISOString(),
         cron: cron.name,

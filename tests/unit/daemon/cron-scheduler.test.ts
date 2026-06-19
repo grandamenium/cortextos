@@ -361,6 +361,113 @@ describe('CronScheduler', () => {
   });
 
   // -------------------------------------------------------------------------
+  // onFire timeout — SYS-CRON-FIRING-FLAG regression
+  //
+  // A wedged agent session makes onFire (PTY inject) HANG (promise never
+  // resolves).  Before the timeout fix this left the scheduler's `firing` flag
+  // stuck true forever, so every later tick SKIPPED that cron and the wedged
+  // agent got zero further wake attempts (silent — no execution-log line either,
+  // since 'fired' only writes after onFire resolves).  The timeout must reject a
+  // hung inject into the normal retry/give-up path so the flag clears and the
+  // slot keeps being attempted on subsequent intervals.
+  // -------------------------------------------------------------------------
+
+  it('hung onFire times out after 4 attempts then gives up (does not hang the fire forever)', async () => {
+    const prev = process.env.CTX_CRON_ONFIRE_TIMEOUT_MS;
+    process.env.CTX_CRON_ONFIRE_TIMEOUT_MS = '5000'; // 5s per-attempt timeout
+    try {
+      // onFire that NEVER resolves — simulates a wedged session's hung inject.
+      const hungFire = vi.fn().mockImplementation(() => new Promise<void>(() => { /* never */ }));
+      // Long schedule + catch-up seed so the cron fires exactly ONCE (no re-fire
+      // during the long in-fire window), isolating the 4-attempt sequence.
+      mockReadCrons.mockReturnValue([
+        makeCron({
+          schedule:      '24h',
+          last_fired_at: new Date(Date.now() - 25 * 3_600_000).toISOString(),
+        }),
+      ]);
+
+      const hungLogs: string[] = [];
+      const hungScheduler = new CronScheduler({
+        agentName: 'test-agent',
+        onFire: hungFire,
+        logger: (msg) => hungLogs.push(msg),
+      });
+      hungScheduler.start();
+
+      // Catch-up fires within one tick, then run out all 4 attempts:
+      // each attempt 5s timeout; back-offs between attempts 1s + 4s + 16s.
+      await vi.advanceTimersByTimeAsync(TICK + 4 * 5_000 + (1_000 + 4_000 + 16_000) + 1_000);
+
+      // The fix: 4 attempts were made (1 initial + 3 retries) and the scheduler
+      // gave up — it did NOT hang on the first attempt forever.
+      expect(hungFire).toHaveBeenCalledTimes(4);
+      expect(hungLogs.some(l => l.includes('giving up'))).toBe(true);
+      expect(hungLogs.some(l => l.toLowerCase().includes('timed out'))).toBe(true);
+
+      hungScheduler.stop();
+    } finally {
+      if (prev === undefined) delete process.env.CTX_CRON_ONFIRE_TIMEOUT_MS;
+      else process.env.CTX_CRON_ONFIRE_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('after a hung fire times out, the cron is re-attempted on later intervals (no permanent stall)', async () => {
+    const prev = process.env.CTX_CRON_ONFIRE_TIMEOUT_MS;
+    process.env.CTX_CRON_ONFIRE_TIMEOUT_MS = '1000'; // fast 1s timeout to fit multiple windows
+    try {
+      // Permanently wedged inject: every attempt hangs forever.
+      const hungFire = vi.fn().mockImplementation(() => new Promise<void>(() => { /* never */ }));
+      mockReadCrons.mockReturnValue([makeCron({ schedule: '1m' })]);
+
+      const hungScheduler = new CronScheduler({
+        agentName: 'test-agent',
+        onFire: hungFire,
+        logger: (msg) => logs.push(msg),
+      });
+      hungScheduler.start();
+
+      // ~4 minutes: each fire window is 4*1s + 21s back-off = 25s, so several
+      // 1m slots come due and each is attempted. Before the fix the firing flag
+      // stayed stuck true after the FIRST attempt and the cron went silent — so
+      // call count would be pinned at 1. The fix keeps it being re-attempted.
+      await vi.advanceTimersByTimeAsync(4 * 60_000 + TICK);
+
+      // Strictly more than a single 4-attempt window proves the flag cleared and
+      // later slots were genuinely re-attempted rather than silently skipped.
+      expect(hungFire.mock.calls.length).toBeGreaterThan(4);
+
+      hungScheduler.stop();
+    } finally {
+      if (prev === undefined) delete process.env.CTX_CRON_ONFIRE_TIMEOUT_MS;
+      else process.env.CTX_CRON_ONFIRE_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('a fast onFire is unaffected by the timeout guard (no spurious timeout)', async () => {
+    const prev = process.env.CTX_CRON_ONFIRE_TIMEOUT_MS;
+    process.env.CTX_CRON_ONFIRE_TIMEOUT_MS = '5000';
+    try {
+      mockReadCrons.mockReturnValue([makeCron({ schedule: '1m' })]);
+      const okScheduler = new CronScheduler({
+        agentName: 'test-agent',
+        onFire: (cron) => { fired.push(cron); }, // resolves immediately
+        logger: (msg) => logs.push(msg),
+      });
+      okScheduler.start();
+
+      await vi.advanceTimersByTimeAsync(60_000 + TICK);
+
+      expect(fired).toHaveLength(1);
+      expect(logs.some(l => l.toLowerCase().includes('timed out'))).toBe(false);
+      okScheduler.stop();
+    } finally {
+      if (prev === undefined) delete process.env.CTX_CRON_ONFIRE_TIMEOUT_MS;
+      else process.env.CTX_CRON_ONFIRE_TIMEOUT_MS = prev;
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // reload() — picks up newly added cron
   // -------------------------------------------------------------------------
 
