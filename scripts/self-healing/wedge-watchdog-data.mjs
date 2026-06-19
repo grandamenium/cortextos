@@ -8,7 +8,15 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { execFileSync } from 'child_process';
 
-export const COOLDOWN_MS = 30 * 60 * 1000;          // 1 action/agent/30min
+export const COOLDOWN_MS = 30 * 60 * 1000;          // 1 action/agent/30min (re-wedge / restart cooldown)
+// Born-wedged surface-escalation window — DISTINCT from COOLDOWN_MS, and MEASURED not guessed.
+// surfaceSince CLEARS on every hb-advance, so the bound that matters is the SLOWEST agent's longest
+// healthy SINGLE-advance gap (its fastest-cron interval). Fleet measurement 2026-06-19: FE/BA
+// ~240min (4h) is the slowest; this is set comfortably above it. A healthy slow agent ticks +
+// clears surfaceSince before this; only a genuinely-never-advancing agent reaches it. (Reusing the
+// 30min COOLDOWN_MS here false-fired a born-wedged escalation on hourly user-proxy AND would have on
+// the 240min FE/BA — 2026-06-19 shadow-window finding; the two timescales are different.)
+export const SURFACE_ESCALATE_MS = 6 * 60 * 60 * 1000;   // 6h — comfortably > the 240min fleet max
 export const MIN_HB_ADVANCES = 3;                   // N: trusted interval needs >=3 observed hb-advance gaps
 export const HB_OBS_MAX = 13;                       // keep last 13 distinct hb values = 12 advance-gaps
 export const BOOTSTRAP_PRIOR_MS = 5 * 60 * 1000;    // surfacing-only prior while untrusted (NON-load-bearing: bootstrap never auto-acts)
@@ -143,14 +151,16 @@ export function applyTrust(verdict, trusted) {
  *  - NOT surfacing (recovered) -> CLEAR surfaceSince + surfaceEscalated (no stale state; a later
  *    genuine wedge re-surfaces cleanly, not pre-escalated);
  *  - first surface -> set surfaceSince = now (surfacingForMs = 0, no escalate yet);
- *  - persists past COOLDOWN_MS -> escalateNow = true ONCE; the surfaceEscalated latch prevents
- *    re-escalation (reuses COOLDOWN_MS — the SAME window/timer as the re-wedge escalation).
+ *  - persists past SURFACE_ESCALATE_MS (>> the slowest healthy cadence, NOT COOLDOWN_MS) ->
+ *    escalateNow = true ONCE; the surfaceEscalated latch prevents re-escalation. (A healthy slow
+ *    agent ticks + clears surfaceSince before this window; only a genuinely-never-advancing agent
+ *    reaches it.) The runner additionally gates the escalation PD-ping on ARMED mode.
  */
 export function tickSurfaceState(prev, isSurfacing, nowMs) {
   if (!isSurfacing) return { surfaceSince: undefined, surfaceEscalated: false, surfacingForMs: 0, escalateNow: false };
   const surfaceSince = prev.surfaceSince || nowMs;
   const surfacingForMs = nowMs - surfaceSince;
-  const escalateNow = surfacingForMs >= COOLDOWN_MS && !prev.surfaceEscalated;
+  const escalateNow = surfacingForMs >= SURFACE_ESCALATE_MS && !prev.surfaceEscalated;
   return { surfaceSince, surfaceEscalated: prev.surfaceEscalated || escalateNow, surfacingForMs, escalateNow };
 }
 
@@ -176,6 +186,31 @@ export function restartDisposition(lastActionAt, nowMs, mode) {
 export function pidChangedReset(prevPid, curPid, hbObs) {
   if (prevPid && curPid && prevPid !== curPid) return { hbObs: [], restarted: true };
   return { hbObs: hbObs || [], restarted: false };
+}
+
+/**
+ * SHADOW-PURITY gate for escalate(): the PD-ping is an external side-effect, so it fires ONLY in
+ * armed mode. In shadow the runner LOGS a WOULD-ESCALATE line instead (visible, consistent with
+ * WOULD-restart). Routing escalate() through this ONE gate makes every call-site (surface, re-wedge,
+ * and any future one) shadow-safe BY CONSTRUCTION — no per-call-site gate to forget. Pure.
+ */
+export function escalationGate(mode) {
+  return mode === 'armed';
+}
+
+/**
+ * Escalation message body, parameterized by reasonType so each path describes itself correctly
+ * (a born-wedged agent may NEVER have acted, so the old hardcoded "RE-WEDGED Xm after last action"
+ * was factually false + misdirected triage). Pure + testable.
+ */
+export function escalationMessage(reasonType, name, detailMs) {
+  const mins = Math.round((detailMs || 0) / 60000);
+  if (reasonType === 're-wedge')
+    return `${name} RE-WEDGED ${mins}m after last action — NOT auto-looping (not a transient stall). Manual investigation needed.`;
+  if (reasonType === 'hold')
+    return `${name} HOLD: Gate-C refutation — no other agent advancing = possible global pause / credit exhaustion / daemon-down. NOT auto-restarting (could be fleet-wide). Check the fleet.`;
+  // born-wedged
+  return `${name} BORN-WEDGED: untrusted interval surfacing ${mins}m past the born-wedged window with no hb-advance — genuinely stuck, NOT auto-restarted (untrusted). Manual investigation needed.`;
 }
 
 // --- per-agent state readers ------------------------------------------------

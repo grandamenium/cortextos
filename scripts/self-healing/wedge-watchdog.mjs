@@ -25,7 +25,7 @@ import { execFileSync } from 'child_process';
 import { evaluateWedge } from './wedge-watchdog-lib.mjs';
 import {
   ctxRoot, listAgentNames, lastHeartbeatMs, lastCronFireMs, recordHbObservation, resolveInterval, applyTrust,
-  tickSurfaceState, restartDisposition, pidChangedReset,
+  tickSurfaceState, restartDisposition, pidChangedReset, escalationGate, escalationMessage,
   lastActivity, ptyInfo, appendShadowLog, loadState, saveState, readMode, recordFire, COOLDOWN_MS,
 } from './wedge-watchdog-data.mjs';
 
@@ -116,16 +116,18 @@ async function main() {
     // Surface state-machine (pure): sets/persists/escalates-once while surfacing, CLEARS on recovery.
     const surf = tickSurfaceState(stA, verdict.action === 'surface', nowMs);
     stA.surfaceSince = surf.surfaceSince; stA.surfaceEscalated = surf.surfaceEscalated;
+    if (verdict.action !== 'hold') stA.holdAlerted = false;   // reset the HOLD-alert latch off-episode
 
     if (verdict.action === 'surface') {
-      // Untrusted would-be-restart: SURFACE (alert), never auto-act. Persists past the cooldown
-      // window -> ESCALATE ONCE (born-wedged not silently held). Same window as re-wedge (one timer).
+      // Untrusted would-be-restart: SURFACE (logged), never auto-act. Persists past the born-wedged
+      // window -> escalate ONCE. escalate() owns the shadow/armed gate (escalationGate) + logs the
+      // WOULD-ESCALATE/ESCALATE line, so no per-site mode check here.
       appendShadowLog(root, {
         ts: new Date(nowMs).toISOString(), mode: MODE, agent: name, action: 'surface',
-        disposition: surf.escalateNow ? 'SURFACE->ESCALATE (untrusted interval persists — born-wedged not silently held)' : 'SURFACE (untrusted interval / bootstrap — NOT auto-acting)',
+        disposition: 'SURFACE (untrusted interval / bootstrap — NOT auto-acting)',
         reason: verdict.reason, trusted: false, nGaps: trust[name].nGaps, surfacingForMs: surf.surfacingForMs, trace: verdict.trace,
       });
-      if (surf.escalateNow && SAFE_NAME.test(name)) escalate(name, verdict, surf.surfacingForMs);
+      if (surf.escalateNow) escalate(root, MODE, name, 'born-wedged', surf.surfacingForMs, verdict);
       continue;
     }
 
@@ -177,9 +179,11 @@ async function main() {
       const rd = restartDisposition(stA.lastActionAt, nowMs, MODE);
       line.cooldownActive = rd.cooling;
       if (rd.escalate) {
-        line.disposition = 'ESCALATE (re-wedge within cooldown — not a transient stall)';
+        // re-wedge within cooldown -> escalate, do NOT loop-restart. escalate() owns the shadow/armed
+        // gate (escalationGate) + logs WOULD-ESCALATE in shadow — no per-site mode check.
+        line.disposition = 'RE-WEDGE (escalation routed via escalate)';
         appendShadowLog(root, line);
-        escalate(name, verdict, rd.sinceLast);
+        escalate(root, MODE, name, 're-wedge', rd.sinceLast, verdict);
         continue;
       }
       if (rd.act) {
@@ -198,9 +202,13 @@ async function main() {
       continue;
     }
 
-    // hold (Gate-C refutation: no other agent advancing) — alarm-only, NEVER acts.
-    line.disposition = MODE === 'shadow' ? 'WOULD-HOLD+ALARM (shadow)' : 'HOLD+ALARM';
+    // hold (Gate-C refutation: no other agent advancing = possible global pause / credit / daemon-down).
+    // NEVER restarts. Fail-toward-surfacing: PUSH-ALERT PD once per HOLD episode (through the same
+    // escalationGate — shadow logs WOULD-ESCALATE, armed pings). holdAlerted latch dedups; cleared
+    // (with surface state) on any non-hold tick.
+    line.disposition = 'HOLD (Gate-C refutation — no other agent advancing)';
     appendShadowLog(root, line);
+    if (!stA.holdAlerted) { escalate(root, MODE, name, 'hold', 0, verdict); stA.holdAlerted = true; }
   }
   saveState(root, state);
   console.log(`[wedge-watchdog] mode=${MODE} evaluated=${names.length} acted=${acted.length}${acted.length ? ' [' + acted.join(',') + ']' : ''}`);
@@ -222,13 +230,21 @@ function doRestart(name) {
   }
 }
 
-function escalate(name, verdict, sinceLastMs) {
-  if (!SAFE_NAME.test(name)) return;     // defense-in-depth
+// Single escalation path — the SHADOW-PURITY gate (escalationGate) is INSIDE here, so EVERY
+// call-site (surface born-wedged, re-wedge, any future) is shadow-safe by construction: in shadow
+// it LOGS a WOULD-ESCALATE line (no PD ping); only armed pings. Message parameterized by reasonType.
+function escalate(root, mode, name, reasonType, detailMs, verdict) {
+  if (!SAFE_NAME.test(name)) return false;   // defense-in-depth (SEC-WEDGE-ARGV)
+  const body = escalationMessage(reasonType, name, detailMs);
+  if (!escalationGate(mode)) {               // SHADOW-PURITY: log would-escalate, NEVER ping
+    appendShadowLog(root, { ts: new Date().toISOString(), mode, agent: name, action: 'escalate', disposition: `WOULD-ESCALATE (${reasonType}, shadow — logged, no PD ping)`, reason: body });
+    return false;
+  }
   try {
     execFileSync('cortextos', ['bus', 'send-message', 'platform-director', 'high',
-      `[wedge-watchdog] ${name} RE-WEDGED ${Math.round(sinceLastMs / 60000)}m after last action — NOT auto-looping (not a transient stall). Manual investigation needed. Trace: ${JSON.stringify(verdict.trace).slice(0, 400)}`,
-    ], { timeout: 15000 });
+      `[wedge-watchdog] ${body} Trace: ${verdict ? JSON.stringify(verdict.trace).slice(0, 300) : ''}`], { timeout: 15000 });
   } catch { /* best-effort */ }
+  return true;
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
