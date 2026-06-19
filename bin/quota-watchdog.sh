@@ -123,8 +123,15 @@ REMAINING_PCT=""
 METHOD=""
 API_AVAILABLE=no
 
-# Path 1: official Anthropic usage API (the only authoritative source)
-if API_OUT=$("$CORTEXTOS" bus check-usage-api --json 2>/dev/null); then
+# Path 1: official Anthropic usage API (the only authoritative source).
+# --force = ALWAYS live: a fleet-HALT pause decision must never be made on a
+# (<=3min) cached snapshot. The watchdog ticks every 5min (> the 3min TTL) so
+# it already mostly live-fetches; --force closes the residual fresh-cache-bad
+# -value window. Fail-safe by construction: a 429-from-force throws -> the
+# check-usage-api call fails -> API_AVAILABLE=no -> api-degraded path -> NO
+# pause (see below). So --force CANNOT manufacture a false-pause even under
+# rate-limit. --force still writes the fresh snapshot to the shared cache.
+if API_OUT=$("$CORTEXTOS" bus check-usage-api --json --force 2>/dev/null); then
   FIVE_H=$(echo "$API_OUT" | "$JQ" -r '.five_hour_utilization // empty')
   if [ -n "$FIVE_H" ] && [ "$FIVE_H" != "null" ]; then
     REMAINING_PCT=$(awk -v u="$FIVE_H" 'BEGIN { p = (1-u)*100; if (p<0) p=0; printf "%.0f", p }')

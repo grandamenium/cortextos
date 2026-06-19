@@ -54,6 +54,29 @@ function writeStore(store = SAMPLE_STORE) {
   writeFileSync(join(oauthDir, 'accounts.json'), JSON.stringify(store, null, 2));
 }
 
+// Write a usage cache directly (state/usage/cache.json) so tests can control
+// expires_at — used to exercise the TTL staleness guard in checkUsageApi.
+// expiresAt < Date.now() ⇒ the guard MUST treat the entry as a miss (re-fetch),
+// never a stale return. Default snapshot carries a deliberately "bad" 0.99
+// reading so a leaked stale value is unmistakable in assertions.
+function writeCache(
+  expiresAt: number,
+  snapshot = {
+    account: 'primary',
+    five_hour_utilization: 0.99,
+    seven_day_utilization: 0.99,
+    fetched_at: '2026-01-01T00:00:00Z',
+  },
+) {
+  const { mkdirSync, writeFileSync } = require('fs');
+  const usageDir = join(tmpDir, 'state', 'usage');
+  mkdirSync(usageDir, { recursive: true });
+  writeFileSync(
+    join(usageDir, 'cache.json'),
+    JSON.stringify({ snapshot, expires_at: expiresAt }, null, 2),
+  );
+}
+
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'cortextos-oauth-test-'));
   mockFetch.mockReset();
@@ -164,6 +187,59 @@ describe('checkUsageApi', () => {
     const call = mockFetch.mock.calls[0];
     expect(call[1].headers.Authorization).toBe('Bearer tok_primary_abc');
     expect(call[1].headers['anthropic-beta']).toBe('oauth-2025-04-20');
+  });
+
+  // --- TTL staleness guard (QUOTA-WATCHDOG-REENABLE-PREP #52) ---
+  // The guard at oauth.ts:178-183 is STRUCTURAL but was UNTESTED. A stale-cache
+  // false-read is the exact failure-shape behind the 2026-06-18 false-pause, so
+  // these lock the three properties before the quota-watchdog re-enable:
+  //   (1) cache HIT within TTL → no re-fetch   (already covered above)
+  //   (2) cache MISS past TTL  → re-fetches, never returns the stale snapshot
+  //   (3) fetch-failure THROWS → never falls back to the stale snapshot
+  it('re-fetches a live value when the cache is expired (no stale return)', async () => {
+    writeStore();
+    // Stale cache, expired 1s ago, carrying a deliberately wrong 0.99 reading.
+    writeCache(Date.now() - 1000);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ five_hour_utilization: 0.12, seven_day_utilization: 0.08 }),
+    });
+
+    const result = await checkUsageApi(tmpDir); // no force — relies on the TTL guard
+    expect(result.cached).toBe(false);
+    expect(mockFetch).toHaveBeenCalledOnce();
+    // Must be the freshly-fetched value, NOT the 0.99 stale snapshot.
+    expect(result.five_hour_utilization).toBeCloseTo(0.12);
+    expect(result.seven_day_utilization).toBeCloseTo(0.08);
+  });
+
+  it('throws on a missing token and does NOT fall back to a stale cache', async () => {
+    // No accounts.json + no env token → no auth source.
+    const savedToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    try {
+      writeCache(Date.now() - 1000); // expired stale cache present
+      await expect(checkUsageApi(tmpDir)).rejects.toThrow(/No OAuth token/);
+      // Guard threw rather than silently serving the stale snapshot, and never
+      // reached the network.
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      if (savedToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = savedToken;
+    }
+  });
+
+  it('throws on a fetch failure and does NOT fall back to a stale cache', async () => {
+    writeStore();
+    writeCache(Date.now() - 1000); // expired stale cache present
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 429,
+      text: async () => 'Too Many Requests',
+    });
+
+    // 429 (the watchdog --force rate-limit case) must throw, not serve stale.
+    await expect(checkUsageApi(tmpDir)).rejects.toThrow('429');
   });
 });
 
