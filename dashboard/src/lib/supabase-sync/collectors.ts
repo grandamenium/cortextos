@@ -115,7 +115,7 @@ export function collectAgents(): AgentRow[] {
 /** Largest active .jsonl in a directory, in MB. Returns null if none found. */
 function largestJsonlMb(dir: string): number | null {
   try {
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl') && !f.includes('-ARCHIVED-'));
     if (!files.length) return null;
     const sizes = files.map((f) => { try { return fs.statSync(path.join(dir, f)).size; } catch { return 0; } });
     const maxBytes = Math.max(...sizes);
