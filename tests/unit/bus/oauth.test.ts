@@ -7,10 +7,21 @@ import { tmpdir } from 'os';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+// Mock the macOS Keychain read (security CLI). Default: no token (throws like a
+// missing keychain entry). Individual tests override the implementation to
+// simulate a present credential.
+const mockExecFileSync = vi.fn((..._args: unknown[]): string => {
+  throw new Error('keychain unavailable');
+});
+vi.mock('child_process', () => ({
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
+}));
+
 const {
   loadAccounts,
   getActiveAccount,
   checkUsageApi,
+  acquireOAuthTokenFromKeychain,
   refreshOAuthToken,
   rotateOAuth,
   ALERT_5H,
@@ -77,13 +88,24 @@ function writeCache(
   );
 }
 
+let savedCreds: string | undefined;
+
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'cortextos-oauth-test-'));
   mockFetch.mockReset();
+  // Default: keychain read fails (no token from any keychain/file source).
+  mockExecFileSync.mockReset();
+  mockExecFileSync.mockImplementation(() => { throw new Error('keychain unavailable'); });
+  // Point the Linux/credentials-file fallback at a guaranteed-missing path so
+  // the keychain helper is deterministic regardless of host platform/state.
+  savedCreds = process.env.CLAUDE_CREDS;
+  process.env.CLAUDE_CREDS = join(tmpDir, 'no-such-credentials.json');
 });
 
 afterEach(() => {
   try { rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
+  if (savedCreds === undefined) delete process.env.CLAUDE_CREDS;
+  else process.env.CLAUDE_CREDS = savedCreds;
 });
 
 describe('loadAccounts', () => {
@@ -229,6 +251,58 @@ describe('checkUsageApi', () => {
     }
   });
 
+  it('falls back to the Keychain/credentials-file token when no accounts.json and no env token', async () => {
+    // Mirrors the quota-watchdog acquisition path: with no accounts.json and no
+    // env token, the triage CLI must still find the token the watchdog uses.
+    const savedToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    try {
+      const blob = JSON.stringify({ claudeAiOauth: { accessToken: 'tok_from_keychain' } });
+      // macOS path: security CLI returns the credential blob.
+      mockExecFileSync.mockReturnValue(blob);
+      // Linux/other path: credentials file present at CLAUDE_CREDS.
+      const { writeFileSync } = require('fs');
+      writeFileSync(process.env.CLAUDE_CREDS as string, blob);
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ five_hour_utilization: 0.31, seven_day_utilization: 0.22 }),
+      });
+
+      const result = await checkUsageApi(tmpDir, { force: true });
+      expect(result.account).toBe('keychain');
+      expect(result.five_hour_utilization).toBeCloseTo(0.31);
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const authHeader = (mockFetch.mock.calls[0][1] as { headers: Record<string, string> }).headers.Authorization;
+      expect(authHeader).toBe('Bearer tok_from_keychain');
+    } finally {
+      if (savedToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = savedToken;
+    }
+  });
+
+  it('prefers the env token over the Keychain when both are present', async () => {
+    const savedToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'tok_from_env';
+    try {
+      mockExecFileSync.mockReturnValue(
+        JSON.stringify({ claudeAiOauth: { accessToken: 'tok_from_keychain' } }),
+      );
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ five_hour_utilization: 0.1, seven_day_utilization: 0.05 }),
+      });
+
+      const result = await checkUsageApi(tmpDir, { force: true });
+      expect(result.account).toBe('env');
+      const authHeader = (mockFetch.mock.calls[0][1] as { headers: Record<string, string> }).headers.Authorization;
+      expect(authHeader).toBe('Bearer tok_from_env');
+    } finally {
+      if (savedToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = savedToken;
+    }
+  });
+
   it('throws on a fetch failure and does NOT fall back to a stale cache', async () => {
     writeStore();
     writeCache(Date.now() - 1000); // expired stale cache present
@@ -240,6 +314,37 @@ describe('checkUsageApi', () => {
 
     // 429 (the watchdog --force rate-limit case) must throw, not serve stale.
     await expect(checkUsageApi(tmpDir)).rejects.toThrow('429');
+  });
+});
+
+describe('acquireOAuthTokenFromKeychain', () => {
+  // Set the token on BOTH sources (macOS keychain mock + CLAUDE_CREDS file) so
+  // the assertion holds regardless of the host platform the test runs on.
+  function seedBothSources(blob: string) {
+    mockExecFileSync.mockReturnValue(blob);
+    const { writeFileSync } = require('fs');
+    writeFileSync(process.env.CLAUDE_CREDS as string, blob);
+  }
+
+  it('returns undefined when no source has a token', () => {
+    // beforeEach already makes the keychain throw and points CLAUDE_CREDS at a
+    // missing file.
+    expect(acquireOAuthTokenFromKeychain()).toBeUndefined();
+  });
+
+  it('extracts the accessToken from the credential blob', () => {
+    seedBothSources(JSON.stringify({ claudeAiOauth: { accessToken: 'tok_xyz' } }));
+    expect(acquireOAuthTokenFromKeychain()).toBe('tok_xyz');
+  });
+
+  it('returns undefined on a malformed credential blob', () => {
+    seedBothSources('not json at all');
+    expect(acquireOAuthTokenFromKeychain()).toBeUndefined();
+  });
+
+  it('returns undefined when the blob lacks an accessToken', () => {
+    seedBothSources(JSON.stringify({ claudeAiOauth: {} }));
+    expect(acquireOAuthTokenFromKeychain()).toBeUndefined();
   });
 });
 

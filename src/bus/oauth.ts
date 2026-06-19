@@ -13,8 +13,9 @@
  */
 
 import { existsSync, readFileSync, chmodSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, platform } from 'os';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 
 // --- Types ---
@@ -108,6 +109,57 @@ function usageDailyPath(ctxRoot: string): string {
   return join(usageDir(ctxRoot), `${today}.jsonl`);
 }
 
+// --- OAuth token acquisition (keychain / credentials file) ---
+
+/**
+ * Acquire a bare OAuth access token the same way the quota-watchdog wrapper
+ * does (bin/quota-watchdog.sh L65-68), so the check-usage-api CLI triage path
+ * reaches parity with the protective watchdog.
+ *
+ * Claude Code refreshes the underlying credential store while any agent runs,
+ * so this yields a fresh token for free.
+ *   - macOS: read from the login Keychain ("Claude Code-credentials").
+ *   - Linux/other: read from the credentials file ($CLAUDE_CREDS, default
+ *     ~/.claude/.credentials.json).
+ *
+ * Returns the access token string, or undefined if none can be obtained.
+ */
+export function acquireOAuthTokenFromKeychain(): string | undefined {
+  const extract = (raw: string): string | undefined => {
+    try {
+      const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string } };
+      const tok = parsed.claudeAiOauth?.accessToken;
+      return tok && tok.length > 0 ? tok : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  if (platform() === 'darwin') {
+    try {
+      const raw = execFileSync(
+        'security',
+        ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      return extract(raw);
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Linux / other: credentials file
+  const credsPath = process.env.CLAUDE_CREDS || join(homedir(), '.claude', '.credentials.json');
+  if (existsSync(credsPath)) {
+    try {
+      return extract(readFileSync(credsPath, 'utf-8'));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 // --- Account store helpers ---
 
 export function loadAccounts(ctxRoot: string): AccountsStore | null {
@@ -199,9 +251,22 @@ export async function checkUsageApi(
       accessToken = active.account.access_token;
       accountName = active.name;
     } else {
+      // Env first, then mirror the watchdog's keychain/credentials-file
+      // acquisition so the triage CLI reaches parity with the protective
+      // watchdog (see acquireOAuthTokenFromKeychain).
       accessToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-      accountName = 'env';
-      if (!accessToken) throw new Error('No OAuth token available (no accounts.json and CLAUDE_CODE_OAUTH_TOKEN not set)');
+      if (accessToken) {
+        accountName = 'env';
+      } else {
+        accessToken = acquireOAuthTokenFromKeychain();
+        accountName = 'keychain';
+      }
+      if (!accessToken) {
+        throw new Error(
+          'No OAuth token available (no accounts.json, CLAUDE_CODE_OAUTH_TOKEN not set, ' +
+          'and no Keychain/credentials-file token found)',
+        );
+      }
     }
   }
 
