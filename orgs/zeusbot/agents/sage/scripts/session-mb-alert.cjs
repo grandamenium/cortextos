@@ -14,16 +14,26 @@ const CRIT_MB = 91;
 const CTX_ROOT = process.env.CTX_ROOT || `/Users/zelda/.cortextos/${process.env.CTX_INSTANCE_ID || 'default'}`;
 const AGENT_NAME = process.env.CTX_AGENT_NAME || 'sage';
 const STATE_FILE = `${CTX_ROOT}/state/${AGENT_NAME}/.session-mb-alert-state.json`;
+const DRY_RUN = process.argv.includes('--dry-run');
+// In dry-run mode, use a separate temp state file so transitions persist between runs
+// without touching the real state. Pass --dry-state <path> to override.
+const dryStateIdx = process.argv.indexOf('--dry-state');
+const DRY_STATE_FILE = DRY_RUN
+  ? (dryStateIdx >= 0 ? process.argv[dryStateIdx + 1] : '/tmp/session-mb-alert-test-state.json')
+  : STATE_FILE;
+const ACTIVE_STATE_FILE = DRY_RUN ? DRY_STATE_FILE : STATE_FILE;
 
 function readState() {
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf-8')); } catch { return {}; }
+  try { return JSON.parse(fs.readFileSync(ACTIVE_STATE_FILE, 'utf-8')); } catch { return {}; }
 }
 
 function writeState(s) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(s, null, 2), 'utf-8');
+  fs.writeFileSync(ACTIVE_STATE_FILE, JSON.stringify(s, null, 2), 'utf-8');
+  if (DRY_RUN) console.log(`[dry-run] state written to ${ACTIVE_STATE_FILE}`);
 }
 
 function sendToZeus(msg) {
+  if (DRY_RUN) { console.log(`[dry-run] WOULD SEND: ${msg}`); return; }
   const escaped = msg.replace(/'/g, "'\\''");
   execSync(`cortextos bus send-message zeus urgent '${escaped}'`, { stdio: 'pipe' });
 }
