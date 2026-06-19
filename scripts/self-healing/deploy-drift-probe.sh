@@ -29,6 +29,12 @@
 #                       PD on those content-identical rebuilds (observed 2026-06-18,
 #                       the #52 bin-only rebuild). Falls back to the mtime heuristic
 #                       only when no trustworthy fingerprint exists for this pid.
+#                       REFINEMENT (restart_hold, dirty-tree class): if the dist was
+#                       built while src/daemon/ had UNCOMMITTED changes that trace into
+#                       the running daemon.js, the restart is reclassified as a
+#                       do-not-restart HOLD (a restart/crash-recovery would load
+#                       UNREVIEWED in-progress code; a committed-SHA diff is blind to
+#                       dirty-tree builds). See deploy-drift-hold-lib.sh.
 #   3. SHA staleness  — dist/daemon.js mtime is NEWER than dist/.build-sha mtime
 #                       => dist was rebuilt without postbuild writing the sha, so
 #                        .build-sha can no longer be trusted for (1).
@@ -55,6 +61,12 @@
 set -uo pipefail
 
 log() { echo "[deploy-drift-probe] $*"; }
+
+# RESTART-HOLD classifier (dirty-tree class). Sourced from alongside this script so
+# the detection logic is unit-tested independently (tests/shell/deploy-drift-hold.test.sh).
+HOLD_LIB="$(dirname "${BASH_SOURCE[0]}")/deploy-drift-hold-lib.sh"
+# shellcheck source=/dev/null
+[ -f "$HOLD_LIB" ] && source "$HOLD_LIB"
 
 # --- 1. Resolve the LIVE daemon process + the dist it executes ----------------
 # pgrep -f misses the node daemon on macOS in practice; ps is the reliable path.
@@ -124,24 +136,54 @@ if [ -f "$FINGERPRINT_FILE" ]; then
 fi
 NEW_FP=""
 
+# The RESTART reason is DEFERRED (captured in RESTART_REASON, appended later) so the
+# dirty-tree HOLD refinement below can REPLACE the plain "needs restart" wording with
+# a do-not-restart HOLD when the dist was built from uncommitted daemon src.
+RESTART_REASON=""
 if [ "$PROC_START_EPOCH" -gt 0 ] && [ "$DAEMON_MTIME" -gt "$PROC_START_EPOCH" ]; then
   # On-disk daemon.js was written after this pid booted. Decide by content.
   if [ "$FP_PID" = "$DAEMON_PID" ] && [ -n "$FP_HASH" ] && [ -n "$DAEMON_HASH" ]; then
     if [ "$DAEMON_HASH" != "$FP_HASH" ]; then
       RESTART_DRIFT="true"
-      REASONS+=("RESTART: dist/daemon.js content changed since the running daemon (pid $DAEMON_PID) loaded it — daemon needs restart")
+      RESTART_REASON="RESTART: dist/daemon.js content changed since the running daemon (pid $DAEMON_PID) loaded it — daemon needs restart"
     fi
     # else: byte-identical rebuild — NOT a restart condition (mtime-only false-positive suppressed).
   else
     # No trustworthy content baseline for this pid (first sighting already post-rebuild).
     # Conservative: fall back to the mtime heuristic so a genuine drift is never MISSED.
     RESTART_DRIFT="true"
-    REASONS+=("RESTART: dist/daemon.js rebuilt after the daemon started (no content baseline for pid $DAEMON_PID; mtime-based) — daemon may need restart")
+    RESTART_REASON="RESTART: dist/daemon.js rebuilt after the daemon started (no content baseline for pid $DAEMON_PID; mtime-based) — daemon may need restart"
   fi
 elif [ "$PROC_START_EPOCH" -gt 0 ] && [ -n "$DAEMON_HASH" ]; then
   # On-disk daemon.js is NOT newer than proc start => it IS what the daemon loaded.
   # (Re)baseline this pid's fingerprint to the current content hash.
   NEW_FP="${DAEMON_PID}:${DAEMON_HASH}"
+fi
+
+# RESTART-HOLD refinement (SYS-DEPLOY-SOT, dirty-tree class). A committed-SHA diff is
+# BLIND to a dist rebuilt from a DIRTY working tree. When RESTART drift fired, the dist
+# is ahead of the running daemon — but if it was built while src/daemon/ had UNCOMMITTED
+# changes, a restart (deliberate OR crash-recovery) would load UNREVIEWED in-progress
+# code while the committed-SHA range shows EMPTY (the 2026-06-19 mis-triage). We trace
+# net-new uncommitted daemon symbols INTO the running dist (running-code == armed-code);
+# if found, EMIT A HOLD instead of the plain actionable "needs restart".
+RESTART_HOLD="false"; HOLD_TOKENS=""
+if [ "$RESTART_DRIFT" = "true" ]; then
+  if declare -f trace_uncommitted_daemon_symbols >/dev/null 2>&1; then
+    HOLD_TOKENS=$(trace_uncommitted_daemon_symbols "$FRAMEWORK_ROOT" "$DAEMON_JS" 2>/dev/null | paste -sd, -)
+    DIRTY_LIST=$(list_dirty_daemon_files "$FRAMEWORK_ROOT" 2>/dev/null | paste -sd' ' -)
+  fi
+  if [ -n "$HOLD_TOKENS" ]; then
+    RESTART_HOLD="true"
+    REASONS+=("HOLD: dist/daemon.js carries UNCOMMITTED daemon src — uncommitted symbol(s) [$HOLD_TOKENS] are present in the RUNNING-disk build (dirty: ${DIRTY_LIST:-?}). DO NOT restart: a deliberate restart OR crash-recovery would load UNREVIEWED in-progress code. Commit/review-gate the dist before any restart. (committed-SHA diff is blind to dirty-tree builds.)")
+  else
+    # Either daemon src is clean (normal post-merge rebuild) or no new symbol traced —
+    # emit the plain RESTART reason, plus a caveat when src/daemon/ is nonetheless dirty.
+    [ -n "$RESTART_REASON" ] && REASONS+=("$RESTART_REASON")
+    if [ -n "${DIRTY_LIST:-}" ]; then
+      REASONS+=("RESTART-CAVEAT: src/daemon/ is dirty ($DIRTY_LIST) while RESTART drift is set, but no net-new uncommitted symbol traced into the dist — verify the build did not capture uncommitted code before restarting.")
+    fi
+  fi
 fi
 
 if [ "$SHA_MTIME" -gt 0 ] && [ "$DAEMON_MTIME" -gt "$SHA_MTIME" ]; then
@@ -216,6 +258,7 @@ if [ -n "$NEW_FP" ]; then echo "$NEW_FP" > "$FINGERPRINT_FILE" 2>/dev/null || tr
 TOPOLOGY_FILE="$STATE_DIR/deploy-topology.json"
 REASONS_JSON=$(printf '%s\n' "${REASONS[@]:-}" | python3 -c "import json,sys; print(json.dumps([l for l in sys.stdin.read().splitlines() if l]))" 2>/dev/null || echo "[]")
 DEPLOYED_DRIFT_JSON=$(printf '%s\n' "${DEPLOYED_DRIFT_FILES[@]:-}" | python3 -c "import json,sys; print(json.dumps([l for l in sys.stdin.read().splitlines() if l]))" 2>/dev/null || echo "[]")
+HOLD_TOKENS_JSON=$(printf '%s' "${HOLD_TOKENS:-}" | python3 -c "import json,sys; s=sys.stdin.read().strip(); print(json.dumps([t for t in s.split(',') if t]))" 2>/dev/null || echo "[]")
 
 cat > "$TOPOLOGY_FILE" <<EOF
 {
@@ -232,6 +275,8 @@ cat > "$TOPOLOGY_FILE" <<EOF
   "drift": $DRIFT,
   "source_drift": $SOURCE_DRIFT,
   "restart_drift": $RESTART_DRIFT,
+  "restart_hold": $RESTART_HOLD,
+  "hold_tokens": $HOLD_TOKENS_JSON,
   "sha_stale": $SHA_STALE,
   "deployed_drift": $DEPLOYED_DRIFT,
   "deployed_orphan": $DEPLOYED_ORPHAN,
@@ -255,20 +300,29 @@ log "wrote $TOPOLOGY_FILE (drift=$DRIFT)"
 # The deployed-copy dimension joins the key by its SORTED drifted-file SET (not just a
 # bool): a new file drifting changes the key (re-page), and a sync that clears it flips
 # the key back (recovered) — same page-once-per-distinct-state semantics as source_drift.
+#
+# restart_HOLD joins the key too: unlike a routine restart_drift (deliberately excluded
+# to avoid re-paging while a planned restart is pending), a HOLD is a do-not-restart
+# WARNING (the dist carries uncommitted daemon src) that PD must see when it appears and
+# when it clears — so hold-state transitions re-page.
 MARKER="$STATE_DIR/.deploy-drift-last"
 DEPLOYED_SIG=$(printf '%s\n' "${DEPLOYED_DRIFT_FILES[@]:-}" | sort | tr '\n' ',' )
-DRIFT_KEY="src=${SOURCE_DRIFT};sha=${SHA_STALE};pid=${DAEMON_PID};dep=${DEPLOYED_SIG}"
+DRIFT_KEY="src=${SOURCE_DRIFT};sha=${SHA_STALE};pid=${DAEMON_PID};dep=${DEPLOYED_SIG};hold=${RESTART_HOLD}"
 LAST_KEY=$(cat "$MARKER" 2>/dev/null || echo "")
 
 if [ "$DRIFT" = "true" ]; then
   for r in "${REASONS[@]}"; do log "DRIFT: $r"; done
   if [ "$DRIFT_KEY" != "$LAST_KEY" ]; then
     SUMMARY=$(printf '%s; ' "${REASONS[@]}")
+    # A HOLD leads the message unmistakably so neither a human nor an automated restart
+    # lane treats it as a routine "needs restart".
+    PREFIX="Live daemon (pid $DAEMON_PID) deploy drift in $FRAMEWORK_ROOT."
+    [ "$RESTART_HOLD" = "true" ] && PREFIX="⚠ HOLD — DO NOT RESTART daemon (pid $DAEMON_PID) in $FRAMEWORK_ROOT: dist carries UNCOMMITTED daemon src."
     cortextos bus send-message platform-director high \
-      "[deploy-drift-probe] Live daemon (pid $DAEMON_PID) deploy drift in $FRAMEWORK_ROOT. ${SUMMARY}Detail: $TOPOLOGY_FILE" \
+      "[deploy-drift-probe] ${PREFIX} ${SUMMARY}Detail: $TOPOLOGY_FILE" \
       2>/dev/null && log "escalated to platform-director" || log "WARNING: PD escalation failed"
     cortextos bus log-event action deploy_drift_detected warn \
-      --meta "{\"pid\":$DAEMON_PID,\"source_drift\":$SOURCE_DRIFT,\"restart_drift\":$RESTART_DRIFT,\"sha_stale\":$SHA_STALE,\"deployed_drift\":$DEPLOYED_DRIFT,\"deployed_orphan\":$DEPLOYED_ORPHAN}" 2>/dev/null || true
+      --meta "{\"pid\":$DAEMON_PID,\"source_drift\":$SOURCE_DRIFT,\"restart_drift\":$RESTART_DRIFT,\"restart_hold\":$RESTART_HOLD,\"sha_stale\":$SHA_STALE,\"deployed_drift\":$DEPLOYED_DRIFT,\"deployed_orphan\":$DEPLOYED_ORPHAN}" 2>/dev/null || true
     echo "$DRIFT_KEY" > "$MARKER"
   else
     log "drift unchanged since last fire — escalation suppressed (idempotent)"
