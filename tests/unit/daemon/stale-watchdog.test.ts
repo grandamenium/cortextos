@@ -25,6 +25,13 @@ function seedHeartbeat(ctxRoot: string, agent: string, lastHeartbeat: string): v
   writeFileSync(join(dir, 'heartbeat.json'), JSON.stringify({ agent, last_heartbeat: lastHeartbeat }), 'utf-8');
 }
 
+/** Seed an agent's stdout.log tail so getRateLimitInfo() can scan it. */
+function seedAgentLog(ctxRoot: string, agent: string, contents: string): void {
+  const dir = join(ctxRoot, 'logs', agent);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'stdout.log'), contents, 'utf-8');
+}
+
 function seedAgentConfig(frameworkRoot: string, org: string, agent: string, config: object): void {
   const dir = join(frameworkRoot, 'orgs', org, 'agents', agent);
   mkdirSync(dir, { recursive: true });
@@ -143,5 +150,105 @@ describe('StaleAgentWatchdog.checkAndRestart behavior', () => {
     );
     await wd.checkAndRestart();
     expect(spies.restartAgent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * EXP-DRIVER-02 — fail-safe-on-bad-signal contract for a control-plane detector.
+ *
+ * Generalizes the #52 quota-watchdog probe-blind test (C1/C2/C3) to the
+ * stale-watchdog. The destructive action here is restartAgent/stopAgent. The
+ * rule: on a MISSING, CORRUPT, or AMBIGUOUS signal the watchdog must do nothing
+ * destructive (at most wait/alert) — never restart, and never halt. A restart
+ * into an exhausted quota wall is the exact crash-loop the code warns against,
+ * so a rate-limited agent with no parseable reset MUST be held, not restarted.
+ *
+ * C2-coverage (the "real trip still fires") path is the existing
+ * "restarts a running agent whose heartbeat is stale" test above.
+ */
+describe('StaleAgentWatchdog fail-safe on bad/missing/ambiguous signal (EXP-DRIVER-02)', () => {
+  let ctxRoot: string;
+  let frameworkRoot: string;
+  let spies: Spies;
+
+  beforeEach(() => {
+    ctxRoot = mkdtempSync(join(tmpdir(), 'cortextos-sw-fs-ctx-'));
+    frameworkRoot = mkdtempSync(join(tmpdir(), 'cortextos-sw-fs-fw-'));
+    spies = { restartAgent: vi.fn(), stopAgent: vi.fn() };
+  });
+  afterEach(() => {
+    rmSync(ctxRoot, { recursive: true, force: true });
+    rmSync(frameworkRoot, { recursive: true, force: true });
+  });
+
+  // C1-analog: no heartbeat file at all (agent may be booting, or signal lost).
+  it('C1: missing heartbeat → no restart, no stop (signal absent ≠ frozen)', async () => {
+    // Intentionally do NOT seed a heartbeat for a1.
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).not.toHaveBeenCalled();
+    expect(spies.stopAgent).not.toHaveBeenCalled();
+  });
+
+  // C1-analog: heartbeat file exists but the timestamp is unparseable garbage.
+  // isHeartbeatStale must not treat a NaN age as "stale" and trigger a restart.
+  it('C1b: corrupt heartbeat timestamp → no restart (NaN age ≠ stale)', async () => {
+    seedHeartbeat(ctxRoot, 'a1', 'not-a-real-timestamp');
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).not.toHaveBeenCalled();
+    expect(spies.stopAgent).not.toHaveBeenCalled();
+  });
+
+  // C1-analog: heartbeat record present but the timestamp field is empty.
+  it('C1c: empty heartbeat timestamp → no restart', async () => {
+    seedHeartbeat(ctxRoot, 'a1', '');
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).not.toHaveBeenCalled();
+    expect(spies.stopAgent).not.toHaveBeenCalled();
+  });
+
+  // C3-analog (the load-bearing one): stale AND rate-limited, but the reset time
+  // cannot be parsed. Restarting now would slam an exhausted quota — the crash
+  // loop the RATE_LIMIT_BLIND_WAIT_MS fallback exists to prevent. First tick must
+  // hold (schedule the blind wait), NOT restart.
+  it('C3: stale + rate-limited with no parseable reset → hold, do NOT restart', async () => {
+    seedHeartbeat(ctxRoot, 'a1', STALE);
+    seedAgentLog(ctxRoot, 'a1', "Some output\nYou've hit your limit\nmore output\n");
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).not.toHaveBeenCalled();
+    expect(spies.stopAgent).not.toHaveBeenCalled();
+  });
+
+  // C2-analog: stale with NO rate-limit signal in the log = genuine freeze.
+  // Coverage must NOT be lost — the recoverable restart still fires.
+  it('C2: stale + no rate-limit signal → restart still fires (coverage preserved)', async () => {
+    seedHeartbeat(ctxRoot, 'a1', STALE);
+    seedAgentLog(ctxRoot, 'a1', 'normal heartbeat output\nworking on task\n');
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).toHaveBeenCalledWith('a1');
   });
 });
