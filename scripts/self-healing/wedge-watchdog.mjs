@@ -29,6 +29,11 @@ import {
 } from './wedge-watchdog-data.mjs';
 
 const FIRE_INTERVAL_SEC = 300; // matches the launchd StartInterval (for the liveness record)
+// PD/SA: log a GATE-A-SPARED-DIVERGENCE when an agent is frozen past this FLAT reference
+// (≈ SA's flat fleet-heartbeat-watch threshold) BUT Gate-A spares it because frozen < 2× its
+// OWN empirical cadence — i.e. the interval-awareness suppressing a flat-backstop FP. Makes
+// that (previously invisible) positive evidence provable from the trace. Log-additive only.
+const FLAT_DIVERGENCE_REF_MS = 150 * 60 * 1000;
 
 // SEC-WEDGE-ARGV (PD/FE 2026-06-19): the agent name reaches `cortextos` argv on the armed
 // restart/escalate paths. Reject any name that is not a plain identifier so a '-'-prefixed
@@ -105,6 +110,17 @@ async function main() {
           action: 'none', disposition: 'CANDIDATE-SPARED', sparedBy, reason: verdict.reason,
           ptyTreeCpuPct: t.ptyTreeCpuPct, lastActivityAgoMs: t.lastActivityAgoMs,
           lastActivitySource: t.lastActivitySource, frozenForMs: t.frozenForMs, thresholdA: t.thresholdA,
+        });
+      } else if (t.gateA === false && t.frozenForMs >= FLAT_DIVERGENCE_REF_MS) {
+        // Interval-awareness suppressing a flat-backstop FP: frozen past the flat ref but
+        // < 2x this agent's OWN cadence. Visible positive evidence (improver/user-proxy class).
+        const a = agents[name];
+        appendShadowLog(root, {
+          ts: new Date(nowMs).toISOString(), mode: MODE, agent: name,
+          action: 'none', disposition: 'GATE-A-SPARED-DIVERGENCE', reason: verdict.reason,
+          frozenForMs: t.frozenForMs, thresholdA: t.thresholdA, heartbeatIntervalMs: t.heartbeatIntervalMs,
+          flatRefMs: FLAT_DIVERGENCE_REF_MS,
+          lastActivityAgoMs: a ? Math.max(0, nowMs - a.lastActivityMs) : null, lastActivitySource: a ? a.lastActivitySource : null,
         });
       }
       continue;
