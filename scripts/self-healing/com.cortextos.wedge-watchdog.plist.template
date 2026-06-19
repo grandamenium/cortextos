@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.cortextos.wedge-watchdog — SYS-WEDGE-AUTORESTART detect/remediate probe.
+  Deterministic NON-LLM launchd job (session-independent, not wedge-exposed: no inference to
+  stall). Deliberately does NOT set CTX_WEDGE_WATCHDOG here — the mode (off|shadow|armed) is
+  read at RUNTIME from the mutable file <CTX_ROOT>/state/wedge-watchdog.mode so the arm-flip is
+  one logged, reversible file-write with NO launchctl reload (PD condition c).
+  Host-specific (darwin / this machine): re-render the {{PATHS}} on any fleet migration.
+  Install: render -> ~/Library/LaunchAgents/com.cortextos.wedge-watchdog.plist -> launchctl bootstrap.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.cortextos.wedge-watchdog</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>CTX_FRAMEWORK_ROOT</key>
+		<string>{{FRAMEWORK_ROOT}}</string>
+		<key>CTX_INSTANCE_ID</key>
+		<string>default</string>
+		<key>CTX_ORG</key>
+		<string>{{ORG}}</string>
+		<key>CTX_ROOT</key>
+		<string>{{CTX_ROOT}}</string>
+		<key>HOME</key>
+		<string>{{HOME}}</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{NODE}}</string>
+		<string>{{FRAMEWORK_ROOT}}/scripts/self-healing/wedge-watchdog.mjs</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StartInterval</key>
+	<integer>300</integer>
+	<key>StandardOutPath</key>
+	<string>{{CTX_ROOT}}/logs/wedge-watchdog.stdout.log</string>
+	<key>StandardErrorPath</key>
+	<string>{{CTX_ROOT}}/logs/wedge-watchdog.stderr.log</string>
+</dict>
+</plist>
