@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   tickSurfaceState, restartDisposition, pidChangedReset, COOLDOWN_MS, SURFACE_ESCALATE_MS,
-  escalationGate, escalationMessage,
+  escalationGate, escalationMessage, holdAlertGate, MIN_FLEET_TRUSTED,
 } from './wedge-watchdog-data.mjs';
 
 const T = 1_000_000_000_000;
@@ -132,4 +132,27 @@ test('escalationMessage by-reason: born-wedged path emits BORN-WEDGED (NOT the f
 
   const hold = escalationMessage('hold', 'platform-director', 0);
   assert.match(hold, /Gate-C|global pause|credit/i, 'HOLD describes the possible global-pause/credit case');
+});
+
+// --- HOLD fleet-state gate: push on an ESTABLISHED fleet stop, suppress during fleet-bootstrap ----
+// COVERAGE PARTITION (must stay documented both sides): the case this SUPPRESSES — a real pause
+// COINCIDING with a restart (fleet never re-advances -> stays untrusted -> HOLD suppressed) — is NOT
+// uncovered: it is caught by SA's fleet-heartbeat-watch backstop (all-agents-hb-stale + work-silent,
+// trust-independent). wedge-HOLD = trusted-fleet-mid-run-stop; backstop = post-restart-no-recover.
+// A future refactor of EITHER monitor must preserve this partition (the cross-monitor coupling is a
+// masking-class risk if silently re-opened).
+
+test('holdAlertGate (b) ESTABLISHED fleet (>=K trusted, all-stopped) -> PUSH (real global pause not silenced)', () => {
+  assert.equal(holdAlertGate(MIN_FLEET_TRUSTED), true);
+  assert.equal(holdAlertGate(MIN_FLEET_TRUSTED + 5), true);
+});
+
+test('holdAlertGate (a) fleet-BOOTSTRAP (<K trusted, post-restart re-accumulation) -> SUPPRESS (no false push) [covered by fleet-heartbeat-watch]', () => {
+  assert.equal(holdAlertGate(0), false, 'just after a restart (trust cleared via pidChangedReset) -> no false global-pause push');
+  assert.equal(holdAlertGate(MIN_FLEET_TRUSTED - 1), false);
+});
+
+test('holdAlertGate (c) K boundary is exactly MIN_FLEET_TRUSTED', () => {
+  assert.equal(holdAlertGate(MIN_FLEET_TRUSTED - 1), false);
+  assert.equal(holdAlertGate(MIN_FLEET_TRUSTED), true);
 });

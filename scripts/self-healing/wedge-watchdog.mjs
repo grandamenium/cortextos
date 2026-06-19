@@ -25,7 +25,7 @@ import { execFileSync } from 'child_process';
 import { evaluateWedge } from './wedge-watchdog-lib.mjs';
 import {
   ctxRoot, listAgentNames, lastHeartbeatMs, lastCronFireMs, recordHbObservation, resolveInterval, applyTrust,
-  tickSurfaceState, restartDisposition, pidChangedReset, escalationGate, escalationMessage,
+  tickSurfaceState, restartDisposition, pidChangedReset, escalationGate, escalationMessage, holdAlertGate,
   lastActivity, ptyInfo, appendShadowLog, loadState, saveState, readMode, recordFire, COOLDOWN_MS,
 } from './wedge-watchdog-data.mjs';
 
@@ -106,6 +106,10 @@ async function main() {
       lastCronFireMs: lastCronFireMs(root, name),
     };
   }
+
+  // Fleet-state for the HOLD push-alert gate: a HOLD pushes only when the fleet is ESTABLISHED
+  // (>=K trusted), suppressed during fleet-bootstrap (<K trusted). See holdAlertGate.
+  const fleetTrustedCount = Object.values(trust).filter(t => t.trusted).length;
 
   const acted = [];
   for (const name of Object.keys(agents)) {
@@ -203,12 +207,23 @@ async function main() {
     }
 
     // hold (Gate-C refutation: no other agent advancing = possible global pause / credit / daemon-down).
-    // NEVER restarts. Fail-toward-surfacing: PUSH-ALERT PD once per HOLD episode (through the same
-    // escalationGate — shadow logs WOULD-ESCALATE, armed pings). holdAlerted latch dedups; cleared
-    // (with surface state) on any non-hold tick.
+    // NEVER restarts. PUSH-ALERT only when the FLEET is ESTABLISHED (>=K trusted = a genuine
+    // trusted-fleet stop); during fleet-BOOTSTRAP (<K trusted, e.g. post-restart re-accumulation) the
+    // refutation pool is unreliable -> SUPPRESS-to-log (kills the guaranteed-recurring post-restart
+    // false-push without silencing a real established-fleet pause). Rides on pidChangedReset for free:
+    // a restart clears trust -> <K -> suppress; a mid-run pause preserves trust -> >=K -> push.
+    // PARTITION: the suppressed case (a real pause COINCIDING with a restart -> agents never re-advance,
+    // stay untrusted, HOLD stays suppressed) is covered by SA's fleet-heartbeat-watch backstop
+    // (all-agents-stale = daemon-restart-stall class) — NOT a blind spot.
     line.disposition = 'HOLD (Gate-C refutation — no other agent advancing)';
     appendShadowLog(root, line);
-    if (!stA.holdAlerted) { escalate(root, MODE, name, 'hold', 0, verdict); stA.holdAlerted = true; }
+    if (holdAlertGate(fleetTrustedCount)) {
+      if (!stA.holdAlerted) { escalate(root, MODE, name, 'hold', 0, verdict); stA.holdAlerted = true; }
+    } else {
+      appendShadowLog(root, { ts: new Date(nowMs).toISOString(), mode: MODE, agent: name, action: 'hold',
+        disposition: 'HOLD-SUPPRESSED (fleet-bootstrap: <K trusted — refutation pool unreliable, not a real global pause; covered by fleet-heartbeat-watch)',
+        fleetTrustedCount, trusted: trust[name].trusted });
+    }
   }
   saveState(root, state);
   console.log(`[wedge-watchdog] mode=${MODE} evaluated=${names.length} acted=${acted.length}${acted.length ? ' [' + acted.join(',') + ']' : ''}`);

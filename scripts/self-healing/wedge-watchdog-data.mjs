@@ -18,6 +18,9 @@ export const COOLDOWN_MS = 30 * 60 * 1000;          // 1 action/agent/30min (re-
 // the 240min FE/BA — 2026-06-19 shadow-window finding; the two timescales are different.)
 export const SURFACE_ESCALATE_MS = 6 * 60 * 60 * 1000;   // 6h — comfortably > the 240min fleet max
 export const MIN_HB_ADVANCES = 3;                   // N: trusted interval needs >=3 observed hb-advance gaps
+export const MIN_FLEET_TRUSTED = 3;                 // K: HOLD push-alert needs an ESTABLISHED fleet (>=K trusted).
+                                                    // Default = MIN_HB_ADVANCES (3) — reuse the "enough to be
+                                                    // reliable" trust number (principled, not arbitrary); tunable up.
 export const HB_OBS_MAX = 13;                       // keep last 13 distinct hb values = 12 advance-gaps
 export const BOOTSTRAP_PRIOR_MS = 5 * 60 * 1000;    // surfacing-only prior while untrusted (NON-load-bearing: bootstrap never auto-acts)
 const INTERVAL_WINDOW = 12;                         // trailing advance-gaps used for the median
@@ -196,6 +199,20 @@ export function pidChangedReset(prevPid, curPid, hbObs) {
  */
 export function escalationGate(mode) {
   return mode === 'armed';
+}
+
+/**
+ * Whether a HOLD (Gate-C refutation: no other agent advancing) should PUSH-ALERT vs suppress-to-log.
+ * Gate on FLEET-state, NOT the target's trust: a HOLD pushes only when the fleet is ESTABLISHED
+ * (>= K TRUSTED agents, i.e. agents with real hb-advance HISTORY) — then "all not-advancing" is a
+ * GENUINE trusted-fleet stop (credit / daemon-wide freeze). During fleet-BOOTSTRAP (< K trusted,
+ * e.g. just after a daemon-restart when agents are re-accumulating) the refutation pool is
+ * unreliable (pool->0 because agents are UNTRUSTED, never-advanced — not a real pause) -> SUPPRESS.
+ * This kills the guaranteed-recurring post-restart-bootstrap false-push WITHOUT silencing a real
+ * global pause among an established fleet (the case the HOLD exists for). K = MIN_FLEET_TRUSTED (tunable).
+ */
+export function holdAlertGate(fleetTrustedCount) {
+  return fleetTrustedCount >= MIN_FLEET_TRUSTED;
 }
 
 /**
