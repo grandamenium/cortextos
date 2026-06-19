@@ -1,6 +1,7 @@
 // wedge-watchdog-data.mjs — data layer for the wedge-watchdog cron-probe.
-// Gathers live fleet state from disk + ps and exposes pure helpers (deriveIntervalMs,
-// median) that the data-layer test exercises. Keeps wedge-watchdog.mjs focused on control flow.
+// Gathers live fleet state from disk + ps and exposes pure helpers (recordHbObservation,
+// deriveIntervalFromHbObs, resolveInterval, applyTrust, median) that the data-layer test
+// exercises. Keeps wedge-watchdog.mjs focused on control flow.
 
 import { readFileSync, existsSync, readdirSync, statSync, appendFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -8,8 +9,10 @@ import { homedir } from 'os';
 import { execFileSync } from 'child_process';
 
 export const COOLDOWN_MS = 30 * 60 * 1000;          // 1 action/agent/30min
-export const MIN_CLOSED_GAPS = 3;                   // need >=3 closed gaps for an empirical interval
-const INTERVAL_WINDOW = 12;                         // trailing closed gaps used for the median
+export const MIN_HB_ADVANCES = 3;                   // N: trusted interval needs >=3 observed hb-advance gaps
+export const HB_OBS_MAX = 13;                       // keep last 13 distinct hb values = 12 advance-gaps
+export const BOOTSTRAP_PRIOR_MS = 5 * 60 * 1000;    // surfacing-only prior while untrusted (NON-load-bearing: bootstrap never auto-acts)
+const INTERVAL_WINDOW = 12;                         // trailing advance-gaps used for the median
 const SHADOW_LOG = 'state/wedge-watchdog-shadow.log';
 const STATE_FILE = 'state/wedge-watchdog-state.json';
 const MODE_FILE = 'state/wedge-watchdog.mode';      // mutable RUNTIME flag: off|shadow|armed
@@ -67,40 +70,84 @@ export function median(nums) {
 }
 
 /**
- * Derive the heartbeat interval from cron-fire timestamps. CLOSED gaps only
- * (diffs between consecutive fires) — the live OPEN gap (now - lastFire) is never
- * a closed gap, so a stalled agent cannot inflate the threshold. Cold-start
- * (< MIN_CLOSED_GAPS closed gaps) returns null => the runner SKIPS the agent
- * (safer than the unit-ambiguous config interval for a just-started, low-wedge-risk agent).
+ * Append the current last_heartbeat to the per-agent observed-advance ring — ONLY when it
+ * ADVANCED to a new value (a real advance). The Gate-A threshold must derive from the cadence
+ * last_heartbeat ACTUALLY advances (what Gate-A measures), NOT the heartbeat-CRON schedule:
+ * a multi-cron agent advances hb on ANY of its crons, far faster than its nominal heartbeat-cron
+ * interval. (2026-06-19 FN-class: heartbeat-cron-gaps gave improver 240min when its true advance
+ * cadence was ~4min -> a 480min threshold would have false-negatived a genuinely-wedged improver.)
+ * @returns {number[]} the new ring (last HB_OBS_MAX distinct hb values)
+ */
+export function recordHbObservation(hbObs, currentHbMs) {
+  const arr = Array.isArray(hbObs) ? hbObs.slice() : [];
+  if (currentHbMs > 0 && arr[arr.length - 1] !== currentHbMs) arr.push(currentHbMs);
+  return arr.slice(-HB_OBS_MAX);
+}
+
+/**
+ * Derive the interval from observed hb-ADVANCE gaps (diffs between consecutive distinct
+ * last_heartbeat values). The live OPEN gap (the current frozen period) is NEVER a completed
+ * advance, so a stalled agent cannot inflate it — and crons stopping during a wedge cannot
+ * inflate it either (we measure hb advances, not cron fires). Cold-start (< MIN_HB_ADVANCES
+ * advance-gaps) returns null => UNTRUSTED (the runner surfaces, never auto-acts).
  * @returns {{ms:number|null, source:string, nGaps:number}}
  */
-export function deriveIntervalMs(fireTimesMs) {
-  const t = [...fireTimesMs].sort((a, b) => a - b);
+export function deriveIntervalFromHbObs(hbObs) {
+  const arr = Array.isArray(hbObs) ? hbObs : [];
   const gaps = [];
-  for (let i = 1; i < t.length; i++) gaps.push(t[i] - t[i - 1]);
-  if (gaps.length >= MIN_CLOSED_GAPS) {
+  for (let i = 1; i < arr.length; i++) gaps.push(arr[i] - arr[i - 1]);
+  if (gaps.length >= MIN_HB_ADVANCES) {
     const recent = gaps.slice(-INTERVAL_WINDOW);
-    return { ms: median(recent), source: 'empirical-closed-median', nGaps: recent.length };
+    return { ms: median(recent), source: 'hb-advance-median', nGaps: recent.length };
   }
-  return { ms: null, source: 'insufficient-history (cold-start skip)', nGaps: gaps.length };
+  return { ms: null, source: 'insufficient-hb-advances (untrusted)', nGaps: gaps.length };
+}
+
+/**
+ * Resolve the Gate-A interval + whether it is TRUSTED. Trusted = >= MIN_HB_ADVANCES observed
+ * hb-advances (you cannot accumulate N advances without being alive, so this subsumes
+ * proven-alive). Untrusted (bootstrap / just-restarted) falls back to the SHORT prior, which is
+ * non-load-bearing for ACTIONS (the trust-gate downgrades any restart to a surface while
+ * untrusted) but kept SHORT so a born-wedged agent SURFACES promptly.
+ * @returns {{intervalMs:number, trusted:boolean, nGaps:number}}
+ */
+export function resolveInterval(hbObs, priorMs = BOOTSTRAP_PRIOR_MS) {
+  const d = deriveIntervalFromHbObs(hbObs);
+  return d.ms != null
+    ? { intervalMs: d.ms, trusted: true, nGaps: d.nGaps }
+    : { intervalMs: priorMs, trusted: false, nGaps: d.nGaps };
+}
+
+/**
+ * Trust-gate: while the interval is UNTRUSTED (bootstrap / just-restarted, < N hb-advances), a
+ * 'restart' verdict cannot be acted on — it is downgraded to a 'surface' so it ALERTS (prompt,
+ * not silent) but NEVER auto-restarts on an untrusted interval. This is the restart-loop guard
+ * BY CONSTRUCTION: a freshly-restarted agent has ~0 advances -> untrusted -> surface-only until
+ * it re-accumulates N + proves alive. 'hold' and 'none' pass through unchanged. evaluateWedge
+ * (the reviewed decision fn) is untouched — this is a thin RUNNER-level wrapper.
+ */
+export function applyTrust(verdict, trusted) {
+  if (!trusted && verdict && verdict.action === 'restart') {
+    return { ...verdict, action: 'surface', reason: `bootstrap: untrusted interval (< ${MIN_HB_ADVANCES} hb-advances) — SURFACE, do not auto-act. ${verdict.reason}` };
+  }
+  return verdict;
 }
 
 // --- per-agent state readers ------------------------------------------------
 
-function heartbeatFireTimes(root, name) {
+// ANY cron fire (not just heartbeat) — for the corroborator + Gate-C: a wedge stops ALL the
+// agent's crons (firing-flag bug), so any-cron silence is the wedge signature; cron-advancing
+// for OTHER agents proves the daemon is alive + firing for them.
+function anyCronFireTimes(root, name) {
   const p = join(root, '.cortextOS', 'state', 'agents', name, 'cron-execution.log');
   if (!existsSync(p)) return [];
   const out = [];
   for (const line of readFileSync(p, 'utf-8').split('\n')) {
-    if (!line.includes('"cron":"heartbeat"') || !line.includes('"status":"fired"')) continue;
+    if (!line.includes('"status":"fired"')) continue;
     const m = line.match(/"ts":"([^"]+)"/);
     if (m) { const ms = Date.parse(m[1]); if (!Number.isNaN(ms)) out.push(ms); }
   }
   return out;
-}
-
-export function heartbeatIntervalMs(root, name) {
-  return deriveIntervalMs(heartbeatFireTimes(root, name)).ms;
 }
 
 export function lastHeartbeatMs(root, name) {
@@ -112,7 +159,7 @@ export function lastHeartbeatMs(root, name) {
 }
 
 export function lastCronFireMs(root, name) {
-  const t = heartbeatFireTimes(root, name);
+  const t = anyCronFireTimes(root, name);
   return t.length ? Math.max(...t) : 0;
 }
 

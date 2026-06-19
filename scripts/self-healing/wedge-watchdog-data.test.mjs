@@ -1,11 +1,15 @@
 // Data-layer tests — run: node --test scripts/self-healing/wedge-watchdog-data.test.mjs
-// Enforces the load-bearing interval-derivation contract (SA note (a)): the empirical
-// interval uses CLOSED historical gaps only and is NOT inflated by a live stall; cold-start
-// (too few closed gaps) returns null so the runner SKIPS rather than use an ambiguous config.
+// Locks the 2026-06-19 arm-blocking interval fix: the Gate-A interval derives from observed
+// last_heartbeat-ADVANCE gaps (what Gate-A measures), NOT the heartbeat-CRON schedule; and the
+// bootstrap trust-gate downgrades any restart -> SURFACE while untrusted (< N advances), so a
+// just-restarted/born-wedged agent can never be auto-restarted on an unmeasured cadence.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveIntervalMs, median, MIN_CLOSED_GAPS } from './wedge-watchdog-data.mjs';
+import {
+  median, recordHbObservation, deriveIntervalFromHbObs, resolveInterval, applyTrust,
+  MIN_HB_ADVANCES, BOOTSTRAP_PRIOR_MS,
+} from './wedge-watchdog-data.mjs';
 
 const MIN = 60_000;
 const T0 = 1_000_000_000_000;
@@ -16,38 +20,71 @@ test('median basic', () => {
   assert.equal(median([]), null);
 });
 
-test('synthetic STALLED history: open gap is NOT a closed gap -> interval == healthy median, NOT inflated', () => {
-  // Six healthy 4-min fires, then the agent WEDGES and stops firing. The "now" is 50 min
-  // after the last fire, but deriveIntervalMs only sees the FIRE timestamps — the open gap
-  // (now - lastFire) is never one of the closed inter-fire gaps, so it cannot inflate.
-  const fires = [];
-  for (let i = 0; i < 6; i++) fires.push(T0 + i * 4 * MIN);
-  // (a wedge means no further fires; nothing else is appended)
-  const r = deriveIntervalMs(fires);
-  assert.equal(r.source, 'empirical-closed-median');
-  assert.equal(r.ms, 4 * MIN, 'must be the healthy 4-min median, NOT inflated by the 50-min stall');
+test('recordHbObservation: appends only on a NEW distinct hb value (a real advance), trims', () => {
+  let obs = [];
+  obs = recordHbObservation(obs, T0);            // first
+  obs = recordHbObservation(obs, T0);            // duplicate (no advance) -> ignored
+  obs = recordHbObservation(obs, T0 + 4 * MIN);  // advance
+  obs = recordHbObservation(obs, 0);             // invalid -> ignored
+  assert.deepEqual(obs, [T0, T0 + 4 * MIN]);
 });
 
-test('cold-start (too few closed gaps) -> null => runner skips (no ambiguous config)', () => {
-  assert.equal(deriveIntervalMs([]).ms, null);
-  assert.equal(deriveIntervalMs([T0]).ms, null);                       // 0 gaps
-  assert.equal(deriveIntervalMs([T0, T0 + 4 * MIN]).ms, null);         // 1 gap
-  assert.equal(deriveIntervalMs([T0, T0 + 4 * MIN, T0 + 8 * MIN]).ms, null); // 2 gaps < MIN_CLOSED_GAPS
-  // exactly MIN_CLOSED_GAPS closed gaps -> derives
-  const ok = deriveIntervalMs([T0, T0 + 4 * MIN, T0 + 8 * MIN, T0 + 12 * MIN]);
-  assert.equal(ok.nGaps, MIN_CLOSED_GAPS);
-  assert.equal(ok.ms, 4 * MIN);
+// --- cadence PAIR: the interval reflects ACTUAL hb-advance cadence, not the cron schedule ---
+
+test('cadence (i) multi-cron EFFECTIVE-SHORT: advances every ~5min -> derives ~5min (NOT a 240min cron interval) [no-FN]', () => {
+  // improver-class: hb advances on its frequent crons every ~5min even though its heartbeat-CRON
+  // fires every 240min. Deriving from advances gives ~5min -> threshold ~10min -> a real wedge
+  // at 160min PASSES Gate-A (caught), instead of being silently spared for 480min.
+  let obs = [];
+  for (let i = 0; i < 5; i++) obs = recordHbObservation(obs, T0 + i * 5 * MIN);
+  const d = deriveIntervalFromHbObs(obs);
+  assert.equal(d.source, 'hb-advance-median');
+  assert.equal(d.ms, 5 * MIN, 'must be the measured ~5min advance cadence, NOT the 240min heartbeat-cron');
 });
 
-test('uses trailing window + is robust to a single outlier gap (median not mean)', () => {
-  // five 4-min gaps + one 40-min outlier (e.g. a one-off slow turn) -> median stays ~4min
-  const fires = [T0, T0 + 4 * MIN, T0 + 8 * MIN, T0 + 12 * MIN, T0 + 52 * MIN, T0 + 56 * MIN, T0 + 60 * MIN];
-  const r = deriveIntervalMs(fires);
-  assert.equal(r.ms, 4 * MIN, 'median resists the one inflated gap a mean would have skewed');
+test('cadence (ii) GENUINELY-SLOW: advances every ~240min -> derives ~240min -> correctly slow [no-FP]', () => {
+  let obs = [];
+  for (let i = 0; i < 5; i++) obs = recordHbObservation(obs, T0 + i * 240 * MIN);
+  assert.equal(deriveIntervalFromHbObs(obs).ms, 240 * MIN);
 });
 
-test('hourly agent -> ~60min interval (interval-awareness source, unit-agnostic)', () => {
-  const fires = [];
-  for (let i = 0; i < 5; i++) fires.push(T0 + i * 60 * MIN);
-  assert.equal(deriveIntervalMs(fires).ms, 60 * MIN);
+test('open frozen gap cannot inflate the interval (only completed advances counted)', () => {
+  // 4 healthy 5-min advances, then the agent FREEZES (no further advance). "now" is hours later,
+  // but recordHbObservation never sees a new value, so the median stays ~5min, not inflated.
+  let obs = [];
+  for (let i = 0; i < 5; i++) obs = recordHbObservation(obs, T0 + i * 5 * MIN);
+  assert.equal(deriveIntervalFromHbObs(obs).ms, 5 * MIN);
 });
+
+// --- trust + bootstrap ------------------------------------------------------
+
+test('resolveInterval: trusted only after >= MIN_HB_ADVANCES advance-gaps', () => {
+  const mk = (n) => { let o = []; for (let i = 0; i <= n; i++) o = recordHbObservation(o, T0 + i * 5 * MIN); return o; };
+  assert.equal(resolveInterval(mk(0)).trusted, false);   // 0 gaps
+  assert.equal(resolveInterval(mk(MIN_HB_ADVANCES - 1)).trusted, false); // N-1 gaps
+  const ok = resolveInterval(mk(MIN_HB_ADVANCES));        // N gaps
+  assert.equal(ok.trusted, true);
+  assert.equal(ok.intervalMs, 5 * MIN);
+  // untrusted falls back to the SHORT prior (non-load-bearing for actions; kept short for prompt surfacing)
+  assert.equal(resolveInterval([]).intervalMs, BOOTSTRAP_PRIOR_MS);
+  assert.equal(resolveInterval([]).trusted, false);
+});
+
+test('bootstrap (a): applyTrust downgrades a would-be RESTART -> SURFACE while UNTRUSTED [restart-loop / quiet-healthy FP guard]', () => {
+  const restart = { action: 'restart', reason: 'wedge', trace: {} };
+  const downgraded = applyTrust(restart, /*trusted*/ false);
+  assert.equal(downgraded.action, 'surface', 'an untrusted/just-restarted agent must NEVER auto-restart');
+  // hold + none pass through unchanged even when untrusted
+  assert.equal(applyTrust({ action: 'hold', reason: 'x' }, false).action, 'hold');
+  assert.equal(applyTrust({ action: 'none', reason: 'x' }, false).action, 'none');
+});
+
+test('bootstrap (c): once TRUSTED, a real RESTART passes through (normal eval resumes)', () => {
+  const restart = { action: 'restart', reason: 'wedge', trace: {} };
+  assert.equal(applyTrust(restart, /*trusted*/ true).action, 'restart');
+});
+
+// Note: bootstrap (b) [untrusted + genuinely-wedged -> SURFACE then persist-past-cooldown ->
+// ESCALATE, not silent-hold-forever] is the runner's stateful surface-persistence path
+// (surfaceSince + COOLDOWN_MS reuse); verified live in the shadow dry-run + described in the
+// re-review bundle. applyTrust above proves the SURFACE downgrade (the (b) entry condition).

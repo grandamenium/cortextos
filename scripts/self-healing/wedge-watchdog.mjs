@@ -24,7 +24,7 @@ import { homedir } from 'os';
 import { execFileSync } from 'child_process';
 import { evaluateWedge } from './wedge-watchdog-lib.mjs';
 import {
-  ctxRoot, listAgentNames, heartbeatIntervalMs, lastHeartbeatMs, lastCronFireMs,
+  ctxRoot, listAgentNames, lastHeartbeatMs, lastCronFireMs, recordHbObservation, resolveInterval, applyTrust,
   lastActivity, ptyInfo, appendShadowLog, loadState, saveState, readMode, recordFire, COOLDOWN_MS,
 } from './wedge-watchdog-data.mjs';
 
@@ -49,14 +49,16 @@ async function main() {
   // Record our own fire every tick (who-watches-the-watcher), even when off.
   recordFire(root, FIRE_INTERVAL_SEC);
 
+  // Single persisted state object: lastMode + per-agent { hbObs, lastActionAt, surfaceSince }.
+  const state = loadState(root);
+  if (!state.agents) state.agents = {};
   // Audit any mode transition (the arm-flip is a file-write; the runner logs when it takes effect).
-  const state0 = loadState(root);
-  if (state0.lastMode !== MODE) {
-    appendShadowLog(root, { ts: new Date(nowMs).toISOString(), event: 'MODE-TRANSITION', from: state0.lastMode || 'unset', to: MODE });
-    state0.lastMode = MODE; saveState(root, state0);
+  if (state.lastMode !== MODE) {
+    appendShadowLog(root, { ts: new Date(nowMs).toISOString(), event: 'MODE-TRANSITION', from: state.lastMode || 'unset', to: MODE });
+    state.lastMode = MODE;
   }
 
-  if (MODE === 'off') { console.log('[wedge-watchdog] mode=off — no-op'); return; }
+  if (MODE === 'off') { saveState(root, state); console.log('[wedge-watchdog] mode=off — no-op'); return; }
   const names = listAgentNames(root);
 
   // Two PTY-tree CPU samples ~1s apart (PD note: max-of-window so a quiet mid-build
@@ -68,21 +70,28 @@ async function main() {
   const sampleC = ptyInfo(root, names);
 
   const agents = {};
-  const skipped = [];
+  const trust = {};
   for (const name of names) {
-    const intervalMs = heartbeatIntervalMs(root, name);
-    if (intervalMs == null) { skipped.push(name); continue; } // cold-start: too few closed gaps
     const a = sampleA[name] || {};
     const treeCpu = Math.max(
       sampleA[name]?.treeCpuPct ?? 0, sampleB[name]?.treeCpuPct ?? 0, sampleC[name]?.treeCpuPct ?? 0,
     );
     const act = lastActivity(root, name);
+    const curHb = lastHeartbeatMs(root, name);
+    // Accumulate observed hb-ADVANCES (persisted across ticks) -> resolve the Gate-A interval
+    // + whether it is TRUSTED (>= N observed advances). Interval = measured hb-advance cadence,
+    // NOT the heartbeat-cron schedule (the 2026-06-19 FN-class fix). No cold-start skip — an
+    // untrusted agent is still evaluated, but the trust-gate downgrades any restart to a surface.
+    const st = state.agents[name] || (state.agents[name] = {});
+    st.hbObs = recordHbObservation(st.hbObs, curHb);
+    const { intervalMs, trusted, nGaps } = resolveInterval(st.hbObs);
+    trust[name] = { trusted, nGaps };
     agents[name] = {
       enabled: a.enabled !== false,
       hermes: !!a.hermes,
       isOrchestrator: name === 'platform-director', // informational only (carve-out subsumed by Gate C)
       heartbeatIntervalMs: intervalMs,
-      lastHeartbeatMs: lastHeartbeatMs(root, name),
+      lastHeartbeatMs: curHb,
       ptyAlive: !!a.ptyAlive,
       ptyTreeCpuPct: treeCpu,
       lastActivityMs: act.ms,
@@ -90,12 +99,31 @@ async function main() {
       lastCronFireMs: lastCronFireMs(root, name),
     };
   }
-  if (skipped.length) console.log(`[wedge-watchdog] cold-start skip (insufficient interval history): ${skipped.join(',')}`);
 
-  const state = loadState(root);
   const acted = [];
   for (const name of Object.keys(agents)) {
-    const verdict = evaluateWedge({ nowMs, target: name, agents });
+    // Trust-gate: while the interval is UNTRUSTED (< N hb-advances), any 'restart' is downgraded
+    // to 'surface' (the bootstrap / restart-loop guard, by construction). evaluateWedge untouched.
+    const verdict = applyTrust(evaluateWedge({ nowMs, target: name, agents }), trust[name].trusted);
+    const stA = state.agents[name] || (state.agents[name] = {});
+    if (verdict.action !== 'surface') { delete stA.surfaceSince; delete stA.surfaceEscalated; }
+
+    if (verdict.action === 'surface') {
+      // Untrusted would-be-restart: SURFACE (alert), never auto-act. Persist past the cooldown
+      // window with no clean hb-advance -> ESCALATE (so a born-wedged agent is not silently held
+      // forever). Same window/path as the re-wedge escalation (one timer, not two).
+      if (!stA.surfaceSince) stA.surfaceSince = nowMs;
+      const surfacingForMs = nowMs - stA.surfaceSince;
+      const escalateNow = surfacingForMs >= COOLDOWN_MS && !stA.surfaceEscalated;
+      appendShadowLog(root, {
+        ts: new Date(nowMs).toISOString(), mode: MODE, agent: name, action: 'surface',
+        disposition: escalateNow ? 'SURFACE->ESCALATE (untrusted interval persists — born-wedged not silently held)' : 'SURFACE (untrusted interval / bootstrap — NOT auto-acting)',
+        reason: verdict.reason, trusted: false, nGaps: trust[name].nGaps, surfacingForMs, trace: verdict.trace,
+      });
+      if (escalateNow && SAFE_NAME.test(name)) { escalate(name, verdict, surfacingForMs); stA.surfaceEscalated = true; }
+      continue;
+    }
+
     if (verdict.action === 'none') {
       // PD trace-contract: POSITIVE never-reap evidence. Log every Gate-A candidate
       // (hb-frozen >= 2x its own interval) that was then SPARED by B1/B2 — a real FE/BA
@@ -108,6 +136,7 @@ async function main() {
         appendShadowLog(root, {
           ts: new Date(nowMs).toISOString(), mode: MODE, agent: name,
           action: 'none', disposition: 'CANDIDATE-SPARED', sparedBy, reason: verdict.reason,
+          trusted: trust[name].trusted, nGaps: trust[name].nGaps,
           ptyTreeCpuPct: t.ptyTreeCpuPct, lastActivityAgoMs: t.lastActivityAgoMs,
           lastActivitySource: t.lastActivitySource, frozenForMs: t.frozenForMs, thresholdA: t.thresholdA,
         });
@@ -118,6 +147,7 @@ async function main() {
         appendShadowLog(root, {
           ts: new Date(nowMs).toISOString(), mode: MODE, agent: name,
           action: 'none', disposition: 'GATE-A-SPARED-DIVERGENCE', reason: verdict.reason,
+          trusted: trust[name].trusted, nGaps: trust[name].nGaps,
           frozenForMs: t.frozenForMs, thresholdA: t.thresholdA, heartbeatIntervalMs: t.heartbeatIntervalMs,
           flatRefMs: FLAT_DIVERGENCE_REF_MS,
           lastActivityAgoMs: a ? Math.max(0, nowMs - a.lastActivityMs) : null, lastActivitySource: a ? a.lastActivitySource : null,
@@ -139,6 +169,7 @@ async function main() {
     const line = {
       ts: new Date(nowMs).toISOString(), mode: MODE, agent: name,
       action: verdict.action, reason: verdict.reason, trace: verdict.trace,
+      trusted: trust[name].trusted, nGaps: trust[name].nGaps,
       cooldownActive: cooling, reWedgeWithinCooldown: reWedge,
     };
 
