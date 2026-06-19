@@ -476,6 +476,9 @@ export class AgentManager {
       // FastChecker only needs the first ID for its single-recipient typing
       // indicator / quick-checks. Multi-user is enforced by the gates above.
       allowedUserId: allowedUserId ? parseInt(allowedUserId.split(',')[0].trim(), 10) : undefined,
+      // Modal-trap alerts route to the org orchestrator's inbox for triage (NOT the
+      // founder Telegram). Undefined when this agent IS the orchestrator or none is set.
+      operatorAgent: this.resolveOrchestrator(resolvedOrg, name),
     });
 
     // Send Telegram notification on crashes and session refreshes
@@ -821,6 +824,28 @@ export class AgentManager {
       // singleton or Telegram webhook if the coupling ever causes real
       // operator pain. Non-orchestrator agents skip this entirely.
       await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+    }
+  }
+
+  /**
+   * Resolve the org's orchestrator agent name from orgs/<org>/context.json, for routing
+   * modal-trap alerts to it (the operator that triages, not the founder Telegram). Returns
+   * undefined when there is no org, no/unreadable context.json, no orchestrator field, or
+   * when THIS agent is itself the orchestrator (don't route an alert to oneself).
+   */
+  private resolveOrchestrator(org: string | undefined, name: string): string | undefined {
+    if (!org) return undefined;
+    try {
+      const contextJson = stripBom(
+        readFileSync(join(this.frameworkRoot, 'orgs', org, 'context.json'), 'utf-8'),
+      );
+      const orchestrator = JSON.parse(contextJson).orchestrator;
+      if (!orchestrator || typeof orchestrator !== 'string' || orchestrator === name) {
+        return undefined;
+      }
+      return orchestrator;
+    } catch {
+      return undefined;
     }
   }
 
