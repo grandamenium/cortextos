@@ -25,6 +25,7 @@ import { execFileSync } from 'child_process';
 import { evaluateWedge } from './wedge-watchdog-lib.mjs';
 import {
   ctxRoot, listAgentNames, lastHeartbeatMs, lastCronFireMs, recordHbObservation, resolveInterval, applyTrust,
+  tickSurfaceState, restartDisposition, pidChangedReset,
   lastActivity, ptyInfo, appendShadowLog, loadState, saveState, readMode, recordFire, COOLDOWN_MS,
 } from './wedge-watchdog-data.mjs';
 
@@ -83,6 +84,12 @@ async function main() {
     // NOT the heartbeat-cron schedule (the 2026-06-19 FN-class fix). No cold-start skip — an
     // untrusted agent is still evaluated, but the trust-gate downgrades any restart to a surface.
     const st = state.agents[name] || (state.agents[name] = {});
+    // ANY-source restart (watchdog/daemon/self) detected by PID change -> reset hbObs -> untrusted
+    // -> surface-only until N fresh advances (born-wedged guard, consistent across restart sources).
+    const curPid = (sampleA[name] || {}).pid || 0;
+    const reset = pidChangedReset(st.pid, curPid, st.hbObs);
+    if (reset.restarted) st.hbObs = reset.hbObs;
+    st.pid = curPid;
     st.hbObs = recordHbObservation(st.hbObs, curHb);
     const { intervalMs, trusted, nGaps } = resolveInterval(st.hbObs);
     trust[name] = { trusted, nGaps };
@@ -106,21 +113,19 @@ async function main() {
     // to 'surface' (the bootstrap / restart-loop guard, by construction). evaluateWedge untouched.
     const verdict = applyTrust(evaluateWedge({ nowMs, target: name, agents }), trust[name].trusted);
     const stA = state.agents[name] || (state.agents[name] = {});
-    if (verdict.action !== 'surface') { delete stA.surfaceSince; delete stA.surfaceEscalated; }
+    // Surface state-machine (pure): sets/persists/escalates-once while surfacing, CLEARS on recovery.
+    const surf = tickSurfaceState(stA, verdict.action === 'surface', nowMs);
+    stA.surfaceSince = surf.surfaceSince; stA.surfaceEscalated = surf.surfaceEscalated;
 
     if (verdict.action === 'surface') {
-      // Untrusted would-be-restart: SURFACE (alert), never auto-act. Persist past the cooldown
-      // window with no clean hb-advance -> ESCALATE (so a born-wedged agent is not silently held
-      // forever). Same window/path as the re-wedge escalation (one timer, not two).
-      if (!stA.surfaceSince) stA.surfaceSince = nowMs;
-      const surfacingForMs = nowMs - stA.surfaceSince;
-      const escalateNow = surfacingForMs >= COOLDOWN_MS && !stA.surfaceEscalated;
+      // Untrusted would-be-restart: SURFACE (alert), never auto-act. Persists past the cooldown
+      // window -> ESCALATE ONCE (born-wedged not silently held). Same window as re-wedge (one timer).
       appendShadowLog(root, {
         ts: new Date(nowMs).toISOString(), mode: MODE, agent: name, action: 'surface',
-        disposition: escalateNow ? 'SURFACE->ESCALATE (untrusted interval persists — born-wedged not silently held)' : 'SURFACE (untrusted interval / bootstrap — NOT auto-acting)',
-        reason: verdict.reason, trusted: false, nGaps: trust[name].nGaps, surfacingForMs, trace: verdict.trace,
+        disposition: surf.escalateNow ? 'SURFACE->ESCALATE (untrusted interval persists — born-wedged not silently held)' : 'SURFACE (untrusted interval / bootstrap — NOT auto-acting)',
+        reason: verdict.reason, trusted: false, nGaps: trust[name].nGaps, surfacingForMs: surf.surfacingForMs, trace: verdict.trace,
       });
-      if (escalateNow && SAFE_NAME.test(name)) { escalate(name, verdict, surfacingForMs); stA.surfaceEscalated = true; }
+      if (surf.escalateNow && SAFE_NAME.test(name)) escalate(name, verdict, surf.surfacingForMs);
       continue;
     }
 
@@ -160,44 +165,42 @@ async function main() {
       continue;
     }
 
-    // Cooldown / escalate-not-loop bookkeeping (per-agent).
-    const st = state.agents[name] || {};
-    const sinceLast = nowMs - (st.lastActionAt || 0);
-    const cooling = sinceLast < COOLDOWN_MS;
-    const reWedge = cooling && verdict.action === 'restart';
-
     const line = {
       ts: new Date(nowMs).toISOString(), mode: MODE, agent: name,
       action: verdict.action, reason: verdict.reason, trace: verdict.trace,
       trusted: trust[name].trusted, nGaps: trust[name].nGaps,
-      cooldownActive: cooling, reWedgeWithinCooldown: reWedge,
     };
 
-    if (verdict.action === 'restart' && reWedge) {
-      // 2nd wedge within the window => escalate, do NOT loop-restart.
-      line.disposition = 'ESCALATE (re-wedge within cooldown — not a transient stall)';
+    if (verdict.action === 'restart') {
+      // Disposition via the pure helper: re-wedge-within-cooldown -> ESCALATE-not-loop;
+      // past-cooldown + armed -> act; past-cooldown + shadow -> would-restart (shadow NEVER acts).
+      const rd = restartDisposition(stA.lastActionAt, nowMs, MODE);
+      line.cooldownActive = rd.cooling;
+      if (rd.escalate) {
+        line.disposition = 'ESCALATE (re-wedge within cooldown — not a transient stall)';
+        appendShadowLog(root, line);
+        escalate(name, verdict, rd.sinceLast);
+        continue;
+      }
+      if (rd.act) {
+        line.disposition = 'ARMED-RESTART';
+        appendShadowLog(root, line);
+        if (doRestart(name)) {
+          stA.lastActionAt = nowMs; stA.lastAction = 'restart'; stA.hbObs = []; // restarted -> untrusted
+          acted.push(name);
+        }
+        continue;
+      }
+      // shadow, not cooling -> would-restart (record the action time so a re-wedge escalates next).
+      line.disposition = 'WOULD-RESTART (shadow)';
       appendShadowLog(root, line);
-      escalate(name, verdict, sinceLast);
+      stA.lastActionAt = nowMs; stA.lastAction = 'would-restart';
       continue;
     }
 
-    if (verdict.action === 'restart' && MODE === 'armed' && !cooling) {
-      line.disposition = 'ARMED-RESTART';
-      appendShadowLog(root, line);
-      if (doRestart(name)) {
-        state.agents[name] = { lastActionAt: nowMs, lastAction: 'restart' };
-        acted.push(name);
-      }
-    } else {
-      // shadow (or armed-but-cooling, or hold): observe only.
-      line.disposition = MODE === 'shadow'
-        ? (verdict.action === 'restart' ? 'WOULD-RESTART (shadow)' : 'WOULD-HOLD+ALARM (shadow)')
-        : (cooling ? 'SUPPRESSED-cooldown' : 'HOLD+ALARM');
-      appendShadowLog(root, line);
-      if (verdict.action === 'restart' && MODE !== 'armed') {
-        state.agents[name] = { lastActionAt: nowMs, lastAction: 'would-restart' };
-      }
-    }
+    // hold (Gate-C refutation: no other agent advancing) — alarm-only, NEVER acts.
+    line.disposition = MODE === 'shadow' ? 'WOULD-HOLD+ALARM (shadow)' : 'HOLD+ALARM';
+    appendShadowLog(root, line);
   }
   saveState(root, state);
   console.log(`[wedge-watchdog] mode=${MODE} evaluated=${names.length} acted=${acted.length}${acted.length ? ' [' + acted.join(',') + ']' : ''}`);

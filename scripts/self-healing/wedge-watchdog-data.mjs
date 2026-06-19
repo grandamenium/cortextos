@@ -133,6 +133,51 @@ export function applyTrust(verdict, trusted) {
   return verdict;
 }
 
+// --- runner-stateful decision helpers (PURE — deterministically tested with injected state+time;
+//     the ps/disk I/O stays in the runner. These are the safety-critical guards.) ---------------
+
+/**
+ * Per-agent surface state-machine for one tick. `isSurfacing` = this tick's verdict is 'surface'
+ * (untrusted would-be-restart). Returns the next {surfaceSince, surfaceEscalated} + this tick's
+ * {surfacingForMs, escalateNow}. Behaviors (all the safety-critical surface guards in one pure fn):
+ *  - NOT surfacing (recovered) -> CLEAR surfaceSince + surfaceEscalated (no stale state; a later
+ *    genuine wedge re-surfaces cleanly, not pre-escalated);
+ *  - first surface -> set surfaceSince = now (surfacingForMs = 0, no escalate yet);
+ *  - persists past COOLDOWN_MS -> escalateNow = true ONCE; the surfaceEscalated latch prevents
+ *    re-escalation (reuses COOLDOWN_MS — the SAME window/timer as the re-wedge escalation).
+ */
+export function tickSurfaceState(prev, isSurfacing, nowMs) {
+  if (!isSurfacing) return { surfaceSince: undefined, surfaceEscalated: false, surfacingForMs: 0, escalateNow: false };
+  const surfaceSince = prev.surfaceSince || nowMs;
+  const surfacingForMs = nowMs - surfaceSince;
+  const escalateNow = surfacingForMs >= COOLDOWN_MS && !prev.surfaceEscalated;
+  return { surfaceSince, surfaceEscalated: prev.surfaceEscalated || escalateNow, surfacingForMs, escalateNow };
+}
+
+/**
+ * Disposition for a TRUSTED 'restart' verdict given the cooldown window + mode:
+ *  - re-wedge WITHIN cooldown -> ESCALATE, do NOT loop-restart (the persistent-wedge guard);
+ *  - past cooldown + ARMED -> act (real restart);
+ *  - past cooldown + SHADOW -> would-restart (shadow must NEVER act, even on a restart disposition).
+ */
+export function restartDisposition(lastActionAt, nowMs, mode) {
+  const sinceLast = nowMs - (lastActionAt || 0);
+  const cooling = sinceLast < COOLDOWN_MS;
+  if (cooling) return { sinceLast, cooling, disposition: 'escalate', act: false, escalate: true };
+  if (mode === 'armed') return { sinceLast, cooling, disposition: 'armed-restart', act: true, escalate: false };
+  return { sinceLast, cooling, disposition: 'would-restart', act: false, escalate: false };
+}
+
+/**
+ * A restart from ANY source (watchdog / daemon / self) is detected by a PID change -> reset hbObs
+ * -> untrusted -> surface-only until N fresh advances. Makes the born-wedged guard CONSISTENT
+ * across restart sources (not just watchdog-initiated). Pure.
+ */
+export function pidChangedReset(prevPid, curPid, hbObs) {
+  if (prevPid && curPid && prevPid !== curPid) return { hbObs: [], restarted: true };
+  return { hbObs: hbObs || [], restarted: false };
+}
+
 // --- per-agent state readers ------------------------------------------------
 
 // ANY cron fire (not just heartbeat) — for the corroborator + Gate-C: a wedge stops ALL the
@@ -219,6 +264,7 @@ export function ptyInfo(root, names) {
       pid = pf.pid || 0;
     } catch { /* no pid file */ }
     res[name] = {
+      pid,                                       // for PID-change restart detection (any-source born-wedged guard)
       ptyAlive: pid > 0 && procs.has(pid),
       treeCpuPct: pid > 0 && procs.has(pid) ? treeCpu(pid) : 0,
       enabled, hermes,
