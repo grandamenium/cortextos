@@ -130,6 +130,5 @@
     "upstream_sync": {
       "enabled": true
     }
-  },
-  "model": "claude-sonnet-4-6"
+  }
 }
