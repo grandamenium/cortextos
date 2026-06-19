@@ -149,6 +149,17 @@ function initializeSchema(db: Database.Database): void {
       reset_at INTEGER NOT NULL
     );
 
+  `);
+
+  // Additive migrations: add columns that may not exist in older DBs
+  for (const sql of [
+    'ALTER TABLE tasks ADD COLUMN start_date TEXT',
+    'ALTER TABLE tasks ADD COLUMN due_date TEXT',
+  ]) {
+    try { db.exec(sql); } catch { /* column already exists — safe to ignore */ }
+  }
+
+  db.exec(`
     -- Indexes for common queries
     CREATE INDEX IF NOT EXISTS idx_tasks_org ON tasks(org);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -173,6 +184,8 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent);
     CREATE INDEX IF NOT EXISTS idx_messages_org ON messages(org);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+
+    CREATE INDEX IF NOT EXISTS idx_tasks_due_date ON tasks(due_date);
   `);
 }
 

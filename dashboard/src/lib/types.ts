@@ -69,6 +69,8 @@ export interface Task {
   created_at: string;
   updated_at?: string;
   completed_at?: string;
+  start_date?: string;
+  due_date?: string;
   notes?: string;
   source_file?: string;
   outputs?: TaskOutput[];

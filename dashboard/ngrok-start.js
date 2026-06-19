@@ -1,0 +1,11 @@
+const { spawn } = require("child_process");
+const NGROK_PATH = "C:\\Users\\jenni\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Ngrok.Ngrok_Microsoft.Winget.Source_8wekyb3d8bbwe\\ngrok.exe";
+const DOMAIN = process.env.NGROK_DOMAIN || null;
+const args = ["http", "3000"];
+if (DOMAIN) args.push("--domain=" + DOMAIN);
+console.log("[ngrok-start] Starting ngrok at:", NGROK_PATH);
+const child = spawn(NGROK_PATH, args, { stdio: "inherit" });
+child.on("error", (err) => { console.error("[ngrok-start] Error:", err.message); process.exit(1); });
+child.on("close", (code) => { process.exit(code != null ? code : 1); });
+process.on("SIGINT", () => child.kill());
+process.on("SIGTERM", () => child.kill());

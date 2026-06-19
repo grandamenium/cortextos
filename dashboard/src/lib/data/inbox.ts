@@ -13,6 +13,9 @@ export interface InboxItem {
   category: string | null;
   isDeal: boolean;
   flaggedAt: string;
+  messageId?: string | null;
+  threadId?: string | null;
+  tokenFile?: string | null;
 }
 
 export function getInboxDigest(limit = 15): InboxItem[] {

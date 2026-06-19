@@ -10,7 +10,7 @@ import { getInboxDigest } from '@/lib/data/inbox';
 
 import { ActionRequired } from '@/components/overview/action-required';
 import { ActionItemsPanel } from '@/components/overview/action-items-panel';
-import { InboxDigest } from '@/components/overview/inbox-digest';
+import { InboxCommandCenter } from '@/components/overview/inbox-command-center';
 import { CurrentFocus } from '@/components/overview/current-focus';
 import { TodaysProgress } from '@/components/overview/todays-progress';
 import { LiveActivity } from '@/components/overview/live-activity';
@@ -114,7 +114,7 @@ export default async function OverviewPage({
           pendingApprovals={pendingApprovals.slice(0, 5)}
           blockedTasks={blockedTasks.slice(0, 5)}
         />
-        <InboxDigest items={inboxDigest} />
+        <InboxCommandCenter items={inboxDigest} />
       </div>
 
       {/* Legacy action-required summary strip — only when old ActionRequired had items */}
