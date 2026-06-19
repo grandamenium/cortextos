@@ -20,21 +20,17 @@ async function main(): Promise<void> {
 
   const agentName = env.agentName || 'agent';
 
-  // Customer-box noise suppression (2026-06-18, Bode-direct): the "context compacting" notice is system noise
-  // the customer should not see — it reads as a redeploy/quiet blip (this is part of the broader noise Jordan/P&S
-  // was getting). On a CUSTOMER box, route to the OPERATOR channel if configured, else SUPPRESS — never send to
-  // the customer's CHAT_ID. On an operator/internal box (CTX_IS_CUSTOMER_BOX unset), CHAT_ID is the operator → unchanged.
-  let sendToken = env.botToken;
-  let sendChat = env.chatId;
-  if (process.env.CTX_IS_CUSTOMER_BOX === '1') {
-    const opChat = process.env.OPERATOR_CHAT_ID;
-    if (opChat) {
-      sendToken = process.env.OPERATOR_BOT_TOKEN || env.botToken;
-      sendChat = opChat;
-    } else {
-      return; // fail-closed: no operator channel → suppress (customer never sees compaction internals)
-    }
-  }
+  // Compaction notice = internal housekeeping noise. Bode-direct 2026-06-19 ("I want to stop getting these"):
+  // it must NEVER go to the primary user/CHAT_ID — on a customer box it reads as a redeploy blip to the customer,
+  // and on the operator box Bode does not want it either (sage compacts many times/day = a steady spam stream).
+  // The 2026-06-18 fix only suppressed the customer case; the operator/internal case still spammed CHAT_ID.
+  // New rule (uniform across all boxes): send ONLY to a dedicated OPERATOR_CHAT_ID if explicitly configured
+  // (a separate low-noise ops channel); otherwise SUPPRESS entirely. Default = nobody gets compaction pings.
+  const opChat = process.env.OPERATOR_CHAT_ID;
+  if (!opChat) return; // no dedicated ops channel → suppress (the default; primary CHAT_ID is never used)
+  const sendToken = process.env.OPERATOR_BOT_TOKEN || env.botToken;
+  if (!sendToken) return;
+  const sendChat = opChat;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
