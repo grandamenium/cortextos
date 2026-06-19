@@ -91,7 +91,24 @@ async function main() {
   const acted = [];
   for (const name of Object.keys(agents)) {
     const verdict = evaluateWedge({ nowMs, target: name, agents });
-    if (verdict.action === 'none') continue;
+    if (verdict.action === 'none') {
+      // PD trace-contract: POSITIVE never-reap evidence. Log every Gate-A candidate
+      // (hb-frozen >= 2x its own interval) that was then SPARED by B1/B2 — a real FE/BA
+      // long-turn reads here as "CANDIDATE-SPARED sparedBy=B2-activity ...". Not-frozen
+      // agents (gateA false) are uninteresting — skip (no per-tick spam of all 11).
+      const t = verdict.trace || {};
+      if (t.gateA === true) {
+        const sparedBy = t.gateB1 === false ? 'B1-tree-cpu'
+          : (t.gateB2 === false ? 'B2-activity' : 'unknown');
+        appendShadowLog(root, {
+          ts: new Date(nowMs).toISOString(), mode: MODE, agent: name,
+          action: 'none', disposition: 'CANDIDATE-SPARED', sparedBy, reason: verdict.reason,
+          ptyTreeCpuPct: t.ptyTreeCpuPct, lastActivityAgoMs: t.lastActivityAgoMs,
+          lastActivitySource: t.lastActivitySource, frozenForMs: t.frozenForMs, thresholdA: t.thresholdA,
+        });
+      }
+      continue;
+    }
     if (!SAFE_NAME.test(name)) {
       appendShadowLog(root, { ts: new Date(nowMs).toISOString(), mode: MODE, agent: name, action: verdict.action, disposition: 'REFUSED-unsafe-agent-name (SEC-WEDGE-ARGV)' });
       continue;
