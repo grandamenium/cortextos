@@ -233,8 +233,17 @@ export class AgentManager {
 
     // Send consolidated operator Telegram alert(s) for all guard findings
     // accumulated during the startup sweep, grouped by alert type.
-    if (this.pendingApiKeyAlerts.length > 0 && this.operatorBotToken && this.operatorChatId) {
-      this.flushGuardAlerts(this.pendingApiKeyAlerts.splice(0), this.operatorBotToken, this.operatorChatId);
+    // H2 fix: if no bot token was captured (no agent has BOT_TOKEN+CHAT_ID),
+    // emit to daemon logs rather than silently discard via splice().
+    if (this.pendingApiKeyAlerts.length > 0) {
+      const pending = this.pendingApiKeyAlerts.splice(0);
+      if (this.operatorBotToken && this.operatorChatId) {
+        this.flushGuardAlerts(pending, this.operatorBotToken, this.operatorChatId);
+      } else {
+        for (const alert of pending) {
+          console.error(`[DAEMON GUARD - no Telegram bot configured] ${alert}`);
+        }
+      }
     }
   }
 
@@ -1008,6 +1017,12 @@ export class AgentManager {
       const newAlerts = this.pendingApiKeyAlerts.splice(0);
       if (this.operatorBotToken && this.operatorChatId) {
         this.flushGuardAlerts(newAlerts, this.operatorBotToken, this.operatorChatId);
+      } else {
+        // H2 fix: IPC-triggered restart with no bot token — log to daemon stderr
+        // rather than silently drop so guard findings have a log trail.
+        for (const alert of newAlerts) {
+          console.error(`[DAEMON GUARD - no Telegram bot configured] ${alert}`);
+        }
       }
     }
   }
@@ -1031,6 +1046,12 @@ export class AgentManager {
     const otherAlerts = alerts.filter(
       (a) => a.startsWith('cred-health') || a.startsWith('model-guard'),
     );
+    // H1 fix: catch any alert string that matches neither classifier so it is
+    // never silently dropped — future guards that push with an unrecognised prefix
+    // still surface to the operator and to daemon logs.
+    const classifiedSet = new Set([...apiKeyAlerts, ...otherAlerts]);
+    const unknownAlerts = alerts.filter((a) => !classifiedSet.has(a));
+
     const api = new TelegramAPI(botToken);
     if (apiKeyAlerts.length > 0) {
       api.sendMessage(
@@ -1042,6 +1063,13 @@ export class AgentManager {
       api.sendMessage(
         chatId,
         `⚠️ DAEMON GUARD: ${otherAlerts.join('; ')}. See daemon logs for details.`,
+      ).catch(() => {});
+    }
+    if (unknownAlerts.length > 0) {
+      console.error(`[DAEMON GUARD] unclassified alerts (check flushGuardAlerts prefix list): ${unknownAlerts.join('; ')}`);
+      api.sendMessage(
+        chatId,
+        `⚠️ DAEMON GUARD (unclassified): ${unknownAlerts.join('; ')}. Update flushGuardAlerts prefix list.`,
       ).catch(() => {});
     }
   }
