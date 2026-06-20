@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { join, relative } from 'path';
+import { homedir } from 'os';
 import { execFile } from 'child_process';
 import { VALID_RUNTIMES } from './runtimes.js';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
@@ -89,6 +90,22 @@ export class AgentManager {
   // send the Telegram alert.
   private operatorBotToken: string | undefined;
   private operatorChatId: string | undefined;
+
+  // Credential-health guard state (#2).
+  // credentials.json is per-user (not per-agent), so we read it once and
+  // cache the issues list for the daemon's lifetime. Agents with a valid
+  // per-agent CLAUDE_CODE_OAUTH_TOKEN override are excluded from the check.
+  private credHealthCached: { done: boolean; issues: string[] } = { done: false, issues: [] };
+  // Agents already alerted so a crash-restart loop doesn't re-flood.
+  private credHealthAlertedAgents: Set<string> = new Set();
+
+  // Model-guard state (#3).
+  // Deduped on agent-name:model-value so a changed config re-alerts
+  // but a repeat restart with the same wrong model does not.
+  private modelGuardAlerted: Set<string> = new Set();
+
+  // The ONLY accepted model per Bode's hard never-lesser-model rule.
+  private static readonly REQUIRED_MODEL = 'claude-opus-4-8';
 
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
@@ -214,15 +231,10 @@ export class AgentManager {
     // race ever does leak through PR #11's protection.
     this.clearDaemonCrashMarkers();
 
-    // Send ONE consolidated ANTHROPIC_API_KEY operator Telegram alert for
-    // all findings accumulated during the startup sweep.
+    // Send consolidated operator Telegram alert(s) for all guard findings
+    // accumulated during the startup sweep, grouped by alert type.
     if (this.pendingApiKeyAlerts.length > 0 && this.operatorBotToken && this.operatorChatId) {
-      const sources = this.pendingApiKeyAlerts.splice(0).join(', ');
-      const alertApi = new TelegramAPI(this.operatorBotToken);
-      alertApi.sendMessage(
-        this.operatorChatId,
-        `⚠️ DAEMON GUARD: ANTHROPIC_API_KEY detected in: ${sources}. Stray key shadows OAuth (#3>#5 precedence) → per-token billing + single auth-failure point. Remove the key(s) and restart the daemon.`,
-      ).catch(() => {});
+      this.flushGuardAlerts(this.pendingApiKeyAlerts.splice(0), this.operatorBotToken, this.operatorChatId);
     }
   }
 
@@ -542,6 +554,85 @@ export class AgentManager {
       this.apiKeyAlertedPaths.add('__process_env__');
       console.log(`[agent-manager] SECURITY WARNING: ANTHROPIC_API_KEY found in process.env (daemon launch environment). This shadows OAuth for all agents → per-token billing + auth-failure single point. Unset it from the daemon environment.`);
       this.pendingApiKeyAlerts.push('process.env (daemon environment)');
+    }
+
+    // ── Guard #2: Credential-health ───────────────────────────────────────
+    // Local-field check only — no live API probe (apollo owns runtime probe).
+    // Reads ~/.claude/.credentials.json ONCE per daemon run and caches the
+    // result. Each agent is then checked: if it has a per-agent
+    // CLAUDE_CODE_OAUTH_TOKEN override, skip (it has its own auth).
+    // Otherwise, any issue in the cached credential check = warn for this agent.
+    // This caught the AXL 14h silent-freeze class before it reaches production.
+    if (!this.credHealthCached.done) {
+      this.credHealthCached.done = true;
+      const credPath = join(homedir(), '.claude', '.credentials.json');
+      if (!existsSync(credPath)) {
+        this.credHealthCached.issues.push('credentials.json missing (no OAuth credential on disk)');
+      } else {
+        try {
+          const credJson = JSON.parse(stripBom(readFileSync(credPath, 'utf-8')));
+          const oauth = credJson?.claudeAiOauth ?? {};
+          const hasAccess = typeof oauth.accessToken === 'string' && oauth.accessToken.length > 0;
+          const hasRefresh = typeof oauth.refreshToken === 'string' && oauth.refreshToken.length > 0;
+          const expiresAt: number | undefined = typeof oauth.expiresAt === 'number' ? oauth.expiresAt : undefined;
+          const expired = expiresAt !== undefined && expiresAt < Date.now();
+          if (!hasAccess) {
+            this.credHealthCached.issues.push('credentials.json: accessToken missing or empty');
+          } else if (expired) {
+            this.credHealthCached.issues.push(`credentials.json: accessToken expired (expiresAt=${new Date(expiresAt!).toISOString()})`);
+          }
+          if (!hasRefresh) {
+            this.credHealthCached.issues.push('credentials.json: refreshToken missing — cannot auto-renew');
+          }
+        } catch {
+          this.credHealthCached.issues.push('credentials.json: unreadable or invalid JSON');
+        }
+      }
+    }
+    // Apply cached credential health result to this agent.
+    // Skip if agent has a per-agent CLAUDE_CODE_OAUTH_TOKEN (own auth path).
+    const agentEnvContent = existsSync(agentEnvFile)
+      ? (() => { try { return readFileSync(agentEnvFile, 'utf-8'); } catch { return ''; } })()
+      : '';
+    const hasPerAgentOAuth = /^CLAUDE_CODE_OAUTH_TOKEN\s*=\s*\S/m.test(agentEnvContent);
+    if (!hasPerAgentOAuth && this.credHealthCached.issues.length > 0 && !this.credHealthAlertedAgents.has(name)) {
+      this.credHealthAlertedAgents.add(name);
+      for (const issue of this.credHealthCached.issues) {
+        log(`CREDENTIAL WARNING: ${issue}. Agent ${name} will auth-fail at runtime. Run 'claude' interactively to re-authenticate.`);
+      }
+      const issueStr = this.credHealthCached.issues.join('; ');
+      this.pendingApiKeyAlerts.push(`cred-health (${name}): ${issueStr}`);
+      if (!this.operatorBotToken && botToken && chatId) {
+        this.operatorBotToken = botToken;
+        this.operatorChatId = chatId;
+      }
+    }
+
+    // ── Guard #3: Model ───────────────────────────────────────────────────
+    // Enforces Bode's hard never-lesser-model rule. Checks config.model (what
+    // the agent WILL launch with via --model flag). Unset = uncontrolled model
+    // selection = violation (even if default happens to be opus today, the pin
+    // is the requirement). Runtime effective-model drift is apollo's lane.
+    const configuredModel = config.model ?? '';
+    const modelKey = `${name}:${configuredModel}`;
+    if (!this.modelGuardAlerted.has(modelKey)) {
+      if (!configuredModel) {
+        this.modelGuardAlerted.add(modelKey);
+        log(`MODEL WARNING: agent ${name} has no model pinned in config.json. Claude Code will pick its own default. Explicitly set model=claude-opus-4-8 to enforce Bode's never-lesser-model rule.`);
+        this.pendingApiKeyAlerts.push(`model-guard (${name}): model not pinned`);
+        if (!this.operatorBotToken && botToken && chatId) {
+          this.operatorBotToken = botToken;
+          this.operatorChatId = chatId;
+        }
+      } else if (configuredModel !== AgentManager.REQUIRED_MODEL) {
+        this.modelGuardAlerted.add(modelKey);
+        log(`MODEL WARNING: agent ${name} configured with model="${configuredModel}" — not the required ${AgentManager.REQUIRED_MODEL}. Update config.json to enforce Bode's never-lesser-model rule.`);
+        this.pendingApiKeyAlerts.push(`model-guard (${name}): model="${configuredModel}" (expected ${AgentManager.REQUIRED_MODEL})`);
+        if (!this.operatorBotToken && botToken && chatId) {
+          this.operatorBotToken = botToken;
+          this.operatorChatId = chatId;
+        }
+      }
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
@@ -916,11 +1007,7 @@ export class AgentManager {
     if (!this.inDiscoverAndStart && this.pendingApiKeyAlerts.length > 0) {
       const newAlerts = this.pendingApiKeyAlerts.splice(0);
       if (this.operatorBotToken && this.operatorChatId) {
-        const alertApi = new TelegramAPI(this.operatorBotToken);
-        alertApi.sendMessage(
-          this.operatorChatId,
-          `⚠️ DAEMON GUARD: ANTHROPIC_API_KEY detected in: ${newAlerts.join(', ')}. Stray key shadows OAuth (#3>#5 precedence) → per-token billing + single auth-failure point. Remove the key(s) and restart the daemon.`,
-        ).catch(() => {});
+        this.flushGuardAlerts(newAlerts, this.operatorBotToken, this.operatorChatId);
       }
     }
   }
@@ -931,6 +1018,34 @@ export class AgentManager {
    * undefined when there is no org, no/unreadable context.json, no orchestrator field, or
    * when THIS agent is itself the orchestrator (don't route an alert to oneself).
    */
+  /**
+   * Send grouped Telegram alert(s) for accumulated guard findings.
+   * API-key findings get a dedicated "ANTHROPIC_API_KEY detected" message;
+   * cred-health and model-guard findings get a separate "DAEMON GUARD" message.
+   * Keeping them separate preserves per-type filtering in tests and monitoring.
+   */
+  private flushGuardAlerts(alerts: string[], botToken: string, chatId: string): void {
+    const apiKeyAlerts = alerts.filter(
+      (a) => a.startsWith('agent .env') || a.startsWith('org secrets.env') || a.startsWith('process.env'),
+    );
+    const otherAlerts = alerts.filter(
+      (a) => a.startsWith('cred-health') || a.startsWith('model-guard'),
+    );
+    const api = new TelegramAPI(botToken);
+    if (apiKeyAlerts.length > 0) {
+      api.sendMessage(
+        chatId,
+        `⚠️ DAEMON GUARD: ANTHROPIC_API_KEY detected in: ${apiKeyAlerts.join(', ')}. Stray key shadows OAuth (#3>#5 precedence) → per-token billing + single auth-failure point. Remove the key(s) and restart the daemon.`,
+      ).catch(() => {});
+    }
+    if (otherAlerts.length > 0) {
+      api.sendMessage(
+        chatId,
+        `⚠️ DAEMON GUARD: ${otherAlerts.join('; ')}. See daemon logs for details.`,
+      ).catch(() => {});
+    }
+  }
+
   private resolveOrchestrator(org: string | undefined, name: string): string | undefined {
     if (!org) return undefined;
     try {
