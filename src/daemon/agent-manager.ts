@@ -71,6 +71,18 @@ export class AgentManager {
   // finishes so the next clean restart starts from a known-good baseline.
   private daemonJustCrashed: boolean = false;
 
+  // ANTHROPIC_API_KEY startup guard state.
+  // Tracks source paths already checked so secrets.env and process.env are
+  // only alerted once per daemon lifetime (not once per agent restart).
+  private apiKeyAlertedPaths: Set<string> = new Set();
+  // Accumulates findings across all startAgent() calls; flushed as ONE
+  // consolidated Telegram alert at the end of discoverAndStart().
+  private pendingApiKeyAlerts: string[] = [];
+  // First available operator bot captured during startAgent(); used to
+  // send the consolidated Telegram alert from discoverAndStart().
+  private operatorBotToken: string | undefined;
+  private operatorChatId: string | undefined;
+
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
@@ -188,6 +200,17 @@ export class AgentManager {
     // are normal operation and should fire the real BUG-011 alarm if a
     // race ever does leak through PR #11's protection.
     this.clearDaemonCrashMarkers();
+
+    // Send ONE consolidated ANTHROPIC_API_KEY operator Telegram alert if
+    // any findings were accumulated across all startAgent() calls.
+    if (this.pendingApiKeyAlerts.length > 0 && this.operatorBotToken && this.operatorChatId) {
+      const sources = this.pendingApiKeyAlerts.join(', ');
+      const alertApi = new TelegramAPI(this.operatorBotToken);
+      alertApi.sendMessage(
+        this.operatorChatId,
+        `⚠️ DAEMON GUARD: ANTHROPIC_API_KEY detected in: ${sources}. Stray key shadows OAuth (#3>#5 precedence) → per-token billing + single auth-failure point. Remove the key(s) and restart the daemon.`,
+      ).catch(() => {});
+    }
   }
 
   /**
@@ -460,6 +483,44 @@ export class AgentManager {
         // Don't log sensitive user IDs — just indicate the gate is enabled
         log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
       }
+
+      // ANTHROPIC_API_KEY guard (source 1: agent .env).
+      // A stray key here silently shadows the OAuth token (ANTHROPIC_API_KEY=#3,
+      // CLAUDE_CODE_OAUTH_TOKEN=#5 in Claude Code precedence) → per-token billing
+      // on this agent + auth-failure single point. Same class as MFL incident
+      // (secrets.env re-add downed 12 agents). Deduped per path so a restart
+      // loop does not flood. Fail-open: warn only, do NOT strip the key.
+      if (!this.apiKeyAlertedPaths.has(agentEnvFile) && /^ANTHROPIC_API_KEY=.+/m.test(envContent)) {
+        this.apiKeyAlertedPaths.add(agentEnvFile);
+        log(`SECURITY WARNING: ANTHROPIC_API_KEY found in agent .env for ${name}. This shadows OAuth (#3>#5 precedence) → per-token billing + auth-failure single point. Remove it — OAuth via credentials.json is the correct auth path.`);
+        this.pendingApiKeyAlerts.push(`agent .env (${name})`);
+        if (!this.operatorBotToken && botToken && chatId) {
+          this.operatorBotToken = botToken;
+          this.operatorChatId = chatId;
+        }
+      }
+    }
+
+    // ANTHROPIC_API_KEY guard (source 2: org secrets.env).
+    // Checked once per org secrets.env path (shared across all agents in the org).
+    const secretsEnvPath = join(this.frameworkRoot, 'orgs', resolvedOrg, 'secrets.env');
+    if (!this.apiKeyAlertedPaths.has(secretsEnvPath) && existsSync(secretsEnvPath)) {
+      this.apiKeyAlertedPaths.add(secretsEnvPath);
+      try {
+        const secretsContent = stripBom(readFileSync(secretsEnvPath, 'utf-8'));
+        if (/^ANTHROPIC_API_KEY=.+/m.test(secretsContent)) {
+          console.log(`[${name}] SECURITY WARNING: ANTHROPIC_API_KEY found in org secrets.env (${resolvedOrg}). This shadows OAuth for ALL agents in this org → per-token billing + single auth-failure point. Remove it.`);
+          this.pendingApiKeyAlerts.push(`org secrets.env (${resolvedOrg})`);
+        }
+      } catch { /* ignore unreadable secrets.env */ }
+    }
+
+    // ANTHROPIC_API_KEY guard (source 3: process.env).
+    // Checked once per daemon run — a key here shadows OAuth for every agent.
+    if (!this.apiKeyAlertedPaths.has('__process_env__') && process.env.ANTHROPIC_API_KEY) {
+      this.apiKeyAlertedPaths.add('__process_env__');
+      console.log(`[agent-manager] SECURITY WARNING: ANTHROPIC_API_KEY found in process.env (daemon launch environment). This shadows OAuth for all agents → per-token billing + auth-failure single point. Unset it from the daemon environment.`);
+      this.pendingApiKeyAlerts.push('process.env (daemon environment)');
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
