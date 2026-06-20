@@ -78,6 +78,29 @@ export interface Task {
    */
   blocks?: string[];
   blocked_by?: string[];
+  /**
+   * Marks a task as intentionally held off dispatch — it is NOT a live
+   * dispatch backlog. Set manually or by the platform-director (the
+   * freeze-owner). The authoring dispatch-backlog detector
+   * (`src/bus/metrics.ts`) excludes any task carrying a `held_reason` from
+   * `pending_dispatch` and its age percentiles, so a correctly-held queue does
+   * not trip `authoring_dispatch_backlog` every nightly cycle (SYS-MET-03).
+   *
+   * The task stays `status: 'pending'` on purpose: SAT-FREEZE release is
+   * policy/manual with no auto-release-sweep keying off status, so the marker
+   * is release-safe by construction (PD freeze-owner ruling 2026-06-18). The
+   * value categorises why it is held:
+   *   - `saturation` — target agent is over its WIP ceiling (held under SAT-FREEZE)
+   *   - `human`      — [HUMAN]-parked: awaiting a human action, not agent-routable
+   *   - `policy`     — held under an explicit policy freeze
+   *
+   * Queryable as PD's lift-set. S2-compatible (the field is present + queryable),
+   * but the S2-inflow-gate AUTOMATION (auto-mark over WIP-ceiling / auto-clear at
+   * lift) is deliberately out of scope here — that is a separate, larger piece.
+   */
+  held_reason?: 'saturation' | 'human' | 'policy';
+  /** Optional free-text detail for `held_reason` (e.g. the blocking condition). */
+  held_note?: string;
 }
 
 // Event Types

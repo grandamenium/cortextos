@@ -240,6 +240,14 @@ interface TaskRecord {
   archived?: boolean;
   title?: string;
   bundle_id?: string;
+  /**
+   * Set when a task is intentionally held off dispatch (SAT-FREEZE / [HUMAN]-
+   * parked / policy freeze). Held tasks are excluded from pending_dispatch and
+   * its age percentiles so a correctly-held queue does not trip
+   * authoring_dispatch_backlog every nightly cycle (SYS-MET-03). See the
+   * `held_reason` doc on the canonical `Task` type in src/types/index.ts.
+   */
+  held_reason?: string;
 }
 
 /**
@@ -344,9 +352,20 @@ function detectAnomalies(role: RoleConfig, metrics: Omit<RoleMetrics, 'anomalies
     }
   }
   if (wantsAuthoring) {
-    if (typeof t.pending_dispatch_age_p95_max_ms === 'number'
-        && metrics.authoring.pending_dispatch_age_p95_ms !== null
-        && metrics.authoring.pending_dispatch_age_p95_ms > t.pending_dispatch_age_p95_max_ms) {
+    // SYS-MET-03 calibration: fire only on a genuinely BROAD + OLD backlog —
+    // a minimum COUNT of undispatched tasks AND a stale MEDIAN (p50) age.
+    // Using p50 instead of p95 means a single just-over-threshold outlier no
+    // longer trips the flag (the product-owner p50=0.1d / p95=2.1d false-positive
+    // class). The min-count gate additionally suppresses a lone stale task.
+    // p95 stays an info-only signal in the metrics payload (still computed), not
+    // a trigger. Held tasks (SAT-FREEZE / [HUMAN]-parked / policy) are already
+    // excluded from pending_dispatch + the p50, so a correctly-held queue
+    // reports pending_dispatch=0 and never fires.
+    const minCount = typeof t.pending_dispatch_min_count === 'number' ? t.pending_dispatch_min_count : 3;
+    if (typeof t.pending_dispatch_age_p50_max_ms === 'number'
+        && metrics.authoring.pending_dispatch >= minCount
+        && metrics.authoring.pending_dispatch_age_p50_ms !== null
+        && metrics.authoring.pending_dispatch_age_p50_ms > t.pending_dispatch_age_p50_max_ms) {
       out.push('authoring_dispatch_backlog');
     }
   }
@@ -693,7 +712,15 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
         authoredTotal++;
         // "pending dispatch" = author still owns it (unassigned OR self-assigned)
         const selfOrUnassigned = !task.assigned_to || task.assigned_to === agent;
-        if (task.status === 'pending' && selfOrUnassigned) {
+        // Intentionally-held tasks (SAT-FREEZE / [HUMAN]-parked / policy freeze)
+        // are NOT live dispatch backlog — they are correctly-held-not-routable.
+        // Excluding them keeps a held queue from tripping authoring_dispatch_backlog
+        // every nightly cycle (SYS-MET-03). The task stays status='pending' so
+        // the policy/manual freeze-release path is unaffected. Still counted in
+        // authored_total (it IS an authored task); only pending_dispatch +
+        // its age percentiles exclude it.
+        const held = typeof task.held_reason === 'string' && task.held_reason.length > 0;
+        if (task.status === 'pending' && selfOrUnassigned && !held) {
           pendingDispatch++;
           if (task.created_at) {
             const t = Date.parse(task.created_at);

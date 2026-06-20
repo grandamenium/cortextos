@@ -381,17 +381,21 @@ describe('Sprint 5: Observability & Metrics', () => {
       expect(a.pending_dispatch).toBe(2);
     });
 
-    it('fires authoring_dispatch_backlog when p95 age > 48h', () => {
+    // SYS-MET-03: the trigger is now (pending_dispatch >= 3 AND p50 age > 3d) —
+    // a genuinely BROAD + OLD backlog. p95 is info-only, not a trigger.
+    it('fires authoring_dispatch_backlog on a broad old backlog (count>=3 AND p50>3d)', () => {
       writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
-      // 5 days ago — well past 48h
+      // 4 tasks, all 5 days old — median (p50) age well past the 3d floor.
       const old = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
-      writeFileSync(join(ctxRoot, 'tasks', 't1.json'), JSON.stringify({
-        created_by: 'product-owner', status: 'pending', created_at: old,
-      }), 'utf-8');
+      for (let i = 0; i < 4; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `t${i}.json`), JSON.stringify({
+          created_by: 'product-owner', status: 'pending', created_at: old,
+        }), 'utf-8');
+      }
 
-      const report = collectMetrics(ctxRoot);
-      const role = report.agents['product-owner'].role;
-      expect(role.authoring.pending_dispatch_age_p95_ms).toBeGreaterThan(172_800_000);
+      const role = collectMetrics(ctxRoot).agents['product-owner'].role;
+      expect(role.authoring.pending_dispatch).toBe(4);
+      expect(role.authoring.pending_dispatch_age_p50_ms).toBeGreaterThan(259_200_000);
       expect(role.anomalies).toContain('authoring_dispatch_backlog');
     });
 
@@ -403,6 +407,87 @@ describe('Sprint 5: Observability & Metrics', () => {
       }), 'utf-8');
 
       const role = collectMetrics(ctxRoot).agents['product-owner'].role;
+      expect(role.anomalies).not.toContain('authoring_dispatch_backlog');
+    });
+
+    // SYS-MET-03 false-positive class 1 — p95 outlier with a fresh median.
+    // The product-owner snapshot: p50≈0.1d (median fresh) but a single task
+    // just over the 2d line drove p95≈2.1d. Under the old p95 trigger this fired;
+    // under the count+p50 trigger it must not.
+    it('does NOT fire on a single old outlier when the median is fresh (p95-outlier class)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      const fresh = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2h
+      const old = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(); // 5d outlier
+      for (let i = 0; i < 4; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `fresh${i}.json`), JSON.stringify({
+          created_by: 'product-owner', status: 'pending', created_at: fresh,
+        }), 'utf-8');
+      }
+      writeFileSync(join(ctxRoot, 'tasks', 'outlier.json'), JSON.stringify({
+        created_by: 'product-owner', status: 'pending', created_at: old,
+      }), 'utf-8');
+
+      const role = collectMetrics(ctxRoot).agents['product-owner'].role;
+      expect(role.authoring.pending_dispatch).toBe(5); // count gate passes
+      // p50 (median of 4 fresh + 1 old) is fresh → trigger must not fire
+      expect(role.authoring.pending_dispatch_age_p50_ms).toBeLessThan(259_200_000);
+      expect(role.anomalies).not.toContain('authoring_dispatch_backlog');
+    });
+
+    // SYS-MET-03: a lone stale task (count below min) must not fire either —
+    // this is the old single-old-task behaviour, now correctly suppressed.
+    it('does NOT fire on a single old task (count below min_count)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      const old = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+      writeFileSync(join(ctxRoot, 'tasks', 't1.json'), JSON.stringify({
+        created_by: 'product-owner', status: 'pending', created_at: old,
+      }), 'utf-8');
+
+      const role = collectMetrics(ctxRoot).agents['product-owner'].role;
+      expect(role.authoring.pending_dispatch).toBe(1);
+      expect(role.anomalies).not.toContain('authoring_dispatch_backlog');
+    });
+
+    // SYS-MET-03 false-positive class 2 — SAT-FREEZE-held tasks. They are
+    // genuinely old but intentionally held (held_reason set), so they must be
+    // excluded from pending_dispatch + the percentiles and never fire — even
+    // though, unmarked, they would be a broad old backlog.
+    it('does NOT fire on intentionally-held tasks (held_reason set)', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      const old = new Date(Date.now() - 19 * 24 * 60 * 60 * 1000).toISOString();
+      for (let i = 0; i < 4; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `held${i}.json`), JSON.stringify({
+          created_by: 'product-owner', status: 'pending', created_at: old,
+          held_reason: 'saturation', held_note: 'FE queue > 30',
+        }), 'utf-8');
+      }
+
+      const role = collectMetrics(ctxRoot).agents['product-owner'].role;
+      // Excluded from pending_dispatch + ages, but still counted in authored_total.
+      expect(role.authoring.authored_total).toBe(4);
+      expect(role.authoring.pending_dispatch).toBe(0);
+      expect(role.authoring.pending_dispatch_age_p50_ms).toBeNull();
+      expect(role.anomalies).not.toContain('authoring_dispatch_backlog');
+    });
+
+    // SYS-MET-03 false-positive class 3 — [HUMAN]-parked tasks (awaiting a
+    // human, not agent-routable) are held with held_reason='human' and excluded.
+    it('excludes [HUMAN]-parked tasks (held_reason=human) from dispatch backlog', () => {
+      writeFileSync(join(ctxRoot, 'config', 'enabled-agents.json'), JSON.stringify({ 'product-owner': { enabled: true } }), 'utf-8');
+      const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+      // 3 human-parked (held) + 1 genuinely-routable old task → only 1 counts,
+      // below min_count, so no fire. Proves held items don't pad the count.
+      for (let i = 0; i < 3; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `human${i}.json`), JSON.stringify({
+          created_by: 'product-owner', status: 'pending', created_at: old, held_reason: 'human',
+        }), 'utf-8');
+      }
+      writeFileSync(join(ctxRoot, 'tasks', 'routable.json'), JSON.stringify({
+        created_by: 'product-owner', status: 'pending', created_at: old,
+      }), 'utf-8');
+
+      const role = collectMetrics(ctxRoot).agents['product-owner'].role;
+      expect(role.authoring.pending_dispatch).toBe(1);
       expect(role.anomalies).not.toContain('authoring_dispatch_backlog');
     });
 
@@ -562,11 +647,13 @@ describe('Sprint 5: Observability & Metrics', () => {
       for (let i = 0; i < 6; i++) {
         writeFileSync(join(ctxRoot, 'tasks', `ip${i}.json`), JSON.stringify({ assigned_to: 'systems-analyst', status: 'in_progress' }), 'utf-8');
       }
-      // 1 stale authored task (> 48h)
+      // 3 stale authored tasks (broad + old: count>=3 AND p50>3d) — SYS-MET-03
       const old = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
-      writeFileSync(join(ctxRoot, 'tasks', 'auth.json'), JSON.stringify({
-        created_by: 'systems-analyst', status: 'pending', created_at: old,
-      }), 'utf-8');
+      for (let i = 0; i < 3; i++) {
+        writeFileSync(join(ctxRoot, 'tasks', `auth${i}.json`), JSON.stringify({
+          created_by: 'systems-analyst', status: 'pending', created_at: old,
+        }), 'utf-8');
+      }
 
       const role = collectMetrics(ctxRoot).agents['systems-analyst'].role;
       expect(role.role_type).toBe('analyst-hybrid');
