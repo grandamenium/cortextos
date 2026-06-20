@@ -72,14 +72,21 @@ export class AgentManager {
   private daemonJustCrashed: boolean = false;
 
   // ANTHROPIC_API_KEY startup guard state.
-  // Tracks source paths already checked so secrets.env and process.env are
-  // only alerted once per daemon lifetime (not once per agent restart).
+  // Tracks source paths WHERE THE KEY WAS FOUND so the same finding is not
+  // re-alerted on every agent restart. Paths are only added when a key IS
+  // detected — clean files are not marked, so a key added post-boot to
+  // secrets.env is caught on the next IPC-triggered agent restart.
   private apiKeyAlertedPaths: Set<string> = new Set();
-  // Accumulates findings across all startAgent() calls; flushed as ONE
-  // consolidated Telegram alert at the end of discoverAndStart().
+  // Accumulates findings per startAgent() call. During discoverAndStart()
+  // (inDiscoverAndStart=true) findings accumulate across all agents and are
+  // flushed as ONE consolidated Telegram at the end. On IPC-triggered restarts
+  // (inDiscoverAndStart=false) each startAgent() flushes immediately.
   private pendingApiKeyAlerts: string[] = [];
+  // Set while discoverAndStart() is running its agent loop so startAgent()
+  // knows to defer the Telegram flush (handled by discoverAndStart instead).
+  private inDiscoverAndStart: boolean = false;
   // First available operator bot captured during startAgent(); used to
-  // send the consolidated Telegram alert from discoverAndStart().
+  // send the Telegram alert.
   private operatorBotToken: string | undefined;
   private operatorChatId: string | undefined;
 
@@ -171,6 +178,9 @@ export class AgentManager {
     // Tunable/disable-able via CTX_SPAWN_STAGGER_MS (set 0 to disable, e.g. tests).
     // Invalid values fall back to the default rather than silently disabling.
     const STAGGER_MS = parseSpawnStaggerMs(process.env.CTX_SPAWN_STAGGER_MS);
+    // Signal startAgent() to defer per-call Telegram flushes during the sweep.
+    // We want ONE consolidated alert after all agents start, not one per agent.
+    this.inDiscoverAndStart = true;
     let startedCount = 0;
     for (const { name, dir, org, config } of agentDirs) {
       // Per-agent config.json `enabled: false` (existing behavior, unchanged)
@@ -194,6 +204,9 @@ export class AgentManager {
       startedCount++;
     }
 
+    // Startup sweep complete — restore normal IPC-flush mode.
+    this.inDiscoverAndStart = false;
+
     // Successful startup pass — clear .daemon-crashed markers from disk
     // AND clear the in-memory daemonJustCrashed flag. After this point,
     // any further startAgent() calls (IPC enable, dashboard restart, etc)
@@ -201,10 +214,10 @@ export class AgentManager {
     // race ever does leak through PR #11's protection.
     this.clearDaemonCrashMarkers();
 
-    // Send ONE consolidated ANTHROPIC_API_KEY operator Telegram alert if
-    // any findings were accumulated across all startAgent() calls.
+    // Send ONE consolidated ANTHROPIC_API_KEY operator Telegram alert for
+    // all findings accumulated during the startup sweep.
     if (this.pendingApiKeyAlerts.length > 0 && this.operatorBotToken && this.operatorChatId) {
-      const sources = this.pendingApiKeyAlerts.join(', ');
+      const sources = this.pendingApiKeyAlerts.splice(0).join(', ');
       const alertApi = new TelegramAPI(this.operatorBotToken);
       alertApi.sendMessage(
         this.operatorChatId,
@@ -488,9 +501,12 @@ export class AgentManager {
       // A stray key here silently shadows the OAuth token (ANTHROPIC_API_KEY=#3,
       // CLAUDE_CODE_OAUTH_TOKEN=#5 in Claude Code precedence) → per-token billing
       // on this agent + auth-failure single point. Same class as MFL incident
-      // (secrets.env re-add downed 12 agents). Deduped per path so a restart
-      // loop does not flood. Fail-open: warn only, do NOT strip the key.
-      if (!this.apiKeyAlertedPaths.has(agentEnvFile) && /^ANTHROPIC_API_KEY=.+/m.test(envContent)) {
+      // (secrets.env re-add downed 12 agents).
+      // Path is added to apiKeyAlertedPaths ONLY when the key is found — clean
+      // files stay unmarked so a key added post-boot is caught on next restart.
+      // Regex: \s*=\s* tolerates spaces around `=` (agent-pty.ts strips them).
+      // Fail-open: warn only, do NOT strip the key.
+      if (!this.apiKeyAlertedPaths.has(agentEnvFile) && /^ANTHROPIC_API_KEY\s*=\s*.+/m.test(envContent)) {
         this.apiKeyAlertedPaths.add(agentEnvFile);
         log(`SECURITY WARNING: ANTHROPIC_API_KEY found in agent .env for ${name}. This shadows OAuth (#3>#5 precedence) → per-token billing + auth-failure single point. Remove it — OAuth via credentials.json is the correct auth path.`);
         this.pendingApiKeyAlerts.push(`agent .env (${name})`);
@@ -502,22 +518,27 @@ export class AgentManager {
     }
 
     // ANTHROPIC_API_KEY guard (source 2: org secrets.env).
-    // Checked once per org secrets.env path (shared across all agents in the org).
+    // Checked on every startAgent() call — path is only added to apiKeyAlertedPaths
+    // when the key IS found, so:
+    //   - Clean files are re-read on each agent restart (cheap; file is small).
+    //   - A key added to secrets.env post-boot is detected on the next IPC restart.
+    //   - A transient readFileSync error does not permanently blind the guard.
+    //   - Multiple agents sharing one secrets.env only alert once (path marked on find).
     const secretsEnvPath = join(this.frameworkRoot, 'orgs', resolvedOrg, 'secrets.env');
     if (!this.apiKeyAlertedPaths.has(secretsEnvPath) && existsSync(secretsEnvPath)) {
-      this.apiKeyAlertedPaths.add(secretsEnvPath);
       try {
         const secretsContent = stripBom(readFileSync(secretsEnvPath, 'utf-8'));
-        if (/^ANTHROPIC_API_KEY=.+/m.test(secretsContent)) {
+        if (/^ANTHROPIC_API_KEY\s*=\s*.+/m.test(secretsContent)) {
+          this.apiKeyAlertedPaths.add(secretsEnvPath); // mark AFTER successful read + key found
           console.log(`[${name}] SECURITY WARNING: ANTHROPIC_API_KEY found in org secrets.env (${resolvedOrg}). This shadows OAuth for ALL agents in this org → per-token billing + single auth-failure point. Remove it.`);
           this.pendingApiKeyAlerts.push(`org secrets.env (${resolvedOrg})`);
         }
-      } catch { /* ignore unreadable secrets.env */ }
+      } catch { /* ignore unreadable secrets.env — not marked, so retried next call */ }
     }
 
     // ANTHROPIC_API_KEY guard (source 3: process.env).
     // Checked once per daemon run — a key here shadows OAuth for every agent.
-    if (!this.apiKeyAlertedPaths.has('__process_env__') && process.env.ANTHROPIC_API_KEY) {
+    if (!this.apiKeyAlertedPaths.has('__process_env__') && /\S/.test(process.env.ANTHROPIC_API_KEY ?? '')) {
       this.apiKeyAlertedPaths.add('__process_env__');
       console.log(`[agent-manager] SECURITY WARNING: ANTHROPIC_API_KEY found in process.env (daemon launch environment). This shadows OAuth for all agents → per-token billing + auth-failure single point. Unset it from the daemon environment.`);
       this.pendingApiKeyAlerts.push('process.env (daemon environment)');
@@ -885,6 +906,22 @@ export class AgentManager {
       // singleton or Telegram webhook if the coupling ever causes real
       // operator pain. Non-orchestrator agents skip this entirely.
       await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
+    }
+
+    // ANTHROPIC_API_KEY guard: flush any findings accumulated in THIS call.
+    // During discoverAndStart() (inDiscoverAndStart=true) we defer and let
+    // discoverAndStart() send ONE consolidated alert after all agents start.
+    // On IPC/dashboard-triggered restarts (inDiscoverAndStart=false) we flush
+    // immediately so a key added post-boot is surfaced to the operator right away.
+    if (!this.inDiscoverAndStart && this.pendingApiKeyAlerts.length > 0) {
+      const newAlerts = this.pendingApiKeyAlerts.splice(0);
+      if (this.operatorBotToken && this.operatorChatId) {
+        const alertApi = new TelegramAPI(this.operatorBotToken);
+        alertApi.sendMessage(
+          this.operatorChatId,
+          `⚠️ DAEMON GUARD: ANTHROPIC_API_KEY detected in: ${newAlerts.join(', ')}. Stray key shadows OAuth (#3>#5 precedence) → per-token billing + single auth-failure point. Remove the key(s) and restart the daemon.`,
+        ).catch(() => {});
+      }
     }
   }
 

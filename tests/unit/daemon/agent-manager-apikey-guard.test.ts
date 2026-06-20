@@ -381,3 +381,187 @@ describe('ANTHROPIC_API_KEY startup guard — consolidated Telegram alert', () =
     expect(apiKeyCalls.length).toBe(0);
   });
 });
+
+// H1 fix: space-before-equals evasion
+describe('ANTHROPIC_API_KEY startup guard — H1 fix: space-before-equals', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'ctx-apikey-h1-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    process.env.CTX_SPAWN_STAGGER_MS = '0';
+    delete process.env.ANTHROPIC_API_KEY;
+    mockSendMessage.mockClear();
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.CTX_SPAWN_STAGGER_MS;
+    delete process.env.ANTHROPIC_API_KEY;
+    vi.restoreAllMocks();
+  });
+
+  it('detects ANTHROPIC_API_KEY with space before = in agent .env (H1 fix)', async () => {
+    // agent-pty.ts strips surrounding spaces from key names via .trim(),
+    // so `ANTHROPIC_API_KEY =value` IS injected into the agent. Guard must match it.
+    makeAgent(frameworkRoot, 'acme', 'alice', 'ANTHROPIC_API_KEY =sk-ant-SPACE\n');
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    const warnSpy = vi.spyOn(console, 'log');
+
+    await am.startAgent('alice', join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), {}, 'acme');
+
+    const warnings = warnSpy.mock.calls.flat().filter(
+      (msg): msg is string => typeof msg === 'string' && msg.includes('ANTHROPIC_API_KEY'),
+    );
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
+  it('detects ANTHROPIC_API_KEY with spaces around = in secrets.env (H1 fix)', async () => {
+    makeAgent(frameworkRoot, 'acme', 'alice');
+    writeFileSync(join(frameworkRoot, 'orgs', 'acme', 'secrets.env'), 'ANTHROPIC_API_KEY = sk-ant-BOTH\n');
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    const warnSpy = vi.spyOn(console, 'log');
+
+    await am.startAgent('alice', join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), {}, 'acme');
+
+    const warnings = warnSpy.mock.calls.flat().filter(
+      (msg): msg is string => typeof msg === 'string' && msg.includes('ANTHROPIC_API_KEY') && msg.includes('secrets.env'),
+    );
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+// H2 fix: secrets.env path not permanently blinded by transient read failure
+describe('ANTHROPIC_API_KEY startup guard — H2 fix: transient-unread does not blind guard', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'ctx-apikey-h2-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    process.env.CTX_SPAWN_STAGGER_MS = '0';
+    delete process.env.ANTHROPIC_API_KEY;
+    mockSendMessage.mockClear();
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.CTX_SPAWN_STAGGER_MS;
+    delete process.env.ANTHROPIC_API_KEY;
+    vi.restoreAllMocks();
+  });
+
+  it('detects key after a previous clean read (path not pre-marked, retried on next call)', async () => {
+    // First call: secrets.env has no key → path NOT added to alertedPaths (H2 fix:
+    // path is only marked when key IS found, so clean reads stay unmarked).
+    // Second call (after stop+key-add): guard re-reads and detects the new key.
+    makeAgent(frameworkRoot, 'acme', 'alice');
+    const secretsPath = join(frameworkRoot, 'orgs', 'acme', 'secrets.env');
+    writeFileSync(secretsPath, 'GEMINI_API_KEY=other\n');
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    const dir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+
+    const warnSpy = vi.spyOn(console, 'log');
+    await am.startAgent('alice', dir, {}, 'acme');
+    const warningsAfterClean = warnSpy.mock.calls.flat().filter(
+      (msg): msg is string => typeof msg === 'string' && msg.includes('ANTHROPIC_API_KEY'),
+    );
+    expect(warningsAfterClean.length).toBe(0); // clean pass
+
+    // Stop the agent, add the stray key, then restart (simulates IPC restart post-boot)
+    await am.stopAgent('alice');
+    writeFileSync(secretsPath, 'ANTHROPIC_API_KEY=sk-ant-ADDED\n');
+    warnSpy.mockClear();
+    await am.startAgent('alice', dir, {}, 'acme');
+
+    const warningsAfterAdd = warnSpy.mock.calls.flat().filter(
+      (msg): msg is string => typeof msg === 'string' && msg.includes('ANTHROPIC_API_KEY') && msg.includes('secrets.env'),
+    );
+    expect(warningsAfterAdd.length).toBeGreaterThan(0); // detected on retry ✓
+  });
+});
+
+// H3 fix: IPC/dashboard restart post-boot flushes Telegram immediately
+describe('ANTHROPIC_API_KEY startup guard — H3 fix: IPC restart Telegram alert', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'ctx-apikey-h3-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    process.env.CTX_SPAWN_STAGGER_MS = '0';
+    delete process.env.ANTHROPIC_API_KEY;
+    mockSendMessage.mockClear();
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.CTX_SPAWN_STAGGER_MS;
+    delete process.env.ANTHROPIC_API_KEY;
+    vi.restoreAllMocks();
+  });
+
+  it('sends Telegram immediately on IPC startAgent (not in discoverAndStart) when key found', async () => {
+    // IPC restart scenario: startAgent called directly, NOT via discoverAndStart.
+    // The guard detects the key and must flush Telegram immediately without waiting
+    // for discoverAndStart() to run (it won't run again after boot).
+    makeAgent(frameworkRoot, 'acme', 'alice', BOT_ENV + 'ANTHROPIC_API_KEY=sk-ant-IPC\n');
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    // Direct call — NOT via discoverAndStart (inDiscoverAndStart stays false)
+    await am.startAgent('alice', join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), {}, 'acme');
+
+    const apiKeyCalls = mockSendMessage.mock.calls.filter(
+      ([_chatId, msg]: [string, string]) => typeof msg === 'string' && msg.includes('ANTHROPIC_API_KEY'),
+    );
+    // Must have fired immediately (not deferred to discoverAndStart)
+    expect(apiKeyCalls.length).toBe(1);
+    expect(apiKeyCalls[0][1]).toContain('agent .env');
+  });
+
+  it('does NOT send Telegram during discoverAndStart sweep (deferred to end)', async () => {
+    // During the startup sweep (inDiscoverAndStart=true), startAgent() must NOT
+    // send per-agent Telegrams — only the consolidated one at the end fires.
+    makeAgent(frameworkRoot, 'acme', 'alice', BOT_ENV + 'ANTHROPIC_API_KEY=sk-ant-SWEEP\n');
+    makeAgent(frameworkRoot, 'acme', 'bob', 'ANTHROPIC_API_KEY=sk-ant-BOB\n');
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+
+    // Intercept startAgent calls to count mid-sweep Telegram sends
+    const sendCounts: number[] = [];
+    const originalStart = am.startAgent.bind(am);
+    vi.spyOn(am, 'startAgent').mockImplementation(async (...args) => {
+      const before = mockSendMessage.mock.calls.filter(
+        ([, msg]: [string, string]) => typeof msg === 'string' && msg.includes('ANTHROPIC_API_KEY'),
+      ).length;
+      await originalStart(...args as Parameters<typeof am.startAgent>);
+      const after = mockSendMessage.mock.calls.filter(
+        ([, msg]: [string, string]) => typeof msg === 'string' && msg.includes('ANTHROPIC_API_KEY'),
+      ).length;
+      sendCounts.push(after - before); // 0 = no mid-sweep send for this agent
+    });
+
+    await am.discoverAndStart();
+
+    // Each individual startAgent() call during the sweep must NOT have sent Telegram
+    expect(sendCounts.every(n => n === 0)).toBe(true);
+    // But the consolidated alert at end of discoverAndStart MUST have fired
+    const totalApiKeyCalls = mockSendMessage.mock.calls.filter(
+      ([, msg]: [string, string]) => typeof msg === 'string' && msg.includes('ANTHROPIC_API_KEY'),
+    );
+    expect(totalApiKeyCalls.length).toBe(1);
+  });
+});
