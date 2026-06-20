@@ -7,9 +7,9 @@ import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
 import { ensureNotBare } from '../utils/git.js';
 
-// Each fast-checker registers a process-level SIGUSR1 handler (see
-// fast-checker.ts:102). With >10 active agents the default Node listener cap
-// trips MaxListenersExceededWarning. Bump for the full fleet.
+// MaxListeners headroom is set dynamically in Daemon.start() once frameworkRoot
+// is known and agent count can be read from disk. The module-level call here
+// covers the window before start() runs (e.g. crash-handler registration).
 process.setMaxListeners(20);
 
 // ---------------------------------------------------------------------------
@@ -215,6 +215,26 @@ function handleFatal(
 }
 
 /**
+ * Count all configured agent dirs across orgs to size the SIGUSR1 listener cap.
+ * Each fast-checker adds one handler; this prevents MaxListenersExceededWarning
+ * on boxes with large fleets (AXL = 16+, customer growth over time).
+ */
+function countAgentsInFramework(frameworkRoot: string): number {
+  try {
+    const orgsRoot = join(frameworkRoot, 'orgs');
+    if (!existsSync(orgsRoot)) return 0;
+    let count = 0;
+    for (const org of readdirSync(orgsRoot, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue;
+      const agentsRoot = join(orgsRoot, org.name, 'agents');
+      if (!existsSync(agentsRoot)) continue;
+      count += readdirSync(agentsRoot, { withFileTypes: true }).filter(d => d.isDirectory()).length;
+    }
+    return count;
+  } catch { return 0; }
+}
+
+/**
  * cortextOS Daemon - single process managing all agents.
  * Run via `pm2 start ecosystem.config.js` or `cortextos ecosystem && pm2 start`.
  */
@@ -246,6 +266,11 @@ class Daemon {
       console.error('[daemon] CTX_FRAMEWORK_ROOT not set');
       process.exit(1);
     }
+
+    // Scale SIGUSR1 listener cap to fleet size. Each fast-checker adds one handler;
+    // the module-level 20 is overridden here once we know the actual agent count.
+    const agentCount = countAgentsInFramework(frameworkRoot);
+    process.setMaxListeners(Math.max(20, agentCount * 2 + 10));
 
     // Write PID file
     const pidFile = join(this.ctxRoot, 'daemon.pid');

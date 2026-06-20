@@ -1037,8 +1037,11 @@ busCommand
 
       console.log('Message sent');
     } catch (err: any) {
-      console.error(`Failed to send: ${err.message || err}`);
-      process.exit(1);
+      // Fail-open: Telegram API/network failures (dead/revoked token, timeout,
+      // rate-limit, network outage) must not freeze the agent's startup or
+      // heartbeat flow. Log the warning and exit 0 so the caller continues.
+      // The operator will notice via dashboard/heartbeat if messages stop landing.
+      console.warn(`[send-telegram] warn: ${err.message || err} — telegram unreachable, continuing`);
     }
   });
 
