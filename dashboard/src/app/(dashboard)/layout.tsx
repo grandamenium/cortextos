@@ -2,6 +2,7 @@ import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import { getOrgs } from '@/lib/config';
 import { DashboardShell } from '@/components/layout/dashboard-shell';
+import { LivenessBanner } from '@/components/layout/liveness-banner';
 import { syncAll } from '@/lib/sync';
 
 export default async function DashboardLayout({
@@ -22,5 +23,10 @@ export default async function DashboardLayout({
 
   const orgs = getOrgs();
 
-  return <DashboardShell orgs={orgs}>{children}</DashboardShell>;
+  return (
+    <DashboardShell orgs={orgs}>
+      <LivenessBanner />
+      {children}
+    </DashboardShell>
+  );
 }

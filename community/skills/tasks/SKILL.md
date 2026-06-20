@@ -59,6 +59,12 @@ Tasks with `needs_approval: true` create an approval item that must be reviewed 
 
 **Priorities:** urgent, high, normal, low
 
+## Picking your next task (coordinated)
+Before you mark a pending task `in_progress`:
+1. **Respect dependencies — never start a blocked task.** Pull with `cortextos bus list-tasks --agent $CTX_AGENT_NAME --status pending --respect-deps` and only claim a task whose `blocked_by` are ALL `completed`/`cancelled`. If your highest-priority task is still blocked, leave it `pending` and take the next *unblocked* one. Marking a blocked task `in_progress` corrupts the board and the bundle order.
+2. **WIP-limit: one at a time (max 2).** Do NOT mark a new task `in_progress` while you already have work `in_progress` — finish it (or set it `blocked`) first. Holding several `in_progress` at once (a whole dependency chain in parallel) starves coordination and is the #1 cause of stalled bundles.
+3. **Bundles run in order.** If your task carries a `bundle_id`, its sibling tasks are dependency-ordered (backend before frontend, etc.). Work yours only once its `blocked_by` clears — the upstream role goes first.
+
 ## Best Practices
 
 - **Always create before starting** - ensures tracking and coordination

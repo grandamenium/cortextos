@@ -57,6 +57,10 @@ const STATUS_TRANSITIONS: Record<TaskStatus, { label: string; status: TaskStatus
   completed: [
     { label: 'Reopen', status: 'pending', variant: 'outline' },
   ],
+  verifying: [
+    { label: 'Mark Verified', status: 'completed', variant: 'default' },
+    { label: 'Reopen', status: 'in_progress', variant: 'outline' },
+  ],
 };
 
 function getOutputIcon(filePath: string) {

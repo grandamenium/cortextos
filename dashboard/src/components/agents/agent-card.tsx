@@ -8,8 +8,27 @@ import { OrgBadge } from '@/components/shared/org-badge';
 import { RuntimeBadge } from '@/components/shared/runtime-badge';
 import { AgentAvatar } from '@/components/shared/agent-avatar';
 import { AgentActions } from './agent-actions';
-import { IconChecklist } from '@tabler/icons-react';
+import {
+  IconChecklist,
+  IconAlertTriangle,
+  IconPlayerPause,
+  IconClock,
+} from '@tabler/icons-react';
 import type { AgentRuntime, HealthStatus } from '@/lib/types';
+import { cn } from '@/lib/utils';
+
+export interface AgentOpsData {
+  crashesToday: number;
+  maxCrashesPerDay: number;
+  halted: boolean;
+  rateLimited: boolean;
+  rateLimitResetsAt: string | null;
+  rateLimitResetsAtMs: number | null;
+  weeklyUsagePct: number | null;
+  restartsTodayTotal: number;
+  lastRestart: string | null;
+  model: string | null;
+}
 
 export interface AgentCardData {
   name: string;
@@ -21,6 +40,7 @@ export interface AgentCardData {
   health: HealthStatus;
   currentTask?: string;
   tasksToday: number;
+  ops?: AgentOpsData;
   runtime?: AgentRuntime;
 }
 
@@ -90,12 +110,78 @@ export function AgentCard({ agent }: AgentCardProps) {
             </div>
           )}
 
-          {/* Footer: tasks count */}
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <IconChecklist size={13} />
-            <span>
-              {agent.tasksToday} task{agent.tasksToday !== 1 ? 's' : ''} today
-            </span>
+          {/* Ops status strip */}
+          {agent.ops && (agent.ops.halted || agent.ops.rateLimited || agent.ops.crashesToday > 0) && (
+            <div className="space-y-1">
+              {agent.ops.halted && (
+                <div className="flex items-center gap-1.5 rounded-md bg-red-500/10 px-2 py-1.5 text-xs text-red-600 dark:text-red-400">
+                  <IconAlertTriangle size={13} />
+                  <span className="font-medium">Halted</span>
+                  <span className="text-red-500/70">
+                    — {agent.ops.crashesToday}/{agent.ops.maxCrashesPerDay} crashes
+                  </span>
+                </div>
+              )}
+              {agent.ops.rateLimited && !agent.ops.halted && (
+                <div className="flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+                  <IconPlayerPause size={13} />
+                  <span className="font-medium">Rate limited</span>
+                  {agent.ops.rateLimitResetsAt && (
+                    <span className="text-amber-500/70">
+                      — resets {agent.ops.rateLimitResetsAt}
+                    </span>
+                  )}
+                </div>
+              )}
+              {!agent.ops.halted && !agent.ops.rateLimited && agent.ops.crashesToday > 0 && (
+                <div className="flex items-center gap-1.5 rounded-md bg-orange-500/10 px-2 py-1.5 text-xs text-orange-600 dark:text-orange-400">
+                  <IconClock size={13} />
+                  <span>
+                    {agent.ops.crashesToday}/{agent.ops.maxCrashesPerDay} crashes today
+                    {agent.ops.restartsTodayTotal > 0 && (
+                      <span className="text-orange-500/60"> · {agent.ops.restartsTodayTotal} restarts</span>
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Footer: tasks + usage */}
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <div className="flex items-center gap-1.5">
+              <IconChecklist size={13} />
+              <span>
+                {agent.tasksToday} task{agent.tasksToday !== 1 ? 's' : ''} today
+              </span>
+            </div>
+            {agent.ops?.weeklyUsagePct != null && (
+              <div className="flex items-center gap-1.5">
+                <div
+                  className={cn(
+                    'h-1.5 w-12 rounded-full bg-muted overflow-hidden',
+                  )}
+                >
+                  <div
+                    className={cn(
+                      'h-full rounded-full transition-all',
+                      agent.ops.weeklyUsagePct >= 90
+                        ? 'bg-red-500'
+                        : agent.ops.weeklyUsagePct >= 70
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500',
+                    )}
+                    style={{ width: `${Math.min(agent.ops.weeklyUsagePct, 100)}%` }}
+                  />
+                </div>
+                <span className={cn(
+                  agent.ops.weeklyUsagePct >= 90 ? 'text-red-500' :
+                  agent.ops.weeklyUsagePct >= 70 ? 'text-amber-500' : '',
+                )}>
+                  {agent.ops.weeklyUsagePct}%
+                </span>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

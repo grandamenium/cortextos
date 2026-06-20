@@ -13,6 +13,7 @@ interface AgentConfig {
     always_ask?: string[];
     never_ask?: string[];
   };
+  role?: string;
   model?: string;
   max_session_seconds?: number;
   max_crashes_per_day?: number;
@@ -295,6 +296,11 @@ export function SettingsTab({ agentName }: SettingsTabProps) {
           <CardTitle className="text-sm font-medium">Agent Config</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div>
+            <label className="text-xs text-muted-foreground">Role</label>
+            <div className="mt-1 text-sm">{config.role || <span className="text-muted-foreground">No role set</span>}</div>
+          </div>
+
           <div>
             <label className="text-xs text-muted-foreground">Model</label>
             <input

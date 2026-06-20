@@ -27,7 +27,7 @@
 
 import { homedir } from 'os';
 import { join } from 'path';
-import { parseDurationMs, readCronState } from '../bus/cron-state.js';
+import { parseDurationMs, pruneCronState, readCronState } from '../bus/cron-state.js';
 import { readCronsWithStatus, updateCron } from '../bus/crons.js';
 import type { CronDefinition } from '../types/index.js';
 import { appendExecutionLog } from './cron-execution-log.js';
@@ -449,6 +449,41 @@ export class CronScheduler {
     // Update the last-good snapshot whenever we get a non-empty result.
     if (nextScheduled.size > 0) {
       this.lastGoodSchedule = new Map(nextScheduled);
+    }
+
+    // CRON-STATE ORPHAN PRUNE (SYS-CRON-STATE-ORPHAN-PRUNE)
+    // Drop cron-state.json records whose cron no longer exists in the live
+    // definition set. Without this, renamed/removed crons leave stale last_fire
+    // records that accumulate forever and feed raw drift-watchdog false-positives.
+    //
+    // liveCronNames is built from the FULL defs list (enabled AND disabled) — a
+    // disabled cron is still live (it may be re-enabled) and must keep its state.
+    //
+    // GUARD: never prune on a corruption fallback. When `corrupt === true`,
+    // `defs` is the degraded empty sentinel (crons.json unparseable AND .bak
+    // failed); pruning against it would wipe every valid state record. The
+    // earlier corrupt+empty branch already returned, but a corrupt read with an
+    // empty lastGoodSchedule falls through to here with defs=[] — so gate on
+    // !corrupt explicitly. pruneCronState's staleness floor is the second guard:
+    // a genuinely-live cron transiently missing from crons.json keeps a fresh
+    // last_fire and is never deleted (see pruneCronState docs).
+    if (!corrupt) {
+      try {
+        const liveCronNames = defs.map(d => d.name);
+        const prunedNames = pruneCronState(stateDir, liveCronNames);
+        if (prunedNames.length > 0) {
+          this.logger(
+            `[cron-scheduler] pruned ${prunedNames.length} orphaned cron-state ` +
+            `record(s) for agent "${this.agentName}": ${prunedNames.join(', ')}`
+          );
+        }
+      } catch (err) {
+        // Prune is best-effort hygiene — a failure must never disrupt scheduling.
+        this.logger(
+          `[cron-scheduler] WARNING: cron-state prune failed for "${this.agentName}" — ` +
+          `${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     }
   }
 

@@ -1,0 +1,100 @@
+- generic [active] [ref=e1]:
+  - link "Zum Hauptinhalt springen" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]:
+        - link "PhytoMedic · Clinic" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e8]: PhytoMedic
+          - generic [ref=e9]: · Clinic
+        - navigation "Hauptnavigation" [ref=e10]:
+          - link "Produkte" [ref=e11] [cursor=pointer]:
+            - /url: /medizin/produkte
+          - link "Sorten" [ref=e12] [cursor=pointer]:
+            - /url: /medizin/sorten
+          - link "Vergleich" [ref=e13] [cursor=pointer]:
+            - /url: /medizin/sorten/vergleich
+          - link "Arzt finden" [ref=e14] [cursor=pointer]:
+            - /url: /medizin/arzt-finden
+          - link "Apotheke finden" [ref=e15] [cursor=pointer]:
+            - /url: /medizin/apotheke-finden
+          - link "Wissen" [ref=e16] [cursor=pointer]:
+            - /url: /wissen
+        - link "Warenkorb" [ref=e18] [cursor=pointer]:
+          - /url: /checkout
+          - img [ref=e19]
+      - contentinfo [ref=e121]:
+        - generic [ref=e122]:
+          - generic [ref=e123]:
+            - generic [ref=e124]:
+              - text: PhytoMedic
+              - paragraph [ref=e125]: Medizinisches Cannabis. Einfach. Sicher. Digital.
+            - generic [ref=e126]:
+              - link "LinkedIn" [ref=e127] [cursor=pointer]:
+                - /url: https://linkedin.com
+                - img [ref=e128]
+              - link "Instagram" [ref=e132] [cursor=pointer]:
+                - /url: https://instagram.com
+                - img [ref=e133]
+          - navigation "Footer-Navigation" [ref=e136]:
+            - generic [ref=e137]:
+              - heading "Patienten" [level=4] [ref=e138]
+              - list [ref=e139]:
+                - listitem [ref=e140]:
+                  - link "Produktkatalog" [ref=e141] [cursor=pointer]:
+                    - /url: /medizin/produkte
+                - listitem [ref=e142]:
+                  - link "Arzt finden" [ref=e143] [cursor=pointer]:
+                    - /url: /medizin/arzt-finden
+                - listitem [ref=e144]:
+                  - link "Apotheke finden" [ref=e145] [cursor=pointer]:
+                    - /url: /medizin/apotheke-finden
+                - listitem [ref=e146]:
+                  - link "Eignungstest" [ref=e147] [cursor=pointer]:
+                    - /url: /medizin/eignungstest
+            - generic [ref=e148]:
+              - heading "Wissen" [level=4] [ref=e149]
+              - list [ref=e150]:
+                - listitem [ref=e151]:
+                  - link "Sorten-Datenbank" [ref=e152] [cursor=pointer]:
+                    - /url: /medizin/sorten
+                - listitem [ref=e153]:
+                  - link "Krankheitsbilder" [ref=e154] [cursor=pointer]:
+                    - /url: /krankheiten
+                - listitem [ref=e155]:
+                  - link "Ratgeber" [ref=e156] [cursor=pointer]:
+                    - /url: /wissen
+                - listitem [ref=e157]:
+                  - link "THC-Rechner" [ref=e158] [cursor=pointer]:
+                    - /url: /medizin/thc-rechner
+            - generic [ref=e159]:
+              - heading "Fachleute" [level=4] [ref=e160]
+              - list [ref=e161]:
+                - listitem [ref=e162]:
+                  - link "Online-Rezept" [ref=e163] [cursor=pointer]:
+                    - /url: /medizin/online-rezept
+                - listitem [ref=e164]:
+                  - link "Standorte" [ref=e165] [cursor=pointer]:
+                    - /url: /medizin/standorte
+                - listitem [ref=e166]:
+                  - link "Registrierung" [ref=e167] [cursor=pointer]:
+                    - /url: /registrieren
+            - generic [ref=e168]:
+              - heading "PhytoMedic" [level=4] [ref=e169]
+              - list [ref=e170]:
+                - listitem [ref=e171]:
+                  - link "Impressum" [ref=e172] [cursor=pointer]:
+                    - /url: /impressum
+                - listitem [ref=e173]:
+                  - link "Datenschutz" [ref=e174] [cursor=pointer]:
+                    - /url: /datenschutz
+                - listitem [ref=e175]:
+                  - link "AGB" [ref=e176] [cursor=pointer]:
+                    - /url: /agb
+                - listitem [ref=e177]:
+                  - link "Widerruf" [ref=e178] [cursor=pointer]:
+                    - /url: /widerruf
+          - paragraph [ref=e179]: © 2026 PhytoMedic. Alle Rechte vorbehalten.
+  - region "Notifications alt+T"
+  - alert [ref=e180]

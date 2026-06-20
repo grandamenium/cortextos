@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join, relative } from 'path';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
@@ -15,7 +15,15 @@ import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHi
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
-import { stripBom } from '../utils/strip-bom.js';
+import { execFileSync } from 'child_process';
+import {
+  listAgentPidFiles,
+  classifyOrphan,
+  clearAgentPidFile,
+  parseEtimeMs,
+  type OrphanProbe,
+  type LiveProcessInfo,
+} from './agent-pid-file.js';
 
 type LogFn = (msg: string) => void;
 
@@ -23,89 +31,125 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 export class AgentManager {
-  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller; telegramRejectCount?: number; telegramLastRejectAlertAt?: number }> = new Map();
+  private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
-  private pendingRestarts: Set<string> = new Set();
+  // pendingRestarts removed: idempotent skip in startAgent() makes the queue unnecessary
   private instanceId: string;
   private ctxRoot: string;
   private frameworkRoot: string;
   private org: string;
-
-  // Set true at construction time if any agent in state/ has a stale
-  // .daemon-crashed marker, meaning the previous daemon process died
-  // abruptly. Used by startAgent() to downgrade the BUG-011 regression
-  // alarm to an info log in the post-crash overlap case (PR #11 only
-  // closed the in-flight stop/start race; crash-restart can legitimately
-  // see overlapping registry state). Cleared after discoverAndStart()
-  // finishes so the next clean restart starts from a known-good baseline.
-  private daemonJustCrashed: boolean = false;
 
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
     this.frameworkRoot = frameworkRoot;
     this.org = org;
-    this.daemonJustCrashed = this.detectDaemonCrashMarkers();
-    if (this.daemonJustCrashed) {
-      console.log('[agent-manager] Detected .daemon-crashed marker(s) — previous daemon exited abnormally. Will quiet BUG-011 alarm for this startup cycle.');
-    }
   }
 
   /**
-   * Scan state/<agent>/.daemon-crashed markers (written by daemon/index.ts:handleFatal).
-   * Presence means the previous daemon process died via uncaughtException
-   * or process.kill rather than a clean shutdown.
-   */
-  private detectDaemonCrashMarkers(): boolean {
-    const stateBase = join(this.ctxRoot, 'state');
-    if (!existsSync(stateBase)) return false;
-    try {
-      const dirs = readdirSync(stateBase, { withFileTypes: true })
-        .filter(d => d.isDirectory())
-        .map(d => d.name);
-      return dirs.some(name => existsSync(join(stateBase, name, '.daemon-crashed')));
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Delete .daemon-crashed markers after a successful discoverAndStart pass
-   * AND clear the daemonJustCrashed flag. Once the initial post-crash
-   * discovery has finished, any further startAgent calls — IPC-triggered
-   * agent enables, dashboard restarts, manual restartAgent — represent
-   * normal operation, not post-crash overlap. They should fire the real
-   * BUG-011 alarm, not the quieted variant.
+   * SYS-DAEMON-RESILIENCE-01 Fix 2: reconcile orphaned agent PTYs left by a
+   * previous daemon CRASH-exit (which skips stopAll, so SIGHUP-handling `claude`
+   * children orphan-survive, reparented to PID 1). Runs BEFORE discoverAndStart
+   * so a survivor is reaped first and then cold-started cleanly with --continue
+   * (context restored from the on-disk JSONL), rather than leaving an
+   * unreachable orphan with no crons + a duplicate fresh spawn.
    *
-   * Called once per daemon startup at the end of discoverAndStart().
-   * Idempotent — if no markers exist, this is a no-op. Wrapped in
-   * best-effort try/catch so a missing dir or permission error never
-   * blocks daemon startup.
+   * SAFETY — only ever SIGTERMs a CONFIRMED own live agent PTY:
+   *  - path-scoped: reads only THIS instance's own ctxRoot state pid-files, so a
+   *    foreign instance's PTYs are structurally invisible (+ instanceId re-checked).
+   *  - never a daemon PID (own daemon.pid + this process excluded).
+   *  - 3-part PID-REUSE guard (classifyOrphan): kill-0 AND ps-command matches the
+   *    agent pattern AND ps start-time ~= the recorded spawnedAt. Any miss =>
+   *    stale-unlink (NEVER kill) — guards a recycled PID that is an unrelated
+   *    process OR another/other-instance agent that took over the dead PID.
+   *
+   * Pure decision logic is in classifyOrphan (unit-tested); this method only
+   * supplies the real probes + performs the side effects (SIGTERM / unlink).
    */
-  private clearDaemonCrashMarkers(): void {
-    if (!this.daemonJustCrashed) return;
-    const stateBase = join(this.ctxRoot, 'state');
-    if (existsSync(stateBase)) {
-      try {
-        const dirs = readdirSync(stateBase, { withFileTypes: true })
-          .filter(d => d.isDirectory())
-          .map(d => d.name);
-        for (const name of dirs) {
-          try {
-            const marker = join(stateBase, name, '.daemon-crashed');
-            if (existsSync(marker)) unlinkSync(marker);
-          } catch { /* per-agent best effort */ }
+  reconcileOrphans(): { reaped: string[]; unlinked: string[] } {
+    const reaped: string[] = [];
+    const unlinked: string[] = [];
+    const pidFiles = listAgentPidFiles(this.ctxRoot);
+    if (pidFiles.length === 0) return { reaped, unlinked };
+
+    const daemonPids = this.collectDaemonPids();
+    const probe: OrphanProbe = {
+      isAlive: (pid: number): boolean => {
+        try { process.kill(pid, 0); return true; } catch { return false; }
+      },
+      getLiveProcess: (pid: number): LiveProcessInfo | null => this.psProcessInfo(pid),
+    };
+
+    for (const { record } of pidFiles) {
+      const verdict = classifyOrphan(record, this.instanceId, daemonPids, probe);
+      if (verdict === 'reap') {
+        try {
+          // SIGTERM (not SIGKILL): claude-code exits fast + flushes its JSONL on
+          // SIGTERM. We do NOT waitpid/drain here before discoverAndStart re-spawns
+          // this agent — in the rare case a PTY lingers >tolerance after SIGTERM,
+          // the fresh --continue spawn could briefly overlap the dying orphan on
+          // the same conversation JSONL. Acceptable: claude exits fast on SIGTERM
+          // and discoverAndStart's own per-agent setup latency covers the gap. If
+          // this ever proves racy, add a bounded drain (poll kill-0 on `reaped`
+          // PIDs, ~few s) before returning. (review note: cortextos-improver 2026-06-18)
+          process.kill(record.pid, 'SIGTERM');
+          reaped.push(record.agent);
+          console.log(`[agent-manager] reconcile: reaped orphaned PTY for "${record.agent}" (pid ${record.pid}) — will cold-start with --continue.`);
+        } catch (err) {
+          console.error(`[agent-manager] reconcile: SIGTERM failed for "${record.agent}" pid ${record.pid}: ${err instanceof Error ? err.message : String(err)}`);
         }
-      } catch { /* directory unreadable — leave markers, next clean startup will retry */ }
+        clearAgentPidFile(this.ctxRoot, record.agent);
+      } else if (verdict === 'stale-unlink') {
+        clearAgentPidFile(this.ctxRoot, record.agent);
+        unlinked.push(record.agent);
+      }
+      // foreign-skip: leave another instance's file untouched (shouldn't occur).
     }
-    // Reset the flag so subsequent startAgent calls (IPC enable, dashboard
-    // restart, manual restartAgent) get the real BUG-011 alarm, not the
-    // quieted post-crash variant.
-    this.daemonJustCrashed = false;
+    if (reaped.length || unlinked.length) {
+      console.log(`[agent-manager] reconcile complete: reaped=[${reaped.join(',')}] unlinked-stale=[${unlinked.join(',')}]`);
+    }
+    return { reaped, unlinked };
+  }
+
+  /** PIDs that must NEVER be reaped (this daemon + its recorded daemon.pid). */
+  private collectDaemonPids(): number[] {
+    const pids = new Set<number>([process.pid]);
+    try {
+      const p = join(this.ctxRoot, 'daemon.pid');
+      if (existsSync(p)) {
+        const n = parseInt(readFileSync(p, 'utf-8').trim(), 10);
+        if (Number.isFinite(n)) pids.add(n);
+      }
+    } catch { /* best effort */ }
+    return [...pids];
+  }
+
+  /** OS identity of a live PID via `ps` (macOS has no /proc). Returns the full
+   *  command + actual start-time (epoch ms) for the 3-part PID-reuse guard.
+   *
+   *  Uses `etime` (elapsed, LOCALE-INDEPENDENT) rather than `lstart` — `lstart`
+   *  renders in the system locale (e.g. German "Do. 18 Juni …") which Date.parse
+   *  handles only by luck. startedAtMs = now - elapsed, which for a genuine orphan
+   *  equals its recorded spawnedAt, and for a recycled (later-started) PID does
+   *  not — exactly the discriminator the guard needs. */
+  private psProcessInfo(pid: number): LiveProcessInfo | null {
+    try {
+      const out = execFileSync('ps', ['-p', String(pid), '-o', 'etime=,command='], { encoding: 'utf-8' }).trim();
+      if (!out) return null;
+      const firstSpace = out.indexOf(' ');
+      if (firstSpace === -1) return null;
+      const etime = out.slice(0, firstSpace).trim();
+      const command = out.slice(firstSpace + 1).trim();
+      const elapsedMs = parseEtimeMs(etime);
+      if (elapsedMs === null) return null;
+      return { command, startedAtMs: Date.now() - elapsedMs };
+    } catch {
+      return null; // ps failed / process gone between kill-0 and ps
+    }
   }
 
   /**
@@ -121,29 +165,80 @@ export class AgentManager {
     // re-discover and re-start any agent dir on disk regardless of user intent.
     const instanceEnabled = this.readInstanceEnableList();
 
-    for (const { name, dir, org, config } of agentDirs) {
-      // Per-agent config.json `enabled: false` (existing behavior, unchanged)
+    const toStart = agentDirs.filter(({ name, config }) => {
       if (config.enabled === false) {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (per-agent config.json)`);
-        continue;
+        return false;
       }
-      // Instance-level enabled-agents.json `enabled: false` (BUG-028 fix)
       const entry = instanceEnabled[name];
       if (entry && entry.enabled === false) {
         console.log(`[agent-manager] Skipping disabled agent: ${name} (enabled-agents.json)`);
+        return false;
+      }
+      return true;
+    });
+
+    // Parallel startup: eliminates the sequential blocking window that caused
+    // external IPC start-agent calls to race with discoverAndStart and trigger
+    // the BUG-011 pendingRestarts cascade. Each agent's startup_delay now runs
+    // concurrently instead of blocking the whole queue.
+    const results = await Promise.allSettled(
+      toStart.map(({ name, dir, config, org }) => this.startAgent(name, dir, config, org)),
+    );
+
+    // SYS-DAEMON-RESILIENCE-01 Fix 1: do-NOT-swallow + assert-outcome.
+    // `startAgent` registers the agent (this.agents.set) and only AFTER an
+    // awaited `agentProcess.start()` wires the cron scheduler. A rejection
+    // between those points used to be discarded by `Promise.allSettled`,
+    // leaving an agent with a live session but NO cron scheduler — a silent
+    // partial-start that masked a failed mechanism behind a "booted fine"
+    // surface. Now: log every rejected start (no swallow), then ASSERT that
+    // every enabled agent ended with the cron scheduler it requires.
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        console.error(
+          `[agent-manager] startAgent REJECTED for "${toStart[i].name}": ${r.reason instanceof Error ? r.reason.stack ?? r.reason.message : String(r.reason)}`,
+        );
+      }
+    });
+    this.assertBootOutcomes(toStart.map(({ name }) => name));
+  }
+
+  /**
+   * SYS-DAEMON-RESILIENCE-01 Fix 1: post-boot outcome assertion.
+   *
+   * For every agent that SHOULD have started, verify it ended in the required
+   * state — registered AND (for non-Hermes runtimes) wired to a cron scheduler.
+   * A registered-but-scheduler-less agent is the partial-start failure mode:
+   * recover it by lazy-wiring the scheduler (same path `reloadCrons` uses for
+   * the start-window gap), and log loudly if recovery still fails. This turns a
+   * silently-swallowed partial start into an observable, self-healed outcome.
+   */
+  private assertBootOutcomes(names: string[]): void {
+    for (const name of names) {
+      const entry = this.agents.get(name);
+      if (!entry) {
+        console.error(
+          `[agent-manager] BOOT-ASSERT FAIL: "${name}" was enabled but is NOT registered (start failed before registry insert) — agent has no session and no crons.`,
+        );
         continue;
       }
-      // BUG-043 fix: pass the per-agent org so startAgent can use it instead
-      // of falling back to `this.org` (the daemon's startup org).
-      await this.startAgent(name, dir, config, org);
-    }
+      // Hermes manages its own crons natively — no daemon scheduler expected.
+      if (entry.process['config']?.runtime === 'hermes') continue;
+      if (this.cronSchedulers.has(name)) continue;
 
-    // Successful startup pass — clear .daemon-crashed markers from disk
-    // AND clear the in-memory daemonJustCrashed flag. After this point,
-    // any further startAgent() calls (IPC enable, dashboard restart, etc)
-    // are normal operation and should fire the real BUG-011 alarm if a
-    // race ever does leak through PR #11's protection.
-    this.clearDaemonCrashMarkers();
+      console.error(
+        `[agent-manager] BOOT-ASSERT: "${name}" registered but has NO cron scheduler (partial start) — recovering via lazy-wire.`,
+      );
+      this.startAgentCronScheduler(name);
+      if (!this.cronSchedulers.has(name)) {
+        console.error(
+          `[agent-manager] BOOT-ASSERT FAIL: "${name}" still has no cron scheduler after recovery — crons will not fire for this agent.`,
+        );
+      } else {
+        console.log(`[agent-manager] BOOT-ASSERT: "${name}" cron scheduler recovered.`);
+      }
+    }
   }
 
   /**
@@ -245,32 +340,10 @@ export class AgentManager {
 
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
     if (this.agents.has(name)) {
-      // BUG-031: this branch was the workaround for the BUG-011 PTY race
-      // (restart-all could send stop+start simultaneously, and the new
-      // start would arrive while the old stop's PTY exit was still in
-      // flight). PR #11 closed BUG-011 by making `AgentProcess.stop()`
-      // await the actual PTY exit before resolving — which means this
-      // branch should NEVER fire under normal restart paths.
-      //
-      // We log a regression warning here instead of deleting the branch
-      // entirely, so we'll know IMMEDIATELY if BUG-011 ever regresses
-      // (a future change accidentally breaks the exit-await). Phase 4 of
-      // the core stability test plan + cycle 2 of PR #13 both confirmed
-      // this branch is dormant. Once we have weeks of zero-warning
-      // production data, we can delete the queue mechanism entirely.
-      if (this.daemonJustCrashed) {
-        // Post-crash startup. The previous daemon exited via
-        // uncaughtException without running stopAll(), so the in-memory
-        // registry from the prior process is gone — but the post-crash
-        // discoverAndStart pass can briefly re-enter startAgent for an
-        // agent whose pendingRestarts entry survived. This is benign and
-        // distinct from the BUG-011 in-flight race PR #11 closed. Log at
-        // info level so operators don't think PR #11 has regressed.
-        console.log(`[agent-manager] ${name} already in registry (post-crash discovery overlap, expected). Queueing restart.`);
-      } else {
-        console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
-      }
-      this.pendingRestarts.add(name);
+      // Idempotent: a second start() for an already-running agent is a no-op.
+      // This replaces the old pendingRestarts cascade that turned IPC/startup
+      // races into silent restart loops (root cause of the 3-agent dropout bug).
+      console.log(`[agent-manager] start(${name}) skipped — already in registry (idempotent; no restart queued)`);
       return;
     }
 
@@ -316,10 +389,7 @@ export class AgentManager {
     let botToken: string | undefined;
 
     if (existsSync(agentEnvFile)) {
-      // stripBom: Windows tooling writes .env with a UTF-8 BOM that breaks
-      // /^BOT_TOKEN=/m when BOT_TOKEN is on line 1 (2026-05-16 silent
-      // smith-not-receiving-Telegram incident). See src/utils/strip-bom.ts.
-      const envContent = stripBom(readFileSync(agentEnvFile, 'utf-8'));
+      const envContent = readFileSync(agentEnvFile, 'utf-8');
       const botTokenMatch = envContent.match(/^BOT_TOKEN=(.+)$/m);
       const chatIdMatch = envContent.match(/^CHAT_ID=(.+)$/m);
       const allowedUserMatch = envContent.match(/^ALLOWED_USER=(.+)$/m);
@@ -333,18 +403,10 @@ export class AgentManager {
         botToken = undefined;
       }
 
-      // ALLOWED_USER must be one or more numeric Telegram user IDs.
-      // Comma-separated for multi-user (e.g. group chats with Sam + a collaborator).
-      // Whitespace tolerated; any non-numeric token rejects the whole list.
-      if (allowedUserId) {
-        const ids = allowedUserId.split(',').map((s) => s.trim()).filter(Boolean);
-        if (ids.length === 0 || !ids.every((id) => /^\d+$/.test(id))) {
-          log(`SECURITY: ALLOWED_USER must be a comma-separated list of numeric Telegram user IDs (e.g. 123456789,987654321). Refusing to enable Telegram. Fix the .env file.`);
-          allowedUserId = undefined;
-        } else {
-          // Normalize to comma-joined form so downstream gate splits on it
-          allowedUserId = ids.join(',');
-        }
+      // ALLOWED_USER must be a numeric Telegram user ID, not a username
+      if (allowedUserId && !/^\d+$/.test(allowedUserId)) {
+        log(`SECURITY: ALLOWED_USER is not a numeric ID. Telegram user IDs are numbers (e.g. 123456789). Refusing to enable Telegram. Fix the .env file.`);
+        allowedUserId = undefined;
       }
 
       // Security: ALLOWED_USER is REQUIRED when BOT_TOKEN is set. Without it,
@@ -353,12 +415,6 @@ export class AgentManager {
       // whitelists their numeric user ID.
       if (botToken && !allowedUserId) {
         log(`SECURITY: BOT_TOKEN is set but ALLOWED_USER is missing. Refusing to enable Telegram. Set ALLOWED_USER to your numeric Telegram user ID in .env, or remove BOT_TOKEN to start the agent without Telegram.`);
-        if (chatId) {
-          const alertApi = new TelegramAPI(botToken);
-          alertApi.sendMessage(chatId,
-            `⚠️ WATCHDOG: ${name} has BOT_TOKEN but ALLOWED_USER is missing or malformed in .env. Telegram is DISABLED for this agent. Fix ALLOWED_USER and restart.`,
-          ).catch(() => {});
-        }
         botToken = undefined;
       }
 
@@ -370,6 +426,26 @@ export class AgentManager {
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
+
+    // SYS-DAEMON-RESILIENCE-01 Fix 3: clean the registry corpse on terminal halt.
+    // When an agent exceeds its crash budget it reaches 'halted' and will NOT
+    // self-restart. If its registry entry lingers, a later `start`/`restart`
+    // dedups against the corpse ("already in registry") and the agent can never
+    // be revived without a full daemon restart. On 'halted' (terminal only —
+    // NOT transient 'crashed', which schedules its own restart), remove the
+    // entry + its cron scheduler so a subsequent start cold-starts cleanly.
+    // The identity guard ensures we only reap THIS process's entry, never a
+    // freshly-restarted replacement that reused the name.
+    agentProcess.onStatusChanged((status) => {
+      if (status.status !== 'halted') return;
+      if (this.agents.get(name)?.process !== agentProcess) return;
+      console.error(
+        `[agent-manager] "${name}" HALTED (terminal, crash-budget exhausted) — removing its registry entry + cron scheduler so a future start is not deduped against a dead corpse.`,
+      );
+      const sched = this.cronSchedulers.get(name);
+      if (sched) { sched.stop(); this.cronSchedulers.delete(name); }
+      this.agents.delete(name);
+    });
     // Issue #330: pass the Telegram handle into AgentProcess so CodexAppServerPTY
     // can emit sendChatAction directly from the JSONL stream. Has no effect for
     // claude-code / hermes runtimes — those still use fast-checker.
@@ -380,9 +456,7 @@ export class AgentManager {
       log,
       telegramApi,
       chatId,
-      // FastChecker only needs the first ID for its single-recipient typing
-      // indicator / quick-checks. Multi-user is enforced by the gates above.
-      allowedUserId: allowedUserId ? parseInt(allowedUserId.split(',')[0].trim(), 10) : undefined,
+      allowedUserId: allowedUserId ? parseInt(allowedUserId, 10) : undefined,
     });
 
     // Send Telegram notification on crashes and session refreshes
@@ -445,43 +519,16 @@ export class AgentManager {
       const stateDir = join(this.ctxRoot, 'state', name);
       const poller = new TelegramPoller(telegramApi, stateDir);
 
-      const REJECT_ALERT_THRESHOLD = 3;
-      const REJECT_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
-
       poller.onMessage((msg) => {
-        // ALLOWED_USER gate: comma-separated list of numeric user IDs.
-        // If configured, ignore messages from other users. Always log the
-        // rejected user_id + name so operators can discover IDs to whitelist.
+        // ALLOWED_USER gate: if configured, ignore messages from other users.
+        // Use numeric comparison to avoid string coercion issues.
         if (allowedUserId) {
-          const allowedIds = allowedUserId.split(',').map((s) => parseInt(s.trim(), 10));
-          const fromId = msg.from?.id;
-          if (typeof fromId !== 'number' || !allowedIds.includes(fromId)) {
-            const rejectedFrom = msg.from?.first_name || msg.from?.username || 'unknown';
-            log(`Ignoring message from unauthorized user (allowed_user gate): from=${fromId} (${rejectedFrom})`);
-            // #459 reject-count watchdog: alert after N consecutive rejects (multi-user gate from #467 preserved).
-            const entry = this.agents.get(name);
-            if (entry) {
-              entry.telegramRejectCount = (entry.telegramRejectCount ?? 0) + 1;
-              if (entry.telegramRejectCount >= REJECT_ALERT_THRESHOLD) {
-                const now = Date.now();
-                const lastAlert = entry.telegramLastRejectAlertAt ?? 0;
-                if (now - lastAlert > REJECT_ALERT_COOLDOWN_MS) {
-                  entry.telegramLastRejectAlertAt = now;
-                  const alertText = `⚠️ WATCHDOG: ${name} rejected ${entry.telegramRejectCount} consecutive Telegram messages (ALLOWED_USER gate). Last from_id: ${fromId ?? 'unknown'}. Verify ALLOWED_USER in .env matches expected users, or this may be unsolicited contact.`;
-                  log(alertText);
-                  if (telegramApi && chatId) {
-                    telegramApi.sendMessage(chatId, alertText).catch(() => {});
-                  }
-                }
-              }
-            }
+          const allowedId = parseInt(allowedUserId, 10);
+          if (msg.from?.id !== allowedId) {
+            log(`Ignoring message from unauthorized user (allowed_user gate)`);
             return;
           }
         }
-
-        // Message passed ALLOWED_USER gate — reset rejection counter.
-        const agentEntry = this.agents.get(name);
-        if (agentEntry) agentEntry.telegramRejectCount = 0;
 
         const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
         const msgChatId = msg.chat?.id;
@@ -582,35 +629,15 @@ export class AgentManager {
       });
 
       poller.onReaction((reaction) => {
-        // ALLOWED_USER gate: same multi-user rule as message handler.
+        // ALLOWED_USER gate: same rule as message handler. If configured,
+        // ignore reactions from other users.
         if (allowedUserId) {
-          const allowedIds = allowedUserId.split(',').map((s) => parseInt(s.trim(), 10));
-          const fromId = reaction.user?.id;
-          if (typeof fromId !== 'number' || !allowedIds.includes(fromId)) {
-            log(`Ignoring reaction from unauthorized user (allowed_user gate): from=${fromId}`);
-            // #459 reject-count watchdog (multi-user gate from #467 preserved).
-            const entry = this.agents.get(name);
-            if (entry) {
-              entry.telegramRejectCount = (entry.telegramRejectCount ?? 0) + 1;
-              if (entry.telegramRejectCount >= REJECT_ALERT_THRESHOLD) {
-                const now = Date.now();
-                const lastAlert = entry.telegramLastRejectAlertAt ?? 0;
-                if (now - lastAlert > REJECT_ALERT_COOLDOWN_MS) {
-                  entry.telegramLastRejectAlertAt = now;
-                  const alertText = `⚠️ WATCHDOG: ${name} rejected ${entry.telegramRejectCount} consecutive Telegram interactions (ALLOWED_USER gate). Verify ALLOWED_USER in .env matches expected users, or this may be unsolicited contact.`;
-                  log(alertText);
-                  if (telegramApi && chatId) {
-                    telegramApi.sendMessage(chatId, alertText).catch(() => {});
-                  }
-                }
-              }
-            }
+          const allowedId = parseInt(allowedUserId, 10);
+          if (reaction.user?.id !== allowedId) {
+            log('Ignoring reaction from unauthorized user (allowed_user gate)');
             return;
           }
         }
-
-        const agentEntry = this.agents.get(name);
-        if (agentEntry) agentEntry.telegramRejectCount = 0;
 
         const from = stripControlChars(reaction.user?.first_name || reaction.user?.username || 'Unknown');
         const reactionChatId = reaction.chat?.id ?? chatId ?? '';
@@ -628,27 +655,22 @@ export class AgentManager {
         checker.queueTelegramMessage(formatted);
       });
 
-      // Wrap poller.start() in a restart-on-Conflict loop. The poller's
-      // internal Conflict-self-die (see TelegramPoller.start) yields the
-      // Telegram getUpdates lock when a duplicate poller is detected — but
-      // without a restart layer above, the agent loses Telegram input
-      // permanently. After a daemon crash, the old getUpdates connections
-      // can hold the lock for ~60s in Telegram's cloud, so this loop
-      // sleeps and retries on 'conflict-self-die' until the lock clears.
-      // Intentional stops (stopAgent → poller.stop()) set
+      // Wrap poller.start() in a restart-on-Conflict supervisor. The poller's
+      // 'conflict-self-die' exit yields the Telegram getUpdates lock when a
+      // duplicate holder is detected (e.g. a lingering connection ~60s after a
+      // daemon crash). Without this wrapper the agent silently loses Telegram
+      // input for the rest of the session. The supervisor sleeps 30s and retries
+      // until the lock clears. Intentional stops (stopAgent → poller.stop()) set
       // lastExitReason='stopped-externally' and exit the loop cleanly.
       const startPrimaryPollerWithRestart = async () => {
-        // 5min hard cap measured against CONSECUTIVE Conflict failures,
-        // not total wrapper lifetime. A long-running successful poll
-        // (>1min) resets the counter — without this reset, a poller that
-        // runs cleanly for hours and then hits a single Conflict would
-        // give up immediately because total runtime already exceeds 5min.
+        // 5min hard cap on CONSECUTIVE Conflict failures. A run longer than
+        // LONG_RUN_RESET_MS proves the lock cleared, so the budget resets —
+        // without this reset a poller running cleanly for hours would give up
+        // on its first subsequent Conflict because total runtime already exceeds 5min.
         const MAX_CONSECUTIVE_CONFLICT_MS = 5 * 60 * 1000;
         const LONG_RUN_RESET_MS = 60_000;
         let consecutiveConflictStart: number | null = null;
         while (true) {
-          // Pre-check: agent may have been deleted from registry during
-          // a previous sleep window. Skip the start() call entirely.
           if (!this.agents.has(name)) return;
           const runStart = Date.now();
           try {
@@ -660,8 +682,6 @@ export class AgentManager {
           const runDuration = Date.now() - runStart;
           if (poller.lastExitReason === 'stopped-externally') return;
           if (!this.agents.has(name)) return;
-          // A poll session that ran for >LONG_RUN_RESET_MS proves the
-          // Conflict lock is no longer chronic — reset the retry budget.
           if (runDuration > LONG_RUN_RESET_MS) consecutiveConflictStart = null;
           if (consecutiveConflictStart === null) consecutiveConflictStart = Date.now();
           if (Date.now() - consecutiveConflictStart > MAX_CONSECUTIVE_CONFLICT_MS) {
@@ -674,17 +694,11 @@ export class AgentManager {
       };
       startPrimaryPollerWithRestart().catch(err => {
         log(`Telegram poller wrapper crashed: ${err}`);
-        // Best-effort operator alert via the agent's own bot. The wrapper
-        // crashing is rare (the only catchable path is a throw from
-        // poller.start() before its own try/catch), but when it happens the
-        // agent silently loses Telegram input — exactly the failure class
-        // the 2026-05-16 audit flagged. Surface it to the operator chat so
-        // they see "X poller crashed" instead of mysterious silence.
         if (telegramApi && chatId) {
           telegramApi.sendMessage(
             String(chatId),
             `${name}: Telegram poller wrapper crashed. Inbound messages may be dropped until restart. Check daemon log.`,
-          ).catch(() => { /* swallow alert failure; original log already captured */ });
+          ).catch(() => {});
         }
       });
 
@@ -728,8 +742,7 @@ export class AgentManager {
     // Only the org's orchestrator runs the activity-channel poller.
     let orchestratorName: string | undefined;
     try {
-      // stripBom: see src/utils/strip-bom.ts for incident context.
-      const contextJson = stripBom(readFileSync(join(orgDir, 'context.json'), 'utf-8'));
+      const contextJson = readFileSync(join(orgDir, 'context.json'), 'utf-8');
       orchestratorName = JSON.parse(contextJson).orchestrator;
     } catch {
       return; // No context.json or unreadable — skip
@@ -741,11 +754,8 @@ export class AgentManager {
     let activityBotToken: string | undefined;
     let activityChatId: string | undefined;
     try {
-      // stripBom + CRLF-aware split: Windows tooling writes activity-channel.env
-      // with BOM + CRLF. Without these, ACTIVITY_BOT_TOKEN never resolves
-      // and the activity-channel poller silently never starts.
-      const content = stripBom(readFileSync(activityEnvPath, 'utf-8'));
-      for (const line of content.split(/\r?\n/)) {
+      const content = readFileSync(activityEnvPath, 'utf-8');
+      for (const line of content.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) continue;
         const eqIdx = trimmed.indexOf('=');
@@ -788,8 +798,6 @@ export class AgentManager {
       log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
     });
 
-    // Same Conflict-restart wrapper as the primary poller — activity
-    // channel can lose its getUpdates lock after a daemon crash too.
     // 5min retry budget measured against CONSECUTIVE failures; resets
     // after a >1min successful run. See primary poller wrapper for rationale.
     const startActivityPollerWithRestart = async () => {
@@ -851,23 +859,6 @@ export class AgentManager {
       this.cronSchedulers.delete(name);
     }
 
-    // BUG-031: honor any restart that was queued while we were stopping.
-    // After PR #11 (BUG-011 fix) this branch should never fire — see the
-    // matching warning comment in startAgent(). The honor logic is preserved
-    // as a safety net in case BUG-011 regresses; the warn line tells us
-    // immediately if it ever does.
-    if (this.pendingRestarts.has(name)) {
-      if (this.daemonJustCrashed) {
-        console.log(`[agent-manager] pendingRestarts fired for ${name} (post-crash safety net, expected). Honoring queued restart.`);
-      } else {
-        console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: pendingRestarts fired for ${name} — race condition leaked through. Honoring queued restart as safety net.`);
-      }
-      this.pendingRestarts.delete(name);
-      console.log(`[agent-manager] Honoring queued restart for ${name}`);
-      this.startAgent(name, '').catch(err =>
-        console.error(`[agent-manager] Queued restart failed for ${name}:`, err),
-      );
-    }
   }
 
   /**
@@ -879,7 +870,6 @@ export class AgentManager {
    * credentials are re-read from {agentDir}/.env on each restart.
    *
    * agentDir is auto-discovered by startAgent() from frameworkRoot/orgs/{org}/agents/{name}.
-   * Participates in the pendingRestarts race protection used by restart-all.
    */
   async restartAgent(name: string): Promise<void> {
     if (!this.agents.has(name)) {

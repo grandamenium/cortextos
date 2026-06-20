@@ -51,9 +51,9 @@ export function syncTasks(org: string): number {
 
   const upsert = db.prepare(`
     INSERT OR REPLACE INTO tasks
-      (id, title, description, status, priority, assignee, org, project, needs_approval, created_at, updated_at, completed_at, notes, source_file)
+      (id, title, description, status, priority, assignee, org, project, needs_approval, created_at, updated_at, completed_at, notes, source_file, bundle_id)
     VALUES
-      (@id, @title, @description, @status, @priority, @assignee, @org, @project, @needs_approval, @created_at, @updated_at, @completed_at, @notes, @source_file)
+      (@id, @title, @description, @status, @priority, @assignee, @org, @project, @needs_approval, @created_at, @updated_at, @completed_at, @notes, @source_file, @bundle_id)
   `);
 
   const files = fs.readdirSync(taskDir).filter((f) => f.endsWith('.json'));
@@ -85,6 +85,7 @@ export function syncTasks(org: string): number {
           completed_at: task.completed_at ?? null,
           notes: task.notes ?? null,
           source_file: filePath,
+          bundle_id: task.bundle_id ?? null,
         });
         markSynced(filePath);
         synced++;

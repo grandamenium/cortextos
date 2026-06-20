@@ -132,12 +132,21 @@ If `auto_create_agent_cycles` or `auto_modify_agent_cycles` is false, create app
 - Assign your compound 1-10 score for this cycle
 - Write justification paragraph
 - Create your own experiment entry and evaluate it
-- Send comprehensive report to user via Telegram:
-  - What the system scan found
-  - Agent experiment summaries
-  - Research findings
-  - Actions taken or proposed
-  - Your system effectiveness score and justification
+- Always write the full cycle summary to `memory/YYYY-MM-DD.md` (or a
+  cycle-specific file under `memory/theta-wave/`) so the durable record
+  exists regardless of what gets surfaced live.
+- Send the comprehensive report to the user via Telegram **only** when
+  the cycle produced ≥1 actionable finding — i.e. a human-decision the
+  founder needs to make, or an agent-action you dispatched. Cycles with
+  zero actionables (clean scans, steady-state confirmations, "no new
+  hypotheses") are memory-only. This protects Telegram SNR: routine
+  confirmations train the founder to skim past theta-wave pings and
+  miss the ones that matter.
+  - When you do send: include what the scan found, agent experiment
+    summaries, research findings, actions taken or proposed, and your
+    system effectiveness score with justification.
+  - When you suppress: log one line to today's memory noting the cycle
+    ran, the score, and `no-actionables — Telegram suppressed`.
 
 ## Your Unique Powers
 - You can CREATE research cycles for any agent
@@ -154,3 +163,5 @@ If `auto_create_agent_cycles` or `auto_modify_agent_cycles` is false, create app
 4. Log EVERYTHING to learnings.md - both what worked and what failed
 5. Never repeat a system-level change that was already discarded
 6. External research must be relevant to current goals, not generic
+7. Telegram only on ≥1 actionable finding — zero-actionable cycles are
+   memory-only (see Phase 8). Routine confirmations erode founder SNR.

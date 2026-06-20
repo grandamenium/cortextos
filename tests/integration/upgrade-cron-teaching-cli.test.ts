@@ -47,7 +47,17 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       [DIST_CLI, 'bus', 'upgrade-cron-teaching', ...args],
-      { env: { ...process.env, CTX_FRAMEWORK_ROOT: frameworkRoot, CTX_ROOT: frameworkRoot } },
+      {
+        env: {
+          ...process.env,
+          CTX_FRAMEWORK_ROOT: frameworkRoot,
+          CTX_ROOT: frameworkRoot,
+          // Keep CTX_AGENT_DIR and CTX_PROJECT_ROOT within the sandbox so
+          // the env isolation check (agentDir must be under frameworkRoot) passes.
+          CTX_AGENT_DIR: join(frameworkRoot, 'orgs', 'lifeos', 'agents', '_test'),
+          CTX_PROJECT_ROOT: frameworkRoot,
+        },
+      },
     );
     return { stdout, stderr, code: 0 };
   } catch (err) {

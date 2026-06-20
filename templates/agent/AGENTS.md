@@ -43,6 +43,7 @@ Complete the following in order. Do not skip steps.
 12. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
 13. Write session start entry to daily memory (see Memory Protocol below)
 14. Send your online status message. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
+14. Send your online status message — **only AFTER crons are confirmed set**. On a cold boot: tell them crons running, pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
 
 ---
 

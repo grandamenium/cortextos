@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master, 'feat/**', 'fix/**']
+    branches: ['**']         # 2026-05-27: was [main,master,feat/**,fix/**] — chore/** silently skipped, TS errors slipped through (Founder cascade-fix)
   pull_request:
     branches: [main, master]
 

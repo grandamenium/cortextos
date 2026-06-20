@@ -52,8 +52,18 @@ describe('readMaxCrashesPerDay', () => {
 });
 
 describe('notifyAgents', () => {
+  const savedFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+
   beforeEach(() => {
     execFileMock.mockReset();
+    // notifyAgents branches on CTX_FRAMEWORK_ROOT to choose between
+    // process.execPath + cliPath (PATH-aware) and 'cortextos' (legacy).
+    // Tests assert the legacy shape, so clear it here.
+    delete process.env.CTX_FRAMEWORK_ROOT;
+  });
+
+  afterEach(() => {
+    if (savedFrameworkRoot !== undefined) process.env.CTX_FRAMEWORK_ROOT = savedFrameworkRoot;
   });
 
   it('sends one bus send-message per recipient', () => {

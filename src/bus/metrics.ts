@@ -6,9 +6,66 @@
 import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, mkdirSync } from 'fs';
 import { join, basename, dirname } from 'path';
 import { execSync } from 'child_process';
-import { ensureDir } from '../utils/atomic.js';
+import { ensureDir, atomicWriteSync } from '../utils/atomic.js';
+import { resolveRoleConfig, type RoleConfig, type RoleType } from './role-config.js';
 
 // --- Types ---
+
+/**
+ * Per-role KPI blocks (SYS-MET-01). The role-typed `role` block is emitted
+ * alongside the legacy unified counters so existing dashboards and callers
+ * keep working.
+ */
+
+export interface AssigneeMetrics {
+  completed: number;
+  pending: number;
+  in_progress: number;
+  /**
+   * Bundle-collapsed in_progress count used by the wip_cap_breach threshold.
+   * Tasks whose titles share a leading `[BUNDLE-KEY ...]` prefix collapse to a
+   * single effort unit; non-bracketed tasks each count as 1. Equals
+   * `in_progress` when no titles share a bundle prefix.
+   */
+  in_progress_effective: number;
+  /** completed / (completed + pending), or null when both are 0 */
+  completion_ratio: number | null;
+  /**
+   * Size of the largest title-prefix or bundle_id group among in-progress tasks.
+   * Used by detectAnomalies to suppress wip_cap_breach when the excess is a
+   * coherent bundle (healthy batching) rather than scattered context-switching.
+   */
+  in_progress_bundle_max: number;
+}
+
+export interface AuthoringMetrics {
+  /** All tasks where created_by === agent (any status) */
+  authored_total: number;
+  /** Authored tasks still in author's queue: pending + (unassigned OR self-assigned) */
+  pending_dispatch: number;
+  /** Age (now - created_at, ms) percentiles across currently pending-dispatch tasks */
+  pending_dispatch_age_p50_ms: number | null;
+  pending_dispatch_age_p95_ms: number | null;
+}
+
+export interface InboxTriageMetrics {
+  /** Today's events with category='inbox' or event names matching the inbox pattern */
+  requests_today: number;
+  /** p50 response latency (ms). null until a separate event-pairing pipeline emits it */
+  response_p50_ms: number | null;
+  /** null pending the ground-truth backfill pipeline — see SYS-MET-01-ADDENDUM */
+  classification_accuracy: number | null;
+}
+
+export interface RoleMetrics {
+  role_type: RoleType;
+  primary_kpi: string;
+  assignee: AssigneeMetrics;
+  authoring: AuthoringMetrics;
+  inbox_triage: InboxTriageMetrics;
+  /** Anomaly tokens fired this run, scoped to this role-type's thresholds */
+  anomalies: string[];
+}
 
 export interface AgentMetrics {
   tasks_completed: number;
@@ -16,6 +73,8 @@ export interface AgentMetrics {
   tasks_in_progress: number;
   errors_today: number;
   heartbeat_stale: boolean;
+  /** Role-typed KPI block. Required — every agent resolves to a role config. */
+  role: RoleMetrics;
 }
 
 export interface SystemMetrics {
@@ -25,10 +84,80 @@ export interface SystemMetrics {
   approvals_pending: number;
 }
 
+/**
+ * Fleet-wide cron-fire bucket. fire_count = sum of distinct (agent, cron) pairs
+ * whose latest fire (per cron-state.json snapshot) landed in this UTC minute.
+ */
+export interface CronStampedeBucket {
+  minute_bucket: string;                          // 'YYYY-MM-DDTHH:MMZ'
+  fire_count: number;
+  agent_breakdown: Record<string, number>;
+  cron_name_breakdown: Record<string, number>;
+}
+
+export interface PerAgentStampede {
+  agent: string;
+  minute_bucket: string;
+  count: number;
+  cron_names: string[];
+}
+
+/**
+ * Fleet-wide cron-collision detector. Source = state/<agent>/cron-state.json
+ * snapshot (latest fire per cron per agent). A stampede shows up the moment
+ * AFTER it lands; later fires of the same cron overwrite the signature, so
+ * this is a current-state probe, not a fire-history aggregator.
+ *
+ * Thresholds (SYS-CRON-STAMPEDE-DETECTOR spec, 2026-06-14):
+ *   - per_agent_warn: any agent with >N fires in one minute = per-agent stampede.
+ *   - fleet_warn:     any minute with >N fires fleet-wide   = warn.
+ *   - fleet_alert:    any minute with >N fires fleet-wide   = alert.
+ */
+export interface CronCollisionDetector {
+  collected_at: string;
+  source: 'cron-state-snapshot';
+  window_hours: number;
+  thresholds: {
+    fleet_warn: number;
+    fleet_alert: number;
+    per_agent_warn: number;
+  };
+  top_buckets: CronStampedeBucket[];
+  warn_buckets: CronStampedeBucket[];
+  alert_buckets: CronStampedeBucket[];
+  per_agent_stampedes: PerAgentStampede[];
+  max_per_agent_fires: PerAgentStampede | null;
+  anomalies: string[];
+}
+
 export interface MetricsReport {
   timestamp: string;
   agents: Record<string, AgentMetrics>;
   system: SystemMetrics;
+  cron_collision_detector: CronCollisionDetector;
+}
+
+/**
+ * Slim, append-friendly record of one collision-detector run, persisted to
+ * `analytics/cron-collision-history.jsonl` (NDJSON) so theta-wave consumers can
+ * correlate stampede signatures across DAYS — the live detector is current-state
+ * only (cron-state.json snapshots), so a stampede outside the rolling window or
+ * overwritten by a later fire is invisible to future analyses (SYS-CRON-STAMPEDE-
+ * DETECTOR-02, follow-up to PR #41).
+ */
+export interface CronCollisionHistoryEntry {
+  collected_at: string;
+  source: 'collectMetrics';
+  top_buckets: CronStampedeBucket[];
+  per_agent_stampedes: PerAgentStampede[];
+  anomalies: string[];
+}
+
+export interface CollisionHistoryOptions {
+  /** Retention window in days; entries older than this are pruned on every write. Default 30. */
+  retentionDays?: number;
+  /** Override Date.now() for tests / for prune-window consistency with the caller. */
+  now?: number;
 }
 
 export interface UsageData {
@@ -97,9 +226,393 @@ function isErrorEvent(line: string): boolean {
   return evt.severity === 'error' || evt.severity === 'critical';
 }
 
+/**
+ * Index of all task records used by collectMetrics. Internal-only — kept in
+ * memory so we can compute per-agent assignee+authoring rollups in O(tasks)
+ * total instead of O(tasks × agents). Only the fields that matter for KPIs
+ * are typed; everything else is intentionally absent.
+ */
+interface TaskRecord {
+  assigned_to?: string;
+  created_by?: string;
+  status?: string;
+  created_at?: string;
+  archived?: boolean;
+  title?: string;
+  bundle_id?: string;
+}
+
+/**
+ * Extract a bundle key from a task title. Bundles are signalled by a leading
+ * bracketed token (`[B-2.x ...]`, `[OVERNIGHT-CRON-HEALTH PHASE-B-2]`,
+ * `[SYS-MET-02] ...`). The key is the first whitespace-delimited token inside
+ * the leading bracket, upper-cased. Titles without a leading bracket return
+ * null so they count as standalone efforts.
+ *
+ * Examples:
+ *   "[OVERNIGHT-CRON-HEALTH] Generic detector"        -> "OVERNIGHT-CRON-HEALTH"
+ *   "[OVERNIGHT-CRON-HEALTH PHASE-B-2] Retrofit"      -> "OVERNIGHT-CRON-HEALTH"
+ *   "[SYS-MET-02] Bundle-aware threshold"             -> "SYS-MET-02"
+ *   "[B2.3c][P1] Standort-gefilterte Slots"           -> "B2.3C"
+ *   "Plain title without brackets"                     -> null
+ */
+function bundleKey(title?: string): string | null {
+  if (!title) return null;
+  const m = title.match(/^\s*\[([^\]\s][^\]]*?)(?:\s|\])/);
+  if (!m) return null;
+  return m[1].toUpperCase();
+}
+
+/**
+ * Nearest-rank percentile (no interpolation). p must be in [0, 100].
+ * Returns null for empty input — keeps callers honest about no-data cases.
+ */
+function percentile(values: number[], p: number): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx];
+}
+
+/**
+ * Inbox-triage request signal. Counts today's events that look like inbound
+ * messages: category='inbox' OR an event name starting with `inbox_`/`request_`.
+ * Conservative — agents that already emit category='inbox' get an accurate
+ * count; others get 0 until they normalize. This is the scaffold called out
+ * in SYS-MET-01-ADDENDUM (primary KPI = request-count + response-p50; the
+ * pairing pipeline that produces p50 lives in a separate task).
+ */
+function countInboxRequests(eventFiles: string[]): number {
+  let count = 0;
+  for (const f of eventFiles) {
+    if (!existsSync(f)) continue;
+    try {
+      const lines = readFileSync(f, 'utf-8').split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const e = JSON.parse(line) as { category?: unknown; event?: unknown };
+          if (e.category === 'inbox') { count++; continue; }
+          if (typeof e.event === 'string' && (e.event.startsWith('inbox_') || e.event.startsWith('request_'))) {
+            count++;
+          }
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+  }
+  return count;
+}
+
+/**
+ * Derive a grouping key for a task title. Returns the first `[TAG]` bracket
+ * token if present (e.g. "[T-A] foo" → "t-a"), otherwise the first two
+ * whitespace-delimited words lowercased. Used for bundle-context detection.
+ */
+function logicalPrefix(title: string): string {
+  const bracketMatch = title.match(/^\[([^\]]+)\]/);
+  if (bracketMatch) return bracketMatch[1].toLowerCase();
+  return title.trim().toLowerCase().split(/\s+/).slice(0, 2).join(' ');
+}
+
+/**
+ * Apply per-role anomaly thresholds. Returns the firing anomaly tokens.
+ * Empty array = healthy. Tokens are stable strings consumers can match on.
+ */
+function detectAnomalies(role: RoleConfig, metrics: Omit<RoleMetrics, 'anomalies' | 'role_type' | 'primary_kpi'>): string[] {
+  const out: string[] = [];
+  const t = role.anomaly_thresholds;
+
+  const wantsAssignee = role.role_type === 'coding-assignee' || role.role_type === 'analyst-hybrid';
+  const wantsAuthoring = role.role_type === 'authoring' || role.role_type === 'analyst-hybrid';
+  const wantsInbox = role.role_type === 'inbox-triage';
+
+  if (wantsAssignee) {
+    if (typeof t.assignee_completion_ratio_min === 'number'
+        && metrics.assignee.completion_ratio !== null
+        && metrics.assignee.completion_ratio < t.assignee_completion_ratio_min) {
+      out.push('assignee_low_completion_ratio');
+    }
+    if (typeof t.wip_cap_max === 'number' && metrics.assignee.in_progress > t.wip_cap_max) {
+      // Bundle-context suppression: if the excess above wip_cap is entirely
+      // explained by one coherent bundle (≥3 tasks sharing a prefix/bundle_id),
+      // the agent is doing healthy batching — not scattered context-switching.
+      const bundleMax = metrics.assignee.in_progress_bundle_max;
+      const nonBundleCount = metrics.assignee.in_progress - bundleMax;
+      const isBundling = bundleMax >= 3 && nonBundleCount < t.wip_cap_max;
+      if (!isBundling) {
+        out.push('assignee_wip_cap_breach');
+      }
+    }
+  }
+  if (wantsAuthoring) {
+    if (typeof t.pending_dispatch_age_p95_max_ms === 'number'
+        && metrics.authoring.pending_dispatch_age_p95_ms !== null
+        && metrics.authoring.pending_dispatch_age_p95_ms > t.pending_dispatch_age_p95_max_ms) {
+      out.push('authoring_dispatch_backlog');
+    }
+  }
+  if (wantsInbox) {
+    if (typeof t.response_p50_max_ms === 'number'
+        && metrics.inbox_triage.response_p50_ms !== null
+        && metrics.inbox_triage.response_p50_ms > t.response_p50_max_ms) {
+      out.push('inbox_triage_slow_response');
+    }
+    if (typeof t.classification_accuracy_min === 'number'
+        && metrics.inbox_triage.classification_accuracy !== null
+        && metrics.inbox_triage.classification_accuracy < t.classification_accuracy_min) {
+      out.push('inbox_triage_classification_drift');
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Truncate an ISO timestamp to its UTC minute bucket: `2026-06-14T18:40Z`.
+ * Returns null when the input does not parse to a finite Date.
+ */
+function isoMinuteBucket(iso: string): string | null {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z`;
+}
+
+export interface CronCollisionDetectorOptions {
+  /** Window in hours; fires older than this are ignored. Default 24. */
+  windowHours?: number;
+  /** Fleet-wide minute fire-count for warn. Default 5 (>5 fires). */
+  fleetWarn?: number;
+  /** Fleet-wide minute fire-count for alert. Default 8 (>8 fires). */
+  fleetAlert?: number;
+  /** Per-agent minute fire-count for stampede. Default 2 (>2 fires). */
+  perAgentWarn?: number;
+  /** Cap on top_buckets returned. Default 50. */
+  topN?: number;
+  /** Override Date.now() for tests. */
+  now?: number;
+}
+
+/**
+ * Walk every agent's `state/<agent>/cron-state.json` snapshot and aggregate
+ * cron fires into UTC minute-buckets. Surfaces fleet-wide collisions
+ * (multiple distinct crons landing in the same minute across the fleet) and
+ * per-agent stampedes (one agent firing N crons in one minute). Result feeds
+ * `MetricsReport.cron_collision_detector` so nightly metrics can flag the
+ * pattern that caused the 2026-06-14 xx:40Z silent-stop incident.
+ */
+export function detectCronCollisions(
+  ctxRoot: string,
+  opts: CronCollisionDetectorOptions = {},
+): CronCollisionDetector {
+  const now = opts.now ?? Date.now();
+  const windowHours = opts.windowHours ?? 24;
+  const fleetWarn = opts.fleetWarn ?? 5;
+  const fleetAlert = opts.fleetAlert ?? 8;
+  const perAgentWarn = opts.perAgentWarn ?? 2;
+  const topN = opts.topN ?? 50;
+  const windowMs = windowHours * 3_600_000;
+
+  // bucket → { count, agent_breakdown, cron_name_breakdown }
+  const buckets = new Map<string, CronStampedeBucket>();
+  // (agent|bucket) → { count, cron_names }
+  const perAgent = new Map<string, { agent: string; bucket: string; count: number; crons: Set<string> }>();
+
+  const stateDir = join(ctxRoot, 'state');
+  if (existsSync(stateDir)) {
+    let entries: string[] = [];
+    try { entries = readdirSync(stateDir); } catch { /* unreadable state root */ }
+
+    for (const agent of entries) {
+      const cronStatePath = join(stateDir, agent, 'cron-state.json');
+      if (!existsSync(cronStatePath)) continue;
+
+      let parsed: unknown;
+      try { parsed = JSON.parse(readFileSync(cronStatePath, 'utf-8')); }
+      catch { continue; }
+
+      const crons = (parsed && typeof parsed === 'object' && Array.isArray((parsed as { crons?: unknown }).crons))
+        ? (parsed as { crons: Array<{ name?: unknown; last_fire?: unknown }> }).crons
+        : [];
+
+      for (const rec of crons) {
+        if (typeof rec.name !== 'string' || typeof rec.last_fire !== 'string') continue;
+        const fireMs = Date.parse(rec.last_fire);
+        if (!Number.isFinite(fireMs)) continue;
+        if (now - fireMs > windowMs) continue;     // outside window
+        if (fireMs > now) continue;                // future timestamp, skip
+
+        const bucket = isoMinuteBucket(rec.last_fire);
+        if (!bucket) continue;
+
+        let b = buckets.get(bucket);
+        if (!b) {
+          b = { minute_bucket: bucket, fire_count: 0, agent_breakdown: {}, cron_name_breakdown: {} };
+          buckets.set(bucket, b);
+        }
+        b.fire_count++;
+        b.agent_breakdown[agent] = (b.agent_breakdown[agent] ?? 0) + 1;
+        b.cron_name_breakdown[rec.name] = (b.cron_name_breakdown[rec.name] ?? 0) + 1;
+
+        const paKey = `${agent}|${bucket}`;
+        let pa = perAgent.get(paKey);
+        if (!pa) {
+          pa = { agent, bucket, count: 0, crons: new Set() };
+          perAgent.set(paKey, pa);
+        }
+        pa.count++;
+        pa.crons.add(rec.name);
+      }
+    }
+  }
+
+  const sortedBuckets = [...buckets.values()].sort((a, b) => {
+    if (b.fire_count !== a.fire_count) return b.fire_count - a.fire_count;
+    return a.minute_bucket < b.minute_bucket ? 1 : -1;     // newer first on tie
+  });
+  const top_buckets = sortedBuckets.slice(0, topN);
+  const warn_buckets = sortedBuckets.filter(b => b.fire_count > fleetWarn);
+  const alert_buckets = sortedBuckets.filter(b => b.fire_count > fleetAlert);
+
+  const perAgentList: PerAgentStampede[] = [...perAgent.values()]
+    .filter(p => p.count > perAgentWarn)
+    .map(p => ({ agent: p.agent, minute_bucket: p.bucket, count: p.count, cron_names: [...p.crons].sort() }))
+    .sort((a, b) => b.count - a.count || (a.minute_bucket < b.minute_bucket ? 1 : -1));
+
+  let max_per_agent_fires: PerAgentStampede | null = null;
+  for (const p of perAgent.values()) {
+    if (!max_per_agent_fires || p.count > max_per_agent_fires.count) {
+      max_per_agent_fires = {
+        agent: p.agent,
+        minute_bucket: p.bucket,
+        count: p.count,
+        cron_names: [...p.crons].sort(),
+      };
+    }
+  }
+
+  const anomalies: string[] = [];
+  if (perAgentList.length > 0) anomalies.push('cron_stampede_agent');
+  if (warn_buckets.length > 0) anomalies.push('cron_stampede_fleet');
+
+  return {
+    collected_at: new Date(now).toISOString(),
+    source: 'cron-state-snapshot',
+    window_hours: windowHours,
+    thresholds: { fleet_warn: fleetWarn, fleet_alert: fleetAlert, per_agent_warn: perAgentWarn },
+    top_buckets,
+    warn_buckets,
+    alert_buckets,
+    per_agent_stampedes: perAgentList,
+    max_per_agent_fires,
+    anomalies,
+  };
+}
+
+const COLLISION_HISTORY_FILE = 'cron-collision-history.jsonl';
+
+/**
+ * Append one collision-detector run to an analytics dir's
+ * `cron-collision-history.jsonl`, pruning entries older than the retention
+ * window in the same pass (idempotent prune-on-write). NDJSON for append-
+ * friendly + greppable. Read-filter-rewrite rather than raw append because the
+ * prune step must drop stale lines; the file is bounded (one entry per metrics
+ * run within the window) so the rewrite cost is negligible.
+ *
+ * No dedup: appending the same minute twice yields two lines (dedup is the
+ * caller's job — see SYS-CRON-STAMPEDE-DETECTOR-02 spec). Malformed pre-existing
+ * lines are skipped, not thrown on.
+ */
+function appendCollisionHistoryFile(
+  filePath: string,
+  entry: CronCollisionHistoryEntry,
+  retentionMs: number,
+  now: number,
+): void {
+  const kept: string[] = [];
+  if (existsSync(filePath)) {
+    let raw = '';
+    try { raw = readFileSync(filePath, 'utf-8'); } catch { raw = ''; }
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: { collected_at?: unknown };
+      try { parsed = JSON.parse(trimmed); } catch { continue; }   // skip malformed
+      const t = typeof parsed.collected_at === 'string' ? Date.parse(parsed.collected_at) : NaN;
+      if (!Number.isFinite(t)) continue;                          // undated → drop
+      if (now - t > retentionMs) continue;                        // outside retention → prune
+      kept.push(trimmed);
+    }
+  }
+  kept.push(JSON.stringify(entry));
+  ensureDir(dirname(filePath));
+  atomicWriteSync(filePath, kept.join('\n') + '\n');
+}
+
+/**
+ * Persist a collision-detector run to the cron-collision-history NDJSON log(s).
+ * Writes to `<org>/analytics/` when org-scoped and always mirrors to the root
+ * `analytics/` (parity with the latest.json report fan-out) so theta-wave's
+ * fleet-level consumer has a single greppable source.
+ */
+export function appendCollisionHistory(
+  ctxRoot: string,
+  detector: CronCollisionDetector,
+  org?: string,
+  opts: CollisionHistoryOptions = {},
+): void {
+  const now = opts.now ?? Date.now();
+  const retentionMs = (opts.retentionDays ?? 30) * 86_400_000;
+  const entry: CronCollisionHistoryEntry = {
+    collected_at: detector.collected_at,
+    source: 'collectMetrics',
+    top_buckets: detector.top_buckets,
+    per_agent_stampedes: detector.per_agent_stampedes,
+    anomalies: detector.anomalies,
+  };
+
+  const orgBase = org ? join(ctxRoot, 'orgs', org) : ctxRoot;
+  appendCollisionHistoryFile(join(orgBase, 'analytics', COLLISION_HISTORY_FILE), entry, retentionMs, now);
+  if (org) {
+    appendCollisionHistoryFile(join(ctxRoot, 'analytics', COLLISION_HISTORY_FILE), entry, retentionMs, now);
+  }
+}
+
+/**
+ * Load persisted collision-history entries from the root analytics log for
+ * theta-wave correlation. Skips malformed lines (resilience). `sinceMs` is an
+ * absolute epoch-ms lower bound — entries with `collected_at >= sinceMs` are
+ * returned, oldest first (file/append order).
+ */
+export function loadCollisionHistory(
+  ctxRoot: string,
+  opts: { sinceMs?: number } = {},
+): CronCollisionHistoryEntry[] {
+  const filePath = join(ctxRoot, 'analytics', COLLISION_HISTORY_FILE);
+  if (!existsSync(filePath)) return [];
+  let raw = '';
+  try { raw = readFileSync(filePath, 'utf-8'); } catch { return []; }
+
+  const out: CronCollisionHistoryEntry[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let parsed: CronCollisionHistoryEntry;
+    try { parsed = JSON.parse(trimmed); } catch { continue; }     // skip malformed
+    if (typeof parsed.collected_at !== 'string') continue;
+    if (opts.sinceMs !== undefined) {
+      const t = Date.parse(parsed.collected_at);
+      if (!Number.isFinite(t) || t < opts.sinceMs) continue;
+    }
+    out.push(parsed);
+  }
+  return out;
+}
+
 export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
   const timestamp = new Date().toISOString();
   const today = timestamp.split('T')[0];
+  const now = Date.now();
 
   const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
   let agentNames: string[] = [];
@@ -114,42 +627,80 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
   let agentsHealthy = 0;
   const agentsTotal = agentNames.length;
 
-  // Gather task directories
+  // Scope task aggregation to the caller's org context. Walking root + every
+  // org's tasks dir conflates unrelated agent populations: a phytomedic-org
+  // `product-owner` lookup would include the 56 mis-routed default-pool
+  // tasks plus any other org's `product-owner` queue, so `tasks_pending`
+  // came back ~57 when `list-tasks --agent product-owner --status pending`
+  // (single-dir, listTasks semantics) returned 1. Match listTasks here:
+  // when org is set, look only at <ctxRoot>/orgs/<org>/tasks; otherwise
+  // look only at <ctxRoot>/tasks. Cross-org rollups belong in a separate
+  // explicit aggregator, not in per-agent metrics.
   const taskDirs: string[] = [];
-  const tasksDir = join(ctxRoot, 'tasks');
-  if (existsSync(tasksDir)) taskDirs.push(tasksDir);
-  // Org-scoped tasks
   const orgsDir = join(ctxRoot, 'orgs');
-  if (existsSync(orgsDir)) {
+  if (org) {
+    const orgTasks = join(orgsDir, org, 'tasks');
+    if (existsSync(orgTasks)) taskDirs.push(orgTasks);
+  } else {
+    const tasksDir = join(ctxRoot, 'tasks');
+    if (existsSync(tasksDir)) taskDirs.push(tasksDir);
+  }
+
+  // Single-pass: load every task once into memory. 1k+ tasks × 10+ agents ran
+  // the previous nested loop at O(tasks × agents) reads; preloading collapses
+  // it to O(tasks). Status/created_by parsing happens per-task once.
+  const allTasks: TaskRecord[] = [];
+  for (const taskDir of taskDirs) {
     try {
-      for (const orgEntry of readdirSync(orgsDir, { withFileTypes: true })) {
-        if (orgEntry.isDirectory()) {
-          const orgTasks = join(orgsDir, orgEntry.name, 'tasks');
-          if (existsSync(orgTasks)) taskDirs.push(orgTasks);
-        }
+      for (const file of readdirSync(taskDir)) {
+        if (!file.endsWith('.json')) continue;
+        try {
+          allTasks.push(JSON.parse(readFileSync(join(taskDir, file), 'utf-8')) as TaskRecord);
+        } catch { /* skip bad files */ }
       }
-    } catch { /* ignore */ }
+    } catch { /* skip bad dirs */ }
   }
 
   for (const agent of agentNames) {
+    const roleConfig = resolveRoleConfig(ctxRoot, agent, org);
     let completed = 0, pending = 0, inProgress = 0;
+    let authoredTotal = 0, pendingDispatch = 0;
+    const pendingDispatchAges: number[] = [];
+    // Bundle-prefix → 1 effort unit; non-bracketed in_progress tasks each
+    // count standalone. effective_wip = bundles.size + standaloneInProgress.
+    const inProgressBundles = new Set<string>();
+    let inProgressStandalone = 0;
 
-    // Count tasks by status
-    for (const taskDir of taskDirs) {
-      try {
-        for (const file of readdirSync(taskDir)) {
-          if (!file.endsWith('.json')) continue;
-          try {
-            const task = JSON.parse(readFileSync(join(taskDir, file), 'utf-8'));
-            if (task.assigned_to !== agent) continue;
-            switch (task.status) {
-              case 'completed': completed++; break;
-              case 'pending': pending++; break;
-              case 'in_progress': inProgress++; break;
-            }
-          } catch { /* skip bad files */ }
+    for (const task of allTasks) {
+      // Archived tasks are excluded from listTasks (src/bus/task.ts), so
+      // counting them here would make `tasks_pending` drift above the live
+      // workload visible to the agent. Mirror listTasks: skip archived.
+      if (task.archived) continue;
+      if (task.assigned_to === agent) {
+        switch (task.status) {
+          case 'completed': completed++; break;
+          case 'pending': pending++; break;
+          case 'in_progress': {
+            inProgress++;
+            const key = bundleKey(task.title);
+            if (key) inProgressBundles.add(key);
+            else inProgressStandalone++;
+            break;
+          }
         }
-      } catch { /* skip bad dirs */ }
+      }
+      if (task.created_by === agent) {
+        authoredTotal++;
+        // "pending dispatch" = author still owns it (unassigned OR self-assigned)
+        const selfOrUnassigned = !task.assigned_to || task.assigned_to === agent;
+        if (task.status === 'pending' && selfOrUnassigned) {
+          pendingDispatch++;
+          if (task.created_at) {
+            const t = Date.parse(task.created_at);
+            if (!Number.isNaN(t)) pendingDispatchAges.push(now - t);
+          }
+        }
+      }
     }
     totalCompleted += completed;
 
@@ -185,7 +736,7 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
         const hb = JSON.parse(readFileSync(hbFile, 'utf-8'));
         if (hb.last_heartbeat) {
           const hbTime = new Date(hb.last_heartbeat).getTime();
-          const age = Date.now() - hbTime;
+          const age = now - hbTime;
           if (age < 5 * 60 * 60 * 1000) {
             heartbeatStale = false;
             agentsHealthy++;
@@ -194,27 +745,76 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       } catch { /* stale by default */ }
     }
 
+    // Compute bundle-group max for WIP-cap suppression.
+    // Group in-progress tasks by bundle_id if present, else by logicalPrefix(title).
+    // Tasks with no title AND no bundle_id get a unique key so they never
+    // inflate a bundle group — absence of a title is not a coherence signal.
+    const bundleGroups = new Map<string, number>();
+    let untitledIdx = 0;
+    for (const task of allTasks) {
+      if (task.archived || task.assigned_to !== agent || task.status !== 'in_progress') continue;
+      let key: string;
+      if (task.bundle_id) {
+        key = task.bundle_id;
+      } else {
+        const prefix = logicalPrefix(task.title ?? '');
+        key = prefix.length > 0 ? prefix : `__untitled_${untitledIdx++}`;
+      }
+      bundleGroups.set(key, (bundleGroups.get(key) ?? 0) + 1);
+    }
+    const inProgressBundleMax = bundleGroups.size === 0 ? 0 : Math.max(...bundleGroups.values());
+
+    const denom = completed + pending;
+    const assignee: AssigneeMetrics = {
+      completed,
+      pending,
+      in_progress: inProgress,
+      in_progress_effective: inProgressBundles.size + inProgressStandalone,
+      completion_ratio: denom === 0 ? null : completed / denom,
+      in_progress_bundle_max: inProgressBundleMax,
+    };
+    const authoring: AuthoringMetrics = {
+      authored_total: authoredTotal,
+      pending_dispatch: pendingDispatch,
+      pending_dispatch_age_p50_ms: percentile(pendingDispatchAges, 50),
+      pending_dispatch_age_p95_ms: percentile(pendingDispatchAges, 95),
+    };
+    const inbox: InboxTriageMetrics = {
+      requests_today: roleConfig.role_type === 'inbox-triage' ? countInboxRequests(eventPaths) : 0,
+      response_p50_ms: null,
+      classification_accuracy: null,
+    };
+    const anomalies = detectAnomalies(roleConfig, { assignee, authoring, inbox_triage: inbox });
+
     agents[agent] = {
       tasks_completed: completed,
       tasks_pending: pending,
       tasks_in_progress: inProgress,
       errors_today: errorsToday,
       heartbeat_stale: heartbeatStale,
+      role: {
+        role_type: roleConfig.role_type,
+        primary_kpi: roleConfig.primary_kpi,
+        assignee,
+        authoring,
+        inbox_triage: inbox,
+        anomalies,
+      },
     };
   }
 
-  // Count pending approvals
+  // Count pending approvals — same org-scoping rationale as taskDirs above.
+  // Cross-org approval rollups would inflate `approvals_pending` for a
+  // single-org report. Use the org's approvals dir when org is set, the
+  // root one otherwise.
   let approvalsPending = 0;
-  const approvalPaths = [join(ctxRoot, 'approvals', 'pending')];
-  if (existsSync(orgsDir)) {
-    try {
-      for (const orgEntry of readdirSync(orgsDir, { withFileTypes: true })) {
-        if (orgEntry.isDirectory()) {
-          const p = join(orgsDir, orgEntry.name, 'approvals', 'pending');
-          if (existsSync(p)) approvalPaths.push(p);
-        }
-      }
-    } catch { /* ignore */ }
+  const approvalPaths: string[] = [];
+  if (org) {
+    const p = join(orgsDir, org, 'approvals', 'pending');
+    if (existsSync(p)) approvalPaths.push(p);
+  } else {
+    const p = join(ctxRoot, 'approvals', 'pending');
+    if (existsSync(p)) approvalPaths.push(p);
   }
   for (const apDir of approvalPaths) {
     if (existsSync(apDir)) {
@@ -223,6 +823,18 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       } catch { /* ignore */ }
     }
   }
+
+  // Fleet-wide cron-collision detector reads state/ directly (not org-scoped:
+  // agent state directories are shared across org reports). The 2026-06-14
+  // xx:40Z silent-stop incident motivated this — 9 simultaneous cron fires
+  // on a single agent at the xx:40 boundary stalled it for ~7 minutes with
+  // no metric surfacing the collision.
+  const cronCollisionDetector = detectCronCollisions(ctxRoot, { now });
+
+  // Persist a slim history record so theta-wave can correlate stampede
+  // signatures across days (SYS-CRON-STAMPEDE-DETECTOR-02). Prune-on-write is
+  // idempotent; uses the same `now` as the detector for a consistent window.
+  appendCollisionHistory(ctxRoot, cronCollisionDetector, org, { now });
 
   const report: MetricsReport = {
     timestamp,
@@ -233,6 +845,7 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       agents_total: agentsTotal,
       approvals_pending: approvalsPending,
     },
+    cron_collision_detector: cronCollisionDetector,
   };
 
   // Write to analytics reports

@@ -1,0 +1,10 @@
+{"ts": 1779146651272, "type": "gate_clear", "pr": 780, "sha": "1cd30285", "score": "4/5", "reviews": 2, "routed_to": "cortextos-improver"}
+{"ts": 1779146651272, "type": "gate_clear", "pr": 771, "sha": "920f19bc", "score": "5/5", "reviews": 3, "routed_to": "cortextos-improver"}
+{"ts": 1779146651272, "type": "gate_clear", "pr": 772, "sha": "65a0a369", "score": "4/5", "reviews": 3, "routed_to": "cortextos-improver"}
+{"ts": 1779147041448, "type": "billing_watchdog", "gh_cache_count": 11, "gh_cache_gb": 2.75, "gh_cache_limit_gb": 10, "gh_cache_pct": 27.5, "gh_minutes": "SKIP_404", "openai_usage": "SKIP_403_no_org_perm", "vercel_prod_state": "BUILDING", "vercel_usage": "SKIP_400", "convex_deploy_key": "MISSING"}
+{"ts": 1779147041448, "type": "ci_scan", "prs_scanned": 10, "real_fails": [{"pr": 795, "check": "Convex Codegen Drift", "author": "syntasticstudios"}, {"pr": 781, "check": "ux-lint UX-05 price-without-unit 8hits"}, {"pr": 782, "check": "Verify screenshot evidence"}, {"pr": 770, "check": "check+screenshot", "hold": "nighttime"}, {"pr": 769, "check": "check+screenshot+UT", "hold": "nighttime"}, {"pr": 768, "check": "check+screenshot", "hold": "nighttime"}], "gate_clear": [{"pr": 787, "score": "5/5", "sha": "00353b60"}]}
+{"ts": 1779147041448, "type": "convex_perf", "getPublicProducts": {"p50": 327.9, "p95": 328.3}, "getPublicOffersByProduct": {"p50": 171.3, "p95": 392.0}, "getPublicKpis": {"p50": 326.9, "p95": 396.9}, "status": "GREEN"}
+{"ts": 1779147041448, "type": "vercel_status", "prod_latest": {"state": "BUILDING", "commit": "fix-772", "sha": "71f6601b"}, "prod_prev": "READY", "preview_building": "feat/core-cart-03 dd50a824", "status": "OK"}
+{"ts":"2026-05-19T07:29:59Z","type":"vercel_status","sha":"e2c6a8bd","state":"READY","target":"production","smoke":"success","status":"GREEN"}
+{"ts":"2026-05-19T07:43:32Z","type":"gate_clear","pr":802,"sha":"e1ec661d","greptile":"4/5","ci":"ALL_GREEN","status":"GATE-CLEAR"}
+{"ts":"2026-05-19T07:47:20Z","type":"vercel_status","sha":"6f473129","state":"READY","target":"production","smoke":"success","status":"GREEN"}

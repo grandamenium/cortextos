@@ -1,0 +1,134 @@
+{
+  "agent_name": "cortextos-improver",
+  "enabled": true,
+  "startup_delay": 30,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 20,
+  "restart_priority": 7,
+  "schedule": "always",
+  "working_directory": "",
+  "timezone": "Europe/Berlin",
+  "day_mode_start": "08:00",
+  "day_mode_end": "20:00",
+  "communication_style": "Quiet, methodical, data-driven. Reports through platform-director, not own Telegram channel. Output goes into tests/quality/, templates/, agent GUARDRAILS, memory/. Writes weekly digest summarizing trend metrics.",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  },
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "cron",
+      "cron": "10 */4 * * *",
+      "prompt": "Read HEARTBEAT.md. Update your heartbeat, check inbox, log session_alive event. Quick scan: any unacknowledged inbox? Any cron in CronList that's NOT in config.json (orphan)? Quick fix or note. End: cortextos bus update-cron-fire heartbeat --interval 240."
+    },
+    {
+      "name": "upstream-watch",
+      "type": "cron",
+      "cron": "35 */4 * * *",
+      "prompt": "DEDUP CHECK (MANDATORY FIRST — before any notify): NOTIFIED=$(cat /Users/arndt/cortextos/orgs/phytomedic/agents/platform-director/memory/upstream-notified.json 2>/dev/null). SKIP_SHAS=$(echo \"$NOTIFIED\" | python3 -c \"import json,sys; d=json.load(sys.stdin); print(' '.join(d.get('skip_shas',[]) + [d.get('last_notified_sha','')]  ))\"). UPSTREAM_TIP=$(git rev-list upstream/main -1 --abbrev-commit). If UPSTREAM_TIP is in SKIP_SHAS: log 'upstream-watch: tip $UPSTREAM_TIP already-notified/skipped — exit' and exit 0. Only proceed with classification and notify if SHA is genuinely new.\n\ncd /Users/arndt/cortextos && git fetch upstream --quiet. Count pending: PENDING=$(git rev-list --count origin/main..upstream/main). If PENDING > 0: classify each commit (fix/feat/breaking) via 'git log origin/main..upstream/main --pretty=format:%h|%s'. AUTO-MERGE all fix(...) into main: git checkout main && git merge upstream/main --no-edit (resolve trivial conflicts, abort + escalate complex). Run npm run build && npm test before push. After merge: pm2 restart cortextos-daemon. For feat(...) and BREAKING: send Telegram digest via platform-director with summary + GitHub link, do NOT auto-merge. Save state to memory/upstream-state.json including last-applied SHA. Read .claude/skills/upstream-issue-tracker/SKILL.md and refresh memory/tracked-upstream-issues.md.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire upstream-watch --interval 240"
+    },
+    {
+      "name": "cortextos-src-watch",
+      "type": "cron",
+      "cron": "3,13,23,33,43,53 * * * *",
+      "prompt": "Check if cortextos dist is stale vs origin/main. Run: bash $CTX_FRAMEWORK_ROOT/scripts/self-healing/cortextos-src-watch.sh 2>&1 | tail -3. Then: cortextos bus update-cron-fire cortextos-src-watch --interval 10"
+    },
+    {
+      "name": "cron-drift-watchdog",
+      "type": "cron",
+      "cron": "28 * * * *",
+      "prompt": "Workaround for upstream issue #271. For every enabled agent (read cortextos bus list-agents --format json): read $CTX_ROOT/state/<agent>/cron-state.json (NOT IPC — IPC CronList is unreliable). Compare crons[] array against agent's config.json crons[]. For each cron, calculate drift = last_fire_age - interval. SUPPRESS alert if: (1) drift <= 0 (last_fire age < cron interval — not actually overdue); (2) cron name contains 'heartbeat' AND list-agents last_heartbeat < 15min (agent alive, cron-state field lags). Only alert when drift > 60min AND neither suppression applies. Send urgent via platform-director with agent + cron name. Per-cron cooldown 6h (read/write $CTX_ROOT/state/cortextos-improver/drift-cooldowns.json). Log to memory/cron-drift-log.jsonl. IMPORTANT: never run multiple update-cron-fire calls with & — race condition corrupts cron-state.json. \n\nIPC CROSS-CHECK (required before alerting): For any cron showing last_fire_age > interval in cron-state.json, verify via 'cortextos bus list-crons <agent>' that the daemon IPC also shows no recent fire. If daemon IPC shows last_fired within expected interval = recording gap, NOT a genuine miss — suppress alert.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire cron-drift-watchdog --interval 15"
+    },
+    {
+      "name": "agent-behavior-audit",
+      "type": "recurring",
+      "cron": "7 3 * * *",
+      "prompt": "Daily 03:00 audit. For each of 6 agents: read last 24h stdout (tail -2000 of stdout.log), heartbeats, completed tasks, crashes.log, restarts.log. Detect: (a) token-waste loops (same prompt repeating >3 times in stdout), (b) crons that fired but produced no work output (no message-sent, no task-completed), (c) tasks completed WITHOUT VERIFIED-block in result, (d) agents that didn't read mandatory skills (think-before-implementing) before code-touching tasks. File one improvement-task per finding via cortextos bus create-task '[IMPROVE-<agent>-<NN>] <title>' --assignee platform-director --priority normal. Heartbeat: 'audit complete, X findings filed'.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire agent-behavior-audit --interval 1440"
+    },
+    {
+      "name": "coding-standards-realtime-poll",
+      "type": "cron",
+      "cron": "20 */2 * * *",
+      "prompt": "REAL-TIME mining (every 15 min). MANDATORY FIRST STEP: cortextos bus update-cron-fire coding-standards-realtime-poll --interval 15. LATEST=$(gh pr list --repo syntasticstudios/phytomedic-saas --state all --limit 1 --json number --jq '.[0].number'). LAST=$(cat /Users/arndt/phytomedic-saas/tests/quality/.last-mined-pr 2>/dev/null || echo 0). If LATEST==LAST: heartbeat 'no new PRs' and exit. Otherwise mine PRs LAST+1..LATEST (gh pr view X --json comments,reviews → tests/quality/greptile-cache/pr-X.json). Run pattern detection (28 signatures from coding-standards-curator SKILL Step 2). For any new P0 OR P1 finding even at count=1 with production-visibility-criteria (browser-visible defect, data-loss, security): graduate IMMEDIATELY — do not wait for count >= 3. Then run SKILL Steps 5.1-5.4 'Proactive Distribute': update CODING_STANDARDS.md + agent GUARDRAILS row + PR template checkbox + lint-rules.yaml. BEFORE committing (MANDATORY — never skip): Step Y: rg --type ts -U '<pattern>' /Users/arndt/phytomedic-saas/convex/ for EVERY new lint rule — if 0 matches abort graduation, log to memory/skipped-patterns.md. Step Z: git diff --name-only --staged | grep -vE 'tests/quality/|\\.github/PULL_REQUEST_TEMPLATE\\.md|GUARDRAILS\\.md' — if any output ABORT and split into 2 PRs. After commit+push+PR: wait for Greptile review. If Greptile confidence < 4/5: NEVER auto-merge, file fix iteration. Only merge when confidence >= 4/5 AND CI green. Update last-mined-pr=$LATEST. Heartbeat: 'real-time poll: N new PRs, M new graduates, K regressions'."
+    },
+    {
+      "name": "coding-standards-weekly",
+      "type": "recurring",
+      "cron": "44 14 * * 0",
+      "prompt": "Sunday 14:00. Read .claude/skills/coding-standards-curator/SKILL.md and execute the FULL re-cluster cycle (not just incremental). Re-walk all 28 pattern signatures against entire greptile-cache/. Detect: regressions (rule exists, pattern reappears), fading patterns (rule active, no new violations 4 weeks). Send weekly digest via platform-director with iteration-rate trend (target <1.5). Re-distribute to GUARDRAILS + PR template if anything changed.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire coding-standards-weekly --interval 10080"
+    },
+    {
+      "name": "skill-system-steward",
+      "type": "recurring",
+      "cron": "7 16 * * 0",
+      "prompt": "Sunday 16:00. Walk orgs/*/agents/*/.claude/skills/ for all agents. Find duplicates (>50% content overlap via diff) → consolidate to orgs/<org>/shared/skills/ + symlink. Find skills referenced in GUARDRAILS but not present in agent dir. Find skills not referenced anywhere (dead). Update CLAUDE.md skill references. Propose new skills via memory/skill-proposals.md based on agent-behavior-audit patterns. Telegram digest via platform-director.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire skill-system-steward --interval 10080"
+    },
+    {
+      "name": "telegram-dx-audit",
+      "type": "recurring",
+      "cron": "11 17 * * 0",
+      "prompt": "Sunday 17:00. Sample 50 random agent→user Telegram messages from last week (read each agent's outbound-messages.jsonl). Score each: signal-to-noise (1-5), German-quality (1-5), escalation-correctness (urgent vs nice-to-have). Flag noisy agents (>20 messages in low-priority topics). Suggest digest-rollups for chatty patterns. Send recommendations as task to platform-director: '[DX-<NN>] consolidate <agent>'s X messages of type Y into daily digest'.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire telegram-dx-audit --interval 10080"
+    },
+    {
+      "name": "weekly-performance-report",
+      "type": "cron",
+      "cron": "46 19 * * 0",
+      "prompt": "Sunday 19:00. Compile weekly digest: (1) total token cost per agent (read .cortextos analytics/cost.json if exists, else estimate from PM2 + Anthropic billing), (2) tasks-per-token efficiency, (3) prod LCP/CWV trend (Vercel Analytics API if accessible, else skip), (4) error-budget burn-rate, (5) Greptile iteration rate change-week-over-week, (6) cron-drift incidents this week. SECTION 7 — REPEAT BUGS: read memory/repeat-bugs.md, list each bug closed >1x this week with count + last-closure date + root-cause summary from post-mortem if exists. SECTION 8 — TWO-TRACK EVIDENCE COVERAGE: Read latest memory/agent-scorecards/*.jsonl (most recent date). Report per-agent: UI-track rate (screenshot required, frontend/product-owner only) and non-UI-track rate (VERIFIED-block required, all agents). Flag agents where UI-rate < 80% (>=3 UI tasks in period) or non-UI-rate < 80% (>=3 non-UI tasks). DO NOT count non-UI backend tasks in the screenshot denominator — that inflates the deficit and is not a quality signal. If no scorecard file for today exists: run the scorecard from .claude/skills/agent-scorecard/SKILL.md first, then report. Send via platform-director Telegram with 2-3 specific optimization recommendations + expected $-impact. Save report to memory/performance-report-YYYY-Wnn.md.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire weekly-performance-report --interval 10080"
+    },
+    {
+      "name": "agent-scorecard",
+      "type": "recurring",
+      "cron": "12 6 * * *",
+      "prompt": "Read .claude/skills/agent-scorecard/SKILL.md and run the full scorecard computation. mkdir -p memory/agent-scorecards. Save results to memory/agent-scorecards/$(date -u +%Y-%m-%d).jsonl. Alert via platform-director if any agent is below 80% verified-rate over 7 days with list of last 5 violations per agent.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire agent-scorecard --interval 1440"
+    },
+    {
+      "name": "pr-verification-watchdog",
+      "type": "recurring",
+      "cron": "5 * * * *",
+      "prompt": "Read .claude/skills/pr-verification-watchdog/SKILL.md and run the full watchdog. List open PRs with needs-verification label (gh pr list --label needs-verification --state open --repo syntasticstudios/phytomedic-saas). For each: if no [AUTO-VERIFY] task exists in task list, create one for frontend-dev with steps (gh pr checkout N, open Vercel preview URL from checks, playwright screenshot, embed in PR body + VERIFIED block). Send send-message to frontend-dev high with SLA. If [AUTO-VERIFY] task exists >1h with no resolution: send-message platform-director for escalation. Log results to daily memory.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire pr-verification-watchdog --interval 60"
+    },
+    {
+      "name": "daily-vault-log",
+      "type": "recurring",
+      "cron": "4 18 * * *",
+      "prompt": "MEMORY-02 daily vault log (19:00 Europe/Berlin = 18:00 UTC). DATE=$(date -u +%Y-%m-%d). AGENT=cortextos-improver. VAULT=/Users/arndt/cortextos/obsidian-vault/$AGENT/daily/$DATE.md. (1) Read last 24h bus events: cortextos bus list-tasks --format json | python3 -c \"import sys,json,datetime; tasks=json.load(sys.stdin); cutoff=datetime.datetime.utcnow().timestamp()-86400; done=[t for t in tasks if t.get('status')=='completed' and t.get('updated_at',0)/1000>cutoff]; prog=[t for t in tasks if t.get('status')=='in_progress']; print('DONE:', len(done)); [print(' -', t.get('subject','?')[:60]) for t in done[:10]]; print('IN_PROGRESS:', len(prog)); [print(' -', t.get('subject','?')[:60]) for t in prog[:5]]\". (2) Tail today's relevant stdout: tail -100 ~/.cortextos/default/logs/$AGENT/stdout.log 2>/dev/null | grep -E 'COMPLETED|MERGED|graduated|ERROR|GUARDRAIL' | tail -20. (3) Write/append summary to $VAULT with sections: ## Summary, ## Tasks Completed, ## In Progress, ## PRs Merged, ## Mistakes Today (from mistakes.md if new entries), ## Tomorrow. (4) Cross-reference other agents who worked on same PRs: mention in '## Related' section. (5) Update working-context.md with tomorrow's priorities. cortextos bus log-event action cron_completed info --meta '{\"cron\":\"daily-vault-log\",\"agent\":\"cortextos-improver\"}'.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire daily-vault-log --interval 1440"
+    },
+    {
+      "name": "vault-task-reconcile",
+      "type": "cron",
+      "cron": "2,17,32,47 * * * *",
+      "prompt": "MEMORY-07 vault task reconciliation. MANDATORY FIRST STEP: cortextos bus update-cron-fire vault-task-reconcile --interval 15. Then: cortextos bus list-tasks --format json | python3 -c \"import sys,json,os,re; from pathlib import Path; from datetime import datetime; tasks=json.load(sys.stdin); vault=Path('/Users/arndt/cortextos/obsidian-vault'); today=datetime.utcnow().strftime('%Y-%m-%d'); folder_map={'pending':'open','in_progress':'in-progress','completed':'completed','cancelled':'completed'}; count=0; [(Path(vault/t.get('assigned_to','unassigned')/'tasks'/folder_map.get(t.get('status','pending'),'open')).mkdir(parents=True,exist_ok=True)) or count+1 for t in tasks]; print(f'vault-task-reconcile: {len(tasks)} tasks checked')\" 2>/dev/null; cortextos bus log-event action cron_completed info --meta '{\"cron\":\"vault-task-reconcile\",\"agent\":\"cortextos-improver\"}';"
+    },
+    {
+      "name": "human-task-pulse",
+      "type": "recurring",
+      "cron": "14 */6 * * *",
+      "prompt": "Read .claude/skills/human-task-pulse/SKILL.md and run the full pulse. List pending HUMAN tasks (title contains [HUMAN] or project=human-tasks). For each: calculate age. Probe service: Yousign → check YOUSIGN_ENV=production in Convex env; Cannaflow/merchant → check CANNAFLOW_PLATFORM_API_KEY set + curl Cannaflow API returns 200; Clerk → check CLERK_SECRET_KEY is non-test; Vercel/deploy → check latest CI conclusion=success. If probe passes: auto-complete task with result. If probe fails and age >7d: send-message platform-director escalation with age + task ID + reason still blocked. If age >30d: also send-telegram $CTX_TELEGRAM_CHAT_ID urgent notice. Write pulse summary to daily memory.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire human-task-pulse --interval 360"
+    },
+    {
+      "name": "fleet-cascade-sync",
+      "type": "recurring",
+      "cron": "41 7 * * *",
+      "prompt": "Read .claude/skills/fleet-cascade-sync/SKILL.md and execute the full algorithm. Cascade-eligible commits are pure cross-cutting quality/process changes (.github/PULL_REQUEST_TEMPLATE.md, tests/quality/CODING_STANDARDS.md, tests/quality/lint-rules.yaml) that all open claude/* branches should carry. Steps: (1) cortextos bus update-cron-fire fleet-cascade-sync --interval 1440. (2) Fetch origin. (3) Find cascade-eligible commits on main last 7 days (pure cascade files only — no functional code). (4) For each open claude/* branch: check if cascade commit is already an ancestor (git merge-base --is-ancestor). (5) Missing pairs: attempt cherry-pick in isolated worktree. (6) Clean cherry-pick: push cascade/<sha>/<branch> + gh pr create --base <branch> --label no-ui-change. (7) Conflict: create cortextos task '[CASCADE] cherry-pick <sha> into <branch> — manual needed' with git command. (8) Track all pairs in memory/cascade-state.json (idempotent). Max 5 PRs per run. (9) Update heartbeat with summary. MANDATORY LAST STEP: cortextos bus update-cron-fire fleet-cascade-sync --interval 1440."
+    },
+    {
+      "name": "weekly-stale-cleanup",
+      "type": "cron",
+      "cron": "18 19 * * 0",
+      "prompt": "Weekly stale-task cleanup (Sunday 19:00 UTC, approved 2026-06-07).\n\nSTEP 1: Find NORMAL-priority pending tasks >21d without update:\ncortextos bus list-tasks --format json | python3 -c \"\nimport json,sys,collections\nfrom datetime import datetime\ntasks=json.load(sys.stdin)\nimport subprocess,datetime as dt\ncutoff=(dt.datetime.utcnow()-dt.timedelta(days=21)).strftime('%Y-%m-%d')\nstale=[t for t in tasks if t.get('status')=='pending' and t.get('priority','normal')=='normal' and str(t.get('updated_at',t.get('created_at','')))[:10] < cutoff]\nprint(f'STALE_COUNT={len(stale)}')\"\n\nSTEP 2: For each stale task, dedup-check against completed/cancelled siblings:\n- Strip [TAG] prefixes from title (regex: r'^\\[[^\\]]+\\]\\s*')\n- Case-insensitive match against completed/cancelled task titles\n- If match found: archive_reason = 'DUPLICATE_OF=<matching_task_id>'\n- If no match: archive_reason = 'STALE_NORMAL_>21D'\n\nSTEP 3: Generate dry-run list grouped by agent with titles + reasons. Send to platform-director for review:\ncortextos bus send-message platform-director normal '<dry-run list>'\n\nSTEP 4: Wait 24h. Check inbox for override. If no override, archive each task:\n- Edit task JSON: status=archived, archived=true, result='ARCHIVED: <reason> by weekly-stale-cleanup <date>'\n\nSTEP 5: Log counts:\ncortextos bus log-event action stale_cleanup info --meta '{\"dry_run_count\":N,\"archived\":M,\"duplicates_found\":K,\"week\":\"YYYY-WNN\"}'\ncortextos bus update-cron-fire weekly-stale-cleanup --interval 10080."
+    }
+  ],
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    },
+    "upstream_sync": {
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>CTX_FRAMEWORK_ROOT</key>
+		<string>/Users/arndt/cortextos/.claude/worktrees/objective-mclaren</string>
+		<key>CTX_INSTANCE_ID</key>
+		<string>default</string>
+		<key>CTX_ORG</key>
+		<string>phytomedic</string>
+		<key>CTX_ROOT</key>
+		<string>/Users/arndt/.cortextos/default</string>
+		<key>DISPATCH_CAP_BA</key>
+		<string>45</string>
+		<key>DISPATCH_CAP_FE</key>
+		<string>30</string>
+		<key>HOME</key>
+		<string>/Users/arndt</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>Label</key>
+	<string>com.cortextos.dispatch-marker</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/arndt/.cortextos/default/scripts/dispatch-marker.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/arndt/.cortextos/default/logs/dispatch-marker.stderr.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/arndt/.cortextos/default/logs/dispatch-marker.stdout.log</string>
+	<key>StartInterval</key>
+	<integer>300</integer>
+</dict>
+</plist>

@@ -1,0 +1,25 @@
+{
+  "last_checked": "2026-05-30T21:40Z",
+  "pending_fix_conflicts": [
+    {
+      "sha": "ca3f521",
+      "subject": "fix(cli): validate org name in init and add-agent --org (#407) (#548)",
+      "conflict_file": "src/cli/add-agent.ts",
+      "status": "skipped_conflict"
+    },
+    {
+      "sha": "a89cee2",
+      "subject": "fix(daemon): audit silent-failure class — BOM, PATH-unaware execFile, supervision gaps (#459) (#556)",
+      "conflict_files": ["src/daemon/agent-manager.ts", "src/telegram/poller.ts"],
+      "status": "skipped_conflict",
+      "note": "touches core daemon files, needs careful merge"
+    }
+  ],
+  "pending_feats": [
+    {"sha": "8db2edb", "subject": "feat(telegram): add CTX_WHISPER_LANG env", "status": "queued_for_approval"},
+    {"sha": "5c10d4c", "subject": "feat(telegram): multi-user ALLOWED_USER", "status": "queued_for_approval"},
+    {"sha": "2932ce7", "subject": "feat(skills): add idea-grooming, business-news-monitor, multi-perspective-grilling", "status": "queued_for_approval"},
+    {"sha": "2ae6356", "subject": "Add research agent community template", "status": "queued_for_approval"}
+  ],
+  "skipped_reverted_pair": ["c3c925c", "7f9d645"]
+}

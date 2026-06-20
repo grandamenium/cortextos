@@ -1,0 +1,138 @@
+- generic [active] [ref=e1]:
+  - link "Zum Hauptinhalt springen" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]:
+        - link "PhytoMedic · Clinic" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e8]: PhytoMedic
+          - generic [ref=e9]: · Clinic
+        - navigation "Hauptnavigation" [ref=e10]:
+          - link "Produkte" [ref=e11] [cursor=pointer]:
+            - /url: /medizin/produkte
+          - link "Sorten" [ref=e12] [cursor=pointer]:
+            - /url: /medizin/sorten
+          - link "Vergleich" [ref=e13] [cursor=pointer]:
+            - /url: /medizin/sorten/vergleich
+          - link "Arzt finden" [ref=e14] [cursor=pointer]:
+            - /url: /medizin/arzt-finden
+          - link "Apotheke finden" [ref=e15] [cursor=pointer]:
+            - /url: /medizin/apotheke-finden
+          - link "Wissen" [ref=e16] [cursor=pointer]:
+            - /url: /wissen
+      - generic [ref=e21]:
+        - heading "Blütenfinder" [level=1] [ref=e22]
+        - paragraph [ref=e23]: Beantworten Sie einige Fragen und erhalten Sie eine personalisierte Sortenempfehlung basierend auf Ihren Beschwerden, Ihrer Erfahrung und Ihren Vorlieben.
+        - generic [ref=e24]:
+          - generic [ref=e25]:
+            - generic [ref=e26]:
+              - generic [ref=e27]: Schritt 1 von 3
+              - generic [ref=e28]: 33%
+            - 'progressbar "Fortschritt: Schritt 1 von 3" [ref=e29]'
+          - generic [ref=e32]:
+            - heading "Welche Beschwerden möchten Sie behandeln?" [level=2] [ref=e33]
+            - paragraph [ref=e34]: Wählen Sie alle zutreffenden Beschwerden aus.
+            - generic [ref=e35]:
+              - button "🔥 Schmerzen" [ref=e36]:
+                - generic [ref=e37]: 🔥
+                - generic [ref=e38]: Schmerzen
+              - button "🌙 Schlafstörungen" [ref=e39]:
+                - generic [ref=e40]: 🌙
+                - generic [ref=e41]: Schlafstörungen
+              - button "😰 Angst / Stress" [ref=e42]:
+                - generic [ref=e43]: 😰
+                - generic [ref=e44]: Angst / Stress
+              - button "🍽️ Appetitmangel" [ref=e45]:
+                - generic [ref=e46]: 🍽️
+                - generic [ref=e47]: Appetitmangel
+              - button "🤢 Übelkeit" [ref=e48]:
+                - generic [ref=e49]: 🤢
+                - generic [ref=e50]: Übelkeit
+              - button "😔 Depression" [ref=e51]:
+                - generic [ref=e52]: 😔
+                - generic [ref=e53]: Depression
+              - button "⚡ ADHS" [ref=e54]:
+                - generic [ref=e55]: ⚡
+                - generic [ref=e56]: ADHS
+              - button "🤕 Migräne" [ref=e57]:
+                - generic [ref=e58]: 🤕
+                - generic [ref=e59]: Migräne
+              - button "💪 Spastik" [ref=e60]:
+                - generic [ref=e61]: 💪
+                - generic [ref=e62]: Spastik
+              - button "🔴 Entzündungen" [ref=e63]:
+                - generic [ref=e64]: 🔴
+                - generic [ref=e65]: Entzündungen
+          - generic [ref=e66]:
+            - button "Weiter" [disabled]
+      - generic [ref=e68]:
+        - generic [ref=e69]:
+          - generic [ref=e70]:
+            - text: PhytoMedic
+            - paragraph [ref=e71]: Medizinisches Cannabis. Einfach. Sicher. Digital.
+          - generic [ref=e72]:
+            - link "LinkedIn" [ref=e73] [cursor=pointer]:
+              - /url: https://linkedin.com
+              - img [ref=e74]
+            - link "Instagram" [ref=e78] [cursor=pointer]:
+              - /url: https://instagram.com
+              - img [ref=e79]
+        - navigation "Footer-Navigation" [ref=e82]:
+          - generic [ref=e83]:
+            - heading "Patienten" [level=4] [ref=e84]
+            - list [ref=e85]:
+              - listitem [ref=e86]:
+                - link "Produktkatalog" [ref=e87] [cursor=pointer]:
+                  - /url: /medizin/produkte
+              - listitem [ref=e88]:
+                - link "Arzt finden" [ref=e89] [cursor=pointer]:
+                  - /url: /medizin/arzt-finden
+              - listitem [ref=e90]:
+                - link "Apotheke finden" [ref=e91] [cursor=pointer]:
+                  - /url: /medizin/apotheke-finden
+              - listitem [ref=e92]:
+                - link "Eignungstest" [ref=e93] [cursor=pointer]:
+                  - /url: /medizin/eignungstest
+          - generic [ref=e94]:
+            - heading "Wissen" [level=4] [ref=e95]
+            - list [ref=e96]:
+              - listitem [ref=e97]:
+                - link "Sorten-Datenbank" [ref=e98] [cursor=pointer]:
+                  - /url: /medizin/sorten
+              - listitem [ref=e99]:
+                - link "Krankheitsbilder" [ref=e100] [cursor=pointer]:
+                  - /url: /krankheiten
+              - listitem [ref=e101]:
+                - link "Ratgeber" [ref=e102] [cursor=pointer]:
+                  - /url: /wissen
+              - listitem [ref=e103]:
+                - link "THC-Rechner" [ref=e104] [cursor=pointer]:
+                  - /url: /medizin/thc-rechner
+          - generic [ref=e105]:
+            - heading "Fachleute" [level=4] [ref=e106]
+            - list [ref=e107]:
+              - listitem [ref=e108]:
+                - link "Online-Rezept" [ref=e109] [cursor=pointer]:
+                  - /url: /medizin/online-rezept
+              - listitem [ref=e110]:
+                - link "Standorte" [ref=e111] [cursor=pointer]:
+                  - /url: /medizin/standorte
+              - listitem [ref=e112]:
+                - link "Registrierung" [ref=e113] [cursor=pointer]:
+                  - /url: /registrieren
+          - generic [ref=e114]:
+            - heading "PhytoMedic" [level=4] [ref=e115]
+            - list [ref=e116]:
+              - listitem [ref=e117]:
+                - link "Impressum" [ref=e118] [cursor=pointer]:
+                  - /url: /impressum
+              - listitem [ref=e119]:
+                - link "Datenschutz" [ref=e120] [cursor=pointer]:
+                  - /url: /datenschutz
+              - listitem [ref=e121]:
+                - link "AGB" [ref=e122] [cursor=pointer]:
+                  - /url: /agb
+        - paragraph [ref=e123]: © 2026 PhytoMedic. Alle Rechte vorbehalten.
+  - region "Notifications alt+T"
+  - alert [ref=e124]

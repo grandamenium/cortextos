@@ -77,6 +77,98 @@ export function updateCronFire(
 }
 
 /**
+ * Default staleness floor for {@link pruneCronState}: an orphaned record (one
+ * whose name is absent from the live cron set) is only pruned once its
+ * `last_fire` is older than this. 14 days comfortably exceeds the firing
+ * interval of every recurring cron in the fleet (the longest are weekly), so a
+ * genuinely-live cron that is transiently missing from the live set — e.g.
+ * config.json updated a beat before crons.json during a manage-cycle injection
+ * — can never be deleted, because its fresh last_fire keeps it under the floor.
+ */
+export const DEFAULT_PRUNE_MIN_STALE_MS = 14 * 86_400_000; // 14 days
+
+export interface PruneCronStateOptions {
+  /**
+   * Minimum age (ms) a record's `last_fire` must exceed before the record is
+   * eligible for pruning. Records younger than this are retained even when
+   * their name is absent from `liveCronNames`. Defaults to
+   * {@link DEFAULT_PRUNE_MIN_STALE_MS}.
+   */
+  minStaleMs?: number;
+}
+
+/**
+ * Remove orphaned entries from cron-state.json — records whose cron no longer
+ * exists in the live cron set AND whose `last_fire` is older than the staleness
+ * floor (see {@link DEFAULT_PRUNE_MIN_STALE_MS}).
+ *
+ * WHY THIS EXISTS (SYS-CRON-STATE-ORPHAN-PRUNE)
+ * --------------------------------------------
+ * {@link updateCronFire} only ever pushes/updates entries — it has no prune
+ * path. When a cron is renamed or removed, its record persists forever with a
+ * stale last_fire, which (1) accumulates unboundedly and (2) produces raw
+ * drift-watchdog false-positives. This restores the missing prune path.
+ *
+ * SAFETY: the union-vs-staleness guard
+ * ------------------------------------
+ * Crons live in three stores (config.json boot source, daemon crons.json live
+ * source, global manage-cycle cycle defs — see reference_fleet_cycle_cron_infra).
+ * crons.json is the authoritative *firing* source: a cron only records to
+ * cron-state.json via `bus update-cron-fire` at the end of a prompt the daemon
+ * dispatched, and the daemon only dispatches crons present in crons.json. So
+ * `liveCronNames` built from crons.json is sufficient in steady state. The
+ * staleness floor is the belt-and-suspenders guard for the transient window
+ * where a cron is being added/migrated and is momentarily in one store but not
+ * crons.json: a live cron fires far more often than the floor, so recency alone
+ * proves liveness regardless of which store currently lists it. Callers should
+ * still pass the widest live set they can cheaply assemble.
+ *
+ * Pure no-op (no disk write) when nothing is pruned, so it is cheap to call on
+ * every scheduler load/reload.
+ *
+ * @param stateDir       - state/<agent> directory holding cron-state.json.
+ * @param liveCronNames  - Names of all currently-defined crons (enabled AND
+ *                         disabled — a disabled cron is still live and keeps
+ *                         its state). Should be the union of every known store.
+ * @param opts           - Optional staleness floor override.
+ * @returns the list of pruned cron names (empty if nothing was removed).
+ */
+export function pruneCronState(
+  stateDir: string,
+  liveCronNames: Iterable<string>,
+  opts: PruneCronStateOptions = {},
+): string[] {
+  const minStaleMs = opts.minStaleMs ?? DEFAULT_PRUNE_MIN_STALE_MS;
+  const live = liveCronNames instanceof Set ? liveCronNames : new Set(liveCronNames);
+  const state = readCronState(stateDir);
+  const now = Date.now();
+
+  const pruned: string[] = [];
+  const kept = state.crons.filter(rec => {
+    if (live.has(rec.name)) return true; // still a live cron — always keep
+    // Orphan candidate: only prune if demonstrably stale, so transient
+    // store-skew on a genuinely-live cron can never delete its state.
+    const fireMs = Date.parse(rec.last_fire);
+    const ageMs = isNaN(fireMs) ? Infinity : now - fireMs;
+    if (ageMs > minStaleMs) {
+      pruned.push(rec.name);
+      return false;
+    }
+    return true;
+  });
+
+  if (pruned.length === 0) return [];
+
+  ensureDir(stateDir);
+  writeFileSync(
+    cronStatePath(stateDir),
+    JSON.stringify({ updated_at: new Date(now).toISOString(), crons: kept }, null, 2) + '\n',
+    'utf-8',
+  );
+  return pruned;
+}
+
+/**
  * Parse an interval string like "6h", "30m", "1d", "2w" into milliseconds.
  * Returns NaN for unrecognised formats (e.g. cron expressions like "0 8 * * *").
  */

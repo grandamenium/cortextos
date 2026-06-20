@@ -1,0 +1,426 @@
+- generic [active] [ref=e1]:
+  - link "Zum Hauptinhalt springen" [ref=e2] [cursor=pointer]:
+    - /url: "#main-content"
+  - main [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]:
+        - link "PhytoMedic · Clinic" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e8]: PhytoMedic
+          - generic [ref=e9]: · Clinic
+        - navigation "Hauptnavigation" [ref=e10]:
+          - link "Produkte" [ref=e11] [cursor=pointer]:
+            - /url: /medizin/produkte
+          - link "Sorten" [ref=e12] [cursor=pointer]:
+            - /url: /medizin/sorten
+          - link "Vergleich" [ref=e13] [cursor=pointer]:
+            - /url: /medizin/sorten/vergleich
+          - link "Arzt finden" [ref=e14] [cursor=pointer]:
+            - /url: /medizin/arzt-finden
+          - link "Apotheke finden" [ref=e15] [cursor=pointer]:
+            - /url: /medizin/apotheke-finden
+          - link "Wissen" [ref=e16] [cursor=pointer]:
+            - /url: /wissen
+        - generic [ref=e18]:
+          - link "Anmelden" [ref=e107] [cursor=pointer]:
+            - /url: /login
+            - button "Anmelden" [ref=e108]
+          - link "Registrieren" [ref=e109] [cursor=pointer]:
+            - /url: /registrieren
+            - button "Registrieren" [ref=e110]
+      - generic [ref=e20]:
+        - navigation "Breadcrumb" [ref=e112]:
+          - list [ref=e113]:
+            - listitem [ref=e114]:
+              - img [ref=e115]
+              - link "Startseite" [ref=e118] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=e119]:
+              - img [ref=e120]
+              - link "Medizin" [ref=e122] [cursor=pointer]:
+                - /url: /medizin
+            - listitem [ref=e123]:
+              - img [ref=e124]
+              - link "Produkte" [ref=e126] [cursor=pointer]:
+                - /url: /medizin/produkte
+            - listitem [ref=e127]:
+              - img [ref=e128]
+              - generic [ref=e130]: 420 Evolution 22/1 CA MAC
+        - generic [ref=e132]:
+          - generic [ref=e134]:
+            - generic [ref=e138]:
+              - img [ref=e139]
+              - generic [ref=e142]: Kein Bild verfügbar
+            - generic [ref=e143]:
+              - generic [ref=e144]:
+                - generic [ref=e145]:
+                  - generic [ref=e146]: Blüten
+                  - generic [ref=e147]: Indica
+                  - generic [ref=e148]: MAC 1
+                - generic [ref=e149]:
+                  - heading "420 Evolution 22/1 CA MAC" [level=1] [ref=e150]
+                  - paragraph [ref=e151]: Four 20 Pharma
+              - generic [ref=e152]:
+                - paragraph [ref=e153]: Wirkstoffprofil
+                - generic [ref=e154]:
+                  - generic [ref=e155]:
+                    - paragraph [ref=e156]: THC
+                    - paragraph [ref=e157]: 22.0%
+                  - generic [ref=e158]:
+                    - paragraph [ref=e159]: CBD
+                    - paragraph [ref=e160]: 0.9%
+              - generic [ref=e162]:
+                - img [ref=e163]
+                - generic [ref=e167]: Bei 3 Apotheken verfügbar
+          - generic [ref=e168]:
+            - generic [ref=e169]:
+              - heading "Preisvergleich" [level=2] [ref=e170]
+              - generic [ref=e171]: 35 Apotheken
+            - generic [ref=e172]:
+              - generic [ref=e173]:
+                - text: Apotheke wählen
+                - combobox [ref=e174]:
+                  - generic:
+                    - generic
+                  - img
+              - paragraph [ref=e177]: 5,49 €
+              - link "Rezept beantragen" [ref=e178] [cursor=pointer]:
+                - /url: /checkout?productId=ph74dj09f8a1hwd04sg59424px82099d&offerId=n17bm09y974g4mem7zfw26xkfn821gg7
+                - button "Rezept beantragen" [ref=e179]
+            - generic [ref=e180]:
+              - generic [ref=e181]:
+                - generic [ref=e184]:
+                  - paragraph [ref=e185]: Cannabis-Taxi
+                  - paragraph [ref=e186]: Esslingen
+                - paragraph [ref=e188]: 6,75 €
+              - generic [ref=e189]:
+                - generic [ref=e192]:
+                  - paragraph [ref=e193]: Medicon-Nordostbahnhof
+                  - paragraph [ref=e194]: Nürnberg
+                - paragraph [ref=e196]: 6,99 €
+              - generic [ref=e197]:
+                - generic [ref=e200]:
+                  - paragraph [ref=e201]: Goldene Blüte
+                  - paragraph [ref=e202]: Freystadt
+                - paragraph [ref=e204]: 5,99 €
+              - generic [ref=e205]:
+                - generic [ref=e208]:
+                  - paragraph [ref=e209]: Cannabis Apotheke Rheinland (Vitahris)
+                  - paragraph [ref=e210]: Bad Neuenahr
+                - paragraph [ref=e212]: 6,79 €
+              - generic [ref=e213]:
+                - generic [ref=e216]:
+                  - paragraph [ref=e217]: CANNACOMPANY
+                  - paragraph [ref=e218]: Bonn
+                - paragraph [ref=e220]: 5,31 €
+              - generic [ref=e221]:
+                - generic [ref=e224]:
+                  - paragraph [ref=e225]: Dragonweed (Herzog Apotheke)
+                  - paragraph [ref=e226]: Geldern
+                - paragraph [ref=e228]: 7,19 €
+              - generic [ref=e229]:
+                - generic [ref=e232]:
+                  - paragraph [ref=e233]: Cannabis Champion (Central Apotheke Waiblingen)
+                  - paragraph [ref=e234]: Waiblingen
+                - paragraph [ref=e236]: 5,96 €
+              - generic [ref=e237]:
+                - generic [ref=e240]:
+                  - paragraph [ref=e241]: Cannabis Apotheke Frankfurt
+                  - paragraph [ref=e242]: Frankfurt am Main
+                - paragraph [ref=e244]: 5,25 €
+              - generic [ref=e245]:
+                - generic [ref=e248]:
+                  - paragraph [ref=e249]: Stachus-Apotheke
+                  - paragraph [ref=e250]: München
+                - paragraph [ref=e252]: 8,90 €
+              - generic [ref=e253]:
+                - generic [ref=e256]:
+                  - paragraph [ref=e257]: Cannabis Apotheke Bayern (Medicon Schweinfurt)
+                  - paragraph [ref=e258]: Schweinfurt
+                - paragraph [ref=e260]: 4,99 €
+              - generic [ref=e261]:
+                - generic [ref=e264]:
+                  - paragraph [ref=e265]: Cannabis Mainfranken (Riemenschneider Apotheke)
+                  - paragraph [ref=e266]: Volkach
+                - paragraph [ref=e268]: 8,99 €
+              - generic [ref=e269]:
+                - generic [ref=e272]:
+                  - paragraph [ref=e273]: CannaMontana (Livus Apotheke)
+                  - paragraph [ref=e274]: Bensheim
+                - paragraph [ref=e276]: 8,90 €
+              - generic [ref=e277]:
+                - generic [ref=e280]:
+                  - paragraph [ref=e281]: Cannabis-Prime (Kappelberg-Apotheke)
+                  - paragraph [ref=e282]: Fellbach
+                - paragraph [ref=e284]: 6,74 €
+              - generic [ref=e285]:
+                - generic [ref=e288]:
+                  - paragraph [ref=e289]: Cannabis Südbaden (Apotheke am Schillerplatz)
+                  - paragraph [ref=e290]: Müllheim
+                - paragraph [ref=e292]: 6,75 €
+              - generic [ref=e293]:
+                - generic [ref=e296]:
+                  - paragraph [ref=e297]: Cannabis Apotheke Ahrtal (Jesuiten-Apotheke)
+                  - paragraph [ref=e298]: Bad Neuenahr-Ahrweiler
+                - paragraph [ref=e300]: 6,95 €
+              - generic [ref=e301]:
+                - generic [ref=e304]:
+                  - paragraph [ref=e305]: Markus Apotheke Saarbrücken
+                  - paragraph [ref=e306]: Saarbrücken
+                - paragraph [ref=e308]: 10,45 €
+              - generic [ref=e309]:
+                - generic [ref=e312]:
+                  - paragraph [ref=e313]: Cannabis4Me (Dahlien-Apotheke)
+                  - paragraph [ref=e314]: Bad Neuenahr
+                - paragraph [ref=e316]: 6,59 €
+              - generic [ref=e317]:
+                - generic [ref=e320]:
+                  - paragraph [ref=e321]: Cannabis-Otto-Apotheke (Apotheke im Otto-Hirsch-Center, Stuttgart)
+                  - paragraph [ref=e322]: Stuttgart
+                - paragraph [ref=e324]: 9,45 €
+              - generic [ref=e325]:
+                - generic [ref=e328]:
+                  - paragraph [ref=e329]: Cannatree – Rats-Apotheke Düsseldorf
+                  - paragraph [ref=e330]: Düsseldorf
+                - paragraph [ref=e332]: 6,99 €
+              - generic [ref=e333]:
+                - generic [ref=e336]:
+                  - paragraph [ref=e337]: Kahlhorst Apotheke Lübeck
+                  - paragraph [ref=e338]: Lübeck
+                - paragraph [ref=e340]: 5,90 €
+              - generic [ref=e341]:
+                - generic [ref=e344]:
+                  - paragraph [ref=e345]: Kristall Apotheke Cannabis, Hürth
+                  - paragraph [ref=e346]: Hürth
+                - paragraph [ref=e348]: 12,14 €
+              - generic [ref=e349]:
+                - generic [ref=e352]:
+                  - paragraph [ref=e353]: CANNABIS MURGTAL (Schwarzwald-Vital Apotheke Gaggenau)
+                  - paragraph [ref=e354]: Gaggenau
+                - paragraph [ref=e356]: 6,49 €
+              - generic [ref=e357]:
+                - generic [ref=e360]:
+                  - paragraph [ref=e361]: CANN EBBES
+                  - paragraph [ref=e362]: Waiblingen
+                - paragraph [ref=e364]: 9,98 €
+              - generic [ref=e365]:
+                - generic [ref=e368]:
+                  - paragraph [ref=e369]: Eifel Gras (farma-plus Apotheke im Rolandshaus Stolberg)
+                  - paragraph [ref=e370]: Stolberg
+                - paragraph [ref=e372]: 6,99 €
+              - generic [ref=e373]:
+                - generic [ref=e376]:
+                  - paragraph [ref=e377]: Marie-Johanna-Apotheke, München
+                  - paragraph [ref=e378]: München
+                - paragraph [ref=e380]: 8,90 €
+              - generic [ref=e381]:
+                - generic [ref=e384]:
+                  - paragraph [ref=e385]: Cannabis Apotheke Herten (farma-plus Apotheke am Rathaus Herten)
+                  - paragraph [ref=e386]: Herten
+                - paragraph [ref=e388]: 13,10 €
+              - generic [ref=e389]:
+                - generic [ref=e392]:
+                  - paragraph [ref=e393]: Cannabis Apotheke Nord (Ring Apotheke)
+                  - paragraph [ref=e394]: Neumünster
+                - paragraph [ref=e396]: 5,36 €
+              - generic [ref=e397]:
+                - generic [ref=e400]:
+                  - paragraph [ref=e401]: Bundes Apotheke, Berlin
+                  - paragraph [ref=e402]: Berlin
+                - paragraph [ref=e404]: 7,00 €
+              - generic [ref=e405]:
+                - generic [ref=e408]:
+                  - paragraph [ref=e409]: T-Damm Apotheke, Berlin-Tempelhof
+                  - paragraph [ref=e410]: Berlin
+                - paragraph [ref=e412]: 7,00 €
+              - generic [ref=e413]:
+                - generic [ref=e416]:
+                  - paragraph [ref=e417]: GRASTHEKE (St. Alexius Apotheke)
+                  - paragraph [ref=e418]: Neuss
+                - paragraph [ref=e420]: 5,49 €
+              - generic [ref=e421]:
+                - generic [ref=e424]:
+                  - paragraph [ref=e425]: Cannabis Mühlheim (Neue Raths Apotheke)
+                  - paragraph [ref=e426]: Mühlheim
+                - paragraph [ref=e428]: 5,69 €
+              - generic [ref=e429]:
+                - generic [ref=e432]:
+                  - paragraph [ref=e433]: Medicannabis Essen (easyApotheke Rathaus Galerie, Essen)
+                  - paragraph [ref=e434]: Essen
+                - paragraph [ref=e436]: 6,99 €
+              - generic [ref=e437]:
+                - generic [ref=e440]:
+                  - paragraph [ref=e441]: Myweed24 (Kleeblatt Apotheke am Ostwall)
+                  - paragraph [ref=e442]: Krefeld
+                - paragraph [ref=e444]: 5,50 €
+              - generic [ref=e445]:
+                - generic [ref=e448]:
+                  - paragraph [ref=e449]: Markt-Apotheke, Waldshut-Tiengen
+                  - paragraph [ref=e450]: Waldshut-Tiengen
+                - paragraph [ref=e452]: 7,79 €
+              - generic [ref=e453]:
+                - generic [ref=e456]:
+                  - paragraph [ref=e457]: Canthera Süd (Mohren Apotheke, Nürnberg)
+                  - paragraph [ref=e458]: Nürnberg
+                - paragraph [ref=e460]: 5,98 €
+          - generic [ref=e461]:
+            - tablist [ref=e462]:
+              - tab "Terpenprofil" [selected] [ref=e463]
+              - tab "Preisverlauf" [ref=e464]
+              - tab "Apotheken" [ref=e465]
+              - tab "Ärzte" [ref=e466]
+              - tab "Marke & Handel" [ref=e467]
+              - tab "Anbau" [ref=e468]
+              - tab "Bewertungen" [ref=e469]
+            - tabpanel "Terpenprofil" [ref=e470]:
+              - generic [ref=e471]:
+                - generic [ref=e472]:
+                  - application [ref=e476]:
+                    - generic [ref=e477]: 0,00%
+                    - generic [ref=e478]: Terpenprofil
+                  - generic [ref=e479]:
+                    - heading "Terpene" [level=3] [ref=e480]
+                    - generic [ref=e481]
+                - generic [ref=e502]:
+                  - paragraph [ref=e503]: Hinweis
+                  - paragraph [ref=e504]: Die hier dargestellten Informationen dienen ausschließlich der allgemeinen Information und ersetzen keine ärztliche Beratung. Medizinisches Cannabis ist verschreibungspflichtig. Konsultieren Sie immer einen qualifizierten Arzt, bevor Sie eine Therapie beginnen oder ändern.
+          - generic [ref=e505]:
+            - heading "Ähnliche Produkte" [level=3] [ref=e506]
+            - generic [ref=e507]:
+              - link "23/1 NICE C Cherry Pie Cansativa THC 23% Indica" [ref=e508] [cursor=pointer]:
+                - /url: /medizin/produkte/23-1-nice-c-cherry-pie
+                - generic [ref=e510]:
+                  - paragraph [ref=e511]: 23/1 NICE C Cherry Pie
+                  - paragraph [ref=e512]: Cansativa
+                  - generic [ref=e513]:
+                    - generic [ref=e514]: THC 23%
+                    - generic [ref=e515]: Indica
+              - link "420 Evolution 20/1 CA PLD Plum Driver Four 20 Pharma THC 20% Hybrid" [ref=e516] [cursor=pointer]:
+                - /url: /medizin/produkte/420-evolution-20-1-ca-pld-plum-driver
+                - generic [ref=e518]:
+                  - paragraph [ref=e519]: 420 Evolution 20/1 CA PLD Plum Driver
+                  - paragraph [ref=e520]: Four 20 Pharma
+                  - generic [ref=e521]:
+                    - generic [ref=e522]: THC 20%
+                    - generic [ref=e523]: Hybrid
+              - link "420 Evolution 25/1 CA ICC Ice Cream Cake Four 20 Pharma THC 25% Hybrid" [ref=e524] [cursor=pointer]:
+                - /url: /medizin/produkte/420-evolution-25-1-ca-icc-ice-cream-cake
+                - generic [ref=e526]:
+                  - paragraph [ref=e527]: 420 Evolution 25/1 CA ICC Ice Cream Cake
+                  - paragraph [ref=e528]: Four 20 Pharma
+                  - generic [ref=e529]:
+                    - generic [ref=e530]: THC 25%
+                    - generic [ref=e531]: Hybrid
+              - link "420 Evolution 27/1 CA ICC Ice Cream Cake Four 20 Pharma THC 27% Hybrid" [ref=e532] [cursor=pointer]:
+                - /url: /medizin/produkte/420-evolution-27-1-ca-icc-ice-cream-cake
+                - generic [ref=e534]:
+                  - paragraph [ref=e535]: 420 Evolution 27/1 CA ICC Ice Cream Cake
+                  - paragraph [ref=e536]: Four 20 Pharma
+                  - generic [ref=e537]:
+                    - generic [ref=e538]: THC 27%
+                    - generic [ref=e539]: Hybrid
+              - link "420 Evolution 27/1 CA STR Star Struck Four 20 Pharma THC 27% Hybrid" [ref=e540] [cursor=pointer]:
+                - /url: /medizin/produkte/420-evolution-27-1-ca-str-star-struck
+                - generic [ref=e542]:
+                  - paragraph [ref=e543]: 420 Evolution 27/1 CA STR Star Struck
+                  - paragraph [ref=e544]: Four 20 Pharma
+                  - generic [ref=e545]:
+                    - generic [ref=e546]: THC 27%
+                    - generic [ref=e547]: Hybrid
+              - link "420 Evolution 27/1 FLM CA Frozen Lemon Mints Four 20 Pharma THC 27% Sativa" [ref=e548] [cursor=pointer]:
+                - /url: /medizin/produkte/420-evolution-27-1-flm-ca-frozen-lemon-mints
+                - generic [ref=e550]:
+                  - paragraph [ref=e551]: 420 Evolution 27/1 FLM CA Frozen Lemon Mints
+                  - paragraph [ref=e552]: Four 20 Pharma
+                  - generic [ref=e553]:
+                    - generic [ref=e554]: THC 27%
+                    - generic [ref=e555]: Sativa
+              - link "420 Evolution 30/1 CA BUL Bucket List Four 20 Pharma THC 30% Hybrid" [ref=e556] [cursor=pointer]:
+                - /url: /medizin/produkte/420-evolution-30-1-ca-bul-bucket-list
+                - generic [ref=e558]:
+                  - paragraph [ref=e559]: 420 Evolution 30/1 CA BUL Bucket List
+                  - paragraph [ref=e560]: Four 20 Pharma
+                  - generic [ref=e561]:
+                    - generic [ref=e562]: THC 30%
+                    - generic [ref=e563]: Hybrid
+              - link "420 Evolution 30/1 CA GMO Cookies Four 20 Pharma THC 30% Indica" [ref=e564] [cursor=pointer]:
+                - /url: /medizin/produkte/420-evolution-30-1-ca-gmo-cookies
+                - generic [ref=e566]:
+                  - paragraph [ref=e567]: 420 Evolution 30/1 CA GMO Cookies
+                  - paragraph [ref=e568]: Four 20 Pharma
+                  - generic [ref=e569]:
+                    - generic [ref=e570]: THC 30%
+                    - generic [ref=e571]: Indica
+          - generic [ref=e572]:
+            - paragraph [ref=e573]: Hinweis
+            - paragraph [ref=e574]: Die hier dargestellten Informationen dienen ausschließlich der allgemeinen Information und ersetzen keine ärztliche Beratung. Medizinisches Cannabis ist verschreibungspflichtig. Konsultieren Sie immer einen qualifizierten Arzt, bevor Sie eine Therapie beginnen oder ändern.
+      - generic [ref=e50]:
+        - generic [ref=e51]:
+          - generic [ref=e52]:
+            - text: PhytoMedic
+            - paragraph [ref=e53]: Medizinisches Cannabis. Einfach. Sicher. Digital.
+          - generic [ref=e54]:
+            - link "LinkedIn" [ref=e55] [cursor=pointer]:
+              - /url: https://linkedin.com
+              - img [ref=e56]
+            - link "Instagram" [ref=e60] [cursor=pointer]:
+              - /url: https://instagram.com
+              - img [ref=e61]
+        - navigation "Footer-Navigation" [ref=e64]:
+          - generic [ref=e65]:
+            - heading "Patienten" [level=4] [ref=e66]
+            - list [ref=e67]:
+              - listitem [ref=e68]:
+                - link "Produktkatalog" [ref=e69] [cursor=pointer]:
+                  - /url: /medizin/produkte
+              - listitem [ref=e70]:
+                - link "Arzt finden" [ref=e71] [cursor=pointer]:
+                  - /url: /medizin/arzt-finden
+              - listitem [ref=e72]:
+                - link "Apotheke finden" [ref=e73] [cursor=pointer]:
+                  - /url: /medizin/apotheke-finden
+              - listitem [ref=e74]:
+                - link "Eignungstest" [ref=e75] [cursor=pointer]:
+                  - /url: /medizin/eignungstest
+          - generic [ref=e76]:
+            - heading "Wissen" [level=4] [ref=e77]
+            - list [ref=e78]:
+              - listitem [ref=e79]:
+                - link "Sorten-Datenbank" [ref=e80] [cursor=pointer]:
+                  - /url: /medizin/sorten
+              - listitem [ref=e81]:
+                - link "Krankheitsbilder" [ref=e82] [cursor=pointer]:
+                  - /url: /krankheiten
+              - listitem [ref=e83]:
+                - link "Ratgeber" [ref=e84] [cursor=pointer]:
+                  - /url: /wissen
+              - listitem [ref=e85]:
+                - link "THC-Rechner" [ref=e86] [cursor=pointer]:
+                  - /url: /medizin/thc-rechner
+          - generic [ref=e87]:
+            - heading "Fachleute" [level=4] [ref=e88]
+            - list [ref=e89]:
+              - listitem [ref=e90]:
+                - link "Online-Rezept" [ref=e91] [cursor=pointer]:
+                  - /url: /medizin/online-rezept
+              - listitem [ref=e92]:
+                - link "Standorte" [ref=e93] [cursor=pointer]:
+                  - /url: /medizin/standorte
+              - listitem [ref=e94]:
+                - link "Registrierung" [ref=e95] [cursor=pointer]:
+                  - /url: /registrieren
+          - generic [ref=e96]:
+            - heading "PhytoMedic" [level=4] [ref=e97]
+            - list [ref=e98]:
+              - listitem [ref=e99]:
+                - link "Impressum" [ref=e100] [cursor=pointer]:
+                  - /url: /impressum
+              - listitem [ref=e101]:
+                - link "Datenschutz" [ref=e102] [cursor=pointer]:
+                  - /url: /datenschutz
+              - listitem [ref=e103]:
+                - link "AGB" [ref=e104] [cursor=pointer]:
+                  - /url: /agb
+        - paragraph [ref=e105]: © 2026 PhytoMedic. Alle Rechte vorbehalten.
+  - region "Notifications alt+T"
+  - alert [ref=e106]

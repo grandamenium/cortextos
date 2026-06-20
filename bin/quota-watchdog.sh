@@ -47,21 +47,63 @@ export CTX_ROOT CTX_FRAMEWORK_ROOT CTX_ORG
 export CTX_AGENT_NAME="$BUS_AGENT"
 export CTX_AGENT_DIR="$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/$BUS_AGENT"
 
-CORTEXTOS=/usr/bin/cortextos
-JQ=/usr/bin/jq
-CCUSAGE=/usr/bin/ccusage
-CLAUDE_CREDS=/root/.claude/.credentials.json
+# Tool paths — env-overridable so the script is portable (macOS Homebrew puts
+# cortextos under /opt/homebrew/bin; ccusage may be absent). Defaults preserve
+# the original Linux layout.
+CORTEXTOS="${CORTEXTOS:-$(command -v cortextos || echo /usr/bin/cortextos)}"
+JQ="${JQ:-$(command -v jq || echo /usr/bin/jq)}"
+CCUSAGE="${CCUSAGE:-$(command -v ccusage || echo /usr/bin/ccusage)}"
+CLAUDE_CREDS="${CLAUDE_CREDS:-$HOME/.claude/.credentials.json}"
 
-# Auto-extract OAuth token from Claude Code's local credentials store if no
-# accounts.json is configured and CLAUDE_CODE_OAUTH_TOKEN isn't already set.
-# Claude Code refreshes that file automatically while any agent runs, so the
-# watchdog gets fresh tokens for free.
+# Acquire an OAuth token for the usage API if not already provided and no
+# accounts.json is configured. Claude Code refreshes the underlying store
+# automatically while any agent runs, so the watchdog gets fresh tokens for free.
+#   - macOS: read from the login Keychain ("Claude Code-credentials").
+#   - Linux: read from the credentials file ($CLAUDE_CREDS).
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
-   && [ ! -f "$CTX_ROOT/state/oauth/accounts.json" ] \
-   && [ -f "$CLAUDE_CREDS" ]; then
-  TOK=$("$JQ" -r '.claudeAiOauth.accessToken // empty' "$CLAUDE_CREDS" 2>/dev/null)
-  [ -n "$TOK" ] && export CLAUDE_CODE_OAUTH_TOKEN="$TOK"
+   && [ ! -f "$CTX_ROOT/state/oauth/accounts.json" ]; then
+  if [ "$(uname)" = "Darwin" ] && command -v security >/dev/null 2>&1; then
+    TOK=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
+          | "$JQ" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+    [ -n "$TOK" ] && export CLAUDE_CODE_OAUTH_TOKEN="$TOK"
+  elif [ -f "$CLAUDE_CREDS" ]; then
+    TOK=$("$JQ" -r '.claudeAiOauth.accessToken // empty' "$CLAUDE_CREDS" 2>/dev/null)
+    [ -n "$TOK" ] && export CLAUDE_CODE_OAUTH_TOKEN="$TOK"
+  fi
 fi
+
+# ── Probe-Blind Guard (SYS-PROBE-BLIND-01) ──────────────────────────────────
+# If no auth credential exists from any source after the acquisition block,
+# the watchdog cannot obtain a trustworthy usage reading. Skip ALL
+# pause/resume decisions to prevent the 2026-06-18 false-pause class:
+# token-loss → stale-cache-0%-remaining → fleet-wide pause despite low real
+# utilization. This is orthogonal to the API-degraded path below: that path
+# handles network/API failures when auth IS available; this handles the case
+# where we have no valid auth identity at all.
+PROBE_BLIND=no
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
+   && [ ! -f "$CTX_ROOT/state/oauth/accounts.json" ]; then
+  PROBE_BLIND=yes
+  log "PROBE_BLIND: no auth token from env/keychain/accounts.json — skipping pause/resume (no fleet action)"
+  cat > "$CHECK_FILE" <<EOF
+{
+  "ts": "$(ts)",
+  "method": "probe-blind",
+  "probe_blind": true,
+  "reason": "no_auth_token",
+  "paused": $([ -f "$PAUSED_FILE" ] && echo true || echo false)
+}
+EOF
+  BLIND_FLAG="$STATE_DIR/.probe-blind-since"
+  if [ ! -f "$BLIND_FLAG" ]; then
+    ALERT_MSG="⚠️ Quota watchdog PROBE-BLIND: no OAuth token found (env/keychain/accounts.json all miss). No pause/resume decisions will be made until a valid token is available. Log: $LOG"
+    "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$ALERT_MSG" --plain-text >> "$LOG" 2>&1 || log "  telegram alert failed"
+    echo "$(ts)" > "$BLIND_FLAG"
+  fi
+  exit 0
+fi
+# Auth available — clear any stale probe-blind flag from a prior episode
+[ -f "$STATE_DIR/.probe-blind-since" ] && rm -f "$STATE_DIR/.probe-blind-since"
 
 # ---------------------------------------------------------------------------
 # 1. Determine remaining_pct — API is the ONLY authoritative source for
@@ -81,8 +123,15 @@ REMAINING_PCT=""
 METHOD=""
 API_AVAILABLE=no
 
-# Path 1: official Anthropic usage API (the only authoritative source)
-if API_OUT=$("$CORTEXTOS" bus check-usage-api --json 2>/dev/null); then
+# Path 1: official Anthropic usage API (the only authoritative source).
+# --force = ALWAYS live: a fleet-HALT pause decision must never be made on a
+# (<=3min) cached snapshot. The watchdog ticks every 5min (> the 3min TTL) so
+# it already mostly live-fetches; --force closes the residual fresh-cache-bad
+# -value window. Fail-safe by construction: a 429-from-force throws -> the
+# check-usage-api call fails -> API_AVAILABLE=no -> api-degraded path -> NO
+# pause (see below). So --force CANNOT manufacture a false-pause even under
+# rate-limit. --force still writes the fresh snapshot to the shared cache.
+if API_OUT=$("$CORTEXTOS" bus check-usage-api --json --force 2>/dev/null); then
   FIVE_H=$(echo "$API_OUT" | "$JQ" -r '.five_hour_utilization // empty')
   if [ -n "$FIVE_H" ] && [ "$FIVE_H" != "null" ]; then
     REMAINING_PCT=$(awk -v u="$FIVE_H" 'BEGIN { p = (1-u)*100; if (p<0) p=0; printf "%.0f", p }')
@@ -194,11 +243,11 @@ if [ -f "$PAUSED_FILE" ]; then
     --meta "{\"remaining_pct\":$REMAINING_PCT,\"method\":\"$METHOD\",\"agents_resumed\":$AGENTS_JSON,\"paused_at\":\"$PAUSED_AT\",\"trigger\":\"auto\"}" \
     >> "$LOG" 2>&1 || log "  log-event failed"
 
-  AGENT_LIST=$(echo "$AGENTS_JSON" | "$JQ" -r 'join(", ")')
-  MSG="✅ Quota watchdog auto-resumed $COUNT agents — remaining ${REMAINING_PCT}% (above ${RESUME_PCT}% buffer). Started: $AGENT_LIST."
-  "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$MSG" --plain-text >> "$LOG" 2>&1 || log "  telegram failed"
-
-  log "AUTO-RESUMED $COUNT agents"
+  # Routine auto-resume is logged via log-event (above) but NOT sent to Telegram.
+  # The Founder's chat only hears about quota events that require action (API-degraded
+  # alert above, or the PAUSE alert below).  Resume data is included in the
+  # weekly-performance-report under "Quota Events".
+  log "AUTO-RESUMED $COUNT agents (no Telegram — routine resume above ${RESUME_PCT}%)"
   exit 0
 fi
 
@@ -212,13 +261,26 @@ fi
 
 log "TRIGGER remaining=${REMAINING_PCT}% < ${THRESHOLD_PCT}%"
 
-# Snapshot running agents
-RUNNING_JSON='[]'
+# Snapshot running agents. If the snapshot FAILS, bail rather than fall through
+# and write a stale, empty paused.json that makes the watchdog believe it paused
+# agents it never touched (#534 Bug A).
+RUNNING_JSON=""
 if AGENTS_OUT=$("$CORTEXTOS" bus list-agents 2>/dev/null); then
   RUNNING_JSON=$(echo "$AGENTS_OUT" | "$JQ" -c '[.[] | select(.running == true) | .name]')
-  [ -z "$RUNNING_JSON" ] && RUNNING_JSON='[]'
 fi
+
+if [ -z "$RUNNING_JSON" ]; then
+  log "ERROR: list-agents snapshot failed or returned empty; skipping pause action to avoid stale-paused-state trap (#534 Bug A)"
+  MSG="⚠️ Quota watchdog wanted to trip (remaining=${REMAINING_PCT}%, threshold ${THRESHOLD_PCT}%) but the list-agents snapshot failed. Holding action — NO agents paused, no state written. Investigate cortextos daemon health. Log: $LOG"
+  "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$MSG" --plain-text >> "$LOG" 2>&1 || true
+  exit 0
+fi
+
 COUNT=$(echo "$RUNNING_JSON" | "$JQ" 'length')
+if [ "$COUNT" -eq 0 ]; then
+  log "no running agents to pause; not writing paused-state"
+  exit 0
+fi
 log "running agents: $RUNNING_JSON (count=$COUNT)"
 
 if [ "$DRY_RUN" = "1" ]; then
@@ -228,12 +290,23 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
-# Stop each running agent
-echo "$RUNNING_JSON" | "$JQ" -r '.[]' | while IFS= read -r AGENT; do
+# Stop each running agent. Process substitution keeps the loop in the parent
+# shell so STOP_FAILED survives the loop (same subshell-state class as #534 Bug B).
+STOP_FAILED=()
+while IFS= read -r AGENT; do
   [ -z "$AGENT" ] && continue
   log "stop: $AGENT"
-  "$CORTEXTOS" stop "$AGENT" >> "$LOG" 2>&1 || log "  stop failed: $AGENT"
-done
+  if "$CORTEXTOS" stop "$AGENT" >> "$LOG" 2>&1; then
+    :
+  else
+    log "  stop failed: $AGENT"
+    STOP_FAILED+=("$AGENT")
+  fi
+done < <(echo "$RUNNING_JSON" | "$JQ" -r '.[]')
+
+if [ "${#STOP_FAILED[@]}" -gt 0 ]; then
+  log "WARNING: ${#STOP_FAILED[@]} agents failed to stop: ${STOP_FAILED[*]} — paused-state will still record the full intended set"
+fi
 
 # Write paused-state file (schema: paused_at, agents_paused, remaining_pct_at_pause + extras)
 cat > "$PAUSED_FILE" <<EOF

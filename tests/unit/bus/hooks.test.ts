@@ -60,11 +60,15 @@ function makeHook(overrides: Partial<HookEntry> = {}): HookEntry {
 }
 
 // Helper: read the meta JSON from the most recent execFile call.
+// Handles two arg shapes depending on whether CTX_FRAMEWORK_ROOT is set:
+//   With CTX_FRAMEWORK_ROOT: [cliPath, bus, log-event, action, <name>, info, --meta, <json>]
+//   Without:                 [bus, log-event, action, <name>, info, --meta, <json>]
 function lastEmittedEvent(): { name: string; meta: Record<string, unknown> } | null {
   if (execFileCalls.length === 0) return null;
   const args = execFileCalls[execFileCalls.length - 1].args;
-  // shape: [bus, log-event, action, <name>, info, --meta, <json>]
-  const name = args[3];
+  const logEventIdx = args.indexOf('log-event');
+  if (logEventIdx < 0) return null;
+  const name = args[logEventIdx + 2]; // skip past 'action' category
   const metaIdx = args.indexOf('--meta');
   const meta = metaIdx >= 0 && metaIdx + 1 < args.length ? JSON.parse(args[metaIdx + 1]) : {};
   return { name, meta };
