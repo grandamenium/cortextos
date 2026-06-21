@@ -794,4 +794,64 @@ describe('CronScheduler', () => {
     expect(names).toContain('b');
     expect(names).not.toContain('c'); // disabled, not scheduled
   });
+
+  // -------------------------------------------------------------------------
+  // onFire timeout — SYS-CRON-FIRING-FLAG
+  //
+  // A wedged PTY makes onFire hang indefinitely: sc.firing gets stuck true
+  // and every subsequent tick skips the cron forever.  The withTimeout wrapper
+  // in fireWithRetry rejects each attempt after ON_FIRE_TIMEOUT_MS, so all 4
+  // attempts exhaust quickly and sc.firing is cleared, allowing the cron to
+  // re-fire on its next due tick.
+  // -------------------------------------------------------------------------
+
+  it('hung onFire times out and clears sc.firing so the cron re-fires on the next interval', async () => {
+    const savedTimeout = CronScheduler.ON_FIRE_TIMEOUT_MS;
+    CronScheduler.ON_FIRE_TIMEOUT_MS = 500;
+    try {
+      let callCount = 0;
+      const partlyHungFire = vi.fn().mockImplementation(() => {
+        callCount++;
+        // Calls 1-4: simulate a wedged PTY (never resolves).
+        // Call 5+: second fire interval, resolves normally.
+        if (callCount <= 4) return new Promise<void>(() => { /* hangs */ });
+        return Promise.resolve();
+      });
+
+      // last_fired_at 2 minutes ago → '1m' schedule → catch-up fires immediately
+      const twoMinsAgo = new Date(Date.now() - 2 * 60_000).toISOString();
+      mockReadCrons.mockReturnValue([
+        makeCron({ name: 'wedge-test', schedule: '1m', last_fired_at: twoMinsAgo }),
+      ]);
+
+      const timeoutLogs: string[] = [];
+      const timeoutScheduler = new CronScheduler({
+        agentName: 'test-agent',
+        onFire: partlyHungFire,
+        logger: (msg) => timeoutLogs.push(msg),
+      });
+
+      timeoutScheduler.start();
+
+      // Advance one tick so the catch-up fire starts; onFire hangs immediately.
+      await vi.advanceTimersByTimeAsync(TICK);
+      expect(partlyHungFire).toHaveBeenCalledTimes(1);
+
+      // Drive all 4 attempts through their timeouts + retry delays:
+      //   4×500ms (timeouts) + 1s+4s+16s (retry back-offs) + 500ms buffer
+      await vi.advanceTimersByTimeAsync(4 * 500 + 1_000 + 4_000 + 16_000 + 500);
+
+      expect(partlyHungFire).toHaveBeenCalledTimes(4);
+      expect(timeoutLogs.some(l => l.includes('timeout'))).toBe(true);
+
+      // sc.firing must be cleared — advance past next due time (1m from tick start)
+      // and verify the cron re-fires on the 5th call.
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(partlyHungFire).toHaveBeenCalledTimes(5);
+
+      timeoutScheduler.stop();
+    } finally {
+      CronScheduler.ON_FIRE_TIMEOUT_MS = savedTimeout;
+    }
+  });
 });
