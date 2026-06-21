@@ -211,16 +211,17 @@ async function fireWithRetry(
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const duration_ms = Date.now() - start;
+      const isTimeout = err instanceof Error && err.message.startsWith('onFire timeout after');
       if (attempt < RETRY_DELAYS_MS.length) {
         const delay = RETRY_DELAYS_MS[attempt];
         logger(
-          `[cron-scheduler] onFire failed for "${cron.name}" ` +
+          `[cron-scheduler] onFire ${isTimeout ? 'timed out' : 'failed'} for "${cron.name}" ` +
           `(attempt ${attempt + 1}/4, retrying in ${delay}ms): ${errMsg}`
         );
         appendExecutionLog(agentName, {
           ts: new Date().toISOString(),
           cron: cron.name,
-          status: 'retried',
+          status: isTimeout ? 'timed_out' : 'retried',
           attempt: attempt + 1,
           duration_ms,
           error: errMsg,
@@ -228,13 +229,13 @@ async function fireWithRetry(
         await sleep(delay);
       } else {
         logger(
-          `[cron-scheduler] onFire failed for "${cron.name}" ` +
+          `[cron-scheduler] onFire ${isTimeout ? 'timed out' : 'failed'} for "${cron.name}" ` +
           `after all 4 attempts — giving up. Last error: ${errMsg}`
         );
         appendExecutionLog(agentName, {
           ts: new Date().toISOString(),
           cron: cron.name,
-          status: 'failed',
+          status: isTimeout ? 'timed_out' : 'failed',
           attempt: attempt + 1,
           duration_ms,
           error: errMsg,

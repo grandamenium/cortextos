@@ -795,7 +795,6 @@ describe('CronScheduler', () => {
     expect(names).not.toContain('c'); // disabled, not scheduled
   });
 
-  // -------------------------------------------------------------------------
   // onFire timeout — SYS-CRON-FIRING-FLAG
   //
   // A wedged PTY makes onFire hang indefinitely: sc.firing gets stuck true
