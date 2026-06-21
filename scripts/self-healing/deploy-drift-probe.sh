@@ -122,22 +122,37 @@ REASONS=()
 if [ -n "$REMOTE_SHA" ] && [ -n "$BUILD_SHA" ]; then
   if ! git -C "$FRAMEWORK_ROOT" merge-base --is-ancestor "$REMOTE_SHA" "$BUILD_SHA" 2>/dev/null; then
     # origin/main is ahead of the built commit. The daemon dist is compiled (tsup) from
-    # src/ + build config ONLY, so page only when the gap touches a DIST-AFFECTING input.
-    # A gap that touches NONE (scripts/tests/docs/templates/orgs/bin/...) rebuilds to a
-    # byte-identical dist = INERT to the running daemon — recorded but NOT paged (the
-    # PR #66 scripts-only-merge false-page class; deploy-drift-nondist-no-restart lane).
+    # src/ + build config ONLY, so page when the gap touches a DIST-AFFECTING input.
+    # Two non-dist sub-cases (see deploy-drift-source-lib.sh):
+    #   • .github/workflows/** → OPERATIONALLY material: page anyway (CI/deploy surface
+    #     advanced), but flag that NO daemon rebuild is required (PD SYS-DEPLOY-SOT spec).
+    #   • everything else non-dist (scripts/tests/docs/templates/orgs/bin/...) → rebuilds
+    #     to a byte-identical dist = INERT — recorded but NOT paged (the PR #66 scripts-only
+    #     false-page class; deploy-drift-nondist-no-restart lane).
+    # Each branch's reason carries the matched-path list (fmt_delta_summary) for one-glance triage.
     if declare -f dist_material_delta >/dev/null 2>&1; then
       MAT_DELTA=$(dist_material_delta "$FRAMEWORK_ROOT" "$BUILD_SHA" "$REMOTE_SHA")
+      OPS_DELTA=$(ops_material_delta "$FRAMEWORK_ROOT" "$BUILD_SHA" "$REMOTE_SHA")
+      # Full gap (all paths) — only for the INERT line's path list; never affects routing.
+      FULL_DELTA=$(git -C "$FRAMEWORK_ROOT" diff --name-only "$BUILD_SHA" "$REMOTE_SHA" 2>/dev/null | grep -v '^$' || true)
     else
       MAT_DELTA="?:source-lib-missing"   # no classifier → conservatively treat as material
+      OPS_DELTA=""
+      FULL_DELTA=""
     fi
     if [ -n "$MAT_DELTA" ]; then
+      # DIST-affecting change → daemon rebuild needed → full page.
       SOURCE_DRIFT="true"
-      MAT_COUNT=$(printf '%s\n' "$MAT_DELTA" | grep -c .)
-      REASONS+=("SOURCE: origin/main ${REMOTE_SHA:0:8} not contained in build ${BUILD_SHA:0:8} — ${MAT_COUNT} dist-affecting file(s) changed (src/ + build config) — dist needs rebuild")
+      REASONS+=("SOURCE: origin/main ${REMOTE_SHA:0:8} not contained in build ${BUILD_SHA:0:8} — $(fmt_delta_summary "$MAT_DELTA") dist-affecting (src/ + build config) — dist needs rebuild")
+    elif [ -n "$OPS_DELTA" ]; then
+      # No dist delta, but .github/workflows/** advanced — operationally material. Page
+      # (NOT silenced) per PD SYS-DEPLOY-SOT spec; daemon rebuild is NOT required.
+      SOURCE_DRIFT="true"
+      REASONS+=("SOURCE-OPS: origin/main ${REMOTE_SHA:0:8} ahead of build ${BUILD_SHA:0:8} — no dist delta but $(fmt_delta_summary "$OPS_DELTA") operationally-material (CI workflow); daemon rebuild NOT required, but the deploy/CI surface advanced — paged, not silenced")
     else
+      # Non-dist, non-ops gap → rebuilds identically → INFO downgrade, recorded not paged.
       SOURCE_INERT="true"
-      REASONS+=("SOURCE-INERT: origin/main ${REMOTE_SHA:0:8} ahead of build ${BUILD_SHA:0:8} but NO dist-affecting delta (non-dist: scripts/tests/docs/templates/orgs/bin) — dist would rebuild identically; recorded, not paged")
+      REASONS+=("SOURCE-INERT: origin/main ${REMOTE_SHA:0:8} ahead of build ${BUILD_SHA:0:8} but NO dist/ops-material delta — non-dist only: $(fmt_delta_summary "$FULL_DELTA") (scripts/tests/docs/templates/orgs/bin) — dist would rebuild identically; recorded, not paged")
     fi
   fi
 elif [ -z "$BUILD_SHA" ]; then

@@ -1,15 +1,21 @@
 #!/bin/bash
-# Regression test for the SOURCE-drift ^src/ materiality filter (deploy-drift-source-lib.sh).
-# A gap between two commits is "material" (page-worthy) only if it touches a dist-affecting
-# input (src/ + build config); a non-dist gap rebuilds identically and must NOT page.
+# Regression test for the SOURCE-drift materiality classifier (deploy-drift-source-lib.sh).
+# A gap between two commits is DIST-material (rebuild page) only if it touches a dist-
+# affecting input (src/ + build config). A non-dist gap rebuilds identically and is INERT
+# (INFO, not paged) — EXCEPT .github/workflows/**, which is OPS-material: paged anyway
+# (CI/deploy surface advanced) without claiming a daemon rebuild is needed.
 #
 # Criteria:
-#   (1) src/ change            → material (paged)
+#   (1) src/ change            → dist-material (paged)
 #   (2) scripts-only change    → inert (the PR #66 false-page class)
 #   (3) tests/docs/orgs change → inert
-#   (4) build-config change    → material (package.json/tsup/tsconfig affect the bundle)
-#   (5) mixed src+scripts       → material (src/ delta present)
+#   (4) build-config change    → dist-material (package.json/tsup/tsconfig affect the bundle)
+#   (5) mixed src+scripts       → dist-material (src/ delta present)
 #   (6) missing/garbage SHA    → non-empty sentinel (caller treats as material, fail-safe)
+#   (7) .github/workflows change → ops-material (paged), NOT dist-material (no rebuild)
+#   (8) scripts-only           → NOT ops-material either (stays inert)
+#   (9) mixed src+workflow      → dist-material dominates (rebuild page)
+#  (10) fmt_delta_summary       → count + matched-path list with "+N more" truncation
 #
 # Usage: bash deploy-drift-source.test.sh <deploy-drift-source-lib.sh>
 set -uo pipefail
@@ -24,11 +30,12 @@ newrepo() {
   REPO=$(mktemp -d /tmp/dds.XXXXXX)
   git -C "$REPO" init -q
   git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
-  mkdir -p "$REPO/src/daemon" "$REPO/scripts/self-healing" "$REPO/tests/shell" "$REPO/orgs/x" "$REPO/docs"
+  mkdir -p "$REPO/src/daemon" "$REPO/scripts/self-healing" "$REPO/tests/shell" "$REPO/orgs/x" "$REPO/docs" "$REPO/.github/workflows"
   printf 'export const a = 1;\n' > "$REPO/src/daemon/index.ts"
   printf '{"name":"x","scripts":{"build":"tsup"}}\n' > "$REPO/package.json"
   printf 'echo hi\n' > "$REPO/scripts/self-healing/thing.sh"
   printf 'doc\n' > "$REPO/docs/readme.md"
+  printf 'name: ci\non: push\n' > "$REPO/.github/workflows/ci.yml"
   git -C "$REPO" add -A >/dev/null 2>&1; git -C "$REPO" commit -qm base >/dev/null 2>&1
   BASE=$(git -C "$REPO" rev-parse HEAD)
 }
@@ -83,6 +90,43 @@ OUT=$(dist_material_delta "$REPO" "$BASE" "deadbeefdeadbeefdeadbeefdeadbeefdeadb
 OUT2=$(dist_material_delta "$REPO" "" "")
 [ -n "$OUT2" ] && ok "C6: empty SHA yields non-empty sentinel: [$OUT2]" || bad "C6: empty SHA silently inert"
 rm -rf "$REPO"
+
+# ── C7: .github/workflows change → ops-material (page), NOT dist, NOT inert ──
+echo "== [C7] .github/workflows change → ops-material full page (NOT INFO downgrade) =="
+newrepo
+printf 'name: ci\non: [push, pull_request]\n' > "$REPO/.github/workflows/ci.yml"; TIP=$(commit ciwf)
+DIST=$(dist_material_delta "$REPO" "$BASE" "$TIP")
+OPS=$(ops_material_delta "$REPO" "$BASE" "$TIP")
+[ -z "$DIST" ] && ok "C7: workflow change is NOT dist-material (no daemon rebuild)" || bad "C7: workflow wrongly flagged dist-material [$DIST]"
+echo "$OPS" | grep -q ".github/workflows/ci.yml" && ok "C7: workflow change IS ops-material (paged, not silenced)" || bad "C7: workflow NOT flagged ops-material [$OPS]"
+rm -rf "$REPO"
+
+# ── C8: scripts-only change → neither dist nor ops material (true INERT) ─────
+echo "== [C8] scripts-only change → NOT ops-material either (stays INFO/inert) =="
+newrepo
+printf 'echo more\n' >> "$REPO/scripts/self-healing/thing.sh"; TIP=$(commit scriptonly)
+OPS=$(ops_material_delta "$REPO" "$BASE" "$TIP")
+[ -z "$OPS" ] && ok "C8: scripts-only gap is NOT ops-material (correctly stays inert)" || bad "C8: scripts-only wrongly ops-material [$OPS]"
+rm -rf "$REPO"
+
+# ── C9: mixed src + workflow → dist-material dominates (full page) ───────────
+echo "== [C9] mixed src/ + workflow → dist-material (rebuild page dominates) =="
+newrepo
+printf 'export const d = 4;\n' >> "$REPO/src/daemon/index.ts"; printf 'name: ci\non: push\njobs: {}\n' > "$REPO/.github/workflows/ci.yml"; TIP=$(commit mixedwf)
+DIST=$(dist_material_delta "$REPO" "$BASE" "$TIP")
+echo "$DIST" | grep -q "src/daemon/index.ts" && ok "C9: mixed gap flagged dist-material via src/ (rebuild needed)" || bad "C9: mixed gap not dist-material [$DIST]"
+rm -rf "$REPO"
+
+# ── C10: fmt_delta_summary → count + matched-path list, with +N truncation ───
+echo "== [C10] fmt_delta_summary emits count + matched-path list (one-glance triage) =="
+EMPTY=$(fmt_delta_summary "")
+[ "$EMPTY" = "0 file(s) []" ] && ok "C10: empty list → '0 file(s) []'" || bad "C10: empty list wrong [$EMPTY]"
+ONE=$(fmt_delta_summary "src/a.ts")
+echo "$ONE" | grep -q "1 file(s) \[src/a.ts\]" && ok "C10: single path listed: [$ONE]" || bad "C10: single path wrong [$ONE]"
+MANY=$(printf 'f1\nf2\nf3\nf4\nf5\nf6\nf7\nf8\n')
+SUM=$(fmt_delta_summary "$MANY")
+echo "$SUM" | grep -q "8 file(s) \[f1, f2, f3, f4, f5, f6, +2 more\]" && ok "C10: >max truncates to +N more: [$SUM]" || bad "C10: truncation wrong [$SUM]"
+echo "$SUM" | grep -q "f1" && echo "$SUM" | grep -q "+2 more" && ok "C10: summary carries actual paths (not just a count)" || bad "C10: summary missing paths [$SUM]"
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"
