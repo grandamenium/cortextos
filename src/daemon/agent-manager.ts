@@ -116,6 +116,46 @@ export class AgentManager {
     if (this.daemonJustCrashed) {
       console.log('[agent-manager] Detected .daemon-crashed marker(s) — previous daemon exited abnormally. Will quiet BUG-011 alarm for this startup cycle.');
     }
+    this.initOperatorChannel();
+  }
+
+  /**
+   * Pre-load the operator alert channel from the org orchestrator's .env.
+   * Guards (#1/#2/#3) must route to the orchestrator's direct channel (e.g. zeus→Bode),
+   * NOT to whichever agent happens to start first. Without this, the first agent
+   * with a BOT_TOKEN becomes the operator channel — a marketing-group bot, a
+   * customer-facing agent, or any other non-ops bot could silently hijack ops alerts.
+   * Best-effort: if context.json or the orchestrator .env is missing, falls back to
+   * the first-available pattern (unchanged behaviour from before this fix).
+   */
+  private initOperatorChannel(): void {
+    const orgsBase = join(this.frameworkRoot, 'orgs');
+    if (!existsSync(orgsBase)) return;
+    try {
+      const orgs = readdirSync(orgsBase, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+      for (const org of orgs) {
+        const contextPath = join(orgsBase, org, 'context.json');
+        if (!existsSync(contextPath)) continue;
+        let orchestratorName: string | undefined;
+        try { orchestratorName = JSON.parse(readFileSync(contextPath, 'utf-8')).orchestrator; } catch { continue; }
+        if (!orchestratorName) continue;
+        const envPath = join(orgsBase, org, 'agents', orchestratorName, '.env');
+        if (!existsSync(envPath)) continue;
+        try {
+          const envContent = stripBom(readFileSync(envPath, 'utf-8'));
+          const botToken = /^BOT_TOKEN=(.+)$/m.exec(envContent)?.[1]?.trim();
+          const chatId = /^CHAT_ID=(.+)$/m.exec(envContent)?.[1]?.trim();
+          if (botToken && /^\d+:[A-Za-z0-9_-]+$/.test(botToken) && chatId && /^\d+$/.test(chatId)) {
+            this.operatorBotToken = botToken;
+            this.operatorChatId = chatId;
+            console.log(`[agent-manager] Operator alert channel: ${orchestratorName} (${org}) chat_id=****${chatId.slice(-4)}`);
+            return;
+          }
+        } catch { continue; }
+      }
+    } catch { /* ignore scan errors — fall back to first-available */ }
   }
 
   /**
@@ -462,6 +502,11 @@ export class AgentManager {
       console.log(`[${name}] ${msg}`);
     };
 
+    // Suppress operator Telegram alerts for test/scratch agents. Guard checks still
+    // run (log to daemon stdout) but findings never reach pendingApiKeyAlerts so they
+    // cannot pollute the real operator channel with synthetic signals.
+    const suppressAlerts = !!config.suppress_operator_alerts;
+
     // Read agent .env for Telegram credentials
     const agentEnvFile = join(agentDir, '.env');
     let telegramApi: TelegramAPI | undefined;
@@ -534,10 +579,12 @@ export class AgentManager {
       if (!this.apiKeyAlertedPaths.has(agentEnvFile) && /^ANTHROPIC_API_KEY\s*=\s*.+/m.test(envContent)) {
         this.apiKeyAlertedPaths.add(agentEnvFile);
         log(`SECURITY WARNING: ANTHROPIC_API_KEY found in agent .env for ${name}. This shadows OAuth (#3>#5 precedence) → per-token billing + auth-failure single point. Remove it — OAuth via credentials.json is the correct auth path.`);
-        this.pendingApiKeyAlerts.push(`agent .env (${name})`);
-        if (!this.operatorBotToken && botToken && chatId) {
-          this.operatorBotToken = botToken;
-          this.operatorChatId = chatId;
+        if (!suppressAlerts) {
+          this.pendingApiKeyAlerts.push(`agent .env (${name})`);
+          if (!this.operatorBotToken && botToken && chatId) {
+            this.operatorBotToken = botToken;
+            this.operatorChatId = chatId;
+          }
         }
       }
     }
@@ -556,7 +603,7 @@ export class AgentManager {
         if (/^ANTHROPIC_API_KEY\s*=\s*.+/m.test(secretsContent)) {
           this.apiKeyAlertedPaths.add(secretsEnvPath); // mark AFTER successful read + key found
           console.log(`[${name}] SECURITY WARNING: ANTHROPIC_API_KEY found in org secrets.env (${resolvedOrg}). This shadows OAuth for ALL agents in this org → per-token billing + single auth-failure point. Remove it.`);
-          this.pendingApiKeyAlerts.push(`org secrets.env (${resolvedOrg})`);
+          if (!suppressAlerts) this.pendingApiKeyAlerts.push(`org secrets.env (${resolvedOrg})`);
         }
       } catch { /* ignore unreadable secrets.env — not marked, so retried next call */ }
     }
@@ -566,7 +613,7 @@ export class AgentManager {
     if (!this.apiKeyAlertedPaths.has('__process_env__') && /\S/.test(process.env.ANTHROPIC_API_KEY ?? '')) {
       this.apiKeyAlertedPaths.add('__process_env__');
       console.log(`[agent-manager] SECURITY WARNING: ANTHROPIC_API_KEY found in process.env (daemon launch environment). This shadows OAuth for all agents → per-token billing + auth-failure single point. Unset it from the daemon environment.`);
-      this.pendingApiKeyAlerts.push('process.env (daemon environment)');
+      if (!suppressAlerts) this.pendingApiKeyAlerts.push('process.env (daemon environment)');
     }
 
     // ── Guard #2: Credential-health ───────────────────────────────────────
@@ -613,11 +660,13 @@ export class AgentManager {
       for (const issue of this.credHealthCached.issues) {
         log(`CREDENTIAL WARNING: ${issue}. Agent ${name} will auth-fail at runtime. Run 'claude' interactively to re-authenticate.`);
       }
-      const issueStr = this.credHealthCached.issues.join('; ');
-      this.pendingApiKeyAlerts.push(`cred-health (${name}): ${issueStr}`);
-      if (!this.operatorBotToken && botToken && chatId) {
-        this.operatorBotToken = botToken;
-        this.operatorChatId = chatId;
+      if (!suppressAlerts) {
+        const issueStr = this.credHealthCached.issues.join('; ');
+        this.pendingApiKeyAlerts.push(`cred-health (${name}): ${issueStr}`);
+        if (!this.operatorBotToken && botToken && chatId) {
+          this.operatorBotToken = botToken;
+          this.operatorChatId = chatId;
+        }
       }
     }
 
@@ -632,18 +681,22 @@ export class AgentManager {
       if (!configuredModel) {
         this.modelGuardAlerted.add(modelKey);
         log(`MODEL WARNING: agent ${name} has no model pinned in config.json. Claude Code will pick its own default. Explicitly set model=claude-opus-4-8 to enforce Bode's never-lesser-model rule.`);
-        this.pendingApiKeyAlerts.push(`model-guard (${name}): model not pinned`);
-        if (!this.operatorBotToken && botToken && chatId) {
-          this.operatorBotToken = botToken;
-          this.operatorChatId = chatId;
+        if (!suppressAlerts) {
+          this.pendingApiKeyAlerts.push(`model-guard (${name}): model not pinned`);
+          if (!this.operatorBotToken && botToken && chatId) {
+            this.operatorBotToken = botToken;
+            this.operatorChatId = chatId;
+          }
         }
       } else if (configuredModel !== AgentManager.REQUIRED_MODEL) {
         this.modelGuardAlerted.add(modelKey);
         log(`MODEL WARNING: agent ${name} configured with model="${configuredModel}" — not the required ${AgentManager.REQUIRED_MODEL}. Update config.json to enforce Bode's never-lesser-model rule.`);
-        this.pendingApiKeyAlerts.push(`model-guard (${name}): model="${configuredModel}" (expected ${AgentManager.REQUIRED_MODEL})`);
-        if (!this.operatorBotToken && botToken && chatId) {
-          this.operatorBotToken = botToken;
-          this.operatorChatId = chatId;
+        if (!suppressAlerts) {
+          this.pendingApiKeyAlerts.push(`model-guard (${name}): model="${configuredModel}" (expected ${AgentManager.REQUIRED_MODEL})`);
+          if (!this.operatorBotToken && botToken && chatId) {
+            this.operatorBotToken = botToken;
+            this.operatorChatId = chatId;
+          }
         }
       }
     }

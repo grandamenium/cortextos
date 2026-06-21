@@ -228,6 +228,12 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * When true, this agent's guard findings (stray API key, cred-health, model-pin)
+   * are NOT included in the consolidated operator Telegram alert. Use on scratch/test
+   * agents whose synthetic signals must never reach the operator channel.
+   */
+  suppress_operator_alerts?: boolean;
 }
 
 export interface CronEntry {
