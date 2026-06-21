@@ -258,8 +258,12 @@ export class AgentManager {
     if (!existsSync(enabledFile)) return {};
     try {
       return JSON.parse(readFileSync(enabledFile, 'utf-8'));
-    } catch {
-      return {}; // corrupt or unreadable — fall through to default-enabled
+    } catch (err) {
+      // Log loudly so the operator sees it in daemon logs — but don't throw.
+      // Throwing here would crash discoverAndStart() and prevent all agents from starting.
+      // Fallback: all-enabled (no entry = default-enabled per BUG-028 design).
+      console.error(`[agent-manager] WARNING: ${enabledFile} is corrupt or unreadable (${err}). Falling back to default-enabled for all agents. Fix the file and restart the daemon.`);
+      return {};
     }
   }
 

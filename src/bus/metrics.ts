@@ -107,7 +107,11 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
   if (existsSync(enabledFile)) {
     try {
       agentNames = Object.keys(JSON.parse(readFileSync(enabledFile, 'utf-8')));
-    } catch { /* empty */ }
+    } catch {
+      // BUG-013 class: corrupt JSON in enabled-agents.json silently returns empty fleet.
+      // Log loudly so operators know the signal is unreliable, not zero.
+      console.error(`[collect-metrics] WARNING: ${enabledFile} contains invalid JSON — metrics will show 0 agents. Fix the file (remove trailing commas, validate JSON).`);
+    }
   }
 
   const agents: Record<string, AgentMetrics> = {};
