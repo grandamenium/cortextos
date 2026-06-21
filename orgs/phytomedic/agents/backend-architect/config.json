@@ -25,6 +25,12 @@
       "type": "cron",
       "cron": "24 4 * * 0",
       "prompt": "Weekly architecture cadence. Execute all three weekly workflows: (1) Architecture summary briefing for platform-director — key decisions, open risks, structural weaknesses, scalability/extensibility concerns, areas needing founder or orchestrator decision. (2) Technical debt and rewrite-risk audit — multi-tenant shortcuts, weak contracts, hardcoded assumptions, poor event/job design, data structures that hurt Cannametrics or pharmacy modules. (3) Version readiness review — assess V1 preparation for V1.5 patient continuity, V2 pharmacy operations, V3 Cannametrics, V4 manufacturer layer, V5 public growth. Identify where V1 helps later phases and where it does not. Send summary to platform-director and user. End: cortextos bus update-cron-fire weekly-architecture-summary --interval 10080"
+    },
+    {
+      "name": "greptile-rescore-scale-ba",
+      "type": "cron",
+      "cron": "43 5 * * 5",
+      "prompt": "Greptile-rescore SCALE cycle weekly loop (cycle greptile_rescore_scale_ba, metric greptile_confidence_score_iteration_pr, BA file-territory). MANDATORY: read .claude/skills/autoresearch/SKILL.md and execute the experiment loop for this cycle. Step A MEASURE: run 'node /Users/arndt/phytomedic-saas/scripts/fleet-cycles/ba-greptile-iteration-pr.mjs --rolling --asof $(date -u +%Y-%m-%d) --emit-summary' (gh must be authed). Read avg_score + sample_size_actual from the emitted /tmp/ba-greptile-iteration-rolling-*.json. If the script is missing (PR #1430 not yet merged into the main checkout at that path), report that to systems-analyst and skip. Step B RECORD: cortextos bus gather-context --agent $CTX_AGENT_NAME; if an active experiment exists evaluate it via evaluate-experiment with the measured avg + justification; surface is empty so absent an SA-assigned surface this is a measurement-tracking tick — do NOT mutate any surface. Step C COMPARE+REPORT: compare avg to the 3.6 shared baseline (phytomedic-saas/obsidian-vault/agent-shared/sprint-plans/sys-rc-fe-01-baseline-2026-06-05.json) and to the prior BA reading; send systems-analyst a one-line trend via cortextos bus send-message systems-analyst normal (avg, n/5, delta-vs-baseline, delta-vs-prior). If n<5 flag the thin-sample caveat. End: cortextos bus update-cron-fire greptile-rescore-scale-ba --interval 10080"
     }
   ]
 }
