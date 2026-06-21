@@ -36,6 +36,27 @@ fi
 # ancestor of BUILD_SHA (local HEAD is a merge commit that includes origin/main).
 if [ -n "$BUILD_SHA" ] && git merge-base --is-ancestor "$REMOTE_SHA" "$BUILD_SHA" 2>/dev/null; then
   echo "[cortextos-src-watch] dist up-to-date (origin/main ${REMOTE_SHA:0:8} ⊆ build ${BUILD_SHA:0:8})"
+  # Secondary check: if the running daemon executes from a DIFFERENT worktree dist,
+  # verify that dist is also current. Without this, a current CLI binary masks a
+  # daemon worktree that was never rebuilt (root-cause of 2026-06-21 SYS-DAEMON-DIST-LAG).
+  DAEMON_JS=$(ps -axww -o command= 2>/dev/null \
+    | awk '/node .*\/dist\/daemon\.js/ && !/awk/ {
+        for(i=1;i<=NF;i++) if($i ~ /\/dist\/daemon\.js$/) {print $i; exit}
+      }') || true  # awk early-exit causes SIGPIPE on ps; suppress pipefail
+  if [ -n "$DAEMON_JS" ] && [ "$DAEMON_JS" != "$REPO_ROOT/dist/daemon.js" ]; then
+    DAEMON_DIST_DIR=$(dirname "$DAEMON_JS")
+    DAEMON_BUILD_SHA=$(cat "$DAEMON_DIST_DIR/.build-sha" 2>/dev/null | tr -d '[:space:]' || echo "")
+    if [ -z "$DAEMON_BUILD_SHA" ]; then
+      echo "[cortextos-src-watch] WARNING: daemon worktree dist no .build-sha at $DAEMON_DIST_DIR — cannot verify" >&2
+    elif git merge-base --is-ancestor "$REMOTE_SHA" "$DAEMON_BUILD_SHA" 2>/dev/null; then
+      echo "[cortextos-src-watch] daemon worktree dist up-to-date (${DAEMON_BUILD_SHA:0:8} ⊇ ${REMOTE_SHA:0:8} at $DAEMON_DIST_DIR)"
+    else
+      echo "[cortextos-src-watch] WARNING: daemon worktree dist LAG — daemon@${DAEMON_BUILD_SHA:0:8} behind origin/main ${REMOTE_SHA:0:8} ($DAEMON_DIST_DIR)" >&2
+      cortextos bus send-message platform-director high \
+        "[cortextos-src-watch] Daemon worktree dist lag: $DAEMON_DIST_DIR built@${DAEMON_BUILD_SHA:0:8} but origin/main@${REMOTE_SHA:0:8} — worktree rebuild+restart needed" \
+        2>/dev/null || true
+    fi
+  fi
   exit 0
 fi
 
