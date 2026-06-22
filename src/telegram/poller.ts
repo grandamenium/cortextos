@@ -118,6 +118,17 @@ export class TelegramPoller {
           this.running = false;
           return;
         }
+        // A 401 Unauthorized means the BOT_TOKEN is invalid or not yet loaded.
+        // This is a PERMANENT failure, not transient — retrying getUpdates once
+        // per second never clears it. Exit the loop so the supervisor backs off
+        // instead of hot-looping. (2026-06-22 OOM: a stale token spammed ~1
+        // error/sec for days → 95k errors → 785MB log → daemon killed.)
+        if (/Unauthorized|\b401\b/i.test(msg)) {
+          console.error('[telegram-poller] Auth failure (401 Unauthorized) — BOT_TOKEN invalid or unloaded. Exiting loop; supervisor will back off.');
+          this.lastExitReason = 'auth-failed';
+          this.running = false;
+          return;
+        }
         // Other errors are transient — log and continue polling.
         console.error('[telegram-poller] Poll error:', err);
       }
