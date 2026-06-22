@@ -7,6 +7,7 @@ export interface PropertyUnit {
   status: 'occupied' | 'vacant';
   rent: number | null;
   tenant: string | null;
+  lease_expiration?: string;
   notes?: string;
 }
 
@@ -16,6 +17,7 @@ export interface PropertyNeed {
   cost: number | null;
   status: 'needed' | 'in_progress' | 'on_hold' | 'quote_pending' | 'pending' | 'done';
   priority: 'urgent' | 'high' | 'medium' | 'low';
+  expected_completion_date?: string;
   notes?: string;
 }
 
@@ -59,6 +61,16 @@ export interface PropertyDraws {
   line_items?: DrawLineItem[];
 }
 
+export interface RoomRosterEntry {
+  room: string;
+  tenant: string | null;
+  lease_expiration?: string;
+  payment_status: 'current' | 'late' | 'delinquent' | 'vacant' | 'eviction' | string;
+  amount_due: number | null;
+  eviction_status?: string;
+  notes?: string;
+}
+
 export interface Property {
   id: string;
   name: string;
@@ -70,6 +82,7 @@ export interface Property {
   manager_email?: string;
   type: string;
   lender?: string;
+  room_roster?: RoomRosterEntry[];
   purchase_price?: number;
   closing_costs?: number;
   original_budget?: number;
@@ -102,6 +115,8 @@ export interface Property {
   past_orders: PastOrder[];
   quotes: Array<{ date: string; item: string; vendor: string; amount?: number; amount_range?: string; notes?: string }>;
   spreadsheet_url?: string;
+  insurance?: { renewal_date: string; carrier?: string; amount?: number };
+  taxes?: { due_date: string; amount?: number; status?: string };
   status_note?: string;
   last_report?: string;
   last_report_by?: string;
@@ -146,7 +161,15 @@ export interface Property {
 function readPropertyFile(filePath: string): Property | null {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(raw) as Property;
+    const data = JSON.parse(raw);
+    // Skip files that aren't property records (e.g. prospect lists, config files)
+    if (!data.id || !data.name || !data.city || !Array.isArray(data.units)) return null;
+    // Normalize missing arrays so the UI never crashes on .map()/.filter()
+    data.needs = Array.isArray(data.needs) ? data.needs : [];
+    data.balances_owed = Array.isArray(data.balances_owed) ? data.balances_owed : [];
+    data.past_orders = Array.isArray(data.past_orders) ? data.past_orders : [];
+    data.quotes = Array.isArray(data.quotes) ? data.quotes : [];
+    return data as Property;
   } catch {
     return null;
   }

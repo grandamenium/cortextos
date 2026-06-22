@@ -25,13 +25,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'invalid JSON' }, { status: 400 });
   }
 
-  const sender = (body.sender as string) || (body.from as string) || 'Unknown';
-  const text = (body.text as string) || (body.body as string) || (body.message as string) || '';
+  const sender = (body.sender as string) || (body.Sender as string) || (body.from as string) || 'Unknown';
+  const text = (body.text as string) || (body.Text as string) || (body.body as string) || (body.message as string) || (body.Message as string) || '';
+  const eventType = (body.type as string) || (body.Type as string) || '';
   const timestamp = (body.timestamp as string) || new Date().toISOString();
   const isGroup = !!(body.group || body.groupName);
   const groupName = (body.groupName as string) || (body.group as string) || '';
 
-  const entry = { ts: new Date().toISOString(), sender, text, timestamp, isGroup, groupName, raw: body };
+  const isMorningWake = eventType === 'morning_wake' || text === 'morning_wake';
+
+  const entry = { ts: new Date().toISOString(), sender, text, eventType: eventType || undefined, isMorningWake: isMorningWake || undefined, timestamp, isGroup, groupName, raw: body };
 
   // Log to file
   try {
@@ -39,10 +42,12 @@ export async function POST(request: NextRequest) {
     fs.appendFileSync(LOG_PATH, JSON.stringify(entry) + '\n');
   } catch { /* best effort */ }
 
-  // Route to Atlas agent inbox
-  const routeMsg = isGroup
-    ? `iMessage (group: ${groupName}) from ${sender}: ${text}`
-    : `iMessage from ${sender}: ${text}`;
+  // Route to Atlas agent inbox (including morning_wake so Atlas can trigger agenda)
+  const routeMsg = isMorningWake
+    ? `morning_wake event from ${sender}`
+    : isGroup
+      ? `iMessage (group: ${groupName}) from ${sender}: ${text}`
+      : `iMessage from ${sender}: ${text}`;
 
   try {
     execSync(`cortextos bus send-message atlas normal ${JSON.stringify(routeMsg)}`, {
@@ -52,7 +57,7 @@ export async function POST(request: NextRequest) {
     });
   } catch { /* non-blocking */ }
 
-  return NextResponse.json({ success: true, received: { sender, text: text.slice(0, 100) } });
+  return NextResponse.json({ success: true, event: isMorningWake ? 'morning_wake' : undefined, received: { sender, text: text.slice(0, 100) } });
 }
 
 // Health check

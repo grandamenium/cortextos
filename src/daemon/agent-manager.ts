@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { execFile } from 'child_process';
 import { join, relative } from 'path';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
@@ -577,6 +578,29 @@ export class AgentManager {
 
         // Text message (non-media)
         const text = stripControlChars(msg.text || '');
+
+        // /print <url-or-drive-id> — execute directly in daemon without waking the agent
+        if (/^\/print\s+\S/i.test(text)) {
+          const urlOrId = text.replace(/^\/print\s+/i, '').trim();
+          const scriptPath = join(agentDir, 'scripts', 'print-doc.js');
+          const sendReply = (m: string) => telegramApi?.sendMessage(String(effectiveChatId), m).catch(() => {});
+          if (!existsSync(scriptPath)) {
+            sendReply('Error: print-doc.js not found in agent scripts directory.');
+            return;
+          }
+          sendReply('Printing... one moment.');
+          execFile('node', [scriptPath, urlOrId], { timeout: 45000 }, (err, stdout, stderr) => {
+            if (err) {
+              log(`[print-doc] error: ${err.message}`);
+              sendReply(`Print failed: ${err.message.split('\n')[0]}`);
+            } else {
+              log(`[print-doc] success for: ${urlOrId}`);
+              sendReply('Print job sent to printer.');
+            }
+          });
+          return;
+        }
+
         const lastSent = FastChecker.readLastSent(stateDir, effectiveChatId);
         // Build reply context from the replied-to message.
         const replyToText = buildReplyContext(msg.reply_to_message);
