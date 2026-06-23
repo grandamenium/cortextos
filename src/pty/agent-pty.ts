@@ -243,7 +243,12 @@ export class AgentPTY {
         `(got ${JSON.stringify(skipPermissions)}); defaulting to skip-on.`,
       );
     }
-    if (skipPermissions !== false) {
+    // Claude Code rejects --dangerously-skip-permissions when the process runs
+    // as root (uid 0) and exits immediately. On root-only hosts (e.g. a VPS where
+    // the daemon runs as root) fall back to bypassPermissions in settings.json
+    // instead of passing the flag, so the agent still starts.
+    const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+    if (skipPermissions !== false && !isRoot) {
       args.push('--dangerously-skip-permissions');
     }
 
