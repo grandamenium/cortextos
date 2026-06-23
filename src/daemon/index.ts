@@ -5,6 +5,7 @@ import { spawnSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
+import { acquireLock, releaseLock } from '../utils/lock.js';
 
 // Each fast-checker registers a process-level SIGUSR1 handler (see
 // fast-checker.ts:102). With >10 active agents the default Node listener cap
@@ -217,11 +218,22 @@ function handleFatal(
  * cortextOS Daemon - single process managing all agents.
  * Run via `pm2 start ecosystem.config.js` or `cortextos ecosystem && pm2 start`.
  */
+export function acquireDaemonInstanceLock(ctxRoot: string): boolean {
+  const lockRoot = join(ctxRoot, '.daemon-instance');
+  ensureDir(lockRoot);
+  return acquireLock(lockRoot);
+}
+
+export function releaseDaemonInstanceLock(ctxRoot: string): void {
+  releaseLock(join(ctxRoot, '.daemon-instance'));
+}
+
 class Daemon {
   private agentManager: AgentManager | null = null;
   private ipcServer: IPCServer | null = null;
   private instanceId: string;
   private ctxRoot: string;
+  private lockHeld = false;
 
   constructor() {
     this.instanceId = process.env.CTX_INSTANCE_ID || 'default';
@@ -246,9 +258,14 @@ class Daemon {
       process.exit(1);
     }
 
+    ensureDir(this.ctxRoot);
+    if (!acquireDaemonInstanceLock(this.ctxRoot)) {
+      throw new Error(`Another cortextOS daemon is already running for instance "${this.instanceId}"`);
+    }
+    this.lockHeld = true;
+
     // Write PID file
     const pidFile = join(this.ctxRoot, 'daemon.pid');
-    ensureDir(this.ctxRoot);
     writeFileSync(pidFile, String(process.pid), 'utf-8');
     if (process.platform !== 'win32') {
       try {
@@ -286,6 +303,10 @@ class Daemon {
         const { unlinkSync } = require('fs');
         unlinkSync(pidFile);
       } catch { /* ignore */ }
+      if (this.lockHeld) {
+        releaseDaemonInstanceLock(this.ctxRoot);
+        this.lockHeld = false;
+      }
       process.exit(0);
     };
 
@@ -343,6 +364,10 @@ class Daemon {
         const { unlinkSync } = require('fs');
         unlinkSync(pidFile);
       } catch { /* ignore */ }
+      if (this.lockHeld) {
+        releaseDaemonInstanceLock(this.ctxRoot);
+        this.lockHeld = false;
+      }
     });
   }
 }

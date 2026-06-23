@@ -1,6 +1,7 @@
 import { join } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { platform } from 'os';
+import { execFileSync } from 'child_process';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 
@@ -295,8 +296,19 @@ export class AgentPTY {
   kill(): void {
     const pty = this.pty;
     if (pty) {
+      const pid = pty.pid;
       this._alive = false;
       this.pty = null;
+      if (platform() === 'win32' && pid) {
+        try {
+          execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        } catch {
+          // The PTY may already have exited; node-pty cleanup below is still required.
+        }
+      }
       pty.kill();
     }
   }
