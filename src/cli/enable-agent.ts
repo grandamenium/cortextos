@@ -4,6 +4,13 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
+import {
+  archiveClaudeProjectDirForLaunchDir,
+  findAgentDirAndOrg,
+  normalizeConfiguredWorkingDirectory,
+  readAgentConfigSafe,
+  validateClaudeWorkingDirectoryPolicy,
+} from '../utils/agent-session-isolation.js';
 import { resolveInstanceId } from './resolve-instance-id.js';
 
 /**
@@ -124,8 +131,9 @@ export const enableAgentCommand = new Command('enable')
   .argument('<agent>', 'Agent name to enable')
   .option('--instance <id>', 'Instance ID')
   .option('--org <org>', 'Organization name')
+  .option('--allow-external-cwd', 'Allow a non-agent-dir working_directory for Claude agents')
   .description('Enable an agent (register and start)')
-  .action(async (agent: string, options: { instance?: string; org?: string }) => {
+  .action(async (agent: string, options: { instance?: string; org?: string; allowExternalCwd?: boolean }) => {
     const instanceId = resolveInstanceId(options.instance);
     // Becky bug preflight: verify .env has BOT_TOKEN and CHAT_ID before registering.
     // Without this, the agent starts, inherits parent-process credentials silently,
@@ -152,6 +160,7 @@ export const enableAgentCommand = new Command('enable')
     }
 
     const orgDir = options.org ? join(projectRoot, 'orgs', options.org) : null;
+    const agentLocation = findAgentDirAndOrg(projectRoot, agent, options.org);
 
     // Locate agent dir — try org-scoped path first, then flat agents/ fallback
     let agentEnvPath: string | null = null;
@@ -223,6 +232,23 @@ export const enableAgentCommand = new Command('enable')
     }
 
     const agents = readEnabledAgents(instanceId);
+    if (!agentLocation) {
+      console.error(`Error: Could not locate agent directory for "${agent}" under ${projectRoot}.`);
+      process.exit(1);
+    }
+    const config = readAgentConfigSafe(agentLocation.agentDir);
+    const validation = validateClaudeWorkingDirectoryPolicy({
+      agentName: agent,
+      agentDir: agentLocation.agentDir,
+      config,
+      projectRoot,
+      enabledAgents: agents,
+      allowExternalCwd: options.allowExternalCwd,
+    });
+    if (!validation.ok) {
+      console.error(`Error: ${validation.error}`);
+      process.exit(1);
+    }
     agents[agent] = {
       enabled: true,
       status: 'configured',
@@ -266,6 +292,12 @@ export const disableAgentCommand = new Command('disable')
   .action(async (agent: string, options: { instance?: string }) => {
     const instanceId = resolveInstanceId(options.instance);
     const agents = readEnabledAgents(instanceId);
+    const projectRoot = discoverProjectRoot();
+    const agentLocation = findAgentDirAndOrg(projectRoot, agent, agents[agent]?.org);
+    const agentConfig = agentLocation ? readAgentConfigSafe(agentLocation.agentDir) : {};
+    const launchDir = agentLocation
+      ? normalizeConfiguredWorkingDirectory(agentLocation.agentDir, agentConfig.working_directory)
+      : null;
     if (agents[agent]) {
       agents[agent].enabled = false;
     }
@@ -274,6 +306,7 @@ export const disableAgentCommand = new Command('disable')
     // Try to stop via daemon IPC
     const ipc = new IPCClient(instanceId);
     const running = await ipc.isDaemonRunning();
+    let archiveSessionStore = !running;
     if (running) {
       // BUG-036 fix: write .user-disable marker BEFORE the stop, so the
       // SessionEnd crash-alert hook in src/hooks/hook-crash-alert.ts knows
@@ -284,11 +317,20 @@ export const disableAgentCommand = new Command('disable')
 
       const response = await ipc.send({ type: 'stop-agent', agent, source: 'cortextos disable' });
       if (response.success) {
+        archiveSessionStore = true;
         console.log(`Agent "${agent}" disabled and stopped.`);
       } else {
         console.log(`Agent "${agent}" disabled. Stop failed: ${response.error}`);
       }
     } else {
       console.log(`Agent "${agent}" disabled.`);
+    }
+
+    if (archiveSessionStore && launchDir) {
+      try {
+        archiveClaudeProjectDirForLaunchDir(launchDir);
+      } catch (err) {
+        console.error(`Warning: failed to archive Claude project state for "${agent}": ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   });

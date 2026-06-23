@@ -4,6 +4,8 @@ import { join } from 'path';
 import { homedir, platform } from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { IPCClient } from '../daemon/ipc-server.js';
+import { discoverProjectRoot, readEnabledAgents } from './enable-agent.js';
+import { findAgentDirAndOrg, readAgentConfigSafe, validateClaudeWorkingDirectoryPolicy } from '../utils/agent-session-isolation.js';
 import { resolveInstanceId } from './resolve-instance-id.js';
 
 const IS_WINDOWS = platform() === 'win32';
@@ -31,8 +33,9 @@ export const startCommand = new Command('start')
   .argument('[agent]', 'Specific agent to start (starts all if omitted)')
   .option('--instance <id>', 'Instance ID')
   .option('--foreground', 'Run daemon in foreground (no PM2, for debugging)')
+  .option('--allow-external-cwd', 'Allow a non-agent-dir working_directory for Claude agents')
   .description('Start the cortextOS daemon and agents')
-  .action(async (agent: string | undefined, options: { instance?: string; foreground?: boolean }) => {
+  .action(async (agent: string | undefined, options: { instance?: string; foreground?: boolean; allowExternalCwd?: boolean }) => {
     const instanceId = resolveInstanceId(options.instance);
     const ipc = new IPCClient(instanceId);
     const shouldBootstrapDaemon = await requireDaemonOfflineForBootstrap(ipc);
@@ -176,23 +179,39 @@ export const startCommand = new Command('start')
 
     // Daemon already running
     if (agent) {
+      const projectRoot = discoverProjectRoot();
       // Auto-register in enabled-agents.json if not already present
       const ctxRoot = join(homedir(), '.cortextos', instanceId);
       const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
-      let enabledAgents: Record<string, any> = {};
-      try {
-        if (existsSync(enabledPath)) {
-          enabledAgents = JSON.parse(readFileSync(enabledPath, 'utf-8'));
-        }
-      } catch { /* ignore */ }
+      const enabledAgents = readEnabledAgents(instanceId);
+      const preferredOrg = enabledAgents[agent]?.org
+        ?? Object.values(enabledAgents).find((entry: { org?: string }) => entry.org)?.org;
+      const agentLocation = findAgentDirAndOrg(projectRoot, agent, preferredOrg);
+
+      if (!agentLocation) {
+        console.error(`Agent "${agent}" was not found under ${projectRoot}.`);
+        process.exit(1);
+      }
+
+      const config = readAgentConfigSafe(agentLocation.agentDir);
+      const validation = validateClaudeWorkingDirectoryPolicy({
+        agentName: agent,
+        agentDir: agentLocation.agentDir,
+        config,
+        projectRoot,
+        enabledAgents,
+        allowExternalCwd: options.allowExternalCwd,
+      });
+      if (!validation.ok) {
+        console.error(`Error: ${validation.error}`);
+        process.exit(1);
+      }
 
       if (!enabledAgents[agent]) {
-        // Try to detect org from existing entries or project structure
-        const existingOrg = Object.values(enabledAgents as Record<string, any>).find((e: any) => e.org)?.org;
         enabledAgents[agent] = {
           enabled: true,
           status: 'configured',
-          ...(existingOrg ? { org: existingOrg } : {}),
+          ...(agentLocation.org ? { org: agentLocation.org } : {}),
         };
         mkdirSync(join(ctxRoot, 'config'), { recursive: true });
         writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');

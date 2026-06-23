@@ -1,6 +1,5 @@
-import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { join, sep } from 'path';
-import { homedir } from 'os';
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
@@ -12,6 +11,7 @@ import { ensureDir } from '../utils/atomic.js';
 import { writeCortextosEnv } from '../utils/env.js';
 import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
+import { findClaudeSessionFile, getDeterministicAgentSessionId } from '../utils/agent-session-isolation.js';
 
 type LogFn = (msg: string) => void;
 
@@ -26,6 +26,7 @@ export class AgentProcess {
   private pty: AgentPTY | CodexAppServerPTY | null = null;
   private sessionTimer: ReturnType<typeof setTimeout> | null = null;
   private crashCount: number = 0;
+  private rateLimitCount: number = 0;
   private maxCrashesPerDay: number = 10;
   // CrashLoopPauser (instar-inspired): sliding-window crash detection.
   // Timestamps of recent crashes within the configured window. If the
@@ -190,6 +191,7 @@ export class AgentProcess {
         return;
       }
       this.status = 'running';
+      this.rateLimitCount = 0;
       this.sessionStart = new Date();
       this.log(`Running (pid: ${this.pty.getPid()})`);
 
@@ -523,13 +525,13 @@ export class AgentProcess {
       const len = stats.size - start;
       // Synchronous read of the tail; small and bounded so the cost is fine
       // even in the exit handler.
-      const fd = require('fs').openSync(logPath, 'r');
+      const fd = openSync(logPath, 'r');
       try {
         const buf = Buffer.alloc(len);
-        const read = require('fs').readSync(fd, buf, 0, len, start);
+        const read = readSync(fd, buf, 0, len, start);
         return buf.toString('utf-8', 0, read);
       } finally {
-        require('fs').closeSync(fd);
+        closeSync(fd);
       }
     } catch {
       return '';
@@ -556,6 +558,24 @@ export class AgentProcess {
       return true;
     }
     return false;
+  }
+
+  private detectRateLimitCrash(recentOutput: string): boolean {
+    if (!recentOutput) return false;
+    const text = recentOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').toLowerCase();
+    return (
+      text.includes('overloaded_error') ||
+      text.includes('rate_limit_error') ||
+      text.includes('rate limit') ||
+      text.includes('rate-limit') ||
+      text.includes('too many requests') ||
+      text.includes('quota exceeded') ||
+      text.includes('usage limit') ||
+      text.includes('weekly limit') ||
+      text.includes('5-hour limit') ||
+      text.includes('5h limit') ||
+      /used \d+% of your/.test(text)
+    );
   }
 
   /**
@@ -660,6 +680,21 @@ export class AgentProcess {
       return;
     }
 
+    if (this.detectRateLimitCrash(recentOutput)) {
+      this.rateLimitCount += 1;
+      const backoff = Math.min(60_000 * Math.pow(2, this.rateLimitCount - 1), 30 * 60_000);
+      this.log(`Rate-limit exit detected. Restarting in ${backoff / 1000}s without charging crash_count (rate-limit #${this.rateLimitCount}).`);
+      this.appendCrashToRestartsLog(exitCode, backoff, 'RATE_LIMIT');
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(err => this.log(`Rate-limit restart failed: ${err}`));
+        }
+      }, backoff);
+      return;
+    }
+
     // CrashLoopPauser (instar-inspired): if a sliding window is configured,
     // check whether the agent is crash-looping before falling through to
     // the legacy daily counter. The window is a more precise signal than
@@ -750,26 +785,11 @@ export class AgentProcess {
       return existsSync(threadStatePath);
     }
 
-    // Default (Claude runtime): existing conversation = JSONL files present.
-    const launchDir = this.config.working_directory || this.env.agentDir;
-    if (!launchDir) return false;
-
-    // Claude projects dir uses the absolute path with all separators replaced by dashes
-    // e.g. /Users/foo/agents/boss -> -Users-foo-agents-boss (leading sep becomes -)
-    // Use homedir() for cross-platform compatibility (HOME is not set on Windows).
-    const convDir = join(
-      homedir(),
-      '.claude',
-      'projects',
-      launchDir.split(sep).join('-'),
-    );
-
-    try {
-      const files = require('fs').readdirSync(convDir);
-      return files.some((f: string) => f.endsWith('.jsonl'));
-    } catch {
-      return false;
-    }
+    // Default (Claude runtime): resume ONLY the deterministic per-agent session.
+    // This intentionally ignores cwd-scoped project history so two agents can
+    // never share a "brain" by pointing at the same working_directory.
+    const sessionId = getDeterministicAgentSessionId(this.name, this.env.org);
+    return findClaudeSessionFile(sessionId) !== null;
   }
 
   private buildStartupPrompt(): string {
@@ -984,7 +1004,7 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY' | 'RATE_LIMIT',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -995,7 +1015,9 @@ export class AgentProcess {
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
           : kind === 'IMAGE_POISON_RECOVERY'
             ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
-            : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
+            : kind === 'RATE_LIMIT'
+              ? `exit_code=${exitCode} rate_limit_count=${this.rateLimitCount} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
+              : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
       appendFileSync(join(logDir, 'restarts.log'), logLine, 'utf-8');
     } catch {

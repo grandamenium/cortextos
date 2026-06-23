@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
+import { getDeterministicAgentSessionId } from '../utils/agent-session-isolation.js';
 
 // node-pty types
 interface IPty {
@@ -174,7 +175,13 @@ export class AgentPTY {
     const autoAcceptDialogs = () => {
       if (!this.pty) return;
       const recent = this.outputBuffer.getRecent();
-      if (recent.includes('trust') || recent.includes('Yes') || recent.includes('bypass permissions')) {
+      const normalized = recent.toLowerCase();
+      if (normalized.includes('settings warning')) {
+        this.outputBuffer.push('\n[cortextos] ERROR: Claude Settings Warning detected in the target working_directory. Fix the referenced .claude/settings.json before restarting this agent.\n');
+        this.kill();
+        return;
+      }
+      if (normalized.includes('trust') || recent.includes('Yes') || normalized.includes('bypass permissions')) {
         this.pty.write('\r');
       }
     };
@@ -217,12 +224,32 @@ export class AgentPTY {
    */
   protected buildClaudeArgs(mode: 'fresh' | 'continue', prompt: string): string[] {
     const args: string[] = [];
+    const sessionId = getDeterministicAgentSessionId(this.env.agentName, this.env.org);
 
     if (mode === 'continue') {
-      args.push('--continue');
+      args.push('--resume', sessionId);
+    } else {
+      args.push('--session-id', sessionId);
     }
 
-    args.push('--dangerously-skip-permissions');
+    // Skip Claude Code's permission system by default (back-compat: agents have
+    // historically run unattended). Set `dangerously_skip_permissions: false` in
+    // the agent config to KEEP the gate on — then Claude Code's PermissionRequest
+    // flow (and the hook-permission-telegram approval) actually engages. Without
+    // this flag the CLI override would suppress any settings.json permission mode.
+    // Only the literal boolean `false` disables the skip; warn on a non-boolean so
+    // a typo (e.g. the string "false") can't silently leave an agent ungated when
+    // the operator intended to engage the gate.
+    const skipPermissions = this.config.dangerously_skip_permissions;
+    if (skipPermissions !== undefined && typeof skipPermissions !== 'boolean') {
+      console.warn(
+        `[agent-pty] ${this.env.agentName}: dangerously_skip_permissions must be true or false ` +
+        `(got ${JSON.stringify(skipPermissions)}); defaulting to skip-on.`,
+      );
+    }
+    if (skipPermissions !== false) {
+      args.push('--dangerously-skip-permissions');
+    }
 
     if (this.config.model) {
       args.push('--model', this.config.model);

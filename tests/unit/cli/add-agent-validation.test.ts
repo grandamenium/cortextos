@@ -15,7 +15,10 @@
  * entry of the add-agent action, so bad names are rejected upfront and
  * the caller gets a clear error before any filesystem state is touched.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { addAgentCommand } from '../../../src/cli/add-agent';
 
 describe('BUG-041: add-agent agent name validation', () => {
@@ -153,6 +156,51 @@ describe('issue #407: add-agent --org name validation', () => {
       )
     ).rejects.toThrow(/__TEST_PROCESS_EXIT_1__/);
 
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('agent session-isolation create validation', () => {
+  let tmpHome: string;
+  let tmpFramework: string;
+  const origHome = process.env.HOME;
+  const origFramework = process.env.CTX_FRAMEWORK_ROOT;
+
+  beforeEach(() => {
+    tmpHome = mkdtempSync(join(tmpdir(), 'cortextos-add-agent-home-'));
+    tmpFramework = mkdtempSync(join(tmpdir(), 'cortextos-add-agent-fw-'));
+    mkdirSync(join(tmpFramework, 'orgs', 'testorg'), { recursive: true });
+    process.env.HOME = tmpHome;
+    process.env.CTX_FRAMEWORK_ROOT = tmpFramework;
+  });
+
+  afterEach(() => {
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    if (origFramework === undefined) delete process.env.CTX_FRAMEWORK_ROOT;
+    else process.env.CTX_FRAMEWORK_ROOT = origFramework;
+    rmSync(tmpHome, { recursive: true, force: true });
+    rmSync(tmpFramework, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('rejects an external working_directory without --allow-external-cwd before creating files', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`__TEST_PROCESS_EXIT_${code}__`);
+    }) as never);
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(
+      addAgentCommand.parseAsync(
+        [
+          'node', 'cli', 'auditmaster', '--template', 'agent', '--org', 'testorg',
+          '--working-directory', '/Users/joshweiss/code/auditos',
+        ],
+      ),
+    ).rejects.toThrow(/__TEST_PROCESS_EXIT_1__/);
+
+    expect(consoleErrorSpy.mock.calls.flat().join(' ')).toContain('--allow-external-cwd');
+    expect(existsSync(join(tmpFramework, 'orgs', 'testorg', 'agents', 'auditmaster'))).toBe(false);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 });

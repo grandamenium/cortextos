@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-04-06T00:00:00Z",
+  "updated_at": "2026-06-06T09:30:00Z",
   "items": [
     {
       "name": "agentic-crm-assistant",
@@ -325,6 +325,18 @@
       "dependencies": [],
       "install_path": "community/skills/nighttime-mode",
       "submitted_at": "2026-04-06T00:00:00Z"
+    },
+    {
+      "name": "voice-agent-factory",
+      "description": "Turn any cortextOS agent into a live ElevenLabs voice agent: mine its real capabilities into a tool catalog, generate a policy-gated gateway dynamically (no pre-built scripts), test on probe-shaped fixtures, provision with tier fallback, verify with real conversations",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["voice", "elevenlabs", "conversational-ai", "gateway", "tools"],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/skills/voice-agent-factory",
+      "submitted_at": "2026-06-06T09:30:00Z"
     }
   ]
 }
