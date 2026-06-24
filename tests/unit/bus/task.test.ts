@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile, archiveTasks } from '../../../src/bus/task';
+import { createTask, updateTask, completeTask, cancelTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile, archiveTasks } from '../../../src/bus/task';
 import type { BusPaths } from '../../../src/types';
 
 describe('Task Management', () => {
@@ -140,6 +140,46 @@ describe('Task Management', () => {
     });
   });
 
+  describe('cancelTask', () => {
+    it('sets status to cancelled and does not set completed_at', () => {
+      const taskId = createTask(paths, 'paul', 'acme', 'Cancel me');
+      cancelTask(paths, taskId, 'not needed');
+
+      const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
+      expect(content.status).toBe('cancelled');
+      expect(content.completed_at).toBeNull();
+    });
+
+    it('writes a cancel audit entry with the reason as note', () => {
+      const taskId = createTask(paths, 'paul', 'acme', 'Audit cancel', { assignee: 'boris' });
+      cancelTask(paths, taskId, 'duplicate');
+
+      const log = readTaskAudit(paths, taskId);
+      expect(log.map(e => e.event)).toEqual(['create', 'cancel']);
+      expect(log[1].agent).toBe('boris');
+      expect(log[1].from).toBe('pending');
+      expect(log[1].to).toBe('cancelled');
+      expect(log[1].note).toBe('duplicate');
+    });
+
+    it('emits no task/task_completed activity event', () => {
+      const taskId = createTask(paths, 'paul', 'acme', 'Cancel-event task', {
+        assignee: 'boris',
+      });
+      cancelTask(paths, taskId, 'duplicate');
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventFile = join(paths.analyticsDir, 'events', 'boris', `${today}.jsonl`);
+      expect(existsSync(eventFile)).toBe(false);
+    });
+
+    it('throws the same not-found error for an unknown task id', () => {
+      expect(() => cancelTask(paths, 'task_nonexistent_000', 'duplicate')).toThrow(
+        /not found in any org under .*\/orgs\//,
+      );
+    });
+  });
+
   describe('listTasks', () => {
     it('returns all non-archived tasks', () => {
       createTask(paths, 'paul', 'acme', 'Task 1');
@@ -165,6 +205,24 @@ describe('Task Management', () => {
 
       const pending = listTasks(paths, { status: 'pending' });
       expect(pending.length).toBe(1);
+    });
+
+    it('hides cancelled tasks by default', () => {
+      const taskId = createTask(paths, 'paul', 'acme', 'Task 1');
+      cancelTask(paths, taskId, 'duplicate');
+
+      const tasks = listTasks(paths);
+      expect(tasks).toEqual([]);
+    });
+
+    it('shows cancelled tasks when explicitly filtered by status', () => {
+      const taskId = createTask(paths, 'paul', 'acme', 'Task 1');
+      cancelTask(paths, taskId, 'duplicate');
+
+      const cancelled = listTasks(paths, { status: 'cancelled' });
+      expect(cancelled).toHaveLength(1);
+      expect(cancelled[0].id).toBe(taskId);
+      expect(cancelled[0].status).toBe('cancelled');
     });
   });
 });

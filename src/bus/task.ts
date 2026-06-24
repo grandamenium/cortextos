@@ -294,7 +294,7 @@ export function updateTask(
  */
 export interface TaskAuditEntry {
   ts: string; // ISO 8601
-  event: 'create' | 'claim' | 'update' | 'complete';
+  event: 'create' | 'claim' | 'update' | 'complete' | 'cancel';
   agent: string; // who caused the event
   from?: TaskStatus;
   to?: TaskStatus;
@@ -518,6 +518,45 @@ export function completeTask(
 }
 
 /**
+ * Cancel a task: terminal 'cancelled' state. Unlike completeTask this sets
+ * NO completed_at and emits NO task_completed event — a cancelled task is
+ * never counted as done and earns no productivity credit. Preferred over
+ * hard delete so the audit trail survives.
+ */
+export function cancelTask(
+  paths: BusPaths,
+  taskId: string,
+  reason?: string,
+): void {
+  const filePath = findTaskFile(paths, taskId);
+  if (!filePath) {
+    throw new Error(
+      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+    );
+  }
+  let prevStatus: TaskStatus | undefined;
+  let assignee: string | undefined;
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    const task: Task = JSON.parse(content);
+    prevStatus = task.status;
+    assignee = task.assigned_to;
+    task.status = 'cancelled';
+    task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    atomicWriteSync(filePath, JSON.stringify(task));
+  } catch (err) {
+    throw new Error(`Task ${taskId} cancel failed: ${err}`);
+  }
+  appendTaskAudit(paths, taskId, {
+    event: 'cancel',
+    agent: assignee || 'unknown',
+    from: prevStatus,
+    to: 'cancelled',
+    note: reason,
+  });
+}
+
+/**
  * List tasks with optional filters.
  * Matches bash list-tasks.sh behavior.
  */
@@ -551,6 +590,9 @@ export function listTasks(
       if (filters?.status && task.status !== filters.status) continue;
       if (filters?.priority && task.priority !== filters.priority) continue;
       if (task.archived) continue;
+      // Cancelled tasks are hidden from every default view (like archived).
+      // An explicit `--status cancelled` query still surfaces them for audit/recovery.
+      if (task.status === 'cancelled' && filters?.status !== 'cancelled') continue;
 
       tasks.push(task);
     } catch {

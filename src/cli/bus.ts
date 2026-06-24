@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName, validateTaskId } from '../utils/validate.js';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { createTask, updateTask, completeTask, cancelTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -315,6 +315,18 @@ busCommand
 
     completeTask(paths, id, effectiveResult);
     console.log(`Completed ${id}`);
+  });
+
+busCommand
+  .command('cancel-task')
+  .description('Cancel a task (terminal cancelled state — no completion, no productivity credit)')
+  .argument('<id>', 'Task ID')
+  .option('--reason <text>', 'optional cancellation reason')
+  .action((id: string, opts: { reason?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    cancelTask(paths, id, opts.reason);
+    console.log(`Cancelled ${id}`);
   });
 
 busCommand
