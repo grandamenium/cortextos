@@ -36,6 +36,14 @@ import { appendExecutionLog } from './cron-execution-log.js';
 // Cron expression parser — no external deps.
 // Supports: *, */N, comma-lists, and ranges for each of the 5 standard fields.
 // Fields: minute hour dom month dow (day-of-week: 0=Sunday … 6=Saturday).
+//
+// TIMEZONE: cron expressions are evaluated in UTC, NOT the daemon's local
+// timezone. The org timezone is UTC (see SYSTEM.md) and all cron schedules are
+// authored as UTC wall-clock times. Matching against UTC fields makes fire
+// times deterministic regardless of the host machine's system timezone — a
+// daemon running in America/New_York (UTC-4) must still fire "0 13 * * *" at
+// 13:00 UTC, not 17:00 UTC. Interpreting in local time caused fixed-hour crons
+// to fire exactly one UTC-offset late (4h on EDT).
 // ---------------------------------------------------------------------------
 
 /**
@@ -74,7 +82,10 @@ function expandField(field: string, min: number, max: number): number[] {
  * expression, starting from `fromMs` (exclusive — the next fire must be
  * strictly after fromMs, rounded forward to the next whole minute).
  *
- * @param expr   - 5-field cron expression ("min hour dom month dow").
+ * Cron fields are matched against UTC wall-clock components (see the TIMEZONE
+ * note above), so the returned instant is independent of the host timezone.
+ *
+ * @param expr   - 5-field cron expression ("min hour dom month dow"), UTC.
  * @param fromMs - Starting epoch time in milliseconds.
  * @returns      Epoch ms of the next matching minute, or NaN if unparseable.
  */
@@ -104,11 +115,11 @@ export function nextFireFromCron(expr: string, fromMs: number): number {
 
   for (let i = 0; i < MAX_MINUTES; i++) {
     const d = new Date(candidate);
-    const m  = d.getMinutes();
-    const h  = d.getHours();
-    const dy = d.getDate();
-    const mo = d.getMonth() + 1; // 1-12
-    const dw = d.getDay();       // 0-6
+    const m  = d.getUTCMinutes();
+    const h  = d.getUTCHours();
+    const dy = d.getUTCDate();
+    const mo = d.getUTCMonth() + 1; // 1-12
+    const dw = d.getUTCDay();       // 0-6
 
     if (
       months.includes(mo) &&
