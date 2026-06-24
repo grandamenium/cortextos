@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync } from 'fs';
 import { join, relative } from 'path';
 import { homedir } from 'os';
 import { execFile } from 'child_process';
@@ -421,6 +421,13 @@ export class AgentManager {
 
     // BUG-043 fix: resolve the agent's true org instead of using `this.org`.
     const resolvedOrg = this.resolveAgentOrg(name, org);
+
+    // BUG-011 fix (companion to stopAgent's disable): re-enable the agent in
+    // enabled-agents.json before spawning. This clears the disabled state written
+    // by stopAgent() so external watchdogs see "enabled" after the restart completes.
+    // Safe for discoverAndStart() too: if the agent was enabled when discovered, it
+    // remains enabled; the write is idempotent.
+    this.updateEnabledAgents(name, true);
 
     // Auto-discover agent directory if not provided (e.g. when started via IPC)
     if (!agentDir || !existsSync(agentDir)) {
@@ -1270,14 +1277,59 @@ export class AgentManager {
   }
 
   /**
+   * BUG-011 fix: atomically mark an agent enabled or disabled in enabled-agents.json.
+   *
+   * stopAgent() calls this with enabled=false BEFORE killing the process —
+   * any external watchdog that reads enabled-agents.json will see the agent as
+   * "intentionally stopped" and skip respawn. startAgent() calls it with
+   * enabled=true before spawning so the agent is visible to the respawn loop
+   * again (and to discoverAndStart on the next daemon restart).
+   *
+   * Race-safe: Node.js is single-threaded so the read-update-write sequence
+   * is atomic within the event loop. The rename-based write prevents torn reads
+   * from concurrent external readers (dashboards, monitoring scripts).
+   *
+   * Best-effort: a write failure logs to daemon stderr but never blocks the
+   * stop/start operation. The in-memory stopRequested flag (in AgentProcess)
+   * is the primary BUG-011 guard; this is the persistent / watchdog-visible layer.
+   */
+  private updateEnabledAgents(name: string, enabled: boolean): void {
+    const enabledFile = join(this.ctxRoot, 'config', 'enabled-agents.json');
+    let data: Record<string, { enabled?: boolean; org?: string; status?: string }> = {};
+    if (existsSync(enabledFile)) {
+      try { data = JSON.parse(readFileSync(enabledFile, 'utf-8')); } catch { /* start fresh */ }
+    }
+    // Preserve all existing fields (org, status) — only update enabled.
+    data[name] = { ...(data[name] ?? {}), enabled };
+    try {
+      mkdirSync(join(this.ctxRoot, 'config'), { recursive: true });
+      const tmp = `${enabledFile}.tmp.${process.pid}`;
+      writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+      renameSync(tmp, enabledFile);
+    } catch (err) {
+      console.error(`[agent-manager] BUG-011: failed to update enabled-agents.json for ${name} (enabled=${enabled}): ${err}`);
+    }
+  }
+
+  /**
    * Stop a specific agent.
    */
-  async stopAgent(name: string): Promise<void> {
+  async stopAgent(name: string, skipEnabledUpdate = false): Promise<void> {
     const entry = this.agents.get(name);
     if (!entry) {
       console.log(`[agent-manager] Agent ${name} not found`);
       return;
     }
+
+    // BUG-011 fix: disable FIRST (before killing) so any external watchdog that
+    // reads enabled-agents.json sees "disabled" and will NOT respawn the agent
+    // while we're in the middle of the stop→start window.
+    // Must happen BEFORE process.stop() — once the process is dead, the watchdog
+    // could fire at any moment. enabled=true is restored by startAgent() on restart.
+    // skipEnabledUpdate=true is used by stopAll() (daemon lifecycle shutdown) — a
+    // clean daemon restart should not leave all agents disabled; discoverAndStart()
+    // on the new daemon process reads enabled-agents.json and must find them enabled.
+    if (!skipEnabledUpdate) this.updateEnabledAgents(name, false);
 
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
@@ -1365,7 +1417,10 @@ export class AgentManager {
 
     for (const name of names) {
       try {
-        await this.stopAgent(name);
+        // skipEnabledUpdate=true: daemon lifecycle shutdown must not write enabled=false
+        // for every agent — the next daemon process's discoverAndStart() reads this file
+        // and would find all agents disabled, booting zero agents (silent outage).
+        await this.stopAgent(name, true);
       } catch (err) {
         console.error(`[agent-manager] Error stopping ${name}:`, err);
       }
