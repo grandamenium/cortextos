@@ -50,28 +50,71 @@ if [ -n "$BUILD_SHA" ] && git merge-base --is-ancestor "$REMOTE_SHA" "$BUILD_SHA
       echo "[cortextos-src-watch] WARNING: daemon worktree dist no .build-sha at $DAEMON_DIST_DIR — cannot verify" >&2
     elif git merge-base --is-ancestor "$REMOTE_SHA" "$DAEMON_BUILD_SHA" 2>/dev/null; then
       echo "[cortextos-src-watch] daemon worktree dist up-to-date (${DAEMON_BUILD_SHA:0:8} ⊇ ${REMOTE_SHA:0:8} at $DAEMON_DIST_DIR)"
-      # Lag has cleared — drop the dedup signature so a future lag re-pages.
-      rm -f "${CTX_ROOT:-$HOME/.cortextos/default}/state/src-watch-daemon-lag.sig" 2>/dev/null || true
+      # Lag has cleared — drop the dedup signature AND any task-mute marker so a
+      # future (unrelated) lag re-pages and is never silently swallowed by a
+      # marker that outlived the drift it was deferring.
+      _LAG_STATE_DIR="${CTX_ROOT:-$HOME/.cortextos/default}/state"
+      rm -f "$_LAG_STATE_DIR/src-watch-daemon-lag.sig" "$_LAG_STATE_DIR/src-watch-daemon-lag.mute" 2>/dev/null || true
     else
       echo "[cortextos-src-watch] WARNING: daemon worktree dist LAG — daemon@${DAEMON_BUILD_SHA:0:8} behind origin/main ${REMOTE_SHA:0:8} ($DAEMON_DIST_DIR)" >&2
-      # SHA-level dedup: only page platform-director when the drift signature
-      # (daemon-built-sha : origin-main-sha) changes. An unchanged signature on
-      # every 10-min fire is the SAME unresolved lag — re-paging it is noise
-      # (PD correction 2026-06-25; devops-monitor probe already dedups likewise).
-      # The signature naturally changes (and re-pages) when origin/main advances
-      # or the worktree is rebuilt to a new SHA; the up-to-date branch above
-      # clears it once the lag resolves.
-      LAG_SIG="${DAEMON_BUILD_SHA}:${REMOTE_SHA}"
-      LAG_SIG_FILE="${CTX_ROOT:-$HOME/.cortextos/default}/state/src-watch-daemon-lag.sig"
-      LAST_LAG_SIG=$(cat "$LAG_SIG_FILE" 2>/dev/null || echo "")
-      if [ "$LAG_SIG" != "$LAST_LAG_SIG" ]; then
-        cortextos bus send-message platform-director high \
-          "[cortextos-src-watch] Daemon worktree dist lag: $DAEMON_DIST_DIR built@${DAEMON_BUILD_SHA:0:8} but origin/main@${REMOTE_SHA:0:8} — worktree rebuild+restart needed" \
-          2>/dev/null || true
-        mkdir -p "$(dirname "$LAG_SIG_FILE")" 2>/dev/null || true
-        printf '%s' "$LAG_SIG" > "$LAG_SIG_FILE" 2>/dev/null || true
+      LAG_STATE_DIR="${CTX_ROOT:-$HOME/.cortextos/default}/state"
+
+      # --- Task-aware mute (outer layer) ---------------------------------------
+      # A deferred-and-owned lag (an open platform-director task tracking THIS
+      # worktree rebuild) re-pages with zero new signal on every main-advance,
+      # because each advance is a genuinely-new SHA signature. If a mute marker
+      # names an OPEN task, suppress the page until that task resolves. The
+      # marker holds the task id (first line of the mute file); the rebuild owner
+      # writes it when they accept the deferral (PD request 2026-06-25).
+      # FAIL-OPEN: any lookup failure / ambiguity falls through to paging — a
+      # mute must never silently hide a real lag. Self-clearing: a marker whose
+      # task is completed/cancelled is deleted and paging resumes.
+      MUTE_FILE="$LAG_STATE_DIR/src-watch-daemon-lag.mute"
+      LAG_MUTED=""
+      if [ -f "$MUTE_FILE" ]; then
+        MUTE_TASK=$(head -n1 "$MUTE_FILE" 2>/dev/null | tr -d '[:space:]')
+        if [ -n "$MUTE_TASK" ]; then
+          MUTE_STATUS=$(cortextos bus list-tasks --format json 2>/dev/null \
+            | MUTE_TASK="$MUTE_TASK" python3 -c 'import json,os,sys
+try: tasks=json.load(sys.stdin)
+except Exception: sys.exit(0)
+tid=os.environ["MUTE_TASK"]
+for t in tasks:
+  if t.get("id")==tid:
+    print(t.get("status","")); break' 2>/dev/null)
+          if [ "$MUTE_STATUS" = "pending" ] || [ "$MUTE_STATUS" = "in_progress" ]; then
+            LAG_MUTED="$MUTE_TASK"
+          elif [ -n "$MUTE_STATUS" ]; then
+            # Task resolved (completed/cancelled) — drop the stale marker, resume paging.
+            rm -f "$MUTE_FILE" 2>/dev/null || true
+          fi
+          # Empty MUTE_STATUS (lookup failed or task not found): fail-open — do
+          # NOT suppress; leave the marker in place for the owner to manage.
+        fi
+      fi
+
+      if [ -n "$LAG_MUTED" ]; then
+        echo "[cortextos-src-watch] daemon worktree dist lag — page MUTED by open task $LAG_MUTED (known/owned, deferred rebuild)"
       else
-        echo "[cortextos-src-watch] daemon worktree dist lag UNCHANGED (${LAG_SIG}) — page deduped"
+        # --- SHA-level dedup (inner layer) -------------------------------------
+        # Only page when the drift signature (daemon-built-sha : origin-main-sha)
+        # changes. An unchanged signature on every 10-min fire is the SAME
+        # unresolved lag — re-paging it is noise (PD correction 2026-06-25;
+        # devops-monitor probe dedups likewise). The signature changes (and
+        # re-pages) when origin/main advances or the worktree is rebuilt; the
+        # up-to-date branch above clears it once the lag resolves.
+        LAG_SIG="${DAEMON_BUILD_SHA}:${REMOTE_SHA}"
+        LAG_SIG_FILE="$LAG_STATE_DIR/src-watch-daemon-lag.sig"
+        LAST_LAG_SIG=$(cat "$LAG_SIG_FILE" 2>/dev/null || echo "")
+        if [ "$LAG_SIG" != "$LAST_LAG_SIG" ]; then
+          cortextos bus send-message platform-director high \
+            "[cortextos-src-watch] Daemon worktree dist lag: $DAEMON_DIST_DIR built@${DAEMON_BUILD_SHA:0:8} but origin/main@${REMOTE_SHA:0:8} — worktree rebuild+restart needed (mute: write task id to $MUTE_FILE to defer)" \
+            2>/dev/null || true
+          mkdir -p "$LAG_STATE_DIR" 2>/dev/null || true
+          printf '%s' "$LAG_SIG" > "$LAG_SIG_FILE" 2>/dev/null || true
+        else
+          echo "[cortextos-src-watch] daemon worktree dist lag UNCHANGED (${LAG_SIG}) — page deduped"
+        fi
       fi
     fi
   fi
