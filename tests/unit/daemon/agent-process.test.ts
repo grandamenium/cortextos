@@ -416,3 +416,53 @@ describe('AgentProcess — CrashLoopPauser (instar-inspired sliding window)', ()
     expect(ap.getStatus().status).not.toBe('halted');
   });
 });
+
+describe('AgentProcess - onboarding marker (do not auto-write .onboarded on heartbeat)', () => {
+  // Regression: buildStartupPrompt used to auto-write the .onboarded marker
+  // whenever a heartbeat.json existed, on the assumption the agent had
+  // onboarded and just forgot the marker. That silently suppressed FIRST BOOT
+  // for agents that were manually scaffolded (heartbeat present) but never
+  // actually ran onboarding. The marker must be explicit: a heartbeat alone
+  // must NOT mark an agent onboarded. This is general daemon behavior (it was
+  // surfaced via a manually-scaffolded opencode agent, but applies to any
+  // runtime).
+  it('does not auto-mark a heartbeat-only agent as onboarded (still routes to FIRST BOOT)', async () => {
+    fsMocks.existsSync.mockImplementation((path: string) => {
+      if (path.endsWith('/.force-fresh')) return false;
+      if (path.endsWith('/.onboarded')) return false;
+      if (path.endsWith('/heartbeat.json')) return true;
+      if (path.endsWith('/ONBOARDING.md')) return true;
+      return false;
+    });
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const prompt = mockPty.spawn.mock.calls[0]?.[1] ?? '';
+    expect(prompt).toContain('FIRST BOOT');
+    expect(prompt).toContain('read ONBOARDING.md and complete the onboarding protocol');
+    // The buggy auto-write must be gone: no .onboarded written from heartbeat presence.
+    expect(fsMocks.writeFileSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('/.onboarded'),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('respects an existing .onboarded marker (suppresses FIRST BOOT)', async () => {
+    fsMocks.existsSync.mockImplementation((path: string) => {
+      if (path.endsWith('/.force-fresh')) return false;
+      if (path.endsWith('/.onboarded')) return true;
+      if (path.endsWith('/heartbeat.json')) return true;
+      if (path.endsWith('/ONBOARDING.md')) return true;
+      return false;
+    });
+
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const prompt = mockPty.spawn.mock.calls[0]?.[1] ?? '';
+    expect(prompt).not.toContain('FIRST BOOT');
+    expect(prompt).not.toContain('complete the onboarding protocol');
+  });
+});
