@@ -299,7 +299,17 @@ describe('buildReplyContext - Telegram reply context (BUG fix: media replies los
 
   it('returns caption for media messages with captions', () => {
     const msg = { message_id: 2, chat: { id: 1 }, photo: [{ file_id: 'x', width: 100, height: 100, file_size: 1 }], caption: 'Check this out' };
-    expect(buildReplyContext(msg)).toBe('Check this out');
+    expect(buildReplyContext(msg)).toBe('Check this out\n[photo]');
+  });
+
+  it('returns caption plus document name for document replies with captions', () => {
+    const msg = {
+      message_id: 12,
+      chat: { id: 1 },
+      caption: 'Code review done — full HTML breakdown attached.',
+      document: { file_id: 'd3', file_name: 'hermes-memory-review.html' },
+    };
+    expect(buildReplyContext(msg)).toBe('Code review done — full HTML breakdown attached.\n[document: hermes-memory-review.html]');
   });
 
   it('returns [video] for video messages without caption', () => {

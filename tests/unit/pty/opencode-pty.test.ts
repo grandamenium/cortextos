@@ -315,6 +315,44 @@ describe('OpencodePTY', () => {
     }
   });
 
+  it('elevates Telegram reply target context for ambiguous OpenCode follow-ups', async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const pty = new OpencodePTY(mockEnv, {});
+      installSpawnMock(pty);
+      await pty.spawn('fresh', '');
+      mockPty.write.mockClear();
+
+      pty.injectMessage([
+        '=== TELEGRAM from [USER: James] (chat_id:7940429114) ===',
+        '[Replying to: "Code review done — 95 files, ~18.5k lines analyzed. Full HTML breakdown attached.\\n[document: hermes-memory-review.html]"]',
+        '```',
+        "what's this?",
+        '```',
+        "Reply using: cortextos bus send-telegram 7940429114 '<your reply>'",
+      ].join('\n'));
+
+      expect(mockPty.write.mock.calls[0][0]).toBe('\x1b');
+      await vi.advanceTimersByTimeAsync(150);
+
+      const written = mockPty.write.mock.calls[1][0];
+      expect(written).toContain('[OPENCODE REPLY TARGET]');
+      expect(written).toContain('The Telegram user replied to this specific prior message:');
+      expect(written).toContain('Code review done — 95 files');
+      expect(written).toContain('[document: hermes-memory-review.html]');
+      expect(written).toContain('If the user says "this", "that", "it"');
+      expect(written).toContain('[OPENCODE TELEGRAM DELIVERY REQUIREMENT]');
+
+      await vi.advanceTimersByTimeAsync(300);
+      expect(mockPty.write.mock.calls.at(-1)?.[0]).toBe('\r');
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('escapes OpenCode shell mode before every Telegram inbound injection', async () => {
     // Regression for the multi-turn shell-mode bug: after the agent runs the
     // reply-protocol `send-telegram` command the TUI is left in shell mode, so

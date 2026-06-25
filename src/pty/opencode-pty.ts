@@ -257,7 +257,16 @@ export class OpencodePTY extends AgentPTY {
     if (!telegramMatch) return safeContent;
 
     const chatId = telegramMatch[1];
+    const replyTargetMatch = safeContent.match(/\[Replying to:\s*"([\s\S]*?)"\]/);
+    const replyTargetBlock = replyTargetMatch?.[1]
+      ? `
+[OPENCODE REPLY TARGET]
+The Telegram user replied to this specific prior message:
+"${replyTargetMatch[1].slice(0, 500)}"
+If the user says "this", "that", "it", or asks a short follow-up, answer about this replied-to message before using broader recent history.`
+      : '';
     return `${safeContent}
+${replyTargetBlock}
 
 [OPENCODE TELEGRAM DELIVERY REQUIREMENT]
 This is a real Telegram inbound message. A plain answer printed only in the OpenCode TUI is NOT delivered to the user and is a failed reply.

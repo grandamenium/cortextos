@@ -8,6 +8,7 @@ import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } fr
 import { join, dirname } from 'path';
 import { logEvent } from '../bus/event.js';
 import type { BusPaths, TelegramMessage } from '../types/index.js';
+import { stripControlChars } from '../utils/validate.js';
 
 /**
  * Optional metadata attached to an outbound Telegram message log entry.
@@ -95,12 +96,18 @@ export function recordInboundTelegram(
   log?: (m: string) => void,
 ): void {
   const text = (msg.text || msg.caption || '').toString();
+  const replyTo = summarizeReplyTarget(msg.reply_to_message);
   logInboundMessage(ctxRoot, agentName, {
     message_id: msg.message_id,
     from: msg.from?.id,
     from_name: fromName,
     chat_id: msg.chat?.id,
     text,
+    ...(replyTo ? {
+      reply_to_message_id: replyTo.messageId,
+      reply_to_text: replyTo.text,
+      reply_to_has_media: replyTo.hasMedia,
+    } : {}),
     timestamp: new Date().toISOString(),
   });
 
@@ -113,10 +120,40 @@ export function recordInboundTelegram(
       from_name: fromName,
       has_media: hasMedia,
       text_chars: text.length,
+      ...(replyTo ? {
+        reply_to_message_id: replyTo.messageId,
+        reply_to_text_chars: replyTo.text.length,
+        reply_to_has_media: replyTo.hasMedia,
+      } : {}),
     });
   } catch (err) {
     log?.(`logEvent(telegram_received) failed: ${err}`);
   }
+}
+
+function summarizeReplyTarget(msg: TelegramMessage | undefined): {
+  messageId: number;
+  text: string;
+  hasMedia: boolean;
+} | null {
+  if (!msg) return null;
+
+  const parts: string[] = [];
+  if (msg.text) parts.push(stripControlChars(msg.text));
+  if (msg.caption) parts.push(stripControlChars(msg.caption));
+  if (msg.document) parts.push(`[document: ${msg.document.file_name ?? 'file'}]`);
+  if (msg.photo) parts.push('[photo]');
+  if (msg.video) parts.push('[video]');
+  if (msg.video_note) parts.push('[video note]');
+  if (msg.voice) parts.push('[voice message]');
+  if (msg.audio) parts.push('[audio]');
+
+  const hasMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
+  return {
+    messageId: msg.message_id,
+    text: parts.join('\n').slice(0, 500),
+    hasMedia,
+  };
 }
 
 /**

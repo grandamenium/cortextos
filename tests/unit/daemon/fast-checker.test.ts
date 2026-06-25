@@ -719,6 +719,21 @@ describe('FastChecker', () => {
       expect(result).toContain('=== TELEGRAM PHOTO from Alice (chat_id:999) ===');
       expect(result).toContain('local_file: /tmp/photo.jpg');
     });
+
+    it('preserves reply context for media messages', () => {
+      const result = FastChecker.formatTelegramPhotoMessage(
+        'Alice',
+        '999',
+        'what is this?',
+        '/tmp/photo.jpg',
+        'Code review done — full HTML breakdown attached.\n[document: hermes-review.html]',
+      );
+
+      expect(result).toContain('[Replying to: "Code review done — full HTML breakdown attached.\n[document: hermes-review.html]"]');
+      expect(result).toContain('caption:');
+      expect(result).toContain('what is this?');
+      expect(result).toContain('local_file: /tmp/photo.jpg');
+    });
   });
 
   describe('formatTelegramDocumentMessage', () => {

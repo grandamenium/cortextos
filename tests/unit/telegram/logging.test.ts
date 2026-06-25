@@ -150,6 +150,47 @@ describe('Telegram Logging', () => {
       expect(eventEntry.metadata.text_chars).toBe('screenshot of the dashboard'.length);
     });
 
+    it('archives reply target metadata for Telegram replies', () => {
+      const paths = buildPaths(testDir, 'spark');
+      mkdirSync(paths.stateDir, { recursive: true });
+
+      const msg: TelegramMessage = {
+        message_id: 124,
+        date: 1714214400,
+        from: { id: 6595584963, is_bot: false, first_name: 'Eros' },
+        chat: { id: 6595584963, type: 'private' },
+        text: 'what is this?',
+        reply_to_message: {
+          message_id: 36,
+          date: 1714214300,
+          chat: { id: 6595584963, type: 'private' },
+          caption: 'Code review done — full HTML breakdown attached.',
+          document: { file_id: 'doc1', file_name: 'hermes-review.html' },
+        },
+      };
+
+      recordInboundTelegram(paths, testDir, 'spark', 'eros-os', 'Eros', msg);
+
+      const inboundPath = join(testDir, 'logs', 'spark', 'inbound-messages.jsonl');
+      const inboundEntry = JSON.parse(readFileSync(inboundPath, 'utf-8').trim());
+      expect(inboundEntry).toMatchObject({
+        message_id: 124,
+        text: 'what is this?',
+        reply_to_message_id: 36,
+        reply_to_text: 'Code review done — full HTML breakdown attached.\n[document: hermes-review.html]',
+        reply_to_has_media: true,
+      });
+
+      const today = new Date().toISOString().split('T')[0];
+      const eventPath = join(testDir, 'analytics', 'events', 'spark', `${today}.jsonl`);
+      const eventEntry = JSON.parse(readFileSync(eventPath, 'utf-8').trim());
+      expect(eventEntry.metadata).toMatchObject({
+        reply_to_message_id: 36,
+        reply_to_text_chars: 'Code review done — full HTML breakdown attached.\n[document: hermes-review.html]'.length,
+        reply_to_has_media: true,
+      });
+    });
+
     it('still writes the JSONL row when the bus-event emit throws', () => {
       const paths = buildPaths(testDir, 'spark');
       mkdirSync(paths.stateDir, { recursive: true });
