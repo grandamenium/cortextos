@@ -23,6 +23,11 @@ module.exports = {
         // agents receive messages but can't reply. (Added manually 2026-06-09.)
         PATH: "C:\\Users\\jenni\\AppData\\Roaming\\npm;" + (process.env.PATH || ""),
       },
+      // Cap Node heap to prevent uncontrolled growth to 4 GB before OOM crash.
+      // Daemon was crashing with FATAL ERROR: Reached heap limit (~4 GB) every
+      // ~30 min. 1536 MB forces GC earlier and keeps restarts small/fast.
+      // (Added manually 2026-06-23.)
+      node_args: '--max-old-space-size=1536',
       max_restarts: 50,
       restart_delay: 5000,
       autorestart: true,

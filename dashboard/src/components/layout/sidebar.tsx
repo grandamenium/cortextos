@@ -19,6 +19,8 @@ import {
   IconTarget,
   IconMessages,
   IconNotes,
+  IconBuildingSkyscraper,
+  IconBuildingCommunity,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -42,6 +44,8 @@ const navItems: NavItem[] = [
   // Operations
   { label: 'Comms', href: '/comms', icon: IconMessages, section: 'ops' },
   { label: 'Approvals', href: '/approvals', icon: IconShieldCheck, section: 'ops' },
+  { label: 'Deals', href: '/deals', icon: IconBuildingSkyscraper, section: 'ops' },
+  { label: 'Timberline', href: '/properties', icon: IconBuildingCommunity, section: 'ops' },
   { label: 'Workflows', href: '/workflows', icon: IconClock, section: 'ops' },
   { label: 'Strategy', href: '/strategy', icon: IconTarget, section: 'ops' },
   { label: 'Analytics', href: '/analytics', icon: IconChartDots3, section: 'ops' },

@@ -13,6 +13,7 @@ export interface PropertyUnit {
 
 export interface PropertyNeed {
   item: string;
+  unit?: string;
   vendor?: string;
   cost: number | null;
   status: 'needed' | 'in_progress' | 'on_hold' | 'quote_pending' | 'pending' | 'done';

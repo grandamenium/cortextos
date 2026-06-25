@@ -3,15 +3,16 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useOrg } from '@/hooks/use-org';
 import { Button } from '@/components/ui/button';
-import { IconLayoutKanban, IconList, IconChecklist } from '@tabler/icons-react';
+import { IconLayoutKanban, IconList, IconChecklist, IconTimeline } from '@tabler/icons-react';
 import { KanbanBoard } from '@/components/tasks/kanban-board';
 import { TaskListTable } from '@/components/tasks/task-list-table';
+import { GanttChart } from '@/components/tasks/gantt-chart';
 import { TaskDetailSheet } from '@/components/tasks/task-detail-sheet';
 import { CreateTaskDialog } from '@/components/tasks/create-task-dialog';
 import { TaskFilters } from '@/components/tasks/task-filters';
 import type { Task, TaskStatus } from '@/lib/types';
 
-type ViewMode = 'kanban' | 'list';
+type ViewMode = 'kanban' | 'list' | 'gantt';
 
 const DEFAULT_FILTERS = {
   org: 'all',
@@ -129,7 +130,7 @@ export default function TasksPage() {
     }
   }
 
-  // Filter tasks for display (non-completed for kanban columns, all for list)
+  // Filter tasks for display
   const displayTasks = view === 'kanban'
     ? tasks.filter((t) => t.status !== 'completed')
     : tasks;
@@ -173,6 +174,14 @@ export default function TasksPage() {
               <IconList className="size-3.5" />
               List
             </Button>
+            <Button
+              variant={view === 'gantt' ? 'secondary' : 'ghost'}
+              size="xs"
+              onClick={() => setView('gantt')}
+            >
+              <IconTimeline className="size-3.5" />
+              Timeline
+            </Button>
           </div>
           <CreateTaskDialog
             agents={agents}
@@ -211,7 +220,10 @@ export default function TasksPage() {
           tasks={displayTasks}
           completedTodayTasks={completedToday}
           onTaskClick={handleTaskClick}
+          onStatusChange={(taskId, status) => handleStatusChange(taskId, status)}
         />
+      ) : view === 'gantt' ? (
+        <GanttChart tasks={displayTasks} onTaskClick={handleTaskClick} />
       ) : (
         <TaskListTable tasks={displayTasks} onTaskClick={handleTaskClick} />
       )}

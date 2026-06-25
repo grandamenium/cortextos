@@ -33,6 +33,12 @@ export async function POST(request: NextRequest) {
   const groupName = (body.groupName as string) || (body.group as string) || '';
 
   const isMorningWake = eventType === 'morning_wake' || text === 'morning_wake';
+  const hasText = text.trim().length > 0;
+
+  // Skip empty-text events (images, tapbacks, reactions) — text is genuinely empty for non-text iMessages
+  if (!hasText && !isMorningWake) {
+    return NextResponse.json({ success: true, skipped: 'empty-text', received: { sender } });
+  }
 
   const entry = { ts: new Date().toISOString(), sender, text, eventType: eventType || undefined, isMorningWake: isMorningWake || undefined, timestamp, isGroup, groupName, raw: body };
 

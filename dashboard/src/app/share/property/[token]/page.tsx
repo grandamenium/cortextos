@@ -318,26 +318,28 @@ export default async function SharePropertyPage({ params }: { params: Promise<{ 
                     {sell.partner_totals && sell.partner_totals.length > 0 && (
                       <div>
                         <p className="text-[10px] uppercase font-semibold text-gray-400 mb-1.5">Partner Totals Out</p>
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="text-[10px] uppercase text-gray-400 border-b border-gray-100">
-                              <th className="text-left pb-1 px-2 font-medium">Partner</th>
-                              <th className="text-right pb-1 px-2 font-medium">Capital</th>
-                              <th className="text-right pb-1 px-2 font-medium">Profit</th>
-                              <th className="text-right pb-1 px-2 font-medium">Total</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-gray-100">
-                            {sell.partner_totals.map((pt, i) => (
-                              <tr key={i}>
-                                <td className="py-1.5 px-2 text-gray-700">{pt.recipient}</td>
-                                <td className="py-1.5 px-2 text-right text-gray-500">{fmt(pt.capital)}</td>
-                                <td className="py-1.5 px-2 text-right text-blue-600">{fmt(pt.profit)}</td>
-                                <td className="py-1.5 px-2 text-right font-bold text-gray-900">{fmt(pt.total)}</td>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm" style={{ minWidth: '280px' }}>
+                            <thead>
+                              <tr className="text-[10px] uppercase text-gray-400 border-b border-gray-100">
+                                <th className="text-left pb-1 px-2 font-medium">Partner</th>
+                                <th className="text-right pb-1 px-2 font-medium">Capital</th>
+                                <th className="text-right pb-1 px-2 font-medium">Profit</th>
+                                <th className="text-right pb-1 px-2 font-medium">Total</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {sell.partner_totals.map((pt, i) => (
+                                <tr key={i}>
+                                  <td className="py-1.5 px-2 text-gray-700">{pt.recipient}</td>
+                                  <td className="py-1.5 px-2 text-right text-gray-500">{fmt(pt.capital)}</td>
+                                  <td className="py-1.5 px-2 text-right text-blue-600">{fmt(pt.profit)}</td>
+                                  <td className="py-1.5 px-2 text-right font-bold text-gray-900">{fmt(pt.total)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
                     )}
 
@@ -512,38 +514,48 @@ export default async function SharePropertyPage({ params }: { params: Promise<{ 
                 <span className="ml-2 text-red-600 normal-case font-normal">({urgentCount} urgent)</span>
               )}
             </h2>
-            <div className="space-y-2">
-              {openNeeds.map((need, i) => (
-                <div key={i} className="rounded-lg bg-gray-50 border px-3 py-2.5">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${priorityBadge[need.priority] ?? ''}`}>
-                      {need.priority}
-                    </span>
-                    <span className="text-sm font-medium text-gray-800">{need.item}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ml-auto ${statusBadge[need.status] ?? ''}`}>
-                      {need.status.replace(/_/g, ' ')}
-                    </span>
-                  </div>
-                  {need.notes && (
-                    <div className="mt-1.5 pl-1 space-y-0.5">
-                      {need.notes.split('\n').filter(Boolean).map((line, li) => {
-                        const isHeader = line.startsWith('---');
-                        const isAction = line.startsWith('ACTION:');
-                        if (isHeader) return (
-                          <p key={li} className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 pt-1">{line.replace(/---/g, '').trim()}</p>
-                        );
-                        if (isAction) return (
-                          <p key={li} className="text-xs font-semibold text-amber-700">{line}</p>
-                        );
-                        return <p key={li} className="text-xs text-gray-500">{line}</p>;
-                      })}
-                    </div>
-                  )}
-                  {need.vendor && (
-                    <p className="text-xs text-gray-400 mt-0.5 pl-1">Vendor: {need.vendor}</p>
-                  )}
-                </div>
-              ))}
+            <div className="overflow-x-auto rounded-lg border border-gray-200">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50">
+                    <th className="px-3 py-2 text-left font-semibold text-gray-500">Issue</th>
+                    <th className="px-3 py-2 text-left font-semibold text-gray-500">Vendor</th>
+                    <th className="px-3 py-2 text-right font-semibold text-gray-500">Cost</th>
+                    <th className="px-3 py-2 text-center font-semibold text-gray-500">Status</th>
+                    <th className="px-3 py-2 text-left font-semibold text-gray-500">Est. Completion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {openNeeds.map((need, i) => (
+                    <tr key={i} className="border-b border-gray-100 last:border-0">
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${priorityBadge[need.priority] ?? ''}`}>
+                            {need.priority}
+                          </span>
+                          <span className="font-medium text-gray-800">{need.item}</span>
+                        </div>
+                        {need.notes && <p className="mt-0.5 text-[10px] text-gray-400 pl-10 line-clamp-2">{need.notes}</p>}
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500">{need.vendor ?? '—'}</td>
+                      <td className="px-3 py-2.5 text-right font-medium tabular-nums text-gray-800">
+                        {need.cost !== null ? fmt(need.cost) : <span className="text-gray-400">TBD</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${statusBadge[need.status] ?? ''}`}>
+                          {need.status.replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-gray-500">
+                        {need.expected_completion_date
+                          ? <span>{new Date(need.expected_completion_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                          : <span className="text-gray-300">—</span>
+                        }
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -554,7 +566,7 @@ export default async function SharePropertyPage({ params }: { params: Promise<{ 
             <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">Completed Work &amp; Draws</h2>
             <div className="space-y-2">
               {property.past_orders.map((order, i) => (
-                <div key={i} className="flex items-center justify-between text-sm rounded-lg bg-green-50 border border-green-100 px-3 py-2">
+                <div key={i} className="flex items-center justify-between flex-wrap gap-1 text-sm rounded-lg bg-green-50 border border-green-100 px-3 py-2">
                   <div className="flex items-center gap-2">
                     <span className="text-green-600">✓</span>
                     <span className="text-gray-400 text-xs">{order.date}</span>

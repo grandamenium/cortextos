@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, cpSync, rmSync, chmodSync } from 'fs';
-import { join, resolve, relative } from 'path';
+import { join, resolve, relative, sep } from 'path';
 import { execSync, execFileSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
 
@@ -245,7 +245,7 @@ export function installCommunityItem(
   // Verify resolved path is under community/
   const resolvedSource = resolve(sourceDir);
   const resolvedBase = resolve(communityBase);
-  if (!resolvedSource.startsWith(resolvedBase + '/') && resolvedSource !== resolvedBase) {
+  if (!resolvedSource.startsWith(resolvedBase + sep) && resolvedSource !== resolvedBase) {
     return { status: 'error', name: itemName, error: 'install_path resolves outside community directory' };
   }
 
@@ -343,7 +343,7 @@ export function prepareSubmission(
   // Verify staging path is under community-staging/
   const resolvedStaging = resolve(stagingDir);
   const resolvedStagingBase = resolve(join(ctxRoot, 'community-staging'));
-  if (!resolvedStaging.startsWith(resolvedStagingBase + '/') && resolvedStaging !== resolvedStagingBase) {
+  if (!resolvedStaging.startsWith(resolvedStagingBase + sep) && resolvedStaging !== resolvedStagingBase) {
     return { status: 'error', name: itemName, type: itemType, staging_dir: '', file_count: 0, files: [], pii_detected: ['staging directory resolves outside expected path'] };
   }
 

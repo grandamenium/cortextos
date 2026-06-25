@@ -45,7 +45,7 @@ const EXCLUDED_DIR_PREFIXES = [
 
 const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-|ghp_|xoxb-|AKIA)/;
 
-const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
+const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js', '.ts', '.tsx', '.jsx']);
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 

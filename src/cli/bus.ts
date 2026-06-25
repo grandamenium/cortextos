@@ -2768,6 +2768,22 @@ busCommand
     }
   });
 
+busCommand
+  .command('print-doc')
+  .description('Download a Google Drive/Docs file or public URL and print to the default printer (Windows only)')
+  .argument('<url-or-id>', 'Google Drive URL, Docs URL, file ID, or any public URL to a PDF')
+  .action((urlOrId: string) => {
+    const env = resolveEnv();
+    const scriptPath = join(env.agentDir || process.cwd(), 'scripts', 'print-doc.js');
+    if (!existsSync(scriptPath)) {
+      console.error('print-doc.js not found at:', scriptPath);
+      console.error('This command requires scripts/print-doc.js in the agent directory.');
+      process.exit(1);
+    }
+    const result = spawnSync('node', [scriptPath, urlOrId], { stdio: 'inherit' });
+    process.exit(result.status ?? 0);
+  });
+
 function sleepMs(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }

@@ -134,11 +134,13 @@ export async function PUT(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { title, description, assignee, priority } = body as {
+  const { title, description, assignee, priority, start_date, due_date } = body as {
     title?: string;
     description?: string;
     assignee?: string;
     priority?: string;
+    start_date?: string | null;
+    due_date?: string | null;
   };
 
   if (title !== undefined && (!title || title.trim().length === 0)) {
@@ -149,6 +151,13 @@ export async function PUT(
   }
   if (assignee !== undefined && !isValidAgentName(assignee)) {
     return Response.json({ error: 'Invalid assignee' }, { status: 400 });
+  }
+  const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]+)?$/;
+  if (start_date != null && !ISO_DATE_RE.test(start_date)) {
+    return Response.json({ error: 'Invalid start_date format' }, { status: 400 });
+  }
+  if (due_date != null && !ISO_DATE_RE.test(due_date)) {
+    return Response.json({ error: 'Invalid due_date format' }, { status: 400 });
   }
 
   // Read and update the task JSON file directly
@@ -169,6 +178,8 @@ export async function PUT(
     if (description !== undefined) taskData.description = description;
     if (assignee !== undefined) taskData.assigned_to = assignee;
     if (priority !== undefined) taskData.priority = priority;
+    if (start_date !== undefined) taskData.start_date = start_date ?? undefined;
+    if (due_date !== undefined) taskData.due_date = due_date ?? undefined;
     taskData.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
     const tmp = taskFile + '.tmp';
