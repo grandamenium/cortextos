@@ -751,21 +751,28 @@ export class AgentProcess {
   }
 
   private shouldContinue(): boolean {
+    const stateDir = join(this.env.ctxRoot, 'state', this.name);
+
+    // Check for force-fresh marker (all runtimes honor it).
+    const forceFreshPath = join(stateDir, '.force-fresh');
+    if (existsSync(forceFreshPath)) {
+      try {
+        unlinkSync(forceFreshPath);
+      } catch { /* ignore */ }
+      return false;
+    }
+
+    // A handoff restart must stay fresh even if a racing start already
+    // consumed .force-fresh and a resumable session file still exists.
+    if (existsSync(join(stateDir, '.handoff-doc-path'))) {
+      return false;
+    }
+
     // Hermes: session continuity is determined by whether the SQLite DB exists.
     // HERMES_HOME env var overrides the default ~/.hermes path.
     if (this.config.runtime === 'hermes') {
       const hermesHome = process.env['HERMES_HOME'];
       return hermesDbExists(hermesHome);
-    }
-
-    // Check for force-fresh marker (all runtimes honor it).
-    const forceFreshPath = join(this.env.ctxRoot, 'state', this.name, '.force-fresh');
-    if (existsSync(forceFreshPath)) {
-      try {
-        const { unlinkSync } = require('fs');
-        unlinkSync(forceFreshPath);
-      } catch { /* ignore */ }
-      return false;
     }
 
     // codex-app-server: session continuity is tracked by the adapter's own

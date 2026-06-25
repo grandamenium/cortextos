@@ -18,6 +18,9 @@ import { processMediaMessage } from '../telegram/media.js';
 import { stripBom } from '../utils/strip-bom.js';
 
 type LogFn = (msg: string) => void;
+type PendingRestart = {
+  forceFresh: boolean;
+};
 
 /**
  * Manages all agents in a cortextOS instance.
@@ -29,7 +32,7 @@ export class AgentManager {
   private cronSchedulers: Map<string, CronScheduler> = new Map();
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
-  private pendingRestarts: Set<string> = new Set();
+  private pendingRestarts: Map<string, PendingRestart> = new Map();
   private instanceId: string;
   private ctxRoot: string;
   private frameworkRoot: string;
@@ -193,6 +196,39 @@ export class AgentManager {
     return true;
   }
 
+  private getAgentStateDir(name: string): string {
+    return join(this.ctxRoot, 'state', name);
+  }
+
+  private hasFreshRestartIntent(name: string): boolean {
+    const stateDir = this.getAgentStateDir(name);
+    return (
+      existsSync(join(stateDir, '.force-fresh'))
+      || existsSync(join(stateDir, '.handoff-doc-path'))
+    );
+  }
+
+  private queuePendingRestart(name: string): void {
+    const pending = this.pendingRestarts.get(name);
+    this.pendingRestarts.set(name, {
+      forceFresh: (pending?.forceFresh ?? false) || this.hasFreshRestartIntent(name),
+    });
+  }
+
+  private armPendingRestartForceFresh(name: string): void {
+    try {
+      const stateDir = this.getAgentStateDir(name);
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(
+        join(stateDir, '.force-fresh'),
+        `${new Date().toISOString()} pending-restart handoff replay\n`,
+        'utf-8',
+      );
+    } catch (err) {
+      console.warn(`[agent-manager] Failed to re-arm .force-fresh for ${name}: ${err}`);
+    }
+  }
+
   /**
    * BUG-043 fix: resolve the canonical org for a given agent without
    * defaulting to the daemon's startup `this.org`.
@@ -305,7 +341,7 @@ export class AgentManager {
       } else {
         console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: ${name} still in registry during startAgent — pendingRestarts queueing engaged. This should not happen with PR #11 in place.`);
       }
-      this.pendingRestarts.add(name);
+      this.queuePendingRestart(name);
       return;
     }
 
@@ -894,11 +930,11 @@ export class AgentManager {
   /**
    * Stop a specific agent.
    */
-  async stopAgent(name: string): Promise<void> {
+  async stopAgent(name: string): Promise<boolean> {
     const entry = this.agents.get(name);
     if (!entry) {
       console.log(`[agent-manager] Agent ${name} not found`);
-      return;
+      return false;
     }
 
     if (entry.poller) entry.poller.stop();
@@ -919,18 +955,24 @@ export class AgentManager {
     // matching warning comment in startAgent(). The honor logic is preserved
     // as a safety net in case BUG-011 regresses; the warn line tells us
     // immediately if it ever does.
-    if (this.pendingRestarts.has(name)) {
+    const pendingRestart = this.pendingRestarts.get(name);
+    if (pendingRestart) {
       if (this.daemonJustCrashed) {
         console.log(`[agent-manager] pendingRestarts fired for ${name} (post-crash safety net, expected). Honoring queued restart.`);
       } else {
         console.warn(`[agent-manager] BUG-011 REGRESSION CHECK: pendingRestarts fired for ${name} — race condition leaked through. Honoring queued restart as safety net.`);
       }
       this.pendingRestarts.delete(name);
+      if (pendingRestart.forceFresh) {
+        this.armPendingRestartForceFresh(name);
+      }
       console.log(`[agent-manager] Honoring queued restart for ${name}`);
       this.startAgent(name, '').catch(err =>
         console.error(`[agent-manager] Queued restart failed for ${name}:`, err),
       );
+      return true;
     }
+    return false;
   }
 
   /**
@@ -950,8 +992,10 @@ export class AgentManager {
       return;
     }
     console.log(`[agent-manager] Restarting ${name}`);
-    await this.stopAgent(name);
-    await this.startAgent(name, '');
+    const queuedRestartHonored = await this.stopAgent(name);
+    if (!queuedRestartHonored) {
+      await this.startAgent(name, '');
+    }
     console.log(`[agent-manager] Restart complete for ${name}`);
   }
 

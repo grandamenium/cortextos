@@ -47,6 +47,7 @@ const fsMocks = {
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
   appendFileSync: vi.fn(),
+  unlinkSync: vi.fn(),
   statSync: vi.fn(),
   readdirSync: vi.fn().mockReturnValue([]),
   openSync: vi.fn().mockReturnValue(1),
@@ -63,6 +64,7 @@ vi.mock('fs', async () => {
     get readFileSync() { return fsMocks.readFileSync; },
     get writeFileSync() { return fsMocks.writeFileSync; },
     get appendFileSync() { return fsMocks.appendFileSync; },
+    get unlinkSync() { return fsMocks.unlinkSync; },
     get statSync() { return fsMocks.statSync; },
     get readdirSync() { return fsMocks.readdirSync; },
     get openSync() { return fsMocks.openSync; },
@@ -93,6 +95,7 @@ beforeEach(() => {
   fsMocks.readFileSync.mockReset();
   fsMocks.writeFileSync.mockReset();
   fsMocks.appendFileSync.mockReset();
+  fsMocks.unlinkSync.mockReset();
   fsMocks.statSync.mockReset();
   fsMocks.readdirSync.mockReset().mockReturnValue([]);
   fsMocks.openSync.mockReset().mockReturnValue(1);
@@ -139,6 +142,40 @@ describe('AgentProcess session isolation', () => {
     await ap.start();
 
     expect(mockPty.spawn).toHaveBeenCalledWith('continue', expect.stringContaining('SESSION CONTINUATION'));
+  });
+
+  it('prefers a handoff restart over a resumable deterministic session', async () => {
+    const sessionId = getDeterministicAgentSessionId('alice', 'acme');
+    const projectsRoot = `${homedir()}/.claude/projects`;
+    const expectedSessionPath = `${projectsRoot}/-Users-joshweiss-code-auditos/${sessionId}.jsonl`;
+    const handoffMarkerPath = '/tmp/test-ctx/state/alice/.handoff-doc-path';
+    const handoffDocPath = '/tmp/test-ctx/state/alice/handoff.md';
+
+    fsMocks.readdirSync.mockImplementation((path: unknown) => {
+      const asString = String(path);
+      if (asString === projectsRoot) {
+        return [{ name: '-Users-joshweiss-code-auditos', isDirectory: () => true }];
+      }
+      return [];
+    });
+    fsMocks.existsSync.mockImplementation((path: unknown) => {
+      const asString = String(path);
+      return (
+        asString === projectsRoot
+        || asString === expectedSessionPath
+        || asString === handoffMarkerPath
+        || asString === handoffDocPath
+      );
+    });
+    fsMocks.readFileSync.mockImplementation((path: unknown) => {
+      if (String(path) === handoffMarkerPath) return `${handoffDocPath}\n`;
+      return '';
+    });
+
+    const ap = new AgentProcess('alice', env, {});
+    await ap.start();
+
+    expect(mockPty.spawn).toHaveBeenCalledWith('fresh', expect.stringContaining('CONTEXT HANDOFF'));
   });
 
   it('rate-limit exits back off without incrementing crash_count', async () => {

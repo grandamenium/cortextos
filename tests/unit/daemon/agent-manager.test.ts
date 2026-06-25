@@ -261,7 +261,7 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
     // actually running the full startAgent flow
     (am as any).agents.set('alice', { process: {}, checker: {}, poller: { stop() {} } });
 
-    const stopSpy = vi.spyOn(am, 'stopAgent').mockResolvedValue();
+    const stopSpy = vi.spyOn(am, 'stopAgent').mockResolvedValue(false);
     const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
 
     await am.restartAgent('alice');
@@ -277,7 +277,7 @@ describe('AgentManager.restartAgent - BUG-007 fix (rebuild Telegram poller)', ()
 
   it('is a no-op when the agent does not exist', async () => {
     const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
-    const stopSpy = vi.spyOn(am, 'stopAgent').mockResolvedValue();
+    const stopSpy = vi.spyOn(am, 'stopAgent').mockResolvedValue(false);
     const startSpy = vi.spyOn(am, 'startAgent').mockResolvedValue();
 
     await am.restartAgent('nonexistent');
