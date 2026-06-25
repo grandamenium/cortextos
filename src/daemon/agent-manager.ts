@@ -104,6 +104,14 @@ export class AgentManager {
   // but a repeat restart with the same wrong model does not.
   private modelGuardAlerted: Set<string> = new Set();
 
+  // Settings-guard state (#4).
+  // Deduped per agent-name. Strips mcp__* entries from permissions.allow at
+  // startup — bare mcp__* triggers a boot-time Settings-Warning modal that
+  // traps headless agents (same class as the Sophie modal-trap incident).
+  // Added to set on first detection (prevents alert flood if the atomic
+  // rewrite fails and the agent keeps crash-restarting within one daemon run).
+  private settingsGuardAlerted: Set<string> = new Set();
+
   // The ONLY accepted model per Bode's hard never-lesser-model rule.
   private static readonly REQUIRED_MODEL = 'claude-opus-4-8';
 
@@ -708,6 +716,57 @@ export class AgentManager {
       }
     }
 
+    // ── Guard #4: settings.json mcp__* sanitizer ─────────────────────────
+    // A bare mcp__* entry in permissions.allow (e.g. "mcp__higgsfield__*")
+    // triggers a boot-time Settings-Warning modal in Claude Code that seizes
+    // the headless PTY and swallows daemon inject → agent alive-but-unreachable
+    // (same class as the Sophie modal-trap incident). Strip the offending
+    // entries and rewrite settings.json before spawn so the agent boots clean.
+    // Deduped per agent-name to prevent alert-flood if the rewrite fails and
+    // the agent keeps crash-restarting within one daemon run.
+    if (!this.settingsGuardAlerted.has(name)) {
+      const settingsPath = join(agentDir, '.claude', 'settings.json');
+      if (existsSync(settingsPath)) {
+        try {
+          const settingsRaw = readFileSync(settingsPath, 'utf-8');
+          const settings = JSON.parse(stripBom(settingsRaw));
+          const allow: unknown[] = Array.isArray(settings?.permissions?.allow)
+            ? settings.permissions.allow
+            : [];
+          const mcpEntries = allow.filter(
+            (e): e is string => typeof e === 'string' && e.startsWith('mcp__'),
+          );
+          if (mcpEntries.length > 0) {
+            this.settingsGuardAlerted.add(name);
+            // Strip mcp__* entries and rewrite atomically (tmp+rename).
+            settings.permissions.allow = allow.filter(
+              (e) => typeof e !== 'string' || !e.startsWith('mcp__'),
+            );
+            const tmpPath = `${settingsPath}.daemon-tmp-${process.pid}`;
+            writeFileSync(tmpPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+            renameSync(tmpPath, settingsPath);
+            log(
+              `SETTINGS WARNING: stripped ${mcpEntries.length} mcp__* entr${mcpEntries.length === 1 ? 'y' : 'ies'} ` +
+              `from permissions.allow (${mcpEntries.join(', ')}) — bare mcp__* triggers a boot-time ` +
+              `Settings-Warning modal that traps headless agents (Sophie modal-trap class). ` +
+              `settings.json rewritten; agent will start clean.`,
+            );
+            if (!suppressAlerts) {
+              this.pendingApiKeyAlerts.push(
+                `settings-guard (${name}): stripped mcp__* from permissions.allow: ${mcpEntries.join(', ')}`,
+              );
+              if (!this.operatorBotToken && botToken && chatId) {
+                this.operatorBotToken = botToken;
+                this.operatorChatId = chatId;
+              }
+            }
+          }
+        } catch {
+          /* non-fatal — malformed settings.json: agent startup will surface the parse error */
+        }
+      }
+    }
+
     const agentProcess = new AgentProcess(name, env, config, log);
     // Issue #330: pass the Telegram handle into AgentProcess so CodexAppServerPTY
     // can emit sendChatAction directly from the JSONL stream. Has no effect for
@@ -1108,7 +1167,7 @@ export class AgentManager {
       (a) => a.startsWith('agent .env') || a.startsWith('org secrets.env') || a.startsWith('process.env'),
     );
     const otherAlerts = alerts.filter(
-      (a) => a.startsWith('cred-health') || a.startsWith('model-guard'),
+      (a) => a.startsWith('cred-health') || a.startsWith('model-guard') || a.startsWith('settings-guard'),
     );
     // H1 fix: catch any alert string that matches neither classifier so it is
     // never silently dropped — future guards that push with an unrecognised prefix

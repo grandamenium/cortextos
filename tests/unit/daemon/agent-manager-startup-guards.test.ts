@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -475,5 +475,160 @@ describe('Startup guard #3 — model: enforce claude-opus-4-8', () => {
     );
     expect(modelAlerts.length).toBe(1);
     expect(modelAlerts[0][1]).toContain('model not pinned');
+  });
+});
+
+// ─── Guard #4: settings.json mcp__* sanitizer ────────────────────────────────
+
+describe('Startup guard #4 — settings.json mcp__* sanitizer', () => {
+  let testDir: string;
+  let ctxRoot: string;
+  let frameworkRoot: string;
+
+  const CLEAN_SETTINGS = JSON.stringify({
+    permissions: { allow: ['Bash', 'Read', 'Write'], defaultMode: 'bypassPermissions' },
+  });
+  const MCP_SETTINGS = JSON.stringify({
+    permissions: {
+      allow: ['Bash', 'mcp__higgsfield__generate_video', 'mcp__stripe__fetch_stripe_resources', 'Read'],
+      defaultMode: 'bypassPermissions',
+    },
+  });
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'ctx-settingsguard-'));
+    ctxRoot = join(testDir, 'instance');
+    frameworkRoot = join(testDir, 'framework');
+    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
+    _fakeHomeDir = join(testDir, 'home');
+    mkdirSync(join(testDir, 'home', '.claude'), { recursive: true });
+    // Write valid creds so cred-health guard doesn't fire
+    writeFileSync(join(testDir, 'home', '.claude', '.credentials.json'), JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'sk-ant-oat01-VALID',
+        refreshToken: 'rt-VALID',
+        expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+      },
+    }));
+    process.env.CTX_SPAWN_STAGGER_MS = '0';
+    delete process.env.ANTHROPIC_API_KEY;
+    mockSendMessage.mockClear();
+  });
+
+  afterEach(() => {
+    _fakeHomeDir = '';
+    rmSync(testDir, { recursive: true, force: true });
+    delete process.env.CTX_SPAWN_STAGGER_MS;
+    delete process.env.ANTHROPIC_API_KEY;
+    vi.restoreAllMocks();
+  });
+
+  it('does NOT warn when settings.json has no mcp__* entries (good direction)', async () => {
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(join(agentDir, '.claude'), { recursive: true });
+    writeFileSync(join(agentDir, '.env'), BOT_ENV);
+    writeFileSync(join(agentDir, '.claude', 'settings.json'), CLEAN_SETTINGS);
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    const warnSpy = vi.spyOn(console, 'log');
+    await am.startAgent('alice', agentDir, { model: 'claude-opus-4-8' }, 'acme');
+
+    const warns = warnSpy.mock.calls.flat().filter(
+      (m): m is string => typeof m === 'string' && m.includes('SETTINGS WARNING'),
+    );
+    expect(warns).toHaveLength(0);
+    expect(mockSendMessage).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('settings-guard'),
+    );
+  });
+
+  it('does NOT warn when settings.json is absent', async () => {
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, '.env'), BOT_ENV);
+    // No .claude/settings.json
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    const warnSpy = vi.spyOn(console, 'log');
+    await am.startAgent('alice', agentDir, { model: 'claude-opus-4-8' }, 'acme');
+
+    const warns = warnSpy.mock.calls.flat().filter(
+      (m): m is string => typeof m === 'string' && m.includes('SETTINGS WARNING'),
+    );
+    expect(warns).toHaveLength(0);
+  });
+
+  it('strips mcp__* entries and rewrites settings.json when found', async () => {
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(join(agentDir, '.claude'), { recursive: true });
+    writeFileSync(join(agentDir, '.env'), BOT_ENV);
+    const settingsPath = join(agentDir, '.claude', 'settings.json');
+    writeFileSync(settingsPath, MCP_SETTINGS);
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    await am.startAgent('alice', agentDir, { model: 'claude-opus-4-8' }, 'acme');
+
+    const written = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+    expect(written.permissions.allow).toEqual(['Bash', 'Read']);
+    expect(written.permissions.allow).not.toContain('mcp__higgsfield__generate_video');
+    expect(written.permissions.allow).not.toContain('mcp__stripe__fetch_stripe_resources');
+  });
+
+  it('logs SETTINGS WARNING when mcp__* entries are found', async () => {
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(join(agentDir, '.claude'), { recursive: true });
+    writeFileSync(join(agentDir, '.env'), BOT_ENV);
+    writeFileSync(join(agentDir, '.claude', 'settings.json'), MCP_SETTINGS);
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    const warnSpy = vi.spyOn(console, 'log');
+    await am.startAgent('alice', agentDir, { model: 'claude-opus-4-8' }, 'acme');
+
+    const warns = warnSpy.mock.calls.flat().filter(
+      (m): m is string => typeof m === 'string' && m.includes('SETTINGS WARNING'),
+    );
+    expect(warns.length).toBeGreaterThan(0);
+    expect(warns[0]).toContain('mcp__higgsfield__generate_video');
+  });
+
+  it('sends Telegram settings-guard alert via discoverAndStart', async () => {
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(join(agentDir, '.claude'), { recursive: true });
+    writeFileSync(join(agentDir, '.env'), BOT_ENV);
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ model: 'claude-opus-4-8' }));
+    writeFileSync(join(agentDir, '.claude', 'settings.json'), MCP_SETTINGS);
+    writeFileSync(join(frameworkRoot, 'orgs', 'acme', 'enabled-agents.json'), JSON.stringify(['alice']));
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    await am.discoverAndStart();
+
+    const settingsAlerts = mockSendMessage.mock.calls.filter(
+      ([, msg]: [string, string]) => typeof msg === 'string' && msg.includes('settings-guard'),
+    );
+    expect(settingsAlerts.length).toBe(1);
+    expect(settingsAlerts[0][1]).toContain('mcp__');
+  });
+
+  it('does NOT re-alert on second startAgent() in same daemon run (dedup)', async () => {
+    const agentDir = join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice');
+    mkdirSync(join(agentDir, '.claude'), { recursive: true });
+    writeFileSync(join(agentDir, '.env'), BOT_ENV);
+    writeFileSync(join(agentDir, '.claude', 'settings.json'), MCP_SETTINGS);
+
+    const am = new AgentManager('inst', ctxRoot, frameworkRoot, 'acme');
+    const warnSpy = vi.spyOn(console, 'log');
+    await am.startAgent('alice', agentDir, { model: 'claude-opus-4-8' }, 'acme');
+    await am.stopAgent('alice');
+
+    warnSpy.mockClear();
+    // Restore mcp__ entries to simulate operator not fixing the file (but dedup should protect)
+    writeFileSync(join(agentDir, '.claude', 'settings.json'), MCP_SETTINGS);
+    await am.startAgent('alice', agentDir, { model: 'claude-opus-4-8' }, 'acme');
+
+    const warns = warnSpy.mock.calls.flat().filter(
+      (m): m is string => typeof m === 'string' && m.includes('SETTINGS WARNING'),
+    );
+    expect(warns).toHaveLength(0); // deduped — same daemon run
   });
 });
