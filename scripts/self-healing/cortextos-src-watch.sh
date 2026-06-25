@@ -50,11 +50,29 @@ if [ -n "$BUILD_SHA" ] && git merge-base --is-ancestor "$REMOTE_SHA" "$BUILD_SHA
       echo "[cortextos-src-watch] WARNING: daemon worktree dist no .build-sha at $DAEMON_DIST_DIR — cannot verify" >&2
     elif git merge-base --is-ancestor "$REMOTE_SHA" "$DAEMON_BUILD_SHA" 2>/dev/null; then
       echo "[cortextos-src-watch] daemon worktree dist up-to-date (${DAEMON_BUILD_SHA:0:8} ⊇ ${REMOTE_SHA:0:8} at $DAEMON_DIST_DIR)"
+      # Lag has cleared — drop the dedup signature so a future lag re-pages.
+      rm -f "${CTX_ROOT:-$HOME/.cortextos/default}/state/src-watch-daemon-lag.sig" 2>/dev/null || true
     else
       echo "[cortextos-src-watch] WARNING: daemon worktree dist LAG — daemon@${DAEMON_BUILD_SHA:0:8} behind origin/main ${REMOTE_SHA:0:8} ($DAEMON_DIST_DIR)" >&2
-      cortextos bus send-message platform-director high \
-        "[cortextos-src-watch] Daemon worktree dist lag: $DAEMON_DIST_DIR built@${DAEMON_BUILD_SHA:0:8} but origin/main@${REMOTE_SHA:0:8} — worktree rebuild+restart needed" \
-        2>/dev/null || true
+      # SHA-level dedup: only page platform-director when the drift signature
+      # (daemon-built-sha : origin-main-sha) changes. An unchanged signature on
+      # every 10-min fire is the SAME unresolved lag — re-paging it is noise
+      # (PD correction 2026-06-25; devops-monitor probe already dedups likewise).
+      # The signature naturally changes (and re-pages) when origin/main advances
+      # or the worktree is rebuilt to a new SHA; the up-to-date branch above
+      # clears it once the lag resolves.
+      LAG_SIG="${DAEMON_BUILD_SHA}:${REMOTE_SHA}"
+      LAG_SIG_FILE="${CTX_ROOT:-$HOME/.cortextos/default}/state/src-watch-daemon-lag.sig"
+      LAST_LAG_SIG=$(cat "$LAG_SIG_FILE" 2>/dev/null || echo "")
+      if [ "$LAG_SIG" != "$LAST_LAG_SIG" ]; then
+        cortextos bus send-message platform-director high \
+          "[cortextos-src-watch] Daemon worktree dist lag: $DAEMON_DIST_DIR built@${DAEMON_BUILD_SHA:0:8} but origin/main@${REMOTE_SHA:0:8} — worktree rebuild+restart needed" \
+          2>/dev/null || true
+        mkdir -p "$(dirname "$LAG_SIG_FILE")" 2>/dev/null || true
+        printf '%s' "$LAG_SIG" > "$LAG_SIG_FILE" 2>/dev/null || true
+      else
+        echo "[cortextos-src-watch] daemon worktree dist lag UNCHANGED (${LAG_SIG}) — page deduped"
+      fi
     fi
   fi
   exit 0
