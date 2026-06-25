@@ -56,7 +56,9 @@ export const uninstallCommand = new Command('uninstall')
         try {
           rmSync(enabledFile);
           console.log('  Removed enabled-agents.json');
-        } catch { /* ignore */ }
+        } catch (err) {
+          console.warn(`  Warning: could not remove enabled-agents.json: ${err}`);
+        }
       }
       console.log('  Preserved state directory (logs, tasks, heartbeats, analytics)');
     } else {
@@ -75,7 +77,9 @@ export const uninstallCommand = new Command('uninstall')
       try {
         rmSync(ecosystemPath);
         console.log('  Removed ecosystem.config.js');
-      } catch { /* ignore */ }
+      } catch (err) {
+        console.warn(`  Warning: could not remove ecosystem.config.js: ${err}`);
+      }
     }
 
     console.log('\n  cortextOS uninstalled.');

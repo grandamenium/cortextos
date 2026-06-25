@@ -81,17 +81,27 @@ export function readEnabledAgents(instanceId: string): Record<string, any> {
   try {
     parsed = JSON.parse(raw);
   } catch {
+    // BUG-013 class: returning {} here lets callers overwrite the file with {}, wiping all registrations.
+    // Fail-closed: back up and throw so the caller never proceeds to a destructive write.
     const backup = `${path}.broken-${Date.now()}`;
-    try { writeFileSync(backup, raw); } catch { /* ignore backup failure */ }
-    console.error(`[enable] WARNING: ${path} contains invalid JSON. Backed up to ${backup}. Treating as empty.`);
-    return {};
+    let backupNote: string;
+    try { writeFileSync(backup, raw); backupNote = `Backed up to: ${backup}.`; }
+    catch { backupNote = `WARNING: backup to ${backup} also failed — corrupt file may be lost.`; }
+    throw new Error(
+      `${path} contains invalid JSON — refusing to proceed (would permanently wipe all agent registrations). ` +
+      `${backupNote} Fix the JSON and re-run.`
+    );
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     const backup = `${path}.broken-${Date.now()}`;
-    try { writeFileSync(backup, raw); } catch { /* ignore backup failure */ }
-    console.error(`[enable] WARNING: ${path} is not a JSON object (got ${parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed}). Backed up to ${backup}. Treating as empty.`);
-    return {};
+    let backupNote: string;
+    try { writeFileSync(backup, raw); backupNote = `Backed up to: ${backup}.`; }
+    catch { backupNote = `WARNING: backup to ${backup} also failed — corrupt file may be lost.`; }
+    throw new Error(
+      `${path} is not a JSON object (got ${parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed}) — ` +
+      `refusing to proceed (would permanently wipe all agent registrations). ${backupNote} Fix the file and re-run.`
+    );
   }
 
   return parsed as Record<string, any>;

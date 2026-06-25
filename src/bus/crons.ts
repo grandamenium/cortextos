@@ -15,7 +15,8 @@
  */
 
 import { existsSync, readFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, isAbsolute } from 'path';
+import { homedir } from 'os';
 import type { CronDefinition, CronExecutionLogEntry } from '../types/index.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME, cronExecutionLogPathFor } from './crons-schema.js';
 import { atomicWriteSync } from '../utils/atomic.js';
@@ -34,12 +35,23 @@ interface CronsFile {
 /**
  * Resolve the absolute path to an agent's crons.json.
  *
- * Uses CTX_ROOT env var when available (production), otherwise falls back to
- * a path relative to process.cwd() so tests can supply their own root via
- * process.env.CTX_ROOT pointing to a tempdir.
+ * Resolution order mirrors resolveEnv() in utils/env.ts:
+ *   1. CTX_ROOT env var (set by daemon for all managed agents)
+ *   2. ~/.cortextos/<CTX_INSTANCE_ID|default>  (correct home-dir default)
+ *
+ * Never falls back to process.cwd() — that silently writes to a path the
+ * daemon never reads, making add-cron look-added-but-never-fires.
  */
 function cronsFilePath(agentName: string): string {
-  const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+  const ctxRoot =
+    process.env.CTX_ROOT ||
+    join(homedir(), '.cortextos', process.env.CTX_INSTANCE_ID ?? 'default');
+  if (!isAbsolute(ctxRoot)) {
+    throw new Error(
+      `[crons] CTX_ROOT resolved to a non-absolute path "${ctxRoot}" — ` +
+        `set CTX_ROOT to an absolute path or leave it unset to use the default (~/.cortextos/default).`
+    );
+  }
   return join(ctxRoot, CRONS_DIRECTORY, agentName, CRONS_FILENAME);
 }
 
@@ -346,7 +358,15 @@ export function getExecutionLogPage(
   offset = 0,
   statusFilter: ExecutionLogStatusFilter = 'all',
 ): ExecutionLogPage {
-  const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+  const ctxRoot =
+    process.env.CTX_ROOT ||
+    join(homedir(), '.cortextos', process.env.CTX_INSTANCE_ID ?? 'default');
+  if (!isAbsolute(ctxRoot)) {
+    throw new Error(
+      `[crons] CTX_ROOT resolved to a non-absolute path "${ctxRoot}" — ` +
+        `set CTX_ROOT to an absolute path or leave it unset to use the default (~/.cortextos/default).`
+    );
+  }
   const filePath = join(ctxRoot, cronExecutionLogPathFor(agentName));
 
   if (!existsSync(filePath)) {

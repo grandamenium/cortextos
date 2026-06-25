@@ -167,11 +167,36 @@ export const startCommand = new Command('start')
       const ctxRoot = join(homedir(), '.cortextos', options.instance);
       const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
       let enabledAgents: Record<string, any> = {};
-      try {
-        if (existsSync(enabledPath)) {
-          enabledAgents = JSON.parse(readFileSync(enabledPath, 'utf-8'));
+      if (existsSync(enabledPath)) {
+        let raw: string;
+        try {
+          raw = readFileSync(enabledPath, 'utf-8');
+        } catch (err) {
+          console.error(`  ERROR: cannot read ${enabledPath}: ${err}\n  Check file permissions — refusing to proceed.`);
+          process.exit(1);
         }
-      } catch { /* ignore */ }
+        try {
+          enabledAgents = JSON.parse(raw!);
+        } catch {
+          // BUG-013 class — destructive variant: corrupt JSON → start-fresh → overwrite → permanent wipe.
+          // Fail-closed: back up, error loudly, refuse to write.
+          const backup = `${enabledPath}.broken-${Date.now()}`;
+          let backupNote: string;
+          try {
+            writeFileSync(backup, raw!, 'utf-8');
+            backupNote = `  Corrupt file backed up to: ${backup}`;
+          } catch {
+            backupNote = `  WARNING: backup to ${backup} also failed — corrupt file may be lost.`;
+          }
+          console.error(
+            `\n  ERROR: ${enabledPath} contains invalid JSON.\n` +
+            `  Refusing to proceed — overwriting would permanently wipe all agent registrations.\n` +
+            backupNote + '\n' +
+            `  Fix the JSON, then re-run: cortextos start ${agent}\n`
+          );
+          process.exit(1);
+        }
+      }
 
       if (!enabledAgents[agent]) {
         // Try to detect org from existing entries or project structure

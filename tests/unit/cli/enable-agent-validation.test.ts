@@ -84,44 +84,40 @@ describe('BUG-035 + BUG-013: enable-agent validation', () => {
       expect(result).toEqual({ commander: { enabled: true, org: 'testorg' } });
     });
 
-    it('backs up corrupt JSON instead of silently returning {}', () => {
+    it('throws and backs up corrupt JSON instead of silently returning {}', () => {
       const path = setupConfigFile('default', 'this is not json{{{');
-      const result = readEnabledAgents('default');
-      expect(result).toEqual({});
+      expect(() => readEnabledAgents('default')).toThrow(/invalid JSON/);
 
-      // The corrupt file should be backed up, not destroyed
+      // The corrupt file should be backed up
       const backups = readdirSync(join(tmpHome, '.cortextos', 'default', 'config'))
         .filter(f => f.startsWith('enabled-agents.json.broken-'));
       expect(backups.length).toBeGreaterThan(0);
 
-      // The original file is still there (caller may decide to overwrite)
+      // The original file is still there (we refuse to touch it)
       expect(existsSync(path)).toBe(true);
     });
 
-    it('rejects array values (wrong shape) and backs them up', () => {
+    it('throws and backs up array values (wrong shape)', () => {
       setupConfigFile('default', '["this", "should", "be", "an", "object"]');
-      const result = readEnabledAgents('default');
-      expect(result).toEqual({});
+      expect(() => readEnabledAgents('default')).toThrow(/not a JSON object/);
 
       const backups = readdirSync(join(tmpHome, '.cortextos', 'default', 'config'))
         .filter(f => f.startsWith('enabled-agents.json.broken-'));
       expect(backups.length).toBeGreaterThan(0);
     });
 
-    it('rejects null values and backs them up', () => {
+    it('throws and backs up null values (wrong shape)', () => {
       setupConfigFile('default', 'null');
-      const result = readEnabledAgents('default');
-      expect(result).toEqual({});
+      expect(() => readEnabledAgents('default')).toThrow(/not a JSON object/);
 
       const backups = readdirSync(join(tmpHome, '.cortextos', 'default', 'config'))
         .filter(f => f.startsWith('enabled-agents.json.broken-'));
       expect(backups.length).toBeGreaterThan(0);
     });
 
-    it('rejects primitive values (string) and backs them up', () => {
+    it('throws and backs up primitive values (wrong shape)', () => {
       setupConfigFile('default', '"a string"');
-      const result = readEnabledAgents('default');
-      expect(result).toEqual({});
+      expect(() => readEnabledAgents('default')).toThrow(/not a JSON object/);
 
       const backups = readdirSync(join(tmpHome, '.cortextos', 'default', 'config'))
         .filter(f => f.startsWith('enabled-agents.json.broken-'));

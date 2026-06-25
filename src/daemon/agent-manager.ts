@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync } from 'fs';
 import { join, relative } from 'path';
+import { homedir } from 'os';
 import { execFile } from 'child_process';
 import { VALID_RUNTIMES } from './runtimes.js';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
@@ -71,6 +72,49 @@ export class AgentManager {
   // finishes so the next clean restart starts from a known-good baseline.
   private daemonJustCrashed: boolean = false;
 
+  // ANTHROPIC_API_KEY startup guard state.
+  // Tracks source paths WHERE THE KEY WAS FOUND so the same finding is not
+  // re-alerted on every agent restart. Paths are only added when a key IS
+  // detected — clean files are not marked, so a key added post-boot to
+  // secrets.env is caught on the next IPC-triggered agent restart.
+  private apiKeyAlertedPaths: Set<string> = new Set();
+  // Accumulates findings per startAgent() call. During discoverAndStart()
+  // (inDiscoverAndStart=true) findings accumulate across all agents and are
+  // flushed as ONE consolidated Telegram at the end. On IPC-triggered restarts
+  // (inDiscoverAndStart=false) each startAgent() flushes immediately.
+  private pendingApiKeyAlerts: string[] = [];
+  // Set while discoverAndStart() is running its agent loop so startAgent()
+  // knows to defer the Telegram flush (handled by discoverAndStart instead).
+  private inDiscoverAndStart: boolean = false;
+  // First available operator bot captured during startAgent(); used to
+  // send the Telegram alert.
+  private operatorBotToken: string | undefined;
+  private operatorChatId: string | undefined;
+
+  // Credential-health guard state (#2).
+  // credentials.json is per-user (not per-agent), so we read it once and
+  // cache the issues list for the daemon's lifetime. Agents with a valid
+  // per-agent CLAUDE_CODE_OAUTH_TOKEN override are excluded from the check.
+  private credHealthCached: { done: boolean; issues: string[] } = { done: false, issues: [] };
+  // Agents already alerted so a crash-restart loop doesn't re-flood.
+  private credHealthAlertedAgents: Set<string> = new Set();
+
+  // Model-guard state (#3).
+  // Deduped on agent-name:model-value so a changed config re-alerts
+  // but a repeat restart with the same wrong model does not.
+  private modelGuardAlerted: Set<string> = new Set();
+
+  // Settings-guard state (#4).
+  // Deduped per agent-name. Strips mcp__* entries from permissions.allow at
+  // startup — bare mcp__* triggers a boot-time Settings-Warning modal that
+  // traps headless agents (same class as the Sophie modal-trap incident).
+  // Added to set on first detection (prevents alert flood if the atomic
+  // rewrite fails and the agent keeps crash-restarting within one daemon run).
+  private settingsGuardAlerted: Set<string> = new Set();
+
+  // The ONLY accepted model per Bode's hard never-lesser-model rule.
+  private static readonly REQUIRED_MODEL = 'claude-opus-4-8';
+
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
@@ -80,6 +124,46 @@ export class AgentManager {
     if (this.daemonJustCrashed) {
       console.log('[agent-manager] Detected .daemon-crashed marker(s) — previous daemon exited abnormally. Will quiet BUG-011 alarm for this startup cycle.');
     }
+    this.initOperatorChannel();
+  }
+
+  /**
+   * Pre-load the operator alert channel from the org orchestrator's .env.
+   * Guards (#1/#2/#3) must route to the orchestrator's direct channel (e.g. zeus→Bode),
+   * NOT to whichever agent happens to start first. Without this, the first agent
+   * with a BOT_TOKEN becomes the operator channel — a marketing-group bot, a
+   * customer-facing agent, or any other non-ops bot could silently hijack ops alerts.
+   * Best-effort: if context.json or the orchestrator .env is missing, falls back to
+   * the first-available pattern (unchanged behaviour from before this fix).
+   */
+  private initOperatorChannel(): void {
+    const orgsBase = join(this.frameworkRoot, 'orgs');
+    if (!existsSync(orgsBase)) return;
+    try {
+      const orgs = readdirSync(orgsBase, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+      for (const org of orgs) {
+        const contextPath = join(orgsBase, org, 'context.json');
+        if (!existsSync(contextPath)) continue;
+        let orchestratorName: string | undefined;
+        try { orchestratorName = JSON.parse(readFileSync(contextPath, 'utf-8')).orchestrator; } catch { continue; }
+        if (!orchestratorName) continue;
+        const envPath = join(orgsBase, org, 'agents', orchestratorName, '.env');
+        if (!existsSync(envPath)) continue;
+        try {
+          const envContent = stripBom(readFileSync(envPath, 'utf-8'));
+          const botToken = /^BOT_TOKEN=(.+)$/m.exec(envContent)?.[1]?.trim();
+          const chatId = /^CHAT_ID=(.+)$/m.exec(envContent)?.[1]?.trim();
+          if (botToken && /^\d+:[A-Za-z0-9_-]+$/.test(botToken) && chatId && /^\d+$/.test(chatId)) {
+            this.operatorBotToken = botToken;
+            this.operatorChatId = chatId;
+            console.log(`[agent-manager] Operator alert channel: ${orchestratorName} (${org}) chat_id=****${chatId.slice(-4)}`);
+            return;
+          }
+        } catch { continue; }
+      }
+    } catch { /* ignore scan errors — fall back to first-available */ }
   }
 
   /**
@@ -159,6 +243,9 @@ export class AgentManager {
     // Tunable/disable-able via CTX_SPAWN_STAGGER_MS (set 0 to disable, e.g. tests).
     // Invalid values fall back to the default rather than silently disabling.
     const STAGGER_MS = parseSpawnStaggerMs(process.env.CTX_SPAWN_STAGGER_MS);
+    // Signal startAgent() to defer per-call Telegram flushes during the sweep.
+    // We want ONE consolidated alert after all agents start, not one per agent.
+    this.inDiscoverAndStart = true;
     let startedCount = 0;
     for (const { name, dir, org, config } of agentDirs) {
       // Per-agent config.json `enabled: false` (existing behavior, unchanged)
@@ -182,12 +269,30 @@ export class AgentManager {
       startedCount++;
     }
 
+    // Startup sweep complete — restore normal IPC-flush mode.
+    this.inDiscoverAndStart = false;
+
     // Successful startup pass — clear .daemon-crashed markers from disk
     // AND clear the in-memory daemonJustCrashed flag. After this point,
     // any further startAgent() calls (IPC enable, dashboard restart, etc)
     // are normal operation and should fire the real BUG-011 alarm if a
     // race ever does leak through PR #11's protection.
     this.clearDaemonCrashMarkers();
+
+    // Send consolidated operator Telegram alert(s) for all guard findings
+    // accumulated during the startup sweep, grouped by alert type.
+    // H2 fix: if no bot token was captured (no agent has BOT_TOKEN+CHAT_ID),
+    // emit to daemon logs rather than silently discard via splice().
+    if (this.pendingApiKeyAlerts.length > 0) {
+      const pending = this.pendingApiKeyAlerts.splice(0);
+      if (this.operatorBotToken && this.operatorChatId) {
+        this.flushGuardAlerts(pending, this.operatorBotToken, this.operatorChatId);
+      } else {
+        for (const alert of pending) {
+          console.error(`[DAEMON GUARD - no Telegram bot configured] ${alert}`);
+        }
+      }
+    }
   }
 
   /**
@@ -201,8 +306,12 @@ export class AgentManager {
     if (!existsSync(enabledFile)) return {};
     try {
       return JSON.parse(readFileSync(enabledFile, 'utf-8'));
-    } catch {
-      return {}; // corrupt or unreadable — fall through to default-enabled
+    } catch (err) {
+      // Log loudly so the operator sees it in daemon logs — but don't throw.
+      // Throwing here would crash discoverAndStart() and prevent all agents from starting.
+      // Fallback: all-enabled (no entry = default-enabled per BUG-028 design).
+      console.error(`[agent-manager] WARNING: ${enabledFile} is corrupt or unreadable (${err}). Falling back to default-enabled for all agents. Fix the file and restart the daemon.`);
+      return {};
     }
   }
 
@@ -321,6 +430,13 @@ export class AgentManager {
     // BUG-043 fix: resolve the agent's true org instead of using `this.org`.
     const resolvedOrg = this.resolveAgentOrg(name, org);
 
+    // BUG-011 fix (companion to stopAgent's disable): re-enable the agent in
+    // enabled-agents.json before spawning. This clears the disabled state written
+    // by stopAgent() so external watchdogs see "enabled" after the restart completes.
+    // Safe for discoverAndStart() too: if the agent was enabled when discovered, it
+    // remains enabled; the write is idempotent.
+    this.updateEnabledAgents(name, true);
+
     // Auto-discover agent directory if not provided (e.g. when started via IPC)
     if (!agentDir || !existsSync(agentDir)) {
       const discovered = join(this.frameworkRoot, 'orgs', resolvedOrg, 'agents', name);
@@ -401,6 +517,11 @@ export class AgentManager {
       console.log(`[${name}] ${msg}`);
     };
 
+    // Suppress operator Telegram alerts for test/scratch agents. Guard checks still
+    // run (log to daemon stdout) but findings never reach pendingApiKeyAlerts so they
+    // cannot pollute the real operator channel with synthetic signals.
+    const suppressAlerts = !!config.suppress_operator_alerts;
+
     // Read agent .env for Telegram credentials
     const agentEnvFile = join(agentDir, '.env');
     let telegramApi: TelegramAPI | undefined;
@@ -459,6 +580,190 @@ export class AgentManager {
         telegramApi = new TelegramAPI(botToken);
         // Don't log sensitive user IDs — just indicate the gate is enabled
         log(`Telegram configured (chat_id: ****${String(chatId).slice(-4)}, allowed_user: enabled)`);
+      }
+
+      // ANTHROPIC_API_KEY guard (source 1: agent .env).
+      // A stray key here silently shadows the OAuth token (ANTHROPIC_API_KEY=#3,
+      // CLAUDE_CODE_OAUTH_TOKEN=#5 in Claude Code precedence) → per-token billing
+      // on this agent + auth-failure single point. Same class as MFL incident
+      // (secrets.env re-add downed 12 agents).
+      // Path is added to apiKeyAlertedPaths ONLY when the key is found — clean
+      // files stay unmarked so a key added post-boot is caught on next restart.
+      // Regex: \s*=\s* tolerates spaces around `=` (agent-pty.ts strips them).
+      // Fail-open: warn only, do NOT strip the key.
+      if (!this.apiKeyAlertedPaths.has(agentEnvFile) && /^ANTHROPIC_API_KEY\s*=\s*.+/m.test(envContent)) {
+        this.apiKeyAlertedPaths.add(agentEnvFile);
+        log(`SECURITY WARNING: ANTHROPIC_API_KEY found in agent .env for ${name}. This shadows OAuth (#3>#5 precedence) → per-token billing + auth-failure single point. Remove it — OAuth via credentials.json is the correct auth path.`);
+        if (!suppressAlerts) {
+          this.pendingApiKeyAlerts.push(`agent .env (${name})`);
+          if (!this.operatorBotToken && botToken && chatId) {
+            this.operatorBotToken = botToken;
+            this.operatorChatId = chatId;
+          }
+        }
+      }
+    }
+
+    // ANTHROPIC_API_KEY guard (source 2: org secrets.env).
+    // Checked on every startAgent() call — path is only added to apiKeyAlertedPaths
+    // when the key IS found, so:
+    //   - Clean files are re-read on each agent restart (cheap; file is small).
+    //   - A key added to secrets.env post-boot is detected on the next IPC restart.
+    //   - A transient readFileSync error does not permanently blind the guard.
+    //   - Multiple agents sharing one secrets.env only alert once (path marked on find).
+    const secretsEnvPath = join(this.frameworkRoot, 'orgs', resolvedOrg, 'secrets.env');
+    if (!this.apiKeyAlertedPaths.has(secretsEnvPath) && existsSync(secretsEnvPath)) {
+      try {
+        const secretsContent = stripBom(readFileSync(secretsEnvPath, 'utf-8'));
+        if (/^ANTHROPIC_API_KEY\s*=\s*.+/m.test(secretsContent)) {
+          this.apiKeyAlertedPaths.add(secretsEnvPath); // mark AFTER successful read + key found
+          console.log(`[${name}] SECURITY WARNING: ANTHROPIC_API_KEY found in org secrets.env (${resolvedOrg}). This shadows OAuth for ALL agents in this org → per-token billing + single auth-failure point. Remove it.`);
+          if (!suppressAlerts) this.pendingApiKeyAlerts.push(`org secrets.env (${resolvedOrg})`);
+        }
+      } catch { /* ignore unreadable secrets.env — not marked, so retried next call */ }
+    }
+
+    // ANTHROPIC_API_KEY guard (source 3: process.env).
+    // Checked once per daemon run — a key here shadows OAuth for every agent.
+    if (!this.apiKeyAlertedPaths.has('__process_env__') && /\S/.test(process.env.ANTHROPIC_API_KEY ?? '')) {
+      this.apiKeyAlertedPaths.add('__process_env__');
+      console.log(`[agent-manager] SECURITY WARNING: ANTHROPIC_API_KEY found in process.env (daemon launch environment). This shadows OAuth for all agents → per-token billing + auth-failure single point. Unset it from the daemon environment.`);
+      if (!suppressAlerts) this.pendingApiKeyAlerts.push('process.env (daemon environment)');
+    }
+
+    // ── Guard #2: Credential-health ───────────────────────────────────────
+    // Local-field check only — no live API probe (apollo owns runtime probe).
+    // Reads ~/.claude/.credentials.json ONCE per daemon run and caches the
+    // result. Each agent is then checked: if it has a per-agent
+    // CLAUDE_CODE_OAUTH_TOKEN override, skip (it has its own auth).
+    // Otherwise, any issue in the cached credential check = warn for this agent.
+    // This caught the AXL 14h silent-freeze class before it reaches production.
+    if (!this.credHealthCached.done) {
+      this.credHealthCached.done = true;
+      const credPath = join(homedir(), '.claude', '.credentials.json');
+      if (!existsSync(credPath)) {
+        this.credHealthCached.issues.push('credentials.json missing (no OAuth credential on disk)');
+      } else {
+        try {
+          const credJson = JSON.parse(stripBom(readFileSync(credPath, 'utf-8')));
+          const oauth = credJson?.claudeAiOauth ?? {};
+          const hasAccess = typeof oauth.accessToken === 'string' && oauth.accessToken.length > 0;
+          const hasRefresh = typeof oauth.refreshToken === 'string' && oauth.refreshToken.length > 0;
+          const expiresAt: number | undefined = typeof oauth.expiresAt === 'number' ? oauth.expiresAt : undefined;
+          const expired = expiresAt !== undefined && expiresAt < Date.now();
+          if (!hasAccess) {
+            this.credHealthCached.issues.push('credentials.json: accessToken missing or empty');
+          } else if (expired) {
+            this.credHealthCached.issues.push(`credentials.json: accessToken expired (expiresAt=${new Date(expiresAt!).toISOString()})`);
+          }
+          if (!hasRefresh) {
+            this.credHealthCached.issues.push('credentials.json: refreshToken missing — cannot auto-renew');
+          }
+        } catch {
+          this.credHealthCached.issues.push('credentials.json: unreadable or invalid JSON');
+        }
+      }
+    }
+    // Apply cached credential health result to this agent.
+    // Skip if agent has a per-agent CLAUDE_CODE_OAUTH_TOKEN (own auth path).
+    const agentEnvContent = existsSync(agentEnvFile)
+      ? (() => { try { return readFileSync(agentEnvFile, 'utf-8'); } catch { return ''; } })()
+      : '';
+    const hasPerAgentOAuth = /^CLAUDE_CODE_OAUTH_TOKEN\s*=\s*\S/m.test(agentEnvContent);
+    if (!hasPerAgentOAuth && this.credHealthCached.issues.length > 0 && !this.credHealthAlertedAgents.has(name)) {
+      this.credHealthAlertedAgents.add(name);
+      for (const issue of this.credHealthCached.issues) {
+        log(`CREDENTIAL WARNING: ${issue}. Agent ${name} will auth-fail at runtime. Run 'claude' interactively to re-authenticate.`);
+      }
+      if (!suppressAlerts) {
+        const issueStr = this.credHealthCached.issues.join('; ');
+        this.pendingApiKeyAlerts.push(`cred-health (${name}): ${issueStr}`);
+        if (!this.operatorBotToken && botToken && chatId) {
+          this.operatorBotToken = botToken;
+          this.operatorChatId = chatId;
+        }
+      }
+    }
+
+    // ── Guard #3: Model ───────────────────────────────────────────────────
+    // Enforces Bode's hard never-lesser-model rule. Checks config.model (what
+    // the agent WILL launch with via --model flag). Unset = uncontrolled model
+    // selection = violation (even if default happens to be opus today, the pin
+    // is the requirement). Runtime effective-model drift is apollo's lane.
+    const configuredModel = config.model ?? '';
+    const modelKey = `${name}:${configuredModel}`;
+    if (!this.modelGuardAlerted.has(modelKey)) {
+      if (!configuredModel) {
+        this.modelGuardAlerted.add(modelKey);
+        log(`MODEL WARNING: agent ${name} has no model pinned in config.json. Claude Code will pick its own default. Explicitly set model=claude-opus-4-8 to enforce Bode's never-lesser-model rule.`);
+        if (!suppressAlerts) {
+          this.pendingApiKeyAlerts.push(`model-guard (${name}): model not pinned`);
+          if (!this.operatorBotToken && botToken && chatId) {
+            this.operatorBotToken = botToken;
+            this.operatorChatId = chatId;
+          }
+        }
+      } else if (configuredModel !== AgentManager.REQUIRED_MODEL) {
+        this.modelGuardAlerted.add(modelKey);
+        log(`MODEL WARNING: agent ${name} configured with model="${configuredModel}" — not the required ${AgentManager.REQUIRED_MODEL}. Update config.json to enforce Bode's never-lesser-model rule.`);
+        if (!suppressAlerts) {
+          this.pendingApiKeyAlerts.push(`model-guard (${name}): model="${configuredModel}" (expected ${AgentManager.REQUIRED_MODEL})`);
+          if (!this.operatorBotToken && botToken && chatId) {
+            this.operatorBotToken = botToken;
+            this.operatorChatId = chatId;
+          }
+        }
+      }
+    }
+
+    // ── Guard #4: settings.json mcp__* sanitizer ─────────────────────────
+    // A bare mcp__* entry in permissions.allow (e.g. "mcp__higgsfield__*")
+    // triggers a boot-time Settings-Warning modal in Claude Code that seizes
+    // the headless PTY and swallows daemon inject → agent alive-but-unreachable
+    // (same class as the Sophie modal-trap incident). Strip the offending
+    // entries and rewrite settings.json before spawn so the agent boots clean.
+    // Deduped per agent-name to prevent alert-flood if the rewrite fails and
+    // the agent keeps crash-restarting within one daemon run.
+    if (!this.settingsGuardAlerted.has(name)) {
+      const settingsPath = join(agentDir, '.claude', 'settings.json');
+      if (existsSync(settingsPath)) {
+        try {
+          const settingsRaw = readFileSync(settingsPath, 'utf-8');
+          const settings = JSON.parse(stripBom(settingsRaw));
+          const allow: unknown[] = Array.isArray(settings?.permissions?.allow)
+            ? settings.permissions.allow
+            : [];
+          const mcpEntries = allow.filter(
+            (e): e is string => typeof e === 'string' && e.startsWith('mcp__'),
+          );
+          if (mcpEntries.length > 0) {
+            this.settingsGuardAlerted.add(name);
+            // Strip mcp__* entries and rewrite atomically (tmp+rename).
+            settings.permissions.allow = allow.filter(
+              (e) => typeof e !== 'string' || !e.startsWith('mcp__'),
+            );
+            const tmpPath = `${settingsPath}.daemon-tmp-${process.pid}`;
+            writeFileSync(tmpPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
+            renameSync(tmpPath, settingsPath);
+            log(
+              `SETTINGS WARNING: stripped ${mcpEntries.length} mcp__* entr${mcpEntries.length === 1 ? 'y' : 'ies'} ` +
+              `from permissions.allow (${mcpEntries.join(', ')}) — bare mcp__* triggers a boot-time ` +
+              `Settings-Warning modal that traps headless agents (Sophie modal-trap class). ` +
+              `settings.json rewritten; agent will start clean.`,
+            );
+            if (!suppressAlerts) {
+              this.pendingApiKeyAlerts.push(
+                `settings-guard (${name}): stripped mcp__* from permissions.allow: ${mcpEntries.join(', ')}`,
+              );
+              if (!this.operatorBotToken && botToken && chatId) {
+                this.operatorBotToken = botToken;
+                this.operatorChatId = chatId;
+              }
+            }
+          }
+        } catch {
+          /* non-fatal — malformed settings.json: agent startup will surface the parse error */
+        }
       }
     }
 
@@ -825,6 +1130,24 @@ export class AgentManager {
       // operator pain. Non-orchestrator agents skip this entirely.
       await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
     }
+
+    // ANTHROPIC_API_KEY guard: flush any findings accumulated in THIS call.
+    // During discoverAndStart() (inDiscoverAndStart=true) we defer and let
+    // discoverAndStart() send ONE consolidated alert after all agents start.
+    // On IPC/dashboard-triggered restarts (inDiscoverAndStart=false) we flush
+    // immediately so a key added post-boot is surfaced to the operator right away.
+    if (!this.inDiscoverAndStart && this.pendingApiKeyAlerts.length > 0) {
+      const newAlerts = this.pendingApiKeyAlerts.splice(0);
+      if (this.operatorBotToken && this.operatorChatId) {
+        this.flushGuardAlerts(newAlerts, this.operatorBotToken, this.operatorChatId);
+      } else {
+        // H2 fix: IPC-triggered restart with no bot token — log to daemon stderr
+        // rather than silently drop so guard findings have a log trail.
+        for (const alert of newAlerts) {
+          console.error(`[DAEMON GUARD - no Telegram bot configured] ${alert}`);
+        }
+      }
+    }
   }
 
   /**
@@ -833,6 +1156,47 @@ export class AgentManager {
    * undefined when there is no org, no/unreadable context.json, no orchestrator field, or
    * when THIS agent is itself the orchestrator (don't route an alert to oneself).
    */
+  /**
+   * Send grouped Telegram alert(s) for accumulated guard findings.
+   * API-key findings get a dedicated "ANTHROPIC_API_KEY detected" message;
+   * cred-health and model-guard findings get a separate "DAEMON GUARD" message.
+   * Keeping them separate preserves per-type filtering in tests and monitoring.
+   */
+  private flushGuardAlerts(alerts: string[], botToken: string, chatId: string): void {
+    const apiKeyAlerts = alerts.filter(
+      (a) => a.startsWith('agent .env') || a.startsWith('org secrets.env') || a.startsWith('process.env'),
+    );
+    const otherAlerts = alerts.filter(
+      (a) => a.startsWith('cred-health') || a.startsWith('model-guard') || a.startsWith('settings-guard'),
+    );
+    // H1 fix: catch any alert string that matches neither classifier so it is
+    // never silently dropped — future guards that push with an unrecognised prefix
+    // still surface to the operator and to daemon logs.
+    const classifiedSet = new Set([...apiKeyAlerts, ...otherAlerts]);
+    const unknownAlerts = alerts.filter((a) => !classifiedSet.has(a));
+
+    const api = new TelegramAPI(botToken);
+    if (apiKeyAlerts.length > 0) {
+      api.sendMessage(
+        chatId,
+        `⚠️ DAEMON GUARD: ANTHROPIC_API_KEY detected in: ${apiKeyAlerts.join(', ')}. Stray key shadows OAuth (#3>#5 precedence) → per-token billing + single auth-failure point. Remove the key(s) and restart the daemon.`,
+      ).catch(() => {});
+    }
+    if (otherAlerts.length > 0) {
+      api.sendMessage(
+        chatId,
+        `⚠️ DAEMON GUARD: ${otherAlerts.join('; ')}. See daemon logs for details.`,
+      ).catch(() => {});
+    }
+    if (unknownAlerts.length > 0) {
+      console.error(`[DAEMON GUARD] unclassified alerts (check flushGuardAlerts prefix list): ${unknownAlerts.join('; ')}`);
+      api.sendMessage(
+        chatId,
+        `⚠️ DAEMON GUARD (unclassified): ${unknownAlerts.join('; ')}. Update flushGuardAlerts prefix list.`,
+      ).catch(() => {});
+    }
+  }
+
   private resolveOrchestrator(org: string | undefined, name: string): string | undefined {
     if (!org) return undefined;
     try {
@@ -972,14 +1336,59 @@ export class AgentManager {
   }
 
   /**
+   * BUG-011 fix: atomically mark an agent enabled or disabled in enabled-agents.json.
+   *
+   * stopAgent() calls this with enabled=false BEFORE killing the process —
+   * any external watchdog that reads enabled-agents.json will see the agent as
+   * "intentionally stopped" and skip respawn. startAgent() calls it with
+   * enabled=true before spawning so the agent is visible to the respawn loop
+   * again (and to discoverAndStart on the next daemon restart).
+   *
+   * Race-safe: Node.js is single-threaded so the read-update-write sequence
+   * is atomic within the event loop. The rename-based write prevents torn reads
+   * from concurrent external readers (dashboards, monitoring scripts).
+   *
+   * Best-effort: a write failure logs to daemon stderr but never blocks the
+   * stop/start operation. The in-memory stopRequested flag (in AgentProcess)
+   * is the primary BUG-011 guard; this is the persistent / watchdog-visible layer.
+   */
+  private updateEnabledAgents(name: string, enabled: boolean): void {
+    const enabledFile = join(this.ctxRoot, 'config', 'enabled-agents.json');
+    let data: Record<string, { enabled?: boolean; org?: string; status?: string }> = {};
+    if (existsSync(enabledFile)) {
+      try { data = JSON.parse(readFileSync(enabledFile, 'utf-8')); } catch { /* start fresh */ }
+    }
+    // Preserve all existing fields (org, status) — only update enabled.
+    data[name] = { ...(data[name] ?? {}), enabled };
+    try {
+      mkdirSync(join(this.ctxRoot, 'config'), { recursive: true });
+      const tmp = `${enabledFile}.tmp.${process.pid}`;
+      writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
+      renameSync(tmp, enabledFile);
+    } catch (err) {
+      console.error(`[agent-manager] BUG-011: failed to update enabled-agents.json for ${name} (enabled=${enabled}): ${err}`);
+    }
+  }
+
+  /**
    * Stop a specific agent.
    */
-  async stopAgent(name: string): Promise<void> {
+  async stopAgent(name: string, skipEnabledUpdate = false): Promise<void> {
     const entry = this.agents.get(name);
     if (!entry) {
       console.log(`[agent-manager] Agent ${name} not found`);
       return;
     }
+
+    // BUG-011 fix: disable FIRST (before killing) so any external watchdog that
+    // reads enabled-agents.json sees "disabled" and will NOT respawn the agent
+    // while we're in the middle of the stop→start window.
+    // Must happen BEFORE process.stop() — once the process is dead, the watchdog
+    // could fire at any moment. enabled=true is restored by startAgent() on restart.
+    // skipEnabledUpdate=true is used by stopAll() (daemon lifecycle shutdown) — a
+    // clean daemon restart should not leave all agents disabled; discoverAndStart()
+    // on the new daemon process reads enabled-agents.json and must find them enabled.
+    if (!skipEnabledUpdate) this.updateEnabledAgents(name, false);
 
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
@@ -1067,7 +1476,10 @@ export class AgentManager {
 
     for (const name of names) {
       try {
-        await this.stopAgent(name);
+        // skipEnabledUpdate=true: daemon lifecycle shutdown must not write enabled=false
+        // for every agent — the next daemon process's discoverAndStart() reads this file
+        // and would find all agents disabled, booting zero agents (silent outage).
+        await this.stopAgent(name, true);
       } catch (err) {
         console.error(`[agent-manager] Error stopping ${name}:`, err);
       }

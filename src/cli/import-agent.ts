@@ -158,11 +158,32 @@ export const importAgentCommand = new Command('import-agent')
     const ctxRoot = join(homedir(), '.cortextos', options.instance);
     const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
     let enabledAgents: Record<string, any> = {};
-    try {
-      if (existsSync(enabledPath)) {
-        enabledAgents = JSON.parse(readFileSync(enabledPath, 'utf-8'));
+    if (existsSync(enabledPath)) {
+      let raw: string;
+      try {
+        raw = readFileSync(enabledPath, 'utf-8');
+      } catch (err) {
+        throw new Error(`Cannot read ${enabledPath}: ${err}. Check file permissions.`);
       }
-    } catch { /* start fresh */ }
+      try {
+        enabledAgents = JSON.parse(raw!);
+      } catch {
+        // BUG-013 class — destructive variant: corrupt JSON → start-fresh → overwrite → permanent wipe.
+        // Fail-closed: back up, refuse to proceed.
+        const backup = `${enabledPath}.broken-${Date.now()}`;
+        let backupNote: string;
+        try {
+          writeFileSync(backup, raw!, 'utf-8');
+          backupNote = `Corrupt file backed up to: ${backup}.`;
+        } catch {
+          backupNote = `WARNING: backup to ${backup} also failed — corrupt file may be lost.`;
+        }
+        throw new Error(
+          `${enabledPath} contains invalid JSON — refusing to overwrite (would permanently wipe all agent registrations). ` +
+          backupNote + ` Fix the JSON and re-run: cortextos import-agent ${agentName}`
+        );
+      }
+    }
     enabledAgents[agentName] = { enabled: true, status: 'configured', org };
     mkdirSync(join(ctxRoot, 'config'), { recursive: true });
     writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');

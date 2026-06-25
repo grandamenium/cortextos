@@ -29,7 +29,8 @@ import {
   writeFileSync,
   renameSync,
 } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, isAbsolute } from 'path';
+import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 import type { CronExecutionLogEntry } from '../types/index.js';
 import { cronExecutionLogPathFor } from '../bus/crons-schema.js';
@@ -53,7 +54,15 @@ export const ROTATION_SIZE_BYTES = 200 * 1_024;
 
 /** Resolve the absolute path to an agent's execution log. */
 function logFilePath(agentName: string): string {
-  const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+  const ctxRoot =
+    process.env.CTX_ROOT ||
+    join(homedir(), '.cortextos', process.env.CTX_INSTANCE_ID ?? 'default');
+  if (!isAbsolute(ctxRoot)) {
+    throw new Error(
+      `[cron-execution-log] CTX_ROOT resolved to a non-absolute path "${ctxRoot}" — ` +
+        `set CTX_ROOT to an absolute path or leave it unset to use the default (~/.cortextos/default).`
+    );
+  }
   return join(ctxRoot, cronExecutionLogPathFor(agentName));
 }
 
