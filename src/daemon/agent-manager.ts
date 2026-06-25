@@ -434,8 +434,15 @@ export class AgentManager {
       registerTelegramCommands(botToken, commands).then((result) => {
         if (result.status === 'ok') {
           log(`Telegram commands registered (${result.count} commands)`);
+        } else if (result.status !== 'empty') {
+          // Surface failures instead of swallowing them silently: a failed
+          // registration means the agent's slash menu is missing until the next
+          // restart, so operators need to see it (non-fatal to agent startup).
+          log(`Telegram command registration failed after retries: ${result.error}`);
         }
-      }).catch(() => { /* non-fatal */ });
+      }).catch((err) => {
+        log(`Telegram command registration error: ${String(err)}`);
+      });
     }
 
     // Start Telegram poller if credentials are available and not explicitly disabled.

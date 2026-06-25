@@ -498,34 +498,53 @@ export function collectTelegramCommands(scanDirs: string[]): { command: string; 
 
 /**
  * Register commands with Telegram Bot API.
+ *
+ * The daemon calls this once per agent at startup. A single setMyCommands attempt
+ * is restart-sensitive: when the daemon bounces mid-onboarding (e.g. reloading to
+ * pick up a newly created agent) any in-flight request is killed and the slash menu
+ * never lands, with no retry. We therefore retry on transient failures with a short
+ * backoff so registration survives a flaky network or a slow API response within a
+ * single boot. `attempts` is the total number of tries (default 3).
  */
 export async function registerTelegramCommands(
   botToken: string,
   commands: { command: string; description: string }[],
+  attempts = 3,
 ): Promise<RegisterCommandsResult> {
   if (commands.length === 0) {
     return { status: 'empty', count: 0, commands: [], error: 'No commands found to register' };
   }
 
-  try {
-    // Register under all_private_chats scope so the / menu appears in private bot chats.
-    // The default scope alone is insufficient — Telegram shows commands from the most
-    // specific matching scope, and all_private_chats takes precedence over default.
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ commands, scope: { type: 'all_private_chats' } }),
-    });
+  const totalAttempts = Math.max(1, attempts);
+  let lastError = 'Failed to register commands with Telegram';
 
-    const data = await response.json() as { ok: boolean; description?: string };
-    if (data.ok) {
-      return { status: 'ok', count: commands.length, commands };
-    } else {
-      return { status: 'error', count: 0, commands, error: data.description || 'Failed to register commands with Telegram' };
+  for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+    try {
+      // Register under all_private_chats scope so the / menu appears in private bot chats.
+      // The default scope alone is insufficient — Telegram shows commands from the most
+      // specific matching scope, and all_private_chats takes precedence over default.
+      const response = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commands, scope: { type: 'all_private_chats' } }),
+      });
+
+      const data = await response.json() as { ok: boolean; description?: string };
+      if (data.ok) {
+        return { status: 'ok', count: commands.length, commands };
+      }
+      lastError = data.description || 'Failed to register commands with Telegram';
+    } catch (err) {
+      lastError = String(err);
     }
-  } catch (err) {
-    return { status: 'error', count: 0, commands, error: String(err) };
+
+    // Back off before retrying (linear: 500ms, 1000ms, ...), skip after the last try.
+    if (attempt < totalAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
   }
+
+  return { status: 'error', count: 0, commands, error: lastError };
 }
 
 // --- Internal helpers ---
