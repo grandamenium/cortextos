@@ -270,10 +270,42 @@ export interface PlanUsage {
 }
 
 export function getPlanUsage(): PlanUsage | null {
+  // Primary: an explicit `cortextos bus scrape-usage` snapshot. Preserves the
+  // manual /usage paste path and the daily JSONL history series.
   const file = path.join(CTX_ROOT, 'state', 'usage', 'latest.json');
-  if (!fs.existsSync(file)) return null;
+  if (fs.existsSync(file)) {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    } catch {
+      // fall through to the live API cache
+    }
+  }
+
+  // Fallback: the OAuth usage cache that the usage-monitor cron keeps fresh.
+  // This auto-populates the widget with no manual scrape. The cache exposes 5h /
+  // 7d / 7d-sonnet utilization, which map onto session / week-all-models / week-sonnet.
+  const cacheFile = path.join(CTX_ROOT, 'state', 'usage', 'api-cache.json');
+  if (!fs.existsSync(cacheFile)) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
+    if (cache.five_hour == null && cache.seven_day == null) return null;
+    const fmtReset = (iso?: string | null): string =>
+      iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric' }) : '';
+    return {
+      agent: 'claude-max',
+      timestamp: fs.statSync(cacheFile).mtime.toISOString(),
+      session: {
+        used_pct: cache.five_hour?.utilization ?? 0,
+        resets: fmtReset(cache.five_hour?.resets_at),
+      },
+      week_all_models: {
+        used_pct: cache.seven_day?.utilization ?? 0,
+        resets: fmtReset(cache.seven_day?.resets_at),
+      },
+      week_sonnet: {
+        used_pct: cache.seven_day_sonnet?.utilization ?? 0,
+      },
+    };
   } catch {
     return null;
   }
