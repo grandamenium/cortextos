@@ -269,6 +269,38 @@ export interface PlanUsage {
   week_sonnet: { used_pct: number };
 }
 
+export interface CodexUsage {
+  plan_type: string;
+  timestamp: string;
+  five_hour: { used_pct: number; resets: string };
+  seven_day: { used_pct: number; resets: string };
+}
+
+/**
+ * Codex (ChatGPT) plan usage, read from the wham cache the usage-monitor cron
+ * keeps fresh. primary_window is the 5h limit, secondary_window the 7d limit;
+ * reset_at is a unix epoch (seconds).
+ */
+export function getCodexUsage(): CodexUsage | null {
+  const cacheFile = path.join(CTX_ROOT, 'state', 'usage', 'codex-wham-cache.json');
+  if (!fs.existsSync(cacheFile)) return null;
+  try {
+    const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
+    const rl = cache.rate_limit;
+    if (!rl) return null;
+    const fmtEpoch = (s?: number | null): string =>
+      s ? new Date(s * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric' }) : '';
+    return {
+      plan_type: cache.plan_type ?? 'codex',
+      timestamp: fs.statSync(cacheFile).mtime.toISOString(),
+      five_hour: { used_pct: rl.primary_window?.used_percent ?? 0, resets: fmtEpoch(rl.primary_window?.reset_at) },
+      seven_day: { used_pct: rl.secondary_window?.used_percent ?? 0, resets: fmtEpoch(rl.secondary_window?.reset_at) },
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function getPlanUsage(): PlanUsage | null {
   // Primary: an explicit `cortextos bus scrape-usage` snapshot. Preserves the
   // manual /usage paste path and the daily JSONL history series.
