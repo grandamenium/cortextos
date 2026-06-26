@@ -340,6 +340,40 @@ export class StaleAgentWatchdog {
         continue;
       }
 
+      // --- Liveness-ack exemption (POST-#83 non-ticking-cron false-positive) ---
+      // recentCronFireState returning 'fired' means a cron fired in the window,
+      // NOT that the agent failed to process it. NON-TICKING crons — passive
+      // monitors (fleet-heartbeat-watch, *-watch) whose prompts never call
+      // `update-heartbeat` — leave the heartbeat stale even when the agent is
+      // perfectly healthy and processes them. From the heartbeat alone, a healthy
+      // agent draining a non-ticking cron is indistinguishable from a wedge.
+      //
+      // The disambiguator is the agent's cron-fire ACK: `update-cron-fire`, which
+      // every cron prompt calls at the END of its run. A `last_fire` inside the
+      // stale window is positive proof the session drained work and is ALIVE — so
+      // skip the restart even though `recentCronFireState` says 'fired'.
+      // (2026-06-26: systems-analyst restarted while acking fleet-heartbeat-watch
+      // 3.7min earlier — crash #5/10 toward HALT on a healthy agent.)
+      //
+      // Fail-safe: missing/unreadable ack state → no exemption (absence of
+      // positive liveness proof must NOT block a genuine wedge restart). A true
+      // wedge — fired-in-window with NO ack in-window (e.g. integrations-routing
+      // 2026-06-26: heartbeat cron fired, never acked) — still restarts.
+      if (!rateLimitInfo.isLimited && this.recentCronAck(name, thresholdMs)) {
+        const ackKey = `ack-${name}`;
+        const lastAckLog = this.lastLogAt.get(ackKey) ?? 0;
+        if (Date.now() - lastAckLog > 30 * 60 * 1000) {
+          const hbAgeMin = Math.round((Date.now() - new Date(hb.last_heartbeat).getTime()) / 60000);
+          console.log(
+            `[watchdog] ${name} heartbeat stale (${hbAgeMin}m) but acked a cron-fire ` +
+            `within ${thresholdMs / 60000}m — alive (processed a non-ticking cron), ` +
+            `not wedged. Skipping restart.`,
+          );
+          this.lastLogAt.set(ackKey, Date.now());
+        }
+        continue;
+      }
+
       // --- Restart ---
 
       // Enforce restart cooldown
@@ -434,6 +468,46 @@ export class StaleAgentWatchdog {
     }
     // No parseable 'fired' entry anywhere → can't confirm the idle pattern.
     return 'unknown';
+  }
+
+  /**
+   * Positive liveness check via the agent's cron-fire ACK registry
+   * (`state/<agent>/cron-state.json`). Agents call `update-cron-fire` at the END
+   * of every cron prompt, so a `last_fire` inside the window proves the session
+   * drained work — even for NON-TICKING crons (passive *-watch monitors whose
+   * prompts never call `update-heartbeat` and therefore leave the heartbeat
+   * stale despite the agent being healthy).
+   *
+   * Complements recentCronFireState: that returns 'fired' for any cron that
+   * fired, which from the heartbeat alone is indistinguishable from a wedge when
+   * the cron is non-ticking. The ack disambiguates — acked in-window → alive.
+   *
+   * Returns true iff some cron's `last_fire` is within windowMs. Missing or
+   * unreadable state → false (fail-safe: absence of positive proof must NOT
+   * suppress a genuine wedge restart).
+   */
+  private recentCronAck(agentName: string, windowMs: number): boolean {
+    const statePath = join(this.ctxRoot, 'state', agentName, 'cron-state.json');
+    if (!existsSync(statePath)) return false;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(statePath, 'utf-8'));
+    } catch {
+      return false;
+    }
+    const crons =
+      parsed && typeof parsed === 'object' &&
+      Array.isArray((parsed as { crons?: unknown }).crons)
+        ? (parsed as { crons: Array<{ last_fire?: unknown }> }).crons
+        : [];
+    const cutoffMs = Date.now() - windowMs;
+    for (const rec of crons) {
+      if (typeof rec.last_fire !== 'string') continue;
+      const fireMs = Date.parse(rec.last_fire);
+      if (!Number.isFinite(fireMs)) continue;
+      if (fireMs >= cutoffMs) return true;
+    }
+    return false;
   }
 
   /**
