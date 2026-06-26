@@ -16,6 +16,15 @@
 #   (8) scripts-only           → NOT ops-material either (stays inert)
 #   (9) mixed src+workflow      → dist-material dominates (rebuild page)
 #  (10) fmt_delta_summary       → count + matched-path list with "+N more" truncation
+#  (11) source_drift_sig        → NEW dist file in range changes the sig (re-page; the
+#                                 2026-06-26 bool-key miss — a new dist-affecting file
+#                                 added while drift already=true did not re-surface to PD)
+#  (12) source_drift_sig        → INERT advance (docs commit) leaves the sig UNCHANGED
+#                                 (anti-spam: no per-commit re-page while a rebuild pends)
+#  (13) source_drift_sig        → re-edit of an already-drifting dist file changes the sig
+#                                 (content-precise via blob hash, not just the path set)
+#  (14) source_drift_sig        → non-material (scripts-only) gap → empty sig
+#  (15) source_drift_sig        → bad SHA → non-empty + STABLE sig (fail-safe, no fake recovery)
 #
 # Usage: bash deploy-drift-source.test.sh <deploy-drift-source-lib.sh>
 set -uo pipefail
@@ -127,6 +136,56 @@ MANY=$(printf 'f1\nf2\nf3\nf4\nf5\nf6\nf7\nf8\n')
 SUM=$(fmt_delta_summary "$MANY")
 echo "$SUM" | grep -q "8 file(s) \[f1, f2, f3, f4, f5, f6, +2 more\]" && ok "C10: >max truncates to +N more: [$SUM]" || bad "C10: truncation wrong [$SUM]"
 echo "$SUM" | grep -q "f1" && echo "$SUM" | grep -q "+2 more" && ok "C10: summary carries actual paths (not just a count)" || bad "C10: summary missing paths [$SUM]"
+
+# ── C11: source_drift_sig — a NEW dist file in range CHANGES the sig ─────────
+# The exact 2026-06-26 escalation miss: with a bare src= bool key, a new dist-affecting
+# file added while SOURCE_DRIFT was ALREADY true did not change the key → PD never saw it.
+echo "== [C11] source_drift_sig: NEW dist-affecting file in range → sig changes (re-page) =="
+newrepo
+printf 'export const b = 2;\n' >> "$REPO/src/daemon/index.ts"; R1=$(commit srcedit)
+SIG1=$(source_drift_sig "$REPO" "$BASE" "$R1")
+printf 'export const c = 3;\n' > "$REPO/src/daemon/new.ts"; R2=$(commit addnewdist)
+SIG2=$(source_drift_sig "$REPO" "$BASE" "$R2")
+{ [ -n "$SIG1" ] && [ -n "$SIG2" ] && [ "$SIG1" != "$SIG2" ]; } \
+  && ok "C11: new dist file changes the sig (${SIG1:0:12} -> ${SIG2:0:12})" \
+  || bad "C11: new dist file did NOT change sig (s1=$SIG1 s2=$SIG2)"
+
+# ── C12: an INERT advance (docs commit) in range does NOT change the sig ─────
+# Anti-spam: while a planned rebuild is pending, unrelated origin/main commits must not
+# re-page. A raw commit-SHA key would churn here; the path+blob set does not.
+echo "== [C12] source_drift_sig: inert docs commit in range → sig UNCHANGED (no spam) =="
+printf 'more docs\n' >> "$REPO/docs/readme.md"; R3=$(commit docschg)
+SIG3=$(source_drift_sig "$REPO" "$BASE" "$R3")
+[ "$SIG3" = "$SIG2" ] \
+  && ok "C12: inert docs commit leaves sig unchanged (${SIG3:0:12})" \
+  || bad "C12: inert docs commit churned the sig (s2=$SIG2 s3=$SIG3)"
+
+# ── C13: a re-edit of an ALREADY-drifting dist file changes the sig ──────────
+# Content-precise: the path set is identical but index.ts's blob hash at the target moved.
+echo "== [C13] source_drift_sig: re-edit of an already-drifting dist file → sig changes =="
+printf 'export const e = 5;\n' >> "$REPO/src/daemon/index.ts"; R4=$(commit srcedit2)
+SIG4=$(source_drift_sig "$REPO" "$BASE" "$R4")
+[ "$SIG4" != "$SIG3" ] \
+  && ok "C13: re-edit of drifting file changes the sig (blob moved: ${SIG3:0:12} -> ${SIG4:0:12})" \
+  || bad "C13: re-edit did NOT change sig (s3=$SIG3 s4=$SIG4)"
+rm -rf "$REPO"
+
+# ── C14: no dist/ops-material delta (scripts-only) → empty signature ─────────
+echo "== [C14] source_drift_sig: non-material (scripts-only) gap → empty sig =="
+newrepo
+printf 'echo more\n' >> "$REPO/scripts/self-healing/thing.sh"; RS=$(commit scriptonly)
+SIGS=$(source_drift_sig "$REPO" "$BASE" "$RS")
+[ -z "$SIGS" ] && ok "C14: scripts-only gap → empty sig (no srcsig in key)" || bad "C14: scripts-only gap produced a sig [$SIGS]"
+rm -rf "$REPO"
+
+# ── C15: bad SHA → NON-empty, STABLE sig (fail-safe: material, no fake recovery) ─
+echo "== [C15] source_drift_sig: bad SHA → non-empty + stable (fail-safe) =="
+newrepo
+DEAD=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+B1=$(source_drift_sig "$REPO" "$BASE" "$DEAD")
+B2=$(source_drift_sig "$REPO" "$BASE" "$DEAD")
+{ [ -n "$B1" ] && [ "$B1" = "$B2" ]; } && ok "C15: bad SHA → non-empty stable sig (${B1:0:12})" || bad "C15: bad SHA sig empty/unstable (b1=$B1 b2=$B2)"
+rm -rf "$REPO"
 
 echo
 echo "RESULT: $PASS passed, $FAIL failed"

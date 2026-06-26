@@ -327,9 +327,10 @@ log "wrote $TOPOLOGY_FILE (drift=$DRIFT)"
 # --- 5. Escalate on MATERIAL drift change (dedup — no spam) -------------------
 # Per platform-director directive (OPS-DAEMON-RESTART, 2026-06-18): a restart_drift
 # that PD has already acknowledged + ticketed must NOT re-page every 15 min. Re-page
-# ONLY when the situation MATERIALLY changes — source_drift flips true, sha_stale
-# flips true, or a NEW daemon pid appears. The dedup key therefore deliberately
-# EXCLUDES restart_drift, build_sha and mtime: a same-pid restart_drift (incl. repeated
+# ONLY when the situation MATERIALLY changes — the source dist-affecting file SET
+# changes (see SOURCE_SIG below; flipping true is one such change), sha_stale flips
+# true, the deployed-drift file set changes, or a NEW daemon pid appears. The dedup
+# key therefore deliberately EXCLUDES restart_drift, build_sha and mtime: a same-pid restart_drift (incl. repeated
 # improver rebuilds of the daemon while it awaits its planned restart) keeps the same
 # key and is suppressed after the first page. A fresh pid (the restart landed, or a
 # crash-respawn) changes the key, which both clears the old condition and surfaces any
@@ -345,7 +346,27 @@ log "wrote $TOPOLOGY_FILE (drift=$DRIFT)"
 # when it clears — so hold-state transitions re-page.
 MARKER="$STATE_DIR/.deploy-drift-last"
 DEPLOYED_SIG=$(printf '%s\n' "${DEPLOYED_DRIFT_FILES[@]:-}" | sort | tr '\n' ',' )
-DRIFT_KEY="src=${SOURCE_DRIFT};sha=${SHA_STALE};pid=${DAEMON_PID};dep=${DEPLOYED_SIG};hold=${RESTART_HOLD}"
+
+# SOURCE signature — key on the dist-affecting changed-file SET, not the src= bool.
+# A bare src=${SOURCE_DRIFT} bool suppresses re-escalation when origin/main advances
+# with a NEW dist-affecting file while SOURCE_DRIFT is ALREADY true: the key is
+# unchanged so PD never sees the new file (2026-06-26 miss — the #84 stale-watchdog.ts
+# source file did not auto-surface; caught only by a manual probe-output read).
+# Mirror DEPLOYED_SIG (set-based): the SORTED union of the dist-material (MAT_DELTA) and
+# ops-material (OPS_DELTA) paths, each paired with its origin/main BLOB hash. That blob
+# hash is a sharper "+ origin/main SHA" — content-precise rather than commit-wide:
+#   • a NEW or REMOVED dist file, OR a re-edit of an already-drifting file (its blob
+#     hash moves) → sig changes → re-page ONCE;
+#   • an INERT origin/main advance (docs/tests/scripts) leaves every dist blob untouched
+#     → identical sig → suppressed — so we do NOT regress to per-commit/per-cycle spam
+#     (the #66/#51 material-change discipline). The raw commit SHA would churn the key on
+#     every unrelated commit in the range; the per-file blob set does not.
+SOURCE_SIG=""
+if [ "$SOURCE_DRIFT" = "true" ] && declare -f source_drift_sig >/dev/null 2>&1; then
+  SOURCE_SIG=$(source_drift_sig "$FRAMEWORK_ROOT" "$BUILD_SHA" "$REMOTE_SHA")
+fi
+
+DRIFT_KEY="src=${SOURCE_DRIFT};srcsig=${SOURCE_SIG};sha=${SHA_STALE};pid=${DAEMON_PID};dep=${DEPLOYED_SIG};hold=${RESTART_HOLD}"
 LAST_KEY=$(cat "$MARKER" 2>/dev/null || echo "")
 
 if [ "$DRIFT" = "true" ]; then

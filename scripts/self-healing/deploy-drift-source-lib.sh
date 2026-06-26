@@ -54,6 +54,37 @@ ops_material_delta() {
   _delta_paths "$1" "$2" "$3" "${OPS_MATERIAL_PATHS[@]}"
 }
 
+# source_drift_sig <repo_root> <commit_a> <commit_b>
+#   Content-precise signature of the DIST/OPS-material drift between two commits, for the
+#   probe's escalation DEDUP key. Emits a single sha256 over the SORTED union of the
+#   dist-material + ops-material changed paths, each paired with its blob hash AT commit_b
+#   (the drift target = origin/main). Empty material set => empty signature ("").
+#
+#   Why a path+blob SET, not the src= bool nor the raw commit SHA:
+#     • bool: a NEW dist-affecting file added while drift is ALREADY true does not change
+#       the key → PD never re-sees it (the 2026-06-26 miss this fixes: the #84
+#       stale-watchdog.ts source file did not auto-surface).
+#     • raw commit SHA: EVERY unrelated commit in the range churns the key → per-commit
+#       page spam while a planned rebuild is pending (violates #66/#51 anti-spam).
+#     • path+blob set: changes iff a dist/ops file is added, removed, OR re-edited (its
+#       blob moves) — re-page ONCE per distinct material state; an INERT advance
+#       (docs/tests/scripts) leaves every blob untouched → identical signature → silent.
+#   A bad SHA flows through the *_delta sentinels ("?:no-sha"/"?:diff-failed"): no blob
+#   (hash "-"), but still a stable NON-empty signature — preserving the fail-safe
+#   "treat as material" without faking a recovery.
+source_drift_sig() {
+  local root="$1" a="$2" b="$3" paths
+  paths=$( { dist_material_delta "$root" "$a" "$b"; ops_material_delta "$root" "$a" "$b"; } \
+    | grep -v '^$' | sort -u )
+  [ -n "$paths" ] || return 0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    local bh
+    bh=$(git -C "$root" rev-parse "$b:$p" 2>/dev/null || echo "-")
+    printf '%s\t%s\n' "$p" "$bh"
+  done <<< "$paths" | { shasum -a 256 2>/dev/null || sha256sum 2>/dev/null; } | awk '{print $1}'
+}
+
 # FMT_DELTA_MAX — how many paths to spell out before collapsing the tail to "+N more".
 FMT_DELTA_MAX=6
 
