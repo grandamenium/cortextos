@@ -8,6 +8,7 @@ import {
   storeUsageData,
   collectTelegramCommands,
   registerTelegramCommands,
+  fitCommandsToTelegramLimits,
 } from '../src/bus/metrics.js';
 
 describe('Sprint 5: Observability & Metrics', () => {
@@ -356,6 +357,25 @@ describe('Sprint 5: Observability & Metrics', () => {
       expect(commands[0].description.length).toBe(256);
     });
 
+    // Regression: Telegram rejects setMyCommands with BOT_COMMANDS_TOO_MUCH when
+    // the COMBINED description payload is too large (~4KB), even under the 100
+    // command cap. An agent with many full-length skill descriptions must still
+    // produce a registerable payload.
+    it('bounds the combined description payload for many long skills', () => {
+      const scanDir = join(testDir, 'agent-many');
+      const longDesc = 'X'.repeat(256);
+      for (let i = 0; i < 60; i++) {
+        const skillDir = join(scanDir, 'skills', `skill-${i}`);
+        mkdirSync(skillDir, { recursive: true });
+        writeFileSync(join(skillDir, 'SKILL.md'), `---\nname: skill-${i}\ndescription: ${longDesc}\n---\n`, 'utf-8');
+      }
+
+      const commands = collectTelegramCommands([scanDir]);
+      expect(commands.length).toBe(60); // every command preserved
+      const totalDescChars = commands.reduce((n, c) => n + c.description.length, 0);
+      expect(totalDescChars).toBeLessThanOrEqual(3500);
+    });
+
     // Issue #329: codex-runtime agents store slash commands under .codex/, not
     // .claude/. Without these scan paths, registerTelegramCommands sees zero
     // commands for codex agents and the Telegram setMyCommands call no-ops,
@@ -411,6 +431,35 @@ describe('Sprint 5: Observability & Metrics', () => {
       const cmds = collectTelegramCommands([scanDir]);
       const names = cmds.map((c) => c.command).sort();
       expect(names).toEqual(['claude_only', 'codex_only']);
+    });
+  });
+
+  describe('fitCommandsToTelegramLimits', () => {
+    const mk = (n: number, descLen = 256) =>
+      Array.from({ length: n }, (_, i) => ({ command: `cmd_${i}`, description: 'D'.repeat(descLen) }));
+
+    it('keeps small menus with full descriptions untouched', () => {
+      const input = mk(10, 200);
+      const out = fitCommandsToTelegramLimits(input);
+      expect(out.length).toBe(10);
+      expect(out[0].description.length).toBe(200); // budget/10 > 256, no trim
+    });
+
+    it('shrinks descriptions so a large menu stays within budget', () => {
+      const out = fitCommandsToTelegramLimits(mk(80));
+      expect(out.length).toBe(80);
+      const total = out.reduce((n, c) => n + c.description.length, 0);
+      expect(total).toBeLessThanOrEqual(3500);
+      expect(out.every((c) => c.description.length >= 1)).toBe(true);
+    });
+
+    it('caps the command count at Telegram\'s 100 limit', () => {
+      const out = fitCommandsToTelegramLimits(mk(140, 10));
+      expect(out.length).toBe(100);
+    });
+
+    it('returns an empty list unchanged', () => {
+      expect(fitCommandsToTelegramLimits([])).toEqual([]);
     });
   });
 
