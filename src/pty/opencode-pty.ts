@@ -56,6 +56,7 @@ export class OpencodePTY extends AgentPTY {
   private opencodeStateRoot: string;
   private contextReporter: OpencodeContextReporter | null = null;
   private contextReportTimer: ReturnType<typeof setInterval> | null = null;
+  private spawnStartedAtMs = 0;
 
   constructor(env: CtxEnv, config: AgentConfig, logPath?: string) {
     super(env, config, logPath, OPENCODE_BOOTSTRAP_PATTERN);
@@ -128,10 +129,11 @@ export class OpencodePTY extends AgentPTY {
     // Telegram, inbox, and cron injections, so start the persistent TUI first
     // and inject the startup prompt through the normal PTY input path.
     this.cleanupStaleProcessMarker();
+    this.spawnStartedAtMs = Date.now();
     await super.spawn(mode, '');
     this.writeSessionMarker(mode);
     this.writeProcessMarker();
-    this.startContextReporter();
+    this.startContextReporter(mode);
     if (prompt.trim()) {
       this.injectStartupPromptWhenReady(prompt);
     }
@@ -343,7 +345,7 @@ Keep the reply concise. Do not just write the answer in the OpenCode chat.`;
     }
   }
 
-  private startContextReporter(): void {
+  private startContextReporter(mode: 'fresh' | 'continue'): void {
     this.stopContextReporter();
     this.contextReporter = new OpencodeContextReporter({
       stateDir: this.stateDir,
@@ -351,7 +353,11 @@ Keep the reply concise. Do not just write the answer in the OpenCode chat.`;
       workingDir: this.workingDir,
       opencodeStateRoot: this.opencodeStateRoot,
       config: this.config,
+      startedAtMs: mode === 'fresh' ? this.spawnStartedAtMs : 0,
     });
+    if (mode === 'fresh') {
+      this.contextReporter.resetContextStatus();
+    }
     this.contextReporter.reportOnce();
     this.contextReportTimer = setInterval(() => {
       this.contextReporter?.reportOnce();

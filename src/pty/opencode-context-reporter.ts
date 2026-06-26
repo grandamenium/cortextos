@@ -30,6 +30,7 @@ interface ReporterOptions {
   workingDir: string;
   opencodeStateRoot: string;
   config: AgentConfig;
+  startedAtMs?: number;
 }
 
 export class OpencodeContextReporter {
@@ -38,6 +39,7 @@ export class OpencodeContextReporter {
   private readonly workingDir: string;
   private readonly opencodeStateRoot: string;
   private readonly config: AgentConfig;
+  private readonly startedAtMs: number;
   private lastStepKey: string | null = null;
 
   constructor(options: ReporterOptions) {
@@ -46,6 +48,12 @@ export class OpencodeContextReporter {
     this.workingDir = options.workingDir;
     this.opencodeStateRoot = options.opencodeStateRoot;
     this.config = options.config;
+    this.startedAtMs = options.startedAtMs ?? Date.now();
+  }
+
+  resetContextStatus(sessionId = `opencode-fresh-${this.startedAtMs}`): boolean {
+    this.lastStepKey = null;
+    return this.writeNeutralStatus(sessionId);
   }
 
   reportOnce(): boolean {
@@ -58,7 +66,9 @@ export class OpencodeContextReporter {
 
       const tokens = this.findLatestTokens(dbPath, session.id);
       const totalTokens = asNumber(tokens?.total);
-      if (!tokens || totalTokens === null) return false;
+      if (!tokens || totalTokens === null) {
+        return this.writeNeutralStatus(session.id);
+      }
 
       const cap = this.resolveContextCap(session);
       if (cap === null || cap <= 0) return false;
@@ -95,7 +105,11 @@ export class OpencodeContextReporter {
   private findSession(dbPath: string): SessionRow | null {
     const byWorkingDir = this.queryRows<SessionRow>(
       dbPath,
-      `select id, model from session where directory = ${sqlString(this.workingDir)} order by time_updated desc limit 1;`,
+      `select id, model from session
+       where directory = ${sqlString(this.workingDir)}
+         and time_updated >= ${this.startedAtMs}
+       order by time_updated desc
+       limit 1;`,
     )[0];
     if (byWorkingDir) return byWorkingDir;
 
@@ -103,13 +117,20 @@ export class OpencodeContextReporter {
       ? null
       : this.queryRows<SessionRow>(
         dbPath,
-        `select id, model from session where directory = ${sqlString(this.agentDir)} order by time_updated desc limit 1;`,
+        `select id, model from session
+         where directory = ${sqlString(this.agentDir)}
+           and time_updated >= ${this.startedAtMs}
+         order by time_updated desc
+         limit 1;`,
       )[0];
     if (byAgentDir) return byAgentDir;
 
     return this.queryRows<SessionRow>(
       dbPath,
-      'select id, model from session order by time_updated desc limit 1;',
+      `select id, model from session
+       where time_updated >= ${this.startedAtMs}
+       order by time_updated desc
+       limit 1;`,
     )[0] ?? null;
   }
 
@@ -153,6 +174,31 @@ export class OpencodeContextReporter {
     const fromModelCache = this.resolveModelCap(session.model);
     if (fromModelCache !== null) return fromModelCache;
     return this.config.opencode_context_cap ?? null;
+  }
+
+  private writeNeutralStatus(sessionId: string): boolean {
+    const stepKey = `${sessionId}:no-tokens`;
+    if (stepKey === this.lastStepKey) return false;
+    this.lastStepKey = stepKey;
+    const payload = JSON.stringify({
+      used_percentage: 0,
+      context_window_size: this.config.opencode_context_cap ?? null,
+      exceeds_200k_tokens: false,
+      current_usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      session_id: sessionId,
+      written_at: new Date().toISOString(),
+    });
+    try {
+      atomicWriteSync(join(this.stateDir, 'context_status.json'), payload);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private resolveModelCap(modelRaw: unknown): number | null {

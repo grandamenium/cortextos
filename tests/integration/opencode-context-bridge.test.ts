@@ -48,6 +48,7 @@ describe('OpenCode context bridge SQLite fixture', () => {
       workingDir: agentDir,
       opencodeStateRoot: opencodeRoot,
       config: {},
+      startedAtMs: 0,
     });
 
     expect(reporter.reportOnce()).toBe(true);

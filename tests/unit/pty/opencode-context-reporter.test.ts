@@ -41,13 +41,14 @@ function writeModels(opencodeRoot: string, context: number): void {
   }));
 }
 
-function makeReporter(paths = makeRoot(), config = {}) {
+function makeReporter(paths = makeRoot(), config = {}, startedAtMs?: number) {
   return new OpencodeContextReporter({
     stateDir: paths.stateDir,
     agentDir: paths.agentDir,
     workingDir: paths.agentDir,
     opencodeStateRoot: paths.opencodeRoot,
     config,
+    startedAtMs,
   });
 }
 
@@ -196,5 +197,65 @@ describe('OpencodeContextReporter', () => {
 
     expect(makeReporter(paths).reportOnce()).toBe(false);
     expect(atomicWriteSyncMock).not.toHaveBeenCalled();
+  });
+
+  it('can clear a stale high reading at fresh OpenCode startup before tokens exist', () => {
+    const paths = makeRoot();
+    const reporter = makeReporter(paths, { opencode_context_cap: 1_000_000 }, 2000);
+
+    expect(reporter.resetContextStatus()).toBe(true);
+    expect(lastPayload()).toMatchObject({
+      used_percentage: 0,
+      context_window_size: 1_000_000,
+      exceeds_200k_tokens: false,
+      current_usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+      session_id: 'opencode-fresh-2000',
+    });
+  });
+
+  it('does not fall back to an older high-token session after a fresh restart', () => {
+    const paths = makeRoot();
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      const sql = String(args.at(-1) ?? '');
+      expect(sql).toContain('time_updated >= 2000');
+      return '[]';
+    });
+
+    const reporter = makeReporter(paths, { opencode_context_cap: 1_000_000 }, 2000);
+    expect(reporter.resetContextStatus()).toBe(true);
+    expect(reporter.reportOnce()).toBe(false);
+    expect(atomicWriteSyncMock).toHaveBeenCalledTimes(1);
+    expect(lastPayload()).toMatchObject({
+      used_percentage: 0,
+      session_id: 'opencode-fresh-2000',
+    });
+  });
+
+  it('overwrites stale context with a neutral active-session status before the first token row', () => {
+    const paths = makeRoot();
+    execFileSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+      const sql = String(args.at(-1) ?? '');
+      if (sql.includes('from session')) {
+        return JSON.stringify([{ id: 'ses-fresh', model: null }]);
+      }
+      if (sql.includes('from part') || sql.includes('from message')) {
+        return '[]';
+      }
+      return '[]';
+    });
+
+    const reporter = makeReporter(paths, { opencode_context_cap: 1_000_000 }, 2000);
+    expect(reporter.reportOnce()).toBe(true);
+    expect(lastPayload()).toMatchObject({
+      used_percentage: 0,
+      context_window_size: 1_000_000,
+      exceeds_200k_tokens: false,
+      session_id: 'ses-fresh',
+    });
   });
 });
