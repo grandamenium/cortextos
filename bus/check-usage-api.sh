@@ -14,6 +14,17 @@
 #   --chat-id ID    Telegram chat ID to send alerts to (uses CTX_TELEGRAM_CHAT_ID if omitted)
 #   --force         Bypass the 3-minute result cache
 #
+# Alert behavior (env-configurable):
+#   Each condition fires AT MOST ONCE per distinct state value and re-arms only
+#   when that value changes, so an unchanged condition is not re-sent every cron
+#   tick. During the quiet band NO Telegram is sent for ANY condition (no
+#   critical carve-out); suppressed alerts are appended to a state file for
+#   paul's heartbeat to surface, and are DROPPED (not re-sent) when the band ends.
+#     CTX_USAGE_QUIET_START_HOUR  Quiet-band start, inclusive UTC hour (default 20)
+#     CTX_USAGE_QUIET_END_HOUR    Quiet-band end, exclusive UTC hour   (default 5)
+#     CTX_USAGE_SUPPRESSED_LOG    Suppressed-alert log path
+#                                 (default $CTX_ROOT/state/usage/suppressed-alerts.jsonl)
+#
 # Output: JSON with utilization fields + codex plan info, or exits 1 on error.
 #
 # Cache: Claude Max results are cached for 3 minutes at $CTX_ROOT/state/usage/api-cache.json
@@ -273,6 +284,71 @@ fi
 # Cache the result
 echo "$RESPONSE" > "$CACHE_FILE"
 
+# ── Alert dedup + quiet-band (per-condition fire-once + re-arm) ──────────────
+# Each alert condition fires AT MOST ONCE per distinct state value and re-arms
+# only when that value changes (e.g. codex-expiry:<expiry-ISO-hour> re-arms when
+# a re-auth produces a new expiry; threshold alerts key on resets_at so they fire
+# once per window). This kills the every-2h re-send of an unchanged condition.
+#
+# Quiet band (default 20:00-05:00Z): NO James-facing Telegram is sent for ANY
+# condition, with NO critical carve-out — this script must never decide to wake
+# James overnight (an overnight emergency is paul's call, not a bash threshold).
+# Suppressed alerts are appended to a state file (ts + condition + value +
+# message) so paul's heartbeat can surface them as a card; the signal is
+# preserved, not lost. catch-up = DROP: a suppressed alert is NOT re-sent when
+# the band ends (the marker is advanced so the unchanged condition stays quiet).
+# Window + suppressed-log path are config-driven via env.
+QUIET_START="${CTX_USAGE_QUIET_START_HOUR:-20}"   # inclusive UTC hour
+QUIET_END="${CTX_USAGE_QUIET_END_HOUR:-5}"        # exclusive UTC hour
+MARKER_DIR="${CTX_ROOT}/state/usage/alert-markers"
+SUPPRESSED_LOG="${CTX_USAGE_SUPPRESSED_LOG:-${CTX_ROOT}/state/usage/suppressed-alerts.jsonl}"
+mkdir -p "$MARKER_DIR" "$(dirname "$SUPPRESSED_LOG")"
+
+_in_quiet_band() {
+  local h; h=$((10#$(date -u +%H)))
+  if [[ $QUIET_START -le $QUIET_END ]]; then
+    [[ $h -ge $QUIET_START && $h -lt $QUIET_END ]]
+  else
+    # window wraps midnight (e.g. 20..05)
+    [[ $h -ge $QUIET_START || $h -lt $QUIET_END ]]
+  fi
+}
+
+# Framework CLI (../dist/cli.js, the same path the bus wrapper scripts resolve).
+# All James-facing sends go through paul over the bus — this script NEVER calls
+# Telegram directly (standing fleet rule: paul is the sole James-facing Telegram
+# surface and relays alerts with his own judgment).
+CLI="${SCRIPT_DIR}/../dist/cli.js"
+
+# _alert <condition> <state-value> <message> [priority]
+# Sends iff: state-value differs from the last-handled value for this condition
+# (fire-once + re-arm) AND we are outside the quiet band. Open band routes the
+# alert to paul over the bus (priority high for CODE RED conditions, normal
+# otherwise). In-band firings are recorded to the suppressed log ONLY (no bus
+# message) and the marker is advanced (catch-up = DROP); paul's heartbeat
+# cursor-reads the log into the morning card.
+_alert() {
+  local cond="$1" val="$2" msg="$3" priority="${4:-normal}"
+  local marker="$MARKER_DIR/${cond}"
+  if [[ -f "$marker" && "$(cat "$marker" 2>/dev/null)" == "$val" ]]; then
+    return 0  # already handled for this exact state value
+  fi
+  if _in_quiet_band; then
+    printf '{"ts":"%s","condition":"%s","value":"%s","message":%s}\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$cond" "$val" \
+      "$(printf '%s' "$msg" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')" \
+      >> "$SUPPRESSED_LOG"
+    echo "$val" > "$marker"  # advance marker: DROP, do not re-send post-band
+    echo "[quiet-band suppressed] ${cond}: ${msg}" >&2
+    return 0
+  fi
+  # Open band: route through paul over the bus (never direct Telegram).
+  node "$CLI" bus send-message paul "$priority" "USAGE-ALERT ${cond}: ${msg}" >/dev/null 2>&1 || true
+  echo "$val" > "$marker"
+  ALERT_SENT=true
+  echo "$msg" >&2
+}
+
 # ── Threshold checks + Telegram alerts ──────────────────────────────────────
 ALERT_SENT=false
 
@@ -282,44 +358,51 @@ if [[ -n "$CHAT_ID" ]]; then
   SEVEN_D_RESET=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('seven_day',{}).get('resets_at','unknown'))" 2>/dev/null || echo "unknown")
   FIVE_H_RESET=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('five_hour',{}).get('resets_at','unknown'))" 2>/dev/null || echo "unknown")
 
-  # 7-day critical threshold
-  if python3 -c "import sys; v=float('${SEVEN_D}'); sys.exit(0 if v >= ${WARN_7DAY} else 1)" 2>/dev/null; then
-    SEND_MSG="CODE RED: Claude Max 7-day usage at ${SEVEN_D}%. Resets: ${SEVEN_D_RESET}. Agents will hit hard limit soon. Action needed: reduce agent frequency or pause non-critical crons."
-    # Use send-telegram if available
-    if [[ -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
-      bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
-    fi
-    ALERT_SENT=true
-    echo "$SEND_MSG" >&2
-  fi
-
-  # 5-hour warning threshold
-  if python3 -c "import sys; v=float('${FIVE_H}'); sys.exit(0 if v >= ${WARN_5H} else 1)" 2>/dev/null; then
-    SEND_MSG="Warning: Claude Max 5-hour window at ${FIVE_H}%. Resets: ${FIVE_H_RESET}."
-    if [[ -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
-      bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
-    fi
-    echo "$SEND_MSG" >&2
-  fi
-
-  # Codex token expiry warning (< 24h)
-  CODEX_EXPIRES=$(CODEX_AUTH="$HOME/.codex/auth.json" python3 -c "
-import json, base64, time, os
+  # Codex fields appended to EVERY alert payload (James directive 2026-05-30:
+  # every James-facing usage alert must carry Codex plan + tokens_5h + tokens_24h
+  # + token expiry as fields — never implemented in this script until now, the
+  # threshold alerts were Claude-only). Computed once from the merged codex.*
+  # data; token counts humanized (e.g. 4.9M). Codex expiry now lives ONLY as a
+  # field — the standalone codex-OAuth-expiry alert class was the overnight spam
+  # and is dropped (zero dedup value once expiry rides on every alert).
+  CODEX_JSON="$(_codex_json)"
+  CODEX_FIELDS="$(CODEX_JSON="$CODEX_JSON" python3 -c '
+import os, json
 try:
-    auth = json.load(open(os.environ['CODEX_AUTH']))
-    token = auth.get('tokens', {}).get('access_token', '')
-    seg = token.split('.')[1] + '=='
-    payload = json.loads(base64.b64decode(seg))
-    print(round((payload.get('exp', 0) - time.time()) / 3600, 1))
-except: print(9999)
-" 2>/dev/null || echo 9999)
-  if python3 -c "import sys; sys.exit(0 if float('${CODEX_EXPIRES}') < 24 else 1)" 2>/dev/null; then
-    SEND_MSG="Warning: Codex OAuth token expires in ${CODEX_EXPIRES}h. Run Codex and re-authenticate."
-    if [[ -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
-      bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
-    fi
-    echo "$SEND_MSG" >&2
+    c = json.loads(os.environ["CODEX_JSON"])
+except Exception:
+    c = {}
+def comp(n):
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "?"
+    for unit, div in (("M", 1e6), ("K", 1e3)):
+        if abs(n) >= div:
+            return f"{n/div:.1f}{unit}"
+    return str(int(n))
+plan = c.get("plan_type", "unknown")
+exp = c.get("token_expires_in_hours")
+exp_s = f"{exp}h" if exp is not None else "?"
+t5h = comp(c.get("tokens_5h"))
+t24h = comp(c.get("tokens_24h"))
+print(f" | Codex: plan={plan}, 5h={t5h}tok, 24h={t24h}tok, token expires={exp_s}")
+' 2>/dev/null || echo "")"
+
+  # 7-day critical threshold (re-arms per 7d window via resets_at)
+  if python3 -c "import sys; v=float('${SEVEN_D}'); sys.exit(0 if v >= ${WARN_7DAY} else 1)" 2>/dev/null; then
+    SEND_MSG="CODE RED: Claude Max 7-day usage at ${SEVEN_D}%. Resets: ${SEVEN_D_RESET}. Agents will hit hard limit soon. Action needed: reduce agent frequency or pause non-critical crons.${CODEX_FIELDS}"
+    _alert "claude-7d" "${SEVEN_D_RESET}" "$SEND_MSG" high
   fi
+
+  # 5-hour warning threshold (re-arms per 5h window via resets_at)
+  if python3 -c "import sys; v=float('${FIVE_H}'); sys.exit(0 if v >= ${WARN_5H} else 1)" 2>/dev/null; then
+    SEND_MSG="Warning: Claude Max 5-hour window at ${FIVE_H}%. Resets: ${FIVE_H_RESET}.${CODEX_FIELDS}"
+    _alert "claude-5h" "${FIVE_H_RESET}" "$SEND_MSG" normal
+  fi
+
+  # (Standalone codex-OAuth-expiry alert removed — it was the overnight spam;
+  # token expiry now rides as a field on every alert via ${CODEX_FIELDS}.)
 
   # Codex usage threshold checks (from wham/usage)
   CODEX_WHAM=$(_codex_wham_usage 2>/dev/null || echo "")
@@ -327,16 +410,34 @@ except: print(9999)
     CODEX_5H=$(echo "$CODEX_WHAM" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('rate_limit',{}).get('primary_window',{}).get('used_percent',-1))" 2>/dev/null || echo -1)
     CODEX_7D=$(echo "$CODEX_WHAM" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('rate_limit',{}).get('secondary_window',{}).get('used_percent',-1))" 2>/dev/null || echo -1)
     CODEX_LIMIT=$(echo "$CODEX_WHAM" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('rate_limit',{}).get('limit_reached',False))" 2>/dev/null || echo "False")
+    # Absolute reset hours (now + reset_after_seconds, truncated to the hour) are
+    # stable within a window, so they key the per-window fire-once dedup.
+    CODEX_5H_RESET=$(echo "$CODEX_WHAM" | python3 -c "
+import sys,json,time
+from datetime import datetime, timezone
+try:
+    d=json.load(sys.stdin); s=d.get('rate_limit',{}).get('primary_window',{}).get('reset_after_seconds')
+    print(datetime.fromtimestamp(time.time()+s, tz=timezone.utc).strftime('%Y-%m-%dT%H') if s is not None else 'none')
+except: print('none')
+" 2>/dev/null || echo none)
+    CODEX_7D_RESET=$(echo "$CODEX_WHAM" | python3 -c "
+import sys,json,time
+from datetime import datetime, timezone
+try:
+    d=json.load(sys.stdin); s=d.get('rate_limit',{}).get('secondary_window',{}).get('reset_after_seconds')
+    print(datetime.fromtimestamp(time.time()+s, tz=timezone.utc).strftime('%Y-%m-%dT%H') if s is not None else 'none')
+except: print('none')
+" 2>/dev/null || echo none)
 
     if [[ "$CODEX_LIMIT" == "True" ]]; then
-      SEND_MSG="CODE RED: Codex rate limit reached. Sessions blocked until window resets."
-      [[ -f "$SCRIPT_DIR/send-telegram.sh" ]] && bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
+      SEND_MSG="CODE RED: Codex rate limit reached. Sessions blocked until window resets.${CODEX_FIELDS}"
+      _alert "codex-limit" "${CODEX_5H_RESET}" "$SEND_MSG" high
     elif python3 -c "import sys; v=float('${CODEX_7D}'); sys.exit(0 if v >= ${WARN_7DAY} else 1)" 2>/dev/null; then
-      SEND_MSG="Warning: Codex 7-day usage at ${CODEX_7D}%."
-      [[ -f "$SCRIPT_DIR/send-telegram.sh" ]] && bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
+      SEND_MSG="Warning: Codex 7-day usage at ${CODEX_7D}%.${CODEX_FIELDS}"
+      _alert "codex-7d" "${CODEX_7D_RESET}" "$SEND_MSG" normal
     elif python3 -c "import sys; v=float('${CODEX_5H}'); sys.exit(0 if v >= ${WARN_5H} else 1)" 2>/dev/null; then
-      SEND_MSG="Warning: Codex 5-hour window at ${CODEX_5H}%."
-      [[ -f "$SCRIPT_DIR/send-telegram.sh" ]] && bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
+      SEND_MSG="Warning: Codex 5-hour window at ${CODEX_5H}%.${CODEX_FIELDS}"
+      _alert "codex-5h" "${CODEX_5H_RESET}" "$SEND_MSG" normal
     fi
   fi
 fi
