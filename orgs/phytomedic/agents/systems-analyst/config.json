@@ -35,13 +35,13 @@
     {
       "name": "daily-integration-health",
       "type": "recurring",
-      "cron": "23 11 * * *",
+      "cron": "23 15 * * *",
       "prompt": "Daily integration health check. Check: Cannaleo availability/routing dependency, HiGreen availability/feed health, QES dependency status, webhook response reliability, known callback failures, sync freshness. Alert platform-director if sustained error rate >15% for 30+ min on core workflow. Alert both if >25% or compliance/routing/data-integrity/security issues. cortextos bus update-cron-fire daily-integration-health --interval 1440"
     },
     {
       "name": "daily-cannametrics-foundation",
       "type": "recurring",
-      "cron": "37 12 * * *",
+      "cron": "37 17 * * *",
       "prompt": "Daily Cannametrics foundation check. Check: catalog sync freshness, snapshot jobs executed, price history append integrity, routing outcome logging continuity, prescription-product linkage continuity, schema/data model anomalies, missing historical capture windows. Treat as first-class health category. Alert platform-director on any data integrity breaks. Alert user immediately on corruption risk or missing capture windows. Also run the field-coverage chronic-floor watch: bash $CTX_FRAMEWORK_ROOT/scripts/self-healing/coverage-floor-watch.sh — if it exits 1 (a core V2-gating field below its calibrated floor), route the BREACH JSON to platform-director: this is a chronic coverage regression the deployed per-sync field_coverage_anomaly detector (PR #1366/#1367) misses by construction (sub-30pp, no zero-floor, no drop to trend — the cbd-396 class). Complements, does not duplicate, the per-sync telemetry. Also run the coverage-staleness backstop: bash $CTX_FRAMEWORK_ROOT/scripts/self-healing/coverage-staleness-watch.sh — it reads the newest fieldCoverageSnapshots per active provider (cannaleo, higreen) via the deploy-key --prod path (majestic-bison-443) and turns a SILENT sync stall into a signal (the chain only writes a snapshot on a full sync pass, so 'no new snapshot' otherwise reads as healthy). Exit 1 = ALERT (snapshot >24h / none = sync chain silently stalled) -> route the ALERT JSON to platform-director; exit 3 = WARN (>16h = 2 missed full syncs) -> soft heads-up to platform-director; exit 2 = probe-blind (do NOT fire); exit 0 = fresh. This is defense-in-depth behind devops' fast freshness probe, on a path that cannot drift to a wrong deployment (SYS-COVERAGE-STALENESS-01). Also run the price-CAPTURE-WINDOW continuity check (catches INTERMITTENT missing days the recency-based staleness-watch misses — a fresh latest snapshot can hide a 5-of-15-day gap): npx convex run functions/cannametrics:dataIntegritySweep --prod (data-anomaly classes; thc/cbd clamp is category-aware per PR #1385) AND npx convex run functions/cannametrics:priceSnapshotCoverageAudit --prod with fromDate=today-14d, toDate=today. If an active provider shows missing dates, VERIFY they are real sync-stall losses (recentSyncLogErrors phase2 reaps + _listSnapshotLog shows inserts only on present dates) and NOT benign cadence/dedup BEFORE alerting — the age-gap suppression baseline masks phase2-stall capture loss (different signal; lesson 2026-06-17). Real missing capture windows = irreversible data-integrity break -> route to platform-director with the per-provider missing-date list + reap evidence (HiGreen phase2-stall class, task_1781692869958). cortextos bus update-cron-fire daily-cannametrics-foundation --interval 1440"
     },
     {
@@ -79,6 +79,12 @@
       "type": "cron",
       "cron": "29 9 * * *",
       "prompt": "Read .claude/skills/overnight-hardening/SKILL.md Phase 5. Compile the overnight-hardening summary (E2E results, bugs found/fixed/open, site health, PR status) and FEED IT TO platform-director via cortextos bus send-message — do NOT Telegram the founder (orchestrator owns the SINGLE founder briefing + goal cascade; per PD lane-lock 2026-05-27, avoid parallel founder summaries). Structure: Overnight Summary, Fixed, Open, Site Health, Recommendation. If this fires close to morning-executive-briefing, fold into one operational feed to PD (no duplicate). cortextos bus update-cron-fire morning-briefing-9-30 --interval 1440"
+    },
+    {
+      "name": "stale-dispatch-watch",
+      "type": "cron",
+      "cron": "17 10 * * 5",
+      "prompt": "Run BA stale-dispatch triage: bash $CTX_FRAMEWORK_ROOT/scripts/self-healing/stale-dispatch-watch.sh — exit 1 = stale tasks found (message sent to platform-director); exit 0 = clean; exit 2 = probe-blind (do NOT fire). cortextos bus update-cron-fire stale-dispatch-watch --interval 10080"
     },
     {
       "name": "fleet-heartbeat-watch",
