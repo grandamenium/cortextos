@@ -18,6 +18,20 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 
 cd "$REPO_ROOT"
 
+# trees_equal <sha_a> <sha_b> — true if both resolve to commits with byte-identical
+# file TREES (git rev-parse <sha>^{tree}). Used alongside merge-base --is-ancestor to
+# suppress a recurring false-positive class: a build-sha whose commit topology differs
+# from origin (squash-merge, feature-branch merge commits) but whose tree is identical —
+# rebuilding/restarting on those yields identical dist for zero functional gain
+# (PD-confirmed 2026-06-27, daemon-worktree 372f96ca vs squash dab8372d). Fails closed:
+# an unresolvable sha returns non-zero, so the caller falls back to the is-ancestor gate.
+trees_equal() {
+  local ta tb
+  ta=$(git rev-parse --verify --quiet "$1^{tree}" 2>/dev/null) || return 1
+  tb=$(git rev-parse --verify --quiet "$2^{tree}" 2>/dev/null) || return 1
+  [ -n "$ta" ] && [ "$ta" = "$tb" ]
+}
+
 # Fetch to learn the remote tip (quiet — no output unless something changed).
 git fetch origin --quiet 2>&1 || {
   echo "[cortextos-src-watch] WARNING: git fetch failed — skipping watch" >&2
@@ -32,9 +46,10 @@ if [ -z "$REMOTE_SHA" ]; then
   exit 0
 fi
 
-# Up-to-date if: BUILD_SHA equals REMOTE_SHA, OR origin/main is already an
-# ancestor of BUILD_SHA (local HEAD is a merge commit that includes origin/main).
-if [ -n "$BUILD_SHA" ] && git merge-base --is-ancestor "$REMOTE_SHA" "$BUILD_SHA" 2>/dev/null; then
+# Up-to-date if: origin/main is already an ancestor of BUILD_SHA (local HEAD is a merge
+# commit that includes origin/main), OR the two commits have byte-identical trees
+# (topology-only difference, e.g. squash-merge — no rebuild would change dist).
+if [ -n "$BUILD_SHA" ] && { git merge-base --is-ancestor "$REMOTE_SHA" "$BUILD_SHA" 2>/dev/null || trees_equal "$BUILD_SHA" "$REMOTE_SHA"; }; then
   echo "[cortextos-src-watch] dist up-to-date (origin/main ${REMOTE_SHA:0:8} ⊆ build ${BUILD_SHA:0:8})"
   # Secondary check: if the running daemon executes from a DIFFERENT worktree dist,
   # verify that dist is also current. Without this, a current CLI binary masks a
@@ -48,7 +63,7 @@ if [ -n "$BUILD_SHA" ] && git merge-base --is-ancestor "$REMOTE_SHA" "$BUILD_SHA
     DAEMON_BUILD_SHA=$(cat "$DAEMON_DIST_DIR/.build-sha" 2>/dev/null | tr -d '[:space:]' || echo "")
     if [ -z "$DAEMON_BUILD_SHA" ]; then
       echo "[cortextos-src-watch] WARNING: daemon worktree dist no .build-sha at $DAEMON_DIST_DIR — cannot verify" >&2
-    elif git merge-base --is-ancestor "$REMOTE_SHA" "$DAEMON_BUILD_SHA" 2>/dev/null; then
+    elif git merge-base --is-ancestor "$REMOTE_SHA" "$DAEMON_BUILD_SHA" 2>/dev/null || trees_equal "$DAEMON_BUILD_SHA" "$REMOTE_SHA"; then
       echo "[cortextos-src-watch] daemon worktree dist up-to-date (${DAEMON_BUILD_SHA:0:8} ⊇ ${REMOTE_SHA:0:8} at $DAEMON_DIST_DIR)"
       # Lag has cleared — drop the dedup signature AND any task-mute marker so a
       # future (unrelated) lag re-pages and is never silently swallowed by a

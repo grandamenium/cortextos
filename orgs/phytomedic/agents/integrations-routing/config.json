@@ -12,13 +12,13 @@
       "name": "integration-health-check-morning",
       "type": "cron",
       "cron": "11 8 * * *",
-      "prompt": "Read skills/integration-health-check/SKILL.md and execute the integration health check. Review all external dependency health, produce the health note, and report risks. MANDATORY LAST STEP: cortextos bus update-cron-fire integration-health-check-morning --interval 12h && cortextos bus update-heartbeat alive"
+      "prompt": "Read skills/integration-health-check/SKILL.md and execute the integration health check. Review all external dependency health, produce the health note, and report risks. MANDATORY LAST STEP: cortextos bus update-cron-fire integration-health-check-morning --interval 24h && cortextos bus update-heartbeat alive"
     },
     {
       "name": "integration-health-check-evening",
       "type": "cron",
       "cron": "16 20 * * *",
-      "prompt": "Read skills/integration-health-check/SKILL.md and execute the integration health check. Review all external dependency health, produce the health note, and report risks. MANDATORY LAST STEP: cortextos bus update-cron-fire integration-health-check-evening --interval 12h && cortextos bus update-heartbeat alive"
+      "prompt": "Read skills/integration-health-check/SKILL.md and execute the integration health check. Review all external dependency health, produce the health note, and report risks. MANDATORY LAST STEP: cortextos bus update-cron-fire integration-health-check-evening --interval 24h && cortextos bus update-heartbeat alive"
     },
     {
       "name": "routing-callback-review",
