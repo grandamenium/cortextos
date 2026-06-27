@@ -32,6 +32,19 @@ trees_equal() {
   [ -n "$ta" ] && [ "$ta" = "$tb" ]
 }
 
+# src_delta_empty <build_sha> <remote_sha> — true ONLY if both shas resolve to commits
+# AND there is no diff under src/ between them. A daemon dist that is "behind" by only
+# non-src files (config.json, scripts, docs, memory) has a byte-identical COMPILED
+# dist (daemon.js etc.), so a rebuild/restart is pointless and would needlessly disarm
+# the watchdogs (non-dist-no-restart doctrine). Complements trees_equal (which catches
+# topology twins but NOT non-src file deltas). Fails CLOSED: any unresolvable sha
+# returns non-zero so a genuine src/ lag still pages.
+src_delta_empty() {
+  git rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1 || return 1
+  git rev-parse --verify --quiet "$2^{commit}" >/dev/null 2>&1 || return 1
+  [ -z "$(git diff --name-only "$1" "$2" -- src/ 2>/dev/null)" ]
+}
+
 # Fetch to learn the remote tip (quiet — no output unless something changed).
 git fetch origin --quiet 2>&1 || {
   echo "[cortextos-src-watch] WARNING: git fetch failed — skipping watch" >&2
@@ -68,6 +81,14 @@ if [ -n "$BUILD_SHA" ] && { git merge-base --is-ancestor "$REMOTE_SHA" "$BUILD_S
       # Lag has cleared — drop the dedup signature AND any task-mute marker so a
       # future (unrelated) lag re-pages and is never silently swallowed by a
       # marker that outlived the drift it was deferring.
+      _LAG_STATE_DIR="${CTX_ROOT:-$HOME/.cortextos/default}/state"
+      rm -f "$_LAG_STATE_DIR/src-watch-daemon-lag.sig" "$_LAG_STATE_DIR/src-watch-daemon-lag.mute" 2>/dev/null || true
+    elif src_delta_empty "$DAEMON_BUILD_SHA" "$REMOTE_SHA"; then
+      # Behind by NON-SRC files only (config/scripts/docs) — compiled dist is identical,
+      # so no rebuild/restart is needed. Suppress the page (would otherwise re-fire on
+      # every config/script-only main-advance) and clear any stale sig/mute so a real
+      # future src/ lag re-pages cleanly.
+      echo "[cortextos-src-watch] daemon worktree behind origin/main ${REMOTE_SHA:0:8} by NON-SRC files only (no src/ delta — compiled dist identical); no rebuild/restart needed, suppressing lag page"
       _LAG_STATE_DIR="${CTX_ROOT:-$HOME/.cortextos/default}/state"
       rm -f "$_LAG_STATE_DIR/src-watch-daemon-lag.sig" "$_LAG_STATE_DIR/src-watch-daemon-lag.mute" 2>/dev/null || true
     else
