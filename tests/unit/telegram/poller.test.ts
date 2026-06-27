@@ -223,3 +223,51 @@ describe('TelegramPoller — offset-after-handler', () => {
     }
   });
 });
+
+describe('TelegramPoller — transient poll-error log rate-limiting', () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), 'cortextos-poller-'));
+  });
+
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('logs at most one poll-error per 30s window, then again after the window elapses', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Freeze virtual time so all errors in a window share the same timestamp.
+    let now = 1_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    const api = {
+      getUpdates: vi.fn(async () => {
+        // Non-Conflict transient error: caught, logged (rate-limited), loop continues.
+        throw new Error('Telegram API request timed out after 15s: getUpdates');
+      }),
+    } as unknown as TelegramAPI;
+
+    const poller = new TelegramPoller(api, stateDir, 1); // 1ms poll → many cycles fast
+    const runP = poller.start();
+
+    // Window 1: time frozen → many failing polls but only ONE logged line.
+    await new Promise((r) => setTimeout(r, 25));
+    const afterWindow1 = errSpy.mock.calls.filter((c) => String(c[0]).includes('Poll error')).length;
+
+    // Advance virtual time past the 30s rate-limit window → next error logs again.
+    now += 31_000;
+    await new Promise((r) => setTimeout(r, 25));
+
+    poller.stop();
+    await runP;
+
+    const total = errSpy.mock.calls.filter((c) => String(c[0]).includes('Poll error')).length;
+    expect(afterWindow1).toBe(1);           // rate-limited within the window
+    expect(total).toBe(2);                   // exactly one more after the window elapsed
+    // The follow-up line folds in the suppressed count for diagnostics.
+    const secondLine = errSpy.mock.calls.map((c) => String(c[0])).filter((s) => s.includes('Poll error'))[1];
+    expect(secondLine).toMatch(/in last \d+s/);
+  });
+});
