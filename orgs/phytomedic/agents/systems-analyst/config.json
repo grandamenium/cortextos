@@ -54,7 +54,7 @@
       "name": "theta-wave",
       "type": "cron",
       "cron": "6 20 * * *",
-      "prompt": "Read .claude/skills/theta-wave/SKILL.md. Initiate the theta wave cycle. First action: message the orchestrator that theta wave is starting and share your initial system scan. cortextos bus update-cron-fire theta-wave --interval 1440"
+      "prompt": "Read .claude/skills/theta-wave/SKILL.md. Initiate the theta wave cycle. BEFORE composing your system scan: read $CTX_FRAMEWORK_ROOT/state/active-experiments.json and include the active experiment count + list in your scan (zero active = 4/10 on experiment-outcomes, same as prior cycles — name the regression explicitly). First action: message the orchestrator that theta wave is starting and share your initial system scan. cortextos bus update-cron-fire theta-wave --interval 1440"
     },
     {
       "name": "overnight-phase-1-e2e",
