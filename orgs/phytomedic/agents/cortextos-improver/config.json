@@ -111,6 +111,12 @@
       "prompt": "Read .claude/skills/vault-task-reconcile/SKILL.md and execute the vault reconciliation."
     },
     {
+      "name": "keychain-oauth-refresh",
+      "type": "cron",
+      "cron": "7 */6 * * *",
+      "prompt": "Proactive OAuth token refresh (SYS-AUTH-HEADLESS-01). Run: bash $CTX_FRAMEWORK_ROOT/scripts/self-healing/keychain-oauth-refresh.sh 2>&1 | tail -5. Then: cortextos bus update-cron-fire keychain-oauth-refresh --interval 360. If script exits non-zero or prints WARNING: cortextos bus send-message platform-director high 'keychain-oauth-refresh FAILED — agents may 401 at next token expiry. Manual fix: claude setup-token → verify $CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/secrets.env has CLAUDE_CODE_OAUTH_TOKEN'."
+    },
+    {
       "name": "human-task-pulse",
       "type": "recurring",
       "cron": "14 */6 * * *",
