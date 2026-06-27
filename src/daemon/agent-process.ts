@@ -832,19 +832,25 @@ export class AgentProcess {
    * Skipped when:
    *  - runtime is anything other than codex-app-server/opencode (claude-code
    *    and hermes already emit this via the prompt),
-   *  - handoff restarts (the agent sends its own contextual "back — ..." reply
-   *    in that case),
+   *  - handoff restarts ON codex-app-server ONLY (codex reliably self-sends its
+   *    own contextual "back — ..." reply on handoff). opencode (deepseek model)
+   *    does NOT execute the injected boot-prompt instruction, so it goes silent
+   *    on every context-handoff restart — for opencode the daemon sends a
+   *    handoff-flavored notification itself,
    *  - Telegram is disabled or no Telegram handle has been wired.
    */
   private maybeSendRuntimeLifecycleNotification(): void {
     if (this.config.runtime !== 'codex-app-server' && this.config.runtime !== 'opencode') return;
-    if (this.lastSpawnWasHandoff) return;
+    if (this.lastSpawnWasHandoff && this.config.runtime !== 'opencode') return;
     if (!this.shouldPromptTelegramOnlineMessage()) return;
     const telegramApi = this.telegramApi;
     const telegramChatId = this.telegramChatId;
     if (!telegramApi || !telegramChatId) return;
+    const message = this.lastSpawnWasHandoff
+      ? `Agent ${this.name} is back online (context handoff)`
+      : `Agent ${this.name} is back online`;
     telegramApi
-      .sendMessage(telegramChatId, `Agent ${this.name} is back online`)
+      .sendMessage(telegramChatId, message)
       .catch(() => { /* non-fatal: notification is observability only */ });
   }
 

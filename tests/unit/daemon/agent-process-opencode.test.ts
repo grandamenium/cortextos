@@ -195,7 +195,7 @@ describe('AgentProcess opencode runtime', () => {
     expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online');
   });
 
-  it('skips daemon-direct back-online Telegram on opencode handoff restart', async () => {
+  it('sends daemon-direct handoff Telegram on opencode handoff restart (deepseek does not self-send)', async () => {
     const handoffDocPath = '/tmp/opencode-handoff.md';
     fsMocks.existsSync.mockImplementation((path: string) =>
       typeof path === 'string'
@@ -212,7 +212,9 @@ describe('AgentProcess opencode runtime', () => {
 
     const prompt = mockOpencodePty.spawn.mock.calls[0]?.[1] ?? '';
     expect(prompt).toContain('CONTEXT HANDOFF');
-    expect(sendMessage).not.toHaveBeenCalled();
+    // Unlike codex-app-server, opencode (deepseek) does NOT execute the injected
+    // boot-prompt notification, so the daemon must send a handoff-flavored ping.
+    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online (context handoff)');
   });
 
   it('does not use Claude /exit choreography on stop', async () => {
