@@ -205,9 +205,7 @@ describe('context handoff fleet lease', () => {
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, 'config.json'), JSON.stringify({}), 'utf-8');
     const status: Record<string, unknown> = {
-      // Default crosses the handoff threshold (default-ON at 60%) so the herd test
-      // fires handoffs without each call having to pass an explicit pct.
-      used_percentage: opts.pct ?? 70,
+      used_percentage: opts.pct ?? 50,
       exceeds_200k_tokens: false,
       written_at: new Date().toISOString(),
     };
