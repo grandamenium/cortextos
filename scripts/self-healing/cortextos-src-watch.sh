@@ -160,6 +160,10 @@ fi
 LOCAL_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "HEAD")
 echo "[cortextos-src-watch] Stale dist detected (built: ${BUILD_SHA:0:8}, origin/main: ${REMOTE_SHA:0:8}) — rebuilding..."
 
+# Capture pre-merge HEAD so we can tell afterward whether the merge touched src/
+# (and thus whether the rebuilt dist actually differs — gates the fleet broadcast below).
+BEFORE_MERGE=$(git rev-parse HEAD 2>/dev/null || echo "")
+
 # Merge origin/main into current branch (no-ff to preserve history).
 if ! git merge origin/main --no-edit 2>&1; then
   echo "[cortextos-src-watch] ERROR: merge conflict on $LOCAL_BRANCH — manual resolution required" >&2
@@ -191,7 +195,14 @@ if [ -f "$REPO_ROOT/scripts/self-healing/sync-deployed-scripts.sh" ]; then
     | sed 's/^/[cortextos-src-watch] /' || true
 fi
 
-# Broadcast to other alive agents so they also rebuild.
-if [ -f "$REPO_ROOT/scripts/broadcast-rebuild.sh" ]; then
+# Broadcast to other alive agents so they also rebuild — but ONLY when the merge
+# actually changed src/ (so the compiled dist differs). A non-src merge (config /
+# scripts / docs / memory) produces a byte-identical dist, so nudging the whole fleet
+# to rebuild is pure inbox noise (devops-monitor + frontend-dev flagged 2026-06-27;
+# all 4 recent broadcasts were non-src). Fail-OPEN: if the pre-merge sha is unknown /
+# unresolvable, src_delta_empty returns non-zero → we broadcast (safe default).
+if src_delta_empty "$BEFORE_MERGE" HEAD; then
+  echo "[cortextos-src-watch] merge was NON-SRC (no src/ delta — compiled dist identical); skipping fleet rebuild broadcast"
+elif [ -f "$REPO_ROOT/scripts/broadcast-rebuild.sh" ]; then
   bash "$REPO_ROOT/scripts/broadcast-rebuild.sh" 2>&1 | sed 's/^/[cortextos-src-watch] /' || true
 fi
