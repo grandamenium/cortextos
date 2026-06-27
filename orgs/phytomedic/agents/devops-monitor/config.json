@@ -13,6 +13,18 @@
       "type": "cron",
       "cron": "9 9 * * 0",
       "prompt": "Weekly infra report: aggregate memory/infra-ledger.jsonl from last 7d. Counts per service (alerts fired, root causes, MTTR). Top 3 recurring issues. Quota trends (% used now vs 7d ago). Send to platform-director inbox + Telegram summary to user.\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire weekly-infra-report --interval 10080"
+    },
+    {
+      "name": "deploy-drift-probe",
+      "type": "cron",
+      "cron": "8,23,38,53 * * * *",
+      "prompt": "Deploy-drift probe tick (SYS-DEPLOY-SOT detection lane). Run: bash \"$CTX_FRAMEWORK_ROOT/scripts/self-healing/deploy-drift-probe.sh\" -- it resolves the LIVE daemon from ps, derives the dist path it executes, and checks 3 drift dimensions (source = origin/main not in dist/.build-sha; restart = daemon.js rebuilt after the daemon started; sha-stale = daemon.js newer than .build-sha). It writes state/deploy-topology.json and AUTO-escalates a NEW drift state to platform-director (idempotent). You usually only read the output. If DRIFT: do NOT restart the daemon or rebuild yourself (fleet-wide impact + improver/src-watch lane) -- just confirm PD escalation fired. MANDATORY LAST STEP: cortextos bus update-cron-fire deploy-drift-probe --interval 900. NO bootstrap-file-reading."
+    },
+    {
+      "name": "ci-pr-cycles-to-green",
+      "type": "cron",
+      "cron": "43 5 * * 5",
+      "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop for ci-pr-cycles-to-green cycle\n\nMANDATORY LAST STEP: cortextos bus update-cron-fire ci-pr-cycles-to-green --interval 604800"
     }
   ]
 }
