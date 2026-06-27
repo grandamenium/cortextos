@@ -14,7 +14,7 @@ vi.mock('fs', async () => {
   };
 });
 
-const { AgentPTY } = await import('../../../src/pty/agent-pty.js');
+const { AgentPTY, augmentAgentPath } = await import('../../../src/pty/agent-pty.js');
 
 const mockEnv = {
   instanceId: 'test',
@@ -58,5 +58,39 @@ describe('AgentPTY --dangerously-skip-permissions toggle', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('augmentAgentPath (PATH-poisoned daemon resilience)', () => {
+  const HOME = '/Users/nick';
+  const NODE_DIR = '/usr/local/bin';
+
+  it('prepends ~/.local/bin (claude install dir) so a minimal daemon PATH can still resolve claude', () => {
+    // Simulates PM2-under-launchd: PATH lacks user-local bins.
+    const poisoned = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+    const out = augmentAgentPath(poisoned, HOME, NODE_DIR).split(':');
+    expect(out[0]).toBe('/Users/nick/.local/bin');
+    expect(out).toContain('/Users/nick/.npm-global/bin');
+  });
+
+  it('preserves the original PATH entries after the prepended dirs', () => {
+    const original = '/usr/bin:/bin';
+    const out = augmentAgentPath(original, HOME, NODE_DIR).split(':');
+    expect(out).toContain('/usr/bin');
+    expect(out).toContain('/bin');
+    // prepended dirs come first
+    expect(out.indexOf('/Users/nick/.local/bin')).toBeLessThan(out.indexOf('/usr/bin'));
+  });
+
+  it('dedupes so an already-present dir is not duplicated', () => {
+    const withDup = '/usr/local/bin:/usr/bin';
+    const out = augmentAgentPath(withDup, HOME, NODE_DIR).split(':');
+    expect(out.filter(d => d === '/usr/local/bin')).toHaveLength(1);
+  });
+
+  it('handles an empty inherited PATH without producing empty segments', () => {
+    const out = augmentAgentPath('', HOME, NODE_DIR).split(':');
+    expect(out).not.toContain('');
+    expect(out[0]).toBe('/Users/nick/.local/bin');
   });
 });

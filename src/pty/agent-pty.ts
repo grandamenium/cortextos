@@ -1,8 +1,46 @@
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
-import { platform } from 'os';
+import { platform, homedir } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
+
+/**
+ * Prepend user-local bin directories to a PATH so node-pty can resolve the
+ * agent binary (`claude`) even when the daemon inherited a minimal PATH.
+ *
+ * This is the durable fix for the recurring "running-but-dead fleet" outage:
+ * PM2 launched from launchd (or a watchdog `pm2 restart --update-env`, which
+ * pushes launchd's stripped PATH into the daemon) leaves the daemon without
+ * `~/.local/bin` on PATH. Claude Code installs there, so node-pty's spawn of
+ * `claude` then fails with ENOENT and every agent silently dies after a daemon
+ * restart. Augmenting the spawned PTY's PATH here makes agents immune to the
+ * daemon's own PATH being poisoned — defense that does not rely on PM2 env.
+ *
+ * POSIX-only: on Windows the binary is resolved by getBinaryName()'s PATH probe.
+ */
+export function augmentAgentPath(
+  currentPath: string,
+  home: string = homedir(),
+  nodeDir: string = dirname(process.execPath),
+): string {
+  if (platform() === 'win32') return currentPath;
+  const prepend = [
+    join(home, '.local', 'bin'),      // Claude Code default install location
+    join(home, '.npm-global', 'bin'), // npm --prefix global installs (cortextos)
+    nodeDir,                          // node + npm-installed siblings
+    '/opt/homebrew/bin',              // Homebrew (Apple Silicon)
+    '/usr/local/bin',                 // Homebrew (Intel) / common installs
+  ];
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const dir of [...prepend, ...(currentPath || '').split(':')]) {
+    if (dir && !seen.has(dir)) {
+      seen.add(dir);
+      merged.push(dir);
+    }
+  }
+  return merged.join(':');
+}
 
 // node-pty types
 interface IPty {
@@ -354,6 +392,11 @@ export class AgentPTY {
         env[key] = process.env[key]!;
       }
     }
+
+    // Ensure `claude` is resolvable even if the daemon inherited a minimal PATH
+    // (PM2-under-launchd, or a watchdog `pm2 restart --update-env`). Without this
+    // a PATH-poisoned daemon spawns agents that die on ENOENT. See augmentAgentPath.
+    env['PATH'] = augmentAgentPath(env['PATH'] || '');
 
     // Windows: ensure UTF-8 locale so emoji and Unicode pass through the PTY
     if (platform() === 'win32') {

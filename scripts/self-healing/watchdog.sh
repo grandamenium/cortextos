@@ -17,6 +17,15 @@ LOG_FILE="$HOME/.cortextos/$INSTANCE/logs/watchdog.log"
 # 0–2 transient poll errors over 5 min; a wedged daemon spams hundreds.
 THRESHOLD="${WATCHDOG_THRESHOLD:-150}"
 
+# launchd starts this script with a stripped PATH (≈/usr/bin:/bin:/usr/sbin:/sbin).
+# The restart below uses `--update-env`, which pushes THIS process's PATH into the
+# daemon. Without augmentation that poisons the daemon's PATH: it loses ~/.local/bin
+# (where `claude` lives) and ~/.npm-global/bin (where `cortextos` lives), so the
+# daemon can no longer spawn agent PTYs (node-pty → ENOENT) or run its heartbeat
+# `cortextos` shell-out — the fleet goes "running"-but-dead after the restart.
+# Prepend the user-local bins so --update-env carries a healthy PATH.
+export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 PM2_BIN="$(command -v pm2)"
 [ -z "$PM2_BIN" ] && { echo "watchdog: pm2 not on PATH" >&2; exit 1; }
 
