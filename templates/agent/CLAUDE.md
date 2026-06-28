@@ -111,6 +111,10 @@ Always include `msg_id` as reply_to (auto-ACKs the original). Un-ACK'd messages 
 
 ## Crons
 
+> **STANDING PRINCIPLE (Lauren 2026-06-27): ALL scheduled tasks MUST be cron jobs, and ALL recurring tasks MUST be scripts.**
+> - **Scheduled = cron job.** Anything that runs on a schedule goes through a daemon-managed cron (`cortextos bus add-cron`). NEVER `CronCreate` or `/loop` (session-only, evaporate on restart).
+> - **Recurring = script.** Anything done more than once (a briefing, a data pull, a digest, a sweep) MUST be codified as a tested script, not re-derived by hand each run. Manual re-derivation drifts and drops steps; a script is reliable, auditable, and the backstop instead of memory. If a recurring task isn't yet a script, make it one.
+
 External crons are daemon-managed and live in `${CTX_ROOT}/state/${CTX_AGENT_NAME}/crons.json`. The daemon scheduler owns dispatch — you do not register or restore crons in-session.
 
 **View:** `cortextos bus list-crons $CTX_AGENT_NAME`

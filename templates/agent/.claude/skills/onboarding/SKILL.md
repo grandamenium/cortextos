@@ -41,6 +41,7 @@ Onboarding must complete all of the following before you are considered function
 | Your current goals and focus | `GOALS.md` |
 | User preferences and context | `USER.md` |
 | Guardrails and patterns to avoid | `GUARDRAILS.md` |
+| Org-wide rules + shared facts (read every session) | `../../knowledge.md` (HARD RULES, USAGE DISCIPLINE, comms/language rules, scheduling rules) |
 | Telegram bot connected and tested | `.env` (BOT_TOKEN, CHAT_ID) |
 | Crons configured and running | `config.json` |
 | Knowledge base ingestion rules set | `.claude/skills/memory-management/SKILL.md` |
