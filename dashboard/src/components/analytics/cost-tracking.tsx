@@ -19,6 +19,13 @@ interface UsageHistoryPoint {
   sonnet_pct: number;
 }
 
+interface CodexUsageData {
+  plan_type: string;
+  timestamp: string;
+  five_hour: { used_pct: number; resets: string };
+  seven_day: { used_pct: number; resets: string };
+}
+
 interface CostTrackingProps {
   dailyCosts: Array<{ date: string; cost: number }>;
   dailyCostByModel: Array<Record<string, unknown>>;
@@ -26,6 +33,7 @@ interface CostTrackingProps {
   projectedMonthly: number;
   planUsage?: PlanUsageData | null;
   usageHistory?: UsageHistoryPoint[];
+  codexUsage?: CodexUsageData | null;
 }
 
 function UsageBar({ pct, label, sublabel }: { pct: number; label: string; sublabel?: string }) {
@@ -51,6 +59,7 @@ export function CostTracking({
   projectedMonthly,
   planUsage,
   usageHistory,
+  codexUsage,
 }: CostTrackingProps) {
   const modelKeys = Object.keys(MODEL_COLORS); // opus, sonnet, haiku
   const modelColorValues = modelKeys.map((k) => MODEL_COLORS[k]);
@@ -100,6 +109,34 @@ export function CostTracking({
           )}
         </CardContent>
       </Card>
+
+      {/* Codex (ChatGPT) Plan Usage */}
+      {codexUsage && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              Codex Plan Usage{codexUsage.plan_type ? ` (${codexUsage.plan_type})` : ''}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <UsageBar
+                pct={codexUsage.seven_day.used_pct}
+                label="Weekly (7-day)"
+                sublabel={codexUsage.seven_day.resets ? `Resets ${codexUsage.seven_day.resets}` : undefined}
+              />
+              <UsageBar
+                pct={codexUsage.five_hour.used_pct}
+                label="Current Session (5h)"
+                sublabel={codexUsage.five_hour.resets ? `Resets ${codexUsage.five_hour.resets}` : undefined}
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Last updated: {new Date(codexUsage.timestamp).toLocaleString()}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Usage History Chart */}
       {usageHistory && usageHistory.length >= 2 ? (

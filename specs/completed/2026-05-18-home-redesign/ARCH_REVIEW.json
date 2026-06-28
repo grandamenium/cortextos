@@ -1,0 +1,169 @@
+{
+  "verdict": "APPROVE",
+  "findings": [
+    {
+      "severity": "warning",
+      "category": "AC coverage",
+      "ac_id": "AC-H2",
+      "message": "AC-H2 measures cold first-paint (no warm-up curl) while SPEC commits to 800ms first-paint. Acceptable but borderline — first request includes Next.js route compilation. AC-H24 covers warm path with real data, which is the more meaningful budget check."
+    },
+    {
+      "severity": "warning",
+      "category": "AC coverage",
+      "ac_id": "AC-H21",
+      "message": "AC-H21 depends on a fixture (tests/fixtures/seed-fleet-thresholds.js) that synthesizes bus events at controlled timestamps. Codexer must implement the fixture such that the FleetPulse helper actually reads from $CORTEXTOS_HOME-scoped bus events, not the global bus DB — verify the fixture's write path matches the helper's read path."
+    },
+    {
+      "severity": "warning",
+      "category": "AC coverage",
+      "ac_id": "AC-H17",
+      "message": "AC-H17 waitForResponse regex /\\/(approve|review|triage|pr|tasks|github)/i is broad; could match unrelated background fetches firing during page load. Recommend scoping to a specific endpoint pattern unique to the CTA action."
+    },
+    {
+      "severity": "warning",
+      "category": "AC coverage",
+      "ac_id": "AC-H15",
+      "message": "AC-H15 verifies fallback banner when ANTHROPIC_ADMIN_KEY is absent, but SPEC says Admin API is primary with bus fallback. There is no AC verifying the Admin API path is preferred when the key IS present. Not blocking — fallback is the riskier path and gets coverage."
+    },
+    {
+      "severity": "warning",
+      "category": "trivial AC risk",
+      "ac_id": "AC-H16",
+      "message": "AC-H16 accepts 1≤ROWS≤7. A buggy implementation rendering exactly 1 mission row from arbitrary input would pass. Consider seeding ≥10 events across ≥2 missions and asserting ROWS≥2 to prove grouping actually fires."
+    }
+  ],
+  "ac_failure_simulation": [
+    {
+      "ac_id": "AC-H1",
+      "would_fail_if": "Codexer ships `const x: any` or unresolved import; tsc emits `error TS2304`/`error TS7006`; grep matches; outer `!` flips exit to 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H2",
+      "would_fail_if": "home page first-paint exceeds 800ms (e.g. uncached gh shell on each request); time_starttransfer=1.2; awk exits 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H3",
+      "would_fail_if": "missing aria-labels or low contrast; Lighthouse a11y=0.85; jq -e on >=0.90 fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H4",
+      "would_fail_if": "helper ignores CORTEXTOS_HOME and reads real fs (which lacks 'ship home redesign' string); final grep -q fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H5",
+      "would_fail_if": "Codexer renders empty string on null mission instead of fallback copy; neither 'No active mission' nor 'All quiet' present; grep fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H6",
+      "would_fail_if": "agent grid is hardcoded; RENDERED!=3 even though 3 agent dirs exist under CORTEXTOS_HOME; test exits 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H7",
+      "would_fail_if": "sparkline returns raw event list (variable length, missing 0-fill, or stringy values); jq length==60 OR all type==number fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H8",
+      "would_fail_if": "launcher agent list is hardcoded and drifts from `cortextos bus list-agents`; BUS_COUNT!=RENDERED; test exits 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H9",
+      "would_fail_if": "skills hardcoded with N<10 OR overflow chip missing when SKILLS>10; either branch returns non-zero.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H10",
+      "would_fail_if": "skill pill click handler not wired to input setState; input value remains empty; toHaveValue(/^\\/graphify/) fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H11",
+      "would_fail_if": "/api/home/dispatch returns 200 without shelling out to `bus send-message`; no event with MARKER appears in bus log; jq length>=1 fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H12",
+      "would_fail_if": "agent whitelist not enforced; '../../etc/passwd' passes through and `bus send-message` errors → 500 not 400; test fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H12b",
+      "would_fail_if": "no rate limit middleware; second request returns 200 instead of 429; test exits 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H13",
+      "would_fail_if": "CORTEXTOS_TOKEN_CAP_5H override ignored (cap returns 5000000 not 1234567); jq fails. Or `used` renders NaN string instead of number.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H14",
+      "would_fail_if": "weekly cap override ignored OR pace marker testid missing; jq or COUNT check fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H15",
+      "would_fail_if": "fallback path not implemented; banner missing → grep fails. Or used renders as 'undefined'/'NaN' string → regex fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H16",
+      "would_fail_if": "flat 50-event list rendered (ROWS=50, fails ROWS<=7) OR grouping crashes (ROWS=0, fails ROWS>=1). Note: a buggy 1-row impl would still pass.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H17",
+      "would_fail_if": "CTA is a non-keyboard-accessible div; Enter fires nothing; waitForResponse times out.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H18",
+      "would_fail_if": "empty cards (sparkline/delta testids missing) OR delta values render NaN%/undefined; per-card grep or awk regex rejects.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H19",
+      "would_fail_if": "fixed-width 1200px element ships without responsive classes; scrollWidth=1200 > clientWidth=375; expect fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H20",
+      "would_fail_if": "new health endpoint drops keys OR returns zero counts while old endpoint reports real counts; MISSING non-empty or OV!=NV.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H21",
+      "would_fail_if": "thresholds inverted (a-green=red); first jq -e fails. Depends on fixture writing events the helper actually reads.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H22",
+      "would_fail_if": "sparklines hydrate without reserved space; CLS spikes to 0.2; jq -e on <=0.05 fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H23",
+      "would_fail_if": "no caching or TTL=0; 5 cache-miss log lines; COUNT=5 > 1; test fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H23b",
+      "would_fail_if": "uncached getTokenUsage call per request; 5 cache-miss lines; COUNT=5 > 1; test fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-H24",
+      "would_fail_if": "CORTEXTOS_HOME leaks from prior AC (unset after fork) — fail-fast directory check exits 1. Or warm first-paint >800ms with real org fs walk uncached; awk exits 1.",
+      "is_trivial": false
+    }
+  ],
+  "spec_sha256": "de1ec2c969d22da1165649c4a3364423596773c08444571c00226c8943e62c2b",
+  "reviewed_at": "2026-05-18T22:04:35Z"
+}

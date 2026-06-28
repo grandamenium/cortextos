@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -7,6 +7,7 @@ import {
   parseUsageOutput,
   storeUsageData,
   collectTelegramCommands,
+  registerTelegramCommands,
 } from '../src/bus/metrics.js';
 
 describe('Sprint 5: Observability & Metrics', () => {
@@ -410,6 +411,54 @@ describe('Sprint 5: Observability & Metrics', () => {
       const cmds = collectTelegramCommands([scanDir]);
       const names = cmds.map((c) => c.command).sort();
       expect(names).toEqual(['claude_only', 'codex_only']);
+    });
+  });
+
+  // setMyCommands was a single fire-and-forget attempt at boot. When the daemon
+  // restarted mid-onboarding the in-flight request was killed and the slash menu
+  // never landed, with no retry. These cover the bounded-retry hardening.
+  describe('registerTelegramCommands retry (restart-resilient setMyCommands)', () => {
+    const sampleCommands = [{ command: 'status', description: 'Show status' }];
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it('returns empty without calling the API when there are no commands', async () => {
+      const fetchMock = vi.fn();
+      global.fetch = fetchMock as unknown as typeof fetch;
+      const result = await registerTelegramCommands('token', []);
+      expect(result.status).toBe('empty');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('succeeds on the first attempt without retrying', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ json: async () => ({ ok: true }) });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      const result = await registerTelegramCommands('token', sampleCommands);
+      expect(result.status).toBe('ok');
+      expect(result.count).toBe(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries after a transient failure and then succeeds', async () => {
+      const fetchMock = vi.fn()
+        .mockRejectedValueOnce(new Error('connection reset'))
+        .mockResolvedValueOnce({ json: async () => ({ ok: true }) });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      const result = await registerTelegramCommands('token', sampleCommands, 3);
+      expect(result.status).toBe('ok');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('returns error after exhausting all attempts and reports the last error', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ json: async () => ({ ok: false, description: 'Bad Request' }) });
+      global.fetch = fetchMock as unknown as typeof fetch;
+      const result = await registerTelegramCommands('token', sampleCommands, 2);
+      expect(result.status).toBe('error');
+      expect(result.error).toBe('Bad Request');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 });

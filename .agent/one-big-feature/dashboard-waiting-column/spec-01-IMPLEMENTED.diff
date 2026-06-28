@@ -1,0 +1,741 @@
+diff --git a/dashboard/src/app/(dashboard)/tasks/page.tsx b/dashboard/src/app/(dashboard)/tasks/page.tsx
+index e2a5e6d..a9a0880 100644
+--- a/dashboard/src/app/(dashboard)/tasks/page.tsx
++++ b/dashboard/src/app/(dashboard)/tasks/page.tsx
+@@ -106,13 +106,33 @@ export default function TasksPage() {
+         body: JSON.stringify({ status, note }),
+       });
+ 
+-      if (res.ok) {
+-        setSheetOpen(false);
+-        setSelectedTask(null);
+-        fetchTasks();
++      if (!res.ok) {
++        throw new Error('Failed to update task status');
+       }
+-    } catch {
+-      // Silently fail
++
++      setSheetOpen(false);
++      setSelectedTask(null);
++      await fetchTasks();
++    } catch (error) {
++      throw error instanceof Error ? error : new Error('Failed to update task status');
++    }
++  }
++
++  async function handleTaskMove(taskId: string, status: Exclude<TaskStatus, 'completed'>) {
++    try {
++      const res = await fetch(`/api/tasks/${taskId}`, {
++        method: 'PATCH',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ status }),
++      });
++
++      if (!res.ok) {
++        throw new Error('Failed to move task');
++      }
++
++      await fetchTasks();
++    } catch (error) {
++      throw error instanceof Error ? error : new Error('Failed to move task');
+     }
+   }
+ 
+@@ -140,8 +160,8 @@ export default function TasksPage() {
+         <h1 className="text-2xl font-semibold">Tasks</h1>
+         <div className="space-y-4">
+           <div className="h-10 w-full rounded-lg bg-muted/30 animate-pulse" />
+-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+-            {Array.from({ length: 4 }).map((_, i) => (
++          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
++            {Array.from({ length: 5 }).map((_, i) => (
+               <div key={i} className="h-64 rounded-xl bg-muted/30 animate-pulse" />
+             ))}
+           </div>
+@@ -211,6 +231,7 @@ export default function TasksPage() {
+           tasks={displayTasks}
+           completedTodayTasks={completedToday}
+           onTaskClick={handleTaskClick}
++          onTaskMove={handleTaskMove}
+         />
+       ) : (
+         <TaskListTable tasks={displayTasks} onTaskClick={handleTaskClick} />
+diff --git a/dashboard/src/app/api/tasks/[id]/route.ts b/dashboard/src/app/api/tasks/[id]/route.ts
+index 33494d4..ef8a0c4 100644
+--- a/dashboard/src/app/api/tasks/[id]/route.ts
++++ b/dashboard/src/app/api/tasks/[id]/route.ts
+@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
+ // Validation
+ // ---------------------------------------------------------------------------
+ 
+-const VALID_STATUSES = ['pending', 'in_progress', 'blocked', 'completed'];
++const VALID_STATUSES = ['pending', 'in_progress', 'blocked', 'completed', 'waiting'];
+ const VALID_PRIORITIES = ['urgent', 'high', 'normal', 'low'];
+ 
+ // Reject IDs that look like path traversal attempts
+diff --git a/dashboard/src/app/api/tasks/route.ts b/dashboard/src/app/api/tasks/route.ts
+index 25d8140..f494a57 100644
+--- a/dashboard/src/app/api/tasks/route.ts
++++ b/dashboard/src/app/api/tasks/route.ts
+@@ -14,7 +14,7 @@ const SAFE_PATH_REGEX = /^[/\w.-]+$/;
+ // Validation constants
+ // ---------------------------------------------------------------------------
+ 
+-const VALID_STATUSES = ['pending', 'in_progress', 'blocked', 'completed'];
++const VALID_STATUSES = ['pending', 'in_progress', 'blocked', 'completed', 'waiting'];
+ const VALID_PRIORITIES = ['urgent', 'high', 'normal', 'low'];
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/dashboard/src/components/shared/status-badge.tsx b/dashboard/src/components/shared/status-badge.tsx
+index 8df8396..d9e8d7e 100644
+--- a/dashboard/src/components/shared/status-badge.tsx
++++ b/dashboard/src/components/shared/status-badge.tsx
+@@ -13,6 +13,11 @@ const statusConfig: Record<
+ > = {
+   pending: { variant: 'outline', label: 'Pending' },
+   in_progress: { variant: 'default', label: 'In Progress' },
++  waiting: {
++    variant: 'secondary',
++    className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
++    label: 'Waiting',
++  },
+   blocked: { variant: 'destructive', label: 'Blocked' },
+   completed: {
+     variant: 'secondary',
+diff --git a/dashboard/src/components/tasks/kanban-board.tsx b/dashboard/src/components/tasks/kanban-board.tsx
+index 33343e1..e404625 100644
+--- a/dashboard/src/components/tasks/kanban-board.tsx
++++ b/dashboard/src/components/tasks/kanban-board.tsx
+@@ -1,77 +1,181 @@
+ 'use client';
+ 
++import { useState } from 'react';
++import {
++  DndContext,
++  PointerSensor,
++  closestCenter,
++  useDroppable,
++  useSensor,
++  useSensors,
++  type DragEndEvent,
++} from '@dnd-kit/core';
+ import { ScrollArea } from '@/components/ui/scroll-area';
++import { cn } from '@/lib/utils';
+ import { StatusBadge } from '@/components/shared';
+ import { TaskCard } from './task-card';
+ import type { Task, TaskStatus } from '@/lib/types';
+ 
++type ColumnStatus = TaskStatus;
++type DropTargetStatus = Exclude<TaskStatus, 'completed'>;
++
+ interface KanbanColumn {
+-  status: TaskStatus;
++  status: ColumnStatus;
+   label: string;
+   tasks: Task[];
++  droppable: boolean;
+ }
+ 
+ interface KanbanBoardProps {
+   tasks: Task[];
+   completedTodayTasks: Task[];
+   onTaskClick: (task: Task) => void;
++  onTaskMove: (taskId: string, status: DropTargetStatus) => Promise<void>;
++}
++
++function isDropTargetStatus(status: string): status is DropTargetStatus {
++  return status === 'pending'
++    || status === 'in_progress'
++    || status === 'waiting'
++    || status === 'blocked';
+ }
+ 
+-export function KanbanBoard({ tasks, completedTodayTasks, onTaskClick }: KanbanBoardProps) {
++function KanbanColumnPanel({
++  column,
++  onTaskClick,
++  movingTaskId,
++}: {
++  column: KanbanColumn;
++  onTaskClick: (task: Task) => void;
++  movingTaskId: string | null;
++}) {
++  const { isOver, setNodeRef } = useDroppable({
++    id: column.status,
++    disabled: !column.droppable,
++  });
++
++  return (
++    <div className="flex flex-col gap-2">
++      <div className="flex items-center justify-between px-1">
++        <div className="flex items-center gap-2">
++          <StatusBadge status={column.status} />
++          <span className="text-xs text-muted-foreground">
++            {column.tasks.length}
++          </span>
++        </div>
++      </div>
++      <ScrollArea className="h-[calc(100vh-280px)] min-h-[300px]">
++        <div
++          ref={setNodeRef}
++          className={cn(
++            'flex min-h-full flex-col gap-2 rounded-xl px-0.5 pt-0.5 pb-1 transition-colors',
++            column.droppable && 'border border-transparent',
++            column.droppable && isOver && 'border-amber-400/60 bg-amber-500/5',
++          )}
++        >
++          {column.tasks.length === 0 ? (
++            <p className="px-2 py-8 text-center text-xs text-muted-foreground">
++              No tasks
++            </p>
++          ) : (
++            column.tasks.map((task) => (
++              <TaskCard
++                key={task.id}
++                task={task}
++                onClick={onTaskClick}
++                draggable={column.droppable}
++                busy={movingTaskId === task.id}
++              />
++            ))
++          )}
++        </div>
++      </ScrollArea>
++    </div>
++  );
++}
++
++export function KanbanBoard({
++  tasks,
++  completedTodayTasks,
++  onTaskClick,
++  onTaskMove,
++}: KanbanBoardProps) {
++  const [movingTaskId, setMovingTaskId] = useState<string | null>(null);
++  const sensors = useSensors(
++    useSensor(PointerSensor, {
++      activationConstraint: { distance: 6 },
++    }),
++  );
++
+   const columns: KanbanColumn[] = [
+     {
+       status: 'pending',
+       label: 'Pending',
+       tasks: tasks.filter((t) => t.status === 'pending'),
++      droppable: true,
+     },
+     {
+       status: 'in_progress',
+       label: 'In Progress',
+       tasks: tasks.filter((t) => t.status === 'in_progress'),
++      droppable: true,
++    },
++    {
++      status: 'waiting',
++      label: 'Waiting',
++      tasks: tasks.filter((t) => t.status === 'waiting'),
++      droppable: true,
+     },
+     {
+       status: 'blocked',
+       label: 'Blocked',
+       tasks: tasks.filter((t) => t.status === 'blocked'),
++      droppable: true,
+     },
+     {
+       status: 'completed',
+       label: 'Completed (today)',
+       tasks: completedTodayTasks,
++      droppable: false,
+     },
+   ];
+ 
++  async function handleDragEnd(event: DragEndEvent) {
++    const targetId = event.over?.id;
++    if (typeof targetId !== 'string' || !isDropTargetStatus(targetId)) {
++      return;
++    }
++
++    const taskId = String(event.active.id);
++    const task = tasks.find((item) => item.id === taskId);
++    if (!task || task.status === targetId) {
++      return;
++    }
++
++    setMovingTaskId(taskId);
++    try {
++      await onTaskMove(taskId, targetId);
++    } finally {
++      setMovingTaskId(null);
++    }
++  }
++
+   return (
+-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+-      {columns.map((col) => (
+-        <div key={col.status} className="flex flex-col gap-2">
+-          <div className="flex items-center justify-between px-1">
+-            <div className="flex items-center gap-2">
+-              <StatusBadge status={col.status} />
+-              <span className="text-xs text-muted-foreground">
+-                {col.tasks.length}
+-              </span>
+-            </div>
+-          </div>
+-          <ScrollArea className="h-[calc(100vh-280px)] min-h-[300px]">
+-            <div className="flex flex-col gap-2 px-0.5 pt-0.5 pb-1">
+-              {col.tasks.length === 0 ? (
+-                <p className="px-2 py-8 text-center text-xs text-muted-foreground">
+-                  No tasks
+-                </p>
+-              ) : (
+-                col.tasks.map((task) => (
+-                  <TaskCard
+-                    key={task.id}
+-                    task={task}
+-                    onClick={onTaskClick}
+-                  />
+-                ))
+-              )}
+-            </div>
+-          </ScrollArea>
+-        </div>
+-      ))}
+-    </div>
++    <DndContext
++      sensors={sensors}
++      collisionDetection={closestCenter}
++      onDragEnd={handleDragEnd}
++    >
++      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
++        {columns.map((column) => (
++          <KanbanColumnPanel
++            key={column.status}
++            column={column}
++            onTaskClick={onTaskClick}
++            movingTaskId={movingTaskId}
++          />
++        ))}
++      </div>
++    </DndContext>
+   );
+ }
+diff --git a/dashboard/src/components/tasks/task-card.tsx b/dashboard/src/components/tasks/task-card.tsx
+index 6f65103..a08ab9e 100644
+--- a/dashboard/src/components/tasks/task-card.tsx
++++ b/dashboard/src/components/tasks/task-card.tsx
+@@ -1,5 +1,8 @@
+ 'use client';
+ 
++import type { CSSProperties } from 'react';
++import { useDraggable } from '@dnd-kit/core';
++import { cn } from '@/lib/utils';
+ import { Card } from '@/components/ui/card';
+ import { PriorityBadge, OrgBadge, TimeAgo } from '@/components/shared';
+ import type { Task } from '@/lib/types';
+@@ -7,13 +10,45 @@ import type { Task } from '@/lib/types';
+ interface TaskCardProps {
+   task: Task;
+   onClick?: (task: Task) => void;
++  draggable?: boolean;
++  busy?: boolean;
+ }
+ 
+-export function TaskCard({ task, onClick }: TaskCardProps) {
++export function TaskCard({ task, onClick, draggable = true, busy = false }: TaskCardProps) {
++  const {
++    attributes,
++    listeners,
++    setNodeRef,
++    transform,
++    isDragging,
++  } = useDraggable({
++    id: task.id,
++    disabled: !draggable || busy,
++  });
++
++  const style: CSSProperties | undefined = transform
++    ? {
++        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
++      }
++    : undefined;
++
+   return (
+     <Card
+-      className="cursor-pointer p-3 transition-colors hover:bg-muted/50"
+-      onClick={() => onClick?.(task)}
++      ref={setNodeRef}
++      {...attributes}
++      {...listeners}
++      style={style}
++      className={cn(
++        'cursor-pointer p-3 transition-colors hover:bg-muted/50',
++        draggable && 'touch-manipulation',
++        isDragging && 'z-10 opacity-70 shadow-lg',
++        busy && 'pointer-events-none opacity-70',
++      )}
++      onClick={() => {
++        if (!isDragging) {
++          onClick?.(task);
++        }
++      }}
+     >
+       <div className="space-y-2">
+         <p className="text-sm font-medium leading-snug line-clamp-2">
+diff --git a/dashboard/src/components/tasks/task-detail-sheet.tsx b/dashboard/src/components/tasks/task-detail-sheet.tsx
+index 85a283b..eb7db15 100644
+--- a/dashboard/src/components/tasks/task-detail-sheet.tsx
++++ b/dashboard/src/components/tasks/task-detail-sheet.tsx
+@@ -43,15 +43,23 @@ export interface TaskDetailSheetProps {
+ const STATUS_TRANSITIONS: Record<TaskStatus, { label: string; status: TaskStatus; variant: 'default' | 'outline' | 'destructive' | 'secondary' }[]> = {
+   pending: [
+     { label: 'Start', status: 'in_progress', variant: 'default' },
++    { label: 'Mark Waiting', status: 'waiting', variant: 'secondary' },
+     { label: 'Block', status: 'blocked', variant: 'destructive' },
+   ],
+   in_progress: [
+     { label: 'Complete', status: 'completed', variant: 'default' },
++    { label: 'Mark Waiting', status: 'waiting', variant: 'secondary' },
++    { label: 'Block', status: 'blocked', variant: 'destructive' },
++    { label: 'Back to Pending', status: 'pending', variant: 'outline' },
++  ],
++  waiting: [
++    { label: 'Resume', status: 'in_progress', variant: 'default' },
+     { label: 'Block', status: 'blocked', variant: 'destructive' },
+     { label: 'Back to Pending', status: 'pending', variant: 'outline' },
+   ],
+   blocked: [
+     { label: 'Unblock', status: 'in_progress', variant: 'default' },
++    { label: 'Mark Waiting', status: 'waiting', variant: 'secondary' },
+     { label: 'Back to Pending', status: 'pending', variant: 'outline' },
+   ],
+   completed: [
+diff --git a/dashboard/src/components/tasks/task-filters.tsx b/dashboard/src/components/tasks/task-filters.tsx
+index 292953d..1f5eead 100644
+--- a/dashboard/src/components/tasks/task-filters.tsx
++++ b/dashboard/src/components/tasks/task-filters.tsx
+@@ -69,6 +69,7 @@ export function TaskFilters({
+         { value: 'all', label: 'All Statuses' },
+         { value: 'pending', label: 'Pending' },
+         { value: 'in_progress', label: 'In Progress' },
++        { value: 'waiting', label: 'Waiting' },
+         { value: 'blocked', label: 'Blocked' },
+         { value: 'completed', label: 'Completed' },
+       ],
+diff --git a/dashboard/src/components/tasks/task-list-table.tsx b/dashboard/src/components/tasks/task-list-table.tsx
+index 1f741a9..a1b5908 100644
+--- a/dashboard/src/components/tasks/task-list-table.tsx
++++ b/dashboard/src/components/tasks/task-list-table.tsx
+@@ -17,7 +17,13 @@ type SortField = 'title' | 'status' | 'priority' | 'assignee' | 'org' | 'created
+ type SortDir = 'asc' | 'desc';
+ 
+ const PRIORITY_ORDER: Record<string, number> = { critical: 0, urgent: 0, high: 1, normal: 2, low: 3 };
+-const STATUS_ORDER = { blocked: 0, in_progress: 1, pending: 2, completed: 3 };
++const STATUS_ORDER: Record<Task['status'], number> = {
++  blocked: 0,
++  in_progress: 1,
++  waiting: 2,
++  pending: 3,
++  completed: 4,
++};
+ 
+ interface TaskListTableProps {
+   tasks: Task[];
+diff --git a/dashboard/src/lib/types.ts b/dashboard/src/lib/types.ts
+index fad5de6..c68d7bb 100644
+--- a/dashboard/src/lib/types.ts
++++ b/dashboard/src/lib/types.ts
+@@ -47,7 +47,7 @@ export interface Heartbeat {
+ 
+ // -- Task Types --
+ 
+-export type TaskStatus = 'pending' | 'in_progress' | 'blocked' | 'completed';
++export type TaskStatus = 'pending' | 'in_progress' | 'waiting' | 'blocked' | 'completed';
+ export type TaskPriority = 'critical' | 'urgent' | 'high' | 'normal' | 'low';
+ 
+ export interface TaskOutput {
+diff --git a/src/cli/bus.ts b/src/cli/bus.ts
+index 3c3516a..79b601d 100644
+--- a/src/cli/bus.ts
++++ b/src/cli/bus.ts
+@@ -181,9 +181,9 @@ busCommand
+ busCommand
+   .command('update-task')
+   .argument('<id>', 'Task ID')
+-  .argument('<status>', 'New status (pending, in_progress, completed, blocked, cancelled)')
++  .argument('<status>', 'New status (pending, in_progress, completed, blocked, cancelled, waiting)')
+   .action((id: string, status: string) => {
+-    const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
++    const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled', 'waiting'];
+     if (!validStatuses.includes(status as TaskStatus)) {
+       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
+       process.exit(1);
+@@ -386,7 +386,7 @@ busCommand
+     }
+ 
+     const PRIORITY_ICON: Record<string, string> = { urgent: '🔴', high: '🟠', normal: '🔵', low: '⚪' };
+-    const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
++    const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', waiting: '⏸', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
+ 
+     console.log(`\n  Tasks (${tasks.length})\n`);
+     const header = '  Status  Pri  ID                        Assignee         Title';
+diff --git a/src/types/index.ts b/src/types/index.ts
+index 27fef8a..085b159 100644
+--- a/src/types/index.ts
++++ b/src/types/index.ts
+@@ -27,7 +27,7 @@ export interface InboxMessage {
+ 
+ // Task Types
+ 
+-export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled';
++export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled' | 'waiting';
+ 
+ export interface TaskOutput {
+   /** Output kind. "file" links to a saved deliverable; other shapes reserved. */
+diff --git a/tests/unit/bus/task.test.ts b/tests/unit/bus/task.test.ts
+index fbc719f..7f56c91 100644
+--- a/tests/unit/bus/task.test.ts
++++ b/tests/unit/bus/task.test.ts
+@@ -100,6 +100,19 @@ describe('Task Management', () => {
+       const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
+       expect(content.status).toBe('in_progress');
+     });
++
++    it('round-trips waiting status', () => {
++      const taskId = createTask(paths, 'paul', 'acme', 'Waiting task');
++      updateTask(paths, taskId, 'waiting');
++
++      const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
++      expect(content.status).toBe('waiting');
++
++      const waiting = listTasks(paths, { status: 'waiting' });
++      expect(waiting).toHaveLength(1);
++      expect(waiting[0].id).toBe(taskId);
++      expect(waiting[0].status).toBe('waiting');
++    });
+   });
+ 
+   describe('completeTask', () => {
+diff --git a/tests/unit/cli/bus-update-task-statuses.test.ts b/tests/unit/cli/bus-update-task-statuses.test.ts
+new file mode 100644
+index 0000000..d892de1
+--- /dev/null
++++ b/tests/unit/cli/bus-update-task-statuses.test.ts
+@@ -0,0 +1,76 @@
++import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
++import { mkdtempSync, rmSync, readFileSync } from 'fs';
++import { join } from 'path';
++import { tmpdir, homedir } from 'os';
++import { createTask } from '../../../src/bus/task';
++import type { BusPaths } from '../../../src/types/index';
++
++let tempCtxRoot = '';
++
++function makePaths(agentName: string): BusPaths {
++  return {
++    ctxRoot: tempCtxRoot,
++    inbox: join(tempCtxRoot, 'inbox', agentName),
++    inflight: join(tempCtxRoot, 'inflight', agentName),
++    processed: join(tempCtxRoot, 'processed', agentName),
++    logDir: join(tempCtxRoot, 'logs', agentName),
++    stateDir: join(tempCtxRoot, 'state', agentName),
++    taskDir: join(tempCtxRoot, 'tasks'),
++    approvalDir: join(tempCtxRoot, 'approvals'),
++    analyticsDir: join(tempCtxRoot, 'analytics'),
++    deliverablesDir: join(tempCtxRoot, 'deliverables'),
++  };
++}
++
++vi.mock('../../../src/utils/paths.js', () => ({
++  resolvePaths: (agentName: string) => makePaths(agentName),
++  getIpcPath: (_instanceId?: string) => join(tempCtxRoot || homedir(), 'daemon.sock'),
++}));
++
++import { busCommand } from '../../../src/cli/bus';
++
++describe('bus update-task waiting status', () => {
++  const originalCtxRoot = process.env.CTX_ROOT;
++  const originalAgentName = process.env.CTX_AGENT_NAME;
++  const originalInstanceId = process.env.CTX_INSTANCE_ID;
++  const originalOrg = process.env.CTX_ORG;
++
++  beforeEach(() => {
++    tempCtxRoot = mkdtempSync(join(tmpdir(), 'bus-update-task-statuses-'));
++    process.env.CTX_ROOT = tempCtxRoot;
++    process.env.CTX_AGENT_NAME = 'paul';
++    process.env.CTX_INSTANCE_ID = 'default';
++    delete process.env.CTX_ORG;
++  });
++
++  afterEach(() => {
++    if (originalCtxRoot === undefined) delete process.env.CTX_ROOT;
++    else process.env.CTX_ROOT = originalCtxRoot;
++
++    if (originalAgentName === undefined) delete process.env.CTX_AGENT_NAME;
++    else process.env.CTX_AGENT_NAME = originalAgentName;
++
++    if (originalInstanceId === undefined) delete process.env.CTX_INSTANCE_ID;
++    else process.env.CTX_INSTANCE_ID = originalInstanceId;
++
++    if (originalOrg === undefined) delete process.env.CTX_ORG;
++    else process.env.CTX_ORG = originalOrg;
++
++    rmSync(tempCtxRoot, { recursive: true, force: true });
++    vi.restoreAllMocks();
++  });
++
++  it('accepts waiting and updates the task on disk', async () => {
++    const paths = makePaths('paul');
++    const taskId = createTask(paths, 'paul', 'acme', 'CLI waiting task');
++    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
++    vi.spyOn(console, 'error').mockImplementation(() => {});
++
++    await busCommand.parseAsync(['node', 'bus', 'update-task', taskId, 'waiting']);
++
++    expect(logSpy).toHaveBeenCalledWith(`Updated ${taskId} -> waiting`);
++
++    const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
++    expect(content.status).toBe('waiting');
++  });
++});
+diff --git a/dashboard/src/components/tasks/__tests__/kanban-board.test.ts b/dashboard/src/components/tasks/__tests__/kanban-board.test.ts
+new file mode 100644
+index 0000000..ade2438
+--- /dev/null
++++ b/dashboard/src/components/tasks/__tests__/kanban-board.test.ts
+@@ -0,0 +1,47 @@
++import { describe, it, expect } from 'vitest';
++import { createElement } from 'react';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { KanbanBoard } from '../kanban-board';
++import type { Task } from '@/lib/types';
++
++function makeTask(id: string, status: Task['status'], title: string): Task {
++  return {
++    id,
++    title,
++    description: '',
++    status,
++    priority: 'normal',
++    assignee: 'paul',
++    org: 'acme',
++    project: 'ops',
++    needs_approval: false,
++    created_at: '2026-06-27T00:00:00Z',
++    updated_at: '2026-06-27T00:00:00Z',
++  };
++}
++
++describe('KanbanBoard', () => {
++  it('renders Waiting in the board between In Progress and Blocked', () => {
++    const html = renderToStaticMarkup(
++      createElement(KanbanBoard, {
++        tasks: [
++          makeTask('task-pending', 'pending', 'Pending task'),
++          makeTask('task-progress', 'in_progress', 'In progress task'),
++          makeTask('task-waiting', 'waiting', 'Waiting task'),
++          makeTask('task-blocked', 'blocked', 'Blocked task'),
++        ],
++        completedTodayTasks: [
++          makeTask('task-completed', 'completed', 'Completed task'),
++        ],
++        onTaskClick: () => undefined,
++        onTaskMove: async () => undefined,
++      }),
++    );
++
++    expect(html).toContain('Waiting');
++    expect(html.indexOf('Pending')).toBeLessThan(html.indexOf('In Progress'));
++    expect(html.indexOf('In Progress')).toBeLessThan(html.indexOf('Waiting'));
++    expect(html.indexOf('Waiting')).toBeLessThan(html.indexOf('Blocked'));
++    expect(html.indexOf('Blocked')).toBeLessThan(html.indexOf('Completed'));
++  });
++});
+diff --git a/dashboard/src/app/api/tasks/[id]/__tests__/route.test.ts b/dashboard/src/app/api/tasks/[id]/__tests__/route.test.ts
+new file mode 100644
+index 0000000..31db22f
+--- /dev/null
++++ b/dashboard/src/app/api/tasks/[id]/__tests__/route.test.ts
+@@ -0,0 +1,80 @@
++import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
++import { NextRequest } from 'next/server';
++
++const spawnSync = vi.fn();
++const getTaskById = vi.fn();
++const syncAll = vi.fn();
++
++vi.mock('child_process', () => ({
++  spawnSync,
++}));
++
++vi.mock('@/lib/data/tasks', () => ({
++  getTaskById,
++}));
++
++vi.mock('@/lib/config', () => ({
++  getFrameworkRoot: () => '/framework',
++  getCTXRoot: () => '/ctx-root',
++}));
++
++vi.mock('@/lib/sync', () => ({
++  syncAll,
++}));
++
++let PATCH: typeof import('../route').PATCH;
++
++beforeAll(async () => {
++  const route = await import('../route');
++  PATCH = route.PATCH;
++});
++
++describe('PATCH /api/tasks/[id]', () => {
++  beforeEach(() => {
++    spawnSync.mockReset();
++    getTaskById.mockReset();
++    syncAll.mockReset();
++
++    getTaskById.mockReturnValue({
++      id: 'task-1',
++      title: 'Waiting route task',
++      org: 'acme',
++    });
++
++    spawnSync.mockReturnValue({
++      status: 0,
++      stderr: '',
++      stdout: 'ok',
++    });
++  });
++
++  it('accepts waiting and persists it through update-task.sh', async () => {
++    const request = new NextRequest('http://localhost/api/tasks/task-1', {
++      method: 'PATCH',
++      body: JSON.stringify({ status: 'waiting' }),
++      headers: { 'Content-Type': 'application/json' },
++    });
++
++    const response = await PATCH(request, {
++      params: Promise.resolve({ id: 'task-1' }),
++    });
++
++    expect(response.status).toBe(200);
++    expect(spawnSync).toHaveBeenCalledWith(
++      'bash',
++      ['/framework/bus/update-task.sh', 'task-1', 'waiting'],
++      expect.objectContaining({
++        encoding: 'utf-8',
++        timeout: 10000,
++        stdio: 'pipe',
++        env: expect.objectContaining({
++          CTX_FRAMEWORK_ROOT: '/framework',
++          CTX_ROOT: '/ctx-root',
++          CTX_AGENT_NAME: 'dashboard',
++          CTX_ORG: 'acme',
++        }),
++      }),
++    );
++    expect(syncAll).toHaveBeenCalled();
++  });
++});

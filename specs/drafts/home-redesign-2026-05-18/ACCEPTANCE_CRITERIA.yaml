@@ -1,0 +1,139 @@
+spec: home-redesign-2026-05-18
+status: SPEC_PASS
+trigger: frank2 spec expansion ADDITION A — "a beautiful home page dashboard"
+mockup: /tmp/home-mockup.html (v3, screenshot /tmp/home-mockup-v3.png)
+target: dashboard/src/app/(dashboard)/page.tsx + 7 new components under dashboard/src/components/home/
+build_env:
+  cwd: ~/code/cortextos
+  branch: feat/home-redesign-2026-05-18 (off main, AFTER vault PR #10 merges)
+  verify: cd dashboard && npm run build && npm test -- --run home
+
+acceptance_criteria:
+
+  AC-H1:
+    title: Strict typecheck clean
+    test: cd dashboard && npm run build 2>&1 | tee /tmp/h1.log && ! grep -E 'error TS' /tmp/h1.log
+    expect: exits 0 with no TS errors
+
+  AC-H2:
+    title: First-paint ≤ 800ms
+    test: cd dashboard && npm run dev & sleep 6 && curl -sw '%{time_starttransfer}\n' -o /dev/null http://localhost:3000/ -H 'Authorization: Bearer $JWT'
+    expect: value ≤ 0.800
+
+  AC-H3:
+    title: Lighthouse a11y ≥ 90
+    test: npx lighthouse http://localhost:3000/ --only-categories=accessibility --quiet --chrome-flags='--headless' --output=json | jq '.categories.accessibility.score'
+    expect: value ≥ 0.90
+
+  AC-H4:
+    title: HeroStrip — "The One Thing" populates from current-mission.txt
+    test: grep -nE 'HeroStrip' dashboard/src/components/home/hero-strip.tsx && grep -nE "readAgentMission" dashboard/src/lib/agents.ts
+    expect: both grep matches present
+    runtime_check: home page HTML contains a non-empty element with data-testid="hero-one-thing"
+
+  AC-H5:
+    title: HeroStrip — fallback when no agent has current-mission.txt
+    test: rm -f orgs/clearworksai/agents/*/state/current-mission.txt && curl -s http://localhost:3000/ | grep -oE 'data-testid="hero-one-thing">[^<]*<' | grep -qE 'No active mission|All quiet'
+    expect: fallback string rendered, no crash
+
+  AC-H6:
+    title: FleetPulse — card per discovered agent
+    test: AGENTS=$(cortextos bus list-agents | wc -l) && curl -s http://localhost:3000/ | grep -c 'data-testid="agent-card"'
+    expect: rendered count equals AGENTS
+
+  AC-H7:
+    title: FleetPulse — sparkline data points = 60 (1 per minute, 0-fill)
+    test: curl -s http://localhost:3000/api/home/fleet-pulse | jq '.[0].sparkline | length'
+    expect: value == 60
+
+  AC-H8:
+    title: ClaudeCodeLauncher — agent tabs loaded from bus list-agents
+    test: curl -s http://localhost:3000/ | grep -oE 'data-testid="launcher-agent-[a-z0-9]+"' | sort -u | wc -l
+    expect: count == number of agents in cortextos bus list-agents
+
+  AC-H9:
+    title: ClaudeCodeLauncher — skill pills loaded from bus list-skills
+    test: SKILLS=$(cortextos bus list-skills --format json | jq 'length') && curl -s http://localhost:3000/ | grep -c 'data-testid="launcher-skill-'
+    expect: rendered skill-pill count ≥ min(SKILLS, 10), with "+ N more" element when SKILLS > 10
+
+  AC-H10:
+    title: ClaudeCodeLauncher — clicking a skill prefills input
+    test: playwright_test
+    steps: |
+      page.click('[data-testid="launcher-skill-graphify"]')
+      expect(page.input('[data-testid="launcher-input"]').value).toMatch(/^\/graphify/)
+    expect: input value starts with selected slash-command
+
+  AC-H11:
+    title: ClaudeCodeLauncher — Send dispatches via bus
+    test: |
+      page.fill('[data-testid="launcher-input"]', '/qa hello from test')
+      page.click('[data-testid="launcher-send"]')
+      # then on the server side:
+      cortextos bus list-events --type send_message_dispatched --limit 1 | grep -q 'hello from test'
+    expect: bus log contains the dispatched message within 2s
+
+  AC-H12:
+    title: ClaudeCodeLauncher — input validates agent against whitelist
+    test: |
+      curl -X POST http://localhost:3000/api/home/dispatch -H 'content-type: application/json' \
+        -d '{"agent":"../../etc/passwd","text":"hi"}' -o /dev/null -w '%{http_code}'
+    expect: 400
+
+  AC-H13:
+    title: TokenLimits — 5-hour window bar renders with cap, used, reset countdown
+    test: curl -s http://localhost:3000/ | grep -E 'data-testid="limits-5h-(used|cap|reset)"' | wc -l
+    expect: count == 3 (all three testids present)
+
+  AC-H14:
+    title: TokenLimits — weekly window bar with pace marker
+    test: curl -s http://localhost:3000/ | grep -E 'data-testid="limits-weekly-(used|cap|reset|pace)"' | wc -l
+    expect: count == 4
+
+  AC-H15:
+    title: TokenLimits — graceful when ANTHROPIC_ADMIN_KEY missing (fall back to bus-derived totals)
+    test: ANTHROPIC_ADMIN_KEY= curl -s http://localhost:3000/ | grep -oE 'data-testid="limits-5h-used">[^<]*<'
+    expect: non-empty value (derived from bus events), banner element with data-testid="limits-source-fallback" present
+
+  AC-H16:
+    title: MissionFeed — events grouped into ≤7 mission lines (no flat event spam)
+    test: curl -s http://localhost:3000/ | grep -c 'data-testid="mission-row"'
+    expect: rendered count ≤ 7
+
+  AC-H17:
+    title: DecisionsQueue — keyboard accessible (Enter activates primary CTA)
+    test: playwright_test
+    steps: |
+      page.focus('[data-testid="decision-row-0"] [data-testid="decision-cta"]')
+      page.keyboard.press('Enter')
+      # expect navigation or modal
+    expect: primary action fires, focus visible during navigation
+
+  AC-H18:
+    title: TodayMetrics — three cards with sparklines + 7-day median delta
+    test: |
+      curl -s http://localhost:3000/ | grep -oE 'data-testid="today-card-(velocity|quality|posture)"' | sort -u | wc -l
+    expect: count == 3
+
+  AC-H19:
+    title: Mobile (≤768) — no horizontal scroll
+    test: playwright_test
+    steps: |
+      page.setViewportSize({width:375,height:812})
+      page.goto('/')
+      scrollW = page.evaluate('document.documentElement.scrollWidth')
+      clientW = page.evaluate('document.documentElement.clientWidth')
+    expect: scrollW == clientW (no overflow)
+
+  AC-H20:
+    title: No regression on existing data fetches
+    test: |
+      diff <(curl -s http://localhost:3000/api/home/health | jq -S .) \
+           <(curl -s http://localhost:3000/api/overview/health | jq -S .)
+    expect: identical (or new endpoint returns superset, never missing fields)
+
+scope_lock:
+  components_to_build: [HeroStrip, FleetPulse, ClaudeCodeLauncher, TokenLimits, MissionFeed, DecisionsQueue, TodayMetrics]
+  components_to_retire: [MetricCards, LiveActivity, AgentStatusGrid, CurrentFocus]
+  count_check: 7 NEW, 4 RETIRED — confirm before dispatch
+  out_of_scope: [auth changes, new routes, migrations, telegram integration, mobile-app changes]

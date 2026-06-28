@@ -1,0 +1,237 @@
+spec_id: briefs-v1-2026-06-03
+spec_title: Private Briefs Endpoint ("briefs") — 2026-06-03 (rev 2)
+spec_sha256: 9639fa874bbdff7e9825412d03af7ec0d5e050f13c858c5841da006a703bf443
+created_at: 2026-06-03T20:35:00Z
+repo: ~/code/briefs
+branch: feature/briefs-v1
+notes: all commands assume bash; each sets -euo pipefail so intermediate failures propagate.
+
+acs:
+
+  - id: AC-1
+    description: build passes and at least 9 node:test tests pass with 0 failures (TAP summary parsed, no-op test scripts cannot pass)
+    env: local
+    timeout: 600
+    expects:
+      exit_code: 0
+    command: |
+      set -euo pipefail
+      cd ~/code/briefs
+      npm ci
+      npm run build
+      npm test 2>&1 | tee /tmp/briefs-ac1.tap
+      PASS=$(grep -E '^# pass [0-9]+' /tmp/briefs-ac1.tap | awk '{print $3}')
+      FAIL=$(grep -E '^# fail [0-9]+' /tmp/briefs-ac1.tap | awk '{print $3}')
+      [ -n "$PASS" ] && [ "$PASS" -ge 9 ] && [ "$FAIL" = "0" ]
+    failure_proof: >
+      Exits non-zero if tsc errors, if the TAP summary is absent (test runner
+      swapped for a no-op like `echo 0` — no `# pass N` line to grep), if
+      fewer than 9 tests pass (one trivial test ships instead of the required
+      list), or if any test fails. pipefail makes the tee pipeline carry npm
+      test's exit code.
+
+  - id: AC-2
+    description: POST->GET roundtrip returns byte-identical HTML; id is exactly 16 base64url chars; token is exactly 32 lowercase hex chars
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      set -euo pipefail
+      cd ~/code/briefs
+      rm -rf /tmp/briefs-ac2 && mkdir -p /tmp/briefs-ac2
+      BRIEFS_API_KEY=ac2key BRIEFS_DATA_DIR=/tmp/briefs-ac2 PUBLIC_BASE_URL=http://127.0.0.1:39231 PORT=39231 node dist/src/server.js & SRV=$!
+      sleep 1
+      HTML='<h1>Brief AC2</h1><p>unique-marker-9f3a</p>'
+      URL=$(curl -sf -X POST http://127.0.0.1:39231/briefs -H 'Authorization: Bearer ac2key' -H 'Content-Type: application/json' -d "{\"html\":\"$(printf '%s' "$HTML" | sed 's/"/\\\\"/g')\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
+      ID=${URL#*/briefs/}; ID=${ID%%\?*}
+      TOKEN=${URL#*token=}
+      BODY=$(curl -sf "$URL")
+      kill $SRV
+      [ "$BODY" = "$HTML" ]
+      [ "${#ID}" -eq 16 ]
+      printf '%s' "$ID" | grep -Eq '^[A-Za-z0-9_-]{16}$'
+      printf '%s' "$TOKEN" | grep -Eq '^[0-9a-f]{32}$'
+    failure_proof: >
+      Exits non-zero if the GET body differs from the posted HTML by one byte
+      (string equality, not grep), if id length regresses from 16, if id
+      contains non-base64url chars, or if the token is not exactly 32
+      lowercase hex chars. set -e propagates a failed POST (empty URL ->
+      json.load throws -> pipeline non-zero) instead of swallowing it.
+
+  - id: AC-3
+    description: 401 on missing/wrong API key, 400 on missing html, 404 on wrong token, missing token, and path-traversal id
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      set -euo pipefail
+      cd ~/code/briefs
+      rm -rf /tmp/briefs-ac3 && mkdir -p /tmp/briefs-ac3
+      BRIEFS_API_KEY=ac3key BRIEFS_DATA_DIR=/tmp/briefs-ac3 PUBLIC_BASE_URL=http://127.0.0.1:39232 PORT=39232 node dist/src/server.js & SRV=$!
+      sleep 1
+      P_NOKEY=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:39232/briefs -H 'Content-Type: application/json' -d '{"html":"x"}')
+      P_BADKEY=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:39232/briefs -H 'Authorization: Bearer wrong' -H 'Content-Type: application/json' -d '{"html":"x"}')
+      P_NOHTML=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:39232/briefs -H 'Authorization: Bearer ac3key' -H 'Content-Type: application/json' -d '{"title":"no html"}')
+      URL=$(curl -sf -X POST http://127.0.0.1:39232/briefs -H 'Authorization: Bearer ac3key' -H 'Content-Type: application/json' -d '{"html":"secret-brief"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
+      ID=${URL#*/briefs/}; ID=${ID%%\?*}
+      G_BADTOKEN=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:39232/briefs/$ID?token=00000000000000000000000000000000")
+      G_NOTOKEN=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:39232/briefs/$ID")
+      G_TRAVERSAL=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:39232/briefs/..%2F..%2Fetc%2Fpasswd?token=x")
+      kill $SRV
+      [ "$P_NOKEY" = "401" ]
+      [ "$P_BADKEY" = "401" ]
+      [ "$P_NOHTML" = "400" ]
+      [ "$G_BADTOKEN" = "404" ]
+      [ "$G_NOTOKEN" = "404" ]
+      [ "$G_TRAVERSAL" = "404" ]
+    failure_proof: >
+      Exits non-zero if POST without/with-wrong key returns anything but 401,
+      if missing html returns anything but 400, or if GET with wrong/missing
+      token or a path-traversal id returns anything but 404 (200 leaking the
+      brief, or 403 confirming existence, both fail).
+
+  - id: AC-4
+    description: raw token appears in zero server log lines and zero stored files (recursive scan, layout-independent, non-vacuous)
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      set -euo pipefail
+      cd ~/code/briefs
+      rm -rf /tmp/briefs-ac4 /tmp/briefs-ac4-data && mkdir -p /tmp/briefs-ac4 /tmp/briefs-ac4-data
+      BRIEFS_API_KEY=ac4key BRIEFS_DATA_DIR=/tmp/briefs-ac4-data PUBLIC_BASE_URL=http://127.0.0.1:39233 PORT=39233 node dist/src/server.js > /tmp/briefs-ac4/stdout.log 2>&1 & SRV=$!
+      sleep 1
+      URL=$(curl -sf -X POST http://127.0.0.1:39233/briefs -H 'Authorization: Bearer ac4key' -H 'Content-Type: application/json' -d '{"html":"log-test"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
+      TOKEN=${URL#*token=}
+      curl -sf "$URL" > /dev/null
+      sleep 0.5
+      kill $SRV
+      sleep 0.5
+      printf '%s' "$TOKEN" | grep -Eq '^[0-9a-f]{32}$'
+      FILECOUNT=$(find /tmp/briefs-ac4-data -type f | wc -l | tr -d ' ')
+      [ "$FILECOUNT" -ge 2 ]
+      ! grep -rq "$TOKEN" /tmp/briefs-ac4/
+      ! grep -rq "$TOKEN" /tmp/briefs-ac4-data/
+    failure_proof: >
+      Exits non-zero if the raw token appears anywhere in server stdout/stderr
+      (e.g. logging req.url instead of req.path) or in ANY stored file
+      regardless of name or layout (grep -r over the data dir, no glob — a
+      .meta.json rename or subdir cannot dodge it). The FILECOUNT>=2 guard
+      ensures the scan isn't passing vacuously on an empty dir, and the token
+      format check ensures we're grepping for a real token, not an empty
+      string.
+
+  - id: AC-5
+    description: 2mb body limit enforced from both sides — 3MB body gets 413, 1.5MB body gets 201
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      set -euo pipefail
+      cd ~/code/briefs
+      rm -rf /tmp/briefs-ac5 && mkdir -p /tmp/briefs-ac5
+      BRIEFS_API_KEY=ac5key BRIEFS_DATA_DIR=/tmp/briefs-ac5 PUBLIC_BASE_URL=http://127.0.0.1:39234 PORT=39234 node dist/src/server.js & SRV=$!
+      sleep 1
+      python3 -c 'import json; open("/tmp/briefs-ac5-big.json","w").write(json.dumps({"html":"x"*3000000}))'
+      python3 -c 'import json; open("/tmp/briefs-ac5-med.json","w").write(json.dumps({"html":"x"*1500000}))'
+      P_BIG=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:39234/briefs -H 'Authorization: Bearer ac5key' -H 'Content-Type: application/json' --data @/tmp/briefs-ac5-big.json)
+      P_MED=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:39234/briefs -H 'Authorization: Bearer ac5key' -H 'Content-Type: application/json' --data @/tmp/briefs-ac5-med.json)
+      kill $SRV
+      [ "$P_BIG" = "413" ]
+      [ "$P_MED" = "201" ]
+    failure_proof: >
+      Exits non-zero if a 3MB body is accepted (limit regressed upward) or a
+      1.5MB body is rejected (limit regressed to the express default 100kb).
+      Payloads go via --data @file to avoid ARG_MAX truncation masking the
+      test.
+
+  - id: AC-6
+    description: boot without BRIEFS_API_KEY terminates on its own with a non-zero exit code within 2 seconds
+    env: local
+    timeout: 60
+    expects:
+      exit_code: 0
+    command: |
+      set -euo pipefail
+      cd ~/code/briefs
+      ( env -u BRIEFS_API_KEY BRIEFS_DATA_DIR=/tmp/briefs-ac6 PORT=39235 node dist/src/server.js & SRV=$!
+        sleep 2
+        if kill -0 $SRV 2>/dev/null; then kill $SRV; exit 1; fi
+        ! wait $SRV )
+    failure_proof: >
+      Exits non-zero if the server is still alive 2s after boot without
+      BRIEFS_API_KEY (i.e. a default/empty key was silently accepted — the
+      kill -0 branch exits 1), or if the process exited 0 (the negated wait
+      fails). Passes only when boot terminates on its own with a non-zero
+      code.
+
+  - id: AC-7
+    description: package.json runtime dependencies are exactly ["express"] — nothing else
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -euo pipefail
+      cd ~/code/briefs
+      node -e 'const p=require("./package.json");const k=Object.keys(p.dependencies||{});process.exit(k.length===1&&k[0]==="express"?0:1)'
+    failure_proof: >
+      Exits non-zero if dependencies is empty, or if any runtime dep besides
+      express (helmet, cors, morgan, pg, ...) is added.
+
+  - id: AC-8
+    description: live Railway deployment stores and returns exact timestamped HTML with noindex/no-store headers; wrong token 404s; robots.txt disallows all
+    env: staging
+    timeout: 300
+    expects:
+      exit_code: 0
+    command: |
+      # Run after Railway service `briefs` is deployed from feature/briefs-v1
+      # with BRIEFS_API_KEY + volume set; BRIEFS_URL = https://<railway-domain>
+      set -euo pipefail
+      STAMP=$(date -u +%s)
+      URL=$(curl -sf -X POST "$BRIEFS_URL/briefs" -H "Authorization: Bearer $BRIEFS_API_KEY" -H 'Content-Type: application/json' -d "{\"html\":\"<h1>Staging brief $STAMP</h1>\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
+      echo "$URL" > /tmp/briefs-persist-url.txt
+      BODY=$(curl -sf "$URL")
+      HDRS=$(curl -sfI "$URL")
+      ID=${URL#*/briefs/}; ID=${ID%%\?*}
+      BAD=$(curl -s -o /dev/null -w '%{http_code}' "$BRIEFS_URL/briefs/$ID?token=deadbeefdeadbeefdeadbeefdeadbeef")
+      ROBOTS=$(curl -sf "$BRIEFS_URL/robots.txt")
+      [ "$BODY" = "<h1>Staging brief $STAMP</h1>" ]
+      echo "$HDRS" | grep -qi 'x-robots-tag: noindex'
+      echo "$HDRS" | grep -qi 'cache-control: private, no-store'
+      [ "$BAD" = "404" ]
+      printf '%s' "$ROBOTS" | grep -q 'Disallow: /'
+    failure_proof: >
+      Exits non-zero if the live Railway deployment cannot store and return
+      the exact timestamped HTML (byte equality, unique per run — a cached or
+      stale response fails), if noindex/no-store headers are missing on the
+      real response, if a wrong token on the real id returns anything but
+      404, or if robots.txt does not disallow crawling.
+
+  - id: AC-9
+    description: AC-8 brief survives a real railway redeploy performed inside this command — proves volume persistence, not container memory
+    env: staging
+    timeout: 900
+    expects:
+      exit_code: 0
+    command: |
+      # Uses /tmp/briefs-persist-url.txt written by AC-8. THIS COMMAND ITSELF
+      # performs the redeploy — passing requires surviving a real container swap.
+      set -euo pipefail
+      PERSIST_URL=$(cat /tmp/briefs-persist-url.txt)
+      railway redeploy --service briefs --yes
+      sleep 60
+      for i in $(seq 1 30); do curl -sf "$BRIEFS_URL/healthz" >/dev/null && break; sleep 5; done
+      BODY=$(curl -sf "$PERSIST_URL")
+      printf '%s' "$BODY" | grep -q '<h1>Staging brief'
+    failure_proof: >
+      Exits non-zero if `railway redeploy` itself fails, if the service never
+      comes healthy after the swap, or if the AC-8 brief 404s/returns empty
+      from the NEW container — i.e. storage was on the ephemeral filesystem
+      instead of the mounted volume. The redeploy is inside the command, so
+      it cannot pass without an actual new deployment having occurred.

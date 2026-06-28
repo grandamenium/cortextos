@@ -269,11 +269,75 @@ export interface PlanUsage {
   week_sonnet: { used_pct: number };
 }
 
-export function getPlanUsage(): PlanUsage | null {
-  const file = path.join(CTX_ROOT, 'state', 'usage', 'latest.json');
-  if (!fs.existsSync(file)) return null;
+export interface CodexUsage {
+  plan_type: string;
+  timestamp: string;
+  five_hour: { used_pct: number; resets: string };
+  seven_day: { used_pct: number; resets: string };
+}
+
+/**
+ * Codex (ChatGPT) plan usage, read from the wham cache the usage-monitor cron
+ * keeps fresh. primary_window is the 5h limit, secondary_window the 7d limit;
+ * reset_at is a unix epoch (seconds).
+ */
+export function getCodexUsage(): CodexUsage | null {
+  const cacheFile = path.join(CTX_ROOT, 'state', 'usage', 'codex-wham-cache.json');
+  if (!fs.existsSync(cacheFile)) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
+    const rl = cache.rate_limit;
+    if (!rl) return null;
+    const fmtEpoch = (s?: number | null): string =>
+      s ? new Date(s * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric' }) : '';
+    return {
+      plan_type: cache.plan_type ?? 'codex',
+      timestamp: fs.statSync(cacheFile).mtime.toISOString(),
+      five_hour: { used_pct: rl.primary_window?.used_percent ?? 0, resets: fmtEpoch(rl.primary_window?.reset_at) },
+      seven_day: { used_pct: rl.secondary_window?.used_percent ?? 0, resets: fmtEpoch(rl.secondary_window?.reset_at) },
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function getPlanUsage(): PlanUsage | null {
+  // Primary: an explicit `cortextos bus scrape-usage` snapshot. Preserves the
+  // manual /usage paste path and the daily JSONL history series.
+  const file = path.join(CTX_ROOT, 'state', 'usage', 'latest.json');
+  if (fs.existsSync(file)) {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    } catch {
+      // fall through to the live API cache
+    }
+  }
+
+  // Fallback: the OAuth usage cache that the usage-monitor cron keeps fresh.
+  // This auto-populates the widget with no manual scrape. The cache exposes 5h /
+  // 7d / 7d-sonnet utilization, which map onto session / week-all-models / week-sonnet.
+  const cacheFile = path.join(CTX_ROOT, 'state', 'usage', 'api-cache.json');
+  if (!fs.existsSync(cacheFile)) return null;
+  try {
+    const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
+    if (cache.five_hour == null && cache.seven_day == null) return null;
+    const fmtReset = (iso?: string | null): string =>
+      iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric' }) : '';
+    return {
+      agent: 'claude-max',
+      timestamp: fs.statSync(cacheFile).mtime.toISOString(),
+      session: {
+        used_pct: cache.five_hour?.utilization ?? 0,
+        resets: fmtReset(cache.five_hour?.resets_at),
+      },
+      week_all_models: {
+        used_pct: cache.seven_day?.utilization ?? 0,
+        resets: fmtReset(cache.seven_day?.resets_at),
+      },
+      week_sonnet: {
+        used_pct: cache.seven_day_sonnet?.utilization ?? 0,
+      },
+    };
   } catch {
     return null;
   }
