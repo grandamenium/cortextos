@@ -72,10 +72,36 @@ busCommand
   .command('send-message')
   .argument('<to>', 'Target agent')
   .argument('<priority>', 'Message priority (urgent, high, normal, low)')
-  .argument('<text>', 'Message text')
+  .argument('[text]', 'Message text (omit when using --body-file/--stdin)')
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
-  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string }) => {
+  .option('--body-file <path>', 'Read message text RAW from a file instead of the <text> arg. SAFE CHANNEL for untrusted/dynamic content: the body never passes through a shell, so backticks/$()/$VAR in it are NOT executed (prevents the command-injection vector of inlining text into a shell-evaluated <text> arg). Convention: write the file via a non-shell tool, keep it OUTSIDE scanned stores, and DELETE it after send (the file is itself a transient store of the content).')
+  .option('--stdin', 'Read message text RAW from stdin instead of the <text> arg. Safe ONLY via a quoted heredoc (<<\'EOF\') or input redirection (< file) — NEVER via `echo "$VAR" |` or `cmd ... |`, which shell-evaluate the content before it reaches stdin. Leaves no persistent file.')
+  .action((to: string, priority: string, textArg: string | undefined, replyToArg: string | undefined, opts: { replyTo?: string; bodyFile?: string; stdin?: boolean }) => {
+    // Resolve message text from the safe non-shell channel when provided, else the positional arg.
+    let text: string;
+    if (opts.bodyFile !== undefined) {
+      const { readFileSync } = require('fs');
+      try {
+        text = readFileSync(opts.bodyFile, 'utf-8'); // RAW read — no interpretation of file body
+      } catch (err) {
+        console.error(`Failed to read --body-file '${opts.bodyFile}': ${String(err)}`);
+        process.exit(1);
+      }
+    } else if (opts.stdin) {
+      const { readFileSync } = require('fs');
+      try {
+        text = readFileSync(0, 'utf-8'); // fd 0 = stdin, RAW
+      } catch (err) {
+        console.error(`Failed to read message text from stdin: ${String(err)}`);
+        process.exit(1);
+      }
+    } else if (textArg !== undefined) {
+      text = textArg;
+    } else {
+      console.error('Message text required: provide <text>, or --body-file <path>, or --stdin.');
+      process.exit(1);
+    }
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
