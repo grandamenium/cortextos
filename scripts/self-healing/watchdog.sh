@@ -47,7 +47,8 @@ if [ ! -f "$ERR_LOG" ]; then
 fi
 
 # Track only lines containing actual poller failures, not unrelated noise.
-current=$(grep -c "telegram-poller.*Poll error\|fetch failed" "$ERR_LOG" 2>/dev/null || echo 0)
+current=$(grep -c "telegram-poller.*Poll error\|fetch failed" "$ERR_LOG" 2>/dev/null || true)
+current="${current:-0}"
 
 # STATE_FILE format: "<last_count> <consecutive_strikes>". Backward-compatible
 # with the old single-field format (just "<last_count>") — strikes defaults 0.
@@ -67,7 +68,8 @@ if [ "$delta" -gt "$THRESHOLD" ]; then
     echo "[$ts] WEDGED: $delta new poller errors (threshold $THRESHOLD), $strikes consecutive tripped windows (>= $CONSECUTIVE). Restarting cortextos-daemon." >> "$LOG_FILE"
     "$PM2_BIN" restart cortextos-daemon --update-env >> "$LOG_FILE" 2>&1
     # Re-snapshot the post-restart count and reset the strike counter.
-    current=$(grep -c "telegram-poller.*Poll error\|fetch failed" "$ERR_LOG" 2>/dev/null || echo 0)
+    current=$(grep -c "telegram-poller.*Poll error\|fetch failed" "$ERR_LOG" 2>/dev/null || true)
+current="${current:-0}"
     strikes=0
   else
     echo "[$ts] TRIPPED: $delta new poller errors (threshold $THRESHOLD), strike $strikes/$CONSECUTIVE — not restarting yet." >> "$LOG_FILE"
