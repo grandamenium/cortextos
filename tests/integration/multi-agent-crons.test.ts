@@ -864,6 +864,8 @@ describe('Scenario 7: Concurrent scheduler ticks don\'t corrupt crons.json', () 
   });
 
   it('5 agents each with 3 crons firing at same simulated minute: no lost updates', async () => {
+    // Disable cold-start stagger so all 15 overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     // Every cron starts 25h overdue so all 15 catch-up fire on tick 1
     const pastFiredAt = new Date(Date.now() - 25 * ONE_HOUR).toISOString();
 

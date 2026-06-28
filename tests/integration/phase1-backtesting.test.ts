@@ -574,6 +574,8 @@ describe('Scenario 4: PTY injection failure / retries', () => {
 
 describe('Scenario 5: Concurrent cron fires', () => {
   it('5 crons firing at the same minute all fire and all log entries appear', async () => {
+    // Disable cold-start stagger so all overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agent = 'concurrent-agent';
     ensureAgentDir(agent);
 
