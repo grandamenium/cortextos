@@ -295,6 +295,16 @@ export class CronScheduler {
    */
   static ON_FIRE_TIMEOUT_MS = 120_000;
 
+  /**
+   * Delay between successive catch-up fires on daemon restart.
+   * When N crons are overdue simultaneously the i-th overdue cron fires at
+   * now + i * CATCHUP_STAGGER_MS instead of all firing on the same tick.
+   * Defaults to TICK_INTERVAL_MS + 1 (30_001 ms) so each slot lands strictly
+   * after the preceding tick boundary, giving at most one catch-up per tick
+   * per agent.  Mutable so unit tests can set a smaller value.
+   */
+  static CATCHUP_STAGGER_MS = CronScheduler.TICK_INTERVAL_MS + 1;
+
   constructor(opts: CronSchedulerOptions) {
     this.agentName = opts.agentName;
     this.onFire    = opts.onFire;
@@ -361,6 +371,8 @@ export class CronScheduler {
     const now = Date.now();
     const { crons: defs, corrupt } = readCronsWithStatus(this.agentName);
     const nextScheduled = new Map<string, ScheduledCron>();
+    // Stagger successive catch-up fires so they don't all land on the same tick.
+    let catchUpIndex = 0;
 
     // Read cron-state.json so catch-up sees fires recorded by `bus update-cron-fire`
     // (e.g. agent heartbeat skills). Without this, a cron that pre-dates the
@@ -434,13 +446,18 @@ export class CronScheduler {
       }
 
       // CATCH-UP POLICY: if nextFireAt is in the past (daemon was stopped),
-      // fire once immediately for the missed window, then recompute from now.
+      // fire once for the missed window, then recompute from now.
       // We do NOT flood-fire all missed windows — one catch-up is sufficient.
+      // STAGGER: successive overdue crons are offset by CATCHUP_STAGGER_MS each
+      // so they spread across separate ticks instead of all firing at once.
       if (nextFireAt <= now) {
+        const staggerMs = catchUpIndex * CronScheduler.CATCHUP_STAGGER_MS;
         this.logger(
-          `[cron-scheduler] catch-up: cron "${def.name}" missed fire at ${new Date(nextFireAt).toISOString()} — scheduling immediate fire`
+          `[cron-scheduler] catch-up: cron "${def.name}" missed fire at ${new Date(nextFireAt).toISOString()}` +
+          ` — scheduling in ${staggerMs}ms (stagger slot ${catchUpIndex})`
         );
-        nextFireAt = now; // fire on the very next tick
+        nextFireAt = now + staggerMs;
+        catchUpIndex++;
       }
 
       nextScheduled.set(def.name, { definition: def, nextFireAt, changeKey: key });
