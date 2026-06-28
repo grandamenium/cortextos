@@ -1,0 +1,200 @@
+spec_id: gws-security-server-side-pdf-2026-05-18
+spec_title: GWS-Security Server-Side PDF Export (WeasyPrint)
+spec_sha256: pending
+created_at: 2026-05-19T00:08:00Z
+status: POST_IMPL_AUDIT
+repo: /Users/joshweiss/code/gws-security
+branch: feature/pdf-server-side-export
+head: 1cf39226b7690444ee1ba1099703eefd9e850175
+
+ac_preamble: |
+  # Assumes branch feature/pdf-server-side-export checked out at /Users/joshweiss/code/gws-security
+  # Local server tests rely on `.venv/bin/python -m flask --app app run` on port 5001 with a logged-in session cookie in $GWS_COOKIE
+  # Staging AC relies on railway-agent CLI being available and gws-security staging service existing
+
+acs:
+  - id: AC-G1
+    description: pyproject.toml declares weasyprint>=63.0
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      cd /Users/joshweiss/code/gws-security && grep -E '"weasyprint>=63\.0"' pyproject.toml
+    failure_proof: |
+      If weasyprint pin is missing or version-bounded too low, grep emits no match and exits 1. WeasyPrint <63 lacks the @page margin-box engine the report uses, so a too-low pin would still build but render a malformed cover page.
+
+  - id: AC-G2
+    description: nixpacks.toml installs pango cairo gdk-pixbuf libffi shared-mime-info native libs (all five)
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      cd /Users/joshweiss/code/gws-security && python3 -c "
+      import tomllib, sys
+      with open('nixpacks.toml','rb') as f: d = tomllib.load(f)
+      pkgs = set(d.get('phases',{}).get('setup',{}).get('nixPkgs',[]))
+      need = {'pango','cairo','gdk-pixbuf','libffi','shared-mime-info'}
+      missing = need - pkgs
+      assert not missing, f'missing nixPkgs: {missing}'
+      print('OK', sorted(pkgs))
+      "
+    failure_proof: |
+      WeasyPrint dlopens pango + cairo at runtime. Any missing native lib → ImportError on first /report.pdf request on Railway, fatal 500. tomllib-based check fails the AC instead of letting it slip into prod.
+
+  - id: AC-G3
+    description: app.py defines GET /assessment/<id>/report.pdf with @login_required and returns application/pdf
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      cd /Users/joshweiss/code/gws-security && python3 -c "
+      import re
+      src = open('app.py').read()
+      pat = re.compile(r\"@app\.route\('/assessment/<assessment_id>/report\.pdf'\)\s*\n@login_required\s*\ndef assessment_report_pdf\(\")
+      assert pat.search(src), 'route + @login_required + assessment_report_pdf function not found'
+      assert \"mimetype='application/pdf'\" in src or 'mimetype=\"application/pdf\"' in src, 'route does not set application/pdf mimetype'
+      print('OK')
+      "
+    failure_proof: |
+      Missing @login_required leaks tenant data to unauthenticated callers. Missing mimetype lets the browser sniff and try to render HTML. Combined regex+substring check catches both regressions.
+
+  - id: AC-G4
+    description: templates/report.html removes Google Fonts @import AND adds at least 4 local @font-face rules (chained, both must hold)
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/gws-security
+      ! grep -q "fonts.googleapis.com" templates/report.html
+      [ "$(grep -c '@font-face' templates/report.html)" -ge 4 ]
+    failure_proof: |
+      `set -e` ensures both checks must pass. If fonts.googleapis.com remains, the first command fails and `set -e` exits non-zero — closes the silent-pass loophole the architect flagged in v1 of this AC. If @font-face count drops below 4, font substitution will silently happen on render.
+
+  - id: AC-G5
+    description: templates/report.html removes auto-print script (no window.print invocation anywhere)
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      cd /Users/joshweiss/code/gws-security && ! grep -E "window\.print|window\.addEventListener\(['\"]load" templates/report.html
+    failure_proof: |
+      A residual window.print call would re-open the Chrome print dialog when the HTML view is loaded with ?print=1, restoring the freeze path the whole spec exists to remove.
+
+  - id: AC-G6
+    description: dashboard.html Export button hrefs to report.pdf with a download attribute and tenant-based filename
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/gws-security
+      grep -E 'href="[^"]*/report\.pdf"' templates/dashboard.html >/dev/null
+      grep -E 'download="\{\{[^}]*report_download_name[^}]*\}\}"' templates/dashboard.html >/dev/null
+    failure_proof: |
+      Wrong href reverts to /report?print=1 (legacy freeze path). Missing/static download attribute means the file saves with the route name ('report.pdf') instead of the tenant-branded slug.
+
+  - id: AC-G7
+    description: static/fonts/ contains Inter 400 500 600 700 woff2 files (each > 50KB to rule out HTML stub placeholders)
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/gws-security
+      for w in 400 500 600 700; do
+        f="static/fonts/Inter-$w.woff2"
+        [ -f "$f" ] || { echo "missing $f"; exit 1; }
+        sz=$(stat -f %z "$f" 2>/dev/null || stat -c %s "$f")
+        [ "$sz" -gt 51200 ] || { echo "$f too small ($sz)"; exit 1; }
+      done
+    failure_proof: |
+      Without WOFF2 binaries (or with HTML 404 stubs accidentally saved), WeasyPrint substitutes a serif fallback. Size gate (>50KB) rules out the common "downloaded the 404 page as the font file" mistake.
+
+  - id: AC-G8
+    description: Local authenticated render of /assessment/<id>/report.pdf returns Content-Type application/pdf, valid PDF magic bytes, expected cover strings present, and zero fonts.googleapis.com refs in source HTML
+    env: local
+    timeout: 180
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/gws-security
+      : "${GWS_COOKIE:?Set GWS_COOKIE to an authenticated session cookie before running AC-G8}"
+      : "${GWS_ASSESSMENT_ID:?Set GWS_ASSESSMENT_ID to a completed assessment id}"
+      .venv/bin/python -m flask --app app run --port 5001 > /tmp/gws-ac-g8.log 2>&1 &
+      PID=$!
+      trap "kill $PID 2>/dev/null || true" EXIT
+      sleep 4
+      OUT=/tmp/ac-g8-report.pdf
+      HTML_OUT=/tmp/ac-g8-report.html
+      curl -fsS -H "Cookie: $GWS_COOKIE" "http://127.0.0.1:5001/assessment/$GWS_ASSESSMENT_ID/report.pdf" -o "$OUT" -D /tmp/ac-g8-headers
+      grep -qi "^content-type: application/pdf" /tmp/ac-g8-headers
+      head -c 4 "$OUT" | grep -q "%PDF"
+      file "$OUT" | grep -q "PDF document"
+      curl -fsS -H "Cookie: $GWS_COOKIE" "http://127.0.0.1:5001/assessment/$GWS_ASSESSMENT_ID/report" -o "$HTML_OUT"
+      ! grep -q "fonts.googleapis.com" "$HTML_OUT"
+      grep -q "Google Workspace" "$HTML_OUT"
+      grep -q "Security Assessment" "$HTML_OUT"
+    failure_proof: |
+      This AC actually hits the live route (not py_compile). HTTP code, Content-Type, PDF magic, file(1) classification, and absence of Google Fonts URL are each asserted independently and chained under set -e. Replaces the v1 self-affirming echo that the architect flagged.
+
+  - id: AC-G9
+    description: Staging deploy to Railway succeeds; staging URL /assessment/<id>/report.pdf serves a valid PDF; rendered HTML has zero fonts.googleapis.com refs
+    env: staging
+    timeout: 1200
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      : "${RAILWAY_GWS_STAGING_URL:?Set RAILWAY_GWS_STAGING_URL to the staging service domain}"
+      : "${GWS_STAGING_COOKIE:?Set GWS_STAGING_COOKIE to a logged-in staging session cookie}"
+      : "${GWS_STAGING_ASSESSMENT_ID:?Set GWS_STAGING_ASSESSMENT_ID to a completed assessment id on staging}"
+      cd /Users/joshweiss/code/gws-security
+      railway environment staging
+      railway up --detach
+      railway status --json > /tmp/ac-g9-status.json
+      python3 -c "import json,sys; s=json.load(open('/tmp/ac-g9-status.json')); ok=any(d.get('status') in ('SUCCESS','DEPLOYED') for d in s.get('deployments',[s]) if isinstance(d,dict)); sys.exit(0 if ok else 1)"
+      OUT=/tmp/ac-g9-report.pdf
+      HTML_OUT=/tmp/ac-g9-report.html
+      curl -fsSL -H "Cookie: $GWS_STAGING_COOKIE" "$RAILWAY_GWS_STAGING_URL/assessment/$GWS_STAGING_ASSESSMENT_ID/report.pdf" -o "$OUT" -D /tmp/ac-g9-headers
+      grep -qi "^content-type: application/pdf" /tmp/ac-g9-headers
+      head -c 4 "$OUT" | grep -q "%PDF"
+      file "$OUT" | grep -q "PDF document"
+      curl -fsSL -H "Cookie: $GWS_STAGING_COOKIE" "$RAILWAY_GWS_STAGING_URL/assessment/$GWS_STAGING_ASSESSMENT_ID/report" -o "$HTML_OUT"
+      ! grep -q "fonts.googleapis.com" "$HTML_OUT"
+    failure_proof: |
+      Real railway up + railway status assertion catches nixpacks build failures (missing native lib at deploy time). Real curl against staging URL with assertions on Content-Type, %PDF magic bytes, file(1), and HTML absence of Google Fonts. Replaces the v1 echo+exit 0 the architect flagged.
+
+  - id: AC-G10
+    description: Rendered PDF page 1 contains expected branded cover text strings (extracted via pdftotext) — guards against silent font substitution / layout breakage
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/gws-security
+      : "${GWS_COOKIE:?Set GWS_COOKIE}"
+      : "${GWS_ASSESSMENT_ID:?Set GWS_ASSESSMENT_ID}"
+      command -v pdftotext >/dev/null 2>&1 || { echo "pdftotext required (poppler-utils)"; exit 1; }
+      OUT=/tmp/ac-g10-report.pdf
+      TXT=/tmp/ac-g10-page1.txt
+      .venv/bin/python -m flask --app app run --port 5002 > /tmp/gws-ac-g10.log 2>&1 &
+      PID=$!
+      trap "kill $PID 2>/dev/null || true" EXIT
+      sleep 4
+      curl -fsS -H "Cookie: $GWS_COOKIE" "http://127.0.0.1:5002/assessment/$GWS_ASSESSMENT_ID/report.pdf" -o "$OUT"
+      pdftotext -layout -f 1 -l 1 "$OUT" "$TXT"
+      grep -q "Google Workspace" "$TXT"
+      grep -q "Security Assessment" "$TXT"
+      grep -q "Clearworks" "$TXT"
+    failure_proof: |
+      Even if Content-Type is correct, font substitution can produce an unbranded report. Extracting actual rendered text from page 1 and grepping for expected strings catches missing logo, wrong template, or empty render. This closes the architect's open blocker about visual-diff coverage.

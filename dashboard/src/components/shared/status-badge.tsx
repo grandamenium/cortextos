@@ -13,6 +13,11 @@ const statusConfig: Record<
 > = {
   pending: { variant: 'outline', label: 'Pending' },
   in_progress: { variant: 'default', label: 'In Progress' },
+  waiting: {
+    variant: 'secondary',
+    className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+    label: 'Waiting',
+  },
   blocked: { variant: 'destructive', label: 'Blocked' },
   completed: {
     variant: 'secondary',

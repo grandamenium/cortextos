@@ -6,6 +6,13 @@ Shared facts, context, and institutional knowledge for all agents in this org. R
 
 **ClearWorks AI** — an AI Operations and Consulting company run by Josh Weiss.
 
+**Official LLC name:** Clearworks.AI LLC — Entity No. B20260246278, formed 06/19/2026, CA Active
+**Registered address:** 849 N Avenue 63, Lower Level, Los Angeles, CA 90042
+**CEO / Manager / Registered Agent:** Joshua Shawn Weiss (self-registered)
+**Type of business (Clearworks.AI LLC):** AI + Digital Operations Consulting
+**Official business phone (Google Voice):** (213) 222-6625
+**Source:** CA SOS Certificate of Status + SOI LLC-12 filings (2026-06-19), Google Drive Operations folder
+
 Current focus areas:
 - **AuditOS** — audit app, primary engineering push right now
 - **ClearPath Academy** — course/training product, launching soon
@@ -32,8 +39,9 @@ Apps and repos (all at `clearworks-ai` on GitHub, local at `~/code/`):
 | Clearpath (gold standard) | `clearworks-ai/clearpath` | clearpath-production-c86d.up.railway.app |
 | Lifecycle X | `clearworks-ai/lifecycle-killer` | lifecycle-killer-production.up.railway.app |
 | Nonprofit Hub | `clearworks-ai/nonprofit-hub` | nonprofit-hub-production.up.railway.app |
-| Zoom Downloader | `clearworks-ai/zoom-downloader` | zoom-downloader-production.up.railway.app |
 | AuditOS | (extraction/audit product — active dev) | — |
+
+> _Zoom Downloader killed/archived 2026-06-08 (Josh request): GitHub repo archived, Railway service torn down._
 
 **Stack (locked):** Node.js + TypeScript strict, Express 5 (REST only), React 18 + Vite + TanStack Query v5, Drizzle ORM + PostgreSQL, Shadcn/ui + Radix + Tailwind (semantic tokens only), express-session + connect-pg-simple.
 

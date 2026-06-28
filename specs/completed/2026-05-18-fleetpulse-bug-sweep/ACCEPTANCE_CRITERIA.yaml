@@ -1,0 +1,234 @@
+spec_id: fleetpulse-dashboard-bug-sweep-2026-05-18
+spec_title: FleetPulse Dashboard Bug Sweep (bugs 1, 4, 5, 7)
+spec_sha256: pending
+created_at: 2026-05-19T01:00:00Z
+status: DRAFT_SPEC
+repo: /Users/joshweiss/code/cortextos
+branch: feature/dashboard-bug-sweep-2026-05-18
+
+ac_preamble: |
+  # Assumes branch feature/dashboard-bug-sweep-2026-05-18 checked out at /Users/joshweiss/code/cortextos
+  # AC-D7 (staging) requires `npm install && npm run build` in dashboard/ succeeding and `npm run start` serving on $PORT (default 3000)
+  # ~/.cortextos/default must contain the real config/enabled-agents.json and orgs/clearworksai/agents/ directory
+  # ~/.claude/skills/ must contain user-facing skill subdirectories (at least graphify and invoicing)
+
+acs:
+  - id: AC-D1
+    description: layout.tsx no longer passes enableSystem to ThemeProvider; defaultTheme=light retained
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/cortextos/dashboard
+      # No enableSystem attribute anywhere in layout.tsx
+      ! grep -E "enableSystem" src/app/layout.tsx
+      # defaultTheme="light" still wired
+      grep -E 'defaultTheme="light"' src/app/layout.tsx >/dev/null
+      # attribute="class" still wired (required by next-themes to toggle .dark)
+      grep -E 'attribute="class"' src/app/layout.tsx >/dev/null
+    failure_proof: |
+      If enableSystem remains, next-themes follows OS preference and Josh's dark-mode Mac re-blacks the dashboard. If defaultTheme="light" or attribute="class" is dropped during the edit, the theme system breaks entirely. All three checks chained under set -e.
+
+  - id: AC-D2
+    description: agents.ts agent discovery uses safeReadDir (dotfile + directory filter) instead of raw readdirSync
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/cortextos/dashboard
+      # The raw readdirSync(agentsDir) without options is gone in the agent-discovery block
+      python3 -c "
+      import re
+      src = open('src/lib/agents.ts').read()
+      # Find the readAgentListFromFilesystem block
+      m = re.search(r'function readAgentListFromFilesystem.*?^}', src, re.DOTALL | re.MULTILINE)
+      assert m, 'readAgentListFromFilesystem not found'
+      body = m.group(0)
+      assert 'safeReadDir(agentsDir)' in body, 'agentsDir loop does not use safeReadDir'
+      # The bare readdirSync(agentsDir) pattern must be gone
+      assert not re.search(r'fs\.readdirSync\(agentsDir\)(?!\s*,)', body), 'raw fs.readdirSync(agentsDir) still present without options'
+      print('OK')
+      "
+    failure_proof: |
+      If Codexer wraps the existing loop in something clever instead of using safeReadDir, .DS_Store and other dotfiles slip back in. Regex specifically rejects raw readdirSync(agentsDir) without a second-arg options object. Substring check confirms the safeReadDir call lands in the right function body.
+
+  - id: AC-D3
+    description: skills.ts has a readUserSkillsFromDisk helper that reads ~/.claude/skills/* SKILL.md files and a LAUNCHER_FEATURED allowlist
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/cortextos/dashboard
+      python3 -c "
+      import re
+      src = open('src/lib/skills.ts').read()
+      assert 'readUserSkillsFromDisk' in src, 'readUserSkillsFromDisk helper missing'
+      assert re.search(r'os\.homedir\(\)', src), 'os.homedir() not used to resolve ~/.claude/skills'
+      assert re.search(r\"'\\.claude',\\s*'skills'\", src) or re.search(r'\"\\.claude\",\\s*\"skills\"', src), 'path.join(homedir, .claude, skills) not present'
+      assert 'SKILL.md' in src, 'SKILL.md filename not referenced'
+      assert 'LAUNCHER_FEATURED' in src, 'LAUNCHER_FEATURED allowlist missing'
+      # featured set must include the four Josh-named anchors
+      for name in ['graphify', 'invoicing', 'gws-meta-workflows', 'cold-email']:
+          assert name in src, f'featured allowlist missing {name}'
+      print('OK')
+      "
+    failure_proof: |
+      Without the disk helper, the launcher stays stuck on the 27 bus-only skills and /invoicing never surfaces — the exact bug Josh called out. Featured allowlist check ensures the four user-facing skills he named are in the visible set, not buried in overflow.
+
+  - id: AC-D4
+    description: claude-code-launcher.tsx overflow surface is an interactive button that opens a Dialog with search input, not an inert span
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/cortextos/dashboard
+      python3 -c "
+      import re
+      src = open('src/components/home/claude-code-launcher.tsx').read()
+      # data-testid stays but is on a button (or trigger), not a bare span
+      m = re.search(r'data-testid=\"launcher-skill-more\"', src)
+      assert m, 'launcher-skill-more testid missing'
+      # Find a 200-char window around the testid; it must contain button/Trigger/onClick
+      window = src[max(0, m.start()-200):m.end()+200]
+      assert ('<button' in window) or ('DialogTrigger' in window) or ('onClick' in window), 'overflow element still inert (no button/onClick/DialogTrigger nearby)'
+      # Dialog import present
+      assert 'Dialog' in src, 'Dialog component not imported'
+      # Search input present (input type=search OR placeholder mentions 'Search')
+      assert re.search(r'type=\"search\"', src) or re.search(r'placeholder=\"Search', src), 'searchable input not added'
+      print('OK')
+      "
+    failure_proof: |
+      The whole point of the fix is making the overflow surface clickable and searchable. Span-with-onClick is a regression Josh would re-flag; this AC blocks any patch that keeps it inert. Search-input check catches a half-fix that opens a static list with no filter.
+
+  - id: AC-D5
+    description: tasks.ts getTasksCompletedToday computes todayStart in America/Los_Angeles, not UTC
+    env: local
+    timeout: 30
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/cortextos/dashboard
+      python3 -c "
+      import re
+      src = open('src/lib/data/tasks.ts').read()
+      m = re.search(r'export function getTasksCompletedToday\([^)]*\)[^{]*\{(.*?)^}', src, re.DOTALL | re.MULTILINE)
+      assert m, 'getTasksCompletedToday not found'
+      body = m.group(1)
+      assert 'America/Los_Angeles' in body, 'America/Los_Angeles timezone not used in body'
+      # The UTC midnight call must be gone from this specific function
+      assert 'setUTCHours' not in body, 'setUTCHours still present in getTasksCompletedToday'
+      print('OK')
+      "
+    failure_proof: |
+      If Codexer leaves setUTCHours in this function or omits the IANA tz string, the velocity card stays at 0 for the same 17-hour window every day. AC scopes to the function body so a separate UTC use elsewhere doesn't false-pass.
+
+  - id: AC-D6
+    description: dashboard production build succeeds (next build) with all changes present
+    env: local
+    timeout: 600
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/cortextos/dashboard
+      npm install --no-audit --no-fund --prefer-offline > /tmp/ac-d6-install.log 2>&1
+      npm run build > /tmp/ac-d6-build.log 2>&1
+      tail -1 /tmp/ac-d6-build.log
+    failure_proof: |
+      Catches TypeScript errors, import resolution failures, and unused-prop violations in the launcher modal wiring. If Codexer introduces an `any`, a missing prop in <ClaudeCodeLauncher>, or a wrong Dialog import path, next build fails and the AC fails. Logs preserved at /tmp/ac-d6-build.log for diagnosis.
+
+  - id: AC-D7
+    description: Staging-equivalent — full dev server running against real ~/.cortextos/default, served at http://127.0.0.1:3199, four endpoints verified
+    env: staging
+    timeout: 900
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/cortextos/dashboard
+      # Build then start (production mode, not dev — closer to deployed shape)
+      npm run build > /tmp/ac-d7-build.log 2>&1
+      PORT=3199 npm run start > /tmp/ac-d7-server.log 2>&1 &
+      PID=$!
+      trap "kill $PID 2>/dev/null || true; wait $PID 2>/dev/null || true" EXIT
+      # Wait for server (poll, no fixed sleep loop)
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        if curl -fsS -o /dev/null http://127.0.0.1:3199/; then break; fi
+        sleep 2
+      done
+      curl -fsS -o /tmp/ac-d7-home.html http://127.0.0.1:3199/
+      # Bug 4: .DS_Store must NOT appear as an agent tile in the launcher
+      ! grep -E 'launcher-agent-_ds_store|launcher-agent-ds_store|\.DS_Store' /tmp/ac-d7-home.html
+      # Bug 1: html element must NOT carry the .dark class on initial server render
+      ! grep -E '<html [^>]*class="[^"]*\bdark\b' /tmp/ac-d7-home.html
+      # Bug 5: invoicing skill must be present in the launcher (from ~/.claude/skills)
+      grep -E 'launcher-skill-invoicing' /tmp/ac-d7-home.html
+      # Bug 5: graphify must still be present
+      grep -E 'launcher-skill-graphify' /tmp/ac-d7-home.html
+      # Bug 5: the overflow trigger exists AND is a button (look for type="button" near the testid)
+      python3 -c "
+      import re
+      html = open('/tmp/ac-d7-home.html').read()
+      m = re.search(r'data-testid=\"launcher-skill-more\"', html)
+      assert m, 'overflow testid not rendered'
+      window = html[max(0, m.start()-300):m.end()+50]
+      assert 'button' in window.lower(), 'overflow trigger is not a <button> in rendered HTML'
+      print('OK overflow')
+      "
+    failure_proof: |
+      This AC actually serves the prod build against Josh's real ~/.cortextos/default config and his real ~/.claude/skills/ tree. It catches: .DS_Store leaking into the agent list, .dark class being applied at server render time (which would re-introduce the black background), missing /invoicing in the surfaced launcher set, and the overflow span regressing back to non-interactive markup. Each assertion is anchored to rendered HTML, not source code.
+
+  - id: AC-D8
+    description: Staging-equivalent — getTasksCompletedToday returns the same count the dashboard renders in the Velocity card when called with PT-local "today" boundary, verified against real SQLite task DB
+    env: staging
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      set -e
+      cd /Users/joshweiss/code/cortextos/dashboard
+      # Use sqlite3 against the real dashboard DB to count tasks completed since PT midnight today
+      DB="$HOME/.cortextos/default/dashboard.db"
+      if [ ! -f "$DB" ]; then
+        # alt path used by some configs
+        DB="$HOME/.cortextos/default/cortextos-default.db"
+      fi
+      [ -f "$DB" ] || { echo "no dashboard DB found at expected paths"; exit 1; }
+      PT_TODAY=$(TZ=America/Los_Angeles date +%Y-%m-%d)
+      # Compute the PT-midnight-as-UTC boundary (handles PDT/PST automatically via date)
+      PT_MIDNIGHT_UTC=$(TZ=UTC date -j -f "%Y-%m-%d %H:%M:%S %Z" "$PT_TODAY 00:00:00 PDT" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null \
+        || TZ=UTC date -j -f "%Y-%m-%d %H:%M:%S %Z" "$PT_TODAY 00:00:00 PST" "+%Y-%m-%dT%H:%M:%SZ")
+      DB_COUNT=$(sqlite3 "$DB" "SELECT COUNT(*) FROM tasks WHERE completed_at >= '$PT_MIDNIGHT_UTC' AND title NOT LIKE 'Cron: %';")
+      # Hit the running server (already started in AC-D7's prod build context, or restart here if not running)
+      if ! curl -fsS -o /dev/null http://127.0.0.1:3199/; then
+        PORT=3199 npm run start > /tmp/ac-d8-server.log 2>&1 &
+        PID=$!
+        trap "kill $PID 2>/dev/null || true" EXIT
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+          if curl -fsS -o /dev/null http://127.0.0.1:3199/; then break; fi
+          sleep 2
+        done
+      fi
+      curl -fsS -o /tmp/ac-d8-home.html http://127.0.0.1:3199/
+      # Velocity card renders "{N} tasks" in a recognizable testid
+      RENDERED=$(python3 -c "
+      import re
+      html = open('/tmp/ac-d8-home.html').read()
+      # Look for the velocity metric card and extract the number before ' tasks'
+      m = re.search(r'Velocity[^<]*</[^>]+>.*?(\d+)\s*tasks', html, re.DOTALL)
+      print(m.group(1) if m else 'NO_MATCH')
+      ")
+      [ "$RENDERED" != "NO_MATCH" ] || { echo "could not extract velocity from rendered HTML"; cat /tmp/ac-d8-home.html | head -200; exit 1; }
+      [ "$RENDERED" = "$DB_COUNT" ] || { echo "velocity mismatch: rendered=$RENDERED db=$DB_COUNT (PT_MIDNIGHT_UTC=$PT_MIDNIGHT_UTC)"; exit 1; }
+      echo "OK velocity=$RENDERED matches db=$DB_COUNT"
+    failure_proof: |
+      Even if AC-D5 passes the source-level check, the rendered number could still be wrong (off-by-one, wrong noise-filter, wrong tz conversion in JS). This AC asserts the actual rendered Velocity card count equals the direct SQLite count using a PT-midnight-as-UTC boundary computed independently in the test harness. If the JS tz math drifts vs the test, RENDERED != DB_COUNT and the AC fails with the exact numbers in the error log.

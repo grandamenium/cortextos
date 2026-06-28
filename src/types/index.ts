@@ -27,7 +27,7 @@ export interface InboxMessage {
 
 // Task Types
 
-export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled';
+export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'cancelled' | 'waiting';
 
 export interface TaskOutput {
   /** Output kind. "file" links to a saved deliverable; other shapes reserved. */

@@ -69,6 +69,7 @@ export function TaskFilters({
         { value: 'all', label: 'All Statuses' },
         { value: 'pending', label: 'Pending' },
         { value: 'in_progress', label: 'In Progress' },
+        { value: 'waiting', label: 'Waiting' },
         { value: 'blocked', label: 'Blocked' },
         { value: 'completed', label: 'Completed' },
       ],

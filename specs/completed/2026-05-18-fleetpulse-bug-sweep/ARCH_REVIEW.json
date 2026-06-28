@@ -1,0 +1,79 @@
+{
+  "verdict": "APPROVE",
+  "findings": [
+    {
+      "severity": "warning",
+      "category": "ac_assumption_drift",
+      "ac_id": "AC-D8",
+      "message": "DB_COUNT query filters `title NOT LIKE 'Cron: %'` but SPEC.md doesn't document that getTasksCompletedToday filters cron tasks. If the production function omits that filter (or filters differently), RENDERED != DB_COUNT and the AC fails even when Fix 7 is correct. Spec should either disclose the existing noise filter or AC-D8 should drop the cron predicate to match the function as written."
+    },
+    {
+      "severity": "warning",
+      "category": "fragile_check",
+      "ac_id": "AC-D7",
+      "message": "Bug 1 check `<html [^>]*class=\"[^\"]*\\bdark\\b` only catches server-rendered dark class. If next-themes applies .dark via client hydration, the server HTML stays neutral and this assertion silently passes regardless of enableSystem. Source-level AC-D1 still catches the actual fix, so coverage is intact, but AC-D7's Bug 1 check is largely a tautology."
+    },
+    {
+      "severity": "warning",
+      "category": "partial_coverage",
+      "ac_id": "AC-D3",
+      "message": "Spec commits to 8-item featured allowlist (graphify, invoicing, gws-meta-workflows, browser, cold-email, content-strategy, seo, m2c1-worker) but AC-D3 only verifies 4 names (graphify, invoicing, gws-meta-workflows, cold-email). Codexer could ship a 4-item list and pass. Either extend AC-D3 to require all 8 or downgrade SPEC.md to soft 'initial set'."
+    },
+    {
+      "severity": "warning",
+      "category": "behavioral_gap",
+      "ac_id": "AC-D4",
+      "message": "AC-D4 only checks markup substrings (Dialog import, button/Trigger/onClick within 200 chars, search input present). It does not verify the modal actually opens on click or that the search filter narrows the list. A non-functional Dialog wired to a no-op trigger would pass. Acceptable for this scope but worth noting."
+    },
+    {
+      "severity": "warning",
+      "category": "modal_content_unverified",
+      "ac_id": "AC-D7",
+      "message": "Staging AC verifies the overflow button is interactive markup but doesn't open the modal (server render only). The 'cannot reach any skill past the first ten' contract isn't end-to-end verified in HTML. Playwright would be the right tool but is out of scope here."
+    }
+  ],
+  "ac_failure_simulation": [
+    {
+      "ac_id": "AC-D1",
+      "would_fail_if": "Codexer leaves enableSystem on ThemeProvider, or accidentally drops defaultTheme=\"light\" / attribute=\"class\" during the edit — any of the three chained checks under set -e exits non-zero.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-D2",
+      "would_fail_if": "Codexer keeps `fs.readdirSync(agentsDir)` raw (no second-arg options) or wraps it in something that doesn't call safeReadDir(agentsDir) — the regex/substring assertions in the readAgentListFromFilesystem body raise AssertionError.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-D3",
+      "would_fail_if": "Codexer skips the user-disk source and only edits bus-skill merge logic — readUserSkillsFromDisk, os.homedir(), .claude/skills path, SKILL.md, LAUNCHER_FEATURED, or any of {graphify, invoicing, gws-meta-workflows, cold-email} missing from source = assert trips.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-D4",
+      "would_fail_if": "Codexer leaves the overflow as `<span data-testid=launcher-skill-more>` with no button/onClick/DialogTrigger nearby, omits Dialog import, or fails to add a search input — one of the three assertions trips.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-D5",
+      "would_fail_if": "Codexer leaves setUTCHours in getTasksCompletedToday body or substitutes a different IANA timezone (e.g., uses Date.now() local) — body inspection assertion trips.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-D6",
+      "would_fail_if": "Any TypeScript error from the launcher modal wiring (missing prop, wrong Dialog import path, `any` violation, unused prop in <ClaudeCodeLauncher>) — next build exits non-zero.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-D7",
+      "would_fail_if": ".DS_Store leaks into rendered launcher tiles, html element gets server-rendered .dark class, invoicing or graphify chip missing from rendered launcher, or overflow trigger renders as a span instead of a button — any of the four grep/python assertions fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-D8",
+      "would_fail_if": "Rendered Velocity card number doesn't match sqlite count using independently computed PT-midnight-UTC boundary — wrong tz math, wrong offset handling around DST, wrong noise-filter, or off-by-one would all surface as RENDERED != DB_COUNT. Also fails (correctly) if the regex can't locate the velocity number at all.",
+      "is_trivial": false
+    }
+  ],
+  "spec_sha256": "1af73680661d6ac5cb5329bb48262321a7d304af46fb75e48b62d234cfeb0547",
+  "reviewed_at": "2026-05-19T01:06:53Z"
+}

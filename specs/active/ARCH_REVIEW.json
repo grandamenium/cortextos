@@ -1,0 +1,78 @@
+{
+  "verdict": "APPROVE",
+  "findings": [
+    {
+      "severity": "warning",
+      "category": "ac_robustness",
+      "ac_id": "AC-1",
+      "message": "TAP parse depends on node:test TAP reporter emitting exact lines `# pass N` / `# fail N`. This is the current Node 20+ behavior, but a Node version bump on Railway/CI could change the summary format and silently break the gate. Pin Node version in package.json engines or document the Node version assumption."
+    },
+    {
+      "severity": "warning",
+      "category": "ac_robustness",
+      "ac_id": "AC-2",
+      "message": "`sleep 1` boot wait is racy on a cold node start; consider a curl-loop on /healthz for the local server too (already done for AC-9). Not a correctness issue — just flake risk."
+    },
+    {
+      "severity": "warning",
+      "category": "dependency",
+      "ac_id": "AC-8",
+      "message": "Staging ACs assume $BRIEFS_URL and $BRIEFS_API_KEY are exported in the shell before invocation. Spec says Larry sets env post-review — make sure the runner exports them or AC-8 fails on `set -u` rather than against the actual SUT."
+    },
+    {
+      "severity": "warning",
+      "category": "dependency",
+      "ac_id": "AC-9",
+      "message": "AC-9 strictly depends on AC-8 having run in the same shell session (reads /tmp/briefs-persist-url.txt). Document this ordering, or have AC-9 re-POST + redeploy itself to be self-contained."
+    }
+  ],
+  "ac_failure_simulation": [
+    {
+      "ac_id": "AC-1",
+      "would_fail_if": "Codexer ships only 3 of the 9 required tests — `# pass 3` is parsed, `[ 3 -ge 9 ]` is false, exit 1. Also fails if test script is replaced with `echo ok` (no `# pass` line, PASS empty, `[ -n \"\" ]` fails).",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-2",
+      "would_fail_if": "Implementation returns id of length 22 (raw base64 of 16 bytes) instead of 16 — `[ \"${#ID}\" -eq 16 ]` fails. Or returns uppercase hex token — `^[0-9a-f]{32}$` fails. Or GET returns HTML wrapped in a layout — byte equality fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-3",
+      "would_fail_if": "Handler returns 403 instead of 404 for wrong token (leaks existence) — `[ \"$G_BADTOKEN\" = \"404\" ]` fails. Or returns 200 leaking the brief on path traversal — fails the traversal check.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-4",
+      "would_fail_if": "Logger uses req.url instead of req.path so `?token=<raw>` ends up in stdout — `! grep -rq \"$TOKEN\" /tmp/briefs-ac4/` fails. Or storage writes raw token to .json instead of sha256 hash — data dir grep fails. FILECOUNT>=2 prevents passing on an empty dir.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-5",
+      "would_fail_if": "Express body limit left at default 100kb — 1.5MB body gets 413 instead of 201, `[ \"$P_MED\" = \"201\" ]` fails. Or limit raised to 10mb — 3MB body gets 201 instead of 413, `[ \"$P_BIG\" = \"413\" ]` fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-6",
+      "would_fail_if": "Server defaults BRIEFS_API_KEY to '' or 'changeme' and keeps listening — `kill -0 $SRV` after 2s succeeds, branch exits 1. Or server exits 0 instead of non-zero — `! wait $SRV` becomes `! 0` = 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-7",
+      "would_fail_if": "Codexer adds helmet/morgan/cors/pg to dependencies — `k.length===1` false, node exits 1. Or removes express entirely — `k[0]===\"express\"` false.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-8",
+      "would_fail_if": "Live service caches and returns last brief instead of the new timestamped one — byte equality with unique timestamp fails. Or X-Robots-Tag missing — header grep fails. Or Cache-Control omitted/different — grep fails. Or wrong token returns 200 over the network — `[ \"$BAD\" = \"404\" ]` fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-9",
+      "would_fail_if": "Briefs written to container FS instead of /data volume — after `railway redeploy` swaps containers, the AC-8 URL 404s and grep on empty body fails. Or `railway redeploy` itself errors — set -e propagates non-zero.",
+      "is_trivial": false
+    }
+  ],
+  "spec_sha256": "63e679ff432242b40a6a57677a48fc6c6aa51b78df79b2102d632d0882949f6d",
+  "reviewed_at": "2026-06-03T20:33:12Z"
+}

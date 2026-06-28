@@ -1,5 +1,8 @@
 'use client';
 
+import type { CSSProperties } from 'react';
+import { useDraggable } from '@dnd-kit/core';
+import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { PriorityBadge, OrgBadge, TimeAgo } from '@/components/shared';
 import type { Task } from '@/lib/types';
@@ -7,13 +10,45 @@ import type { Task } from '@/lib/types';
 interface TaskCardProps {
   task: Task;
   onClick?: (task: Task) => void;
+  draggable?: boolean;
+  busy?: boolean;
 }
 
-export function TaskCard({ task, onClick }: TaskCardProps) {
+export function TaskCard({ task, onClick, draggable = true, busy = false }: TaskCardProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+  } = useDraggable({
+    id: task.id,
+    disabled: !draggable || busy,
+  });
+
+  const style: CSSProperties | undefined = transform
+    ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+      }
+    : undefined;
+
   return (
     <Card
-      className="cursor-pointer p-3 transition-colors hover:bg-muted/50"
-      onClick={() => onClick?.(task)}
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      style={style}
+      className={cn(
+        'cursor-pointer p-3 transition-colors hover:bg-muted/50',
+        draggable && 'touch-manipulation',
+        isDragging && 'z-10 opacity-70 shadow-lg',
+        busy && 'pointer-events-none opacity-70',
+      )}
+      onClick={() => {
+        if (!isDragging) {
+          onClick?.(task);
+        }
+      }}
     >
       <div className="space-y-2">
         <p className="text-sm font-medium leading-snug line-clamp-2">

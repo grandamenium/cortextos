@@ -1,0 +1,564 @@
+spec_id: home-redesign-2026-05-18
+spec_title: Dashboard Home Redesign
+spec_sha256: pending
+created_at: 2026-05-18T20:56:00Z
+status: SPEC_PASS
+trigger: frank2 spec expansion ADDITION A — "a beautiful home page dashboard"
+mockup: /tmp/home-mockup.html (v3, screenshot /tmp/home-mockup-v3.png)
+target: dashboard/src/app/(dashboard)/page.tsx + 7 new components under dashboard/src/components/home/
+
+test_env:
+  test_home_root: /tmp/cortex-test-${UUID}
+  env_var: CORTEXTOS_HOME (read by all fs helpers — overrides default org root)
+  jwt: $JWT (5 min, HS256 with $AUTH_SECRET; tests mint via tests/helpers/mint-jwt.ts). Rate-limit identity keys off JWT `sub` claim, NOT a session cookie.
+  prod_url: http://localhost:3100
+  token_caps_override:
+    CORTEXTOS_TOKEN_CAP_5H: integer (default 5000000)
+    CORTEXTOS_TOKEN_CAP_WEEKLY: integer (default 150000000)
+
+ac_preamble: |
+  # Run ONCE before any AC executes. Each AC then starts the already-built server.
+  cd dashboard && npm run build > /tmp/ac-build.log 2>&1 || { echo "preamble build failed"; exit 1; }
+  export JWT=$(node tests/helpers/mint-jwt.ts)
+  export AUTH_SECRET="${AUTH_SECRET:-86ea1bf8627e69bb503c02e1077831f8bf39ea3ab240fada9b941b6b8d61f231}"
+  # Each AC re-uses the existing .next/ build via `npm start` only.
+
+acs:
+  - id: AC-H1
+    description: Strict typecheck clean
+    env: local
+    timeout: 600
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && npm run build 2>&1 | tee /tmp/h1.log
+      ! grep -qE 'error TS' /tmp/h1.log
+    failure_proof: |-
+      If Codexer ships `const x: any = ...` or a missing import, tsc emits `error TS2304` and grep -q matches, returning 0 → outer `!` flips to non-zero → AC fails.
+
+  - id: AC-H2
+    description: Production first-paint ≤ 800ms (cold render path)
+    env: local
+    timeout: 300
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && npm run build > /tmp/h2-build.log 2>&1 || exit 1
+      PORT=3100 npm start > /tmp/h2-start.log 2>&1 &
+      PID=$!; trap "kill $PID" EXIT
+      sleep 5
+      T=$(curl -sw '%{time_starttransfer}' -o /dev/null -H "Authorization: Bearer $JWT" http://localhost:3100/)
+      awk -v t="$T" 'BEGIN{ if (t+0 > 0.800) exit 1; exit 0 }'
+    failure_proof: |-
+      If the home page renders in >800ms (e.g. uncached gh-pr-list shell on each request), awk receives t=1.2 and exits 1.
+
+  - id: AC-H3
+    description: Lighthouse a11y ≥ 0.90
+    env: local
+    timeout: 300
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && npm run build > /dev/null && PORT=3100 npm start &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      npx lighthouse http://localhost:3100/ --only-categories=accessibility \
+        --quiet --chrome-flags='--headless' --output=json --output-path=/tmp/h3.json \
+        --extra-headers="{\"Authorization\":\"Bearer $JWT\"}" > /dev/null
+      jq -e '.categories.accessibility.score >= 0.90' /tmp/h3.json > /dev/null
+    failure_proof: |-
+      If a button lacks aria-label or contrast is <4.5:1, Lighthouse scores .85; `jq -e` fails the >=0.90 comparison and exits 1.
+
+  - id: AC-H4
+    description: HeroStrip "One Thing" — populated path
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      export CORTEXTOS_HOME=$(mktemp -d)
+      mkdir -p $CORTEXTOS_HOME/orgs/clearworksai/agents/larry/state
+      echo "MISSION: ship home redesign | Phase: 1/4 | Next: wire components | Updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        > $CORTEXTOS_HOME/orgs/clearworksai/agents/larry/state/current-mission.txt
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID; rm -rf $CORTEXTOS_HOME" EXIT; sleep 5
+      curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/ \
+        | grep -oE 'data-testid="hero-one-thing">[^<]+<' \
+        | grep -qE 'ship home redesign'
+    failure_proof: |-
+      If readAgentMission ignores CORTEXTOS_HOME and reads ~/code/cortextos/orgs/... (which won't contain "ship home redesign"), the grep -q fails and exits 1.
+
+  - id: AC-H5
+    description: HeroStrip "One Thing" — fallback when no mission (non-destructive)
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      export CORTEXTOS_HOME=$(mktemp -d)
+      mkdir -p $CORTEXTOS_HOME/orgs/clearworksai/agents/larry/state
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID; rm -rf $CORTEXTOS_HOME" EXIT; sleep 5
+      curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/ \
+        | grep -oE 'data-testid="hero-one-thing">[^<]+<' \
+        | grep -qE 'No active mission|All quiet'
+    failure_proof: |-
+      If Codexer renders an empty string when readAgentMission returns null, the fallback grep fails. CORTEXTOS_HOME points at a fresh tmp dir — no real agent state is ever touched.
+
+  - id: AC-H6
+    description: FleetPulse — card per discovered agent
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      export CORTEXTOS_HOME=$(mktemp -d)
+      mkdir -p $CORTEXTOS_HOME/orgs/clearworksai/agents/{larry,frank2,codexer}/state
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID; rm -rf $CORTEXTOS_HOME" EXIT; sleep 5
+      RENDERED=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/ \
+        | grep -c 'data-testid="agent-card"')
+      test "$RENDERED" -eq 3
+    failure_proof: |-
+      If Codexer hardcodes a 4-up grid without iterating discovered agents, RENDERED!=3 and `test` exits 1.
+
+  - id: AC-H7
+    description: FleetPulse sparkline = 60 buckets, 0-fill
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      export CORTEXTOS_HOME=$(mktemp -d)
+      mkdir -p $CORTEXTOS_HOME/orgs/clearworksai/agents/larry/state
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID; rm -rf $CORTEXTOS_HOME" EXIT; sleep 5
+      curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/api/home/fleet-pulse \
+        | jq -e '.[0].sparkline | length == 60 and all(.[]; type == "number")' > /dev/null
+    failure_proof: |-
+      If Codexer returns the raw event list (variable length, no 0-fill), `.sparkline | length == 60` is false → jq -e exits 1. The `all type == "number"` clause also catches stringy buckets.
+
+  - id: AC-H8
+    description: ClaudeCodeLauncher — agent tabs match bus list-agents
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      BUS_COUNT=$(cortextos bus list-agents --format json | jq 'length')
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      RENDERED=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/ \
+        | grep -oE 'data-testid="launcher-agent-[a-z0-9_-]+"' | sort -u | wc -l | tr -d ' ')
+      test "$RENDERED" -eq "$BUS_COUNT"
+    failure_proof: |-
+      If Codexer hardcodes the agent list, BUS_COUNT (say 8) ≠ RENDERED (say 4) → test exits 1.
+
+  - id: AC-H9
+    description: ClaudeCodeLauncher — skill pills from bus list-skills with "+ N more" overflow
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      SKILLS=$(cortextos bus list-skills --format json | jq 'length')
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      HTML=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/)
+      VISIBLE=$(echo "$HTML" | grep -oE 'data-testid="launcher-skill-[a-z0-9_-]+"' | sort -u | wc -l | tr -d ' ')
+      EXPECTED=$([ "$SKILLS" -lt 10 ] && echo "$SKILLS" || echo 10)
+      test "$VISIBLE" -eq "$EXPECTED" || exit 1
+      if [ "$SKILLS" -gt 10 ]; then
+        echo "$HTML" | grep -q 'data-testid="launcher-skill-more"' || exit 1
+      fi
+    failure_proof: |-
+      If Codexer ships 5 pills hardcoded with SKILLS=12, VISIBLE=5 but EXPECTED=10 → test fails. If SKILLS>10 and "+ N more" is missing, second branch fails.
+
+  - id: AC-H10
+    description: ClaudeCodeLauncher — clicking skill pill prefills input
+    env: local
+    timeout: 180
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      cd dashboard && npx playwright test tests/home/launcher.spec.ts -g "AC-H10" --reporter=line
+    spec_file_content: |
+      # dashboard/tests/home/launcher.spec.ts
+      import { test, expect } from '@playwright/test';
+      const JWT = process.env.JWT!;
+      test('AC-H10 skill prefill', async ({ page }) => {
+        await page.context().setExtraHTTPHeaders({ Authorization: `Bearer ${JWT}` });
+        await page.goto('http://localhost:3100/');
+        await page.click('[data-testid="launcher-skill-graphify"]');
+        await expect(page.locator('[data-testid="launcher-input"]')).toHaveValue(/^\/graphify/);
+      });
+    failure_proof: |-
+      If the pill click is not wired to setState, locator value stays empty and toHaveValue fails → playwright exits non-zero.
+
+  - id: AC-H11
+    description: ClaudeCodeLauncher — Send dispatches via bus
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      MARKER="h11-$(date +%s)-$RANDOM"
+      curl -sf -X POST -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+        -d "{\"agent\":\"larry\",\"text\":\"/qa $MARKER\"}" \
+        http://localhost:3100/api/home/dispatch || exit 1
+      sleep 2
+      cortextos bus list-events --type message_sent --limit 10 --format json \
+        | jq -e --arg m "$MARKER" '[.[] | select((.meta.text? // "") | contains($m))] | length >= 1' > /dev/null
+    failure_proof: |-
+      If the dispatch route doesn't actually shell out to `cortextos bus send-message`, no bus event with the unique MARKER exists → jq -e fails.
+
+  - id: AC-H12
+    description: dispatch — agent whitelist enforced (400 on unknown agent)
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+        -d '{"agent":"../../etc/passwd","text":"hi"}' \
+        http://localhost:3100/api/home/dispatch)
+      test "$CODE" = "400"
+    failure_proof: |-
+      If validation passes a non-whitelisted agent through to `bus send-message`, bus errors → 500, not 400. test exits 1.
+
+  - id: AC-H12b
+    description: dispatch — rate limit 1 req/sec per JWT subject (second within window → 429)
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      # Rate-limit identity is the JWT 'sub' claim, not a cookie. Same JWT → same bucket.
+      C1=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+        -d '{"agent":"larry","text":"/qa rate1"}' \
+        http://localhost:3100/api/home/dispatch)
+      C2=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" \
+        -d '{"agent":"larry","text":"/qa rate2"}' \
+        http://localhost:3100/api/home/dispatch)
+      test "$C1" = "200" && test "$C2" = "429"
+    failure_proof: |-
+      If no rate-limit middleware exists, C2=200 → test fails. Codexer must implement a per-subject token bucket (1 token capacity, refill 1/sec) keyed off `jwt.sub`.
+
+  - id: AC-H13
+    description: TokenLimits — 5-hour testids present AND cap value matches CORTEXTOS_TOKEN_CAP_5H
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      # Run server with a deterministic, non-default cap so the rendered value is checkable.
+      cd dashboard && CORTEXTOS_TOKEN_CAP_5H=1234567 PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/api/home/token-limits \
+        | jq -e '.fiveHour.cap == 1234567 and (.fiveHour.used | type == "number") and (.fiveHour.resetAt | type == "string")' > /dev/null || exit 1
+      COUNT=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/ \
+        | grep -oE 'data-testid="limits-5h-(used|cap|reset)"' | sort -u | wc -l | tr -d ' ')
+      test "$COUNT" -eq 3
+    failure_proof: |-
+      If Codexer hardcodes cap=5000000, the jq check fails because the override 1234567 isn't honored. If `used` renders as "NaN" (string not number), jq rejects it.
+
+  - id: AC-H14
+    description: TokenLimits — weekly testids present AND cap value matches CORTEXTOS_TOKEN_CAP_WEEKLY
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && CORTEXTOS_TOKEN_CAP_WEEKLY=87654321 PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/api/home/token-limits \
+        | jq -e '.weekly.cap == 87654321 and (.weekly.used | type == "number") and (.weekly.pace | type == "number")' > /dev/null || exit 1
+      COUNT=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/ \
+        | grep -oE 'data-testid="limits-weekly-(used|cap|reset|pace)"' | sort -u | wc -l | tr -d ' ')
+      test "$COUNT" -eq 4
+    failure_proof: |-
+      If cap-override is ignored, jq fails. If pace marker testid is omitted, COUNT=3 → test fails.
+
+  - id: AC-H15
+    description: TokenLimits — bus-derived primary source (no admin key required); fallback banner visible
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      # Start the server WITHOUT ANTHROPIC_ADMIN_KEY so the fallback path is exercised.
+      cd dashboard && env -u ANTHROPIC_ADMIN_KEY PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      HTML=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/)
+      USED=$(echo "$HTML" | grep -oE 'data-testid="limits-5h-used">[^<]+<' | sed -E 's/.*>([^<]+)<.*/\1/')
+      test -n "$USED" || exit 1
+      # Reject literal NaN/undefined sentinels — used must be a number string
+      echo "$USED" | grep -qE '^[0-9]+(\.[0-9]+)?[KMB]?$|^[0-9,]+$' || exit 1
+      echo "$HTML" | grep -q 'data-testid="limits-source-fallback"'
+    failure_proof: |-
+      If the server was launched with the admin key in env, the fallback banner is suppressed → grep -q fails. If bus-derived totals render literal 'undefined'/'NaN', the numeric-string regex fails.
+
+  - id: AC-H16
+    description: MissionFeed — events grouped into ≤7 mission rows (no flat event spam)
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      ROWS=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/ \
+        | grep -c 'data-testid="mission-row"')
+      test "$ROWS" -le 7 && test "$ROWS" -ge 1
+    failure_proof: |-
+      If Codexer renders a flat list of 50 bus events, ROWS=50 → test fails. If grouping logic crashes and renders 0, test fails too.
+
+  - id: AC-H17
+    description: DecisionsQueue — primary CTA keyboard reachable (Enter fires action)
+    env: local
+    timeout: 180
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      cd dashboard && npx playwright test tests/home/decisions.spec.ts -g "AC-H17" --reporter=line
+    spec_file_content: |
+      # dashboard/tests/home/decisions.spec.ts
+      import { test, expect } from '@playwright/test';
+      const JWT = process.env.JWT!;
+      test('AC-H17 keyboard CTA', async ({ page }) => {
+        await page.context().setExtraHTTPHeaders({ Authorization: `Bearer ${JWT}` });
+        await page.goto('http://localhost:3100/');
+        const cta = page.locator('[data-testid="decision-row-0"] [data-testid="decision-cta"]').first();
+        await cta.focus();
+        const focused = await page.evaluate(() => document.activeElement?.getAttribute('data-testid'));
+        expect(focused).toBe('decision-cta');
+        const [response] = await Promise.all([
+          page.waitForResponse(r => /\/(approve|review|triage|pr|tasks|github)/i.test(r.url()), { timeout: 3000 }),
+          page.keyboard.press('Enter'),
+        ]);
+        expect(response.status()).toBeLessThan(500);
+      });
+    failure_proof: |-
+      If the CTA is a <div> with onClick (not keyboard-accessible), Enter fires no request, waitForResponse times out → test fails.
+
+  - id: AC-H18
+    description: TodayMetrics — 3 narrative cards each with sparkline + 7-day median delta
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      HTML=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/)
+      CARDS=$(echo "$HTML" | grep -oE 'data-testid="today-card-(velocity|quality|posture)"' | sort -u | wc -l | tr -d ' ')
+      test "$CARDS" -eq 3 || exit 1
+      # Each card must render its sparkline AND delta sub-elements (not empty placeholders)
+      for n in velocity quality posture; do
+        echo "$HTML" | grep -q "data-testid=\"today-card-$n-sparkline\"" || { echo "missing $n sparkline"; exit 1; }
+        echo "$HTML" | grep -q "data-testid=\"today-card-$n-delta\""     || { echo "missing $n delta";     exit 1; }
+      done
+      # Delta values must be numeric (allow leading +/- and % suffix); reject empty/NaN/undefined
+      echo "$HTML" | grep -oE 'data-testid="today-card-(velocity|quality|posture)-delta">[^<]+<' \
+        | sed -E 's/.*>([^<]+)<.*/\1/' \
+        | awk '{ if ($0 !~ /^[+-]?[0-9]+(\.[0-9]+)?%?$/) { print "bad delta: "$0; exit 1 } }'
+    failure_proof: |-
+      If Codexer ships 3 empty cards (no sparkline SVG, no delta value), per-card grep fails. If delta renders as "NaN%" or "undefined", awk regex rejects → exit 1.
+
+  - id: AC-H19
+    description: Mobile (≤768) — no horizontal scroll
+    env: local
+    timeout: 180
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      cd dashboard && npx playwright test tests/home/mobile.spec.ts -g "AC-H19" --reporter=line
+    spec_file_content: |
+      # dashboard/tests/home/mobile.spec.ts
+      import { test, expect } from '@playwright/test';
+      const JWT = process.env.JWT!;
+      test('AC-H19 no horizontal scroll', async ({ page }) => {
+        await page.context().setExtraHTTPHeaders({ Authorization: `Bearer ${JWT}` });
+        await page.setViewportSize({ width: 375, height: 812 });
+        await page.goto('http://localhost:3100/');
+        const { scrollW, clientW } = await page.evaluate(() => ({
+          scrollW: document.documentElement.scrollWidth,
+          clientW: document.documentElement.clientWidth,
+        }));
+        expect(scrollW).toBe(clientW);
+      });
+    failure_proof: |-
+      If a fixed-width 1200px element ships without responsive classes, scrollW=1200 > clientW=375 → expect fails.
+
+  - id: AC-H20
+    description: No regression — /api/home/health agent/task/approval counts equal /api/overview/health
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      OLD=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/api/overview/health)
+      NEW=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/api/home/health)
+      # Key-superset check (new endpoint never DROPS a field)
+      OLD_KEYS=$(echo "$OLD" | jq -r 'keys[]' | sort)
+      NEW_KEYS=$(echo "$NEW" | jq -r 'keys[]' | sort)
+      MISSING=$(comm -23 <(echo "$OLD_KEYS") <(echo "$NEW_KEYS"))
+      test -z "$MISSING" || { echo "missing keys: $MISSING"; exit 1; }
+      # VALUE invariant — agentCount/taskCount/approvalCount must match exactly between old and new
+      for k in agentCount taskCount approvalCount; do
+        OV=$(echo "$OLD" | jq -r --arg k "$k" '.[$k] // empty')
+        NV=$(echo "$NEW" | jq -r --arg k "$k" '.[$k] // empty')
+        test -n "$OV" || { echo "old missing $k"; exit 1; }
+        test "$OV" = "$NV" || { echo "$k mismatch: old=$OV new=$NV"; exit 1; }
+      done
+    failure_proof: |-
+      If the new endpoint returns {agentCount:0,taskCount:0,approvalCount:0} while the old endpoint reports real counts, OV!=NV → test exits 1. If a key is dropped, MISSING list is non-empty.
+
+  - id: AC-H21
+    description: FleetPulse color thresholds — green ≤5min, amber ≤30min, red >30min
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      export CORTEXTOS_HOME=$(mktemp -d)
+      mkdir -p $CORTEXTOS_HOME/orgs/clearworksai/agents/{a-green,a-amber,a-red}/state
+      node tests/fixtures/seed-fleet-thresholds.js $CORTEXTOS_HOME
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID; rm -rf $CORTEXTOS_HOME" EXIT; sleep 5
+      JSON=$(curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/api/home/fleet-pulse)
+      echo "$JSON" | jq -e '.[] | select(.name=="a-green") | .health == "green"' > /dev/null
+      echo "$JSON" | jq -e '.[] | select(.name=="a-amber") | .health == "amber"' > /dev/null
+      echo "$JSON" | jq -e '.[] | select(.name=="a-red")   | .health == "red"'   > /dev/null
+    failure_proof: |-
+      If thresholds are inverted, a-green gets health=red → jq -e fails on first check. Fixture seeds bus events at NOW-30s / NOW-15min / NOW-60min for the three test agents.
+    fixture: tests/fixtures/seed-fleet-thresholds.js — writes synthetic bus events with controlled timestamps under $CORTEXTOS_HOME.
+
+  - id: AC-H22
+    description: No layout shift after hydration (CLS ≤ 0.05)
+    env: local
+    timeout: 300
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      npx lighthouse http://localhost:3100/ --only-categories=performance \
+        --quiet --chrome-flags='--headless' --output=json --output-path=/tmp/h22.json \
+        --extra-headers="{\"Authorization\":\"Bearer $JWT\"}" > /dev/null
+      jq -e '.audits["cumulative-layout-shift"].numericValue <= 0.05' /tmp/h22.json > /dev/null
+    failure_proof: |-
+      If sparklines are injected client-side without reserved space, CLS spikes to 0.2 → jq -e fails.
+
+  - id: AC-H23
+    description: Server cache TTLs honored — gh PR fetched at most 1× per 60s across 5 requests
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /tmp/h23.log 2>&1 &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      for i in 1 2 3 4 5; do
+        curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/ > /dev/null
+      done
+      COUNT=$(grep -c '\[cache-miss\] getRecentPRs' /tmp/h23.log)
+      test "$COUNT" -le 1
+    failure_proof: |-
+      If caching is missing or TTL=0, COUNT=5 → test fails. Codexer must log `[cache-miss] getRecentPRs` on each upstream gh fetch.
+
+  - id: AC-H23b
+    description: Token-usage cache — upstream fetched at most 1× per 60s across 5 requests
+    env: local
+    timeout: 120
+    expects:
+      exit_code: 0
+    command: |
+      cd dashboard && PORT=3100 npm start > /tmp/h23b.log 2>&1 &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      for i in 1 2 3 4 5; do
+        curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/api/home/token-limits > /dev/null
+      done
+      COUNT=$(grep -c '\[cache-miss\] getTokenUsage' /tmp/h23b.log)
+      test "$COUNT" -le 1
+    failure_proof: |-
+      If Codexer ships an uncached call (either to the Admin API or the bus-event scanner) on every request, COUNT=5 → test fails. Codexer must log `[cache-miss] getTokenUsage` on each upstream/disk fetch, with a 60s TTL Map.
+
+  - id: AC-H24
+    description: Staging-equivalent — prod build with REAL CORTEXTOS_HOME serves home in <800ms warm + ≥1 real agent
+    note: Dashboard does not deploy to Railway yet. "Staging-equivalent" = prod build (npm run build && npm start) on Josh's machine with real org state. Closest to deployed conditions short of hosting; upgrade to a real staging AC after Tailscale Funnel exposes localhost.
+    env: staging
+    timeout: 600
+    expects:
+      exit_code: 0
+    command: |
+      # CRITICAL: clear test-only env BEFORE forking npm start. Child inherits at fork time;
+      # unset after spawn has no effect on the running server.
+      unset CORTEXTOS_HOME
+      unset CORTEXTOS_TOKEN_CAP_5H
+      unset CORTEXTOS_TOKEN_CAP_WEEKLY
+      # Hard-assert the server will see real org state, not a tmp dir leaked from a prior AC
+      test -d "$HOME/code/cortextos/orgs/clearworksai/agents" || { echo "real org state missing"; exit 1; }
+      cd dashboard && npm run build > /dev/null
+      PORT=3100 npm start > /dev/null &
+      PID=$!; trap "kill $PID" EXIT; sleep 5
+      # Warm the route
+      curl -sf -o /dev/null -H "Authorization: Bearer $JWT" http://localhost:3100/
+      T=$(curl -sw '%{time_starttransfer}' -o /dev/null -H "Authorization: Bearer $JWT" http://localhost:3100/)
+      awk -v t="$T" 'BEGIN{ if (t+0 > 0.800) exit 1; exit 0 }' || { echo "slow: $T"; exit 1; }
+      curl -sf -H "Authorization: Bearer $JWT" http://localhost:3100/api/home/fleet-pulse \
+        | jq -e 'length >= 1' > /dev/null
+    failure_proof: |-
+      If `unset CORTEXTOS_HOME` ran after npm start &, the spawned Node process would still see the test home — masking real-data bugs. Order matters: unset MUST precede fork. If a real-data path is slow (uncached repeated fs walk of ~/code/cortextos/orgs) or crashes parsing actual current-mission.txt edge cases, T>0.800 OR jq fails.
+
+scope_lock:
+  components_to_build:
+    - HeroStrip (dashboard/src/components/home/hero-strip.tsx)
+    - FleetPulse (dashboard/src/components/home/fleet-pulse.tsx)
+    - ClaudeCodeLauncher (dashboard/src/components/home/claude-code-launcher.tsx)
+    - TokenLimits (dashboard/src/components/home/token-limits.tsx)
+    - MissionFeed (dashboard/src/components/home/mission-feed.tsx)
+    - DecisionsQueue (dashboard/src/components/home/decisions-queue.tsx)
+    - TodayMetrics (dashboard/src/components/home/today-metrics.tsx)
+  api_routes_to_build:
+    - POST /api/home/dispatch
+    - GET /api/home/fleet-pulse
+    - GET /api/home/token-limits
+    - GET /api/home/health (regression-compatible with /api/overview/health)
+  helpers_to_build:
+    - dashboard/src/lib/agents.ts — readAgentMission, getAgentsList (CORTEXTOS_HOME-aware)
+    - dashboard/src/lib/skills.ts — getSkillsList (5-min cache)
+    - dashboard/src/lib/token-usage.ts — bus-event-derived totals (5h/weekly/24h)
+    - dashboard/src/lib/dispatch.ts — agent whitelist + per-JWT-sub 1/sec token bucket
+  fixtures_to_build:
+    - tests/fixtures/seed-fleet-thresholds.js — synthesizes bus events at controlled timestamps
+    - tests/helpers/mint-jwt.ts — mints HS256 JWT for $AUTH_SECRET
+  components_to_retire:
+    - MetricCards (dashboard/src/components/overview/metric-cards.tsx)
+    - LiveActivity (dashboard/src/components/overview/live-activity.tsx)
+    - AgentStatusGrid (dashboard/src/components/overview/agent-status-grid.tsx)
+    - CurrentFocus (dashboard/src/components/overview/current-focus.tsx)
+  count_check: 7 NEW components · 4 RETIRED · 4 new API routes · 4 new helpers · 2 fixtures
+  out_of_scope:
+    - Auth changes
+    - New PAGE routes (only /api/home/* internal routes added)
+    - Migrations
+    - Telegram integration
+    - Mobile app
+    - Railway hosting / Tailscale Funnel (separate follow-up task)

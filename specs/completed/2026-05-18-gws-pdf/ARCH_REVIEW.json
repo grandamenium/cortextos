@@ -1,0 +1,77 @@
+{
+  "verdict": "APPROVE",
+  "findings": [
+    {
+      "severity": "warning",
+      "category": "tenant_assumption",
+      "ac_id": "AC-G10",
+      "message": "AC-G10 greps for the literal 'Clearworks' on page 1, but SPEC.md only commits to 'tenant name' as a cover string. If the test assessment belongs to a different tenant, AC-G10 will false-fail. Acceptable because env requires GWS_ASSESSMENT_ID to be operator-chosen, but consider parameterizing GWS_EXPECTED_TENANT."
+    },
+    {
+      "severity": "warning",
+      "category": "scope_implicit",
+      "ac_id": "AC-G3",
+      "message": "AC-G3 asserts @login_required on the new route. SPEC.md says the route 'mirrors lines 593-621 assessment_report' which implies the decorator, but the decorator is not called out in the Scope section. Codexer should treat the @login_required pairing as binding via this AC."
+    },
+    {
+      "severity": "warning",
+      "category": "state_machine_inversion",
+      "ac_id": null,
+      "message": "Spec is explicitly POST_IMPL_AUDIT — code at 1cf3922 predates this review. Approval here only validates that ACs can catch regressions; it does not retroactively make the build-before-spec dispatch correct. Future changes on this branch must rewind to DRAFT_SPEC per the spec's own state-machine note."
+    }
+  ],
+  "ac_failure_simulation": [
+    {
+      "ac_id": "AC-G1",
+      "would_fail_if": "pyproject.toml pin is removed, downgraded to weasyprint>=60, or rewritten as weasyprint = \"^63\" (TOML key form instead of PEP 508 string) — grep -E exits 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G2",
+      "would_fail_if": "nixpacks.toml omits any of {pango, cairo, gdk-pixbuf, libffi, shared-mime-info} from phases.setup.nixPkgs — tomllib parses, set diff is non-empty, assert raises, python exits non-zero.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G3",
+      "would_fail_if": "Route is registered without @login_required between the decorator and the function, function is renamed, or mimetype is left to Flask default text/html — regex misses or substring not found, assert fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G4",
+      "would_fail_if": "fonts.googleapis.com remains in templates/report.html (first ! grep returns 1 under set -e) OR @font-face declaration count drops below 4 (second test returns 1).",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G5",
+      "would_fail_if": "Any window.print() call or window.addEventListener('load', ...) survives in templates/report.html — grep matches, ! inverts to exit 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G6",
+      "would_fail_if": "Dashboard reverts to /report?print=1 href, or download attribute is hardcoded (e.g., download=\"report.pdf\") instead of templating report_download_name — second grep returns 1 under set -e.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G7",
+      "would_fail_if": "Any of Inter-{400,500,600,700}.woff2 is missing OR a file is an HTML 404 stub under 50KB — stat returns small size, [ -gt 51200 ] fails, script exits 1.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G8",
+      "would_fail_if": "Route 500s, returns text/html, returns a non-%PDF payload, or rendered HTML still references fonts.googleapis.com — curl -fsS fails on 5xx, or one of the chained greps under set -e exits non-zero.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G9",
+      "would_fail_if": "Railway nixpacks build fails because a native lib is missing (status JSON has no SUCCESS/DEPLOYED deployment), or staging URL serves HTML instead of PDF, or rendered staging HTML still has fonts.googleapis.com — assertion or grep fails.",
+      "is_trivial": false
+    },
+    {
+      "ac_id": "AC-G10",
+      "would_fail_if": "PDF renders but pdftotext extracts page 1 missing 'Google Workspace', 'Security Assessment', or 'Clearworks' — caused by font substitution swallowing glyphs, wrong template, or empty data binding.",
+      "is_trivial": false
+    }
+  ],
+  "spec_sha256": "210a3e05d0198232636d71fd700ee84a0e340ddfba1ba0d1d138ee813b6dc502",
+  "reviewed_at": "2026-05-19T00:35:12Z"
+}
