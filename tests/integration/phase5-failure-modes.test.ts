@@ -646,6 +646,10 @@ describe('FM-4: .bak backup/restore — automatic readCrons() fallback', () => {
 
 describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift', () => {
   it('100 overdue crons fire exactly once each on restart; no double-fires', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    // Disable cold-start stagger so all 100 crons land in the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
+
     const agent = 'fm-storm';
     ensureAgentDir(agent);
 
@@ -682,6 +686,7 @@ describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift',
     expect(maxFires).toBe(1);            // no double-fires
 
     scheduler.stop();
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   }, 30_000);
 
   it('catch-up storm logs show "catch-up" for each of the 100 crons', async () => {
@@ -708,7 +713,11 @@ describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift',
   }, 30_000);
 
   it('50 crons with slow PTY (5ms each): tick latency stays under TICK_INTERVAL_MS', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
     // Quantifies the sequential-fire drift concern from architectural finding AF-2.
+    // Disable cold-start stagger so all 50 crons land in the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
+
     const agent = 'fm-slow-pty';
     ensureAgentDir(agent);
 
@@ -731,6 +740,7 @@ describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift',
     expect(callCount).toBe(50);
 
     scheduler.stop();
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   }, 30_000);
 });
 
@@ -1181,6 +1191,10 @@ describe('AF-1: lastGoodSchedule — transient corruption keeps crons firing', (
 
 describe('AF-2: Sequential fire under slow PTY — drift quantification', () => {
   it('10 crons × 10ms PTY delay: all fire within 2 ticks', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    // Disable cold-start stagger so all 10 crons land in the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
+
     const agent = 'af-drift-10';
     ensureAgentDir(agent);
 
@@ -1201,9 +1215,14 @@ describe('AF-2: Sequential fire under slow PTY — drift quantification', () => 
     expect(callCount).toBe(10);
     // 10 × 10ms = 100ms total tick latency — well under 30s TICK_INTERVAL_MS
     scheduler.stop();
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   });
 
   it('50 crons × 10ms PTY delay: all fire, documented as 500ms total tick latency', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    // Disable cold-start stagger so all 50 crons land in the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
+
     const agent = 'af-drift-50';
     ensureAgentDir(agent);
 
@@ -1224,13 +1243,18 @@ describe('AF-2: Sequential fire under slow PTY — drift quantification', () => 
     expect(callCount).toBe(50);
     // 50 × 10ms = 500ms — still well under TICK_INTERVAL_MS (30s)
     scheduler.stop();
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   }, 30_000);
 
   it('100 crons × 10ms PTY delay: 1s tick latency — acceptable, documented scaling limit', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
     // Documented finding: 100 crons × 10ms = 1s tick latency.
     // This is acceptable (30s TICK_INTERVAL_MS has plenty of headroom).
     // Scale limit: ~3000 crons × 10ms = 30s (would fill TICK_INTERVAL_MS).
     // Promise.all parallelization is the path for scale beyond this threshold.
+    // Disable cold-start stagger so all 100 crons land in the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
+
     const agent = 'af-drift-100';
     ensureAgentDir(agent);
 
@@ -1251,6 +1275,7 @@ describe('AF-2: Sequential fire under slow PTY — drift quantification', () => 
 
     expect(callCount).toBe(100);
     scheduler.stop();
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   }, 60_000);
 });
 
@@ -1296,6 +1321,10 @@ describe('FM-6: PTY blocked — retries until accepting, recovery within spec', 
   });
 
   it('PTY permanently blocked — all 4 attempts exhausted; scheduler continues, healthy cron unaffected', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    // Disable cold-start stagger so both overdue crons land in the same tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
+
     const agent = 'fm-pty-dead';
     ensureAgentDir(agent);
 
@@ -1335,5 +1364,6 @@ describe('FM-6: PTY blocked — retries until accepting, recovery within spec', 
     expect(givingUpMsg).toBeDefined();
 
     scheduler.stop();
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   });
 });

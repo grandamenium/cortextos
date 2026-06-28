@@ -574,6 +574,8 @@ describe('Scenario 4: PTY injection failure / retries', () => {
 
 describe('Scenario 5: Concurrent cron fires', () => {
   it('5 crons firing at the same minute all fire and all log entries appear', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agent = 'concurrent-agent';
     ensureAgentDir(agent);
 
@@ -622,6 +624,7 @@ describe('Scenario 5: Concurrent cron fires', () => {
       expect(cron?.last_fired_at, `${name} should have last_fired_at`).toBeDefined();
       expect(cron?.fire_count, `${name} fire_count should be 1`).toBe(1);
     }
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   });
 
   it('concurrent fires at exact same minute via cron expression (*/5 * * * *)', async () => {
