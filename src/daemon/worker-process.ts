@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { mkdirSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import type { CtxEnv, WorkerStatus, WorkerStatusValue } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
 import { injectMessage } from '../pty/inject.js';
@@ -52,6 +52,10 @@ export class WorkerProcess {
       mkdirSync(join(env.ctxRoot, 'inbox', this.name), { recursive: true });
       mkdirSync(join(env.ctxRoot, 'state', this.name), { recursive: true });
       mkdirSync(join(env.ctxRoot, 'logs', this.name), { recursive: true });
+      // Write a marker so the crash-alert hook can identify this as a worker
+      // session and suppress Telegram/bus alerts on normal exit. Workers are
+      // designed to have no Telegram integration (see class doc above).
+      writeFileSync(join(env.ctxRoot, 'state', this.name, '.is-worker'), this.name);
     } catch { /* ignore */ }
 
     const logPath = join(env.ctxRoot, 'logs', this.name, 'stdout.log');

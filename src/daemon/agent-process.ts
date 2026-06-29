@@ -566,8 +566,6 @@ export class AgentProcess {
     return (
       text.includes('overloaded_error') ||
       text.includes('rate_limit_error') ||
-      text.includes('rate limit') ||
-      text.includes('rate-limit') ||
       text.includes('too many requests') ||
       text.includes('quota exceeded') ||
       text.includes('usage limit') ||

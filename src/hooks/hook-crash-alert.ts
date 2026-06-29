@@ -53,7 +53,7 @@ function isQuietHoursLA(now: Date): boolean {
  * signatures. Mirrors OutputBuffer.hasRateLimitSignature so the hook and the
  * daemon use the same detection logic.
  */
-function detectRateLimitInLog(logPath: string): boolean {
+export function detectRateLimitInLog(logPath: string): boolean {
   try {
     const size = statSync(logPath).size;
     const readBytes = Math.min(size, 200 * 1024); // last 200 KB
@@ -63,8 +63,6 @@ function detectRateLimitInLog(logPath: string): boolean {
     return (
       text.includes('overloaded_error') ||
       text.includes('rate_limit_error') ||
-      text.includes('rate limit') ||
-      text.includes('rate-limit') ||
       text.includes('too many requests') ||
       text.includes('quota exceeded') ||
       text.includes('usage limit') ||
@@ -260,6 +258,16 @@ export function classifyFromMarkers(
   return { endType: 'crash', reason: '' };
 }
 
+/**
+ * Determine whether a given state directory belongs to a worker session.
+ * Workers write a `.is-worker` marker in spawn() so the crash-alert hook can
+ * suppress Telegram/bus alerts while still logging to crashes.log for forensics.
+ * Exported for unit testing; not used outside this module in production.
+ */
+export function isWorkerSession(stateDir: string): boolean {
+  return existsSync(join(stateDir, '.is-worker'));
+}
+
 async function main(): Promise<void> {
   const agentName = process.env.CTX_AGENT_NAME;
   const instanceId = process.env.CTX_INSTANCE_ID || 'default';
@@ -273,6 +281,7 @@ async function main(): Promise<void> {
   const ctxRoot = join(homedir(), '.cortextos', instanceId);
   const stateDir = join(ctxRoot, 'state', agentName);
   const logDir = join(ctxRoot, 'logs', agentName);
+  const isWorker = existsSync(join(stateDir, '.is-worker'));
 
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });
@@ -315,11 +324,14 @@ async function main(): Promise<void> {
     }
   }
 
-  // Track crash count (real crashes only).
+  // Track crash count (real crashes only). Workers are excluded — a worker
+  // that self-terminates after completing its task must not inflate the daily
+  // crash count (workers have no Telegram integration by design; see
+  // WorkerProcess class doc in src/daemon/worker-process.ts).
   const today = new Date().toISOString().split('T')[0];
   const countFile = join(stateDir, '.crash_count_today');
   let crashCount = 0;
-  if (endType === 'crash') {
+  if (endType === 'crash' && !isWorker) {
     try {
       const data = readFileSync(countFile, 'utf-8').trim();
       const [date, count] = data.split(':');
@@ -352,12 +364,21 @@ async function main(): Promise<void> {
   // session_id is recorded purely for audit (there is no session_id dedup —
   // an earlier iteration tried that and it was removed). If a duplicate-firing
   // FP ever slips through, two crashes.log lines sharing a session value make
-  // it provable after the fact.
+  // it provable after the fact. Worker exits include worker=1 so they are
+  // distinguishable from real agent crashes in post-incident forensics.
   const timestamp = new Date().toISOString();
-  const logLine = `${timestamp} type=${endType} reason=${reason || 'none'} session=${sessionId || 'unknown'} last_task=${lastTask}\n`;
+  let logLine = `${timestamp} type=${endType} reason=${reason || 'none'} session=${sessionId || 'unknown'} last_task=${lastTask}`;
+  if (isWorker) logLine += ' worker=1';
+  logLine += '\n';
   try {
     appendFileSync(join(logDir, 'crashes.log'), logLine);
   } catch { /* ignore */ }
+
+  // Worker sessions are ephemeral and have no Telegram integration by design
+  // (see WorkerProcess). A worker that self-terminates after completing its
+  // task must not page Josh or bus-alert chief/analyst. Forensics already
+  // logged above.
+  if (isWorker) return;
 
   // Decide whether to actually send to Telegram.
   const now = new Date();
