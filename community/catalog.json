@@ -337,6 +337,18 @@
       "dependencies": [],
       "install_path": "community/skills/voice-agent-factory",
       "submitted_at": "2026-06-06T09:30:00Z"
+    },
+    {
+      "name": "workflows-engineering",
+      "description": "Claude Code Dynamic Workflows skill for designing auditable, observable, repeatable, optimizable agentic loops",
+      "author": "grandamenium",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["claude-code", "workflows", "agentic-loops", "orchestration", "skills"],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/skills/workflows-engineering",
+      "submitted_at": "2026-06-29T17:40:00Z"
     }
   ]
 }
