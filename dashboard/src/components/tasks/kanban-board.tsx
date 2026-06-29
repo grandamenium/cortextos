@@ -39,7 +39,7 @@ function DroppableColumn({ status, tasks, onTaskClick }: DroppableColumnProps) {
           isOver ? 'bg-primary/5 ring-1 ring-inset ring-primary/20' : ''
         }`}
       >
-        <ScrollArea className="h-[calc(100vh-280px)] min-h-[300px]">
+        <ScrollArea className="h-[calc(100vh-340px)] md:h-[calc(100vh-280px)] min-h-[200px]">
           <div className="flex flex-col gap-2 px-0.5 pt-0.5 pb-1">
             {tasks.length === 0 ? (
               <p className="px-2 py-8 text-center text-xs text-muted-foreground">

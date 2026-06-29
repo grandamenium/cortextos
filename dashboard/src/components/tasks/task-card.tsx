@@ -49,11 +49,10 @@ export function TaskCard({ task, onClick, isDragOverlay = false }: TaskCardProps
             <OrgBadge org={task.org} />
           </div>
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            {task.assignee ? (
-              <span className="truncate max-w-[120px]">{task.assignee}</span>
-            ) : (
-              <span className="italic">Unassigned</span>
-            )}
+            <span className="truncate max-w-[140px]">
+              {task.assignee || <span className="italic">Unassigned</span>}
+              {task.project && <span className="ml-1 opacity-60">· {task.project}</span>}
+            </span>
             <TimeAgo date={task.created_at} className="text-xs" />
           </div>
         </div>

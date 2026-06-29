@@ -117,6 +117,19 @@ export default function TasksPage() {
     }
   }
 
+  async function handleFieldUpdate(taskId: string, field: string, value: string) {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [field]: value }),
+      });
+      if (res.ok) fetchTasks();
+    } catch {
+      // Silently fail
+    }
+  }
+
   async function handleDelete(taskId: string) {
     try {
       const res = await fetch(`/api/tasks/${taskId}`, { method: 'DELETE' });
@@ -225,7 +238,12 @@ export default function TasksPage() {
       ) : view === 'gantt' ? (
         <GanttChart tasks={displayTasks} onTaskClick={handleTaskClick} />
       ) : (
-        <TaskListTable tasks={displayTasks} onTaskClick={handleTaskClick} />
+        <TaskListTable
+          tasks={displayTasks}
+          onTaskClick={handleTaskClick}
+          onStatusChange={(taskId, status) => handleStatusChange(taskId, status)}
+          onFieldUpdate={handleFieldUpdate}
+        />
       )}
 
       {/* Task detail sheet */}

@@ -2,9 +2,10 @@ import { NextRequest } from 'next/server';
 import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { getTaskById } from '@/lib/data/tasks';
+import { getTaskById, getTasks } from '@/lib/data/tasks';
 import { getFrameworkRoot, getCTXRoot } from '@/lib/config';
 import { syncAll } from '@/lib/sync';
+import { syncTasksPage, appendTaskAuditLine } from '@/lib/obsidian-sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -134,11 +135,12 @@ export async function PUT(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { title, description, assignee, priority, start_date, due_date } = body as {
+  const { title, description, assignee, priority, project, start_date, due_date } = body as {
     title?: string;
     description?: string;
     assignee?: string;
     priority?: string;
+    project?: string;
     start_date?: string | null;
     due_date?: string | null;
   };
@@ -178,6 +180,7 @@ export async function PUT(
     if (description !== undefined) taskData.description = description;
     if (assignee !== undefined) taskData.assigned_to = assignee;
     if (priority !== undefined) taskData.priority = priority;
+    if (project !== undefined) taskData.project = project;
     if (start_date !== undefined) taskData.start_date = start_date ?? undefined;
     if (due_date !== undefined) taskData.due_date = due_date ?? undefined;
     taskData.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -206,6 +209,19 @@ export async function PUT(
     }
 
     try { syncAll(); } catch { /* best-effort */ }
+
+    // Obsidian sync (Phase 1) — fire and forget, never blocks response
+    try {
+      const changedFields = [title, description, assignee, priority, project, due_date]
+        .map((v, i) => v !== undefined ? ['title','description','assignee','priority','project','due_date'][i] : null)
+        .filter(Boolean).join(', ');
+      const memPath = path.join(getCTXRoot(), 'orgs', task.org || '', '..', '..', 'agents', 'forge', 'memory',
+        `${new Date().toISOString().slice(0,10)}.md`);
+      appendTaskAuditLine(id, taskData.title, changedFields || 'fields', 'updated', memPath);
+      const allTasks = getTasks({});
+      syncTasksPage(allTasks);
+    } catch { /* non-fatal */ }
+
     return Response.json({ success: true });
   } catch (err) {
     console.error('[api/tasks/[id]] PUT error:', err);
@@ -338,6 +354,15 @@ export async function PATCH(
     } catch {
       // Sync is best-effort
     }
+
+    // Obsidian sync (Phase 1) — fire and forget
+    try {
+      const memPath = path.join(getCTXRoot(), 'orgs', task?.org || '', '..', '..', 'agents', 'forge', 'memory',
+        `${new Date().toISOString().slice(0,10)}.md`);
+      appendTaskAuditLine(id, task?.title || id, 'status', status, memPath);
+      const allTasks = getTasks({});
+      syncTasksPage(allTasks);
+    } catch { /* non-fatal */ }
 
     return Response.json({ success: true });
   } catch (err: unknown) {

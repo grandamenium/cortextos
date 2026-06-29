@@ -119,11 +119,24 @@ export function detectDayNightMode(timezone: string): 'day' | 'night' {
 /**
  * Read all agent heartbeats.
  * Scans state/ directory for agent subdirs containing heartbeat.json.
+ * Skips agents explicitly disabled in enabled-agents.json so that retired
+ * agents with stale state dirs do not generate false-positive stale alerts.
  * Matches dashboard heartbeat path: state/{agent}/heartbeat.json
  */
 export function readAllHeartbeats(paths: BusPaths): Heartbeat[] {
   const heartbeats: Heartbeat[] = [];
   const stateDir = join(paths.ctxRoot, 'state');
+
+  // Load enabled-agents.json to filter out disabled/retired agents.
+  // An agent absent from the file is treated as enabled (daemon default-on).
+  let enabledMap: Record<string, { enabled?: boolean }> = {};
+  try {
+    const enabledFile = join(paths.ctxRoot, 'config', 'enabled-agents.json');
+    enabledMap = JSON.parse(readFileSync(enabledFile, 'utf-8'));
+  } catch {
+    // If the file is missing or corrupt, include all agents (safe fallback).
+  }
+
   let agentDirs: string[];
   try {
     agentDirs = readdirSync(stateDir, { withFileTypes: true })
@@ -134,6 +147,10 @@ export function readAllHeartbeats(paths: BusPaths): Heartbeat[] {
   }
 
   for (const agent of agentDirs) {
+    // Skip agents explicitly marked disabled — they are retired, not stale.
+    const entry = enabledMap[agent];
+    if (entry && entry.enabled === false) continue;
+
     const hbPath = join(stateDir, agent, 'heartbeat.json');
     try {
       const content = readFileSync(hbPath, 'utf-8');
