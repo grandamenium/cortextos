@@ -859,11 +859,12 @@ export class AgentProcess {
       // msg1: planned-restart lifecycle notif, hook parity for runtimes without
       // Claude Code hooks. Both codex and opencode were missing this.
       send(this.buildPlannedRestartNotification());
-      // msg2: opencode can't self-send a contextual "back — ..." reply, so the
-      // daemon sends a back-online ping. codex self-sends its own, so skip it.
-      if (this.config.runtime === 'opencode') {
-        send(`Agent ${this.name} is back online (context handoff)`);
-      }
+      // msg2 ("back — ...") is self-sent by the agent via the handoff boot prompt
+      // (agent-process.ts buildStartupPrompt handoffUxOverride) for BOTH codex and
+      // opencode — opencode now reliably honors it. The daemon used to send an
+      // "Agent X is back online (context handoff)" substitute for opencode, but
+      // that produced a redundant 3rd message on top of the self-sent "back —".
+      // Removed: msg1 (daemon) + msg2 (agent self-send) = clean 2-message pattern.
       return;
     }
 
