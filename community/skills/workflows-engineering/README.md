@@ -8,6 +8,7 @@ Use it when you need to turn repeatable agent work into an auditable, observable
 
 - Claude Code Dynamic Workflow mechanics and limits
 - Agentic loop design: trigger, state, planner, worker, verifier, stop rule, and artifact ledger
+- Anthropic's six dynamic-workflow patterns: classify-and-act, fan-out-and-synthesize, adversarial verification, generate-and-filter, tournament, and loop until done
 - Workflow spec templates
 - Maker and checker patterns
 - Use cases for research, content, coding, QA, scraping, and agent operations

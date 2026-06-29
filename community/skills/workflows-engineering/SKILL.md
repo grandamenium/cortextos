@@ -46,6 +46,15 @@ Use a workflow when the task has most of these properties:
 - The output needs durable artifacts, audit trails, or cross-checking.
 - The agentic loop needs explicit state, verifier roles, stop rules, and optimization metrics.
 
+Anthropic's June 2026 dynamic-workflows guidance names six common workflow patterns. Pick one as the primary loop shape, then compose others only where they add real control:
+
+- Classify-and-act: classify the input or output, then route to the right behavior.
+- Fan-out-and-synthesize: shard the work, run isolated agents, then wait at a synthesis barrier.
+- Adversarial verification: pair maker agents with separate verifier agents that test results against a rubric.
+- Generate-and-filter: produce many candidates, dedupe, verify, and keep only the strongest.
+- Tournament: send multiple agents at the same task with different approaches, then judge pairwise or by rubric.
+- Loop until done: repeat passes until a stop condition is met, such as no new findings, no more errors, max iterations, or budget exhausted.
+
 Use a skill when the task is mostly reusable instructions:
 
 - Teach Claude a procedure, style, policy, domain, or checklist.
@@ -122,13 +131,14 @@ When designing a Claude Code workflow as an agentic loop:
 4. Define the plan gate before worker agents act.
 5. Identify independent fan-out units.
 6. Define maker and checker subagent roles with explicit ownership.
-7. Define the stop condition: pass, no progress, max iterations, budget cap, timeout, or human handoff.
-8. Specify durable output paths and the artifact ledger.
-9. Require source/provenance fields in artifacts.
-10. Add a small-slice test mode.
-11. Add failure labels, not silent empty results.
-12. Add final aggregation and skeptical verification.
-13. Define metrics for optimization: pass rate, cost, duration, retry count, verifier failures, and unresolved blockers.
+7. Choose the primary Anthropic pattern: classify-and-act, fan-out-and-synthesize, adversarial verification, generate-and-filter, tournament, or loop until done.
+8. Define the stop condition: pass, no progress, max iterations, budget cap, timeout, or human handoff.
+9. Specify durable output paths and the artifact ledger.
+10. Require source/provenance fields in artifacts.
+11. Add a small-slice test mode.
+12. Add failure labels, not silent empty results.
+13. Add final aggregation and skeptical verification.
+14. Define metrics for optimization: pass rate, cost, duration, retry count, verifier failures, and unresolved blockers.
 
 ## Recommended Workflow Spec Template
 
@@ -199,6 +209,7 @@ When designing a Claude Code workflow as an agentic loop:
 
 - Do not use a workflow just because a task is important. Use it because orchestration should be scripted.
 - Do not ask for a workflow without specifying inputs, outputs, phases, and success criteria.
+- Do not ask for "a workflow" generically when one of the six pattern names would give Claude a sharper harness shape.
 - Do not build a loop without a stop condition.
 - Do not let the maker be the only checker.
 - Do not keep loop state only in the chat.
@@ -238,6 +249,7 @@ Claude Code Workflows run the loop. persistent operating layer operates the loop
 Load only the reference needed for the current request:
 
 - `references/official-feature-surface.md`: feature mechanics, official docs, lifecycle, limits.
+- `references/anthropic-dynamic-workflow-patterns.md`: Anthropic June 2026 article synthesis, six canonical patterns, use cases, prompt nudges, and loop-design implications.
 - `references/implementation-spec-patterns.md`: local spec patterns and workflow design examples.
 - `references/comparison-decision-matrix.md`: deeper comparison across workflows, skills, subagents, MCP, slash commands, hooks, and persistent operating layer.
 - `references/use-cases-patterns.md`: examples for content, research, coding, QA, scraping, and agent operations.
