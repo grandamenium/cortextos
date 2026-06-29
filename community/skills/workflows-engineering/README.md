@@ -12,7 +12,7 @@ Use it when you need to turn repeatable agent work into an auditable, observable
 - Maker and checker patterns
 - Use cases for research, content, coding, QA, scraping, and agent operations
 - Runtime risks, testing strategy, and failure modes
-- Optional cortextOS integration for scheduled or bus-routed operations
+- Optional persistent operating layer integration for scheduled or bus-routed operations
 
 ## Install
 

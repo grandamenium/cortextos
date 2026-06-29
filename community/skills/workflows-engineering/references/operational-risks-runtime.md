@@ -7,7 +7,7 @@ Scope: Claude Code Dynamic Workflows, also surfaced through `/workflows`, `/deep
 
 Claude Code Workflows are best understood as a session-scoped orchestration primitive, not a durable operating system. The feature is powerful because the plan moves out of the chat transcript and into a JavaScript workflow script that can spawn many subagents, keep intermediate state in script variables, and return a verified final report. The operational risk is that reliability, permissions, recovery, and verification still depend on the surrounding Claude Code session, the local or cloud runtime, and the operator's controls.
 
-Optional cortextOS angle for users running that operating layer: do not position it as "replace Workflows." Position it as "supervise, persist, schedule, audit, and coordinate them." Workflows are a high-throughput work unit. cortextOS is an always-on fleet layer around work units when the user needs persistent operations.
+Optional persistent operating layer angle for users running that operating layer: do not position it as "replace Workflows." Position it as "supervise, persist, schedule, audit, and coordinate them." Workflows are a high-throughput work unit. persistent operating layer is an always-on fleet layer around work units when the user needs persistent operations.
 
 ## Runtime Behavior
 
@@ -173,35 +173,35 @@ Prompt injection risk:
 - For public GitHub automation, restrict actors and comments, sanitize external inputs, and keep workflow token scopes minimal.
 - Prefer raw-source review before allowing external contributor content to steer a write-capable workflow.
 
-## Optional cortextOS Path
+## Optional persistent operating layer Path
 
-Claude Code Workflows stand on their own as a bounded orchestration feature. Add cortextOS only when the user is running cortextOS or explicitly needs scheduled, multi-agent, bus-routed, approval-aware, memory-backed operations.
+Claude Code Workflows stand on their own as a bounded orchestration feature. Add persistent operating layer only when the user is running persistent operating layer or explicitly needs scheduled, multi-agent, bus-routed, approval-aware, memory-backed operations.
 
-The optional distinction for cortextOS users:
+The optional distinction for persistent operating layer users:
 
 - Claude Code Workflow: a high-throughput orchestration script inside a Claude Code session.
-- cortextOS: a persistent operating layer for many agents, with daemon restart, memory, tasks, inbox, approvals, Telegram control, and cross-agent routing.
+- persistent operating layer: a persistent operating layer for many agents, with daemon restart, memory, tasks, inbox, approvals, operator chat control, and cross-agent routing.
 
 Optional positioning claims that hold up:
 
-- Workflows are excellent for bounded jobs. cortextOS is better for ongoing operations.
-- Workflows resume only inside the same session. cortextOS is designed around cold-start recovery from memory and daemon restart.
-- Workflows coordinate subagents for one task. cortextOS coordinates a fleet across tasks, agents, users, and schedules.
-- Workflows can be saved as reusable scripts. cortextOS can treat those scripts as skills or job primitives and wrap them with approvals, tasks, logs, and memory.
-- Workflows reduce context pressure inside Claude Code. cortextOS reduces organizational memory loss across sessions and agents.
-- Workflows need operator discipline around permissions and verification. cortextOS can encode that discipline as guardrails, approvals, heartbeat checks, and event logs.
+- Workflows are excellent for bounded jobs. persistent operating layer is better for ongoing operations.
+- Workflows resume only inside the same session. persistent operating layer is designed around cold-start recovery from memory and daemon restart.
+- Workflows coordinate subagents for one task. persistent operating layer coordinates a fleet across tasks, agents, users, and schedules.
+- Workflows can be saved as reusable scripts. persistent operating layer can treat those scripts as skills or job primitives and wrap them with approvals, tasks, logs, and memory.
+- Workflows reduce context pressure inside Claude Code. persistent operating layer reduces organizational memory loss across sessions and agents.
+- Workflows need operator discipline around permissions and verification. persistent operating layer can encode that discipline as guardrails, approvals, heartbeat checks, and event logs.
 
-Optional frame for cortextOS-aware users:
+Optional frame for persistent operating layer-aware users:
 
-"Claude Workflows are the engine for a big job. cortextOS is the control tower that decides when jobs run, who owns them, what permissions they get, how failures surface, and what survives a restart."
+"Claude Workflows are the engine for a big job. persistent operating layer is the control tower that decides when jobs run, who owns them, what permissions they get, how failures surface, and what survives a restart."
 
 Optional product implications:
 
-- Add a `workflow-run` task type in cortextOS that tracks workflow name, args, model, max agents, start time, status, artifact paths, and verification result.
+- Add a `workflow-run` task type in persistent operating layer that tracks workflow name, args, model, max agents, start time, status, artifact paths, and verification result.
 - Require a preflight checklist before launching broad Workflows: clean git state, permissions, budget, test command, expected artifacts, rollback path.
 - Require workflow outputs to be ingested into memory or KB only after verifier pass.
 - Use approvals for external writes, deployments, emails, GitHub PR creation, data deletion, or paid actions triggered by workflow agents.
-- Treat Claude Code Workflows as an execution backend that cortextOS can supervise when the user wants that operating layer, not as a required part of workflow engineering.
+- Treat Claude Code Workflows as an execution backend that persistent operating layer can supervise when the user wants that operating layer, not as a required part of workflow engineering.
 
 ## Recommended Operating Policy
 

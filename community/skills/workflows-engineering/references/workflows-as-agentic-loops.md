@@ -16,14 +16,14 @@ intake -> plan -> shard -> act -> observe -> verify -> decide -> artifact -> lea
 
 The value is not simply "many agents." The value is that the loop can be inspected, saved, rerun, measured, and improved. A good workflow is a reusable operating procedure with evidence and telemetry. A weak workflow is a large prompt that happens to spawn more workers.
 
-Optional cortextOS angle for users running that operating layer:
+Optional persistent operating layer angle for users running that operating layer:
 
 ```text
 Claude Code Dynamic Workflow = high-throughput loop execution
-cortextOS = durable operating layer around the loop
+persistent operating layer = durable operating layer around the loop
 ```
 
-Claude Code can run the loop. cortextOS can make the loop visible, governed, scheduled, logged, memory-backed, approval-aware, and recoverable across restarts when the user needs that operating layer.
+Claude Code can run the loop. persistent operating layer can make the loop visible, governed, scheduled, logged, memory-backed, approval-aware, and recoverable across restarts when the user needs that operating layer.
 
 ## Design Principles
 
@@ -156,7 +156,7 @@ This is especially important for external communications, deployment, publishing
 
 Claude Code Workflow resume is session-scoped. If Claude Code exits during a run, the next session starts the workflow fresh. That is fine for bounded jobs, but not enough for operating-system-grade loops.
 
-If the user is running cortextOS, a production loop can be wrapped by:
+If the user is running persistent operating layer, a production loop can be wrapped by:
 
 - A dashboard-visible task.
 - A run directory.
@@ -178,7 +178,7 @@ Examples:
 
 - User command.
 - Saved workflow slash command.
-- cortextOS cron.
+- persistent operating layer cron.
 - GitHub event.
 - Research request.
 - Daily monitor threshold.
@@ -637,19 +637,19 @@ Key metrics:
 - Stale task count.
 - Missed heartbeat count.
 
-## Optional cortextOS Path
+## Optional persistent operating layer Path
 
-Claude Code Dynamic Workflows can be used without cortextOS. The default skill path should teach workflow engineering: loop design, state, verification, artifacts, stop conditions, and optimization.
+Claude Code Dynamic Workflows can be used without persistent operating layer. The default skill path should teach workflow engineering: loop design, state, verification, artifacts, stop conditions, and optimization.
 
-For users who are running cortextOS, workflows can become a bounded execution unit inside the wider operating layer.
+For users who are running persistent operating layer, workflows can become a bounded execution unit inside the wider operating layer.
 
-Optional cortextOS wrapper pattern:
+Optional persistent operating layer wrapper pattern:
 
 ```text
-cortextOS cron or user request
+persistent operating layer cron or user request
 -> create task
 -> run skill to select or design workflow
--> launch dynamic workflow or cortextOS workflow
+-> launch dynamic workflow or persistent operating layer workflow
 -> collect artifacts
 -> run verifier
 -> log events
@@ -658,7 +658,7 @@ cortextOS cron or user request
 -> update optimization notes
 ```
 
-Optional product implications for cortextOS users:
+Optional product implications for persistent operating layer users:
 
 - Add a `workflow-run` task pattern with workflow name, args, status, artifact path, verification result, and metrics.
 - Require `metrics.json` and `verification.json` for production workflow outputs.
@@ -670,7 +670,7 @@ Optional product implications for cortextOS users:
 
 ## How the Existing Skill Should Change
 
-The `workflows-engineering` skill should make agentic loop design the central operating model. cortextOS should appear only as an optional path for users who need scheduled, multi-agent, bus-routed, approval-aware, memory-backed operations.
+The `workflows-engineering` skill should make agentic loop design the central operating model. persistent operating layer should appear only as an optional path for users who need scheduled, multi-agent, bus-routed, approval-aware, memory-backed operations.
 
 ### Add an "Agentic Loop Design" section near the top
 
@@ -766,14 +766,14 @@ Add these to the existing anti-patterns:
 - Workflow that hides a human approval boundary inside one long run.
 - Workflow that reruns without recording what changed from the previous run.
 
-### Clarify optional cortextOS integration
+### Clarify optional persistent operating layer integration
 
-The cortextOS section should move from mandatory "wrap workflows with tasks" language to optional "run workflows as task backed loops when an operating layer is needed."
+The persistent operating layer section should move from mandatory "wrap workflows with tasks" language to optional "run workflows as task backed loops when an operating layer is needed."
 
 Recommended language:
 
 ```text
-For cortextOS-backed production agent operations, wrap each workflow run in a cortextOS task, log event milestones, write artifacts, require verifier output, then complete or block the task with artifact paths. Use crons to trigger recurring loops, approvals to stop external actions, and memory or KB ingestion only after verification.
+For persistent operating layer-backed production agent operations, wrap each workflow run in a persistent operating layer task, log event milestones, write artifacts, require verifier output, then complete or block the task with artifact paths. Use crons to trigger recurring loops, approvals to stop external actions, and memory or KB ingestion only after verification.
 ```
 
 ### Add a "Skill to Workflow to Loop" migration rule

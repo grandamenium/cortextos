@@ -1,7 +1,7 @@
 # Claude Code Workflows Implementation and Spec Patterns
 
 Date: 2026-06-29
-Scope: implementation research, spec structure, authoring patterns, reusable examples, and gaps for cortextOS Workflows and Claude Code native Workflows.
+Scope: implementation research, spec structure, authoring patterns, reusable examples, and gaps for persistent operating layer Workflows and Claude Code native Workflows.
 
 ## Executive Summary
 
@@ -9,9 +9,9 @@ There are two related systems in the local evidence:
 
 1. Claude Code native Dynamic Workflows. These live under `~/.claude/projects/.../workflows/` and are executed by Claude Code's private workflow runtime. They use JavaScript orchestration files with runtime-provided primitives such as `phase`, `log`, `agent`, `parallel`, and `pipeline`. Agent calls spawn Claude workflow subagents. Scripts can contain inline schemas and large prompt builders. Run records include the script, args, result, logs, phases, per-agent progress, token totals, and tool-call totals.
 
-2. cortextOS Workflows. This is the cortextOS implementation inspired by Claude Code Workflows. It lives in `src/workflows`, uses org-level workflow definition packages under `orgs/<org>/workflows/<name>/`, and maps `agent()` calls onto persistent cortextOS agents through the bus, workflow request envelopes, JSON replies, schema validation, audit packets, and dashboard data.
+2. persistent operating layer Workflows. This is the persistent operating layer implementation inspired by Claude Code Workflows. It lives in `src/workflows`, uses org-level workflow definition packages under `orgs/<org>/workflows/<name>/`, and maps `agent()` calls onto persistent persistent operating layer agents through the bus, workflow request envelopes, JSON replies, schema validation, audit packets, and dashboard data.
 
-The important implementation difference is runtime ownership. Claude native workflows use Claude's own subagent runtime. cortextOS workflows use a safe local JS coordinator, persistent named agents, durable run directories, bus dispatch, and explicit `workflow-reply` records.
+The important implementation difference is runtime ownership. Claude native workflows use Claude's own subagent runtime. persistent operating layer workflows use a safe local JS coordinator, persistent named agents, durable run directories, bus dispatch, and explicit `workflow-reply` records.
 
 The strongest authoring pattern is to treat workflows as reusable orchestration packages, not as long-form instructions. The package should declare phases and agent calls in `workflow.meta.json`, implement deterministic control flow in `workflow.js`, put production output contracts in `schemas/*.schema.json`, and keep prompts self-contained enough that a target agent can complete its call without knowing the whole workflow architecture.
 
@@ -20,7 +20,7 @@ The strongest authoring pattern is to treat workflows as reusable orchestration 
 Example research and workflow docs:
 
 - `docs/research/2026-05-29/claude-workflows-opus-48.md`
-- `docs/content/weekly-script-research-2026-06-22/claude-workflows-cortext-extraction-2026-06-22.md`
+- `docs/content/weekly-script-research-2026-06-22/claude-workflows-workflow-extraction-2026-06-22.md`
 - `docs/workflows/boosend-workflow.md`
 - `docs/workflows/skill-optimizer-implementation-plan.md`
 - `docs/workflows/seedance-optimizer-implementation-plan.md`
@@ -28,9 +28,9 @@ Example research and workflow docs:
 
 Example workflow research and implementation notes:
 
-- `docs/research/cortextos-workflows-design/cortextos-workflows-design-note.md`
+- `docs/research/workflow-runtime-workflows-design/workflow-runtime-workflows-design-note.md`
 - `docs/research/claude-workflows-codex-adapter/research-note.md`
-- `docs/research/cortextos-workflows-mvp/final-mvp-spec-build-plan.md`
+- `docs/research/workflow-runtime-workflows-mvp/final-mvp-spec-build-plan.md`
 - `docs/research/workflows-dogfood-upgrade-plan/workflows-dogfood-upgrade-plan.md`
 - `docs/research/workflows-continuation-upgrade/workflows-continuation-upgrade-implementation.md`
 
@@ -67,7 +67,7 @@ Native Claude Code workflow artifacts:
 
 ## Existing Local Research Position
 
-The prior data-codex brief from 2026-05-29 frames Claude Code Dynamic Workflows as script-owned orchestration:
+The prior research agent brief from 2026-05-29 frames Claude Code Dynamic Workflows as script-owned orchestration:
 
 - Claude writes a JavaScript workflow script.
 - A background runtime executes the script.
@@ -75,13 +75,13 @@ The prior data-codex brief from 2026-05-29 frames Claude Code Dynamic Workflows 
 - Intermediate state lives in script variables rather than the main chat context.
 - The practical value is scale, because many agent calls can be queued and coordinated without flooding the primary conversation.
 
-The 2026-06-19 Stephen design note then maps that methodology into cortextOS:
+The 2026-06-19 Stephen design note then maps that methodology into persistent operating layer:
 
 - Do not monkeypatch Claude Code's private workflow runtime.
-- Build a cortextOS-native runner using a compatible subset of the workflow methodology.
-- Map `agent()` to persistent cortextOS agents.
+- Build a persistent operating layer-native runner using a compatible subset of the workflow methodology.
+- Map `agent()` to persistent persistent operating layer agents.
 - Persist run records, agent calls, logs, schemas, approvals, and outputs.
-- Make workflow execution visible in CLI, Telegram, and dashboard surfaces.
+- Make workflow execution visible in CLI, operator chat, and dashboard surfaces.
 
 The MVP spec locked in several product decisions:
 
@@ -115,8 +115,8 @@ Observed native Claude Code workflow artifacts follow this shape:
 Example inspected:
 
 ```text
-~/.claude/projects/-Users-cortextos-cortextos-orgs-lifeos-agents-data/9b6527e3-0caf-43d6-bc95-3bcdad49ffe8/workflows/scripts/deep-research-wf_c33ae5ab-ad1.js
-~/.claude/projects/-Users-cortextos-cortextos-orgs-lifeos-agents-data/9b6527e3-0caf-43d6-bc95-3bcdad49ffe8/workflows/wf_c33ae5ab-ad1.json
+~/.claude/projects/-Users-workflow-runtime-workflow-runtime-orgs-example-agents-research/9b6527e3-0caf-43d6-bc95-3bcdad49ffe8/workflows/scripts/deep-research-wf_c33ae5ab-ad1.js
+~/.claude/projects/-Users-workflow-runtime-workflow-runtime-orgs-example-agents-research/9b6527e3-0caf-43d6-bc95-3bcdad49ffe8/workflows/wf_c33ae5ab-ad1.json
 ```
 
 The workflow script includes:
@@ -172,9 +172,9 @@ The per-subagent metadata files can be minimal. One inspected `.meta.json` only 
 
 The per-subagent `.jsonl` files contain sidechain messages, tool calls, tool results, structured output calls, model metadata, token usage, timestamps, cwd, session id, git branch, and workflow attribution fields such as `attributionAgent` and `attributionSkill`.
 
-## cortextOS Workflow Definition Structure
+## persistent operating layer Workflow Definition Structure
 
-cortextOS workflow definitions use a package directory:
+persistent operating layer workflow definitions use a package directory:
 
 ```text
 orgs/<org>/workflows/<workflow-name>/
@@ -295,7 +295,7 @@ The safe sandbox rejects workflow source that references:
 
 The design intent is that workflow JS coordinates only. Agents perform all actual reading, writing, shell work, network fetching, tool use, communication, and external side effects under their own normal permissions and guardrails.
 
-cortextOS `agent()` has this shape:
+persistent operating layer `agent()` has this shape:
 
 ```js
 await agent(targetAgent, prompt, {
@@ -314,14 +314,14 @@ This differs from native Claude workflow scripts, where observed calls often use
 await agent(prompt, { label, phase, schema })
 ```
 
-That signature difference matters for importers and reusable examples. Native Claude examples cannot be copied directly into cortextOS workflow definitions without adapting `agent()` calls to include a target agent.
+That signature difference matters for importers and reusable examples. Native Claude examples cannot be copied directly into persistent operating layer workflow definitions without adapting `agent()` calls to include a target agent.
 
 ## Runtime Run Structure
 
-cortextOS workflow runs are stored under the instance state, not inside the source repo:
+persistent operating layer workflow runs are stored under the instance state, not inside the source repo:
 
 ```text
-~/.cortextos/<instance>/orgs/<org>/workflows/runs/<run-id>/
+~/.workflow-runtime/<instance>/orgs/<org>/workflows/runs/<run-id>/
   run.json
   events.jsonl
   args.json
@@ -391,24 +391,24 @@ Events are append-only JSONL records with ids, timestamps, event types, phase, c
 
 ## CLI and Dashboard Surfaces
 
-The CLI surface is implemented under `cortextos bus workflow`:
+The CLI surface is implemented under `workflow-runtime bus workflow`:
 
 ```bash
-cortextos bus workflow validate <name>
-cortextos bus workflow dry-run <name>
-cortextos bus workflow run <name> --args <file> --timeout-ms <ms>
-cortextos bus workflow continue <run-id> --timeout-ms <ms>
-cortextos bus workflow status <run-id>
-cortextos bus workflow list
-cortextos bus workflow open <run-id>
-cortextos bus workflow cancel <run-id> --reason <reason>
+workflow-runtime bus workflow validate <name>
+workflow-runtime bus workflow dry-run <name>
+workflow-runtime bus workflow run <name> --args <file> --timeout-ms <ms>
+workflow-runtime bus workflow continue <run-id> --timeout-ms <ms>
+workflow-runtime bus workflow status <run-id>
+workflow-runtime bus workflow list
+workflow-runtime bus workflow open <run-id>
+workflow-runtime bus workflow cancel <run-id> --reason <reason>
 ```
 
 Agent calls complete through:
 
 ```bash
-cortextos bus workflow-reply <call-id> <json-or-file>
-cortextos bus workflow-reply <call-id> --reject <reason>
+workflow-runtime bus workflow-reply <call-id> <json-or-file>
+workflow-runtime bus workflow-reply <call-id> --reject <reason>
 ```
 
 By default, `workflow-reply` tries to continue the owning workflow after accepting a successful reply. `--no-continue` disables that auto-continue behavior.
@@ -457,7 +457,7 @@ retry_count: <count>
 
 <author prompt>
 
-Reply using: cortextos bus workflow-reply <call-id> <absolute-result-json-path>
+Reply using: workflow-runtime bus workflow-reply <call-id> <absolute-result-json-path>
 ```
 
 Allowed actions are derived from side effects:
@@ -484,7 +484,7 @@ The local validator supports a useful subset:
 - object `properties`
 - array `items`
 
-It does not fully enforce every JSON Schema feature. For example, source inspection shows no enforcement for `minItems`, `maxItems`, or `additionalProperties`. Native Claude workflow scripts often use inline schemas with those constraints, but cortextOS file schemas should not rely on unsupported constraints for correctness.
+It does not fully enforce every JSON Schema feature. For example, source inspection shows no enforcement for `minItems`, `maxItems`, or `additionalProperties`. Native Claude workflow scripts often use inline schemas with those constraints, but persistent operating layer file schemas should not rely on unsupported constraints for correctness.
 
 Practical authoring guidance:
 
@@ -512,7 +512,7 @@ Pattern:
 - No side effects.
 - Good starter for read-only artifact review.
 
-Useful for data-codex when a source, report, brief, or scraped artifact needs a single independent review pass.
+Useful for research agent when a source, report, brief, or scraped artifact needs a single independent review pass.
 
 ### `pr-review-iteration`
 
@@ -565,10 +565,10 @@ orgs/example/workflows/pr-review-iteration-dogfood/
 
 Pattern:
 
-- Claude-side reviewer via `skoolio`.
+- Claude-side reviewer via `reviewer-agent`.
 - Codex-side synthesis via `stephen`.
 - Read-only artifact review.
-- No repo modification, deploy, merge, Telegram, Supabase, or external systems.
+- No repo modification, deploy, merge, operator chat, Supabase, or external systems.
 - Good evidence of cross-runtime workflow dispatch.
 
 This is the best local example of using a workflow as an audit-friendly dogfood harness.
@@ -605,17 +605,17 @@ Pattern:
 - Run 3-vote adversarial verification.
 - Synthesize a final report.
 
-This is a strong methodology reference for data-codex research workflows, but it is not directly portable to cortextOS as-is. The native script uses Claude's `agent(prompt, options)` signature, inline schemas, and a pipeline form that differs from the current cortextOS runner.
+This is a strong methodology reference for research agent research workflows, but it is not directly portable to persistent operating layer as-is. The native script uses Claude's `agent(prompt, options)` signature, inline schemas, and a pipeline form that differs from the current persistent operating layer runner.
 
-## Data-codex Workflow Candidates From Local Patterns
+## Research agent Workflow Candidates From Local Patterns
 
-The 2026-06-22 data-codex extraction doc identified three strong workflow candidates:
+The 2026-06-22 research agent extraction doc identified three strong workflow candidates:
 
 1. URL-to-briefing workflow.
 2. Daily signal triage workflow.
 3. Viral tool claim evaluator workflow.
 
-These map cleanly onto cortextOS Workflows:
+These map cleanly onto persistent operating layer Workflows:
 
 ### URL-to-briefing
 
@@ -631,7 +631,7 @@ Likely calls:
 
 - `source-capture` to a scraping-capable data agent.
 - `claim-extraction` to a research agent.
-- `brief-synthesis` to data-codex or nick-facing writer.
+- `brief-synthesis` to a research agent or content-facing writer.
 
 Output schemas:
 
@@ -713,7 +713,7 @@ Use labels like:
 - `fix-pass`
 - `final-synthesis`
 
-Avoid labels generated from long source titles, long claims, or volatile paths. Native Claude examples can use dynamic labels freely, but cortextOS continuation and stored-call replay are easier to reason about when labels are stable.
+Avoid labels generated from long source titles, long claims, or volatile paths. Native Claude examples can use dynamic labels freely, but persistent operating layer continuation and stored-call replay are easier to reason about when labels are stable.
 
 ### Make Agent Prompts Stand Alone
 
@@ -774,21 +774,21 @@ The native `deep-research` script is valuable because it shows effective researc
 - Synthesize only after verified evidence is assembled.
 - Preserve refuted claims for transparency.
 
-For cortextOS, reuse the methodology but adapt the mechanics:
+For persistent operating layer, reuse the methodology but adapt the mechanics:
 
 - Put schemas in files, not inline JS objects.
 - Add explicit target agents to `agent()` calls.
-- Use the current cortextOS `parallel()` signature.
-- Avoid native Claude `pipeline(items, stage1, stage2)` unless the cortextOS runner is extended to support it.
+- Use the current persistent operating layer `parallel()` signature.
+- Avoid native Claude `pipeline(items, stage1, stage2)` unless the persistent operating layer runner is extended to support it.
 - Use stable labels and metadata calls for dry-run visibility.
 
 ## Gaps and Risks
 
-### Native Claude and cortextOS Primitive Mismatch
+### Native Claude and persistent operating layer Primitive Mismatch
 
-Native Claude examples use `agent(prompt, options)`. cortextOS uses `agent(target, prompt, options)`.
+Native Claude examples use `agent(prompt, options)`. persistent operating layer uses `agent(target, prompt, options)`.
 
-Native Claude examples can use `pipeline(items, stage1, stage2, ...)`. The current cortextOS runner implements `pipeline(items)` where `items` is an array of thunk functions. The authoring skill says `pipeline([fn, fn])`, which matches the current source more closely than the native `deep-research` script.
+Native Claude examples can use `pipeline(items, stage1, stage2, ...)`. The current persistent operating layer runner implements `pipeline(items)` where `items` is an array of thunk functions. The authoring skill says `pipeline([fn, fn])`, which matches the current source more closely than the native `deep-research` script.
 
 This mismatch blocks direct import of native Claude workflows.
 
@@ -842,12 +842,12 @@ Dashboard surfaces list definitions, runs, events, calls, audits, and details. T
 
 The roadmap mentions a Claude workflow importer, but source inspection did not find one. Any native Claude workflow reuse currently requires manual translation.
 
-## Recommended Spec Pattern for Future data-codex Workflows
+## Recommended Spec Pattern for Future research agent Workflows
 
 Use this package shape:
 
 ```text
-orgs/lifeos/workflows/<workflow-name>/
+orgs/example-org/workflows/<workflow-name>/
   workflow.js
   workflow.meta.json
   schemas/
@@ -879,7 +879,7 @@ Use this metadata pattern:
   "calls": [
     {
       "label": "source-capture",
-      "target": "data-codex",
+      "target": "research agent",
       "phase": "Capture",
       "schema": "schemas/capture-result.schema.json",
       "sideEffects": "none",
@@ -889,7 +889,7 @@ Use this metadata pattern:
     },
     {
       "label": "claim-extraction",
-      "target": "data-codex",
+      "target": "research agent",
       "phase": "Extract",
       "schema": "schemas/extraction-result.schema.json",
       "sideEffects": "none",
@@ -899,7 +899,7 @@ Use this metadata pattern:
     },
     {
       "label": "final-brief",
-      "target": "data-codex",
+      "target": "research agent",
       "phase": "Synthesis",
       "schema": "schemas/final-result.schema.json",
       "sideEffects": "none",
@@ -921,7 +921,7 @@ const url = args.url
 const requestedBy = args.requestedBy ?? 'operator'
 
 phase('Capture', 'Fetch or scrape the source')
-const capture = await agent('data-codex', `Capture this source for briefing.
+const capture = await agent('research agent', `Capture this source for briefing.
 
 URL: ${url}
 Requested by: ${requestedBy}
@@ -938,7 +938,7 @@ Rules:
 })
 
 phase('Extract', 'Extract claims and content angles')
-const extraction = await agent('data-codex', `Extract reusable claims and angles from the captured source.
+const extraction = await agent('research agent', `Extract reusable claims and angles from the captured source.
 
 Capture result:
 ${JSON.stringify(capture.data ?? capture, null, 2)}
@@ -951,7 +951,7 @@ Return falsifiable claims, caveats, source-quality notes, and content angles.`, 
 })
 
 phase('Synthesis', 'Write the final briefing')
-const final = await agent('data-codex', `Create the final source-backed briefing.
+const final = await agent('research agent', `Create the final source-backed briefing.
 
 Capture:
 ${JSON.stringify(capture.data ?? capture, null, 2)}
@@ -990,14 +990,14 @@ return {
 - Parallel calls are independent.
 - Prior result JSON is passed into downstream prompts when needed.
 - Output schemas use only locally enforced JSON Schema features.
-- `cortextos bus workflow validate <name>` passes.
-- `cortextos bus workflow dry-run <name>` is reviewed before running.
+- `workflow-runtime bus workflow validate <name>` passes.
+- `workflow-runtime bus workflow dry-run <name>` is reviewed before running.
 - The workflow has a clear operator-facing success, blocked, and failed state.
 
 ## Bottom Line
 
 Claude Code native Workflows provide the methodology: script-owned orchestration, structured subagent calls, fan-out, pipeline stages, verification loops, and compact final synthesis.
 
-cortextOS Workflows provide the local production path: org-level reusable workflow packages, safe JS coordination, persistent agent dispatch, workflow request envelopes, JSON schema replies, durable run records, audit packets, transcript capture, and dashboard visibility.
+persistent operating layer Workflows provide the local production path: org-level reusable workflow packages, safe JS coordination, persistent agent dispatch, workflow request envelopes, JSON schema replies, durable run records, audit packets, transcript capture, and dashboard visibility.
 
-For data-codex, the practical next step is not to import native Claude scripts wholesale. It is to translate the best native patterns into cortextOS packages using the local `workflow.meta.json` plus `workflow.js` plus `schemas/` structure, starting with read-only workflows such as URL-to-briefing, daily signal triage, and viral tool claim evaluator.
+For research agent, the practical next step is not to import native Claude scripts wholesale. It is to translate the best native patterns into persistent operating layer packages using the local `workflow.meta.json` plus `workflow.js` plus `schemas/` structure, starting with read-only workflows such as URL-to-briefing, daily signal triage, and viral tool claim evaluator.

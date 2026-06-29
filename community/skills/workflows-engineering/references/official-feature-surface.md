@@ -2,7 +2,7 @@
 
 Date: 2026-06-29
 
-Scope: current official and primary-source terminology for Claude Code "workflows", with boundaries against adjacent automation features. This is written for data-codex research use, not as implementation guidance for a specific repo.
+Scope: current official and primary-source terminology for Claude Code "workflows", with boundaries against adjacent automation features. This is written for research agent research use, not as implementation guidance for a specific repo.
 
 ## Executive summary
 
@@ -19,7 +19,7 @@ Official docs use "workflow" in several different ways, so terminology disciplin
 - "Hooks" are lifecycle-triggered commands, HTTP calls, LLM prompts, or subagents. They enforce deterministic or event-driven behavior around a session, not scripted multi-agent orchestration.
 - "Agent teams" are independent Claude Code sessions coordinated by a lead session. They are experimental and disabled by default. They are adjacent to workflows because both support parallel work, but workflows put the plan in a script.
 
-For data-codex, use "dynamic workflow" when referring to Claude Code's scripted multi-agent orchestration feature. Use "routine" for Anthropic-managed, triggerable cloud automations. Use "scheduled task" or `/loop` for scheduling. Use "workflow" alone only when the context clearly means the dynamic workflow runtime or when quoting official wording.
+For research agent, use "dynamic workflow" when referring to Claude Code's scripted multi-agent orchestration feature. Use "routine" for Anthropic-managed, triggerable cloud automations. Use "scheduled task" or `/loop` for scheduling. Use "workflow" alone only when the context clearly means the dynamic workflow runtime or when quoting official wording.
 
 ## Primary source set
 
@@ -139,7 +139,7 @@ Inputs:
 - Claude passes structured data where possible, so the script can use array and object methods directly.
 - If omitted, `args` is `undefined`.
 
-## Exact official terms and recommended data-codex usage
+## Exact official terms and recommended research agent usage
 
 Use these terms precisely:
 
@@ -170,7 +170,7 @@ Avoid these terms unless quoting:
 
 "Common workflows" are official docs recipes for everyday tasks: exploring codebases, fixing bugs, refactoring, testing, creating pull requests, documentation, working with images, references, scheduling, resuming conversations, worktrees, planning before editing, delegating research to subagents, and piping Claude into scripts.
 
-Boundary: these are usage patterns, not the dynamic workflow runtime. They are still "workflows" in ordinary documentation language, but data-codex should not treat them as a first-class workflow object.
+Boundary: these are usage patterns, not the dynamic workflow runtime. They are still "workflows" in ordinary documentation language, but research agent should not treat them as a first-class workflow object.
 
 ### Skills
 
@@ -377,7 +377,7 @@ Managed Code Review limitations:
 - Check run conclusion is neutral by default, so teams must parse check output themselves if they want gating.
 - Pricing is usage-based and can average $15-25 per review, scaling with PR size and complexity.
 
-## Implications for data-codex naming and modeling
+## Implications for research agent naming and modeling
 
 Recommended internal ontology:
 
@@ -424,4 +424,4 @@ The safest official framing is:
 
 Dynamic workflows are Claude Code's scripted multi-subagent orchestration feature. They are best understood as a background runtime for JavaScript plans written by Claude, with monitoring through `/workflows`, optional saving as slash commands, and strict limits around user input, tool access, concurrency, total agents, and session-scoped resume.
 
-Routines, scheduled tasks, hooks, skills, GitHub Actions, Code Review, subagents, and agent teams all sit nearby, but each has a separate official meaning. For data-codex, model them as adjacent automation primitives rather than collapsing them into a single "workflow" bucket.
+Routines, scheduled tasks, hooks, skills, GitHub Actions, Code Review, subagents, and agent teams all sit nearby, but each has a separate official meaning. For research agent, model them as adjacent automation primitives rather than collapsing them into a single "workflow" bucket.

@@ -540,9 +540,9 @@ Operating model:
 - Notify on completion or blockage.
 - Require human approval before external side effects.
 
-Business Insider reported Boris Cherny describing "five to 10 sessions" and "a few thousand" agents doing deeper overnight work, with reliance on `/loops` and Routines for recurring automation. Treat this as a directional signal: serious users are moving from chat to always-on delegation.
+Business Insider reported an Anthropic engineer describing "five to 10 sessions" and "a few thousand" agents doing deeper overnight work, with reliance on `/loops` and Routines for recurring automation. Treat this as a directional signal: serious users are moving from chat to always-on delegation.
 
-Source: [Business Insider coverage](https://www.businessinsider.com/anthropic-engineer-claude-boris-cherny-ai-agent-use-overnight-2026-5).
+Source: Business Insider coverage of overnight multi-agent operation patterns.
 
 ### Pattern B: Queue Worker With Checkpoints
 
@@ -808,5 +808,5 @@ If the same orchestration will run again, save it as a workflow command. If only
 - [Awesome Claude Code Workflows](https://github.com/ithiria894/awesome-claude-code-workflows): community signal for workflow categories such as virtual engineering teams, plan-build-review pipelines, research, browser testing, marketing/content, autonomous loops, and dashboards.
 - [DEV Community workflow best practices](https://dev.to/galian/claude-code-workflow-best-practices-that-ship-code-na): practitioner framing around CLAUDE.md, plan mode, subagents, worktrees, hooks, and verification loops.
 - [InfoQ coverage](https://www.infoq.com/news/2026/06/dynamic-workflows-claude-code/): secondary source for dynamic workflows as parallel agent coordination for bug hunts, migrations, audits, performance review, and architecture analysis.
-- [Business Insider coverage of Boris Cherny workflow](https://www.businessinsider.com/anthropic-engineer-claude-boris-cherny-ai-agent-use-overnight-2026-5): secondary source for overnight multi-agent operation pattern.
-- Local prior research: `docs/research/2026-05-29/claude-workflows-opus-48.md`, `docs/research/boris-cherny-claude-code-tips-deep-read-2026-05-04.md`, and `docs/research/claude-code-worktrees-2026-04-19.md`.
+- Business Insider coverage of an Anthropic engineer's workflow: secondary source for overnight multi-agent operation patterns.
+- Prior local notes on dynamic workflows and worktrees can help seed an internal implementation plan, but should be replaced with public citations before distribution.

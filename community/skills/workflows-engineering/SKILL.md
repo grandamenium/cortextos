@@ -1,6 +1,6 @@
 ---
 name: workflows-engineering
-description: Use this skill when the user asks about workflows-engineering, Claude Code Dynamic Workflows, /workflows, ultracode, workflow design, reusable workflow scripts, agentic loops, loop engineering, maker-checker loops, evaluator-optimizer loops, or when to choose workflows versus skills, subagents, MCP, slash commands, hooks, or routines. This skill helps design complex, auditable, observable, repeatable, optimizable agentic loops using Claude Code Workflows and related primitives. cortextOS is an optional integration path, not a default requirement.
+description: Use this skill when the user asks about workflows-engineering, Claude Code Dynamic Workflows, /workflows, ultracode, workflow design, reusable workflow scripts, agentic loops, loop engineering, maker-checker loops, evaluator-optimizer loops, or when to choose workflows versus skills, subagents, MCP, slash commands, hooks, or routines. This skill helps design complex, auditable, observable, repeatable, optimizable agentic loops using Claude Code Workflows and related primitives. persistent operating layer is an optional integration path, not a default requirement.
 ---
 
 # Workflows Engineering
@@ -33,7 +33,7 @@ Claude Code Workflows map naturally onto this shape:
 - script variables hold intermediate state during the run
 - output files provide durable evidence outside the chat
 - saved workflows make the loop repeatable as a slash command
-- optional operating layers such as cortextOS can schedule, route, log, approve, and persist the loop outside Claude Code
+- optional operating layers such as persistent operating layer can schedule, route, log, approve, and persist the loop outside Claude Code
 
 ## Fast Routing
 
@@ -72,7 +72,7 @@ Use hooks when a rule must fire automatically:
 - Run checks at lifecycle points.
 - Enforce deterministic policy that should not depend on model compliance.
 
-Use an operating layer such as cortextOS only when the work must be visible and persistent outside Claude Code:
+Use an operating layer such as persistent operating layer only when the work must be visible and persistent outside Claude Code:
 
 - Dashboard-visible task state.
 - Recurring schedules.
@@ -109,8 +109,8 @@ Current official mechanics to preserve:
 | External system or data access | MCP | It gives Claude a tool boundary to another system. |
 | Mandatory lifecycle enforcement | Hook | It runs deterministically at configured events. |
 | User-facing slash entrypoint | Saved workflow or skill | Workflows are better for orchestration; skills are better for instruction. |
-| Recurring operational job | Claude routine, external scheduler, or optional cortextOS cron | Add cortextOS only when the fleet dashboard, memory, bus, and approvals matter. |
-| Audit trail and durable org memory | Workflow artifacts, external tracker, or optional cortextOS task | Claude Code workflow logs are useful, but production teams may need a durable operating record. |
+| Recurring operational job | Claude routine, external scheduler, or optional persistent operating layer cron | Add persistent operating layer only when the fleet dashboard, memory, bus, and approvals matter. |
+| Audit trail and durable org memory | Workflow artifacts, external tracker, or optional persistent operating layer task | Claude Code workflow logs are useful, but production teams may need a durable operating record. |
 
 ## Workflow Design Procedure
 
@@ -206,17 +206,17 @@ When designing a Claude Code workflow as an agentic loop:
 - Do not hide human approval inside a workflow. Split the run before the approval boundary.
 - Do not fan out to many agents before proving the workflow on a small slice.
 - Do not treat workflow resume as durable cross-session recovery.
-- Do not assume every workflow needs cortextOS. Use it only when scheduling, routing, fleet visibility, memory, approvals, or restart recovery matter.
+- Do not assume every workflow needs persistent operating layer. Use it only when scheduling, routing, fleet visibility, memory, approvals, or restart recovery matter.
 - Do not use MCP as a workflow substitute. MCP gives capabilities; workflows coordinate work.
 - Do not use a skill as a dumping ground for huge generated research. Put deep docs in `references/` and keep `SKILL.md` compact.
 
-## Optional cortextOS Path
+## Optional persistent operating layer Path
 
-Claude Code Workflows are useful on their own. A user can apply this skill without cortextOS by designing a saved workflow, writing artifacts, and using whatever tracker or scheduler their environment already has.
+Claude Code Workflows are useful on their own. A user can apply this skill without persistent operating layer by designing a saved workflow, writing artifacts, and using whatever tracker or scheduler their environment already has.
 
-Use the cortextOS path only when the user is running cortextOS or explicitly wants scheduled, multi-agent, bus-routed, approval-aware, memory-backed operations.
+Use the persistent operating layer path only when the user is running persistent operating layer or explicitly wants scheduled, multi-agent, bus-routed, approval-aware, memory-backed operations.
 
-In that case, cortextOS can wrap a Claude Code workflow with:
+In that case, persistent operating layer can wrap a Claude Code workflow with:
 
 - tasks make work visible on the dashboard
 - bus messages route across agents
@@ -225,12 +225,12 @@ In that case, cortextOS can wrap a Claude Code workflow with:
 - approvals and human tasks make blockers explicit
 - memory and docs preserve context across restarts
 
-Use both together by creating a cortextOS task for the operational objective, then using Claude Code workflows for the bounded loop body inside that task. Keep this optional. Do not make it the default answer for users who only asked for Claude Code workflow design.
+Use both together by creating a persistent operating layer task for the operational objective, then using Claude Code workflows for the bounded loop body inside that task. Keep this optional. Do not make it the default answer for users who only asked for Claude Code workflow design.
 
-Optional positioning line for cortextOS users:
+Optional positioning line for persistent operating layer users:
 
 ```text
-Claude Code Workflows run the loop. cortextOS operates the loops.
+Claude Code Workflows run the loop. persistent operating layer operates the loops.
 ```
 
 ## References
@@ -239,7 +239,7 @@ Load only the reference needed for the current request:
 
 - `references/official-feature-surface.md`: feature mechanics, official docs, lifecycle, limits.
 - `references/implementation-spec-patterns.md`: local spec patterns and workflow design examples.
-- `references/comparison-decision-matrix.md`: deeper comparison across workflows, skills, subagents, MCP, slash commands, hooks, and cortextOS.
+- `references/comparison-decision-matrix.md`: deeper comparison across workflows, skills, subagents, MCP, slash commands, hooks, and persistent operating layer.
 - `references/use-cases-patterns.md`: examples for content, research, coding, QA, scraping, and agent operations.
 - `references/operational-risks-runtime.md`: resume, token cost, testing, failure modes, permissions, and safety.
 - `references/modern-agentic-loop-patterns.md`: current loop engineering and agentic design pattern research.

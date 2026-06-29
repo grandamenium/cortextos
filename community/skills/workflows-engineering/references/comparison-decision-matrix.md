@@ -1,4 +1,4 @@
-# Claude Code Workflows vs Skills vs Subagents vs MCP vs Slash Commands vs cortextOS Crons/Tasks
+# Claude Code Workflows vs Skills vs Subagents vs MCP vs Slash Commands vs persistent operating layer Crons/Tasks
 
 Date: 2026-06-29
 
@@ -11,12 +11,12 @@ Use the smallest primitive that owns the right part of the system:
 - Use a subagent when the work needs an isolated worker role, separate context, constrained tools, or a different model.
 - Use a Claude Code dynamic workflow when the orchestration itself should live in rerunnable code and can fan out to many subagents.
 - Use MCP when Claude needs live access to an external tool, database, API, resource, connector, or event channel.
-- Use a cortextOS cron when the work must run unattended on this daemon across restarts.
-- Use a cortextOS task when the work needs dashboard visibility, status, ownership, blocking, or completion accounting.
+- Use a persistent operating layer cron when the work must run unattended on this daemon across restarts.
+- Use a persistent operating layer task when the work needs dashboard visibility, status, ownership, blocking, or completion accounting.
 
-Most durable automations combine several primitives. For users running cortextOS, a durable operating pattern is:
+Most durable automations combine several primitives. For users running persistent operating layer, a durable operating pattern is:
 
-`cortextOS cron -> tracked cortextOS task -> skill or workflow -> subagents as needed -> MCP/CLI tools for external systems -> task completion/event log`
+`persistent operating layer cron -> tracked persistent operating layer task -> skill or workflow -> subagents as needed -> MCP/CLI tools for external systems -> task completion/event log`
 
 ## Comparison Matrix
 
@@ -27,8 +27,8 @@ Most durable automations combine several primitives. For users running cortextOS
 | Subagent | Isolated worker role | Claude delegates, user asks to use an agent, skill uses `context: fork`, or workflow spawns workers | Claude decides turn by turn inside a separate context window | Result returns to caller; custom definitions can constrain tools, model, permissions, memory, worktree isolation | Read-only exploration, code review, security review, independent implementation unit, evaluator role | Coordinating many peers, tasks requiring worker-to-worker discussion, or tightly coupled same-file changes |
 | MCP | Tool/data/protocol integration | Claude uses exposed MCP tools/resources/prompts; user can manage with `/mcp` or `claude mcp` | External server owns tool semantics; Claude decides when to call tools | Server connection state in Claude Code; external system remains source of truth | Databases, SaaS apps, issue trackers, Figma, Slack, monitoring, resources, push channels | Encoding agent procedure, replacing skills, connecting untrusted prompt-injectable sources without guardrails |
 | Slash command | Explicit session control or shortcut | Human types `/command` at the start of a message | Depends on command type: built-in CLI logic, bundled skill, bundled workflow, MCP prompt, or custom skill-backed command | Session-local UX; command registry shown by `/` | Fast manual invocation, setup, context management, skill/workflow entrypoint, debug actions | Unattended scheduling, durable cross-session automation, hidden behavior the user did not ask to run |
-| cortextOS cron | Persistent unattended scheduling in the daemon | Daemon injects `[CRON FIRED ...] name: prompt` | Cron prompt plus the agent handling it | Registered in daemon cron state; fires across restarts; dashboard test-fire; must close loop with `update-cron-fire` | Heartbeats, recurring monitors, daily digests, scheduled research, periodic pipeline runs | Session-local `/loop` for persistent work, untracked tasks, one-shot jobs without self-removal |
-| cortextOS task | Work tracking and coordination | Agent creates or updates through `cortextos bus` | Human or assigned agent owns execution; task record owns status | Dashboard-visible status: pending, in_progress, blocked, completed; supports assignee, priority, project | Any meaningful deliverable, blockers, human dependencies, approvals, cross-agent coordination | Replacing a procedure, storing long instructions, running work by itself |
+| persistent operating layer cron | Persistent unattended scheduling in the daemon | Daemon injects `[CRON FIRED ...] name: prompt` | Cron prompt plus the agent handling it | Registered in daemon cron state; fires across restarts; dashboard test-fire; must close loop with `update-cron-fire` | Heartbeats, recurring monitors, daily digests, scheduled research, periodic pipeline runs | Session-local `/loop` for persistent work, untracked tasks, one-shot jobs without self-removal |
+| persistent operating layer task | Work tracking and coordination | Agent creates or updates through `workflow-runtime bus` | Human or assigned agent owns execution; task record owns status | Dashboard-visible status: pending, in_progress, blocked, completed; supports assignee, priority, project | Any meaningful deliverable, blockers, human dependencies, approvals, cross-agent coordination | Replacing a procedure, storing long instructions, running work by itself |
 
 ## Key Distinctions
 
@@ -79,7 +79,7 @@ Decision rule:
 - Use a subagent for one focused worker with a clear role.
 - Use a few subagents when the main agent can coordinate them conversationally.
 - Use a workflow when there are dozens to hundreds of agents, structured phases, retry/cross-check logic, or reusable fan-out.
-- Use agent teams only when peer agents must communicate with one another. For this document, agent teams are adjacent to subagents and workflows, not a replacement for cortextOS fleet coordination.
+- Use agent teams only when peer agents must communicate with one another. For this document, agent teams are adjacent to subagents and workflows, not a replacement for persistent operating layer fleet coordination.
 
 ### Subagent vs Skill
 
@@ -91,20 +91,20 @@ Decision rule:
 - Use a subagent for isolation, separate context, different tool access, a different model, a reviewer/evaluator role, or background work.
 - Use both when a reusable procedure should run isolated from the main conversation.
 
-### Slash Command vs cortextOS Cron
+### Slash Command vs persistent operating layer Cron
 
-A slash command is an in-session user interface. A cortextOS cron is daemon-owned scheduling. The local cron-management skill says daemon crons are stored in the agent's state directory, survive restarts, and should be managed with `cortextos bus add-cron`, `update-cron`, `remove-cron`, and `list-crons`. Session-local schedulers die when the process dies.
+A slash command is an in-session user interface. A persistent operating layer cron is daemon-owned scheduling. The local cron-management skill says daemon crons are stored in the agent's state directory, survive restarts, and should be managed with `workflow-runtime bus add-cron`, `update-cron`, `remove-cron`, and `list-crons`. Session-local schedulers die when the process dies.
 
 Decision rule:
 
 - Use a slash command for "run this now".
-- Use a cortextOS cron for "run this later or repeatedly even if I am away".
+- Use a persistent operating layer cron for "run this later or repeatedly even if I am away".
 - If a cron prompt becomes long or fragile, move the procedure into a skill or script and let the cron invoke that stable entrypoint.
-- Always close a recurring cron fire with `cortextos bus update-cron-fire <name> --interval <interval>` when the local cron protocol requires it.
+- Always close a recurring cron fire with `workflow-runtime bus update-cron-fire <name> --interval <interval>` when the local cron protocol requires it.
 
-### cortextOS Task vs Everything Else
+### persistent operating layer Task vs Everything Else
 
-A cortextOS task is not an execution primitive. It is the coordination and accountability record. The local task skill says every meaningful deliverable should have a task so the dashboard can show status, blockers, priority, and completion.
+A persistent operating layer task is not an execution primitive. It is the coordination and accountability record. The local task skill says every meaningful deliverable should have a task so the dashboard can show status, blockers, priority, and completion.
 
 Decision rule:
 
@@ -167,16 +167,16 @@ MCP is infrastructure. Keep business rules, editorial standards, and workflow po
 
 Slash commands should be obvious, explicit, and low-surprise. If the user would be surprised that it ran automatically, it should not be model-invoked.
 
-### Use cortextOS crons when:
+### Use persistent operating layer crons when:
 
 - The work must run on a schedule from the daemon.
 - It must survive hard restarts, context compaction, and daemon restarts.
 - The workflow is operational: heartbeat, digest, monitor, scrape, report, recurring cleanup, or once-at-a-time reminder.
 - The prompt can be safely injected later and treated like a user request.
 
-For this data-codex agent, current cron patterns include heartbeat, GitHub trending feed, research digest, YouTube monitoring, short-form monitoring, weekly trends, experiment evaluation, broadcast scraper, daily signal pipeline, and nightly topic briefing.
+For this research agent agent, current cron patterns include heartbeat, GitHub trending feed, research digest, YouTube monitoring, short-form monitoring, weekly trends, experiment evaluation, broadcast scraper, daily signal pipeline, and nightly topic briefing.
 
-### Use cortextOS tasks when:
+### Use persistent operating layer tasks when:
 
 - There is a meaningful deliverable.
 - The user, dashboard, or another agent needs to know status.
@@ -184,7 +184,7 @@ For this data-codex agent, current cron patterns include heartbeat, GitHub trend
 - A human task or approval must be represented.
 - Completion needs a result summary and event log.
 
-Tasks are the "work ledger" for cortextOS. They should surround substantial runs of the other primitives.
+Tasks are the "work ledger" for persistent operating layer. They should surround substantial runs of the other primitives.
 
 ## Anti-Patterns
 
@@ -193,8 +193,8 @@ Tasks are the "work ledger" for cortextOS. They should surround substantial runs
 | Huge `CLAUDE.md` with every procedure | Always consumes context and mixes facts with workflows | Move procedures into skills; keep stable facts in memory/docs |
 | Skill as a database connector | Skills do not provide live system access by themselves | MCP or CLI for access, skill for policy |
 | MCP as a workflow brain | MCP tools expose capabilities, but they should not hide agent procedure and approval logic | Skill or workflow orchestrates MCP calls |
-| Slash command as persistent scheduler | Commands only run when invoked in a session | cortextOS daemon cron, or Claude Code routines when cloud execution is desired |
-| `/loop` for daemon-critical work | Session-local loops can die on restart and silently drop work | cortextOS cron registered through the bus |
+| Slash command as persistent scheduler | Commands only run when invoked in a session | persistent operating layer daemon cron, or Claude Code routines when cloud execution is desired |
+| `/loop` for daemon-critical work | Session-local loops can die on restart and silently drop work | persistent operating layer cron registered through the bus |
 | Cron prompt with hundreds of lines | Hard to maintain, hard to test, easy to drift | Cron invokes a skill or script entrypoint |
 | Cron fire without closure | Daemon cannot distinguish handled work from stuck work | Call `update-cron-fire` after successful recurring cron handling |
 | Editing `config.json.crons[]` and expecting hot reload | Local cron docs say mid-session changes must use bus cron commands | Use `add-cron`, `update-cron`, `remove-cron`, then confirm with `list-crons` |
@@ -274,7 +274,7 @@ Do not migrate when:
 - Static exports are sufficient.
 - The server would expose high-risk data without clear permissions, logging, or prompt-injection mitigations.
 
-### Manual Run to cortextOS Cron
+### Manual Run to persistent operating layer Cron
 
 Migrate when:
 
@@ -286,7 +286,7 @@ Migrate when:
 Implementation pattern:
 
 1. Put the real procedure in a skill or script.
-2. Register a cortextOS cron that invokes that entrypoint.
+2. Register a persistent operating layer cron that invokes that entrypoint.
 3. Create/update a task when the cron run starts if there is a meaningful deliverable.
 4. Close the cron fire and complete the task with a result summary.
 
@@ -301,7 +301,7 @@ Migrate when:
 
 Use a script for deterministic data movement. Use a skill when judgment, source synthesis, or agentic procedure matters. Use both when the skill calls deterministic scripts.
 
-### Untracked Work to cortextOS Task
+### Untracked Work to persistent operating layer Task
 
 Migrate when:
 
@@ -317,8 +317,8 @@ Migrate when:
 
 Use:
 
-- cortextOS cron for schedule
-- cortextOS task for tracked run
+- persistent operating layer cron for schedule
+- persistent operating layer task for tracked run
 - skill for digest procedure and formatting
 - MCP/CLI/web tools for source access
 - subagents for independent research lanes
@@ -332,7 +332,7 @@ Use:
 - dynamic workflow for fan-out across modules/worktrees
 - subagents for implementation units and reviewers
 - skill for project migration rules
-- cortextOS task if this is part of the daemon's tracked work
+- persistent operating layer task if this is part of the daemon's tracked work
 
 ### External App Automation
 
@@ -341,14 +341,14 @@ Use:
 - MCP for the external app connection
 - skill for policy, templates, approvals, and logging
 - subagent for read-only review or preparation
-- cortextOS task for visible work status
+- persistent operating layer task for visible work status
 - approval before irreversible external action
 
 ### Nightly Monitoring Pipeline
 
 Use:
 
-- cortextOS cron as the scheduler
+- persistent operating layer cron as the scheduler
 - script for deterministic scraping/scoring
 - skill for interpretation and routing
 - task for visible pipeline run
@@ -366,11 +366,11 @@ Primary/official sources used:
 - Claude Code MCP docs: MCP connects Claude Code to external tools, data sources, APIs, resources, prompts, and event channels, with trust and prompt-injection considerations. https://code.claude.com/docs/en/mcp
 - MCP official intro: MCP is an open standard for connecting AI applications to external systems. https://modelcontextprotocol.io/docs/getting-started/intro
 - Claude Code commands docs: slash commands control sessions, can be built-in commands, bundled skills, bundled workflows, or MCP prompts. https://code.claude.com/docs/en/commands
-- Claude Code routines docs, for boundary only: routines are Anthropic-managed scheduled/API/GitHub-triggered cloud runs; cortextOS crons are the local daemon-owned equivalent in this environment. https://code.claude.com/docs/en/routines
+- Claude Code routines docs, for boundary only: routines are Anthropic-managed scheduled/API/GitHub-triggered cloud runs; persistent operating layer crons are the local daemon-owned equivalent in this environment. https://code.claude.com/docs/en/routines
 
-Local cortextOS sources used:
+Local persistent operating layer sources used:
 
 - `TOOLS.md`: bus command index for tasks, crons-related workflows, messages, heartbeats, approvals, KB, and worker sessions.
-- `plugins/cortextos-agent-skills/skills/tasks/SKILL.md`: tasks provide dashboard-visible lifecycle tracking for meaningful work.
-- `plugins/cortextos-agent-skills/skills/cron-management/SKILL.md`: daemon-managed crons live in the agent state directory, survive restarts, and are managed with bus cron commands.
-- `config.json`: data-codex currently uses recurring and crontab schedules for heartbeat, monitoring, research digests, and signal pipelines.
+- `plugins/workflow-runtime-agent-skills/skills/tasks/SKILL.md`: tasks provide dashboard-visible lifecycle tracking for meaningful work.
+- `plugins/workflow-runtime-agent-skills/skills/cron-management/SKILL.md`: daemon-managed crons live in the agent state directory, survive restarts, and are managed with bus cron commands.
+- `config.json`: research agent currently uses recurring and crontab schedules for heartbeat, monitoring, research digests, and signal pipelines.
