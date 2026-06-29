@@ -478,25 +478,31 @@ export class CodexAppServerPTY {
   }
 
   private async startOrResumeThread(mode: 'fresh' | 'continue'): Promise<void> {
-    const persisted = this.readThreadState();
-    if (persisted) {
-      try {
-        const resumed = await this.request<ThreadResponse>('thread/resume', {
-          threadId: persisted.threadId,
-          cwd: this._cwd,
-          ...THREAD_PERMISSION_OVERRIDES,
-          config: { features: { goals: true } },
-          excludeTurns: true,
-          persistExtendedHistory: true,
-        });
-        this.setThreadId(resumed.result?.thread.id || persisted.threadId);
-        return;
-      } catch (err) {
-        this._outputBuffer.push(`[codex-app-server] persisted resume failed: ${err}\n`);
-      }
-    }
-
+    // Only resume a persisted thread in CONTINUE mode. A context-handoff /
+    // .force-fresh restart runs in FRESH mode and MUST start a brand-new codex
+    // thread: resuming the persisted thread retains the full context window, so
+    // the handoff never lowers usage, the agent immediately re-crosses the
+    // threshold, and it re-fires — a restart treadmill (caught by cortext-designer
+    // PR-A live validation 2026-06-29; resuming was previously unconditional here).
     if (mode === 'continue') {
+      const persisted = this.readThreadState();
+      if (persisted) {
+        try {
+          const resumed = await this.request<ThreadResponse>('thread/resume', {
+            threadId: persisted.threadId,
+            cwd: this._cwd,
+            ...THREAD_PERMISSION_OVERRIDES,
+            config: { features: { goals: true } },
+            excludeTurns: true,
+            persistExtendedHistory: true,
+          });
+          this.setThreadId(resumed.result?.thread.id || persisted.threadId);
+          return;
+        } catch (err) {
+          this._outputBuffer.push(`[codex-app-server] persisted resume failed: ${err}\n`);
+        }
+      }
+
       const latest = await this.findLatestThreadForCwd();
       if (latest) {
         const resumed = await this.request<ThreadResponse>('thread/resume', {
@@ -783,34 +789,38 @@ export class CodexAppServerPTY {
    * monitor. Writes atomically; failures are non-fatal (observability only).
    *
    * Mapping (per codex schema ThreadTokenUsageUpdatedNotification):
-   *   - used_percentage = total.totalTokens / cap * 100  (clamped to [0, 100])
+   *   - used_percentage = last.totalTokens / cap * 100  (clamped to [0, 100])
    *   - context_window_size = modelContextWindow ?? config.codex_context_cap ?? 256000
-   *   - exceeds_200k_tokens = total.totalTokens > 200000
-   *   - current_usage.{input,output,cache_read} from total.{input,output,cachedInput}Tokens
+   *   - exceeds_200k_tokens = last.totalTokens > 200000
+   *   - current_usage.{input,output,cache_read} from last.{input,output,cachedInput}Tokens
    *   - session_id = current threadId
+   *
+   * `total` is lifetime cumulative across the app-server thread and can grow far
+   * beyond the active model window. Context handoff must use the current window
+   * occupancy (`last`) so long-lived threads do not report false 100%.
    */
   private writeContextStatus(params: Record<string, unknown>): void {
     const tokenUsage = isRecord(params.tokenUsage) ? params.tokenUsage : null;
     if (!tokenUsage) return;
-    const total = isRecord(tokenUsage.total) ? tokenUsage.total : null;
-    if (!total) return;
-    const totalTokens = typeof total.totalTokens === 'number' ? total.totalTokens : null;
-    if (totalTokens === null) return;
+    const current = isRecord(tokenUsage.last) ? tokenUsage.last : null;
+    const currentTokens = current && typeof current.totalTokens === 'number' ? current.totalTokens : null;
 
     const modelContextWindow = typeof tokenUsage.modelContextWindow === 'number'
       ? tokenUsage.modelContextWindow
       : null;
     const cap = modelContextWindow ?? this._config.codex_context_cap ?? 256000;
-    const usedPct = cap > 0 ? Math.min(100, (totalTokens / cap) * 100) : null;
+    const usedPct = cap > 0 && currentTokens !== null
+      ? Math.min(100, (currentTokens / cap) * 100)
+      : null;
 
-    const inputTokens = typeof total.inputTokens === 'number' ? total.inputTokens : 0;
-    const outputTokens = typeof total.outputTokens === 'number' ? total.outputTokens : 0;
-    const cachedInputTokens = typeof total.cachedInputTokens === 'number' ? total.cachedInputTokens : 0;
+    const inputTokens = current && typeof current.inputTokens === 'number' ? current.inputTokens : 0;
+    const outputTokens = current && typeof current.outputTokens === 'number' ? current.outputTokens : 0;
+    const cachedInputTokens = current && typeof current.cachedInputTokens === 'number' ? current.cachedInputTokens : 0;
 
     const payload = JSON.stringify({
       used_percentage: usedPct,
       context_window_size: cap,
-      exceeds_200k_tokens: totalTokens > 200000,
+      exceeds_200k_tokens: currentTokens !== null ? currentTokens > 200000 : false,
       current_usage: {
         input_tokens: inputTokens,
         output_tokens: outputTokens,

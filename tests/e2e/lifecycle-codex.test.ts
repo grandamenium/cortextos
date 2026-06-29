@@ -134,12 +134,16 @@ describe('E2E codex lifecycle (mock-codex.js + WsUnixJsonRpcClient)', () => {
       threadId: string;
       turnId: string;
       tokenUsage: {
+        last: { inputTokens: number; outputTokens: number; totalTokens: number; cachedInputTokens: number };
         total: { inputTokens: number; outputTokens: number; totalTokens: number; cachedInputTokens: number };
         modelContextWindow: number;
       };
     };
     expect(params.threadId).toBe(threadId);
     expect(typeof params.turnId).toBe('string');
+    expect(params.tokenUsage.last.inputTokens).toBeGreaterThan(0);
+    expect(params.tokenUsage.last.outputTokens).toBeGreaterThan(0);
+    expect(params.tokenUsage.last.totalTokens).toBeGreaterThan(0);
     expect(params.tokenUsage.total.inputTokens).toBeGreaterThan(0);
     expect(params.tokenUsage.total.outputTokens).toBeGreaterThan(0);
     expect(params.tokenUsage.total.totalTokens).toBeGreaterThan(0);

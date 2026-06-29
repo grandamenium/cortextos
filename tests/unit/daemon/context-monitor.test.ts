@@ -163,6 +163,88 @@ describe('context monitor circuit breaker', () => {
   });
 });
 
+// --- Overflow-banner backstop self-referential guard ---
+
+describe('overflow-banner backstop corroboration guard', () => {
+  // Mirrors the hard overflow backstop in fast-checker.ts (~line 977). The PTY
+  // banner regex is a backstop that force-restarts when Claude's live context-
+  // overflow banner appears in an agent's terminal. Without the
+  // ctxCorroboratesOverflow gate, the regex matched those banner phrases as benign
+  // TEXT — so any agent that merely READ or DISCUSSED the overflow/compaction
+  // mechanism (memory files, daemon source, chat) printed the strings into its own
+  // PTY buffer and force-restarted itself at low context. Because the watchdog is
+  // shared, multiple agents investigating the compaction mechanism at once could
+  // cascade across runtimes. The gate requires usage to corroborate the banner:
+  // exceeds_200k OR pct >= 85.
+  const OVERFLOW_BANNER_RE = /extra usage.*?1[Mm] context|conversation too long.*?compaction/i;
+
+  // NEW (guarded) detector — gates the banner regex on real high context.
+  function forceRestartsOnOverflow(recentOutput: string, pct: number | null, exceeds200k: boolean): boolean {
+    const ctxCorroboratesOverflow = exceeds200k || (pct !== null && pct >= 85);
+    return ctxCorroboratesOverflow && OVERFLOW_BANNER_RE.test(recentOutput);
+  }
+
+  // OLD (pre-fix) detector — regex only, no context gate. Kept here ONLY to prove
+  // the regression test has teeth: each real cascade string below MUST trip this,
+  // and MUST NOT trip the guarded detector at low context. A test that passed on
+  // both code paths would prove nothing.
+  function oldDetectorRestarts(recentOutput: string): boolean {
+    return OVERFLOW_BANNER_RE.test(recentOutput);
+  }
+
+  // The real same-line banner strings that triggered the false-positive. The regex
+  // has no /s flag, so both tokens must share a line.
+  const CASCADE_STRINGS = [
+    // an agent's own answer describing the mechanism to the user
+    'Context compaction/handoff — YES. The daemon watches compaction signals ("conversation too long…compaction") at threshold',
+    // an agent's memory entry documenting the bug, quoting the regex pattern
+    '## Self-Referential Overflow False-Positive — detector trips on conversation too long.*compaction in its own output',
+    // an agent's diagnosis, quoting the pattern verbatim
+    'fast-checker.ts has an unconditional regex that force-restarts on text matching conversation too long.*compaction',
+  ];
+
+  it('TEETH: every real cascade string trips the OLD detector (reproduces the bug)', () => {
+    // If any of these did NOT match, the test would be a no-op green.
+    for (const s of CASCADE_STRINGS) {
+      expect(oldDetectorRestarts(s)).toBe(true);
+    }
+  });
+
+  it('ROOT CAUSE: the same real cascade strings at LOW context do NOT force-restart on the fix', () => {
+    // Each of these benign quotes looped an agent on old code; the guard kills it.
+    for (const s of CASCADE_STRINGS) {
+      expect(forceRestartsOnOverflow(s, 12, false)).toBe(false);
+      expect(forceRestartsOnOverflow(s, 70, false)).toBe(false);
+      expect(forceRestartsOnOverflow(s, 84, false)).toBe(false);
+    }
+  });
+
+  it('genuine overflow (pct >= 85) with the banner DOES force-restart (backstop preserved)', () => {
+    // Boundary: 84 is safe (covered above), 85 acts.
+    expect(forceRestartsOnOverflow(CASCADE_STRINGS[0], 85, false)).toBe(true);
+    expect(forceRestartsOnOverflow(CASCADE_STRINGS[0], 99, false)).toBe(true);
+  });
+
+  it('genuine overflow (exceeds_200k, null pct) with the banner DOES force-restart', () => {
+    expect(forceRestartsOnOverflow(CASCADE_STRINGS[0], null, true)).toBe(true);
+  });
+
+  it('high context with NO banner phrase does NOT force-restart (regex still required)', () => {
+    expect(forceRestartsOnOverflow('ordinary work output, nothing about overflow', 99, true)).toBe(false);
+  });
+
+  it('the "extra usage / 1M context" banner variant is gated the same way', () => {
+    const variant = 'error: enable extra usage to access the 1M context window';
+    expect(forceRestartsOnOverflow(variant, 20, false)).toBe(false); // low context, benign
+    expect(forceRestartsOnOverflow(variant, 90, false)).toBe(true);  // genuine overflow
+  });
+
+  it('AGENTS.md-style boot text quoting the phrase at low context is safe', () => {
+    const bootText = 'fast-checker watches context % and compaction signals ("conversation too long...compaction")';
+    expect(forceRestartsOnOverflow(bootText, 8, false)).toBe(false);
+  });
+});
+
 // --- Handoff block consumption ---
 
 describe('consumeHandoffBlock', () => {

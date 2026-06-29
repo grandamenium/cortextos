@@ -10,6 +10,7 @@ import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
+import { agentHoldsContextHandoffLease, releaseContextHandoffLease, requestContextHandoffLease } from './context-handoff-lease.js';
 
 type LogFn = (msg: string) => void;
 
@@ -54,7 +55,10 @@ export class FastChecker {
   private ctxHandoffFiredAt: number = 0;    // fires once per session (0 = not yet)
   private ctxHandoffDeadlineAt: number = 0; // timestamp after which force-restart fires
   private ctxLastSessionId: string | null = null; // detects new session → clears stale deadline
+  private ctxHandoffLeaseId: string | null = null;
+  private ctxHandoffQueuedLogAt: number = 0;
   private ctxCircuitRestarts: number[] = []; // timestamps of recent context-triggered restarts
+  private ctxHandoffFires: number[] = [];    // timestamps of recent Tier-2 handoff fires (cooperative-restart loop backstop)
   private ctxCircuitBrokenAt: number | null = null; // when circuit tripped (null = healthy)
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
@@ -918,8 +922,12 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     } catch { /* keep stale values */ }
     const config = this.agent.getConfig();
     return {
-      warn: config.ctx_warning_threshold ?? 70,
-      handoff: config.ctx_handoff_threshold ?? 80,
+      // Context-handoff is ON by default for every runtime/agent: an unset
+      // threshold falls back to 30% warning / 60% handoff (a percentage of the
+      // ACTIVE model's context window, so it adapts to window size). An explicit
+      // ctx_handoff_threshold <= 0 is the deliberate opt-out (see checkContextStatus).
+      warn: config.ctx_warning_threshold ?? 30,
+      handoff: config.ctx_handoff_threshold ?? 60,
     };
   }
 
@@ -936,6 +944,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (now - this.ctxCircuitBrokenAt >= 30 * 60_000) {
         this.ctxCircuitBrokenAt = null;
         this.ctxCircuitRestarts = [];
+        this.ctxHandoffFires = [];
         this.saveCtxCircuit();
         this.log('Context circuit breaker reset after 30min pause');
       } else {
@@ -962,6 +971,17 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       // 5-min deadline timer would otherwise fire on the fresh low-context session.
       const incomingSessionId = typeof data.session_id === 'string' ? data.session_id : null;
       if (incomingSessionId && incomingSessionId !== this.ctxLastSessionId) {
+        // Release any context-handoff lease held by this agent on a fresh session.
+        // This MUST be unconditional — released by agent name, not gated on
+        // ctxLastSessionId or the in-memory ctxHandoffLeaseId. A handoff restart can
+        // reset this monitor's per-agent state (both fields back to null), so gating
+        // release on either leaks the lease until its 10-min TTL and starves the fleet
+        // handoff queue: completed handoffs never free their slot, and queued agents
+        // above threshold wait up to a full TTL for a slot. A fresh session never needs
+        // a lease acquired by a prior session of the same agent; release-by-name is a
+        // no-op when none is held and also clears any stale queue entry.
+        releaseContextHandoffLease(this.paths.ctxRoot, this.agent.name);
+        this.ctxHandoffLeaseId = null;
         if (this.ctxLastSessionId !== null) {
           this.ctxHandoffFiredAt = 0;
           this.ctxHandoffDeadlineAt = 0;
@@ -972,21 +992,57 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       }
     } catch { return; }
 
-    // Check PTY output for hard API overflow errors (always act regardless of threshold config)
+    // Check PTY output for hard API overflow errors (always act regardless of threshold config).
+    // Guard: only treat the banner phrase as a *live* overflow when context usage actually
+    // corroborates it (exceeds 200k, or pct genuinely high). The same phrase appears as benign
+    // text in memory files, source, and chat that *document* this mechanism — without this guard
+    // a fresh boot re-reading those at low context force-restarts on every boot, producing a loop.
+    const ctxCorroboratesOverflow = exceeds200k || (pct !== null && pct >= 85);
     const recentOutput = this.agent.getOutputBuffer()?.getRecent(8000) ?? '';
-    if (/extra usage.*?1[Mm] context|conversation too long.*?compaction/i.test(recentOutput)) {
-      this.log('Context overflow error detected in PTY output — force restarting');
+    if (ctxCorroboratesOverflow && /extra usage.*?1[Mm] context|conversation too long.*?compaction/i.test(recentOutput)) {
+      this.log('Context overflow error detected in PTY output at high context — force restarting');
       this.forceContextRestart('API overflow error in PTY output');
       return;
     }
 
     const { warn, handoff } = this.getCtxThresholds();
 
-    // No threshold configured — observe-only mode (log but don't act)
-    if (this.agent.getConfig().ctx_handoff_threshold === undefined) return;
+    // Default-ON: an UNSET ctx_handoff_threshold uses the 60% default from
+    // getCtxThresholds (handoff on for every agent with no config). An explicit
+    // ctx_handoff_threshold <= 0 is the deliberate opt-out (observe-only: log,
+    // never act). This is the only disable path now that default is on.
+    const configuredHandoff = this.agent.getConfig().ctx_handoff_threshold;
+    if (configuredHandoff !== undefined && configuredHandoff <= 0) return;
 
     const effectivePct = pct ?? (exceeds200k ? 101 : null);
     if (effectivePct === null) return;
+
+    // Session-id-independent leaked-lease release (the Claude null-session_id edge).
+    // The new-session detection above only releases a leaked lease when the bridge
+    // reports a non-null session_id. hook-context-status writes `session_id ?? null`,
+    // so a fresh Claude session reports session_id:null, that block is skipped, and a
+    // lease leaked by the agent's prior session sits in `active` until its 10-min TTL —
+    // starving the fleet handoff queue on the majority (Claude) path. Release it by name
+    // here, gated on the precise safety condition rather than the session_id proxy:
+    //   (1) effectivePct < handoff — the agent is NOT mid-handoff, so it cannot
+    //       legitimately need a handoff lease this tick; and
+    //   (2) ctxHandoffLeaseId === null — this monitor did not itself acquire the live
+    //       lease. A lease acquired by the CURRENT session always sets ctxHandoffLeaseId
+    //       synchronously at the Tier 2 acquire below (and resets context_status to 0%,
+    //       so the very next tick is below-threshold-but-lease-held). The only way to
+    //       hold a lease with this field null is that a prior session acquired it and a
+    //       full respawn recreated this monitor with null state — i.e. the leaked lease.
+    //       This is exactly the guarantee the original non-null-session_id gate gave,
+    //       without the proxy. A read-only existence check runs first so idle ticks
+    //       never pay the lease-file write.
+    if (
+      effectivePct < handoff
+      && this.ctxHandoffLeaseId === null
+      && agentHoldsContextHandoffLease(this.paths.ctxRoot, this.agent.name, now)
+    ) {
+      releaseContextHandoffLease(this.paths.ctxRoot, this.agent.name);
+      this.log('Released leaked context-handoff lease by name (fresh below-threshold session)');
+    }
 
     // Tier 3: deadline exceeded — force restart if agent ignored handoff prompt
     if (this.ctxHandoffDeadlineAt > 0 && now > this.ctxHandoffDeadlineAt) {
@@ -1007,7 +1063,51 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
     // Tier 2: handoff (fires once per session lifecycle)
     if (effectivePct >= handoff && this.ctxHandoffFiredAt === 0) {
+      const lease = requestContextHandoffLease({
+        ctxRoot: this.paths.ctxRoot,
+        agentName: this.agent.name,
+      });
+      if (lease.status === 'queued') {
+        if (now - this.ctxHandoffQueuedLogAt > 60_000) {
+          this.ctxHandoffQueuedLogAt = now;
+          this.log(
+            `Context handoff queued at ${Math.round(effectivePct)}% `
+            + `(position ${lease.position}, active ${lease.activeCount}, queued ${lease.queuedCount}, wait ~${Math.ceil(lease.waitMs / 1000)}s)`,
+          );
+        }
+        return;
+      }
+      this.ctxHandoffLeaseId = lease.leaseId;
       this.ctxHandoffFiredAt = now;
+
+      // Cooperative-restart loop backstop. A handoff normally fires ONCE per session and
+      // the fresh session drops well below threshold, so legitimate usage never re-fires
+      // soon. If a runtime fails to reset context on the handoff restart (e.g. a
+      // thread-persistence regression), the fresh session immediately re-crosses the
+      // threshold and re-fires every cycle — a self-sustaining treadmill the restart
+      // circuit breaker misses because these are COOPERATIVE handoff restarts, not Tier-3
+      // force-restarts. Count handoff fires in a persisted 15min window (survives the
+      // restart); if they reach the cap, trip the circuit breaker (30min pause) instead of
+      // handing off again, so any handoff loop self-limits regardless of cause. Cap 3 is
+      // above the benign 1-2 fires a single very-large turn can produce before settling.
+      this.ctxHandoffFires = this.ctxHandoffFires.filter(t => now - t < 15 * 60_000);
+      this.ctxHandoffFires.push(now);
+      this.saveCtxCircuit();
+      if (this.ctxHandoffFires.length >= 3) {
+        this.ctxCircuitBrokenAt = now;
+        this.saveCtxCircuit();
+        // Release the lease we just acquired — we are pausing, not handing off.
+        releaseContextHandoffLease(this.paths.ctxRoot, this.agent.name);
+        this.ctxHandoffLeaseId = null;
+        this.ctxHandoffFiredAt = 0;
+        const msg = `Context handoff loop detected for ${this.agent.name}: ${this.ctxHandoffFires.length} handoffs in 15min — a runtime may not be resetting context on restart. Auto-handoff paused 30min. Check logs/${this.agent.name}/restarts.log.`;
+        this.log(msg);
+        if (this.telegramApi && this.chatId) {
+          this.telegramApi.sendMessage(this.chatId, msg).catch(() => {});
+        }
+        return;
+      }
+
       this.ctxHandoffDeadlineAt = now + 5 * 60_000; // 5min grace for agent to cooperate
       // Reset context_status.json so the new session doesn't re-trigger immediately
       const statusPath = join(this.paths.stateDir, 'context_status.json');
@@ -1076,6 +1176,19 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     this.ctxHandoffFiredAt = 0;
     this.ctxHandoffDeadlineAt = 0;
     this.ctxWarningFiredAt = 0;
+
+    // Release this dying session's context-handoff lease on teardown. This restart is
+    // IN-PROCESS — sessionRefresh() below does stop()+start() on the same AgentProcess
+    // and does NOT recreate this FastChecker, so ctxHandoffLeaseId survives into the
+    // fresh session. The by-name cleanup in checkContextStatus is gated on
+    // ctxHandoffLeaseId === null, so without this it would skip a lease this session
+    // leaked when the fresh session reports session_id:null (the Tier-3 arm of the
+    // Claude null-session_id leak — the agent ignored the 5-min handoff prompt and was
+    // force-restarted). Release by name and clear the in-memory id HERE, before the
+    // restart spawns the new session, so we free the dying session's own lease — never
+    // a lease the fresh session might later acquire.
+    releaseContextHandoffLease(this.paths.ctxRoot, this.agent.name);
+    this.ctxHandoffLeaseId = null;
 
     // Write .force-fresh + .restart-planned (hardRestart from src/bus/system.ts)
     hardRestart(this.paths, this.agent.name, `CONTEXT-FORCE-RESTART: ${reason}`);
@@ -1151,6 +1264,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (!existsSync(this.ctxCircuitFile)) return;
       const data = JSON.parse(readFileSync(this.ctxCircuitFile, 'utf-8'));
       this.ctxCircuitRestarts = Array.isArray(data.restarts) ? data.restarts : [];
+      this.ctxHandoffFires = Array.isArray(data.handoffFires) ? data.handoffFires : [];
       this.ctxCircuitBrokenAt = typeof data.brokenAt === 'number' ? data.brokenAt : null;
     } catch {
       // Start fresh on error
@@ -1164,6 +1278,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     try {
       writeFileSync(this.ctxCircuitFile, JSON.stringify({
         restarts: this.ctxCircuitRestarts,
+        handoffFires: this.ctxHandoffFires,
         brokenAt: this.ctxCircuitBrokenAt,
       }), 'utf-8');
     } catch {
