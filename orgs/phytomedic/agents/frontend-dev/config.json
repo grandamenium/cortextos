@@ -7,6 +7,12 @@
       "type": "cron",
       "cron": "14 */4 * * *",
       "prompt": "Heartbeat-Tick. Run: cortextos bus update-heartbeat alive. Then: cortextos bus check-inbox | head -50. If inbox has urgent msgs, process them. Else end. NO bootstrap-file-reading. End: cortextos bus update-cron-fire heartbeat --interval 240."
+    },
+    {
+      "name": "greptile-rescore-pilot",
+      "type": "cron",
+      "cron": "43 5 * * 5",
+      "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the experiment loop for greptile_rescore_pilot cycle. End: cortextos bus update-cron-fire greptile-rescore-pilot --interval 10080."
     }
   ]
 }

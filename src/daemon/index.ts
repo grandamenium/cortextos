@@ -2,6 +2,7 @@ import { AgentManager } from './agent-manager.js';
 import { IPCServer } from './ipc-server.js';
 import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'fs';
 import { StaleAgentWatchdog } from './stale-watchdog.js';
+import { WedgeWatchdog, wedgeWatchdogArmed } from './wedge-watchdog.js';
 import { VaultLivenessWatchdog } from './vault-liveness-watchdog.js';
 import { sendOperatorAlertBestEffort } from './operator-alert.js';
 import { SleepScheduler } from './sleep-scheduler.js';
@@ -179,6 +180,7 @@ class Daemon {
   private ipcServer: IPCServer | null = null;
   private vaultWatchdog: VaultLivenessWatchdog | null = null;
   private staleWatchdog: StaleAgentWatchdog | null = null;
+  private wedgeWatchdog: WedgeWatchdog | null = null;
   private instanceId: string;
   private ctxRoot: string;
 
@@ -247,6 +249,18 @@ class Daemon {
       console.log('[daemon] StaleAgentWatchdog present but DISABLED (set CTX_STALE_WATCHDOG=1 to arm)');
     }
 
+    // Wedge-watchdog: catches agents that received a cron fire but froze without processing it.
+    // Triple-gate: (1) cron fired recently, (2) heartbeat frozen >= 2 intervals, (3) PTY ~0% CPU.
+    // DEFAULT OFF (shadow mode): logs "WOULD have restarted" without acting.
+    // Arm with CTX_WEDGE_WATCHDOG_ARMED=1 once shadow FP-count is zero.
+    this.wedgeWatchdog = new WedgeWatchdog(this.agentManager, this.ctxRoot);
+    this.wedgeWatchdog.start();
+    if (wedgeWatchdogArmed()) {
+      console.log('[daemon] WedgeWatchdog ARMED (CTX_WEDGE_WATCHDOG_ARMED=1)');
+    } else {
+      console.log('[daemon] WedgeWatchdog started in SHADOW mode (set CTX_WEDGE_WATCHDOG_ARMED=1 to arm)');
+    }
+
     // Keep the vault coordination layer alive: regenerate agent-shared/active-tasks.md
     // from the live bus every cycle (replacing the dead cron-prompt updater) and alert
     // when the narrative state (project-state.md) goes stale. Without this the board
@@ -261,9 +275,12 @@ class Daemon {
     const shutdown = async () => {
       console.log('[daemon] Shutting down...');
       // Stop the watchdogs FIRST, before stopAll(), so no in-flight tick can
-      // restart an agent (stale watchdog) or regenerate the board mid-teardown.
+      // restart an agent (stale/wedge watchdogs) or regenerate the board mid-teardown.
       if (this.staleWatchdog) {
         this.staleWatchdog.stop();
+      }
+      if (this.wedgeWatchdog) {
+        this.wedgeWatchdog.stop();
       }
       if (this.vaultWatchdog) {
         this.vaultWatchdog.stop();

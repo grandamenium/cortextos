@@ -169,17 +169,36 @@ function computeNextFireAt(cron: CronDefinition, referenceMs: number): number {
 
 const RETRY_DELAYS_MS = [1_000, 4_000, 16_000];
 
+/**
+ * Race `promise` against a `ms`-millisecond deadline.
+ * Rejects with `Error("onFire timeout after Nms: <label>")` if the deadline
+ * fires first (SYS-CRON-FIRING-FLAG: prevents a wedged PTY from hanging
+ * `onFire` indefinitely and permanently blocking `sc.firing`).
+ * Cleans up its own setTimeout on whichever branch wins.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let handle: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    handle = setTimeout(
+      () => reject(new Error(`onFire timeout after ${ms}ms: ${label}`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(handle!));
+}
+
 async function fireWithRetry(
   cron: CronDefinition,
   agentName: string,
   onFire: (c: CronDefinition) => Promise<void> | void,
   logger: (msg: string) => void,
+  timeoutMs: number,
 ): Promise<boolean> {
   const maxAttempts = RETRY_DELAYS_MS.length + 1; // 4 attempts total
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const start = Date.now();
     try {
-      await Promise.resolve(onFire(cron));
+      await withTimeout(Promise.resolve(onFire(cron)), timeoutMs, cron.name);
       appendExecutionLog(agentName, {
         ts: new Date().toISOString(),
         cron: cron.name,
@@ -192,16 +211,17 @@ async function fireWithRetry(
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const duration_ms = Date.now() - start;
+      const isTimeout = err instanceof Error && err.message.startsWith('onFire timeout after');
       if (attempt < RETRY_DELAYS_MS.length) {
         const delay = RETRY_DELAYS_MS[attempt];
         logger(
-          `[cron-scheduler] onFire failed for "${cron.name}" ` +
+          `[cron-scheduler] onFire ${isTimeout ? 'timed out' : 'failed'} for "${cron.name}" ` +
           `(attempt ${attempt + 1}/4, retrying in ${delay}ms): ${errMsg}`
         );
         appendExecutionLog(agentName, {
           ts: new Date().toISOString(),
           cron: cron.name,
-          status: 'retried',
+          status: isTimeout ? 'timed_out' : 'retried',
           attempt: attempt + 1,
           duration_ms,
           error: errMsg,
@@ -209,13 +229,13 @@ async function fireWithRetry(
         await sleep(delay);
       } else {
         logger(
-          `[cron-scheduler] onFire failed for "${cron.name}" ` +
+          `[cron-scheduler] onFire ${isTimeout ? 'timed out' : 'failed'} for "${cron.name}" ` +
           `after all 4 attempts — giving up. Last error: ${errMsg}`
         );
         appendExecutionLog(agentName, {
           ts: new Date().toISOString(),
           cron: cron.name,
-          status: 'failed',
+          status: isTimeout ? 'timed_out' : 'failed',
           attempt: attempt + 1,
           duration_ms,
           error: errMsg,
@@ -266,6 +286,24 @@ export class CronScheduler {
 
   /** Epoch ms of the tick interval, exposed so tests can override. */
   static readonly TICK_INTERVAL_MS = 30_000;
+
+  /**
+   * Per-attempt onFire timeout in ms.  A wedged PTY hangs onFire indefinitely;
+   * this caps each attempt so `sc.firing` is eventually cleared and the
+   * scheduler keeps trying on later ticks (SYS-CRON-FIRING-FLAG).
+   * Mutable so unit tests can set a sub-second value.
+   */
+  static ON_FIRE_TIMEOUT_MS = 120_000;
+
+  /**
+   * Delay between successive catch-up fires on daemon restart.
+   * When N crons are overdue simultaneously the i-th overdue cron fires at
+   * now + i * CATCHUP_STAGGER_MS instead of all firing on the same tick.
+   * Defaults to TICK_INTERVAL_MS + 1 (30_001 ms) so each slot lands strictly
+   * after the preceding tick boundary, giving at most one catch-up per tick
+   * per agent.  Mutable so unit tests can set a smaller value.
+   */
+  static CATCHUP_STAGGER_MS = CronScheduler.TICK_INTERVAL_MS + 1;
 
   constructor(opts: CronSchedulerOptions) {
     this.agentName = opts.agentName;
@@ -333,6 +371,8 @@ export class CronScheduler {
     const now = Date.now();
     const { crons: defs, corrupt } = readCronsWithStatus(this.agentName);
     const nextScheduled = new Map<string, ScheduledCron>();
+    // Stagger successive catch-up fires so they don't all land on the same tick.
+    let catchUpIndex = 0;
 
     // Read cron-state.json so catch-up sees fires recorded by `bus update-cron-fire`
     // (e.g. agent heartbeat skills). Without this, a cron that pre-dates the
@@ -406,13 +446,18 @@ export class CronScheduler {
       }
 
       // CATCH-UP POLICY: if nextFireAt is in the past (daemon was stopped),
-      // fire once immediately for the missed window, then recompute from now.
+      // fire once for the missed window, then recompute from now.
       // We do NOT flood-fire all missed windows — one catch-up is sufficient.
+      // STAGGER: successive overdue crons are offset by CATCHUP_STAGGER_MS each
+      // so they spread across separate ticks instead of all firing at once.
       if (nextFireAt <= now) {
+        const staggerMs = catchUpIndex * CronScheduler.CATCHUP_STAGGER_MS;
         this.logger(
-          `[cron-scheduler] catch-up: cron "${def.name}" missed fire at ${new Date(nextFireAt).toISOString()} — scheduling immediate fire`
+          `[cron-scheduler] catch-up: cron "${def.name}" missed fire at ${new Date(nextFireAt).toISOString()}` +
+          ` — scheduling in ${staggerMs}ms (stagger slot ${catchUpIndex})`
         );
-        nextFireAt = now; // fire on the very next tick
+        nextFireAt = now + staggerMs;
+        catchUpIndex++;
       }
 
       nextScheduled.set(def.name, { definition: def, nextFireAt, changeKey: key });
@@ -522,7 +567,7 @@ export class CronScheduler {
         );
       }
 
-      const success = await fireWithRetry(cron, this.agentName, this.onFire, this.logger);
+      const success = await fireWithRetry(cron, this.agentName, this.onFire, this.logger, CronScheduler.ON_FIRE_TIMEOUT_MS);
 
       if (success) {
         // Persist last_fired_at + fire_count to disk.

@@ -864,6 +864,8 @@ describe('Scenario 7: Concurrent scheduler ticks don\'t corrupt crons.json', () 
   });
 
   it('5 agents each with 3 crons firing at same simulated minute: no lost updates', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     // Every cron starts 25h overdue so all 15 catch-up fire on tick 1
     const pastFiredAt = new Date(Date.now() - 25 * ONE_HOUR).toISOString();
 
@@ -918,5 +920,6 @@ describe('Scenario 7: Concurrent scheduler ticks don\'t corrupt crons.json', () 
         expect(c.last_fired_at, `${agentName}/${c.name}: last_fired_at updated`).not.toBe(pastFiredAt);
       }
     }
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   });
 });

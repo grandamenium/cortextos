@@ -1,5 +1,9 @@
 # Long-Term Memory
 
+## EXP-DRIVER Mechanic
+- [Experiment proposal mechanic + carve-outs](memory/exp-driver-mechanic.md) — SA proposes 1 experiment/agent/cycle; carve-outs: WIP-cap, 1-in-flight, counter-stop
+- [Round tracking log](experiments/learnings.md) — one entry per proposal round; Round 1 (2026-06-21): devops-monitor/cannametrics/IR all accepted
+
 ## Onboarding Context — 2026-04-12
 
 ### What "healthy" means for PhytoMedic

@@ -1,0 +1,16 @@
+{
+  "_meta": {
+    "purpose": "Durable registry of fleet agent experiments. Theta-wave reads this each cycle. Experiments must be explicitly set to 'completed' or 'cancelled' — silent removal is what killed prior cycles.",
+    "owner": "systems-analyst",
+    "read_by": ["systems-analyst (theta-wave cron)", "platform-director (review)"],
+    "statuses": {
+      "active": "Experiment is running — has a live cron or ongoing measurement",
+      "paused": "Temporarily suspended but not closed",
+      "completed": "Ran to conclusion, outcome recorded in notes",
+      "cancelled": "Abandoned before conclusion, reason in notes"
+    },
+    "last_updated": "2026-06-27T20:00:00Z",
+    "last_updated_by": "systems-analyst (theta-wave cycle 4)"
+  },
+  "experiments": []
+}

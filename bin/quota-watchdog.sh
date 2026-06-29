@@ -96,7 +96,7 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
 EOF
   BLIND_FLAG="$STATE_DIR/.probe-blind-since"
   if [ ! -f "$BLIND_FLAG" ]; then
-    ALERT_MSG="⚠️ Quota watchdog PROBE-BLIND: no OAuth token found (env/keychain/accounts.json all miss). No pause/resume decisions will be made until a valid token is available. Log: $LOG"
+    ALERT_MSG="⚠️ Quota-Watchdog BLIND: Kein OAuth-Token gefunden (env/keychain/accounts.json alle fehlen). Keine Pause/Resume-Entscheidungen bis Token verfügbar. Log: $LOG"
     "$CORTEXTOS" bus send-telegram "$CHAT_ID" "$ALERT_MSG" --plain-text >> "$LOG" 2>&1 || log "  telegram alert failed"
     echo "$(ts)" > "$BLIND_FLAG"
   fi
@@ -159,7 +159,7 @@ if [ "$API_AVAILABLE" = "no" ]; then
   REMAINING_PCT=unknown
   METHOD="api-degraded"
   log "WARNING: API path unavailable. ccusage_signal=${CCUSAGE_PCT:-unavailable}%. Staying running per v3 policy — alert sent to operator."
-  ALERT_MSG="⚠️ Quota watchdog API path degraded — ccusage signal=${CCUSAGE_PCT:-unavailable}%. Agents NOT paused (per v3 policy: pause only on API-confirmed below-threshold). Investigate manually if API path doesn't recover within the next cycle. Watchdog log: $LOG"
+  ALERT_MSG="⚠️ Quota-Watchdog API nicht erreichbar — ccusage-Signal: ${CCUSAGE_PCT:-nicht verfügbar}%. Agenten NICHT pausiert (v3-Policy: nur bei API-bestätigtem Unterschreiten). Bitte manuell prüfen falls API im nächsten Cycle weiter ausfällt. Log: $LOG"
   # Only alert ONCE per degradation episode — don't spam Sondre on repeated cron ticks
   DEGRADED_FLAG="$STATE_DIR/.api-degraded-since"
   if [ ! -f "$DEGRADED_FLAG" ]; then

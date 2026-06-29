@@ -47,7 +47,14 @@ const DEFAULT_CONFIGS: Record<RoleType, RoleConfig> = {
     primary_kpi: 'pending_dispatch_age_p95_ms',
     secondary_kpis: ['authored_pending_dispatch', 'authored_total'],
     anomaly_thresholds: {
-      // 48h: most user requests should reach a coding agent within 2 working days
+      // SYS-MET-03: fire authoring_dispatch_backlog only on a BROAD + OLD
+      // backlog — at least `min_count` undispatched tasks whose MEDIAN (p50)
+      // age exceeds 3 days. p50 (not p95) so a single just-over-threshold
+      // outlier no longer trips it; min_count so a lone stale task does not.
+      pending_dispatch_min_count: 3,
+      pending_dispatch_age_p50_max_ms: 259_200_000, // 3d
+      // p95 ceiling retained as an INFO-only reference (no longer the trigger).
+      // 48h: most user requests should reach a coding agent within 2 working days.
       pending_dispatch_age_p95_max_ms: 172_800_000,
     },
   },
@@ -67,6 +74,9 @@ const DEFAULT_CONFIGS: Record<RoleType, RoleConfig> = {
     anomaly_thresholds: {
       assignee_completion_ratio_min: 0.3,
       wip_cap_max: 5,
+      // SYS-MET-03: see 'authoring' above — count + p50 trigger, p95 info-only.
+      pending_dispatch_min_count: 3,
+      pending_dispatch_age_p50_max_ms: 259_200_000, // 3d
       pending_dispatch_age_p95_max_ms: 172_800_000,
     },
   },

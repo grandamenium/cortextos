@@ -23,6 +23,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { NextRequest } from 'next/server';
+import { CronScheduler } from '../../src/daemon/cron-scheduler.js';
 
 // ---------------------------------------------------------------------------
 // Temp root — separate from the backtest root to avoid cross-contamination
@@ -195,6 +196,8 @@ const perfResults: Record<string, { p50: number; p95: number; count: number }> =
 
 describe('Perf: GET /api/workflows/crons — 50 crons (5 agents)', () => {
   it('p95 < 2000ms', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const samples = await bench(async () => {
       const req = new NextRequest('http://localhost/api/workflows/crons');
       const res = await cronsRootModule.GET(req);
@@ -212,6 +215,7 @@ describe('Perf: GET /api/workflows/crons — 50 crons (5 agents)', () => {
     );
 
     expect(p95).toBeLessThan(2000);
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   });
 });
 
@@ -221,6 +225,8 @@ describe('Perf: GET /api/workflows/crons — 50 crons (5 agents)', () => {
 
 describe('Perf: GET /api/workflows/crons — 100 crons (10 agents)', () => {
   it('p95 < 2000ms', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const samples = await bench(async () => {
       const req = new NextRequest('http://localhost/api/workflows/crons');
       const res = await cronsRootModule.GET(req);
@@ -237,6 +243,7 @@ describe('Perf: GET /api/workflows/crons — 100 crons (10 agents)', () => {
     );
 
     expect(p95).toBeLessThan(2000);
+    CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
   });
 });
 

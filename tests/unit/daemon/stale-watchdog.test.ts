@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { StaleAgentWatchdog } from '../../../src/daemon/stale-watchdog';
 import { staleWatchdogEnabled } from '../../../src/daemon/index';
+import { cronExecutionLogPathFor } from '../../../src/bus/crons-schema';
 import type { AgentManager } from '../../../src/daemon/agent-manager';
 
 interface Spies {
@@ -38,8 +39,37 @@ function seedAgentConfig(frameworkRoot: string, org: string, agent: string, conf
   writeFileSync(join(dir, 'config.json'), JSON.stringify(config), 'utf-8');
 }
 
+/** Seed an agent's cron-execution.log with a single 'fired' entry `ageMs` ago. */
+function seedCronExecLog(ctxRoot: string, agent: string, firedAgeMs: number): void {
+  const logPath = join(ctxRoot, cronExecutionLogPathFor(agent));
+  mkdirSync(join(logPath, '..'), { recursive: true });
+  const entry = {
+    ts: new Date(Date.now() - firedAgeMs).toISOString(),
+    cron: 'heartbeat',
+    status: 'fired',
+    attempt: 1,
+    duration_ms: 100,
+    error: null,
+  };
+  writeFileSync(logPath, JSON.stringify(entry) + '\n', 'utf-8');
+}
+
+/** Seed an agent's cron-state.json with a single cron ACK (`last_fire`) `ageMs` ago. */
+function seedCronAck(ctxRoot: string, agent: string, ackAgeMs: number, name = 'fleet-heartbeat-watch'): void {
+  const dir = join(ctxRoot, 'state', agent);
+  mkdirSync(dir, { recursive: true });
+  const now = new Date().toISOString();
+  const last_fire = new Date(Date.now() - ackAgeMs).toISOString();
+  writeFileSync(
+    join(dir, 'cron-state.json'),
+    JSON.stringify({ updated_at: now, crons: [{ name, last_fire, interval: '1h' }] }, null, 2) + '\n',
+    'utf-8',
+  );
+}
+
 const STALE = '2020-01-01T00:00:00.000Z'; // years old → stale under any threshold
 const FRESH = new Date().toISOString();
+const MIN = 60 * 1000;
 
 describe('staleWatchdogEnabled (safety guard)', () => {
   const original = process.env.CTX_STALE_WATCHDOG;
@@ -243,6 +273,109 @@ describe('StaleAgentWatchdog fail-safe on bad/missing/ambiguous signal (EXP-DRIV
   it('C2: stale + no rate-limit signal → restart still fires (coverage preserved)', async () => {
     seedHeartbeat(ctxRoot, 'a1', STALE);
     seedAgentLog(ctxRoot, 'a1', 'normal heartbeat output\nworking on task\n');
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).toHaveBeenCalledWith('a1');
+  });
+});
+
+/**
+ * SYS-STALE-WATCHDOG-IDLE-FP — idle-but-alive exemption.
+ *
+ * A stale heartbeat alone is NOT a wedge: `update-heartbeat` is activity-driven,
+ * so a sparse-cron idle agent is SUPPOSED to look stale. The discriminator
+ * (mirroring WedgeWatchdog Gate-1) is whether a cron actually FIRED in the stale
+ * window that the agent failed to process. This recurring false-positive HALTED
+ * 3 agents on 2026-06-23.
+ */
+describe('StaleAgentWatchdog idle-but-alive exemption (SYS-STALE-WATCHDOG-IDLE-FP)', () => {
+  let ctxRoot: string;
+  let frameworkRoot: string;
+  let spies: Spies;
+
+  beforeEach(() => {
+    ctxRoot = mkdtempSync(join(tmpdir(), 'cortextos-sw-idle-ctx-'));
+    frameworkRoot = mkdtempSync(join(tmpdir(), 'cortextos-sw-idle-fw-'));
+    spies = { restartAgent: vi.fn(), stopAgent: vi.fn() };
+  });
+  afterEach(() => {
+    rmSync(ctxRoot, { recursive: true, force: true });
+    rmSync(frameworkRoot, { recursive: true, force: true });
+  });
+
+  // The fix: stale hb + cron-exec log whose newest 'fired' entry is OLDER than
+  // the stale window = idle agent, no work to process → must NOT restart.
+  it('idle: stale hb + no cron fired within window → skipped (no restart)', async () => {
+    seedHeartbeat(ctxRoot, 'a1', STALE);
+    seedCronExecLog(ctxRoot, 'a1', 60 * MIN); // last fire 60m ago, window is 15m
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).not.toHaveBeenCalled();
+    expect(spies.stopAgent).not.toHaveBeenCalled();
+  });
+
+  // The genuine wedge: a cron DID fire within the window but the agent's
+  // heartbeat is still frozen — it got work and didn't tick → must restart.
+  it('wedge: stale hb + cron fired within window → restart still fires', async () => {
+    seedHeartbeat(ctxRoot, 'a1', STALE);
+    seedCronExecLog(ctxRoot, 'a1', 2 * MIN); // fired 2m ago, well inside the 15m window
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).toHaveBeenCalledWith('a1');
+  });
+
+  // Fail-safe: no cron-exec log at all = unknown signal → preserve restart
+  // (never weaken freeze detection on ambiguity). This is also why the existing
+  // no-cron-log tests above still restart.
+  it('fail-safe: stale hb + missing cron-exec log → restart (unknown ≠ idle)', async () => {
+    seedHeartbeat(ctxRoot, 'a1', STALE);
+    // No cron-exec log seeded.
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).toHaveBeenCalledWith('a1');
+  });
+
+  // POST-#83 non-ticking-cron false-positive: a cron fired in-window (looks like
+  // a wedge from the heartbeat) but the agent ACKED a cron-fire within the window
+  // → alive (it drained a non-ticking cron whose prompt never ticks the
+  // heartbeat) → must NOT restart. The 2026-06-26 systems-analyst incident.
+  it('alive: stale hb + cron fired in-window BUT cron-fire acked in-window → skipped (no restart)', async () => {
+    seedHeartbeat(ctxRoot, 'a1', STALE);
+    seedCronExecLog(ctxRoot, 'a1', 2 * MIN); // a cron fired 2m ago (inside 15m window)
+    seedCronAck(ctxRoot, 'a1', 4 * MIN);     // but the agent acked it 4m ago → alive
+    const wd = new StaleAgentWatchdog(
+      fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
+      ctxRoot,
+      frameworkRoot,
+    );
+    await wd.checkAndRestart();
+    expect(spies.restartAgent).not.toHaveBeenCalled();
+    expect(spies.stopAgent).not.toHaveBeenCalled();
+  });
+
+  // True wedge preserved: cron fired in-window, but the newest ack is OLDER than
+  // the window (agent stopped acking) → genuinely frozen → must restart. The
+  // 2026-06-26 integrations-routing contrast case.
+  it('wedge: stale hb + cron fired in-window + ack OLDER than window → restart still fires', async () => {
+    seedHeartbeat(ctxRoot, 'a1', STALE);
+    seedCronExecLog(ctxRoot, 'a1', 2 * MIN);  // fired 2m ago (inside window)
+    seedCronAck(ctxRoot, 'a1', 60 * MIN);     // last ack 60m ago (window is 15m) → wedged
     const wd = new StaleAgentWatchdog(
       fakeAgentManager([{ name: 'a1', status: 'running' }], spies),
       ctxRoot,

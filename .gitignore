@@ -9,6 +9,11 @@ node_modules/
 dist/
 ecosystem.config.js
 
+# Build / tooling scratch artifacts (never commit)
+.next/
+.obsidian/
+.playwright-mcp/
+
 # User-created org data (not part of the framework)
 orgs/
 # But community subdirectories ARE part of the framework

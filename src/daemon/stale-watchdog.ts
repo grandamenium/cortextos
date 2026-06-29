@@ -3,8 +3,9 @@ import { join } from 'path';
 import type { AgentManager } from './agent-manager.js';
 import { readAllHeartbeats, isHeartbeatStale } from '../bus/heartbeat.js';
 import { incrementCrashCount } from './crash-counter.js';
+import { cronExecutionLogPathFor } from '../bus/crons-schema.js';
 import { ensureDir } from '../utils/atomic.js';
-import type { BusPaths, AgentConfig } from '../types/index.js';
+import type { BusPaths, AgentConfig, CronExecutionLogEntry } from '../types/index.js';
 
 const DEFAULT_CHECK_INTERVAL_MS = 5 * 60 * 1000;    // 5 minutes
 const DEFAULT_STALE_THRESHOLD_MS = 15 * 60 * 1000;  // 15 minutes
@@ -310,6 +311,69 @@ export class StaleAgentWatchdog {
         this.lastLogAt.delete(name);
       }
 
+      // --- Idle-but-alive exemption (SYS-STALE-WATCHDOG-IDLE-FP) ---
+      // A stale heartbeat alone is NOT a wedge. `update-heartbeat` is
+      // activity-driven, so an idle agent — one with no cron fired in the stale
+      // window — is SUPPOSED to look stale (nothing triggered a heartbeat).
+      // Restarting it is a false-positive: it churns the fleet and, when crash
+      // counts accumulate, HALTS healthy agents (the 2026-06-23 incident).
+      //
+      // Mirror WedgeWatchdog Gate-1: only treat a stale heartbeat as a wedge if
+      // a cron actually FIRED within the window and the agent still didn't tick.
+      // If the cron-exec log positively shows no recent fire → idle → skip.
+      // Fail-safe: an UNKNOWN signal (missing/unreadable log) falls through to
+      // the existing restart path — ambiguity must never weaken genuine freeze
+      // detection. Scoped to the non-rate-limit path (rate-limited agents are
+      // handled above and must follow their reset/blind-wait logic).
+      if (!rateLimitInfo.isLimited && this.recentCronFireState(name, thresholdMs) === 'idle') {
+        const idleKey = `idle-${name}`;
+        const lastIdleLog = this.lastLogAt.get(idleKey) ?? 0;
+        if (Date.now() - lastIdleLog > 30 * 60 * 1000) {
+          const hbAgeMin = Math.round((Date.now() - new Date(hb.last_heartbeat).getTime()) / 60000);
+          console.log(
+            `[watchdog] ${name} heartbeat stale (${hbAgeMin}m) but no cron fired in ` +
+            `${thresholdMs / 60000}m — idle, not wedged. Skipping restart ` +
+            `(heartbeat is activity-driven; a freeze is caught when the next cron fires).`,
+          );
+          this.lastLogAt.set(idleKey, Date.now());
+        }
+        continue;
+      }
+
+      // --- Liveness-ack exemption (POST-#83 non-ticking-cron false-positive) ---
+      // recentCronFireState returning 'fired' means a cron fired in the window,
+      // NOT that the agent failed to process it. NON-TICKING crons — passive
+      // monitors (fleet-heartbeat-watch, *-watch) whose prompts never call
+      // `update-heartbeat` — leave the heartbeat stale even when the agent is
+      // perfectly healthy and processes them. From the heartbeat alone, a healthy
+      // agent draining a non-ticking cron is indistinguishable from a wedge.
+      //
+      // The disambiguator is the agent's cron-fire ACK: `update-cron-fire`, which
+      // every cron prompt calls at the END of its run. A `last_fire` inside the
+      // stale window is positive proof the session drained work and is ALIVE — so
+      // skip the restart even though `recentCronFireState` says 'fired'.
+      // (2026-06-26: systems-analyst restarted while acking fleet-heartbeat-watch
+      // 3.7min earlier — crash #5/10 toward HALT on a healthy agent.)
+      //
+      // Fail-safe: missing/unreadable ack state → no exemption (absence of
+      // positive liveness proof must NOT block a genuine wedge restart). A true
+      // wedge — fired-in-window with NO ack in-window (e.g. integrations-routing
+      // 2026-06-26: heartbeat cron fired, never acked) — still restarts.
+      if (!rateLimitInfo.isLimited && this.recentCronAck(name, thresholdMs)) {
+        const ackKey = `ack-${name}`;
+        const lastAckLog = this.lastLogAt.get(ackKey) ?? 0;
+        if (Date.now() - lastAckLog > 30 * 60 * 1000) {
+          const hbAgeMin = Math.round((Date.now() - new Date(hb.last_heartbeat).getTime()) / 60000);
+          console.log(
+            `[watchdog] ${name} heartbeat stale (${hbAgeMin}m) but acked a cron-fire ` +
+            `within ${thresholdMs / 60000}m — alive (processed a non-ticking cron), ` +
+            `not wedged. Skipping restart.`,
+          );
+          this.lastLogAt.set(ackKey, Date.now());
+        }
+        continue;
+      }
+
       // --- Restart ---
 
       // Enforce restart cooldown
@@ -360,6 +424,91 @@ export class StaleAgentWatchdog {
 
   /** Tracks last log timestamp per agent to avoid spamming */
   private lastLogAt: Map<string, number> = new Map();
+
+  /**
+   * Discriminate idle-but-alive from wedged using the agent's cron-execution
+   * log (mirrors WedgeWatchdog Gate-1). A stale heartbeat is only wedge-evidence
+   * if the daemon actually sent the agent work it failed to process.
+   *
+   * Returns:
+   *   'fired'   — a cron fired within windowMs (agent had work to process now)
+   *   'idle'    — log readable, newest 'fired' entry is older than windowMs
+   *               (the agent legitimately had nothing to do → stale hb expected)
+   *   'unknown' — log missing/unreadable, or no parseable 'fired' entry at all
+   *               (cannot confirm idleness → caller must NOT skip the restart)
+   *
+   * Scans newest-first and decides on the first (newest) 'fired' entry, matching
+   * WedgeWatchdog.checkCronFired's single-entry semantics.
+   */
+  private recentCronFireState(agentName: string, windowMs: number): 'fired' | 'idle' | 'unknown' {
+    const logPath = join(this.ctxRoot, cronExecutionLogPathFor(agentName));
+    if (!existsSync(logPath)) return 'unknown';
+    let lines: string[];
+    try {
+      lines = readFileSync(logPath, 'utf-8').trim().split('\n');
+    } catch {
+      return 'unknown';
+    }
+    const cutoffMs = Date.now() - windowMs;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      let entry: CronExecutionLogEntry;
+      try {
+        entry = JSON.parse(line) as CronExecutionLogEntry;
+      } catch {
+        continue;
+      }
+      if (entry.status !== 'fired') continue;
+      const ts = new Date(entry.ts).getTime();
+      if (isNaN(ts)) continue;
+      // Newest 'fired' entry decides: within window → still has work (wedge
+      // candidate); older than window → idle.
+      return ts >= cutoffMs ? 'fired' : 'idle';
+    }
+    // No parseable 'fired' entry anywhere → can't confirm the idle pattern.
+    return 'unknown';
+  }
+
+  /**
+   * Positive liveness check via the agent's cron-fire ACK registry
+   * (`state/<agent>/cron-state.json`). Agents call `update-cron-fire` at the END
+   * of every cron prompt, so a `last_fire` inside the window proves the session
+   * drained work — even for NON-TICKING crons (passive *-watch monitors whose
+   * prompts never call `update-heartbeat` and therefore leave the heartbeat
+   * stale despite the agent being healthy).
+   *
+   * Complements recentCronFireState: that returns 'fired' for any cron that
+   * fired, which from the heartbeat alone is indistinguishable from a wedge when
+   * the cron is non-ticking. The ack disambiguates — acked in-window → alive.
+   *
+   * Returns true iff some cron's `last_fire` is within windowMs. Missing or
+   * unreadable state → false (fail-safe: absence of positive proof must NOT
+   * suppress a genuine wedge restart).
+   */
+  private recentCronAck(agentName: string, windowMs: number): boolean {
+    const statePath = join(this.ctxRoot, 'state', agentName, 'cron-state.json');
+    if (!existsSync(statePath)) return false;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(statePath, 'utf-8'));
+    } catch {
+      return false;
+    }
+    const crons =
+      parsed && typeof parsed === 'object' &&
+      Array.isArray((parsed as { crons?: unknown }).crons)
+        ? (parsed as { crons: Array<{ last_fire?: unknown }> }).crons
+        : [];
+    const cutoffMs = Date.now() - windowMs;
+    for (const rec of crons) {
+      if (typeof rec.last_fire !== 'string') continue;
+      const fireMs = Date.parse(rec.last_fire);
+      if (!Number.isFinite(fireMs)) continue;
+      if (fireMs >= cutoffMs) return true;
+    }
+    return false;
+  }
 
   /**
    * Check if an agent is currently rate-limited and parse the reset time.
