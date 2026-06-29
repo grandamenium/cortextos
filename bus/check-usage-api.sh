@@ -302,25 +302,6 @@ if [[ -n "$CHAT_ID" ]]; then
     echo "$SEND_MSG" >&2
   fi
 
-  # Codex token expiry warning (< 24h)
-  CODEX_EXPIRES=$(CODEX_AUTH="$HOME/.codex/auth.json" python3 -c "
-import json, base64, time, os
-try:
-    auth = json.load(open(os.environ['CODEX_AUTH']))
-    token = auth.get('tokens', {}).get('access_token', '')
-    seg = token.split('.')[1] + '=='
-    payload = json.loads(base64.b64decode(seg))
-    print(round((payload.get('exp', 0) - time.time()) / 3600, 1))
-except: print(9999)
-" 2>/dev/null || echo 9999)
-  if python3 -c "import sys; sys.exit(0 if float('${CODEX_EXPIRES}') < 24 else 1)" 2>/dev/null; then
-    SEND_MSG="Warning: Codex OAuth token expires in ${CODEX_EXPIRES}h. Run Codex and re-authenticate."
-    if [[ -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
-      bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
-    fi
-    echo "$SEND_MSG" >&2
-  fi
-
   # Codex usage threshold checks (from wham/usage)
   CODEX_WHAM=$(_codex_wham_usage 2>/dev/null || echo "")
   if [[ -n "$CODEX_WHAM" ]]; then
