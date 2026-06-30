@@ -9,6 +9,7 @@ import {
   listExperiments,
   gatherContext,
   manageCycle,
+  isApprovalRequired,
 } from '../src/bus/experiment.js';
 
 describe('Sprint 3: Experiment Framework', () => {
@@ -439,6 +440,74 @@ describe('Sprint 3: Experiment Framework', () => {
 
     it('throws when creating without required fields', () => {
       expect(() => manageCycle(testDir, 'create', { name: 'x' })).toThrow('requires');
+    });
+  });
+
+  describe('isApprovalRequired', () => {
+    const configPath = () => join(testDir, 'experiments', 'config.json');
+
+    it('returns global approval_required when no cycle matches', () => {
+      writeFileSync(configPath(), JSON.stringify({ approval_required: true }));
+      expect(isApprovalRequired(testDir, 'testbot', 'engagement_rate')).toBe(true);
+    });
+
+    it('cycle-level false overrides global true', () => {
+      writeFileSync(
+        configPath(),
+        JSON.stringify({
+          approval_required: true,
+          cycles: [
+            { name: 'first_touch', agent: 'testbot', metric: 'engagement_rate', approval_required: false },
+          ],
+        }),
+      );
+      expect(isApprovalRequired(testDir, 'testbot', 'engagement_rate')).toBe(false);
+    });
+
+    it('cycle-level true overrides global false', () => {
+      writeFileSync(
+        configPath(),
+        JSON.stringify({
+          approval_required: false,
+          cycles: [
+            { name: 'gated', agent: 'testbot', metric: 'churn_rate', approval_required: true },
+          ],
+        }),
+      );
+      expect(isApprovalRequired(testDir, 'testbot', 'churn_rate')).toBe(true);
+    });
+
+    it('falls back to global when matching cycle does not set approval_required', () => {
+      writeFileSync(
+        configPath(),
+        JSON.stringify({
+          approval_required: true,
+          cycles: [{ name: 'plain', agent: 'testbot', metric: 'ctr' }],
+        }),
+      );
+      expect(isApprovalRequired(testDir, 'testbot', 'ctr')).toBe(true);
+    });
+
+    it('cycle match requires both metric and agent', () => {
+      writeFileSync(
+        configPath(),
+        JSON.stringify({
+          approval_required: true,
+          cycles: [
+            { name: 'other-agent', agent: 'someoneelse', metric: 'ctr', approval_required: false },
+          ],
+        }),
+      );
+      expect(isApprovalRequired(testDir, 'testbot', 'ctr')).toBe(true);
+    });
+
+    it('returns false when config is absent', () => {
+      expect(isApprovalRequired(testDir, 'testbot', 'anything')).toBe(false);
+    });
+
+    it('returns false on malformed config', () => {
+      writeFileSync(configPath(), '{not json');
+      expect(isApprovalRequired(testDir, 'testbot', 'anything')).toBe(false);
     });
   });
 });

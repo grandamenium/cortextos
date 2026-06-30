@@ -9,7 +9,7 @@ import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
-import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
+import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, isApprovalRequired } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { createApproval, updateApproval } from '../bus/approval.js';
@@ -715,9 +715,8 @@ busCommand
     });
     console.log(id);
 
-    // If approval_required is configured, auto-create an approval
-    const config = loadExperimentConfig(agentDir);
-    if (config.approval_required) {
+    // If approval is required (cycle-level setting overrides global), auto-create an approval
+    if (isApprovalRequired(agentDir, env.agentName, metric)) {
       const paths = resolvePaths(env.agentName, env.instanceId, env.org);
       const approvalId = await createApproval(
         paths,
