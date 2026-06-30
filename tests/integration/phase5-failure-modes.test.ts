@@ -646,6 +646,8 @@ describe('FM-4: .bak backup/restore — automatic readCrons() fallback', () => {
 
 describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift', () => {
   it('100 overdue crons fire exactly once each on restart; no double-fires', async () => {
+    // Disable cold-start stagger so all overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agent = 'fm-storm';
     ensureAgentDir(agent);
 
@@ -708,6 +710,8 @@ describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift',
   }, 30_000);
 
   it('50 crons with slow PTY (5ms each): tick latency stays under TICK_INTERVAL_MS', async () => {
+    // Disable cold-start stagger so all overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     // Quantifies the sequential-fire drift concern from architectural finding AF-2.
     const agent = 'fm-slow-pty';
     ensureAgentDir(agent);
@@ -1181,6 +1185,8 @@ describe('AF-1: lastGoodSchedule — transient corruption keeps crons firing', (
 
 describe('AF-2: Sequential fire under slow PTY — drift quantification', () => {
   it('10 crons × 10ms PTY delay: all fire within 2 ticks', async () => {
+    // Disable cold-start stagger so all overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agent = 'af-drift-10';
     ensureAgentDir(agent);
 
@@ -1204,6 +1210,8 @@ describe('AF-2: Sequential fire under slow PTY — drift quantification', () => 
   });
 
   it('50 crons × 10ms PTY delay: all fire, documented as 500ms total tick latency', async () => {
+    // Disable cold-start stagger so all overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agent = 'af-drift-50';
     ensureAgentDir(agent);
 
@@ -1227,6 +1235,8 @@ describe('AF-2: Sequential fire under slow PTY — drift quantification', () => 
   }, 30_000);
 
   it('100 crons × 10ms PTY delay: 1s tick latency — acceptable, documented scaling limit', async () => {
+    // Disable cold-start stagger so all overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     // Documented finding: 100 crons × 10ms = 1s tick latency.
     // This is acceptable (30s TICK_INTERVAL_MS has plenty of headroom).
     // Scale limit: ~3000 crons × 10ms = 30s (would fill TICK_INTERVAL_MS).
@@ -1296,6 +1306,8 @@ describe('FM-6: PTY blocked — retries until accepting, recovery within spec', 
   });
 
   it('PTY permanently blocked — all 4 attempts exhausted; scheduler continues, healthy cron unaffected', async () => {
+    // Disable cold-start stagger so both overdue crons land in the same tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agent = 'fm-pty-dead';
     ensureAgentDir(agent);
 

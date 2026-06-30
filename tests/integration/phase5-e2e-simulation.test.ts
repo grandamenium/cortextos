@@ -465,6 +465,8 @@ describe('Scenario 2: Daemon crash — stop mid-run, restart, bounded catch-up',
 
 describe('Scenario 3: Agent crash — PTY unavailable, graceful failure, recovery', () => {
   it('crons log failures gracefully when PTY unavailable; resume after agent restart', async () => {
+    // Disable cold-start stagger so overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agent = 'pty-crash-agent';
     ensureAgentDir(agent);
 
@@ -809,6 +811,8 @@ describe('Scenario 5: PTY degradation — slow injection, intermittent failure, 
    */
 
   it('5a: slow injection (200ms each call) — all crons eventually delivered within retry window', async () => {
+    // Disable cold-start stagger so overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agent = 'slow-pty-agent';
     ensureAgentDir(agent);
 
@@ -1002,6 +1006,8 @@ describe('Scenario 5: PTY degradation — slow injection, intermittent failure, 
 
 describe('Scenario 6: Concurrent stress — 10 crons fire simultaneously, no race conditions', () => {
   it('10 crons fire concurrently; all log entries present, no JSON corruption', async () => {
+    // Disable cold-start stagger so all 10 overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     // 3 agents: 3 + 3 + 4 = 10 crons total
     const agentDefs: Array<{ agent: string; names: string[] }> = [
       {
@@ -1091,6 +1097,8 @@ describe('Scenario 6: Concurrent stress — 10 crons fire simultaneously, no rac
   });
 
   it('second concurrent burst: 10 more simultaneous fires after 1h — cumulative counts correct', async () => {
+    // Disable cold-start stagger so overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
     const agentNames = ['burst-a', 'burst-b'];
     const namesA = ['ba1', 'ba2', 'ba3', 'ba4', 'ba5'];
     const namesB = ['bb1', 'bb2', 'bb3', 'bb4', 'bb5'];

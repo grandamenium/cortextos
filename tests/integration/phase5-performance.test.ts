@@ -258,6 +258,8 @@ describe('P-2: Fire latency — due cron fires within 1 min of schedule', () => 
   it('overdue cron fires on the very next tick (<30s after start)', async () => {
     vi.useFakeTimers();
     await reloadModules();
+    // Disable cold-start stagger so all overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
 
     const agent = 'p2-latency';
     ensureAgentDir(agent);
@@ -456,6 +458,8 @@ describe('P-5: Concurrent fires — 100 simultaneous crons succeed in <30s (simu
   it('100 overdue crons all fire within one 30s tick (fast no-op PTY)', async () => {
     vi.useFakeTimers();
     await reloadModules();
+    // Disable cold-start stagger so all 100 overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
 
     const agent = 'p5-concurrent-100';
     ensureAgentDir(agent);
@@ -520,6 +524,8 @@ describe('P-5: Concurrent fires — 100 simultaneous crons succeed in <30s (simu
     // The spec "all succeed in <30s" is satisfied because 1s << 30s TICK_INTERVAL_MS.
     vi.useFakeTimers();
     await reloadModules();
+    // Disable cold-start stagger so all 100 overdue crons fire within the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
 
     const agent = 'p5-slow-pty-100';
     ensureAgentDir(agent);
@@ -730,6 +736,8 @@ describe('SC-2: Scaling cliff — sequential fire drift at 1000 crons × 10ms PT
     // sequential firing would fill the entire 30s tick interval.
     vi.useFakeTimers();
     await reloadModules();
+    // Disable cold-start stagger so all 1000 overdue crons are due on the first tick
+    CronScheduler.CATCHUP_STAGGER_MS = 0;
 
     const agent = 'sc2-drift-1000';
     ensureAgentDir(agent);

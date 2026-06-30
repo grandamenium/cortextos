@@ -709,6 +709,43 @@ describe('CronScheduler', () => {
     expect(fired.some(c => c.name === 'overdue')).toBe(true);
   });
 
+  it('staggers multiple overdue crons across separate ticks on cold-start', async () => {
+    const savedStagger = CronScheduler.CATCHUP_STAGGER_MS;
+    // Use TICK + 1 so each slot lands strictly past the preceding tick boundary
+    // (slot i fires at now + i*(TICK+1) which is > now + (i-1)*TICK on tick i).
+    CronScheduler.CATCHUP_STAGGER_MS = TICK + 1;
+    try {
+      const twoHoursAgo = new Date(Date.now() - 2 * 3_600_000).toISOString();
+      mockReadCrons.mockReturnValue([
+        makeCron({ name: 'alpha',   schedule: '1h', last_fired_at: twoHoursAgo }),
+        makeCron({ name: 'beta',    schedule: '1h', last_fired_at: twoHoursAgo }),
+        makeCron({ name: 'gamma',   schedule: '1h', last_fired_at: twoHoursAgo }),
+      ]);
+
+      scheduler.start();
+
+      // Tick 1 (t = TICK): only alpha fires (nextFireAt = now, now+TICK+1 > TICK)
+      await vi.advanceTimersByTimeAsync(TICK);
+      const afterTick1 = fired.map(c => c.name);
+      expect(afterTick1).toContain('alpha');
+      expect(afterTick1).not.toContain('beta');
+      expect(afterTick1).not.toContain('gamma');
+
+      // Tick 2 (t = 2*TICK): beta fires (nextFireAt = now + TICK + 1 ≤ 2*TICK)
+      await vi.advanceTimersByTimeAsync(TICK);
+      const afterTick2 = fired.map(c => c.name);
+      expect(afterTick2).toContain('beta');
+      expect(afterTick2).not.toContain('gamma');
+
+      // Tick 3 (t = 3*TICK): gamma fires (nextFireAt = now + 2*(TICK+1) ≤ 3*TICK)
+      await vi.advanceTimersByTimeAsync(TICK);
+      const afterTick3 = fired.map(c => c.name);
+      expect(afterTick3).toContain('gamma');
+    } finally {
+      CronScheduler.CATCHUP_STAGGER_MS = savedStagger;
+    }
+  });
+
   it('does NOT fire on start when the cron is not yet due', async () => {
     // last_fired_at is 30 minutes ago, schedule is "1h" — not yet due
     const thirtyMinsAgo = new Date(Date.now() - 30 * 60_000).toISOString();
