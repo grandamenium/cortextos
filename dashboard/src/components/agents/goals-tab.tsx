@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { IconDeviceFloppy, IconTarget } from '@tabler/icons-react';
+import { IconDeviceFloppy, IconTarget, IconAlertTriangle } from '@tabler/icons-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 
 interface AgentGoals {
@@ -108,9 +108,18 @@ export function GoalsTab({ agentName, org }: GoalsTabProps) {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex items-start gap-2 rounded-md border border-warning/50 bg-warning/10 px-3 py-2 text-xs text-warning">
+            <IconAlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>
+              These fields are stored in <code className="font-mono">goals.json</code>, the
+              structured source. Saving updates it and regenerates{' '}
+              <code className="font-mono">GOALS.md</code> from it (when the built CLI is
+              available); the generated file is overwritten, so anything hand-authored
+              directly in <code className="font-mono">GOALS.md</code> is replaced.
+            </span>
+          </div>
           <p className="text-xs text-muted-foreground">
             Set by the orchestrator during morning cascade. Editable here for overrides.
-            Changes regenerate GOALS.md automatically.
           </p>
 
           <div>
