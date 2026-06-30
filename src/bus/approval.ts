@@ -269,29 +269,79 @@ export function updateApproval(
   }
 }
 
-/**
- * List pending approvals.
- */
-export function listPendingApprovals(paths: BusPaths): Approval[] {
-  const pendingDir = join(paths.approvalDir, 'pending');
+/** Read + parse every *.json in a single approvals/pending dir. Skips corrupt
+ * files; returns [] if the dir is absent. No status filter (caller decides). */
+function readPendingDir(pendingDir: string): Approval[] {
   let files: string[];
   try {
     files = readdirSync(pendingDir).filter(f => f.endsWith('.json'));
   } catch {
     return [];
   }
-
   const approvals: Approval[] = [];
   for (const file of files) {
     try {
-      const content = readFileSync(join(pendingDir, file), 'utf-8');
-      approvals.push(JSON.parse(content));
+      approvals.push(JSON.parse(readFileSync(join(pendingDir, file), 'utf-8')));
     } catch {
       // Skip corrupt
     }
   }
+  return approvals;
+}
 
-  return approvals.sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  );
+/** Parse a timestamp to epoch ms; malformed/missing dates coerce to 0 so the
+ * sort comparator can never produce NaN (which would leave order undefined). */
+function tsOf(s: string | undefined | null): number {
+  const t = new Date(s as string).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
+function byCreatedDesc(a: Approval, b: Approval): number {
+  return tsOf(b.created_at) - tsOf(a.created_at);
+}
+
+/**
+ * List pending approvals for a single org's approval dir.
+ *
+ * Filters on `status === 'pending'`: resolution moves files to `resolved/`,
+ * but a crash mid-move (or a divergent writer) can leave a resolved approval in
+ * `pending/`. Counting those produced the stale backlog in #193.
+ */
+export function listPendingApprovals(paths: BusPaths): Approval[] {
+  return readPendingDir(join(paths.approvalDir, 'pending'))
+    .filter(a => a.status === 'pending')
+    .sort(byCreatedDesc);
+}
+
+/**
+ * Collect every genuinely-pending approval system-wide: the root
+ * `<ctxRoot>/approvals/pending` plus each `<ctxRoot>/orgs/<org>/approvals/pending`.
+ *
+ * Single source of truth for `collect-metrics` (approvals_pending) and
+ * `list-approvals --all-orgs`, so the two can never disagree (#193). Keeps only
+ * `status === 'pending'` and dedups by id (an approval seen under two scanned
+ * dirs counts once).
+ */
+export function collectAllPendingApprovals(ctxRoot: string): Approval[] {
+  const dirs = [join(ctxRoot, 'approvals', 'pending')];
+  const orgsDir = join(ctxRoot, 'orgs');
+  try {
+    for (const entry of readdirSync(orgsDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        dirs.push(join(orgsDir, entry.name, 'approvals', 'pending'));
+      }
+    }
+  } catch {
+    // no orgs/ dir — root-only deployment
+  }
+
+  const byId = new Map<string, Approval>();
+  for (const dir of dirs) {
+    for (const a of readPendingDir(dir)) {
+      if (a.status === 'pending' && !byId.has(a.id)) {
+        byId.set(a.id, a);
+      }
+    }
+  }
+  return [...byId.values()].sort(byCreatedDesc);
 }
