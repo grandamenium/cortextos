@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added — Reusable CI workflow: Migration Collision Check (Theta Phase 8)
+
+- **`.github/workflows/migration-collision-check.yml`**: a `workflow_call` reusable workflow that consumer repos (initial target: conduit) wire into their PR CI to detect cross-PR migration-number collisions. Fails the calling PR's check if any migration it INTRODUCES has a number that (a) is already used by a migration on the base branch, or (b) is already proposed by another open (non-draft) PR in the same repo. Also catches internal duplicates within a single PR. Output is a GitHub `::error file=...::` annotation naming the colliding artifact (`on <base> as <path>` or `in open PR #N as <path>`). Defaults: `migrations-path: migrations`, `filename-pattern: ^([0-9]{3})_` (3-digit sequential prefix, the conduit convention from PR #283/#285); both are configurable inputs so timestamp-style migrations can opt in later. Permissions are minimal (`contents: read`, `pull-requests: read`), `actions/checkout` is SHA-pinned, all untrusted inputs go through `env:` (never inline `${{ }}` in shell).
+
 ### Hook Framework — Loop Detection (B1)
 
 - **`hook-loop-detector`**: new PreToolUse hook that detects and blocks repeated Claude tool-call loops. Two patterns are detected: (a) the same tool invoked with identical arguments 15+ times within the last 30 calls, and (b) two tools ping-ponging (24+ alternations within a 12-call dominant-pair window). Blocked calls are NOT recorded into history, so the wedge cannot self-perpetuate. History is time-windowed (60s) so a stale prior-session tail does not block the first call of a new session. After 30 minutes of continuous block, exactly one tool call is allowed through ("emergency escape") so the agent can issue a Telegram alert before re-entering the blocked window.
