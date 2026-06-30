@@ -27,6 +27,7 @@ export interface OAuthAccount {
   last_refreshed: string; // ISO 8601
   five_hour_utilization: number; // 0.0–1.0
   seven_day_utilization: number; // 0.0–1.0
+  source?: string;
 }
 
 export interface AccountsStore {
@@ -73,6 +74,8 @@ export interface RotateResult {
 
 const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
 const ROTATION_LOG_MAX = 50;
+const CLAUDE_CODE_OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const CLAUDE_CODE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 
 // Utilization thresholds for rotation trigger
 const THRESHOLD_5H = 0.85;
@@ -190,13 +193,15 @@ export async function checkUsageApi(
     const store = loadAccounts(ctxRoot);
     const acct = store?.accounts[opts.account];
     if (!acct) throw new Error(`Account "${opts.account}" not found in accounts.json`);
-    accessToken = acct.access_token;
+    const fresh = await refreshIfExpiringSoon(ctxRoot, opts.account, acct);
+    accessToken = fresh.access_token;
     accountName = opts.account;
   } else {
     // Fall back to env / Keychain
     const active = getActiveAccount(ctxRoot);
     if (active) {
-      accessToken = active.account.access_token;
+      const fresh = await refreshIfExpiringSoon(ctxRoot, active.name, active.account);
+      accessToken = fresh.access_token;
       accountName = active.name;
     } else {
       accessToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -266,6 +271,22 @@ export async function checkUsageApi(
   return { ...snapshot, cached: false };
 }
 
+async function refreshIfExpiringSoon(
+  ctxRoot: string,
+  accountName: string,
+  account: OAuthAccount,
+): Promise<OAuthAccount> {
+  if (account.expires_at - Date.now() >= 5 * 60 * 1000) {
+    return account;
+  }
+
+  await refreshOAuthToken(ctxRoot, accountName);
+  const refreshed = loadAccounts(ctxRoot);
+  const refreshedAccount = refreshed?.accounts[accountName];
+  if (!refreshedAccount) throw new Error(`Account "${accountName}" missing after refresh`);
+  return refreshedAccount;
+}
+
 // --- refresh-oauth-token ---
 
 /**
@@ -285,13 +306,19 @@ export async function refreshOAuthToken(
   if (!account) throw new Error(`Account "${name}" not found in accounts.json`);
   if (!account.refresh_token) throw new Error(`Account "${name}" has no refresh_token`);
 
-  const response = await fetch('https://console.anthropic.com/v1/oauth/token', {
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: account.refresh_token,
+    client_id: CLAUDE_CODE_OAUTH_CLIENT_ID,
+  });
+
+  const response = await fetch(CLAUDE_CODE_TOKEN_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'refresh_token',
-      refresh_token: account.refresh_token,
-    }),
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body,
   });
 
   if (!response.ok) {
@@ -319,8 +346,37 @@ export async function refreshOAuthToken(
     last_refreshed: new Date().toISOString(),
   };
   saveAccounts(ctxRoot, store);
+  syncClaudeCredentialsIfNeeded(account, tokens, expiresAt);
 
   return { account: name, expires_at: expiresAt };
+}
+
+function syncClaudeCredentialsIfNeeded(
+  account: OAuthAccount,
+  tokens: { access_token: string; refresh_token: string },
+  expiresAt: number,
+): void {
+  if (account.source !== '~/.claude/.credentials.json') return;
+
+  const credentialsPath = join(homedir(), '.claude', '.credentials.json');
+  if (!existsSync(credentialsPath)) return;
+
+  try {
+    const credentials = JSON.parse(readFileSync(credentialsPath, 'utf-8'));
+    if (!credentials?.claudeAiOauth) return;
+
+    credentials.claudeAiOauth = {
+      ...credentials.claudeAiOauth,
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token,
+      expiresAt,
+    };
+    atomicWriteSync(credentialsPath, JSON.stringify(credentials, null, 2));
+    try { chmodSync(credentialsPath, 0o600); } catch { /* ignore */ }
+  } catch {
+    // accounts.json is the source of truth for cortextOS usage checks. If the
+    // optional Claude Code credential sync fails, keep the successful refresh.
+  }
 }
 
 // --- rotate-oauth ---

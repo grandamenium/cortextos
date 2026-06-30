@@ -277,20 +277,59 @@ echo "$RESPONSE" > "$CACHE_FILE"
 ALERT_SENT=false
 
 if [[ -n "$CHAT_ID" ]]; then
-  FIVE_H=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('five_hour',{}).get('utilization'); print(v if v is not None else -1)" 2>/dev/null || echo -1)
-  SEVEN_D=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('seven_day',{}).get('utilization'); print(v if v is not None else -1)" 2>/dev/null || echo -1)
+  FIVE_H_RAW=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('five_hour',{}).get('utilization'); print(v if v is not None else -1)" 2>/dev/null || echo -1)
+  SEVEN_D_RAW=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('seven_day',{}).get('utilization'); print(v if v is not None else -1)" 2>/dev/null || echo -1)
   SEVEN_D_RESET=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('seven_day',{}).get('resets_at','unknown'))" 2>/dev/null || echo "unknown")
   FIVE_H_RESET=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('five_hour',{}).get('resets_at','unknown'))" 2>/dev/null || echo "unknown")
 
+  # API returns 0-1 fractions; convert to percentages for comparison and display
+  FIVE_H=$(python3 -c "v=float('${FIVE_H_RAW}'); print(round(v*100,1) if v >= 0 else -1)" 2>/dev/null || echo -1)
+  SEVEN_D=$(python3 -c "v=float('${SEVEN_D_RAW}'); print(round(v*100,1) if v >= 0 else -1)" 2>/dev/null || echo -1)
+
+  # Anomaly guard: 7d rolling window can't jump >50pp in one 6h polling interval.
+  # Seen 2026-06-14: API returned 1.0 (100%) when actual was ~3% — transient glitch.
+  PREV_READING_FILE="${CACHE_DIR}/prev-7d-pct.txt"
+  PREV_7D=$(cat "$PREV_READING_FILE" 2>/dev/null || echo -1)
+  ANOMALY_SUSPECTED=false
+  if python3 -c "import sys; prev=float('$PREV_7D'); curr=float('$SEVEN_D'); sys.exit(0 if curr >= 0 and prev >= 0 and curr-prev > 50 else 1)" 2>/dev/null; then
+    ANOMALY_SUSPECTED=true
+    echo "ANOMALY SUSPECTED: 7d jumped from ${PREV_7D}% to ${SEVEN_D}% in one interval — re-verifying before alert" >&2
+  fi
+  # Update last-known-good only when no anomaly suspected
+  if [[ "$ANOMALY_SUSPECTED" == "false" && "$SEVEN_D" != "-1" ]]; then
+    echo "$SEVEN_D" > "$PREV_READING_FILE"
+  fi
+
   # 7-day critical threshold
   if python3 -c "import sys; v=float('${SEVEN_D}'); sys.exit(0 if v >= ${WARN_7DAY} else 1)" 2>/dev/null; then
-    SEND_MSG="CODE RED: Claude Max 7-day usage at ${SEVEN_D}%. Resets: ${SEVEN_D_RESET}. Agents will hit hard limit soon. Action needed: reduce agent frequency or pause non-critical crons."
-    # Use send-telegram if available
-    if [[ -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
-      bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
+    if [[ "$ANOMALY_SUSPECTED" == "true" ]]; then
+      # Re-fetch (bypass cache) to confirm before alerting
+      sleep 10
+      VERIFY_RESP=$(curl -sf "https://api.anthropic.com/api/oauth/usage" \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+        -H "anthropic-beta: oauth-2025-04-20" \
+        --max-time 10 2>/dev/null || true)
+      if [[ -n "$VERIFY_RESP" ]]; then
+        SEVEN_D_VR=$(echo "$VERIFY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('seven_day',{}).get('utilization',-1); print(round(v*100,1) if v>=0 else -1)" 2>/dev/null || echo -1)
+        if python3 -c "import sys; v=float('${SEVEN_D_VR}'); sys.exit(0 if v >= ${WARN_7DAY} else 1)" 2>/dev/null; then
+          SEVEN_D="$SEVEN_D_VR"
+          echo "$SEVEN_D" > "$PREV_READING_FILE"
+        else
+          echo "ANOMALY CONFIRMED: ${SEVEN_D}% fell to ${SEVEN_D_VR}% on re-verify — transient API glitch, suppressing alert" >&2
+          SEVEN_D="$SEVEN_D_VR"
+          [[ "$SEVEN_D" != "-1" ]] && echo "$SEVEN_D" > "$PREV_READING_FILE"
+        fi
+      fi
     fi
-    ALERT_SENT=true
-    echo "$SEND_MSG" >&2
+    # Only alert if still above threshold after anomaly check
+    if python3 -c "import sys; v=float('${SEVEN_D}'); sys.exit(0 if v >= ${WARN_7DAY} else 1)" 2>/dev/null; then
+      SEND_MSG="CODE RED: Claude Max 7-day usage at ${SEVEN_D}% (confirmed). Resets: ${SEVEN_D_RESET}. Agents will hit hard limit soon. Action needed: reduce agent frequency or pause non-critical crons."
+      if [[ -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
+        bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
+      fi
+      ALERT_SENT=true
+      echo "$SEND_MSG" >&2
+    fi
   fi
 
   # 5-hour warning threshold

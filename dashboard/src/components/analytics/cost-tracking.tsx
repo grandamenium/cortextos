@@ -76,7 +76,7 @@ export function CostTracking({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {planUsage ? (
+          {planUsage && planUsage.week_all_models && planUsage.session && planUsage.week_sonnet ? (
             <div className="space-y-4">
               <UsageBar
                 pct={planUsage.week_all_models.used_pct}
