@@ -1,4 +1,8 @@
 node_modules/
+# Local git worktrees — created in-repo for isolated branch work.
+# Without this, auto-commit crons stage the worktree dir as a mode-160000
+# submodule gitlink every cycle.
+.worktrees/
 .claude/
 !.claude/commands/
 !.claude/commands/**
