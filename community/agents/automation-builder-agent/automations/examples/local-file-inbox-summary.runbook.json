@@ -1,0 +1,39 @@
+{
+  "$schema": "../schemas/runbook.schema.json",
+  "id": "local-file-inbox-summary-runbook",
+  "spec_id": "local-file-inbox-summary",
+  "target": "local-script",
+  "preconditions": [
+    "A local inbox directory exists.",
+    "The run is read-only for source files.",
+    "The output directory exists or can be created locally."
+  ],
+  "steps": [
+    "Create a fixture directory under tmp/local-file-inbox-summary/inbox.",
+    "Add two .txt files with sample notes.",
+    "Run the local summarizer in dry-run mode or manually produce the digest from the fixture files.",
+    "Write the digest to automations/runs/local-file-inbox-summary-digest.md.",
+    "Record the run result in automations/runs/local-file-inbox-summary-YYYY-MM-DD.json."
+  ],
+  "dry_run": "Use fixture files under tmp/ and write only to automations/runs/.",
+  "approval_gates": [
+    "Required before external sends, deletes, moves, syncs, or production scheduling."
+  ],
+  "observability": [
+    "Run record includes input count, output path, checks, status, and errors.",
+    "Heartbeat or task update notes blockers and result."
+  ],
+  "error_handling": [
+    "If the input directory is missing, fail with a clear message and do not create an empty production digest.",
+    "If a file cannot be read, include the filename in errors and mark the run failed.",
+    "If output cannot be written, preserve source files and mark the run failed."
+  ],
+  "rollback": "Remove the generated digest and run record. No source file changes are made.",
+  "tests": [
+    "Fixture with two files yields two entries.",
+    "Missing inbox returns failed run record.",
+    "Digest path is local.",
+    "No source files are modified."
+  ],
+  "maintenance_owner": "automation-builder-agent"
+}

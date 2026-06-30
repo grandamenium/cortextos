@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "normalized-doc.schema.json",
+  "title": "Normalized KB Document",
+  "type": "object",
+  "required": ["doc_id", "source_id", "raw_doc_id", "title", "content", "metadata", "privacy"],
+  "properties": {
+    "doc_id": { "type": "string" },
+    "source_id": { "type": "string" },
+    "raw_doc_id": { "type": "string" },
+    "title": { "type": "string" },
+    "content": { "type": "string" },
+    "metadata": {
+      "type": "object",
+      "required": ["hash", "created_at", "ingested_at", "owner", "tags", "confidence", "freshness"],
+      "properties": {
+        "source_path_or_url": { "type": "string" },
+        "hash": {
+          "type": "object",
+          "required": ["algorithm", "value"],
+          "properties": {
+            "algorithm": { "const": "sha256" },
+            "value": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "author": { "type": "string" },
+        "created_at": { "type": "string" },
+        "ingested_at": { "type": "string" },
+        "owner": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "confidence": { "enum": ["low", "medium", "high"] },
+        "freshness": { "enum": ["current", "review-soon", "stale", "unknown"] },
+        "transformation_notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "privacy": {
+      "type": "object",
+      "required": ["scope", "collection", "shared_approved"],
+      "properties": {
+        "scope": { "enum": ["private", "shared"] },
+        "collection": { "type": "string" },
+        "shared_approved": { "type": "boolean" },
+        "redactions": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

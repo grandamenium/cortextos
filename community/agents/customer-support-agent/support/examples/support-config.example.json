@@ -1,0 +1,65 @@
+{
+  "$schema": "../schemas/support-config.schema.json",
+  "product": {
+    "name": "Example Product",
+    "description": "A placeholder product used to smoke-test local support triage.",
+    "docs_sources": [
+      "support/macros.md",
+      "docs/"
+    ]
+  },
+  "intake": {
+    "default_connector": "local_files",
+    "local_ticket_file": "support/tickets.jsonl",
+    "optional_connectors": {
+      "zendesk": false,
+      "intercom": false,
+      "freshdesk": false,
+      "help_scout": false,
+      "gmail": false,
+      "outlook": false
+    }
+  },
+  "classification": {
+    "categories": [
+      "account",
+      "billing",
+      "bug",
+      "how-to",
+      "feature-request",
+      "incident",
+      "security",
+      "privacy",
+      "other"
+    ],
+    "priorities": [
+      "low",
+      "normal",
+      "high",
+      "urgent"
+    ],
+    "sentiments": [
+      "calm",
+      "confused",
+      "frustrated",
+      "angry"
+    ]
+  },
+  "sla": {
+    "low_hours": 72,
+    "normal_hours": 24,
+    "high_hours": 8,
+    "urgent_hours": 2
+  },
+  "approval": {
+    "customer_sends_require_approval": true,
+    "external_ticket_mutations_require_approval": true
+  },
+  "handoffs": {
+    "docs_owner": "knowledge-base-librarian",
+    "engineering_owner": "coding-agent",
+    "product_owner": "product-owner",
+    "billing_owner": "human",
+    "security_owner": "human"
+  }
+}

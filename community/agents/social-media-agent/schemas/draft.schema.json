@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.dev/schemas/social-media-agent/draft.schema.json",
+  "title": "Social Media Draft",
+  "type": "object",
+  "required": ["id", "created_at", "platform", "format", "status", "angle", "content", "approval_required"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "platform": { "type": "string" },
+    "account": { "type": "string" },
+    "format": { "type": "string" },
+    "status": { "type": "string", "enum": ["draft", "needs_revision", "pending_approval", "approved", "scheduled", "published", "rejected"] },
+    "source_signal_ids": { "type": "array", "items": { "type": "string" } },
+    "angle": {
+      "type": "object",
+      "required": ["hook", "promise", "proof", "cta"],
+      "additionalProperties": false,
+      "properties": {
+        "hook": { "type": "string" },
+        "promise": { "type": "string" },
+        "proof": { "type": "string" },
+        "cta": { "type": "string" },
+        "risk_notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "content": {
+      "type": "object",
+      "required": ["body"],
+      "additionalProperties": false,
+      "properties": {
+        "body": { "type": "string" },
+        "caption": { "type": "string" },
+        "script": { "type": "array", "items": { "type": "string" } },
+        "slides": { "type": "array", "items": { "type": "string" } },
+        "assets": { "type": "array", "items": { "type": "string" } },
+        "hashtags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "brand_voice": { "type": "string" },
+        "claims_verified": { "type": "boolean" },
+        "privacy_reviewed": { "type": "boolean" },
+        "platform_fit": { "type": "string" }
+      }
+    },
+    "approval_required": { "type": "boolean" },
+    "approval_id": { "type": "string" }
+  }
+}

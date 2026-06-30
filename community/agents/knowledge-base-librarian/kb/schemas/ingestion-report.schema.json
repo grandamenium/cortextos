@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ingestion-report.schema.json",
+  "title": "KB Ingestion Report",
+  "type": "object",
+  "required": ["batch_id", "started_at", "completed_at", "scope", "task_id", "sources", "documents", "verification", "outcome"],
+  "properties": {
+    "batch_id": { "type": "string" },
+    "started_at": { "type": "string" },
+    "completed_at": { "type": "string" },
+    "scope": { "enum": ["private", "shared"] },
+    "task_id": { "type": "string" },
+    "sources": { "type": "array", "items": { "type": "string" } },
+    "documents": {
+      "type": "object",
+      "required": ["raw_count", "normalized_count", "ingested_count", "skipped_count"],
+      "properties": {
+        "raw_count": { "type": "integer", "minimum": 0 },
+        "normalized_count": { "type": "integer", "minimum": 0 },
+        "ingested_count": { "type": "integer", "minimum": 0 },
+        "skipped_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["query", "passed", "notes"],
+        "properties": {
+          "query": { "type": "string" },
+          "passed": { "type": "boolean" },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "outcome": { "enum": ["completed", "completed_with_warnings", "blocked", "failed"] },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "follow_up_tasks": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

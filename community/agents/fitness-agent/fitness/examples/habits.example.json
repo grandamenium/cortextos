@@ -1,0 +1,20 @@
+[
+  {
+    "id": "walk",
+    "name": "Daily walk",
+    "target": "10 to 30 minutes at an easy pace",
+    "cadence": "daily",
+    "tracking": "evening check-in",
+    "minimum_viable_version": "put on shoes and walk for 5 minutes",
+    "off_limits": false
+  },
+  {
+    "id": "sleep-note",
+    "name": "Sleep note",
+    "target": "Record sleep quality in one sentence",
+    "cadence": "daily",
+    "tracking": "morning plan",
+    "minimum_viable_version": "one word",
+    "off_limits": false
+  }
+]

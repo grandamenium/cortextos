@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "repositories": [
+    {
+      "id": "example-app",
+      "name": "Example App",
+      "path": "../example-app",
+      "remote": "git@github.com:example/example-app.git",
+      "allowed": false,
+      "default_branch": "main",
+      "protected_branches": ["main", "production"],
+      "branch_policy": {
+        "mode": "worktree",
+        "name_pattern": "agent/{task_id}-{slug}",
+        "worktree_root": "work/worktrees"
+      },
+      "test_commands": {
+        "install": "npm install",
+        "lint": "npm run lint",
+        "unit": "npm test",
+        "typecheck": "npm run typecheck"
+      },
+      "ci": {
+        "provider": "github-actions",
+        "required_checks": ["lint", "test", "typecheck"]
+      },
+      "approval_required_for": ["open_pr", "update_pr", "post_comment", "merge", "deploy", "delete_branch", "external_message"],
+      "protected_paths": [".env", "secrets/**", "production/**"],
+      "notes": "Set allowed=true only after the user confirms this repository is in scope."
+    }
+  ]
+}

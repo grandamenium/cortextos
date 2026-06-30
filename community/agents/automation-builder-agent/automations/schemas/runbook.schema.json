@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Automation Runbook",
+  "type": "object",
+  "required": ["id", "spec_id", "target", "preconditions", "steps", "dry_run", "approval_gates", "observability", "rollback", "tests", "maintenance_owner"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "spec_id": {
+      "type": "string"
+    },
+    "target": {
+      "type": "string"
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dry_run": {
+      "type": "string"
+    },
+    "approval_gates": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "observability": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "error_handling": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rollback": {
+      "type": "string"
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "maintenance_owner": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "./schemas/escalation-policy.schema.json",
+  "default_owner": "human",
+  "rules": [
+    {
+      "name": "Security or privacy",
+      "match_categories": [
+        "security",
+        "privacy"
+      ],
+      "priority": "urgent",
+      "owner": "human",
+      "requires_approval_before_customer_send": true,
+      "instructions": "Do not diagnose, disclose sensitive information, or promise remediation. Create an escalation task with minimal necessary context."
+    },
+    {
+      "name": "Billing, refunds, or account access",
+      "match_categories": [
+        "billing",
+        "account"
+      ],
+      "priority": "high",
+      "owner": "human",
+      "requires_approval_before_customer_send": true,
+      "instructions": "Do not issue refunds, credits, account changes, or access changes without owner review."
+    },
+    {
+      "name": "Bug or incident",
+      "match_categories": [
+        "bug",
+        "incident"
+      ],
+      "priority": "high",
+      "owner": "engineering_owner",
+      "requires_approval_before_customer_send": true,
+      "instructions": "Create a bug or incident handoff with reproduction details, impact, timestamps, and customer-visible symptoms."
+    },
+    {
+      "name": "Angry or VIP customer",
+      "match_sentiments": [
+        "angry"
+      ],
+      "priority": "high",
+      "owner": "human",
+      "requires_approval_before_customer_send": true,
+      "instructions": "Draft empathetically, avoid defensive language, and get human review before sending."
+    }
+  ]
+}

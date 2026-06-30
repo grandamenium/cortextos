@@ -1,0 +1,35 @@
+{
+  "$schema": "../schemas/run-record.schema.json",
+  "id": "local-file-inbox-summary-example-run",
+  "automation_id": "local-file-inbox-summary",
+  "started_at": "2026-01-01T00:00:00Z",
+  "environment": "fixture",
+  "mode": "dry-run",
+  "status": "passed",
+  "inputs": {
+    "file_count": 2,
+    "source": "tmp/local-file-inbox-summary/inbox"
+  },
+  "outputs": {
+    "digest_path": "automations/runs/local-file-inbox-summary-digest.md",
+    "entry_count": 2
+  },
+  "checks": [
+    {
+      "name": "all fixture files included",
+      "status": "passed",
+      "note": "Both sample files appeared in the digest."
+    },
+    {
+      "name": "source files unchanged",
+      "status": "passed",
+      "note": "Workflow is read-only for source files."
+    },
+    {
+      "name": "external side effects",
+      "status": "passed",
+      "note": "No external sends or production changes."
+    }
+  ],
+  "errors": []
+}

@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "raw_retention": {
+    "mode": "copy",
+    "preserve_originals": true
+  },
+  "normalization": {
+    "formats": ["markdown", "json", "jsonl", "text"],
+    "hash_algorithm": "sha256",
+    "required_metadata": ["source_id", "hash", "owner", "privacy.scope", "tags", "ingested_at"]
+  },
+  "verification": {
+    "requires_query_check": true,
+    "minimum_queries": 1
+  },
+  "reporting": {
+    "write_json_report": true,
+    "write_markdown_summary": true
+  }
+}

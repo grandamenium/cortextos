@@ -1,0 +1,29 @@
+{
+  "brand_name": "Example Studio",
+  "brand_type": "company",
+  "audience": {
+    "primary": "Independent operators who want practical content systems.",
+    "secondary": ["solo founders", "small marketing teams"],
+    "problems": ["inconsistent posting", "generic messaging", "unclear approval process"],
+    "desired_outcomes": ["repeatable content pipeline", "clear voice", "safe publishing workflow"]
+  },
+  "voice": {
+    "tone": ["specific", "direct", "useful"],
+    "style_rules": ["Lead with the concrete takeaway.", "Use examples before abstractions."],
+    "banned_phrases": ["game changer", "revolutionary", "unlock your potential"],
+    "example_references": ["examples/approved-post.md"]
+  },
+  "content_pillars": [
+    {
+      "name": "Workflow Design",
+      "description": "Practical ways to make content operations repeatable.",
+      "formats": ["text_post", "carousel", "short_video"]
+    }
+  ],
+  "boundaries": {
+    "off_limits_topics": ["confidential client work", "unverified revenue claims"],
+    "claims_policy": "Only make claims backed by source material, user-provided facts, or clearly labeled opinion.",
+    "privacy_rules": ["Do not reveal private customer names without explicit approval."],
+    "approval_required_for": ["publishing", "scheduling", "comments", "DMs", "profile changes"]
+  }
+}

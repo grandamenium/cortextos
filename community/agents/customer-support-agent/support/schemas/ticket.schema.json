@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ticket.schema.json",
+  "title": "Support Ticket",
+  "type": "object",
+  "required": [
+    "id",
+    "source",
+    "created_at",
+    "requester",
+    "subject",
+    "body"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "local",
+        "zendesk",
+        "intercom",
+        "freshdesk",
+        "help_scout",
+        "gmail",
+        "outlook",
+        "github",
+        "linear",
+        "jira"
+      ]
+    },
+    "external_url": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "requester": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        }
+      }
+    },
+    "subject": {
+      "type": "string"
+    },
+    "body": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "classification": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ]
+        },
+        "sentiment": {
+          "type": "string"
+        },
+        "product_area": {
+          "type": "string"
+        },
+        "requires_escalation": {
+          "type": "boolean"
+        },
+        "sla_risk": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

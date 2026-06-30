@@ -1,0 +1,13 @@
+{
+  "date": "2026-06-13",
+  "status": "waiting_on_user",
+  "prompts": [
+    {
+      "time": "20:00",
+      "text": "What movement or habit did you complete today, and what got in the way?"
+    }
+  ],
+  "responses": [],
+  "next_actions": ["Append factual response to fitness/logs/YYYY-MM-DD.jsonl"],
+  "safety_flags": []
+}

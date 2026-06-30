@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "draft.schema.json",
+  "title": "Support Draft",
+  "type": "object",
+  "required": [
+    "ticket_id",
+    "created_at",
+    "status",
+    "approval_required",
+    "reply"
+  ],
+  "properties": {
+    "ticket_id": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "approval_requested",
+        "approved",
+        "rejected",
+        "sent",
+        "escalated"
+      ]
+    },
+    "approval_required": {
+      "type": "boolean",
+      "const": true
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reply": {
+      "type": "string"
+    },
+    "internal_notes": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fitness Habit",
+  "type": "object",
+  "required": ["id", "name", "target", "cadence", "tracking"],
+  "properties": {
+    "id": { "type": "string" },
+    "name": { "type": "string" },
+    "target": { "type": "string" },
+    "cadence": { "type": "string" },
+    "tracking": { "type": "string" },
+    "minimum_viable_version": { "type": "string" },
+    "off_limits": { "type": "boolean" }
+  }
+}

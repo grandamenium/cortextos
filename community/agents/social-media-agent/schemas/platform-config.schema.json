@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.dev/schemas/social-media-agent/platform-config.schema.json",
+  "title": "Social Media Platform Config",
+  "type": "object",
+  "required": ["platforms", "default_approval_policy"],
+  "additionalProperties": false,
+  "properties": {
+    "platforms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "handle", "mode", "formats"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "handle": { "type": "string" },
+          "mode": { "type": "string", "enum": ["research_only", "draft_only", "approved_posting", "disabled"] },
+          "formats": { "type": "array", "items": { "type": "string" } },
+          "cadence": { "type": "string" },
+          "tooling": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "research": { "type": "array", "items": { "type": "string" } },
+              "draft_storage": { "type": "string" },
+              "scheduling": { "type": "string" },
+              "analytics": { "type": "string" }
+            }
+          },
+          "constraints": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "default_approval_policy": {
+      "type": "object",
+      "required": ["external_actions_require_approval"],
+      "additionalProperties": false,
+      "properties": {
+        "external_actions_require_approval": { "type": "boolean" },
+        "allowed_without_approval": { "type": "array", "items": { "type": "string" } },
+        "always_requires_approval": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

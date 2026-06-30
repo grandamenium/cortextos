@@ -1,0 +1,9 @@
+{
+  "pending": [],
+  "approved": [],
+  "rejected": [],
+  "policy": {
+    "external_actions_require_approval": true,
+    "approval_required_for": ["publish", "schedule", "comment", "reply", "dm", "edit", "delete", "profile_change"]
+  }
+}

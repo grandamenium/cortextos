@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { installCommunityItem } from '../../../src/bus/catalog';
@@ -20,15 +20,19 @@ describe('installCommunityItem — install_path normalization (task_177623277537
     rmSync(ctxRoot, { recursive: true, force: true });
   });
 
-  function writeCatalog(installPath: string) {
+  function writeCatalog(
+    installPath: string,
+    type: 'skill' | 'agent' = 'skill',
+    name = 'tasks',
+  ) {
     const catalog = {
       version: '1.0.0',
       updated_at: '2026-04-15T00:00:00Z',
       items: [{
-        name: 'tasks',
+        name,
         description: 'test',
         author: 'test',
-        type: 'skill',
+        type,
         version: '1.0.0',
         tags: [],
         dependencies: [],
@@ -70,6 +74,18 @@ describe('installCommunityItem — install_path normalization (task_177623277537
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it('agent targets templates/personas/<name>/ so add-agent can spawn installed community personas', () => {
+    mkdirSync(join(frameworkRoot, 'community', 'agents', 'persona-agent'), { recursive: true });
+    writeFileSync(join(frameworkRoot, 'community', 'agents', 'persona-agent', 'AGENTS.md'), '# persona');
+    writeCatalog('community/agents/persona-agent', 'agent', 'persona-agent');
+
+    const r = installCommunityItem(frameworkRoot, ctxRoot, 'persona-agent');
+
+    expect(r.status).toBe('installed');
+    expect((r as { target: string }).target).toBe(join(frameworkRoot, 'templates', 'personas', 'persona-agent'));
+    expect(existsSync(join(frameworkRoot, 'templates', 'personas', 'persona-agent', 'AGENTS.md'))).toBe(true);
   });
 
   it('path traversal still rejected after normalization', () => {

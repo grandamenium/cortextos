@@ -1,0 +1,10 @@
+{
+  "focus": "Configure the knowledge base librarian with /setup",
+  "goals": [
+    "Create a source registry",
+    "Normalize and ingest high-value knowledge",
+    "Maintain search quality",
+    "Protect privacy and provenance"
+  ],
+  "bottleneck": "Setup not completed"
+}

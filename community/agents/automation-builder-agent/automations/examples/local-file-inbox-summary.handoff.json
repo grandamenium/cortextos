@@ -1,0 +1,21 @@
+{
+  "$schema": "../schemas/handoff.schema.json",
+  "id": "local-file-inbox-summary-handoff",
+  "spec_path": "automations/examples/local-file-inbox-summary.spec.json",
+  "runbook_path": "automations/examples/local-file-inbox-summary.runbook.json",
+  "recommended_target": "local-script",
+  "implementation_owner": "coding-agent or current automation-builder agent",
+  "blockers": [
+    {
+      "type": "none",
+      "description": "No credentials or external access required for local dry-run.",
+      "status": "not-applicable"
+    }
+  ],
+  "approval_required": false,
+  "local_verification": "Use tmp fixture files and record the run in automations/runs before any scheduling or external send is considered.",
+  "task": {
+    "id": "not-created",
+    "status": "not-created"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "focus": "Run /setup and get the user to their first useful cortextOS workflow with the smallest safe starter team",
+  "goals": [
+    "Capture one concrete first outcome and safety boundaries",
+    "Discover available tools without collecting secrets in chat",
+    "Recommend the smallest starter agent team",
+    "Create day-one workflow and handoff docs",
+    "Teach tasks, approvals, crons, memory, and outputs by doing",
+    "Approval-gate any agent creation or external mutation"
+  ],
+  "success_criteria": [
+    "concierge/onboarding-profile.json exists",
+    "concierge/starter-team-recommendation.json exists",
+    "concierge/day-one-workflow.json exists",
+    "At least one setup task is completed or blocked on approval/human action",
+    "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.onboarded exists"
+  ],
+  "bottleneck": "Setup not completed"
+}

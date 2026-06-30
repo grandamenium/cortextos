@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "taxonomy.schema.json",
+  "title": "KB Taxonomy",
+  "type": "object",
+  "required": ["version", "facets"],
+  "properties": {
+    "version": { "type": "string" },
+    "facets": {
+      "type": "object",
+      "required": ["topics", "audiences", "source_types", "freshness", "confidence"],
+      "properties": {
+        "topics": { "type": "array", "items": { "type": "string" } },
+        "audiences": { "type": "array", "items": { "type": "string" } },
+        "source_types": { "type": "array", "items": { "type": "string" } },
+        "freshness": { "type": "array", "items": { "type": "string" } },
+        "confidence": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

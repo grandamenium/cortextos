@@ -1,0 +1,29 @@
+{
+  "brand_name": "Unconfigured Brand",
+  "brand_type": "other",
+  "audience": {
+    "primary": "Configure during /setup.",
+    "secondary": [],
+    "problems": [],
+    "desired_outcomes": []
+  },
+  "voice": {
+    "tone": ["clear", "specific", "useful"],
+    "style_rules": ["Do not publish until setup and approval policy are complete."],
+    "banned_phrases": [],
+    "example_references": []
+  },
+  "content_pillars": [
+    {
+      "name": "Setup Required",
+      "description": "Replace this with configured content pillars during /setup.",
+      "formats": []
+    }
+  ],
+  "boundaries": {
+    "off_limits_topics": [],
+    "claims_policy": "Do not make unsupported claims. Configure source and claim rules during /setup.",
+    "privacy_rules": ["Do not reveal private information."],
+    "approval_required_for": ["publishing", "scheduling", "comments", "DMs", "profile changes"]
+  }
+}

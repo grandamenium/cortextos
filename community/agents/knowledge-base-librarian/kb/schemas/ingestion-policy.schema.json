@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ingestion-policy.schema.json",
+  "title": "KB Ingestion Policy",
+  "type": "object",
+  "required": ["version", "raw_retention", "normalization", "verification", "reporting"],
+  "properties": {
+    "version": { "type": "string" },
+    "raw_retention": {
+      "type": "object",
+      "required": ["mode", "preserve_originals"],
+      "properties": {
+        "mode": { "enum": ["copy", "reference_only"] },
+        "preserve_originals": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "normalization": {
+      "type": "object",
+      "required": ["formats", "hash_algorithm", "required_metadata"],
+      "properties": {
+        "formats": { "type": "array", "items": { "enum": ["markdown", "json", "jsonl", "text"] } },
+        "hash_algorithm": { "enum": ["sha256"] },
+        "required_metadata": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "required": ["requires_query_check", "minimum_queries"],
+      "properties": {
+        "requires_query_check": { "type": "boolean" },
+        "minimum_queries": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "reporting": {
+      "type": "object",
+      "required": ["write_json_report", "write_markdown_summary"],
+      "properties": {
+        "write_json_report": { "type": "boolean" },
+        "write_markdown_summary": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

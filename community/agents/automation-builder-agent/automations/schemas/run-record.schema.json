@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Automation Run Record",
+  "type": "object",
+  "required": ["id", "automation_id", "started_at", "environment", "mode", "status", "inputs", "outputs", "checks", "errors"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "automation_id": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "environment": {
+      "enum": ["local", "fixture", "staging", "production"]
+    },
+    "mode": {
+      "enum": ["dry-run", "read-only", "write"]
+    },
+    "status": {
+      "enum": ["passed", "failed", "blocked", "skipped"]
+    },
+    "inputs": {
+      "type": "object"
+    },
+    "outputs": {
+      "type": "object"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["passed", "failed", "skipped"]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fitness Check-In",
+  "type": "object",
+  "required": ["date", "status", "prompts", "responses", "next_actions", "safety_flags"],
+  "properties": {
+    "date": { "type": "string", "format": "date" },
+    "status": { "type": "string", "enum": ["open", "waiting_on_user", "complete", "blocked"] },
+    "prompts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["time", "text"],
+        "properties": {
+          "time": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "responses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["time", "text", "source"],
+        "properties": {
+          "time": { "type": "string" },
+          "text": { "type": "string" },
+          "source": { "type": "string" }
+        }
+      }
+    },
+    "next_actions": { "type": "array", "items": { "type": "string" } },
+    "safety_flags": { "type": "array", "items": { "type": "string" } }
+  }
+}

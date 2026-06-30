@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fitness Profile",
+  "type": "object",
+  "required": ["setup_status", "user", "goals", "baseline", "constraints", "tracking", "coaching", "schedule", "safety"],
+  "properties": {
+    "setup_status": { "type": "string", "enum": ["draft", "complete"] },
+    "user": {
+      "type": "object",
+      "required": ["display_name", "timezone", "privacy"],
+      "properties": {
+        "display_name": { "type": "string" },
+        "timezone": { "type": "string" },
+        "privacy": { "type": "string" }
+      }
+    },
+    "goals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "time_horizon", "success_markers"],
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "why_it_matters": { "type": "string" },
+          "time_horizon": { "type": "string" },
+          "success_markers": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "properties": {
+        "training_days_per_week": { "type": ["integer", "null"], "minimum": 0, "maximum": 7 },
+        "movement": { "type": "string" },
+        "sleep": { "type": "string" },
+        "recovery": { "type": "string" },
+        "available_equipment": { "type": "array", "items": { "type": "string" } },
+        "available_time": { "type": "string" }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "injuries_or_medical": { "type": "array", "items": { "type": "string" } },
+        "professional_guidance": { "type": "array", "items": { "type": "string" } },
+        "accessibility_needs": { "type": "array", "items": { "type": "string" } },
+        "off_limits_topics": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "tracking": {
+      "type": "object",
+      "required": ["source_of_truth", "metrics", "external_tools"],
+      "properties": {
+        "source_of_truth": { "type": "string" },
+        "metrics": { "type": "array", "items": { "type": "string" } },
+        "external_tools": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "coaching": {
+      "type": "object",
+      "required": ["tone", "direct_accountability_opt_in", "profanity_opt_in", "intensity_escalation_opt_in"],
+      "properties": {
+        "tone": { "type": "string" },
+        "direct_accountability_opt_in": { "type": "boolean" },
+        "profanity_opt_in": { "type": "boolean" },
+        "intensity_escalation_opt_in": { "type": "boolean" }
+      }
+    },
+    "schedule": {
+      "type": "object",
+      "properties": {
+        "morning_plan": { "type": "string" },
+        "evening_review": { "type": "string" },
+        "weekly_review": { "type": "string" },
+        "quiet_hours": { "type": "string" }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "required": ["no_medical_diagnosis", "no_unsafe_restriction", "no_body_shaming", "route_to_professional_when_needed"],
+      "properties": {
+        "no_medical_diagnosis": { "type": "boolean" },
+        "no_unsafe_restriction": { "type": "boolean" },
+        "no_body_shaming": { "type": "boolean" },
+        "route_to_professional_when_needed": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "timezone": "",
+  "mode": "day",
+  "template": "automation-builder-agent",
+  "setup_skill": "setup",
+  "working_directory": "",
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and AGENTS.md. Update heartbeat, check inbox/tasks, write memory, review blocked automations, and continue the highest-priority safe automation-builder task."
+    },
+    {
+      "name": "automation-backlog-review",
+      "type": "recurring",
+      "cron": "0 10 * * 1-5",
+      "prompt": "Create or update a task for automation backlog review. Read automations/registry.json, automations/specs, and .claude/skills/automation-discovery/SKILL.md. Identify stale candidates, missing blockers, and next safe local-first actions. Do not execute external or production automations without approval."
+    },
+    {
+      "name": "runbook-quality-review",
+      "type": "recurring",
+      "cron": "0 11 * * 5",
+      "prompt": "Create or update a task for runbook quality review. Read .claude/skills/automation-runbook/SKILL.md, inspect automations/runbooks and automations/runs, flag missing tests, rollback, observability, owner, approval gates, and credential blockers. Write findings to memory and registry."
+    }
+  ],
+  "domain_setup_skill": "automation-builder-setup"
+}

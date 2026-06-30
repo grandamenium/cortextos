@@ -1,0 +1,17 @@
+{
+  "$schema": "../schemas/kb-gap.schema.json",
+  "id": "kb-gap-example-001",
+  "created_at": "2026-01-15T14:15:00Z",
+  "ticket_ids": [
+    "example-ticket-001"
+  ],
+  "question": "What should support do when password reset emails do not arrive?",
+  "gap_type": "missing-doc",
+  "impact": "Customers may remain locked out and support may give inconsistent troubleshooting steps.",
+  "attempted_sources": [
+    "support/macros.md",
+    "docs/account-access.md"
+  ],
+  "suggested_fix": "Add a password reset troubleshooting article with email checks, escalation criteria, and account-compromise warning signs.",
+  "owner": "knowledge-base-librarian"
+}

@@ -1,0 +1,32 @@
+{
+  "date": "2026-06-13",
+  "profile_goal_ids": ["primary"],
+  "safety_notes": ["Keep intensity conversational unless the user opted into more."],
+  "workouts": [
+    {
+      "name": "Easy movement session",
+      "intent": "Build consistency without overreaching.",
+      "duration_minutes": 30,
+      "intensity": "easy",
+      "steps": ["5 minutes warm-up walk", "20 minutes easy walk or band circuit", "5 minutes cool-down"],
+      "modifications": ["Stop if pain or dizziness appears", "Swap to mobility if recovery is poor"]
+    }
+  ],
+  "habits": [
+    {
+      "id": "water",
+      "name": "Hydration check",
+      "target": "Drink water with two meals",
+      "cadence": "daily",
+      "tracking": "evening check-in",
+      "minimum_viable_version": "one glass with any meal",
+      "off_limits": false
+    }
+  ],
+  "checkins": [
+    {
+      "time": "20:00",
+      "prompt": "What movement or habit did you complete today, and what got in the way?"
+    }
+  ]
+}

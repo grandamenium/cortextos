@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.dev/schemas/coding-agent/repositories.schema.json",
+  "title": "Coding Agent Repository Registry",
+  "type": "object",
+  "required": ["version", "repositories"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "repositories": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/repository"
+      }
+    }
+  },
+  "$defs": {
+    "repository": {
+      "type": "object",
+      "required": ["id", "name", "path", "allowed", "default_branch", "protected_branches", "branch_policy", "test_commands", "approval_required_for"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string",
+          "description": "Local clone path, workspace-relative path, or setup placeholder."
+        },
+        "remote": {
+          "type": "string"
+        },
+        "allowed": {
+          "type": "boolean"
+        },
+        "default_branch": {
+          "type": "string"
+        },
+        "protected_branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "branch_policy": {
+          "type": "object",
+          "required": ["mode", "name_pattern"],
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["worktree", "branch-in-place", "ask"]
+            },
+            "name_pattern": {
+              "type": "string"
+            },
+            "worktree_root": {
+              "type": "string"
+            }
+          }
+        },
+        "test_commands": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "ci": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "provider": {
+              "type": "string",
+              "examples": ["github-actions", "gitlab-ci", "circleci", "local-only"]
+            },
+            "required_checks": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "approval_required_for": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["open_pr", "update_pr", "post_comment", "merge", "deploy", "delete_branch", "delete_data", "external_message"]
+          }
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

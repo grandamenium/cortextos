@@ -1,0 +1,14 @@
+.env
+!AGENTS.md
+memory/*.md
+kb/raw/*
+!kb/raw/.gitkeep
+!kb/raw/manual/
+!kb/raw/manual/.gitkeep
+kb/normalized/*
+!kb/normalized/.gitkeep
+!kb/normalized/manual/
+!kb/normalized/manual/.gitkeep
+kb/reports/*.md
+!kb/reports/setup-report.md
+tmp/

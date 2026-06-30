@@ -1,0 +1,11 @@
+{
+  "focus": "Configure the customer support agent with /setup, then run local-first support triage safely.",
+  "goals": [
+    "Triage support tickets from local files or configured connectors",
+    "Draft accurate source-grounded replies",
+    "Gate all customer sends and external ticket mutations on approval",
+    "Escalate risky account, billing, legal, security, privacy, incident, and policy-exception cases",
+    "Capture repeated questions, weak macros, missing docs, bugs, and product feedback as KB gaps"
+  ],
+  "bottleneck": "Setup not completed"
+}

@@ -2,7 +2,7 @@
 
 See `AGENTS.md` for the full cortextOS operating protocol.
 
-On first boot, run `.claude/skills/research-agent-setup/SKILL.md`. The setup skill turns this template into a user's research agent by collecting:
+On first boot, or when the user says `/setup`, run `.claude/skills/setup/SKILL.md`. That wrapper delegates to `.claude/skills/research-agent-setup/SKILL.md`, which turns this template into a user's research agent by collecting:
 
 - niche and target audience
 - source categories and exact sources

@@ -1,0 +1,75 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "{{timezone}}",
+  "mode": "day",
+  "template": "social-media-agent",
+  "setup_skill": "setup",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update heartbeat, check inbox, inspect content approvals and draft pipeline health, write memory, then continue the highest priority social-media-agent task. When finished, run: cortextos bus update-cron-fire heartbeat --interval 4h"
+    },
+    {
+      "name": "daily-content-brief",
+      "type": "recurring",
+      "cron": "0 9 * * 1-5",
+      "prompt": "Create a task for the daily content brief, mark it in_progress, then run .claude/skills/content-research/SKILL.md. Capture configured signals, write content/signals/YYYY-MM-DD.json and content/angles/YYYY-MM-DD.md, update heartbeat/events/memory, and complete or block the task. When finished or blocked, run: cortextos bus update-cron-fire daily-content-brief --interval \"0 9 * * 1-5\""
+    },
+    {
+      "name": "draft-pipeline-review",
+      "type": "recurring",
+      "cron": "0 13 * * 1-5",
+      "prompt": "Create a task for draft pipeline review, mark it in_progress, then run .claude/skills/draft-production/SKILL.md and .claude/skills/approval-routing/SKILL.md. Review angles, stale drafts, approval state, and scheduled handoffs. Do not publish or schedule without an approval. When finished or blocked, run: cortextos bus update-cron-fire draft-pipeline-review --interval \"0 13 * * 1-5\""
+    },
+    {
+      "name": "analytics-digest",
+      "type": "recurring",
+      "cron": "0 17 * * 5",
+      "prompt": "Create a task for analytics digest, mark it in_progress, then run .claude/skills/analytics-digest/SKILL.md. Read configured analytics exports or dashboards, write content/analytics/weekly/YYYY-MM-DD.json and .md summaries, update MEMORY.md with durable learnings, and create human tasks for missing analytics access. When finished or blocked, run: cortextos bus update-cron-fire analytics-digest --interval \"0 17 * * 5\""
+    },
+    {
+      "name": "weekly-retro",
+      "type": "recurring",
+      "cron": "0 10 * * 1",
+      "prompt": "Create a task for weekly content retro, mark it in_progress, then run .claude/skills/weekly-retro/SKILL.md. Review signals, drafts, approvals, published records, and analytics from the previous week; write content/retros/YYYY-MM-DD.md and update goals/tuning suggestions. When finished or blocked, run: cortextos bus update-cron-fire weekly-retro --interval \"0 10 * * 1\""
+    }
+  ],
+  "social_media": {
+    "brand_profile": "config/brand-profile.json",
+    "platform_config": "config/platform-config.json",
+    "content_calendar": "config/content-calendar.json",
+    "pipeline_root": "content",
+    "approval_state_dir": "content/approvals",
+    "analytics_dir": "content/analytics",
+    "default_delivery": "local_files",
+    "external_actions_require_approval": true
+  },
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion",
+      "platform-publishing",
+      "platform-scheduling",
+      "platform-comments",
+      "platform-dms",
+      "profile-changes"
+    ],
+    "never_ask": []
+  },
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    }
+  },
+  "domain_setup_skill": "social-media-setup"
+}

@@ -5,7 +5,7 @@ description: "Configure the research agent template: niche, sources, scoring, de
 
 # Research Agent Setup
 
-Interactive onboarding. Prompts the user for all configuration values and writes `config.json`.
+Interactive setup. Prompts the user for all configuration values, writes the research configuration, and marks the agent ready for normal operation.
 
 ---
 
@@ -18,6 +18,15 @@ On first boot, or when the user asks to configure or reconfigure the research ag
 ## Process
 
 Ask the user each question in order. Accept their answer before moving to the next. Write the completed config at the end.
+
+Before writing files, create or reuse a setup task, mark it `in_progress`, update heartbeat, and log `setup_started`.
+
+```bash
+TASK_ID=$(cortextos bus create-task "Complete research-agent setup" --desc "Configure research niche, sources, scoring, delivery, crons, memory, heartbeat, events, and onboarding state.")
+cortextos bus update-task "$TASK_ID" in_progress
+cortextos bus update-heartbeat "WORKING ON: research-agent setup"
+cortextos bus log-event action setup_started info --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"template\":\"research-agent\"}"
+```
 
 ---
 
@@ -57,6 +66,8 @@ Write or update:
 
 - `IDENTITY.md`
 - `USER.md`
+- `GOALS.md`
+- `MEMORY.md`
 - `TOOLS.md`
 - `research/sources.json`
 - `research/scoring-rubric.json`
@@ -81,3 +92,42 @@ Use `research.delivery.destination` and `research.delivery.requires_approval` fo
 delivery settings.
 
 Never write secrets into committed files. Confirm: "Setup complete. Add your API keys to .env or org secrets. Your first run will fire at [next scheduled time]."
+
+## Completion Contract
+
+After writing the files:
+
+1. Confirm daemon-managed crons exist and match the shipped names in `config.json`.
+
+   ```bash
+   cortextos bus list-crons "$CTX_AGENT_NAME"
+   ```
+
+   If any shipped cron is missing, add it with `cortextos bus add-cron` using the matching name, interval or cron expression, and prompt from `config.json`. Do not use session-local scheduling for persistent work.
+
+2. Write a setup memory entry.
+
+   ```bash
+   TODAY_UTC=$(date -u +%Y-%m-%d)
+   mkdir -p memory
+   cat >> "memory/$TODAY_UTC.md" <<EOF
+
+## Setup - $(date -u +%H:%M:%S UTC)
+- Status: setup complete
+- Current state: research sources, scoring rubric, delivery policy, crons, and approval boundaries configured.
+- Next: run source collection, signal scoring, brief generation, and delivery routing on the configured schedule.
+EOF
+   ```
+
+3. Mark onboarding complete, update heartbeat, complete the task, and log events.
+
+   ```bash
+   mkdir -p "${CTX_ROOT}/state/${CTX_AGENT_NAME}"
+   touch "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.onboarded"
+   cortextos bus update-heartbeat "online: research-agent setup complete"
+   cortextos bus complete-task "$TASK_ID" --result "Configured research-agent template, verified crons, wrote memory, and marked onboarding complete."
+   cortextos bus log-event task task_completed info --meta "{\"task_id\":\"$TASK_ID\",\"agent\":\"$CTX_AGENT_NAME\",\"template\":\"research-agent\"}"
+   cortextos bus log-event action setup_completed info --meta "{\"agent\":\"$CTX_AGENT_NAME\",\"template\":\"research-agent\"}"
+   ```
+
+If setup cannot finish because a human must provide credentials or choose sources, create a human task with exact instructions and block the setup task until that dependency is resolved.

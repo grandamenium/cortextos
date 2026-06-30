@@ -429,17 +429,48 @@ Do not scrape Instagram, X, or TikTok directly.
 ```python
 import subprocess, json, os
 
+APIFY_TIMEOUT_SECONDS = 30
+APIFY_MAX_STDOUT_BYTES = 2_000_000
+APIFY_MAX_ITEMS = 500
+
 def fetch_apify_actor(actor_id, input_payload):
     token = os.environ.get("APIFY_TOKEN", "")
     if not token:
         raise ValueError("APIFY_TOKEN not set")
-    result = subprocess.run(
-        ["apify", "call", actor_id, "--json", "--no-open-browser"],
-        input=json.dumps(input_payload),
-        capture_output=True, text=True,
-        env={**os.environ, "APIFY_TOKEN": token}
-    )
-    return json.loads(result.stdout) if result.returncode == 0 else []
+
+    try:
+        result = subprocess.run(
+            ["apify", "call", actor_id, "--json", "--no-open-browser"],
+            input=json.dumps(input_payload),
+            capture_output=True,
+            text=True,
+            timeout=APIFY_TIMEOUT_SECONDS,
+            env={**os.environ, "APIFY_TOKEN": token}
+        )
+    except subprocess.TimeoutExpired:
+        print(f"Apify actor {actor_id} timed out after {APIFY_TIMEOUT_SECONDS}s")
+        return []
+
+    if result.returncode != 0:
+        print(f"Apify actor {actor_id} failed: {result.stderr[:1000]}")
+        return []
+
+    stdout_bytes = result.stdout.encode("utf-8")
+    if len(stdout_bytes) > APIFY_MAX_STDOUT_BYTES:
+        print(f"Apify actor {actor_id} output exceeded {APIFY_MAX_STDOUT_BYTES} bytes")
+        return []
+
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        print(f"Apify actor {actor_id} returned invalid JSON: {exc}")
+        return []
+
+    items = parsed if isinstance(parsed, list) else parsed.get("items", [])
+    if len(items) > APIFY_MAX_ITEMS:
+        print(f"Apify actor {actor_id} returned {len(items)} items; truncating to {APIFY_MAX_ITEMS}")
+        items = items[:APIFY_MAX_ITEMS]
+    return items
 ```
 
 Actor IDs (from sources.json): `apify~instagram-api-scraper`, `fastdata~twitter-scraper`, `clockworks~tiktok-profile-scraper`.

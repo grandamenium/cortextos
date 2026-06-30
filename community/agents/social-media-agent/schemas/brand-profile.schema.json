@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.dev/schemas/social-media-agent/brand-profile.schema.json",
+  "title": "Social Media Brand Profile",
+  "type": "object",
+  "required": ["brand_name", "audience", "voice", "content_pillars", "boundaries"],
+  "additionalProperties": false,
+  "properties": {
+    "brand_name": { "type": "string", "minLength": 1 },
+    "brand_type": { "type": "string", "enum": ["person", "company", "community", "product", "publication", "other"] },
+    "audience": {
+      "type": "object",
+      "required": ["primary", "problems", "desired_outcomes"],
+      "additionalProperties": false,
+      "properties": {
+        "primary": { "type": "string", "minLength": 1 },
+        "secondary": { "type": "array", "items": { "type": "string" } },
+        "problems": { "type": "array", "items": { "type": "string" } },
+        "desired_outcomes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "voice": {
+      "type": "object",
+      "required": ["tone", "style_rules", "banned_phrases"],
+      "additionalProperties": false,
+      "properties": {
+        "tone": { "type": "array", "items": { "type": "string" } },
+        "style_rules": { "type": "array", "items": { "type": "string" } },
+        "banned_phrases": { "type": "array", "items": { "type": "string" } },
+        "example_references": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "content_pillars": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "formats": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "boundaries": {
+      "type": "object",
+      "required": ["off_limits_topics", "claims_policy", "approval_required_for"],
+      "additionalProperties": false,
+      "properties": {
+        "off_limits_topics": { "type": "array", "items": { "type": "string" } },
+        "claims_policy": { "type": "string" },
+        "privacy_rules": { "type": "array", "items": { "type": "string" } },
+        "approval_required_for": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

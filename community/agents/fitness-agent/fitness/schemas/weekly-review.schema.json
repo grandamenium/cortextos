@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Weekly Fitness Review Metadata",
+  "type": "object",
+  "required": ["week", "wins", "missed_commitments", "trends", "blockers", "safety_notes", "next_week_adjustments", "questions_for_user"],
+  "properties": {
+    "week": { "type": "string" },
+    "wins": { "type": "array", "items": { "type": "string" } },
+    "missed_commitments": { "type": "array", "items": { "type": "string" } },
+    "trends": { "type": "array", "items": { "type": "string" } },
+    "blockers": { "type": "array", "items": { "type": "string" } },
+    "safety_notes": { "type": "array", "items": { "type": "string" } },
+    "next_week_adjustments": { "type": "array", "items": { "type": "string" } },
+    "questions_for_user": { "type": "array", "items": { "type": "string" } }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": "1.0",
+  "created_at": "2026-06-13T10:05:00-04:00",
+  "basis": "The user wants searchable notes and a weekly themes report. One KB-focused starter agent is enough for day one.",
+  "recommended_agents": [
+    {
+      "template": "knowledge-base-librarian",
+      "agent_name": "kb-librarian",
+      "role": "Ingest local notes, maintain source registry, and verify search quality.",
+      "why": "The desired outcome depends on clean local knowledge ingestion before adding automation or project management.",
+      "first_task": "Ingest the selected notes folder privately and write a first themes report.",
+      "dependencies": ["User selects source folder"],
+      "approval_status": "not_requested"
+    }
+  ],
+  "approval_required": true,
+  "alternatives_considered": ["project-manager-agent can wait until themes become tasks", "automation-builder-agent can wait until the ingestion path is stable"],
+  "deferred_agents": ["project-manager-agent", "automation-builder-agent"]
+}

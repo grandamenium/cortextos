@@ -1,0 +1,69 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "{{timezone}}",
+  "mode": "day",
+  "template": "fitness-agent",
+  "setup_skill": "setup",
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and .claude/skills/heartbeat/SKILL.md. Update heartbeat, check inbox, inspect active fitness tasks, and continue the highest priority safe fitness-agent work. When finished, run: cortextos bus update-cron-fire heartbeat --interval 4h"
+    },
+    {
+      "name": "morning-fitness-plan",
+      "type": "recurring",
+      "cron": "0 7 * * *",
+      "prompt": "Create a task for the morning fitness plan, mark it in_progress, read fitness/profile.json plus recent fitness/logs and fitness/reviews, then write fitness/plans/YYYY-MM-DD.json using fitness/schemas/daily-plan.schema.json. Keep the plan realistic, safety-bounded, and aligned with the user's opted-in tone. When finished, complete the task and run: cortextos bus update-cron-fire morning-fitness-plan --interval \"0 7 * * *\""
+    },
+    {
+      "name": "evening-fitness-review",
+      "type": "recurring",
+      "cron": "0 20 * * *",
+      "prompt": "Create a task for the evening fitness review, mark it in_progress, read today's plan and check-ins, run .claude/skills/fitness-checkin/SKILL.md if updates are missing, append safe factual entries to fitness/logs/YYYY-MM-DD.jsonl, and write or update fitness/checkins/YYYY-MM-DD.json. Do not shame or diagnose. When finished or waiting on the user, complete or block the task and run: cortextos bus update-cron-fire evening-fitness-review --interval \"0 20 * * *\""
+    },
+    {
+      "name": "weekly-fitness-review",
+      "type": "recurring",
+      "cron": "0 9 * * 0",
+      "prompt": "Create a task for the weekly fitness review, mark it in_progress, read .claude/skills/weekly-fitness-review/SKILL.md, review fitness/plans, fitness/checkins, fitness/logs, and fitness/profile.json, then write fitness/reviews/YYYY-Www.md with wins, trends, blockers, safety notes, and next-week adjustments. When finished, complete the task and run: cortextos bus update-cron-fire weekly-fitness-review --interval \"0 9 * * 0\""
+    }
+  ],
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    }
+  },
+  "fitness": {
+    "profile_file": "fitness/profile.json",
+    "plans_dir": "fitness/plans",
+    "checkins_dir": "fitness/checkins",
+    "logs_dir": "fitness/logs",
+    "reviews_dir": "fitness/reviews",
+    "schemas_dir": "fitness/schemas",
+    "examples_dir": "fitness/examples",
+    "source_of_truth": "local_files",
+    "external_integrations": {
+      "calendar": "optional",
+      "wearable": "optional",
+      "spreadsheet": "optional",
+      "nutrition_app": "optional"
+    }
+  },
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "data-deletion"
+    ],
+    "never_ask": []
+  },
+  "domain_setup_skill": "fitness-setup"
+}

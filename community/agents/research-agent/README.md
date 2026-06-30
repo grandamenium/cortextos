@@ -18,7 +18,7 @@ This template is a generalized version of a working research agent pattern: coll
 ## First Run
 
 1. Install this template as a new cortextOS agent.
-2. Start the agent and run the `research-agent-setup` skill.
+2. Start the agent and run `/setup` (the generic wrapper delegates to `research-agent-setup`).
 3. Configure your niche, audience, sources, scoring keywords, output style, delivery destination, and approval rules.
 4. Put credentials in `.env`, org secrets, or connector auth flows. Do not paste secrets into chat.
 5. Let the configured daemon crons run the research cycles.

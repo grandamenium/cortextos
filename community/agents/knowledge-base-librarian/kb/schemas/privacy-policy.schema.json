@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "privacy-policy.schema.json",
+  "title": "KB Privacy Policy",
+  "type": "object",
+  "required": ["version", "default_scope", "shared_requires_explicit_approval", "blocked_patterns", "scope_rules"],
+  "properties": {
+    "version": { "type": "string" },
+    "default_scope": { "const": "private" },
+    "shared_requires_explicit_approval": { "const": true },
+    "blocked_patterns": { "type": "array", "items": { "type": "string" } },
+    "sensitive_categories": { "type": "array", "items": { "type": "string" } },
+    "scope_rules": {
+      "type": "object",
+      "required": ["private", "shared"],
+      "properties": {
+        "private": { "type": "array", "items": { "type": "string" } },
+        "shared": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

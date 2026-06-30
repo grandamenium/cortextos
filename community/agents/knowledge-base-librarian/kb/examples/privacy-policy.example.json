@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "default_scope": "private",
+  "shared_requires_explicit_approval": true,
+  "blocked_patterns": [
+    "API key",
+    "private key",
+    "password",
+    "secret token",
+    "credential file"
+  ],
+  "sensitive_categories": [
+    "customer data",
+    "employee data",
+    "health data",
+    "financial data",
+    "legal data",
+    "regulated data",
+    "confidential strategy"
+  ],
+  "scope_rules": {
+    "private": [
+      "Allowed for owner-approved personal, team, or agent retrieval.",
+      "Still block credentials and secrets."
+    ],
+    "shared": [
+      "Requires explicit source registry scope shared and shared_approved true.",
+      "Requires approval before ingesting sensitive or customer-facing material.",
+      "Must retain source citations and owner."
+    ]
+  }
+}

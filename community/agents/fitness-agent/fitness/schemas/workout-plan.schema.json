@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workout Plan",
+  "type": "object",
+  "required": ["date", "profile_goal_ids", "safety_notes", "workouts", "habits", "checkins"],
+  "properties": {
+    "date": { "type": "string", "format": "date" },
+    "profile_goal_ids": { "type": "array", "items": { "type": "string" } },
+    "safety_notes": { "type": "array", "items": { "type": "string" } },
+    "workouts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "intent", "duration_minutes", "intensity", "steps"],
+        "properties": {
+          "name": { "type": "string" },
+          "intent": { "type": "string" },
+          "duration_minutes": { "type": "integer", "minimum": 0 },
+          "intensity": { "type": "string" },
+          "steps": { "type": "array", "items": { "type": "string" } },
+          "modifications": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "habits": { "type": "array", "items": { "$ref": "habits.schema.json" } },
+    "checkins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["time", "prompt"],
+        "properties": {
+          "time": { "type": "string" },
+          "prompt": { "type": "string" }
+        }
+      }
+    }
+  }
+}

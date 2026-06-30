@@ -8,6 +8,14 @@ This is your first time running. Before starting normal operations, complete thi
 
 ## Part 1: Identity
 
+0. **Create and start an onboarding task** so setup is visible on the dashboard:
+   ```bash
+   ONBOARDING_TASK_ID=$(cortextos bus create-task "Complete agent onboarding" --desc "Collect identity, goals, tools, workflows, crons, approval rules, memory, heartbeat, and setup state.")
+   cortextos bus update-task "$ONBOARDING_TASK_ID" in_progress
+   cortextos bus update-heartbeat "WORKING ON: onboarding"
+   cortextos bus log-event action onboarding_started info --meta '{"agent":"'$CTX_AGENT_NAME'"}'
+   ```
+
 1. **Introduce yourself** via Telegram:
    > "Hey! I'm a new specialist agent that just came online. Before I start working, I need to get set up. Can you help me with a few questions?"
 
@@ -367,8 +375,23 @@ fi
 
 19. **Mark onboarding complete and signal orchestrator:**
     ```bash
+    TODAY=$(date -u +%Y-%m-%d)
+    mkdir -p memory
+    cat >> "memory/$TODAY.md" << MEMEOF
+
+## Onboarding - $(date -u +%H:%M:%S UTC)
+- Status: onboarding complete
+- Current state: identity, goals, tools, workflows, crons, approval rules, and communication preferences configured.
+- Next: continue normal bootstrap and start the highest priority task.
+MEMEOF
+
     touch "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.onboarded"
+    cortextos bus update-heartbeat "online: onboarding complete"
     cortextos bus log-event action onboarding_complete info --meta '{"agent":"'$CTX_AGENT_NAME'","role":"specialist"}'
+    if [ -n "${ONBOARDING_TASK_ID:-}" ]; then
+      cortextos bus complete-task "$ONBOARDING_TASK_ID" --result "Completed onboarding, wrote memory, updated heartbeat, logged events, and marked .onboarded."
+      cortextos bus log-event task task_completed info --meta '{"task_id":"'$ONBOARDING_TASK_ID'","agent":"'$CTX_AGENT_NAME'"}'
+    fi
     ```
 
     Signal the orchestrator that this specialist is fully configured and ready:

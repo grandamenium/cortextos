@@ -1,0 +1,33 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "timezone": "",
+  "mode": "day",
+  "template": "knowledge-base-librarian",
+  "setup_skill": "setup",
+  "working_directory": "",
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and AGENTS.md. Update heartbeat, check inbox/tasks, write memory, review active ingestion work, and continue the highest-priority safe knowledge-base task."
+    },
+    {
+      "name": "weekly-kb-maintenance-review",
+      "type": "recurring",
+      "cron": "0 10 * * 1",
+      "prompt": "Create or update a task for weekly KB maintenance review. Read kb/reports, kb/normalized, kb/sources/ingestion-policy.json, and .claude/skills/kb-maintenance-review/SKILL.md. Identify stale docs, failed ingestions, taxonomy drift, retrieval quality issues, and safe next actions. Do not modify shared collections without approval."
+    },
+    {
+      "name": "weekly-source-registry-review",
+      "type": "recurring",
+      "cron": "0 11 * * 1",
+      "prompt": "Create or update a task for weekly source registry review. Read kb/sources/source-registry.json and kb/sources/privacy-policy.json. Verify every source has owner, privacy scope, connector status, collection target, and next review date. Default unknown sources to private and create follow-up tasks for missing approvals or stale sources."
+    }
+  ],
+  "domain_setup_skill": "knowledge-base-librarian-setup"
+}

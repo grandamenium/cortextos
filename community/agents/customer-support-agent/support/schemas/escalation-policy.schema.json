@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "escalation-policy.schema.json",
+  "title": "Escalation Policy",
+  "type": "object",
+  "required": [
+    "default_owner",
+    "rules"
+  ],
+  "properties": {
+    "default_owner": {
+      "type": "string"
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "priority",
+          "owner",
+          "requires_approval_before_customer_send",
+          "instructions"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "match_categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "match_sentiments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "urgent"
+            ]
+          },
+          "owner": {
+            "type": "string"
+          },
+          "requires_approval_before_customer_send": {
+            "type": "boolean",
+            "const": true
+          },
+          "instructions": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

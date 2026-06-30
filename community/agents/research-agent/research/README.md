@@ -9,7 +9,7 @@ cp research/sources.example.json research/sources.json
 cp research/scoring-rubric.example.json research/scoring-rubric.json
 ```
 
-Then run the `research-agent-setup` skill or edit the files manually.
+Then run `/setup` or edit the files manually. `/setup` delegates to the `research-agent-setup` skill.
 
 Generated paths:
 

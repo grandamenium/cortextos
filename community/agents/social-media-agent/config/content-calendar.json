@@ -1,0 +1,6 @@
+{
+  "timezone": "{{timezone}}",
+  "cadence": "Configure during /setup.",
+  "slots": [],
+  "blackout_dates": []
+}

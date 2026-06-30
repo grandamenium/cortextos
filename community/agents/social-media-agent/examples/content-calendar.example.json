@@ -1,0 +1,23 @@
+{
+  "timezone": "America/New_York",
+  "cadence": "weekday draft review with weekly analytics retro",
+  "slots": [
+    {
+      "day": "Monday",
+      "time": "10:00",
+      "platform": "LinkedIn",
+      "format": "text_post",
+      "pillar": "Workflow Design",
+      "status": "draft_needed"
+    },
+    {
+      "day": "Wednesday",
+      "time": "10:00",
+      "platform": "LinkedIn",
+      "format": "document_carousel",
+      "pillar": "Workflow Design",
+      "status": "idea_needed"
+    }
+  ],
+  "blackout_dates": []
+}

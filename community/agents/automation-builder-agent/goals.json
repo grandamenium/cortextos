@@ -1,0 +1,11 @@
+{
+  "focus": "Complete setup, then build a backlog of safe, local-first automation specs and runbooks.",
+  "goals": [
+    "Discover repeated workflows and score automation candidates",
+    "Write implementation-ready specs with approval and rollback policy",
+    "Generate runbooks and local verification plans",
+    "Identify credential, human, and approval blockers before execution",
+    "Create handoffs for the right implementation target"
+  ],
+  "bottleneck": "Setup not completed"
+}

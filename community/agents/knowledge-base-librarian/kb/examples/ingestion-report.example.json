@@ -1,0 +1,24 @@
+{
+  "batch_id": "manual-drop-2026-01-01",
+  "started_at": "2026-01-01T00:00:00Z",
+  "completed_at": "2026-01-01T00:10:00Z",
+  "scope": "private",
+  "task_id": "task_example",
+  "sources": ["manual-notes"],
+  "documents": {
+    "raw_count": 1,
+    "normalized_count": 1,
+    "ingested_count": 1,
+    "skipped_count": 0
+  },
+  "verification": [
+    {
+      "query": "What did the manual note cover?",
+      "passed": true,
+      "notes": "The private KB returned the normalized example note with source metadata."
+    }
+  ],
+  "outcome": "completed",
+  "warnings": [],
+  "follow_up_tasks": []
+}

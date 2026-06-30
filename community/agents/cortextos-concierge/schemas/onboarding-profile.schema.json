@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortextos.local/schemas/concierge/onboarding-profile.schema.json",
+  "title": "Concierge Onboarding Profile",
+  "type": "object",
+  "required": ["version", "created_at", "outcome", "success_24h", "boundaries", "tools", "approval_policy"],
+  "properties": {
+    "version": { "type": "string" },
+    "created_at": { "type": "string" },
+    "timezone": { "type": "string" },
+    "outcome": { "type": "string", "minLength": 1 },
+    "category": { "type": "string" },
+    "success_24h": { "type": "string", "minLength": 1 },
+    "boundaries": {
+      "type": "object",
+      "required": ["never_touch", "external_writes_require_approval"],
+      "properties": {
+        "never_touch": { "type": "array", "items": { "type": "string" } },
+        "external_writes_require_approval": { "type": "boolean" },
+        "agent_creation_requires_approval": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "status"],
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "enum": ["available", "missing", "configured", "unknown"] },
+          "access": { "enum": ["read_only", "write_with_approval", "none", "unknown"] },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "human_tasks": { "type": "array", "items": { "type": "string" } },
+    "approval_policy": {
+      "type": "object",
+      "required": ["agent_creation", "external_writes"],
+      "properties": {
+        "agent_creation": { "const": "required" },
+        "external_writes": { "const": "required" },
+        "data_deletion": { "const": "required" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

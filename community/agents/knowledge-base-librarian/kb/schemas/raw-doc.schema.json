@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "raw-doc.schema.json",
+  "title": "Raw KB Document Manifest",
+  "type": "object",
+  "required": ["raw_doc_id", "source_id", "path", "hash", "privacy", "captured_at"],
+  "properties": {
+    "raw_doc_id": { "type": "string" },
+    "source_id": { "type": "string" },
+    "path": { "type": "string" },
+    "original_name": { "type": "string" },
+    "mime_type": { "type": "string" },
+    "hash": {
+      "type": "object",
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "value": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "privacy": {
+      "type": "object",
+      "required": ["scope", "shared_approved"],
+      "properties": {
+        "scope": { "enum": ["private", "shared"] },
+        "shared_approved": { "type": "boolean" },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "captured_at": { "type": "string" },
+    "notes": { "type": "string" }
+  },
+  "additionalProperties": false
+}

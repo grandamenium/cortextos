@@ -1,0 +1,27 @@
+{
+  "$schema": "../schemas/escalation-policy.schema.json",
+  "default_owner": "human",
+  "rules": [
+    {
+      "name": "Billing review",
+      "match_categories": [
+        "billing"
+      ],
+      "priority": "high",
+      "owner": "billing_owner",
+      "requires_approval_before_customer_send": true,
+      "instructions": "Create an escalation task before promising refunds, credits, invoice changes, or payment changes."
+    },
+    {
+      "name": "Security or privacy review",
+      "match_categories": [
+        "security",
+        "privacy"
+      ],
+      "priority": "urgent",
+      "owner": "security_owner",
+      "requires_approval_before_customer_send": true,
+      "instructions": "Minimize sensitive details and wait for owner review before any customer-facing response."
+    }
+  ]
+}

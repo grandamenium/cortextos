@@ -28,7 +28,7 @@ Before anything else, check if you have been onboarded:
 [[ -f "${CTX_ROOT}/state/${CTX_AGENT_NAME}/.onboarded" ]] && echo "ONBOARDED" || echo "NEEDS_ONBOARDING"
 ```
 
-If `NEEDS_ONBOARDING`: read `.claude/skills/onboarding/SKILL.md` and follow its instructions. Do NOT proceed with normal operations until onboarding is complete. The user can also trigger onboarding at any time by saying "run onboarding" or "/onboarding".
+If `NEEDS_ONBOARDING`: read `.claude/skills/onboarding/SKILL.md` and follow its instructions. Do NOT proceed with normal operations until onboarding is complete. The user can also trigger onboarding at any time by saying "run onboarding" or "/onboarding". If the user says `/setup`, `setup`, or `run setup`, read `.claude/skills/setup/SKILL.md`; it delegates to the research-specific setup flow.
 
 If `ONBOARDED`: continue with the session start protocol below.
 
@@ -443,17 +443,7 @@ For full CRUD protocol, see `.claude/skills/cron-management/SKILL.md`.
 
 ---
 
-## /loop vs Persistent Crons
-
-`/loop` is session-local — dies on restart. For ANY work that must survive restarts (heartbeats, daily reports, monitoring, experiment loops), use `cortextos bus add-cron`.
-
-| Need | Use |
-|------|-----|
-| Repeat for this session only | `/loop <interval> <prompt>` |
-| Persist across restarts | `cortextos bus add-cron` |
-| One-time future fire | `cortextos bus add-cron --schedule <ISO>` |
-
-For full model (retry logic, execution log, migration, examples, troubleshooting), see `.claude/skills/cron-management/SKILL.md`.
+For full cron model details (retry logic, execution log, migration, examples, and troubleshooting), see `.claude/skills/cron-management/SKILL.md`.
 
 ---
 
