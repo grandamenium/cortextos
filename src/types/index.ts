@@ -38,6 +38,21 @@ export interface TaskOutput {
   label?: string;
 }
 
+/**
+ * Hermes dispatcher provenance for a task served by the multi-backend worker.
+ * Attached optionally to Task.meta so the dashboard + planners can answer
+ * "which backend served this and what did it fall back from" without reading
+ * the hermes-dispatch.jsonl log. All fields optional — absent on non-Hermes tasks.
+ */
+export interface HermesTaskMeta {
+  /** BackendId of the backend that produced the served result ('claude' | 'codex' | 'gemini'). */
+  servedBy?: string;
+  /** The model that ACTUALLY ran (resolved, not requested). */
+  servedModel?: string;
+  /** Backends that were tried and fell over before the serving backend, in order. */
+  fellBackFrom?: string[];
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -68,6 +83,12 @@ export interface Task {
    */
   blocks?: string[];
   blocked_by?: string[];
+  /**
+   * Free-form structured metadata. Carries HermesTaskMeta provenance when the
+   * task was served by the Hermes multi-backend worker; optional so existing
+   * task files remain valid with this field absent.
+   */
+  meta?: HermesTaskMeta & Record<string, unknown>;
 }
 
 // Event Types
@@ -200,7 +221,7 @@ export interface AgentConfig {
    * NousResearch/hermes-agent) with Hermes-specific bootstrap, session
    * continuity, and exit handling.
    */
-  runtime?: 'claude-code' | 'hermes' | 'codex-app-server';
+  runtime?: 'claude-code' | 'hermes' | 'hermes-worker' | 'codex-app-server';
   /**
    * Whether this agent runs a Telegram poller. Defaults to true when absent
    * (preserves existing behaviour). Set to false on specialist agents that
