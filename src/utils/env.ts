@@ -96,7 +96,12 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
   if (agentDir && frameworkRoot) {
     const fwRootResolved = resolvePath(frameworkRoot);
     const agentDirResolved = resolvePath(agentDir);
-    if (agentDirResolved !== fwRootResolved && !agentDirResolved.startsWith(fwRootResolved + sep)) {
+    // Anchor the containment check with a trailing separator so a prefix match
+    // can't pass on a partial path segment. When fwRoot resolves to filesystem
+    // root '/', it already ends in sep — appending another yields '//', which no
+    // absolute path starts with, so the agentDir was wrongly rejected (issue #527).
+    const fwRootPrefix = fwRootResolved.endsWith(sep) ? fwRootResolved : fwRootResolved + sep;
+    if (agentDirResolved !== fwRootResolved && !agentDirResolved.startsWith(fwRootPrefix)) {
       throw new Error(
         `Resolved CTX_AGENT_DIR '${agentDir}' is not under CTX_FRAMEWORK_ROOT '${frameworkRoot}'. ` +
         `This indicates a sandbox/live environment leak — likely CTX_FRAMEWORK_ROOT was overridden ` +
