@@ -223,3 +223,100 @@ function recoverStaleInflight(
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Inbox / lock health monitor (Fix C — observability)
+//
+// A wedged inbox (e.g. a stale lock that `checkInbox` can't acquire) goes
+// SILENT — messages pile up and the agent looks idle. This is the day-1
+// visibility that would have surfaced the 2026-06-01 codex inbox deadlock
+// instead of it festering for 3 days. Read-only; safe to run every heartbeat.
+// ---------------------------------------------------------------------------
+
+export type InboxLockState = 'none' | 'pid_alive' | 'pid_dead' | 'pid_corrupt' | 'pid_missing';
+
+export interface InboxHealthRow {
+  agent: string;
+  depth: number;              // count of deliverable *.json in the inbox
+  lock: InboxLockState;       // state of the .lock file
+  lockAgeMs: number | null;   // age of the .lock file, or null if none
+  legacyLockDir: boolean;     // leftover pre-migration .lock.d directory
+  warnings: string[];         // human-readable health warnings (empty = healthy)
+}
+
+export interface InboxHealthOpts {
+  /** Limit to one agent; omit to scan every agent under inbox/. */
+  agent?: string;
+  /** WARN above this inbox depth (default 20). */
+  depthWarn?: number;
+  /** WARN when a LIVE-held lock is older than this (default 10min). */
+  lockAgeWarnMs?: number;
+}
+
+/**
+ * Per-agent inbox depth + lock state. WARN on: deep inbox (consumer not
+ * draining), a stale lock (dead/corrupt/pid-less — wedges checkInbox), a live
+ * lock held implausibly long, or a leftover .lock.d from before the migration.
+ */
+export function checkInboxHealth(ctxRoot: string, opts: InboxHealthOpts = {}): InboxHealthRow[] {
+  const depthWarn = opts.depthWarn ?? 20;
+  const lockAgeWarnMs = opts.lockAgeWarnMs ?? 10 * 60_000;
+  const inboxRoot = join(ctxRoot, 'inbox');
+
+  let agents: string[];
+  if (opts.agent) {
+    agents = [opts.agent];
+  } else {
+    try {
+      agents = readdirSync(inboxRoot).filter(a => {
+        try { return statSync(join(inboxRoot, a)).isDirectory(); } catch { return false; }
+      });
+    } catch {
+      agents = [];
+    }
+  }
+
+  const rows: InboxHealthRow[] = [];
+  for (const agent of agents) {
+    const dir = join(inboxRoot, agent);
+
+    let depth = 0;
+    try {
+      depth = readdirSync(dir).filter(f => f.endsWith('.json') && !f.startsWith('.')).length;
+    } catch { /* inbox dir gone — depth 0 */ }
+
+    let lock: InboxLockState = 'none';
+    let lockAgeMs: number | null = null;
+    const lockFile = join(dir, '.lock');
+    try {
+      lockAgeMs = Date.now() - statSync(lockFile).mtimeMs;
+      const raw = readFileSync(lockFile, 'utf-8').trim();
+      if (raw === '') {
+        lock = 'pid_missing';
+      } else {
+        const pid = parseInt(raw, 10);
+        if (Number.isNaN(pid)) {
+          lock = 'pid_corrupt';
+        } else {
+          try { process.kill(pid, 0); lock = 'pid_alive'; }
+          catch { lock = 'pid_dead'; }
+        }
+      }
+    } catch { /* no .lock file */ }
+
+    const legacyLockDir = existsSync(join(dir, '.lock.d'));
+
+    const warnings: string[] = [];
+    if (depth > depthWarn) warnings.push(`inbox depth ${depth} > ${depthWarn} (consumer not draining?)`);
+    if (lock === 'pid_dead' || lock === 'pid_corrupt' || lock === 'pid_missing') {
+      warnings.push(`stale lock (${lock}) — wedges checkInbox`);
+    }
+    if (lock === 'pid_alive' && lockAgeMs !== null && lockAgeMs > lockAgeWarnMs) {
+      warnings.push(`lock held ${Math.round(lockAgeMs / 60_000)}min > ${Math.round(lockAgeWarnMs / 60_000)}min`);
+    }
+    if (legacyLockDir) warnings.push('legacy .lock.d present (pre-migration leftover — safe to remove)');
+
+    rows.push({ agent, depth, lock, lockAgeMs, legacyLockDir, warnings });
+  }
+  return rows;
+}

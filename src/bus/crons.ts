@@ -46,9 +46,9 @@ function cronsFilePath(agentName: string): string {
 /**
  * Per-agent lock directory for the read-modify-write helpers below.
  *
- * `acquireLock` (utils/lock.ts) creates a `.lock.d` mkdir inside this
- * dir, so the dir itself must exist.  We mkdir-recursive on first use
- * — same idempotent path that atomicWriteSync uses.
+ * `acquireLock` (utils/lock.ts) creates a `.lock` file (hardlinked from a
+ * temp) inside this dir, so the dir itself must exist.  We mkdir-recursive on
+ * first use — same idempotent path that atomicWriteSync uses.
  *
  * Using the agent's directory (parent of crons.json) means different
  * agents don't block each other; only writers to the SAME agent's
