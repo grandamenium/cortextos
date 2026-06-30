@@ -147,6 +147,69 @@ function getOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken
   return null;
 }
 
+/**
+ * Verify the daemon's runtime CTX_ROOT is consistent with the instance it
+ * believes it is serving, BEFORE it touches any state directory.
+ *
+ * The daemon derives `ctxRoot` from `instanceId` (= `join(home, '.cortextos',
+ * instanceId)`) and otherwise ignores `process.env.CTX_ROOT`. But `pm2 restart
+ * --update-env` re-evaluates the ecosystem env in the calling SHELL, discarding
+ * the literal `env:` block — so a leaked/stale shell `CTX_ROOT` (or `CTX_ROOT_LOCK`)
+ * can disagree with the instance the daemon was meant to run as (confirmed sandbox
+ * flip incident 2026-06-04, issue #315). This check makes that disagreement
+ * fail closed instead of silently re-pointing the daemon.
+ *
+ * Rules (pure — no side effects, unit-testable):
+ *  - `CTX_ROOT_LOCK`, when set, is the authoritative pin: the instance-derived
+ *    `ctxRoot` MUST equal it, and a set `CTX_ROOT` must equal it too.
+ *  - Otherwise a set `CTX_ROOT` MUST equal the instance-derived path.
+ *  - An unset `CTX_ROOT`/`CTX_ROOT_LOCK` is OK (the daemon derives correctly).
+ */
+export function checkCtxRootConsistency(opts: {
+  instanceId: string;
+  home: string;
+  envCtxRoot?: string;
+  lock?: string;
+}): { ok: true } | { ok: false; expected: string; got: string; via: 'CTX_ROOT_LOCK' | 'CTX_ROOT' } {
+  const expected = join(opts.home, '.cortextos', opts.instanceId);
+  const envCtxRoot = opts.envCtxRoot && opts.envCtxRoot.length > 0 ? opts.envCtxRoot : undefined;
+  const lock = opts.lock && opts.lock.length > 0 ? opts.lock : undefined;
+
+  if (lock !== undefined) {
+    if (lock !== expected) return { ok: false, expected, got: lock, via: 'CTX_ROOT_LOCK' };
+    if (envCtxRoot !== undefined && envCtxRoot !== lock) {
+      return { ok: false, expected: lock, got: envCtxRoot, via: 'CTX_ROOT' };
+    }
+    return { ok: true };
+  }
+  if (envCtxRoot !== undefined && envCtxRoot !== expected) {
+    return { ok: false, expected, got: envCtxRoot, via: 'CTX_ROOT' };
+  }
+  return { ok: true };
+}
+
+/** Best-effort operator Telegram alert (shares the crash-loop creds resolution). */
+function sendOperatorAlertBestEffort(frameworkRoot: string, message: string): boolean {
+  const creds = getOperatorChatCreds(frameworkRoot);
+  if (!creds) {
+    console.error('[daemon] Operator alert: no operator chat configured ' +
+      '(set CTX_OPERATOR_CHAT_ID + CTX_OPERATOR_BOT_TOKEN, or ensure at least one agent .env exists)');
+    return false;
+  }
+  try {
+    const r = spawnSync('curl', [
+      '-s', '--max-time', '3',
+      '-X', 'POST',
+      `https://api.telegram.org/bot${creds.botToken}/sendMessage`,
+      '-d', `chat_id=${creds.chatId}`,
+      '--data-urlencode', `text=${message}`,
+    ], { timeout: TELEGRAM_SEND_TIMEOUT_MS, stdio: 'pipe' });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
 function sendCrashLoopAlertBestEffort(
   frameworkRoot: string,
   crashCount: number,
@@ -243,6 +306,28 @@ class Daemon {
 
     if (!frameworkRoot) {
       console.error('[daemon] CTX_FRAMEWORK_ROOT not set');
+      process.exit(1);
+    }
+
+    // Fail closed if the runtime CTX_ROOT disagrees with the instance we're
+    // serving — catches `pm2 restart --update-env` silently flipping the daemon
+    // onto a different (e.g. live) state root. Runs BEFORE any state-dir write.
+    const ctxRootCheck = checkCtxRootConsistency({
+      instanceId: this.instanceId,
+      home: homedir(),
+      envCtxRoot: process.env.CTX_ROOT,
+      lock: process.env.CTX_ROOT_LOCK,
+    });
+    if (!ctxRootCheck.ok) {
+      const msg =
+        `🚨 FATAL: cortextos daemon CTX_ROOT mismatch — refusing to start.\n` +
+        `instance=${this.instanceId} via=${ctxRootCheck.via}\n` +
+        `expected=${ctxRootCheck.expected}\n` +
+        `got=${ctxRootCheck.got}\n` +
+        `This usually means 'pm2 restart --update-env' re-evaluated a stale shell env. ` +
+        `Use 'pm2 delete' + 'pm2 start' from the ecosystem file instead.`;
+      console.error(`[daemon] ${msg.replace(/\n/g, ' ')}`);
+      sendOperatorAlertBestEffort(frameworkRoot, msg);
       process.exit(1);
     }
 
