@@ -1,12 +1,20 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import type { TelegramUpdate, TelegramMessage, TelegramCallbackQuery, TelegramMessageReaction } from '../types/index.js';
+import type { BusPaths, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, TelegramMessageReaction } from '../types/index.js';
 import { TelegramAPI } from './api.js';
 import { ensureDir } from '../utils/atomic.js';
+import { logEvent } from '../bus/event.js';
 
 export type MessageHandler = (msg: TelegramMessage) => void;
 export type CallbackHandler = (query: TelegramCallbackQuery) => void;
 export type ReactionHandler = (reaction: TelegramMessageReaction) => void;
+
+export interface TelegramPollerObservability {
+  paths?: BusPaths;
+  agentName?: string;
+  org?: string;
+  log?: (m: string) => void;
+}
 
 /**
  * Telegram polling loop. Replaces the Telegram portion of fast-checker.sh.
@@ -22,6 +30,7 @@ export class TelegramPoller {
   private callbackHandlers: CallbackHandler[] = [];
   private reactionHandlers: ReactionHandler[] = [];
   private pollInterval: number;
+  private observability?: TelegramPollerObservability;
   /**
    * Why the poll loop last exited. Read by AgentManager's poller-supervisor
    * (#459 supervision-gap fix) to decide whether to restart:
@@ -48,10 +57,17 @@ export class TelegramPoller {
    *   write to `.telegram-offset` and lose track of which bot each
    *   offset belonged to.
    */
-  constructor(api: TelegramAPI, stateDir: string, pollInterval: number = 1000, offsetFileSuffix?: string) {
+  constructor(
+    api: TelegramAPI,
+    stateDir: string,
+    pollInterval: number = 1000,
+    offsetFileSuffix?: string,
+    observability?: TelegramPollerObservability,
+  ) {
     this.api = api;
     this.stateDir = stateDir;
     this.pollInterval = pollInterval;
+    this.observability = observability;
     this.offsetFileName = offsetFileSuffix
       ? `.telegram-offset-${offsetFileSuffix}`
       : '.telegram-offset';
@@ -102,6 +118,17 @@ export class TelegramPoller {
           this.running = false;
           return;
         }
+        // A 401 Unauthorized means the BOT_TOKEN is invalid or not yet loaded.
+        // This is a PERMANENT failure, not transient — retrying getUpdates once
+        // per second never clears it. Exit the loop so the supervisor backs off
+        // instead of hot-looping. (2026-06-22 OOM: a stale token spammed ~1
+        // error/sec for days → 95k errors → 785MB log → daemon killed.)
+        if (/Unauthorized|\b401\b/i.test(msg)) {
+          console.error('[telegram-poller] Auth failure (401 Unauthorized) — BOT_TOKEN invalid or unloaded. Exiting loop; supervisor will back off.');
+          this.lastExitReason = 'auth-failed';
+          this.running = false;
+          return;
+        }
         // Other errors are transient — log and continue polling.
         console.error('[telegram-poller] Poll error:', err);
       }
@@ -134,7 +161,10 @@ export class TelegramPoller {
 
     for (const update of result.result as TelegramUpdate[]) {
       const nextOffset = update.update_id + 1;
+      const updateType = detectUpdateType(update);
       let handlerFailed = false;
+
+      this.observability?.log?.(`[telegram-poller] update_id=${update.update_id} type=${updateType}`);
 
       if (update.message) {
         for (const handler of this.messageHandlers) {
@@ -169,6 +199,17 @@ export class TelegramPoller {
             handlerFailed = true;
             break;
           }
+        }
+      }
+
+      if (!update.message && !update.callback_query && !update.message_reaction) {
+        const keys = Object.keys(update);
+        console.warn(`[telegram-poller] UNKNOWN update shape: update_id=${update.update_id} keys=${keys.join(',')}`);
+        if (this.observability?.paths && this.observability.agentName && this.observability.org) {
+          logEvent(this.observability.paths, this.observability.agentName, this.observability.org, 'error', 'telegram_unknown_update', 'warning', {
+            update_id: update.update_id,
+            keys,
+          });
         }
       }
 
@@ -217,4 +258,11 @@ export class TelegramPoller {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function detectUpdateType(update: TelegramUpdate): 'message' | 'callback_query' | 'message_reaction' | 'unknown' {
+  if (update.message) return 'message';
+  if (update.callback_query) return 'callback_query';
+  if (update.message_reaction) return 'message_reaction';
+  return 'unknown';
 }

@@ -20,12 +20,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { platform, tmpdir } from 'os';
 import { WsUnixJsonRpcClient } from '../../src/utils/ws-unix-client.js';
 
 const { MockCodexServer } = require('./mock-codex.js') as {
   MockCodexServer: new (options: {
-    socketPath: string;
+    socketPath?: string;
+    host?: string;
+    port?: number;
     skills?: Array<{ name: string; path: string; enabled?: boolean }>;
     turnDeltaText?: string;
     tokenUsage?: Record<string, number>;
@@ -34,6 +36,7 @@ const { MockCodexServer } = require('./mock-codex.js') as {
 };
 
 interface MockCodexServerInstance {
+  port?: number;
   listen(): Promise<void>;
   close(): Promise<void>;
   failNextWith(code: number, message: string): void;
@@ -44,6 +47,7 @@ interface MockCodexServerInstance {
 describe('E2E codex lifecycle (mock-codex.js + WsUnixJsonRpcClient)', () => {
   let testDir: string;
   let socketPath: string;
+  let endpoint: string;
   let server: MockCodexServerInstance;
   let client: WsUnixJsonRpcClient;
   let notifications: Array<{ method: string; params: unknown }>;
@@ -51,14 +55,16 @@ describe('E2E codex lifecycle (mock-codex.js + WsUnixJsonRpcClient)', () => {
   beforeEach(async () => {
     testDir = mkdtempSync(join(tmpdir(), 'lifecycle-codex-'));
     socketPath = join(testDir, 'codex.sock');
+    const useTcp = platform() === 'win32';
     server = new MockCodexServer({
-      socketPath,
+      ...(useTcp ? { host: '127.0.0.1', port: 0 } : { socketPath }),
       skills: [{ name: 'review-pr', path: '/skills/review-pr', enabled: true }],
       turnDeltaText: 'hello world',
     });
     await server.listen();
+    endpoint = useTcp ? `ws://127.0.0.1:${server.port}` : socketPath;
     notifications = [];
-    client = new WsUnixJsonRpcClient(socketPath);
+    client = new WsUnixJsonRpcClient(endpoint);
     client.onMessage((message) => {
       if (typeof message === 'object' && message !== null && 'method' in message && !('id' in message)) {
         notifications.push({ method: (message as { method: string }).method, params: (message as { params: unknown }).params });
@@ -68,8 +74,8 @@ describe('E2E codex lifecycle (mock-codex.js + WsUnixJsonRpcClient)', () => {
   });
 
   afterEach(async () => {
-    client.close();
-    await server.close();
+    client?.close();
+    await server?.close();
     rmSync(testDir, { recursive: true, force: true });
   });
 

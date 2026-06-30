@@ -111,9 +111,15 @@ export class FastChecker {
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
-        if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-      });
+      const cliPath = join(this.frameworkRoot, 'dist', 'cli.js');
+      execFile(
+        process.execPath,
+        [cliPath, 'bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`],
+        { env: { ...process.env, CTX_AGENT_NAME: agentName }, windowsHide: true },
+        (err) => {
+          if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
+        },
+      );
     }, HEARTBEAT_INTERVAL_MS);
 
     while (this.running) {

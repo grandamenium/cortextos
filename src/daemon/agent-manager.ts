@@ -12,6 +12,7 @@ import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
+import { logEvent } from '../bus/event.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
@@ -450,7 +451,12 @@ export class AgentManager {
     // running its own poller (only the designated orchestrator agent should poll).
     if (telegramApi && chatId && config.telegram_polling !== false) {
       const stateDir = join(this.ctxRoot, 'state', name);
-      const poller = new TelegramPoller(telegramApi, stateDir);
+      const poller = new TelegramPoller(telegramApi, stateDir, 1000, undefined, {
+        paths,
+        agentName: name,
+        org: resolvedOrg,
+        log,
+      });
 
       const REJECT_ALERT_THRESHOLD = 3;
       const REJECT_ALERT_COOLDOWN_MS = 30 * 60 * 1000;
@@ -502,7 +508,16 @@ export class AgentManager {
         // inbound messages on a window where Eros replied to multiple
         // agents — the JSONL had the data but it never reached the
         // event log.
-        recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
+        try {
+          recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
+        } catch (err) {
+          log(`recordInboundTelegram FAILED for msg_id=${msg.message_id}: ${err}`);
+          logEvent(paths, name, resolvedOrg, 'error', 'inbound_persistence_failed', 'error', {
+            message_id: msg.message_id,
+            error: String(err),
+          });
+          throw err;
+        }
 
         // Check for media messages (photo, document, voice, audio, video, video_note)
         const isMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
@@ -652,7 +667,9 @@ export class AgentManager {
         // give up immediately because total runtime already exceeds 5min.
         const MAX_CONSECUTIVE_CONFLICT_MS = 5 * 60 * 1000;
         const LONG_RUN_RESET_MS = 60_000;
+        const MAX_AUTH_BACKOFF_MS = 10 * 60 * 1000;
         let consecutiveConflictStart: number | null = null;
+        let authFailCount = 0;
         while (true) {
           // Pre-check: agent may have been deleted from registry during
           // a previous sleep window. Skip the start() call entirely.
@@ -667,9 +684,31 @@ export class AgentManager {
           const runDuration = Date.now() - runStart;
           if (poller.lastExitReason === 'stopped-externally') return;
           if (!this.agents.has(name)) return;
-          // A poll session that ran for >LONG_RUN_RESET_MS proves the
-          // Conflict lock is no longer chronic — reset the retry budget.
-          if (runDuration > LONG_RUN_RESET_MS) consecutiveConflictStart = null;
+          // A poll session that ran for >LONG_RUN_RESET_MS proves the prior
+          // failure cleared — reset both retry budgets.
+          if (runDuration > LONG_RUN_RESET_MS) { consecutiveConflictStart = null; authFailCount = 0; }
+          // Auth failure (401): exponential backoff capped at 10min, alert
+          // operator ONCE. This stops the hot-loop that caused the 2026-06-22
+          // OOM (~1 error/sec → 95k errors → 785MB log → daemon killed). The
+          // token is captured at poller construction, so a genuinely bad token
+          // will keep failing — the backoff + alert hand it to the operator to
+          // fix the .env and restart, rather than flooding the log. Reset the
+          // Conflict budget too so stale 401 backoff time can't make a later
+          // 409 give up instantly.
+          if (poller.lastExitReason === 'auth-failed') {
+            consecutiveConflictStart = null;
+            authFailCount++;
+            const backoffMs = Math.min(30_000 * Math.pow(2, authFailCount - 1), MAX_AUTH_BACKOFF_MS);
+            if (authFailCount === 1 && telegramApi && chatId) {
+              telegramApi.sendMessage(
+                String(chatId),
+                `${name}: Telegram auth failed (401) — BOT_TOKEN may be invalid or unloaded. Backing off; check the agent .env if this persists.`,
+              ).catch(() => { /* best-effort */ });
+            }
+            log(`Telegram poller for ${name} auth-failed (401, attempt ${authFailCount}). Backing off ${Math.round(backoffMs / 1000)}s before retry.`);
+            await new Promise(r => setTimeout(r, backoffMs));
+            continue;
+          }
           if (consecutiveConflictStart === null) consecutiveConflictStart = Date.now();
           if (Date.now() - consecutiveConflictStart > MAX_CONSECUTIVE_CONFLICT_MS) {
             log(`Telegram poller for ${name} could not clear Conflict within 5min of consecutive failures — giving up. Inspect for duplicate bot instance.`);
@@ -771,12 +810,41 @@ export class AgentManager {
       return;
     }
 
+    // Defensive: refuse to start activity-poller if its bot token collides
+    // with any agent's primary BOT_TOKEN. Two pollers on the same bot inside
+    // a single daemon race getUpdates and silently drop ~50% of inbound
+    // messages. Operators must use a dedicated bot for the activity channel.
+    try {
+      const agentsDir = join(orgDir, 'agents');
+      if (existsSync(agentsDir)) {
+        for (const entry of readdirSync(agentsDir)) {
+          const otherEnvPath = join(agentsDir, entry, '.env');
+          if (!existsSync(otherEnvPath)) continue;
+          const otherEnv = readFileSync(otherEnvPath, 'utf-8');
+          const match = otherEnv.match(/^BOT_TOKEN=(.+)$/m);
+          const otherToken = match?.[1]?.trim();
+          if (otherToken && otherToken === activityBotToken) {
+            log(`SECURITY: activity-channel ACTIVITY_BOT_TOKEN collides with agent '${entry}' BOT_TOKEN. Refusing to start activity poller — two pollers on the same bot will race getUpdates and drop messages. Use a dedicated bot for the activity channel.`);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      log(`Activity-channel token collision check failed: ${err}`);
+    }
+
     const activityApi = new TelegramAPI(activityBotToken);
     const stateDir = join(this.ctxRoot, 'state', name);
+    const activityPaths = resolvePaths('activity-channel', this.instanceId, org);
     // offsetFileSuffix keeps the activity poller's offset file distinct
     // from the primary bot's .telegram-offset — without this they would
     // clobber each other in the same stateDir.
-    const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity');
+    const activityPoller = new TelegramPoller(activityApi, stateDir, 1000, 'activity', {
+      paths: activityPaths,
+      agentName: 'activity-channel',
+      org,
+      log,
+    });
 
     activityPoller.onCallback((query) => {
       const entry = this.agents.get(name);
@@ -792,7 +860,7 @@ export class AgentManager {
     activityPoller.onMessage((msg) => {
       const from = stripControlChars(msg.from?.first_name || msg.from?.username || 'Unknown');
       const text = stripControlChars(msg.text || msg.caption || '');
-      log(`[activity-channel inbound] from ${from}: ${text.slice(0, 120)}`);
+      log(`[activity-channel inbound] msg_id=${msg.message_id} from ${from}: ${text.slice(0, 120)}`);
     });
 
     // Same Conflict-restart wrapper as the primary poller — activity

@@ -1,0 +1,25 @@
+{
+  "captured_at": "2026-06-15T12:10:00Z",
+  "captured_at_local": "2026-06-15T08:10:00-04:00",
+  "source": "Claude mobile app — Usage page (Sebastian screenshot)",
+  "plan": "Max 5x",
+  "plan_note": "Per 2026-06-12 memory user_claude_plan_max5x (Max 5x, not 20x). Screenshot shows percentages only (tier-agnostic); cap-risk read valid regardless. analyst cap-constant 17M assumes Max20x — likely needs downward revision for Max5x.",
+  "session_5h": {
+    "used_pct": 20,
+    "resets_in_minutes": 79,
+    "resets_at_utc": "2026-06-15T13:29:00Z"
+  },
+  "weekly": {
+    "all_models_pct": 41,
+    "resets_at_local": "2026-06-18T13:59:00-04:00",
+    "resets_at_utc_approx": "2026-06-18T17:59:00Z"
+  },
+  "delta_from_previous": {
+    "previous_captured_at": "2026-05-27T22:10:00Z",
+    "stale_gap_days": 19,
+    "note": "Prior parse 19 days stale; no meaningful interval delta. Drift logged 2026-06-15."
+  },
+  "burn_rate_estimate": {
+    "note": "Single fresh capture; no recent prior for burn rate. Weekly 41% with Thu reset = ample headroom, no cap risk. 5h at 20% with ~79min to reset = no session risk."
+  }
+}

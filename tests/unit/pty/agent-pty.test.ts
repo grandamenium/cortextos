@@ -1,7 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 
+const { execFileSyncMock, platformMock } = vi.hoisted(() => ({
+  execFileSyncMock: vi.fn(),
+  platformMock: vi.fn(() => 'win32'),
+}));
+
 // node-pty is native; stub it so constructing AgentPTY never touches it.
 vi.mock('node-pty', () => ({ spawn: vi.fn() }));
+vi.mock('child_process', () => ({ execFileSync: execFileSyncMock }));
+vi.mock('os', async () => {
+  const actual = await vi.importActual<typeof import('os')>('os');
+  return { ...actual, platform: platformMock };
+});
 
 // existsSync=false → the local/*.md system-prompt block is skipped in buildClaudeArgs.
 vi.mock('fs', async () => {
@@ -58,5 +68,23 @@ describe('AgentPTY --dangerously-skip-permissions toggle', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe('AgentPTY Windows teardown', () => {
+  it('tree-kills the PTY PID before releasing the node-pty handle', () => {
+    const handleKill = vi.fn();
+    const pty = new AgentPTY(mockEnv, {});
+    (pty as any).pty = { pid: 12345, kill: handleKill };
+    (pty as any)._alive = true;
+
+    pty.kill();
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      'taskkill.exe',
+      ['/PID', '12345', '/T', '/F'],
+      expect.objectContaining({ stdio: 'ignore', windowsHide: true }),
+    );
+    expect(handleKill).toHaveBeenCalledOnce();
   });
 });

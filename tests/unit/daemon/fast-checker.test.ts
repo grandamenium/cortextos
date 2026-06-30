@@ -796,8 +796,18 @@ describe('FastChecker', () => {
       checker.start();
       await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
       expect(execFile).toHaveBeenCalledWith(
-        'cortextos',
-        expect.arrayContaining(['bus', 'update-heartbeat', expect.stringContaining('[watchdog] my-agent alive — idle session')]),
+        process.execPath,
+        [
+          join('/tmp/framework', 'dist', 'cli.js'),
+          'bus',
+          'update-heartbeat',
+          expect.stringContaining('[watchdog] my-agent alive — idle session'),
+        ],
+        expect.objectContaining({
+          env: expect.objectContaining({
+            CTX_AGENT_NAME: 'my-agent',
+          }),
+        }),
         expect.any(Function),
       );
       checker.stop();
