@@ -378,6 +378,129 @@ describe('Cross-org task lifecycle', () => {
   });
 });
 
+/**
+ * Orgless root task lifecycle — exercises the findTaskFile orgless-root tier.
+ *
+ * Tasks filed without an org (e.g. daemon-created tasks from sender
+ * `cortextos`) are written to `<ctxRoot>/tasks/` rather than under any
+ * `orgs/<name>/tasks/` dir. Before the orgless-root lookup tier, findTaskFile
+ * only checked the caller's own org dir and scanned `orgs/*` — so these tasks
+ * could be created but never updated or completed through the bus, which is
+ * exactly the failure the codex audit surfaced (2026-05-30).
+ *
+ * Real nested filesystem layout, no mocked path resolution.
+ */
+describe('Orgless root task lifecycle', () => {
+  let testDir: string;
+  let orgAPaths: BusPaths;
+  let rootTaskDir: string;
+
+  beforeEach(() => {
+    testDir = mkdtempSync(join(tmpdir(), 'cortextos-orgless-test-'));
+    // Caller is org-scoped (OrgA); orgless tasks live at <ctxRoot>/tasks/.
+    mkdirSync(join(testDir, 'orgs', 'OrgA', 'tasks'), { recursive: true });
+    rootTaskDir = join(testDir, 'tasks');
+    mkdirSync(rootTaskDir, { recursive: true });
+
+    orgAPaths = {
+      ctxRoot: testDir,
+      inbox: join(testDir, 'inbox', 'agentA'),
+      inflight: join(testDir, 'inflight', 'agentA'),
+      processed: join(testDir, 'processed', 'agentA'),
+      logDir: join(testDir, 'logs', 'agentA'),
+      stateDir: join(testDir, 'state', 'agentA'),
+      taskDir: join(testDir, 'orgs', 'OrgA', 'tasks'),
+      approvalDir: join(testDir, 'orgs', 'OrgA', 'approvals'),
+      analyticsDir: join(testDir, 'orgs', 'OrgA', 'analytics'),
+      heartbeatDir: join(testDir, 'heartbeats'),
+    };
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  /** Drop a raw orgless task JSON directly into <ctxRoot>/tasks/ — the shape
+   * the daemon writes for sender `cortextos`, with an empty org field. */
+  function writeRootTask(taskId: string, overrides: Record<string, unknown> = {}): void {
+    const task = {
+      id: taskId,
+      title: 'Orgless root task',
+      description: '',
+      type: 'agent',
+      needs_approval: false,
+      status: 'pending',
+      assigned_to: 'agentA',
+      created_by: 'cortextos',
+      org: '',
+      priority: 'normal',
+      project: '',
+      kpi_key: null,
+      created_at: '2026-04-11T20:00:00Z',
+      updated_at: '2026-04-11T20:00:00Z',
+      completed_at: null,
+      due_date: null,
+      archived: false,
+      ...overrides,
+    };
+    writeFileSync(join(rootTaskDir, `${taskId}.json`), JSON.stringify(task), 'utf-8');
+  }
+
+  it('findTaskFile resolves an orgless root task to <ctxRoot>/tasks/', () => {
+    const taskId = 'task_orgless_001';
+    writeRootTask(taskId);
+    expect(findTaskFile(orgAPaths, taskId)).toBe(join(rootTaskDir, `${taskId}.json`));
+  });
+
+  it('updateTask reaches an orgless root task (the bug repro)', () => {
+    // Before the orgless-root tier this threw "not found" because the task
+    // lives at <ctxRoot>/tasks/, outside both the caller org dir and orgs/*.
+    const taskId = 'task_orgless_002';
+    writeRootTask(taskId);
+
+    updateTask(orgAPaths, taskId, 'in_progress');
+
+    const content = JSON.parse(readFileSync(join(rootTaskDir, `${taskId}.json`), 'utf-8'));
+    expect(content.status).toBe('in_progress');
+    expect(new Date(content.updated_at).getTime()).toBeGreaterThan(
+      new Date('2026-04-11T20:00:00Z').getTime(),
+    );
+    // The org dir must NOT have sprouted a stray copy.
+    expect(existsSync(join(orgAPaths.taskDir, `${taskId}.json`))).toBe(false);
+  });
+
+  it('completeTask reaches an orgless root task and marks it done', () => {
+    const taskId = 'task_orgless_003';
+    writeRootTask(taskId);
+
+    completeTask(orgAPaths, taskId, 'orgless completion');
+
+    const content = JSON.parse(readFileSync(join(rootTaskDir, `${taskId}.json`), 'utf-8'));
+    expect(content.status).toBe('completed');
+    expect(content.completed_at).toBeTruthy();
+    expect(content.result).toBe('orgless completion');
+  });
+
+  it('same-org fast path still wins when an id exists in both org dir and root', () => {
+    // Defensive: if the same id somehow exists both in the caller's org dir
+    // and at the orgless root, the own-org fast path must take precedence so
+    // an agent operating on its own task never silently retargets the root.
+    const taskId = 'task_orgless_004';
+    const ownId = createTask(orgAPaths, 'agentA', 'OrgA', 'Own-org task');
+    // Reuse the generated id at the root to force the collision scenario.
+    writeRootTask(ownId);
+
+    updateTask(orgAPaths, ownId, 'in_progress');
+
+    const ownContent = JSON.parse(readFileSync(join(orgAPaths.taskDir, `${ownId}.json`), 'utf-8'));
+    expect(ownContent.status).toBe('in_progress');
+    // Root copy stays untouched (still pending) — fast path never reached it.
+    const rootContent = JSON.parse(readFileSync(join(rootTaskDir, `${ownId}.json`), 'utf-8'));
+    expect(rootContent.status).toBe('pending');
+    void taskId;
+  });
+});
+
 describe('claimTask — atomic claim (beads-inspired)', () => {
   let testDir: string;
   let paths: BusPaths;

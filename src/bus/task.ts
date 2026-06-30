@@ -200,13 +200,18 @@ export function checkTaskDependencies(
  * cross-org assignment required a manual workaround dance where the filer
  * ran update/complete on behalf of the assignee.
  *
- * This helper fixes that by using a two-tier lookup:
+ * This helper fixes that by using a three-tier lookup:
  *
  *   1. Fast path: check the caller's OWN org tasks dir first. Most tasks
  *      live there and this check pays zero scan cost when it hits.
- *   2. Fallback: scan every sibling org under `<ctxRoot>/orgs/*` for a
- *      matching task file. Only runs when the fast path missed, so
- *      same-org operations take no perf hit.
+ *   2. Orgless root: check `<ctxRoot>/tasks/` for tasks filed without an
+ *      org (e.g. daemon-created tasks from sender `cortextos`). These live
+ *      outside the `orgs/*` tree, so the cross-org scan in tier 3 would
+ *      never find them — without this tier an orgless task can be created
+ *      but never updated or completed through the bus.
+ *   3. Fallback: scan every sibling org under `<ctxRoot>/orgs/*` for a
+ *      matching task file. Only runs when tiers 1-2 missed, so same-org
+ *      and orgless-root operations take no scan hit.
  *
  * Task IDs are generated as `task_<epoch_ms>_<3digit_random>` so real
  * collisions are effectively impossible — but if the scan ever finds the
@@ -227,6 +232,15 @@ export function findTaskFile(paths: BusPaths, taskId: string): string | null {
   // Fast path: same-org lookup.
   const sameOrg = join(paths.taskDir, `${taskId}.json`);
   if (existsSync(sameOrg)) return sameOrg;
+
+  // Orgless root tasks: tasks filed without an org — e.g. daemon-created
+  // tasks from sender `cortextos` — live at `<ctxRoot>/tasks/` rather than
+  // under any `orgs/<name>/tasks/` dir. The cross-org scan below only walks
+  // `orgs/*`, so without this tier an orgless task is unreachable by
+  // update/complete: it can be created but never driven through its
+  // lifecycle. Checked before the scan — a single existsSync, no perf cost.
+  const orglessRoot = join(paths.ctxRoot, 'tasks', `${taskId}.json`);
+  if (existsSync(orglessRoot)) return orglessRoot;
 
   // Fallback: cross-org scan.
   const orgsRoot = join(paths.ctxRoot, 'orgs');
@@ -268,7 +282,7 @@ export function updateTask(
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
     throw new Error(
-      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/ or the orgless root ${paths.ctxRoot}/tasks/`,
     );
   }
   let prevStatus: TaskStatus | undefined;
@@ -380,7 +394,7 @@ export function claimTask(
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
     throw new Error(
-      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/ or the orgless root ${paths.ctxRoot}/tasks/`,
     );
   }
 
@@ -467,7 +481,7 @@ export function completeTask(
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
     throw new Error(
-      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/ or the orgless root ${paths.ctxRoot}/tasks/`,
     );
   }
   let prevStatus: TaskStatus | undefined;
