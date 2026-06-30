@@ -10,6 +10,7 @@ import { existsSync, readFileSync, appendFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { execFile } from 'child_process';
 import type { Event, EventCategory, EventSeverity } from '../types/index.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 // ── Schema types — mirror RFC #15 §4 ─────────────────────────────────────────
 
@@ -347,7 +348,7 @@ function logRegistryWarn(orgPath: string, reason: string): void {
 
 function appendActivityLine(scope: string, line: string): void {
   try {
-    const dir = join(process.env.CTX_ROOT ?? '', 'logs', scope);
+    const dir = join(getCtxRoot(process.env.CTX_INSTANCE_ID || 'default'), 'logs', scope);
     mkdirSync(dir, { recursive: true });
     appendFileSync(join(dir, 'hooks.log'), `${line}\n`, 'utf-8');
   } catch {

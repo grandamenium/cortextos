@@ -748,7 +748,7 @@ export class CodexAppServerPTY {
 
   private emitUnsupportedRequestEvent(method: string): void {
     try {
-      const paths = resolvePaths(this._env.agentName, this._env.instanceId, this._env.org);
+      const paths = resolvePaths(this._env.agentName, this._env.instanceId, this._env.org, this._env.ctxRoot);
       logEvent(
         paths,
         this._env.agentName,

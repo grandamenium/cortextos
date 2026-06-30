@@ -1,8 +1,8 @@
 import { Command } from 'commander';
 import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { spawnSync } from 'child_process';
+import { getCtxRoot } from '../utils/paths.js';
 
 export const uninstallCommand = new Command('uninstall')
   .option('--instance <id>', 'Instance ID', 'default')
@@ -11,7 +11,7 @@ export const uninstallCommand = new Command('uninstall')
   .description('Remove cortextOS state directories and PM2 processes')
   .action(async (options: { instance: string; force?: boolean; keepState?: boolean }) => {
     const instanceId = options.instance;
-    const ctxRoot = join(homedir(), '.cortextos', instanceId);
+    const ctxRoot = getCtxRoot(instanceId);
 
     if (!existsSync(ctxRoot)) {
       console.log(`No cortextOS state found at ${ctxRoot}`);

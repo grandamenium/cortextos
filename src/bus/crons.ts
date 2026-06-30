@@ -20,6 +20,7 @@ import type { CronDefinition, CronExecutionLogEntry } from '../types/index.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME, cronExecutionLogPathFor } from './crons-schema.js';
 import { atomicWriteSync } from '../utils/atomic.js';
 import { withFileLockSync } from '../utils/lock.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -35,11 +36,11 @@ interface CronsFile {
  * Resolve the absolute path to an agent's crons.json.
  *
  * Uses CTX_ROOT env var when available (production), otherwise falls back to
- * a path relative to process.cwd() so tests can supply their own root via
- * process.env.CTX_ROOT pointing to a tempdir.
+ * the instance data root (CTX_ROOT honoured, #568); tests supply their own
+ * root via process.env.CTX_ROOT pointing to a tempdir.
  */
 function cronsFilePath(agentName: string): string {
-  const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+  const ctxRoot = getCtxRoot(process.env.CTX_INSTANCE_ID || 'default');
   return join(ctxRoot, CRONS_DIRECTORY, agentName, CRONS_FILENAME);
 }
 
@@ -346,7 +347,7 @@ export function getExecutionLogPage(
   offset = 0,
   statusFilter: ExecutionLogStatusFilter = 'all',
 ): ExecutionLogPage {
-  const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+  const ctxRoot = getCtxRoot(process.env.CTX_INSTANCE_ID || 'default');
   const filePath = join(ctxRoot, cronExecutionLogPathFor(agentName));
 
   if (!existsSync(filePath)) {

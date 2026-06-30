@@ -92,7 +92,7 @@ busCommand
     }
 
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
 
     // Warn if target agent doesn't exist (check project dir)
     const { existsSync } = require('fs');
@@ -126,7 +126,7 @@ busCommand
   .command('check-inbox')
   .action(() => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const messages = checkInbox(paths);
     console.log(JSON.stringify(messages));
   });
@@ -136,7 +136,7 @@ busCommand
   .argument('<id>', 'Message ID to acknowledge')
   .action((id: string) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     ackInbox(paths, id);
     try {
       logEvent(paths, env.agentName, env.org, 'message', 'inbox_ack', 'info', JSON.stringify({ msg_id: id }));
@@ -156,7 +156,7 @@ busCommand
   .option('--blocks <ids>', 'Comma-separated task IDs that this new task will block (symmetric reverse edge)')
   .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; needsApproval?: boolean; blockedBy?: string; blocks?: string }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const parseList = (raw?: string) => (raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []);
     const taskId = createTask(paths, env.agentName, env.org, title, {
       description: opts.desc,
@@ -170,7 +170,7 @@ busCommand
     console.log(taskId);
     // Auto-notify assignee so the task is visible immediately (issue #78)
     if (opts.assignee && opts.assignee !== env.agentName) {
-      const assigneePaths = resolvePaths(opts.assignee, env.instanceId, env.org);
+      const assigneePaths = resolvePaths(opts.assignee, env.instanceId, env.org, env.ctxRoot);
       const desc = opts.desc ? ` — ${opts.desc.slice(0, 120)}` : '';
       sendMessage(assigneePaths, env.agentName, opts.assignee, 'normal',
         `Task assigned: [${opts.priority}] ${title}${desc} (id: ${taskId})`);
@@ -188,7 +188,7 @@ busCommand
       process.exit(1);
     }
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
 
     // Guard: block review/completion when deliverables are required but missing.
     // Checks both ready_for_review (approval workflow) and completed (vanilla upstream)
@@ -212,7 +212,7 @@ busCommand
   .option('--dry-run', 'Report what would be compacted without modifying anything')
   .action((opts: { olderThan: string; dryRun?: boolean }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const olderThanDays = parseInt(opts.olderThan, 10);
     if (isNaN(olderThanDays) || olderThanDays < 0) {
       console.error('--older-than must be a non-negative integer');
@@ -234,7 +234,7 @@ busCommand
   .argument('<id>', 'Task ID')
   .action((id: string) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const open = checkTaskDependencies(paths, id);
     if (open.length === 0) {
       console.log(`${id}: no open dependencies — ready to work`);
@@ -251,7 +251,7 @@ busCommand
   .option('--json', 'Emit raw JSONL instead of formatted text')
   .action((id: string, opts: { json?: boolean }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const entries = readTaskAudit(paths, id);
     if (entries.length === 0) {
       console.log(`No audit log for task ${id}`);
@@ -276,7 +276,7 @@ busCommand
   .option('--agent <name>', 'Agent claiming the task (defaults to CTX_AGENT_NAME)')
   .action((id: string, opts: { agent?: string }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const agent = opts.agent || env.agentName;
     if (!agent) {
       console.error('ERROR: --agent or CTX_AGENT_NAME required');
@@ -301,7 +301,7 @@ busCommand
     // Accept result as either positional arg or --result flag (P1 fix #8)
     const effectiveResult = opts.result ?? resultArg;
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
 
     // Guard: block completion when deliverables are required but missing
     if (env.org) {
@@ -327,7 +327,7 @@ busCommand
   .action((taskId: string, source: string, opts: { label?: string; move?: boolean; link?: boolean }) => {
     const noLink = opts.link === false;
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     try {
       const result = saveOutput(paths, {
         taskId,
@@ -354,7 +354,7 @@ busCommand
   .option('--respect-deps', 'Sort DAG-aware: unblocked tasks first, blocked tasks last')
   .action((opts: { agent?: string; status?: string; format?: string; respectDeps?: boolean }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const tasks = listTasks(paths, {
       agent: opts.agent,
       status: opts.status as TaskStatus,
@@ -410,7 +410,7 @@ busCommand
       process.exit(1);
     }
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     logEvent(paths, env.agentName, env.org, category as EventCategory, event, severity as EventSeverity, opts.meta);
     console.log(`Logged ${category}/${event} (${severity})`);
   });
@@ -423,7 +423,7 @@ busCommand
   .option('--interval <i>', 'Loop interval from cron config')
   .action((status: string, opts: { task?: string; timezone?: string; interval?: string }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
 
     // Read display name from IDENTITY.md so agents self-report their user-facing name
     let displayName: string | undefined;
@@ -485,7 +485,7 @@ busCommand
   .option('--format <fmt>', 'Output format: json or text', 'text')
   .action((opts: { format?: string }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const heartbeats = readAllHeartbeats(paths);
 
     if (opts.format === 'json') {
@@ -565,7 +565,7 @@ busCommand
   .description('Find stale tasks (in_progress >2h, pending >24h, overdue)')
   .action(() => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const report = checkStaleTasks(paths);
     console.log(JSON.stringify(report));
   });
@@ -576,7 +576,7 @@ busCommand
   .option('--dry-run', 'Show what would be archived without modifying files')
   .action((opts: { dryRun?: boolean }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const report = archiveTasks(paths, opts.dryRun ?? false);
     console.log(JSON.stringify(report));
   });
@@ -586,7 +586,7 @@ busCommand
   .description('Find stale human-assigned tasks (>24h)')
   .action(() => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const tasks = checkHumanTasks(paths);
     console.log(JSON.stringify(tasks));
   });
@@ -599,11 +599,11 @@ busCommand
     const { mkdirSync, writeFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const reason = opts.reason || 'self-restart requested';
 
     // Write .user-restart marker (same as soft-restart)
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
     const stateDir = join(ctxRoot, 'state', env.agentName);
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, '.user-restart'), reason);
@@ -612,7 +612,7 @@ busCommand
     selfRestart(paths, env.agentName, reason);
 
     // Send IPC restart-agent signal for self — makes restart immediate
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
     if (daemonRunning) {
       const resp = await ipc.send({ type: 'restart-agent', agent: env.agentName, source: 'cortextos bus self-restart' });
@@ -636,7 +636,7 @@ busCommand
   .action(async (opts: { reason?: string; handoffDoc?: string }) => {
     const { writeFileSync: fsWrite, existsSync: fsExists, mkdirSync: fsMkdir } = require('fs');
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     hardRestart(paths, env.agentName, opts.reason);
     if (opts.handoffDoc && fsExists(opts.handoffDoc)) {
       fsMkdir(paths.stateDir, { recursive: true });
@@ -645,7 +645,7 @@ busCommand
     // Send IPC restart-agent so the daemon terminates and restarts this session
     // immediately. Without this the session keeps running — .force-fresh is only
     // consumed on the NEXT restart, which never comes unless the daemon is notified.
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
     if (daemonRunning) {
       const resp = await ipc.send({ type: 'restart-agent', agent: env.agentName, source: 'cortextos bus hard-restart' });
@@ -718,7 +718,7 @@ busCommand
     // If approval_required is configured, auto-create an approval
     const config = loadExperimentConfig(agentDir);
     if (config.approval_required) {
-      const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+      const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
       const approvalId = await createApproval(
         paths,
         env.agentName,
@@ -1012,7 +1012,7 @@ busCommand
         // Auto-emit activity event so dashboard sees every Telegram send,
         // even from agents that never call log-event directly.
         try {
-          const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+          const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
           const preview = message.length > 120 ? message.slice(0, 120) + '…' : message;
           logEvent(paths, env.agentName, env.org, 'message', 'telegram_sent', 'info', JSON.stringify({ chat_id: chatId, message_id: sentMessageId, preview }));
         } catch { /* non-fatal */ }
@@ -1086,7 +1086,7 @@ busCommand
       process.exit(1);
     }
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     // await — createApproval fan-out posts to the activity channel, which
     // must complete before the CLI process exits or the post silently
     // never sends. env.frameworkRoot is passed so the activity-channel
@@ -1110,7 +1110,7 @@ busCommand
       process.exit(1);
     }
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     updateApproval(paths, id, status as ApprovalStatus, note);
     console.log(`Approval ${id} -> ${status}`);
   });
@@ -1138,7 +1138,7 @@ busCommand
     }
 
     const result = queryKnowledgeBase(
-      resolvePaths(env.agentName, env.instanceId, org),
+      resolvePaths(env.agentName, env.instanceId, org, env.ctxRoot),
       question,
       {
         org,
@@ -1217,7 +1217,7 @@ busCommand
 
     const frameworkRoot = env.frameworkRoot || process.cwd();
     const instanceId = env.instanceId;
-    const kbRoot = pjoin(hdir(), '.cortextos', instanceId, 'orgs', org, 'knowledge-base');
+    const kbRoot = pjoin(env.ctxRoot, 'orgs', org, 'knowledge-base');
     const chromaDir = pjoin(kbRoot, 'chromadb');
     const isWin = process.platform === 'win32';
     const venvBin = isWin ? 'Scripts' : 'bin';
@@ -1376,7 +1376,7 @@ busCommand
     const { existsSync, readdirSync, readFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
     const frameworkRoot = env.frameworkRoot || process.cwd();
 
     // Collect agents from enabled-agents.json + filesystem scan
@@ -1406,7 +1406,7 @@ busCommand
 
     // Determine running agents via IPC daemon.
     const runningAgents = new Set<string>();
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     try {
       const resp = await ipc.send({ type: 'status', source: 'cortextos bus' });
       if (resp.success && Array.isArray(resp.data)) {
@@ -1559,8 +1559,8 @@ busCommand
     const { mkdirSync, writeFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
+    const ctxRoot = env.ctxRoot;
 
     // Write urgent signal file that fast-checker checks on every poll
     const signalDir = join(ctxRoot, 'state', targetAgent);
@@ -1589,7 +1589,7 @@ busCommand
     const { mkdirSync, writeFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
 
     // Step 1: Write .user-restart marker BEFORE triggering exit
     const stateDir = join(ctxRoot, 'state', targetAgent);
@@ -1598,7 +1598,7 @@ busCommand
     console.log(`Wrote .user-restart marker for ${targetAgent}: ${reason}`);
 
     // Step 2: Send restart via IPC daemon (cross-platform — named pipe on Windows, socket on Unix).
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (daemonRunning) {
@@ -1624,7 +1624,7 @@ busCommand
     const { mkdirSync, writeFileSync, readFileSync, existsSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
     const staggerMs = parseInt(opts.stagger, 10) * 1000;
 
     // Read enabled agents from config
@@ -1647,7 +1647,7 @@ busCommand
       process.exit(0);
     }
 
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
     if (!daemonRunning) {
       console.error('ERROR: Node daemon is not running. Start it with: cortextos start');
@@ -1690,7 +1690,7 @@ busCommand
     const { mkdirSync, appendFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
-    const ctxRoot = require('path').join(require('os').homedir(), '.cortextos', env.instanceId);
+    const ctxRoot = env.ctxRoot;
 
     // Write to outbound-messages.jsonl so iOS app chat history picks it up
     const logDir = join(ctxRoot, 'logs', agent);
@@ -1706,7 +1706,7 @@ busCommand
 
     // ACK the original inbox message
     if (msgId) {
-      const paths = resolvePaths(agent, env.instanceId, env.org);
+const paths = resolvePaths(agent, env.instanceId, env.org, env.ctxRoot);
       try { ackInbox(paths, msgId); } catch { /* best effort */ }
     }
 
@@ -1733,7 +1733,7 @@ busCommand
 
     if (opts.allOrgs) {
       // Scan every org directory under CTX_ROOT — mirrors dashboard syncAll() behaviour
-      const ctxRoot = join(homedir(), '.cortextos', env.instanceId);
+      const ctxRoot = env.ctxRoot;
       const orgsDir = join(ctxRoot, 'orgs');
       const orgs: string[] = existsSync(orgsDir)
         ? readdirSync(orgsDir, { withFileTypes: true })
@@ -1741,11 +1741,11 @@ busCommand
             .map((d: { name: string }) => d.name)
         : [];
       for (const org of orgs) {
-        const orgPaths = resolvePaths(env.agentName, env.instanceId, org);
+        const orgPaths = resolvePaths(env.agentName, env.instanceId, org, env.ctxRoot);
         approvals = approvals.concat(listPendingApprovals(orgPaths));
       }
     } else {
-      const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+      const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
       approvals = listPendingApprovals(paths);
     }
 
@@ -1774,7 +1774,7 @@ busCommand
   .description('Create a persistent reminder that survives hard-restarts')
   .action((fireAt: string, prompt: string) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const reminder = createReminder(paths, fireAt, prompt);
     console.log(reminder.id);
   });
@@ -1786,7 +1786,7 @@ busCommand
   .description('List pending (or all) reminders')
   .action((opts: { all?: boolean; format?: string }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const reminders = listReminders(paths, { all: opts.all });
 
     if (opts.format === 'json') {
@@ -1816,7 +1816,7 @@ busCommand
   .description('Mark a reminder as handled')
   .action((id: string) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     ackReminder(paths, id);
     console.log(`ACK'd reminder ${id}`);
   });
@@ -1827,7 +1827,7 @@ busCommand
   .description('Delete acked reminders older than N days')
   .action((opts: { days?: string }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const pruned = pruneReminders(paths, parseInt(opts.days ?? '7', 10));
     console.log(`Pruned ${pruned} acked reminder(s)`);
   });
@@ -1839,7 +1839,7 @@ busCommand
   .description('Record that a named cron just fired (enables daemon gap detection for dead zones)')
   .action((cronName: string, opts: { interval?: string }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     updateCronFire(paths.stateDir, cronName, opts.interval);
     console.log(`Recorded fire for cron "${cronName}"`);
   });
@@ -1911,9 +1911,9 @@ function fmtTs(iso: string | undefined): string {
  * Send a reload-crons IPC signal to the daemon (non-blocking, best-effort).
  * Silently swallows errors — the daemon will pick up changes on its next tick.
  */
-async function signalCronReload(agentName: string, instanceId: string): Promise<void> {
+async function signalCronReload(agentName: string, instanceId: string, ctxRoot?: string): Promise<void> {
   try {
-    const ipc = new IPCClient(instanceId);
+    const ipc = new IPCClient(instanceId, ctxRoot);
     await ipc.send({ type: 'reload-crons', agent: agentName, source: 'cortextos bus cron-cmd' });
   } catch { /* non-fatal — scheduler picks up file change on next 30s tick */ }
 }
@@ -1959,7 +1959,7 @@ busCommand
       process.exit(1);
     }
 
-    await signalCronReload(agent, env.instanceId);
+    await signalCronReload(agent, env.instanceId, env.ctxRoot);
     console.log(`Added cron '${name}' for ${agent}`);
   });
 
@@ -1978,7 +1978,7 @@ busCommand
     }
 
     const env = resolveEnv();
-    await signalCronReload(agent, env.instanceId);
+    await signalCronReload(agent, env.instanceId, env.ctxRoot);
     console.log(`Removed cron '${name}' from ${agent}`);
   });
 
@@ -1998,7 +1998,7 @@ busCommand
     //   - cron-state.json `last_fire` (via bus update-cron-fire from agent skills)
     // For a single source of truth in the CLI, take the most recent of the two.
     const env = resolveEnv();
-    const paths = resolvePaths(agent, env.instanceId, env.org);
+    const paths = resolvePaths(agent, env.instanceId, env.org, env.ctxRoot);
     const stateRecords = readCronState(paths.stateDir).crons;
     const fireByName = new Map<string, string>();
     for (const rec of stateRecords) fireByName.set(rec.name, rec.last_fire);
@@ -2111,7 +2111,7 @@ busCommand
     }
 
     const env = resolveEnv();
-    await signalCronReload(agent, env.instanceId);
+    await signalCronReload(agent, env.instanceId, env.ctxRoot);
     console.log(`Updated cron '${name}' for ${agent}`);
   });
 
@@ -2130,7 +2130,7 @@ busCommand
     }
 
     const env = resolveEnv();
-    const ipc = new IPCClient(env.instanceId);
+    const ipc = new IPCClient(env.instanceId, env.ctxRoot);
 
     const daemonRunning = await ipc.isDaemonRunning();
     if (!daemonRunning) {
@@ -2566,7 +2566,7 @@ busCommand
   .option('--dry-run', 'Print events to stdout instead of logging', false)
   .action(async (opts: { session?: string; interval: string; telegram: boolean; dryRun: boolean }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org, env.ctxRoot);
     const sessionName = opts.session || env.agentName;
     const pollMs = Math.max(500, parseInt(opts.interval, 10) || 2000);
 

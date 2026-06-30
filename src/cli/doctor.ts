@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import { existsSync, readFileSync, readdirSync, statSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { getCtxRoot } from '../utils/paths.js';
 
 interface Check {
   name: string;
@@ -148,7 +149,7 @@ export const doctorCommand = new Command('doctor')
     }
 
     // Check state directory
-    const ctxRoot = join(homedir(), '.cortextos', options.instance);
+    const ctxRoot = getCtxRoot(options.instance);
     checks.push({
       name: 'State directory',
       status: existsSync(ctxRoot) ? 'pass' : 'warn',
@@ -225,7 +226,7 @@ export const doctorCommand = new Command('doctor')
       });
 
       // Tunnel URL saved?
-      const tunnelConfigPath = join(homedir(), '.cortextos', options.instance, 'tunnel.json');
+      const tunnelConfigPath = join(getCtxRoot(options.instance), 'tunnel.json');
       let tunnelUrl: string | undefined;
       try {
         const tc = JSON.parse(readFileSync(tunnelConfigPath, 'utf-8'));

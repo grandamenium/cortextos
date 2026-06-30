@@ -4,6 +4,7 @@ import { existsSync, writeFileSync, readFileSync, mkdirSync, chmodSync } from 'f
 import { join } from 'path';
 import { homedir } from 'os';
 import { stripBom } from '../utils/strip-bom.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 const TUNNEL_NAME = 'cortextos';
 const PLIST_LABEL = 'com.cortextos.tunnel';
@@ -20,7 +21,7 @@ interface TunnelConfig {
 }
 
 function getTunnelConfigPath(instance: string): string {
-  return join(homedir(), '.cortextos', instance, 'tunnel.json');
+  return join(getCtxRoot(instance), 'tunnel.json');
 }
 
 function readTunnelConfig(instance: string): TunnelConfig {
@@ -34,7 +35,7 @@ function readTunnelConfig(instance: string): TunnelConfig {
 
 function writeTunnelConfig(instance: string, config: TunnelConfig): void {
   const configPath = getTunnelConfigPath(instance);
-  mkdirSync(join(homedir(), '.cortextos', instance), { recursive: true });
+  mkdirSync(getCtxRoot(instance), { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }
 
@@ -179,8 +180,8 @@ function writePlist(instance: string, port: number): void {
   const cfPath = getCloudflaredPath();
   const nodeBinDir = detectNodePath();
   const cfBinDir = detectCloudflaredPath();
-  const logDir = join(homedir(), '.cortextos', instance, 'logs', 'tunnel');
-  const ctxRoot = join(homedir(), '.cortextos', instance);
+  const logDir = join(getCtxRoot(instance), 'logs', 'tunnel');
+  const ctxRoot = getCtxRoot(instance);
 
   mkdirSync(logDir, { recursive: true });
 
