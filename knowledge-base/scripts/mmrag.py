@@ -347,6 +347,106 @@ def get_chroma_client():
 # ---------------------------------------------------------------------------
 # Text chunking
 # ---------------------------------------------------------------------------
+def _markdown_sections(text):
+    """Split markdown into (heading_path, body) sections.
+
+    heading_path is the breadcrumb of headings above the section, e.g.
+    "Knowledge Base (RAG) > Query". Body text before any heading gets path "".
+    Heading lines stay part of their section body.
+    """
+    import re
+    sections = []
+    heading_stack = []  # list of (level, title)
+    current_lines = []
+
+    def flush():
+        body = "\n".join(current_lines).strip()
+        if body:
+            path = " > ".join(t for _, t in heading_stack)
+            sections.append((path, body))
+        current_lines.clear()
+
+    in_code_fence = False
+    for line in text.split("\n"):
+        # Lines inside fenced code blocks are never headings (bash/python comments
+        # at column 0 would otherwise match the heading regex)
+        if line.lstrip().startswith("```"):
+            in_code_fence = not in_code_fence
+            current_lines.append(line)
+            continue
+        m = None if in_code_fence else re.match(r'^(#{1,6})\s+(.+)$', line)
+        if m:
+            flush()
+            level = len(m.group(1))
+            while heading_stack and heading_stack[-1][0] >= level:
+                heading_stack.pop()
+            heading_stack.append((level, m.group(2).strip()))
+            current_lines.append(line)
+        else:
+            current_lines.append(line)
+    flush()
+    return sections
+
+
+def chunk_markdown(text, filename, chunk_size=DEFAULT_TEXT_CHUNK_SIZE,
+                   overlap=DEFAULT_TEXT_CHUNK_OVERLAP):
+    """Markdown-aware chunking with contextual headers.
+
+    Every chunk is prefixed with "[<filename> > <heading path>]" so the embedded
+    text carries its document identity — a chunk that says "## Step 2: reply"
+    means nothing to a retriever unless it knows it came from the comms skill.
+    Adjacent small sections are merged greedily up to chunk_size; oversized
+    sections fall back to the char-based splitter.
+    """
+    sections = _markdown_sections(text)
+    if not sections:
+        return []
+
+    def header(path):
+        return f"[{filename} > {path}]" if path else f"[{filename}]"
+
+    def common_path_prefix(paths):
+        """Longest common breadcrumb prefix of the merged sections' paths."""
+        split_paths = [p.split(" > ") if p else [] for p in paths]
+        prefix = []
+        for parts in zip(*split_paths):
+            if all(x == parts[0] for x in parts):
+                prefix.append(parts[0])
+            else:
+                break
+        return " > ".join(prefix)
+
+    chunks = []
+    pending_body = ""
+    pending_paths = []
+
+    def flush_pending():
+        nonlocal pending_body, pending_paths
+        if pending_body.strip():
+            # A merged chunk is labelled with the breadcrumb common to ALL its
+            # sections (often the shared parent heading), never a misleading one
+            label = common_path_prefix(pending_paths) if pending_paths else ""
+            chunks.append(f"{header(label)}\n{pending_body.strip()}")
+        pending_body = ""
+        pending_paths = []
+
+    for path, body in sections:
+        if len(body) > chunk_size:
+            # Oversized section: flush whatever is pending, then sub-chunk it
+            flush_pending()
+            for sub in chunk_text(body, chunk_size=chunk_size, overlap=overlap):
+                chunks.append(f"{header(path)}\n{sub}")
+            continue
+        # Greedy merge: accumulate small sections until chunk_size would be exceeded
+        if pending_body and len(pending_body) + len(body) + 1 > chunk_size:
+            flush_pending()
+        pending_paths.append(path)
+        pending_body = f"{pending_body}\n\n{body}" if pending_body else body
+    flush_pending()
+
+    return chunks
+
+
 def chunk_text(text, chunk_size=DEFAULT_TEXT_CHUNK_SIZE, overlap=DEFAULT_TEXT_CHUNK_OVERLAP):
     """Split text into overlapping chunks, preferring paragraph/section boundaries."""
     if len(text) <= chunk_size:
@@ -505,18 +605,31 @@ def already_exists(collection, doc_id):
 
 
 def ingest_text_file(client, config, collection, file_path):
-    """Ingest a text-based file."""
+    """Ingest a text-based file.
+
+    With contextual_chunking (default on): markdown files are split on heading
+    structure and every chunk carries a "[filename > heading path]" context
+    header; other text files get a "[filename]" header. This makes small or
+    fragmentary chunks retrievable — naked text fragments embed poorly.
+    """
     file_path = Path(file_path)
     text = file_path.read_text(errors="replace")
     if not text.strip():
         print(f"  SKIP (empty): {file_path}")
         return 0
 
-    chunks = chunk_text(
-        text,
-        chunk_size=config.get("text_chunk_size", DEFAULT_TEXT_CHUNK_SIZE),
-        overlap=config.get("text_chunk_overlap", DEFAULT_TEXT_CHUNK_OVERLAP),
-    )
+    chunk_size = config.get("text_chunk_size", DEFAULT_TEXT_CHUNK_SIZE)
+    overlap = config.get("text_chunk_overlap", DEFAULT_TEXT_CHUNK_OVERLAP)
+    contextual = config.get("contextual_chunking", True)
+
+    if contextual and file_path.suffix.lower() in (".md", ".markdown"):
+        chunks = chunk_markdown(text, file_path.name, chunk_size=chunk_size, overlap=overlap)
+    elif contextual:
+        chunks = [f"[{file_path.name}]\n{c}"
+                  for c in chunk_text(text, chunk_size=chunk_size, overlap=overlap)]
+    else:
+        # Legacy char-based chunking, no context headers
+        chunks = chunk_text(text, chunk_size=chunk_size, overlap=overlap)
 
     count = 0
     for i, chunk in enumerate(chunks):
