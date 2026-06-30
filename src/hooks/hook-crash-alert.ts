@@ -94,6 +94,30 @@ export function readMaxCrashesPerDay(agentDir: string | undefined): number | nul
 }
 
 /**
+ * #339: write a point-in-time `exit-reason.json` snapshot into the agent's state
+ * dir. OVERWRITTEN each session end (not appended) so the dashboard reads the most
+ * recent exit reason as JSON without log-parsing. The four fields mirror the
+ * `crashes.log` line so the two sources stay consistent. Best-effort — never throws.
+ */
+export function writeExitReasonSnapshot(
+  stateDir: string,
+  fields: { type: string; timestamp: string; reason: string; lastTask: string },
+): void {
+  try {
+    writeFileSync(
+      join(stateDir, 'exit-reason.json'),
+      JSON.stringify({
+        type: fields.type,
+        timestamp: fields.timestamp,
+        reason: fields.reason || 'none',
+        last_task: fields.lastTask,
+      }) + '\n',
+      'utf-8',
+    );
+  } catch { /* best-effort observability — an exit-reason write must never crash the hook */ }
+}
+
+/**
  * Send a crash notification via `cortextos bus send-message` to the listed
  * recipient agents. Best-effort: failures are swallowed so an alert miss never
  * cascades into a hook crash.
@@ -353,6 +377,11 @@ async function main(): Promise<void> {
   try {
     appendFileSync(join(logDir, 'crashes.log'), logLine);
   } catch { /* ignore */ }
+
+  // #339: point-in-time exit-reason.json snapshot alongside crashes.log so the
+  // dashboard can tell "intentionally stopped" from "actually crashed" without
+  // tailing+parsing the audit log. Fields mirror the crashes.log line.
+  writeExitReasonSnapshot(stateDir, { type: endType, timestamp, reason, lastTask });
 
   // Decide whether to actually send to Telegram.
   const now = new Date();

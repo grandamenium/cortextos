@@ -64,6 +64,20 @@ export class AgentProcess {
   // (each start() recreates the PTY, but the Telegram handle persists).
   private telegramApi: TelegramAPI | null = null;
   private telegramChatId: string | null = null;
+  // Area 4.4 wedge-detection: a crash-recovery restart re-spawns the PTY but
+  // nothing verifies the --continue session actually RESUMES (the fast-checker
+  // runs waitForBootstrap once per discovery, not per crash-restart). A restart
+  // into a non-responsive / onboarding-wedged session is otherwise undetected.
+  // After each crash-recovery restart we require a heartbeat STRICTLY NEWER than
+  // the restart within wedgeDetectMs; absent => one force-fresh re-restart
+  // (cap=1) => still wedged => ONE operator alert (restart-wedged class).
+  private wedgeWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private wedgeReRestartUsed = false; // re-restart cap = EXACTLY 1; reset on a fresh heartbeat
+  private lastWedgeAlertAt = 0;       // restart-wedged alert class-dedup (15-min window)
+  // N = 5min fixed (NOT the #621 per-agent staleness module — different PR base;
+  // see DELIVERY for the future unification). Static so tests can shorten it.
+  static wedgeDetectMs = 5 * 60 * 1000;
+  static wedgeAlertDedupMs = 15 * 60 * 1000;
   // Issue #392: tracks whether the most recently built startup prompt consumed
   // a handoff doc marker. start() reads this after spawn to decide whether the
   // daemon should fire the codex-app-server back-online Telegram directly
@@ -633,9 +647,93 @@ export class AgentProcess {
 
     setTimeout(() => {
       if (this.status === 'crashed') {
-        this.start().catch(err => this.log(`Restart failed: ${err}`));
+        const restartAt = Date.now();
+        this.start()
+          .then(() => this.armWedgeWatchdog(restartAt, false))
+          .catch(err => this.log(`Restart failed: ${err}`));
       }
     }, backoff);
+  }
+
+  /**
+   * Area 4.4 wedge-detection. After a crash-recovery restart, require a heartbeat
+   * written STRICTLY AFTER the restart within wedgeDetectMs — a healthy resume
+   * writes one within ~1-2min via its boot/resume routine, a session wedged on an
+   * onboarding/trust prompt never does. Absent: arm `.force-fresh` + one re-restart
+   * (cap=1); still wedged after that: ONE operator alert (restart-wedged class).
+   */
+  private armWedgeWatchdog(restartAt: number, isRetry: boolean): void {
+    if (this.wedgeWatchdogTimer) clearTimeout(this.wedgeWatchdogTimer);
+    this.wedgeWatchdogTimer = setTimeout(() => {
+      this.wedgeWatchdogTimer = null;
+      // Only a still-running, non-stopped agent can be "wedged". An intentional
+      // stop (or a status that already moved off 'running') is not a wedge.
+      if (this.stopRequested || this.status !== 'running') return;
+      if (this.hasHeartbeatNewerThan(restartAt)) {
+        this.wedgeReRestartUsed = false; // resumed cleanly — re-arm the cap for next crash
+        return;
+      }
+      this.log(
+        `Restart-wedged: no heartbeat within ${AgentProcess.wedgeDetectMs / 1000}s of crash-recovery restart — session did not resume`,
+      );
+      if (!isRetry && !this.wedgeReRestartUsed) {
+        // cap = EXACTLY 1: force a clean fresh session and re-restart once.
+        this.wedgeReRestartUsed = true;
+        this.armForceFresh('restart-wedged: --continue resume did not become responsive');
+        void this.restartFromWedge();
+      } else {
+        this.emitRestartWedgedAlert();
+      }
+    }, AgentProcess.wedgeDetectMs);
+    if (typeof this.wedgeWatchdogTimer.unref === 'function') this.wedgeWatchdogTimer.unref();
+  }
+
+  /** A heartbeat written strictly after `sinceMs` proves the restarted session resumed. */
+  private hasHeartbeatNewerThan(sinceMs: number): boolean {
+    try {
+      const p = join(this.env.ctxRoot, 'state', this.name, 'heartbeat.json');
+      if (!existsSync(p)) return false;
+      const hb = JSON.parse(readFileSync(p, 'utf-8'));
+      const t = hb.last_heartbeat ? new Date(hb.last_heartbeat).getTime() : statSync(p).mtimeMs;
+      return Number.isFinite(t) && t > sinceMs;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Force-fresh re-restart of a wedged session (.force-fresh already armed). */
+  private async restartFromWedge(): Promise<void> {
+    try {
+      await this.stop();
+      const reRestartAt = Date.now();
+      await this.start();
+      this.armWedgeWatchdog(reRestartAt, true); // retry pass: no second force-fresh, alert if still wedged
+    } catch (err) {
+      this.log(`Wedge re-restart failed: ${err}`);
+      this.emitRestartWedgedAlert();
+    }
+  }
+
+  /**
+   * ONE operator alert per restart-wedged class per 15-min window. cdd8fc61-native
+   * via the daemon's existing Telegram handle + a local dedup. NOTE: unifies with
+   * the #620 spawn-failure-alerter's fleet class-dedup when both land (see DELIVERY).
+   */
+  private emitRestartWedgedAlert(): void {
+    const now = Date.now();
+    if (now - this.lastWedgeAlertAt < AgentProcess.wedgeAlertDedupMs) return;
+    this.lastWedgeAlertAt = now;
+    this.log(
+      `RESTART-WEDGED: agent "${this.name}" restarted into a non-responsive session and did not recover after a force-fresh re-restart — manual attention needed`,
+    );
+    if (this.telegramApi && this.telegramChatId) {
+      this.telegramApi
+        .sendMessage(
+          this.telegramChatId,
+          `⚠️ Agent ${this.name} RESTART-WEDGED: crash-recovery restart did not resume (no heartbeat) and a force-fresh re-restart also failed. Needs manual attention.`,
+        )
+        .catch(() => {});
+    }
   }
 
   private shouldContinue(): boolean {
