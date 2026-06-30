@@ -37,7 +37,7 @@ vi.mock('../../../src/utils/org.js', () => ({
   normalizeOrgName: (_root: string, org: string) => org,
 }));
 
-const { queryKnowledgeBase, ingestKnowledgeBase } = await import('../../../src/bus/knowledge-base.js');
+const { queryKnowledgeBase, ingestKnowledgeBase, reindexKnowledgeBase } = await import('../../../src/bus/knowledge-base.js');
 
 // Minimal BusPaths stub — knowledge-base.ts doesn't actually USE the paths
 // object at call time, just the options/env it constructs.
@@ -178,6 +178,135 @@ describe('queryKnowledgeBase — graceful missing-config', () => {
     expect(result.results[0].content).toBe('hit');
     // Happy path emits no [kb] warning.
     expect(warnLog.filter((m) => m.includes('[kb]'))).toHaveLength(0);
+  });
+});
+
+describe('queryKnowledgeBase — rerank wiring', () => {
+  it('default: does NOT pass --no-rerank or --threshold (config decides)', () => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue('{"results": []}');
+
+    queryKnowledgeBase(dummyPaths, 'q', baseOptions);
+
+    const [, argv] = execFileSyncMock.mock.calls[0] as [string, string[], object];
+    expect(argv).not.toContain('--no-rerank');
+    expect(argv).not.toContain('--threshold');
+  });
+
+  it('rerank: false passes --no-rerank without forcing a threshold (org config owns the default)', () => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue('{"results": []}');
+
+    queryKnowledgeBase(dummyPaths, 'q', { ...baseOptions, rerank: false });
+
+    const [, argv] = execFileSyncMock.mock.calls[0] as [string, string[], object];
+    expect(argv).toContain('--no-rerank');
+    // The wrapper must NOT override the org's configured similarity_threshold
+    expect(argv).not.toContain('--threshold');
+  });
+
+  it('scope=all merged results are sorted by score, best first', () => {
+    mockConfiguredKb();
+    // Two collections (shared + agent): shared returns a low-scoring hit,
+    // the agent collection returns a high-scoring one.
+    execFileSyncMock
+      .mockReturnValueOnce(JSON.stringify({
+        results: [{ content: 'low', similarity: 0.2, source: 'low.md', type: 'text' }],
+      }))
+      .mockReturnValueOnce(JSON.stringify({
+        reranked: true,
+        results: [{ content: 'high', similarity: 0.4, rerank_score: 0.9, source: 'high.md', type: 'text' }],
+      }));
+
+    const result = queryKnowledgeBase(dummyPaths, 'q', { ...baseOptions, scope: 'all' });
+
+    expect(result.results.map((r) => r.source_file)).toEqual(['high.md', 'low.md']);
+    expect(result.results[0].score).toBe(0.9);
+  });
+
+  it('explicit threshold IS passed through', () => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue('{"results": []}');
+
+    queryKnowledgeBase(dummyPaths, 'q', { ...baseOptions, threshold: 0.42 });
+
+    const [, argv] = execFileSyncMock.mock.calls[0] as [string, string[], object];
+    const idx = (argv as string[]).indexOf('--threshold');
+    expect(idx).toBeGreaterThan(-1);
+    expect(argv[idx + 1]).toBe('0.42');
+  });
+
+  it('rerank_score is preferred over cosine similarity as the result score', () => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        reranked: true,
+        results: [
+          { content: 'hit', similarity: 0.3, rerank_score: 0.95, source: 'GOALS.md', type: 'text' },
+        ],
+      }),
+    );
+
+    const result = queryKnowledgeBase(dummyPaths, 'agent goals', baseOptions);
+
+    expect(result.results[0].score).toBe(0.95);
+    expect(result.results[0].rerank_score).toBe(0.95);
+    expect(result.reranked).toBe(true);
+  });
+
+  it('without rerank, cosine similarity remains the score', () => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        reranked: false,
+        results: [
+          { content: 'hit', similarity: 0.68, source: 'GOALS.md', type: 'text' },
+        ],
+      }),
+    );
+
+    const result = queryKnowledgeBase(dummyPaths, 'agent goals', baseOptions);
+
+    expect(result.results[0].score).toBe(0.68);
+    expect(result.results[0].rerank_score).toBeUndefined();
+    expect(result.reranked).toBe(false);
+  });
+});
+
+describe('reindexKnowledgeBase — provider migration', () => {
+  it('missing config: warn + return cleanly, execFileSync NEVER called', () => {
+    mockMissingKbConfig();
+
+    expect(() =>
+      reindexKnowledgeBase(baseOptions),
+    ).not.toThrow();
+
+    expect(execFileSyncMock).not.toHaveBeenCalled();
+    expect(warnLog.some((m) => m.includes('TestOrg') && /run setup/i.test(m))).toBe(true);
+    expect(warnLog.some((m) => m.includes('[kb]'))).toBe(true);
+  });
+
+  it('config present: execFileSync called with mmrag reindex args', () => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue('');
+
+    reindexKnowledgeBase(baseOptions);
+
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
+    const [pythonPath, argv] = execFileSyncMock.mock.calls[0] as [string, string[], object];
+    expect(String(pythonPath)).toMatch(/python/);
+    expect(argv).toEqual(expect.arrayContaining(['reindex']));
+    expect(argv).not.toContain('--collection');
+  });
+
+  it('specific collection: passes --collection to mmrag.py', () => {
+    mockConfiguredKb();
+    execFileSyncMock.mockReturnValue('');
+
+    reindexKnowledgeBase({ ...baseOptions, collection: 'agent-james' });
+
+    const [, argv] = execFileSyncMock.mock.calls[0] as [string, string[], object];
+    expect(argv).toEqual(expect.arrayContaining(['reindex', '--collection', 'agent-james']));
   });
 });
 

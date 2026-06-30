@@ -101,6 +101,8 @@ export interface KBQueryResult {
   agent_name?: string;
   org: string;
   score: number;
+  /** Cohere rerank relevance score (present when the rerank stage ran) */
+  rerank_score?: number;
   doc_type: string;
 }
 
@@ -109,6 +111,8 @@ export interface KBQueryResponse {
   total: number;
   query: string;
   collection: string;
+  /** True when results were reordered by the rerank stage */
+  reranked?: boolean;
 }
 
 /**
@@ -124,11 +128,13 @@ export function queryKnowledgeBase(
     scope?: 'shared' | 'private' | 'all';
     topK?: number;
     threshold?: number;
+    /** Set false to disable the rerank stage (--no-rerank). Default: config decides. */
+    rerank?: boolean;
     frameworkRoot: string;
     instanceId: string;
   },
 ): KBQueryResponse {
-  const { agent, scope = 'all', topK = 5, threshold = 0.5, frameworkRoot, instanceId } = options;
+  const { agent, scope = 'all', topK, threshold, rerank, frameworkRoot, instanceId } = options;
   // Normalize once at the top so every downstream path join, env var, and
   // ChromaDB collection name uses the canonical filesystem casing. Without
   // this, `shared-acmecorp` and `shared-AcmeCorp` become two
@@ -171,23 +177,43 @@ export function queryKnowledgeBase(
   }
 
   const runQuery = (col: string): string | null => {
+    const queryArgs = [
+      mmragPath, 'query', question,
+      '--collection', col,
+      '--json',
+    ];
+    if (topK !== undefined) {
+      queryArgs.push('--top-k', String(topK));
+    }
+    // Only pass --threshold when explicitly set; otherwise mmrag.py applies the
+    // per-stage config default (similarity_threshold — 0.5 fallback — or
+    // rerank_threshold). The org config owns the default, not this wrapper.
+    if (threshold !== undefined) {
+      queryArgs.push('--threshold', String(threshold));
+    }
+    if (rerank === false) {
+      queryArgs.push('--no-rerank');
+    }
     try {
-      return execFileSync(pythonPath, [
-        mmragPath, 'query', question,
-        '--collection', col,
-        '--top-k', String(topK),
-        '--threshold', String(threshold),
-        '--json',
-      ], {
+      return execFileSync(pythonPath, queryArgs, {
         encoding: 'utf-8',
-        timeout: 30000,
+        timeout: 60000,
         env,
       });
-    } catch {
+    } catch (err) {
+      // Surface actionable mmrag errors (provider mismatch -> "run kb-reindex")
+      // instead of silently collapsing them into an empty result set.
+      const execErr = err as { stdout?: string; stderr?: string };
+      const detail = `${execErr.stdout || ''}${execErr.stderr || ''}`;
+      const errorLine = detail.split('\n').find((l) => l.startsWith('ERROR:'));
+      if (errorLine) {
+        console.error(`[kb] ${errorLine}`);
+      }
       return null;
     }
   };
 
+  let anyReranked = false;
   const parseOutput = (output: string | null): KBQueryResult[] => {
     if (!output) return [];
     // mmrag.py --json outputs pretty-printed JSON; find and parse the JSON block
@@ -196,17 +222,21 @@ export function queryKnowledgeBase(
     if (jsonStart === -1) return [];
     try {
       const raw = JSON.parse(trimmed.slice(jsonStart)) as {
-        results?: Array<{ content?: string; result?: string; similarity?: number; source?: string; type?: string }>;
+        results?: Array<{ content?: string; result?: string; similarity?: number; rerank_score?: number; source?: string; type?: string }>;
         result_count?: number;
         query?: string;
         collection?: string;
+        reranked?: boolean;
       };
+      if (raw.reranked) anyReranked = true;
       return (raw.results || []).map((r) => ({
         content: r.content || r.result || '',
         source_file: r.source || '',
         org,
         agent_name: agent,
-        score: r.similarity ?? 0,
+        // Rerank relevance is the more meaningful score when present
+        score: r.rerank_score ?? r.similarity ?? 0,
+        rerank_score: r.rerank_score,
         doc_type: r.type || 'markdown',
       }));
     } catch {
@@ -224,11 +254,14 @@ export function queryKnowledgeBase(
     }
 
     if (allResults.length > 0) {
+      // scope=all merges multiple collections — order by relevance, best first
+      allResults.sort((a, b) => b.score - a.score);
       return {
         results: allResults,
         total: allResults.length,
         query: question,
         collection: collections.length === 1 ? lastCollection : `shared-${org}`,
+        reranked: anyReranked,
       };
     }
   } catch {
@@ -324,6 +357,46 @@ export function ingestKnowledgeBase(
   });
 
   console.log(`\nIngest complete → collection: ${collection}`);
+}
+
+/**
+ * Reindex (migrate) knowledge base collections to the configured embedding provider.
+ *
+ * Re-embeds the stored chunks under the active provider — used when switching
+ * embedding_provider (e.g. gemini → cohere) or changing embedding dimensions.
+ * No source files are needed; stored documents and media descriptions are preserved.
+ */
+export function reindexKnowledgeBase(
+  options: {
+    org: string;
+    collection?: string;
+    frameworkRoot: string;
+    instanceId: string;
+  },
+): void {
+  const { org, collection, frameworkRoot, instanceId } = options;
+
+  const env = buildKBEnv(frameworkRoot, org, instanceId);
+
+  if (!kbConfigured(env)) {
+    console.warn(
+      `[kb] Knowledge base not configured for org ${org}. Skipping reindex — run setup to enable.`,
+    );
+    return;
+  }
+
+  const pythonPath = getVenvPython(frameworkRoot);
+  const mmragPath = join(frameworkRoot, 'knowledge-base', 'scripts', 'mmrag.py');
+
+  const args = [mmragPath, 'reindex'];
+  if (collection) args.push('--collection', collection);
+
+  execFileSync(pythonPath, args, {
+    encoding: 'utf-8',
+    timeout: 600000, // re-embedding whole collections can take a while
+    env,
+    stdio: 'inherit',
+  });
 }
 
 /**
