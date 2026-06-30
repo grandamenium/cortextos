@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { stripBom } from '../utils/strip-bom.js';
+import { validateOrgName, validateAgentName } from '../utils/validate.js';
 
 export const getConfigCommand = new Command('get-config')
   .description('Show resolved operational config for an agent (org defaults + agent overrides)')
@@ -16,6 +17,16 @@ export const getConfigCommand = new Command('get-config')
     // Require org
     if (!org) {
       process.stderr.write('Error: --org is required (or set CTX_ORG)\n');
+      process.exit(1);
+    }
+
+    // Reject path-traversal in org/agent before building any orgs/<org>/agents/<agent>
+    // path below. Clean exit (like goals.ts) rather than an uncaught throw.
+    try {
+      validateOrgName(org);
+      if (agentName) validateAgentName(agentName);
+    } catch (err) {
+      process.stderr.write(`Error: ${(err as Error).message}\n`);
       process.exit(1);
     }
 

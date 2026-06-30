@@ -1556,6 +1556,7 @@ busCommand
   .argument('<agent>', 'Target agent name')
   .argument('<message>', 'Urgent message text')
   .action((targetAgent: string, message: string) => {
+    validateAgentName(targetAgent); // reject traversal before building state/<agent>
     const { mkdirSync, writeFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
@@ -1586,6 +1587,7 @@ busCommand
   .argument('<agent>', 'Target agent name to restart')
   .argument('[reason]', 'Reason for restart', 'user request via soft-restart')
   .action(async (targetAgent: string, reason: string) => {
+    validateAgentName(targetAgent); // reject traversal before building state/<agent>
     const { mkdirSync, writeFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
@@ -1656,8 +1658,12 @@ busCommand
 
     console.log(`Restarting ${targets.length} agent(s) with ${opts.stagger}s stagger: ${targets.join(', ')}`);
 
+    let invalidTargets = 0;
     for (let i = 0; i < targets.length; i++) {
       const agent = targets[i];
+      // Agent names come from enabled-agents.json; skip any that aren't valid
+      // identifiers rather than let a tampered config build a path out of state/.
+      try { validateAgentName(agent); } catch (e) { console.error(`Skipping invalid agent name: ${agent} — ${(e as Error).message}`); invalidTargets++; continue; }
       if (i > 0) {
         await new Promise(resolve => setTimeout(resolve, staggerMs));
       }
@@ -1676,6 +1682,12 @@ busCommand
     }
 
     console.log('soft-restart-all complete.');
+    // Signal failure if any configured target was dropped for an invalid name,
+    // so a tampered enabled-agents.json doesn't pass silently in scripts.
+    if (invalidTargets > 0) {
+      console.error(`${invalidTargets} target(s) skipped due to invalid agent names — check enabled-agents.json.`);
+      process.exit(1);
+    }
   });
 
 busCommand
@@ -1685,6 +1697,7 @@ busCommand
   .argument('<reply>', 'Reply text')
   .argument('[msg-id]', 'Inbox message ID to ACK')
   .action((agent: string, reply: string, msgId?: string) => {
+    validateAgentName(agent); // reject traversal before building logs/<agent>
     // Same literal '\n'/'\t' normalize as send-telegram (codex agent fix).
     reply = reply.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
     const { mkdirSync, appendFileSync } = require('fs');

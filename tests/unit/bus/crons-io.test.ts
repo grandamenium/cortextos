@@ -452,3 +452,24 @@ describe('getCronByName', () => {
     expect(getCronByName('boris', 'heartbeat')?.name).toBe('heartbeat');
   });
 });
+
+// ---------------------------------------------------------------------------
+// agent-name path-traversal hardening (#33)
+// ---------------------------------------------------------------------------
+
+describe('agent-name path-traversal hardening (#33)', () => {
+  it('rejects a traversal agent name across crons file I/O', async () => {
+    const { readCrons, readCronsWithStatus, addCron, removeCron, getExecutionLogPage } = await importCrons();
+    expect(() => readCrons('../../etc')).toThrow(/Invalid agent name/);
+    expect(() => readCronsWithStatus('../../etc')).toThrow(/Invalid agent name/);
+    expect(() => addCron('../../etc', makeHeartbeat())).toThrow(/Invalid agent name/);
+    expect(() => removeCron('../../etc', 'heartbeat')).toThrow(/Invalid agent name/);
+    expect(() => getExecutionLogPage('../../etc')).toThrow(/Invalid agent name/);
+  });
+
+  it('still works for a valid agent name', async () => {
+    const { writeCrons, readCrons } = await importCrons();
+    writeCrons('boris', [makeHeartbeat()]);
+    expect(readCrons('boris').length).toBe(1);
+  });
+});
