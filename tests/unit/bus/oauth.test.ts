@@ -187,6 +187,15 @@ describe('refreshOAuthToken', () => {
     expect(result.account).toBe('primary');
     expect(result.expires_at).toBeGreaterThan(Date.now());
 
+    const call = mockFetch.mock.calls[0];
+    expect(call[0]).toBe('https://platform.claude.com/v1/oauth/token');
+    expect(call[1].headers['Content-Type']).toBe('application/x-www-form-urlencoded');
+    expect(call[1].headers.Accept).toBe('application/json');
+    expect(call[1].body).toBeInstanceOf(URLSearchParams);
+    expect(call[1].body.get('grant_type')).toBe('refresh_token');
+    expect(call[1].body.get('refresh_token')).toBe('rtok_primary_xyz');
+    expect(call[1].body.get('client_id')).toBe('9d1c250a-e61b-44d9-88ed-5944d1962f5e');
+
     // Verify accounts.json was rewritten with new tokens
     const store = loadAccounts(tmpDir)!;
     expect(store.accounts.primary.access_token).toBe('new_access_tok');

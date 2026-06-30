@@ -167,25 +167,23 @@ export class AgentPTY {
       }
     });
 
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+    // Claude Code shows first-run prompts in new environments. Auto-accept the
+    // trust prompt with Enter. If --dangerously-skip-permissions triggers the
+    // bypass warning, the default selection is "No, exit", so choose "Yes" first.
+    const acceptStartupPrompts = () => {
+      if (!this.pty) return;
+      const recent = this.outputBuffer.getRecent();
+      if (recent.includes('Bypass Permissions') || recent.includes('No, exit')) {
+        this.pty.write('\x1b[B\r');
+        return;
       }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+      if (recent.includes('trust this folder') || recent.includes('Yes, I trust this folder')) {
+        this.pty.write('\r');
       }
-    }, 8000);
+    };
+    setTimeout(acceptStartupPrompts, 5000);
+    setTimeout(acceptStartupPrompts, 8000);
+    setTimeout(acceptStartupPrompts, 12000);
   }
 
   /**
