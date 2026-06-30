@@ -41,11 +41,11 @@ function todayDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Write a minimal task JSON that the hasOrchIssuedTaskInLast24h helper can parse. */
+/** Write a minimal task JSON that the hasEngagedOrchTask helper can parse. */
 function writeTask(
   taskDir: string,
   taskId: string,
-  opts: { assigned_to: string; created_by: string; created_at: string },
+  opts: { assigned_to: string; created_by: string; created_at: string; status?: string },
 ) {
   mkdirSync(taskDir, { recursive: true });
   writeFileSync(
@@ -56,7 +56,7 @@ function writeTask(
       description: '',
       type: 'agent',
       needs_approval: false,
-      status: 'pending',
+      status: opts.status ?? 'pending',
       assigned_to: opts.assigned_to,
       created_by: opts.created_by,
       org: 'test-org',
@@ -168,7 +168,7 @@ describe('runGoalProgressProbe — codex-runtime idle suppression', () => {
     expect(result.stampStaleAgents.map(a => a.agent)).not.toContain(agentName);
   });
 
-  it('codex-runtime agent with only old tasks (>24h) → suppressed as if no tasks', () => {
+  it('codex-runtime agent with only old non-active tasks (>24h, status=pending) → suppressed as if no tasks', () => {
     const agentName = 'codex';
     const agentDir = join(agentsDir, agentName);
     writeHeartbeat(tmpRoot, agentName);
@@ -176,16 +176,45 @@ describe('runGoalProgressProbe — codex-runtime idle suppression', () => {
     writeMemory(agentDir, todayDate(), 'Did some unrelated work today.');
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ agent_name: agentName, runtime: 'codex-app-server', enabled: true }));
-    // Task created 25h ago — outside the 24h window
+    // Task created 25h ago, status=pending — outside the 24h window AND not actively engaged
     writeTask(taskDir, 'task-old', {
       assigned_to: agentName,
       created_by: 'orchestrator',
       created_at: isoHoursAgo(25),
+      status: 'pending',
     });
 
     const result = runGoalProgressProbe(makePaths(tmpRoot), 'orchestrator', 'test-org', tmpRoot);
 
     expect(result.agents.map(a => a.agent)).not.toContain(agentName);
+    expect(result.stalledAgents.map(a => a.agent)).not.toContain(agentName);
+  });
+
+  it('codex-runtime agent with long-running IN_PROGRESS task (created >24h ago) → tracked, not suppressed', () => {
+    // Regression: an agent actively working a multi-day assignment must remain visible
+    // to the probe (so stamp-stale / stalled classification still applies). Earlier the
+    // 24h-only check would silently drop the agent once its task aged past one day,
+    // hiding long-running work from goal-progress reporting.
+    const agentName = 'codex';
+    const agentDir = join(agentsDir, agentName);
+    writeHeartbeat(tmpRoot, agentName);
+    writeGoals(agentDir, isoHoursAgo(30), ['ship', 'deploy']);
+    writeMemory(agentDir, todayDate(), 'Working on ship and deploy — fix landing today.');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'config.json'), JSON.stringify({ agent_name: agentName, runtime: 'codex-app-server', enabled: true }));
+    // Task created 13 days ago BUT still in_progress — agent is actively engaged
+    writeTask(taskDir, 'task-long', {
+      assigned_to: agentName,
+      created_by: 'orchestrator',
+      created_at: isoHoursAgo(13 * 24),
+      status: 'in_progress',
+    });
+
+    const result = runGoalProgressProbe(makePaths(tmpRoot), 'orchestrator', 'test-org', tmpRoot);
+
+    expect(result.agents.map(a => a.agent)).toContain(agentName);
+    // goals.json is stale-stamp but memory mentions terms → stamp-stale, not stalled
+    expect(result.stampStaleAgents.map(a => a.agent)).toContain(agentName);
     expect(result.stalledAgents.map(a => a.agent)).not.toContain(agentName);
   });
 });

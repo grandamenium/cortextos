@@ -138,15 +138,21 @@ function isCodexRuntimeAgent(agentConfig: { runtime?: string } | null, agentName
 }
 
 /**
- * Returns true when the task directory contains at least one task that was
- * assigned to `agentName` and created by "orchestrator" within the last 24 hours.
+ * Returns true when the task directory contains at least one orchestrator-issued
+ * task assigned to `agentName` that signals active engagement:
  *
- * An orchestrator-issued task signals that the codex agent is part of an active
- * workstream — goal-progress tracking should apply. Absence of such a task means
- * the agent is truly idle (e.g. deprioritized due to auth/credit issues) and
- * should be suppressed to avoid false-positive "stalled" alerts.
+ *   1. A task whose status is `in_progress` (the agent is actively working on it),
+ *      regardless of how long ago it was created. This handles long-running
+ *      assignments where a task may live for days or weeks; the freshness signal
+ *      comes from the in_progress status, not the creation timestamp.
+ *   2. OR a task whose `created_at` is within the last 24 hours, regardless of
+ *      status (recent assignment — give the agent time to pick it up).
+ *
+ * Absence of either signal means the agent is truly idle (e.g. deprioritized
+ * due to auth/credit issues) and should be suppressed to avoid false-positive
+ * "stalled" alerts.
  */
-function hasOrchIssuedTaskInLast24h(taskDir: string, agentName: string, nowMs: number): boolean {
+function hasEngagedOrchTask(taskDir: string, agentName: string, nowMs: number): boolean {
   if (!existsSync(taskDir)) return false;
   const cutoffMs = nowMs - 24 * 3_600_000;
   let files: string[];
@@ -159,11 +165,9 @@ function hasOrchIssuedTaskInLast24h(taskDir: string, agentName: string, nowMs: n
     try {
       const raw = readFileSync(join(taskDir, file), 'utf-8');
       const task = JSON.parse(raw) as Task;
-      if (
-        task.assigned_to === agentName &&
-        task.created_by === 'orchestrator' &&
-        typeof task.created_at === 'string'
-      ) {
+      if (task.assigned_to !== agentName || task.created_by !== 'orchestrator') continue;
+      if (task.status === 'in_progress') return true;
+      if (typeof task.created_at === 'string') {
         const createdMs = Date.parse(task.created_at);
         if (Number.isFinite(createdMs) && createdMs >= cutoffMs) return true;
       }
@@ -292,7 +296,7 @@ export function runGoalProgressProbe(
       // last 24 h.  These agents go idle when Codex is deprioritised (auth/credit
       // issues) and would otherwise generate spurious "stalled" alerts.  The moment
       // an orchestrator assigns them real work they are tracked again.
-      if (isCodexRuntimeAgent(agentConfig, name) && !hasOrchIssuedTaskInLast24h(paths.taskDir, name, nowMs)) continue;
+      if (isCodexRuntimeAgent(agentConfig, name) && !hasEngagedOrchTask(paths.taskDir, name, nowMs)) continue;
 
       const agentDir = join(agentsDir, name);
       const goals = readJson<AgentGoals>(join(agentDir, 'goals.json'));
