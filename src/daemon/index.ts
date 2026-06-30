@@ -4,12 +4,19 @@ import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 
 import { spawnSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
+import { setDefaultAutoSelectFamily } from 'net';
 import { ensureDir } from '../utils/atomic.js';
 
 // Each fast-checker registers a process-level SIGUSR1 handler (see
 // fast-checker.ts:102). With >10 active agents the default Node listener cap
 // trips MaxListenersExceededWarning. Bump for the full fleet.
 process.setMaxListeners(20);
+
+// Disable Happy Eyeballs family auto-selection. On hosts with a broken IPv6
+// route, Node's fetch() races IPv4/IPv6 and intermittently fast-fails with
+// AggregateError [ETIMEDOUT] (~80% failure on Telegram sends). Sequential
+// connection makes fetch fall through cleanly to working IPv4.
+setDefaultAutoSelectFamily(false);
 
 // ---------------------------------------------------------------------------
 // Crash handling: turn silent daemon deaths into attributable, observable

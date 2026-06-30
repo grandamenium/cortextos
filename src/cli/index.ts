@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
+import { setDefaultAutoSelectFamily } from 'net';
 import { initCommand } from './init.js';
 import { addAgentCommand } from './add-agent.js';
 import { startCommand } from './start.js';
@@ -25,6 +26,11 @@ import { setupCommand } from './setup.js';
 import { spawnWorkerCommand, terminateWorkerCommand, listWorkersCommand, injectWorkerCommand } from './workers.js';
 import { importAgentCommand } from './import-agent.js';
 import { updateCommand } from './update.js';
+
+// Disable Happy Eyeballs family auto-selection. On hosts with a broken IPv6
+// route, Node's fetch() races IPv4/IPv6 and intermittently fast-fails with
+// AggregateError [ETIMEDOUT]. Sequential connection falls through to IPv4.
+setDefaultAutoSelectFamily(false);
 
 const program = new Command();
 
