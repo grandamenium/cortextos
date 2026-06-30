@@ -296,6 +296,8 @@ export interface AgentDetail {
   soulRaw: string;
   goalsRaw: string;
   memoryRaw: string;
+  /** sha256 of memoryRaw at load time; echoed back on save for conflict detection (#515). */
+  memoryHash: string;
   memoryFiles: MemoryFile[];
   heartbeat: Heartbeat | null;
   health: HealthStatus;

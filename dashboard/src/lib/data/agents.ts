@@ -4,6 +4,7 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import {
   CTX_ROOT,
   getAgentDir,
@@ -222,6 +223,9 @@ export async function getAgentDetail(
     soulRaw,
     goalsRaw,
     memoryRaw,
+    // Content hash the dashboard echoes back on save so the PATCH handler can
+    // reject overwrites of a MEMORY.md that changed on disk meanwhile (#515).
+    memoryHash: createHash('sha256').update(memoryRaw, 'utf-8').digest('hex'),
     memoryFiles,
     heartbeat: hb,
     health,

@@ -21,6 +21,7 @@ interface MemoryTabProps {
   agentName: string;
   org: string;
   memoryRaw: string;
+  memoryHash: string;
   memoryFiles: MemoryFile[];
 }
 
@@ -34,12 +35,18 @@ export function MemoryTab({
   agentName,
   org,
   memoryRaw: initialMemoryRaw,
+  memoryHash,
   memoryFiles,
 }: MemoryTabProps) {
   const [memoryRaw, setMemoryRaw] = useState(initialMemoryRaw);
+  // The hash of the version currently on disk, as last seen by this tab. Seeded
+  // from the server-issued load hash and refreshed after each successful save so
+  // consecutive saves don't false-409 (#515).
+  const [currentHash, setCurrentHash] = useState(memoryHash);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Record<string, string>>(
     {},
   );
@@ -48,19 +55,35 @@ export function MemoryTab({
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    setConflict(false);
+    setSaved(false);
 
     try {
       const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memoryRaw, org }),
+        body: JSON.stringify({ memoryRaw, memoryHash: currentHash, org }),
       });
+
+      // 409 = MEMORY.md changed on disk since this tab loaded (#515). Keep the
+      // operator's edits in the textarea and prompt a reload rather than
+      // clobbering the newer on-disk content.
+      if (res.status === 409) {
+        setConflict(true);
+        return;
+      }
 
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error ?? 'Failed to save');
       }
 
+      // Advance our on-disk baseline to what we just wrote so the next save in
+      // this tab compares against the right version (#515).
+      const data = await res.json().catch(() => ({}));
+      if (typeof data.memoryHash === 'string') {
+        setCurrentHash(data.memoryHash);
+      }
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
@@ -105,6 +128,18 @@ export function MemoryTab({
         <div className="flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           <IconAlertTriangle size={16} />
           <span>{error}</span>
+        </div>
+      )}
+      {conflict && (
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <IconAlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <span>
+            MEMORY.md changed on disk since you opened this tab, so the save was
+            blocked to avoid overwriting it. Your edits are still here — copy
+            them somewhere safe, then reload the page to pull the latest version
+            and re-apply them. (Reloading now would discard this draft, so it is
+            not done automatically.)
+          </span>
         </div>
       )}
 

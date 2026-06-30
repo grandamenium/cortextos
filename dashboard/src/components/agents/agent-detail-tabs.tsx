@@ -68,6 +68,7 @@ export function AgentDetailTabs({
           agentName={detail.systemName ?? detail.name}
           org={detail.org}
           memoryRaw={detail.memoryRaw}
+          memoryHash={detail.memoryHash}
           memoryFiles={detail.memoryFiles}
         />
       </TabsContent>
