@@ -16,6 +16,7 @@ import { collectTelegramCommands, registerTelegramCommands } from '../bus/metric
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 import { stripBom } from '../utils/strip-bom.js';
+import { isValidTimeZone } from '../utils/agent-timezone.js';
 
 type LogFn = (msg: string) => void;
 
@@ -1153,10 +1154,19 @@ export class AgentManager {
       }
     };
 
+    // Interpret cron hours in the agent's configured timezone (#481), matching
+    // the same config.json `timezone` the agent PTY uses (agent-pty.ts). When
+    // unset, the scheduler keeps process-local behaviour — consistent with the
+    // PTY's own fallback to the system TZ.
+    const timeZone = this.agents.get(agentName)?.process['config']?.timezone;
+    if (timeZone && !isValidTimeZone(timeZone)) {
+      console.warn(`[agent-manager] agent "${agentName}" has an invalid config.json timezone "${timeZone}" — cron hours will fall back to UTC (#481)`);
+    }
     const scheduler = new CronScheduler({
       agentName,
       onFire,
       logger: (msg) => console.log(`[daemon] ${msg}`),
+      timeZone,
     });
 
     scheduler.start();

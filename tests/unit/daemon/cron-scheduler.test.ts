@@ -172,6 +172,64 @@ describe('nextFireFromCron', () => {
 });
 
 // ---------------------------------------------------------------------------
+// nextFireFromCron with an explicit timeZone (#481)
+// ---------------------------------------------------------------------------
+
+/** Wall-clock fields of `ms` as seen in IANA `tz`. */
+function tzOf(ms: number, tz: string): { hour: number; minute: number; day: number; month: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz, hourCycle: 'h23',
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric',
+  }).formatToParts(new Date(ms));
+  const g = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+  return { hour: g('hour'), minute: g('minute'), day: g('day'), month: g('month') };
+}
+
+describe('nextFireFromCron with timeZone (#481)', () => {
+  const CHI = 'America/Chicago';
+
+  it('interprets "0 14 * * *" in the given timezone, not the process TZ', () => {
+    // 2025-06-01 00:00 UTC, well before 14:00 Chicago that day.
+    const fromMs = Date.UTC(2025, 5, 1, 0, 0, 0);
+    const next = nextFireFromCron('0 14 * * *', fromMs, CHI);
+    expect(next).not.toBeNaN();
+    const w = tzOf(next, CHI);
+    expect(w.hour).toBe(14);
+    expect(w.minute).toBe(0);
+  });
+
+  it('DST spring-forward: skips the non-existent 02:30 and fires the next valid day', () => {
+    // 2025-03-09 Chicago: 02:00–02:59 do not exist (CST->CDT). fromMs = 01:00 CST.
+    const fromMs = Date.UTC(2025, 2, 9, 7, 0, 0);
+    const next = nextFireFromCron('30 2 * * *', fromMs, CHI);
+    expect(next).not.toBeNaN();
+    const w = tzOf(next, CHI);
+    expect(w.hour).toBe(2);
+    expect(w.minute).toBe(30);
+    expect(w.day).toBe(10); // the 9th's 02:30 was skipped
+  });
+
+  it('DST fall-back: fires the first occurrence of the repeated 01:30', () => {
+    // 2025-11-02 Chicago: 01:00–01:59 occur twice (CDT then CST). fromMs = 00:00 CDT.
+    const fromMs = Date.UTC(2025, 10, 2, 5, 0, 0);
+    const next = nextFireFromCron('30 1 * * *', fromMs, CHI);
+    expect(next).not.toBeNaN();
+    const w = tzOf(next, CHI);
+    expect(w.hour).toBe(1);
+    expect(w.minute).toBe(30);
+    // First (CDT) 01:30 = 06:30 UTC, before the second (CST) 01:30 = 07:30 UTC.
+    expect(next).toBe(Date.UTC(2025, 10, 2, 6, 30, 0));
+  });
+
+  it('falls back to UTC when the timezone is invalid', () => {
+    const fromMs = Date.UTC(2025, 5, 1, 0, 0, 0);
+    const next = nextFireFromCron('0 14 * * *', fromMs, 'Not/AZone');
+    expect(next).not.toBeNaN();
+    expect(tzOf(next, 'UTC').hour).toBe(14);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CronScheduler behaviour tests (fake timers)
 // ---------------------------------------------------------------------------
 
