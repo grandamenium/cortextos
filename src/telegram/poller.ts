@@ -9,6 +9,53 @@ export type CallbackHandler = (query: TelegramCallbackQuery) => void;
 export type ReactionHandler = (reaction: TelegramMessageReaction) => void;
 
 /**
+ * Long-poll window (seconds) handed to getUpdates. Telegram holds the request
+ * open until an update arrives or this elapses, so idle bots make ~1 request
+ * per (LONG_POLL_SECONDS + pollInterval) instead of 1/sec — a ~25x cut in idle
+ * API traffic with no added message latency (long-poll returns the instant an
+ * update arrives). Must stay below the getUpdates HTTP abort in TelegramAPI
+ * (which scales its abort to this value); see api.ts (A:F-08).
+ */
+const LONG_POLL_SECONDS = 25;
+
+/** Outcome classification for a failed poll cycle (#C1 poll-error split). */
+export type PollErrorPlan =
+  | { type: 'conflict' }
+  | { type: 'rate-limit'; delayMs: number; nextNetFailures: number }
+  | { type: 'network'; delayMs: number; circuitTripped: boolean; nextNetFailures: number };
+
+const POLL_BACKOFF_BASE_MS = 1000;
+const POLL_BACKOFF_CAP_MS = 60_000;
+/** Consecutive network failures before we emit a circuit-breaker log line. */
+const POLL_CIRCUIT_THRESHOLD = 5;
+
+/**
+ * Classify a poll-loop error and decide the next-poll delay (#C1). Pure: takes
+ * the error message and the current consecutive-network-failure count, returns
+ * the plan without mutating state or adding jitter (the caller does both, so
+ * this stays deterministically testable).
+ *
+ *  - 409 Conflict       → caller self-dies so the supervisor retakes the lock.
+ *  - 429 Too Many Requests → honour the `retry after N` value Telegram sends;
+ *                            network-failure streak resets (server was reached).
+ *  - network / timeout  → exponential backoff base*2^(n-1) capped, and a
+ *                         circuit-breaker log once the streak hits the threshold.
+ */
+export function planPollError(message: string, netFailures: number): PollErrorPlan {
+  if (/conflict/i.test(message)) {
+    return { type: 'conflict' };
+  }
+  if (/too many requests|retry after|\b429\b/i.test(message)) {
+    const m = message.match(/retry after (\d+)/i);
+    const retryAfterSec = m ? parseInt(m[1], 10) : 1;
+    return { type: 'rate-limit', delayMs: Math.max(1, retryAfterSec) * 1000, nextNetFailures: 0 };
+  }
+  const next = netFailures + 1;
+  const delayMs = Math.min(POLL_BACKOFF_BASE_MS * 2 ** (next - 1), POLL_BACKOFF_CAP_MS);
+  return { type: 'network', delayMs, circuitTripped: next === POLL_CIRCUIT_THRESHOLD, nextNetFailures: next };
+}
+
+/**
  * Telegram polling loop. Replaces the Telegram portion of fast-checker.sh.
  * Polls getUpdates every 1 second and routes messages/callbacks to handlers.
  */
@@ -22,6 +69,8 @@ export class TelegramPoller {
   private callbackHandlers: CallbackHandler[] = [];
   private reactionHandlers: ReactionHandler[] = [];
   private pollInterval: number;
+  /** Consecutive network/timeout poll failures, for exponential backoff (#C1). */
+  private netFailures: number = 0;
   /**
    * Why the poll loop last exited. Read by AgentManager's poller-supervisor
    * (#459 supervision-gap fix) to decide whether to restart:
@@ -91,22 +140,43 @@ export class TelegramPoller {
     while (this.running) {
       try {
         await this.pollOnce();
+        // A clean cycle clears the network-failure streak so the next blip
+        // starts the exponential backoff from the base again.
+        this.netFailures = 0;
+        await sleep(this.pollInterval + this.pollJitterMs());
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        // A 409 Conflict means another getUpdates connection holds the lock
-        // (e.g. a not-yet-released connection lingering ~60s after a daemon
-        // crash). Exit the loop with a distinct reason so the supervisor can
-        // sleep and retake the lock, rather than hot-looping on Conflict.
-        if (/Conflict/i.test(msg)) {
+        const plan = planPollError(msg, this.netFailures);
+        if (plan.type === 'conflict') {
+          // Another getUpdates connection holds the lock (e.g. lingering ~60s
+          // after a daemon crash). Exit so the supervisor sleeps + retakes the
+          // lock rather than hot-looping on Conflict.
           this.lastExitReason = 'conflict-self-die';
           this.running = false;
           return;
         }
-        // Other errors are transient — log and continue polling.
-        console.error('[telegram-poller] Poll error:', err);
+        this.netFailures = plan.nextNetFailures;
+        if (plan.type === 'rate-limit') {
+          console.error(`[telegram-poller] 429 Too Many Requests — backing off ${plan.delayMs}ms (retry-after honoured)`);
+        } else {
+          console.error('[telegram-poller] Poll error:', err);
+          if (plan.circuitTripped) {
+            console.error(
+              `[telegram-poller] CIRCUIT: ${this.netFailures} consecutive network failures — ` +
+              `sustained outage; continuing with capped backoff.`
+            );
+          }
+        }
+        // Per-agent jitter de-syncs the fleet so retries do not thunder back
+        // in lockstep after a shared outage or rate-limit window (#C1).
+        await sleep(plan.delayMs + this.pollJitterMs());
       }
-      await sleep(this.pollInterval);
     }
+  }
+
+  /** Random per-cycle jitter (0–500ms) to spread fleet-wide poll/retry timing. */
+  private pollJitterMs(): number {
+    return Math.floor(Math.random() * 500);
   }
 
   /**
@@ -129,7 +199,7 @@ export class TelegramPoller {
    * update so a crash mid-batch does not drop confirmed state.
    */
   async pollOnce(): Promise<void> {
-    const result = await this.api.getUpdates(this.offset, 1);
+    const result = await this.api.getUpdates(this.offset, LONG_POLL_SECONDS);
     if (!result?.result?.length) return;
 
     for (const update of result.result as TelegramUpdate[]) {
