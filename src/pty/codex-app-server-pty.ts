@@ -180,7 +180,7 @@ export class CodexAppServerPTY {
     }
   }
 
-  kill(): void {
+  kill(signal?: string): void {
     this._alive = false;
     this._turnQueue = [];
     this.rejectTurnCompletion(new Error('Codex app-server stopped'));
@@ -190,7 +190,7 @@ export class CodexAppServerPTY {
     }
     if (this._appServerPty) {
       try {
-        this._appServerPty.kill();
+        this._appServerPty.kill(signal);
       } catch {
         // Ignore shutdown errors.
       }

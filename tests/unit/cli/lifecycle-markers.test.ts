@@ -16,10 +16,10 @@
  * the end-to-end behavior with a real Telegram bot.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir, homedir } from 'os';
-import { writeDisableMarker } from '../../../src/cli/enable-agent';
+import { writeDisableMarker, clearLifecycleMarkers } from '../../../src/cli/enable-agent';
 import { writeStopMarker } from '../../../src/cli/stop';
 
 describe('BUG-036: lifecycle marker writes', () => {
@@ -99,6 +99,53 @@ describe('BUG-036: lifecycle marker writes', () => {
       const stateDir = join(homedir(), '.cortextos', 'default', 'state', 'commander');
       expect(existsSync(join(stateDir, '.user-disable'))).toBe(true);
       expect(existsSync(join(stateDir, '.user-stop'))).toBe(true);
+    });
+  });
+
+  // Restart-marker hygiene (#609): enable must CONSUME stale lifecycle markers
+  // so a re-enabled agent's first genuine crash isn't misread as an intentional
+  // stop (which silently masked dead agents in the overnight cascade).
+  describe('clearLifecycleMarkers (enable consumes stale markers)', () => {
+    const stateDir = () => join(homedir(), '.cortextos', 'default', 'state', 'commander');
+
+    it('removes .user-disable left by a prior disable, returning what it cleared', () => {
+      writeDisableMarker('default', 'commander', 'disabled earlier');
+      expect(existsSync(join(stateDir(), '.user-disable'))).toBe(true);
+
+      const cleared = clearLifecycleMarkers('default', 'commander');
+
+      expect(cleared).toContain('.user-disable');
+      expect(existsSync(join(stateDir(), '.user-disable'))).toBe(false);
+    });
+
+    it('full disable->enable cycle boots clean with ZERO manual rm', () => {
+      // disable writes both markers (paul died re-enabling with these present)
+      writeDisableMarker('default', 'commander', 'disable');
+      writeStopMarker('default', 'commander', 'stop');
+      // enable consumes them
+      const cleared = clearLifecycleMarkers('default', 'commander');
+      expect(cleared.sort()).toEqual(['.user-disable', '.user-stop']);
+      expect(existsSync(join(stateDir(), '.user-disable'))).toBe(false);
+      expect(existsSync(join(stateDir(), '.user-stop'))).toBe(false);
+    });
+
+    it('clears .restart-planned and .session-refresh too, but leaves non-lifecycle files', () => {
+      const dir = stateDir();
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, '.restart-planned'), 'planned');
+      writeFileSync(join(dir, '.session-refresh'), 'refresh');
+      writeFileSync(join(dir, 'heartbeat.json'), '{}'); // must NOT be touched
+
+      const cleared = clearLifecycleMarkers('default', 'commander');
+
+      expect(cleared.sort()).toEqual(['.restart-planned', '.session-refresh']);
+      expect(existsSync(join(dir, '.restart-planned'))).toBe(false);
+      expect(existsSync(join(dir, '.session-refresh'))).toBe(false);
+      expect(existsSync(join(dir, 'heartbeat.json'))).toBe(true); // untouched
+    });
+
+    it('returns [] and does not throw when there is nothing to clear', () => {
+      expect(clearLifecycleMarkers('default', 'never-existed')).toEqual([]);
     });
   });
 });

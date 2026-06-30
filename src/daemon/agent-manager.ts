@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, statSync } from 'fs';
 import { join, relative } from 'path';
+import { AGENT_LIFECYCLE_MARKERS } from '../bus/heartbeat.js';
 import type { AgentConfig, AgentStatus, CtxEnv, BusPaths, WorkerStatus, TelegramMessage } from '../types/index.js';
 import { AgentProcess } from './agent-process.js';
 import { WorkerProcess } from './worker-process.js';
@@ -18,6 +19,15 @@ import { processMediaMessage } from '../telegram/media.js';
 import { stripBom } from '../utils/strip-bom.js';
 
 type LogFn = (msg: string) => void;
+
+/**
+ * A lifecycle marker older than this is treated as orphaned by the daemon boot
+ * sweep (sweepStaleLifecycleMarkers). Sized to the crash-alert hook's 300s TTL:
+ * past the TTL the hook already ignores the marker, so reaping it is safe, while
+ * anything younger may belong to an in-flight restart and is left to the
+ * heartbeat grace path.
+ */
+const STALE_MARKER_SWEEP_MS = 300_000; // 5 minutes — matches the hook TTL
 
 /**
  * Manages all agents in a cortextOS instance.
@@ -109,9 +119,60 @@ export class AgentManager {
   }
 
   /**
+   * Reap STALE agent-lifecycle markers across every agent's state dir at daemon
+   * boot (#609 / restart-marker hygiene). An orphaned `.restart-planned` /
+   * `.user-stop` / etc — left by a crash-before-heartbeat, a continuously
+   * re-armed restart loop, or a disable->enable that skipped cleanup — makes the
+   * crash-alert hook misread a genuine crash as an intentional stop, silently
+   * masking a dead agent (live: 14.5h overnight cascade). Self-healing those on
+   * the next daemon boot is what neither the 07:27Z dist swap nor a manual
+   * restart did, because nothing swept them.
+   *
+   * Only markers OLDER than STALE_MARKER_SWEEP_MS are cleared, so a restart that
+   * is genuinely in flight (its second SessionEnd hook firing may not have
+   * landed) keeps its marker — the heartbeat grace path + 300s hook TTL own
+   * within-window consumption. `.daemon-crashed` is intentionally excluded
+   * (owned by the BUG-011 quiet logic). Each clear logs agent/marker/age/content
+   * — the observability line for this whole failure class.
+   */
+  private sweepStaleLifecycleMarkers(nowMs: number = Date.now()): void {
+    const stateBase = join(this.ctxRoot, 'state');
+    if (!existsSync(stateBase)) return;
+    let agents: string[];
+    try {
+      agents = readdirSync(stateBase, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name);
+    } catch {
+      return; // state dir unreadable — next clean boot retries
+    }
+    for (const agent of agents) {
+      for (const marker of AGENT_LIFECYCLE_MARKERS) {
+        const p = join(stateBase, agent, marker);
+        try {
+          if (!existsSync(p)) continue;
+          const ageMs = nowMs - statSync(p).mtimeMs;
+          if (ageMs < STALE_MARKER_SWEEP_MS) continue; // in-flight — leave to grace/TTL
+          let content = '';
+          try { content = readFileSync(p, 'utf-8').trim().split('\n')[0].slice(0, 200); } catch { /* ignore */ }
+          unlinkSync(p);
+          console.log(
+            `[agent-manager] Swept stale lifecycle marker: agent=${agent} marker=${marker} ` +
+            `age=${Math.round(ageMs / 1000)}s content=${JSON.stringify(content)}`
+          );
+        } catch { /* per-marker best effort — never block boot */ }
+      }
+    }
+  }
+
+  /**
    * Discover and start all enabled agents.
    */
   async discoverAndStart(): Promise<void> {
+    // Reap stale orphaned lifecycle markers BEFORE starting agents, so a fresh
+    // session never inherits a prior session's stop/disable/restart marker.
+    this.sweepStaleLifecycleMarkers();
+
     const agentDirs = this.discoverAgents();
 
     // BUG-028: read instance-level enabled-agents.json so the daemon respects
