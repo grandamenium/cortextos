@@ -76,7 +76,14 @@ MEMEOF
    cortextos bus hard-restart --reason "context exhaustion"
    ```
 
-**--continue restarts** (71h auto-restart): No user notification needed. Session history is preserved.
+**--continue restarts** (71h auto-restart): No user notification needed when the reload is invisible to the user. Session history is preserved.
+
+**User-visible restarts** (coordinated fleet bounces, crash recovery the user noticed, restarts the user asked for or asked about): send ONE substantive Telegram. ALL FOUR elements REQUIRED, IN THIS ORDER — a message missing any element is a protocol violation. Never a bare "back online":
+1. **Restart class** — what kind and why. Example: "Restarted as part of the coordinated daemon deploy."
+2. **Carried through** — what survived intact. Example: "All queued work and the watch loop carried through untouched."
+3. **Pending** — what still waits and on whom. Example: "Still waiting on your call for the two draft replies."
+4. **New since last contact** — what changed during the restart, or say nothing did. Example: "Nothing new since my last message."
+Write it as natural prose, not a numbered list. Before sending: count the four elements in your draft — if any is missing, rewrite.
 
 ---
 
