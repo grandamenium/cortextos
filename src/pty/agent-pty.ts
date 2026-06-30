@@ -167,25 +167,46 @@ export class AgentPTY {
       }
     });
 
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+    // Claude Code shows interactive prompts on first run that must be auto-accepted
+    // when running headless (no human at the PTY). There are TWO distinct screens:
+    //   1. "trust this folder?"  — default is "Yes, I trust"  → bare Enter accepts.
+    //   2. "Bypass Permissions mode" (Claude Code 2.1.x+) — options are
+    //      "1. No, exit" (DEFAULT) and "2. Yes, I accept". Sending bare Enter here
+    //      would select "No, exit" and QUIT the agent (exit code 1). We must move the
+    //      selection DOWN to "Yes, I accept" then confirm: Down-arrow (\x1b[B) + Enter.
+    // The screens render a few seconds apart, so poll briefly and handle each once.
+    // The TUI separates words with cursor-positioning escape codes, so we strip ANSI
+    // and match on CO-OCCURRING, prompt-specific tokens (not stray single words) so
+    // normal agent output can never trigger a stray keystroke. We also STOP the moment
+    // the real session is live (isBootstrapped) so we never inject into it. Note:
+    // isBootstrapped()'s pattern is lowercase 'permissions' (the status bar) which is
+    // absent from both prompt screens, and it already excludes the trust prompt — so it
+    // is reliably false during these screens and true only once the session has started.
+    let trustHandled = false;
+    let bypassHandled = false;
+    const promptPoll = setInterval(() => {
+      if (!this.pty) { clearInterval(promptPoll); return; }
+      const recent = this.outputBuffer.getRecent().replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      const showingBypass = recent.includes('Bypass') && recent.includes('accept');
+      const showingTrust = recent.includes('trust') && recent.includes('folder');
+      if (showingBypass && !bypassHandled) {
+        // Bypass screen: default selection is "1. No, exit". Move DOWN to
+        // "2. Yes, I accept", then confirm. Bare Enter here would quit the agent.
+        bypassHandled = true;
+        this.pty.write('\x1b[B'); // arrow down to "Yes, I accept"
+        setTimeout(() => { if (this.pty) this.pty.write('\r'); }, 350); // confirm
+        return;
       }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
+      if (showingTrust && !trustHandled) {
+        trustHandled = true;
+        this.pty.write('\r');     // trust screen default is "Yes, I trust"
+        return;
       }
-    }, 8000);
+      // No first-run prompt pending and the real session is up → stop polling so we
+      // never write a stray keystroke into the live agent session.
+      if (this.outputBuffer.isBootstrapped()) { clearInterval(promptPoll); return; }
+    }, 1200);
+    setTimeout(() => clearInterval(promptPoll), 20000);
   }
 
   /**
