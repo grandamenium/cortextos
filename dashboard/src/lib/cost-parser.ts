@@ -18,26 +18,68 @@ interface ModelPricing {
   cacheReadPerMillion: number;
 }
 
+// Approximate list prices per million tokens. APPROXIMATIONS for dashboard
+// display only — for authoritative billing consult the Anthropic console
+// (platform.claude.com). Claude rates current as of 2026-06 from
+// platform.claude.com/pricing; cache-write is 1.25x input (5-min TTL) and
+// cache-read is 0.1x input. Update on model releases.
+//
+// Keys are GENERATION-SPECIFIC because substring matching alone collapses
+// model generations that are priced differently (#520): Claude 4.x Opus is
+// $5/$25, but the retired Claude 3 Opus was $15/$75 — mapping every "opus" to
+// one rate over-counted Claude 4.x Opus agents by ~3x. resolvePricingKey()
+// selects the right generation key per model id.
 const MODEL_PRICING: Record<string, ModelPricing> = {
-  opus: { inputPerMillion: 15, outputPerMillion: 75, cacheWritePerMillion: 3.75, cacheReadPerMillion: 1.50 },
+  // Claude Opus pricing splits by PRICE TIER, not a clean 3-vs-4 line: the
+  // $5/$25 tier arrived with Opus 4.5. Opus 4.0 and 4.1 (and Claude 3 Opus)
+  // are still $15/$75 per platform.claude.com/pricing.
+  'opus-current': { inputPerMillion: 5, outputPerMillion: 25, cacheWritePerMillion: 6.25, cacheReadPerMillion: 0.50 },   // Opus 4.5+
+  'opus-legacy': { inputPerMillion: 15, outputPerMillion: 75, cacheWritePerMillion: 18.75, cacheReadPerMillion: 1.50 },  // Opus 3, 4.0, 4.1
+  // Claude Sonnet — 3.x and 4.x both $3/$15.
   sonnet: { inputPerMillion: 3, outputPerMillion: 15, cacheWritePerMillion: 3.75, cacheReadPerMillion: 0.30 },
-  haiku: { inputPerMillion: 0.8, outputPerMillion: 4, cacheWritePerMillion: 1.00, cacheReadPerMillion: 0.08 },
+  // Claude Haiku — 4.5 ($1/$5) vs the retired Haiku 3.5 ($0.80/$4).
+  'haiku-4': { inputPerMillion: 1, outputPerMillion: 5, cacheWritePerMillion: 1.25, cacheReadPerMillion: 0.10 },
+  'haiku-3': { inputPerMillion: 0.8, outputPerMillion: 4, cacheWritePerMillion: 1.00, cacheReadPerMillion: 0.08 },
+  // Claude Fable 5 — most-capable tier, above Opus ($10/$50).
+  fable: { inputPerMillion: 10, outputPerMillion: 50, cacheWritePerMillion: 12.50, cacheReadPerMillion: 1.00 },
   // gpt-5-codex: OpenAI list pricing as of 2026-01. cache write n/a (no separate
   // write cost on cached input). Update when codex pricing changes upstream.
   'gpt-5-codex': { inputPerMillion: 1.25, outputPerMillion: 10, cacheWritePerMillion: 0, cacheReadPerMillion: 0.125 },
 };
 
 /**
- * Resolve model name to pricing key. Matches substrings: claude variants map to
- * opus/sonnet/haiku; gpt-5-codex (and bare "codex" / "gpt-5" variants) map to
- * gpt-5-codex pricing rather than silently defaulting to sonnet.
+ * Resolve a model name to a pricing key by family AND price tier. Substring
+ * matching alone is insufficient because tiers of the same family are priced
+ * differently (#520). For Opus the split is NOT a clean 3-vs-4 line: the
+ * $5/$25 tier started at Opus 4.5, so Opus 4.0 / 4.1 are still $15/$75 like
+ * Claude 3 Opus. resolveOpusKey() reads the minor version to route correctly.
+ * Haiku splits cleanly (4.5 $1/$5 vs retired 3.5 $0.80/$4 — no 4.0/4.1). An
+ * untagged/future Opus or Haiku defaults to the CURRENT tier, so the ~3x
+ * over-count this fix removes cannot silently return. gpt-5-codex (and bare
+ * "codex"/"gpt-5") map to codex pricing rather than defaulting to sonnet.
  */
+function resolveOpusKey(lower: string): string {
+  // $15/$75 tier: Claude 3 Opus + Opus 4.0–4.4 (the $5/$25 price drop landed
+  // at Opus 4.5). $5/$25 tier: Opus 4.5 and later.
+  if (lower.includes('claude-3') || lower.includes('opus-3')) return 'opus-legacy'; // Opus 3 (any alias)
+  const m = lower.match(/opus-4-(\d+)/); // minor version after "opus-4-"
+  if (m) {
+    const n = Number(m[1]);
+    // A bare dated id `claude-opus-4-YYYYMMDD` is Opus 4.0 — the captured number
+    // is a date, not a minor version (>= 1000 ⇒ date).
+    if (n >= 1000) return 'opus-legacy';
+    return n < 5 ? 'opus-legacy' : 'opus-current'; // price drop at 4.5
+  }
+  return 'opus-current'; // bare / future Opus → current tier
+}
+
 function resolvePricingKey(model: string): string {
   const lower = model.toLowerCase();
-  if (lower.includes('opus')) return 'opus';
-  if (lower.includes('haiku')) return 'haiku';
+  if (lower.includes('fable') || lower.includes('mythos')) return 'fable';
+  if (lower.includes('opus')) return resolveOpusKey(lower);
+  if (lower.includes('haiku')) return lower.includes('claude-3') ? 'haiku-3' : 'haiku-4';
   if (lower.includes('codex') || lower.includes('gpt-5')) return 'gpt-5-codex';
-  // Default to sonnet for all other claude models
+  // Default to sonnet for all other claude models (3.x and 4.x are same price).
   return 'sonnet';
 }
 
