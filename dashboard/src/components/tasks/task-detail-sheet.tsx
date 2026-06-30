@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Sheet,
   SheetContent,
@@ -27,9 +27,10 @@ import {
   OrgBadge,
   TimeAgo,
 } from '@/components/shared';
-import { IconPencil, IconFile, IconPhoto, IconFileText, IconCode } from '@tabler/icons-react';
+import { IconPencil, IconFile, IconPhoto, IconFileText, IconCode, IconSend } from '@tabler/icons-react';
 import { DeliverablePreview } from '@/components/tasks/deliverable-preview';
-import type { Task, TaskOutput, TaskStatus, TaskPriority } from '@/lib/types';
+import { TaskHistoryFeed } from '@/components/tasks/task-history-feed';
+import type { Task, TaskOutput, TaskStatus, TaskPriority, TaskAuditEntry } from '@/lib/types';
 
 export interface TaskDetailSheetProps {
   task: Task | null;
@@ -92,6 +93,14 @@ export function TaskDetailSheet({
   const [deliverablesEnabled, setDeliverablesEnabled] = useState(false);
   const [previewOutput, setPreviewOutput] = useState<TaskOutput | null>(null);
 
+  // History / comments state
+  const [history, setHistory] = useState<TaskAuditEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [commentError, setCommentError] = useState<string | null>(null);
+  const commentRef = useRef<HTMLTextAreaElement>(null);
+
   // Fetch outputs and deliverables setting when task detail opens
   const fetchTaskOutputs = useCallback(async (taskId: string, org: string) => {
     try {
@@ -111,14 +120,72 @@ export function TaskDetailSheet({
     } catch { /* non-fatal */ }
   }, []);
 
+  const fetchHistory = useCallback(async (taskId: string) => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/history`);
+      if (res.ok) {
+        const data = await res.json();
+        setHistory(Array.isArray(data) ? data : []);
+      }
+    } catch { /* non-fatal */ }
+    finally { setHistoryLoading(false); }
+  }, []);
+
   useEffect(() => {
     if (open && task) {
       fetchTaskOutputs(task.id, task.org);
+      fetchHistory(task.id);
     } else {
       setOutputs([]);
       setPreviewOutput(null);
+      setHistory([]);
+      setCommentText('');
+      setCommentError(null);
     }
-  }, [open, task?.id, task?.org, fetchTaskOutputs, task]);
+  }, [open, task?.id, task?.org, fetchTaskOutputs, fetchHistory, task]);
+
+  async function handleSubmitComment() {
+    if (!task || !commentText.trim() || submittingComment) return;
+    setSubmittingComment(true);
+    setCommentError(null);
+
+    // Optimistic update
+    const optimistic: TaskAuditEntry = {
+      ts: new Date().toISOString(),
+      event: 'comment',
+      agent: 'dashboard-user',
+      note: commentText.trim(),
+    };
+    setHistory((prev) => [...prev, optimistic]);
+    const draft = commentText;
+    setCommentText('');
+
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: draft }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Replace optimistic with server response (includes real ts + agent)
+        setHistory(Array.isArray(data) ? data : []);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setCommentError(data.error ?? 'Kommentar konnte nicht gespeichert werden');
+        // Rollback optimistic entry
+        setHistory((prev) => prev.filter((e) => e !== optimistic));
+        setCommentText(draft);
+      }
+    } catch {
+      setCommentError('Netzwerkfehler beim Senden');
+      setHistory((prev) => prev.filter((e) => e !== optimistic));
+      setCommentText(draft);
+    } finally {
+      setSubmittingComment(false);
+    }
+  }
 
   if (!task) return null;
 
@@ -358,6 +425,55 @@ export function TaskDetailSheet({
                     })}
                   </div>
                 )}
+              </div>
+            </>
+          )}
+
+          {/* History feed */}
+          {!editing && (
+            <>
+              <Separator />
+              <div>
+                <p className="text-sm text-muted-foreground mb-3">Verlauf</p>
+                <TaskHistoryFeed entries={history} loading={historyLoading} />
+
+                {/* Comment input */}
+                <div className="mt-4 space-y-2">
+                  {commentError && (
+                    <p className="text-xs text-destructive">{commentError}</p>
+                  )}
+                  <div className="flex gap-2 items-end">
+                    <Textarea
+                      ref={commentRef}
+                      placeholder="Kommentar hinzufügen..."
+                      value={commentText}
+                      onChange={(e) => setCommentText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                          e.preventDefault();
+                          handleSubmitComment();
+                        }
+                      }}
+                      maxLength={2000}
+                      rows={2}
+                      className="resize-none"
+                      aria-label="Kommentar schreiben"
+                    />
+                    <Button
+                      size="icon"
+                      variant="default"
+                      onClick={handleSubmitComment}
+                      disabled={!commentText.trim() || submittingComment}
+                      aria-label="Senden"
+                      className="shrink-0"
+                    >
+                      <IconSend size={14} />
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground/60">
+                    Cmd+Enter zum Senden
+                  </p>
+                </div>
               </div>
             </>
           )}
