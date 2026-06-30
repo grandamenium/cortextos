@@ -1,0 +1,14 @@
+{
+  "name": "workflows-engineering",
+  "type": "skill",
+  "description": "Design Claude Code Dynamic Workflows as auditable, observable, repeatable, and optimizable agentic loops.",
+  "author": "grandamenium",
+  "tags": [
+    "claude-code",
+    "workflows",
+    "agentic-loops",
+    "orchestration",
+    "skills"
+  ],
+  "entrypoint": "SKILL.md"
+}
