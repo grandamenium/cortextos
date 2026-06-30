@@ -7,6 +7,12 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, m
 import { join, basename, dirname } from 'path';
 import { execSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
+import { computeStaleThresholdMs } from './heartbeat-staleness.js';
+
+// Agents whose heartbeat lacked a usable loop_interval and fell back to the 2h
+// default — logged ONCE per process so a misconfigured agent surfaces without
+// spamming the watchdog every collection cycle.
+const loggedStaleFallbackAgents = new Set<string>();
 
 // --- Types ---
 
@@ -177,7 +183,11 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       }
     }
 
-    // Check heartbeat staleness (stale if >5 hours old)
+    // Check heartbeat staleness against a PER-AGENT threshold derived from the
+    // agent's own cadence (loop_interval), not a flat 5h. A flat threshold read
+    // a 3.5h-dead agent as healthy (paul, 01:00Z); the per-cadence threshold —
+    // max(min(3×,6h),1.5×,15m) — flags it. Missing/unparseable cadence falls
+    // back to 2h (logged once).
     let heartbeatStale = true;
     const hbFile = join(ctxRoot, 'state', agent, 'heartbeat.json');
     if (existsSync(hbFile)) {
@@ -186,7 +196,14 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
         if (hb.last_heartbeat) {
           const hbTime = new Date(hb.last_heartbeat).getTime();
           const age = Date.now() - hbTime;
-          if (age < 5 * 60 * 60 * 1000) {
+          const { thresholdMs, fallback } = computeStaleThresholdMs(hb.loop_interval);
+          if (fallback && !loggedStaleFallbackAgents.has(agent)) {
+            loggedStaleFallbackAgents.add(agent);
+            console.warn(
+              `[watchdog] ${agent}: heartbeat loop_interval missing/unparseable — using 2h staleness fallback`,
+            );
+          }
+          if (age < thresholdMs) {
             heartbeatStale = false;
             agentsHealthy++;
           }
