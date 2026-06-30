@@ -41,7 +41,9 @@ interface MockCodexServerInstance {
   requestLog: Array<{ method: string; params: unknown; notification?: boolean }>;
 }
 
-describe('E2E codex lifecycle (mock-codex.js + WsUnixJsonRpcClient)', () => {
+// Uses Unix sockets, which require Windows 10 1809+ AND elevated permissions.
+// `listen EACCES` happens reliably for unprivileged users on Windows.
+describe.skipIf(process.platform === 'win32')('E2E codex lifecycle (mock-codex.js + WsUnixJsonRpcClient)', () => {
   let testDir: string;
   let socketPath: string;
   let server: MockCodexServerInstance;

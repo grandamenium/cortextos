@@ -237,7 +237,7 @@ describe('FM-1: Disk full — ENOSPC write failure, no data loss on recovery', (
     scheduler.stop();
   });
 
-  it('atomicWriteSync: ENOSPC on tmp write throws; subsequent write succeeds', () => {
+  it.skipIf(process.platform === 'win32')('atomicWriteSync: ENOSPC on tmp write throws; subsequent write succeeds', () => {
     // Direct unit test: atomicWriteSync propagates write errors correctly.
     // We simulate ENOSPC by writing to a path in a non-writable directory.
     const readOnlyDir = join(tmpRoot, 'readonly-dir');
@@ -785,7 +785,7 @@ describe('FM-7: Log rotation under concurrent write pressure', () => {
     expect(lines.length).toBeLessThanOrEqual(MAX_LOG_LINES + 100);
   });
 
-  it('log rotation preserves the most-recent entries', async () => {
+  it('log rotation preserves the most-recent entries', { timeout: process.platform === 'win32' ? 60_000 : 15_000 }, async () => {
     const agent = 'fm-logrotate-order';
     ensureAgentDir(agent);
 

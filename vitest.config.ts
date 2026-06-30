@@ -20,5 +20,19 @@ export default defineConfig({
       'tests/**/*.test.ts',
       'dashboard/src/**/__tests__/**/*.test.ts',
     ],
+    // On Windows, vitest's default thread pool causes interference between
+    // files that use vi.useFakeTimers() and perf-budget tests under load
+    // (heartbeat watchdog, p95 latency assertions, concurrent disk writes).
+    // Forks give each file its own process and reduce cross-file contention.
+    // On other platforms we keep the default thread pool (faster).
+    ...(process.platform === 'win32'
+      ? {
+          pool: 'forks' as const,
+          // Throttle parallelism on Windows. Default would be 1-per-core which
+          // overwhelms the I/O subsystem when multiple integration tests do
+          // heavy disk work concurrently.
+          poolOptions: { forks: { maxForks: 2, minForks: 1 } },
+        }
+      : {}),
   },
 });

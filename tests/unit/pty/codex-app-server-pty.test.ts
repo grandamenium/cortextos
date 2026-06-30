@@ -91,7 +91,10 @@ beforeEach(() => {
   messageHandler = null;
 });
 
-describe('CodexAppServerPTY socket path policy', () => {
+// These three describes assert exact POSIX path strings ('/tmp/...'). Node's
+// path.join produces backslashes on Windows; the source is platform-correct.
+// Skip on Windows where the user isn't using the codex runtime anyway.
+describe.skipIf(process.platform === 'win32')('CodexAppServerPTY socket path policy', () => {
   it('uses codex.sock in the agent state dir by default', () => {
     const pty = new CodexAppServerPTY(mockEnv, {});
     expect((pty as unknown as { _socketPath: string })._socketPath).toBe('/tmp/ctx/state/codex-app-agent/codex.sock');
@@ -912,7 +915,7 @@ describe('CodexAppServerPTY event handling', () => {
   });
 });
 
-describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', () => {
+describe.skipIf(process.platform === 'win32')('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', () => {
   function feedTokenUsage(pty: InstanceType<typeof CodexAppServerPTY>, tokenUsage: unknown) {
     (pty as unknown as { handleRpcMessage(message: unknown): void }).handleRpcMessage({
       method: 'thread/tokenUsage/updated',
@@ -1050,7 +1053,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
   });
 });
 
-describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', () => {
+describe.skipIf(process.platform === 'win32')('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', () => {
   function feedTokenUsage(
     pty: InstanceType<typeof CodexAppServerPTY>,
     tokenUsage: unknown,

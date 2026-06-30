@@ -75,6 +75,18 @@ CHROMADB_DIR="$KB_ROOT/chromadb"
 VENV_DIR="$FRAMEWORK_ROOT/knowledge-base/venv"
 MMRAG_PY="$FRAMEWORK_ROOT/knowledge-base/scripts/mmrag.py"
 
+# Resolve platform-specific venv paths (Windows uses Scripts/python.exe, Unix uses bin/python3)
+if [[ -x "$VENV_DIR/Scripts/python.exe" ]]; then
+  VENV_PY="$VENV_DIR/Scripts/python.exe"
+elif [[ -x "$VENV_DIR/bin/python3" ]]; then
+  VENV_PY="$VENV_DIR/bin/python3"
+elif [[ -x "$VENV_DIR/bin/python" ]]; then
+  VENV_PY="$VENV_DIR/bin/python"
+else
+  echo "ERROR: Python venv not found at $VENV_DIR. Run: bash bus/kb-setup.sh --org $ORG" >&2
+  exit 1
+fi
+
 # Source org secrets for GEMINI_API_KEY
 SECRETS_FILE="$FRAMEWORK_ROOT/orgs/$ORG/secrets.env"
 if [[ -f "$SECRETS_FILE" ]]; then
@@ -113,7 +125,7 @@ for path in "${PATHS[@]}"; do
   echo "  Source: $path"
 done
 
-"$VENV_DIR/bin/python3" "$MMRAG_PY" ingest "${PATHS[@]}" \
+"$VENV_PY" "$MMRAG_PY" ingest "${PATHS[@]}" \
   --collection "$COLLECTION" \
   ${FORCE}
 

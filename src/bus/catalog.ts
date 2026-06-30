@@ -6,7 +6,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, cpSync, rmSync, chmodSync } from 'fs';
-import { join, resolve, relative } from 'path';
+import { join, resolve, relative, isAbsolute } from 'path';
 import { execSync, execFileSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
 
@@ -234,18 +234,21 @@ export function installCommunityItem(
   // "skills/X" (submit-writes shape) both resolve correctly under communityBase.
   const installPath = item.install_path.replace(/^community\//, '');
 
-  // Validate install_path to prevent path traversal
-  if (installPath.includes('..') || installPath.startsWith('/')) {
+  // Validate install_path to prevent path traversal. Reject absolute paths
+  // on both POSIX (starts with /) and Windows (drive letters, UNC, leading \).
+  if (installPath.includes('..') || isAbsolute(installPath) || /^[\\/]/.test(installPath)) {
     return { status: 'error', name: itemName, error: 'install_path contains path traversal' };
   }
 
   const communityBase = join(frameworkRoot, 'community');
   const sourceDir = join(communityBase, installPath);
 
-  // Verify resolved path is under community/
+  // Verify resolved path is under community/ using relative() so the check
+  // works on both POSIX and Windows path separators.
   const resolvedSource = resolve(sourceDir);
   const resolvedBase = resolve(communityBase);
-  if (!resolvedSource.startsWith(resolvedBase + '/') && resolvedSource !== resolvedBase) {
+  const rel = relative(resolvedBase, resolvedSource);
+  if (rel.startsWith('..') || rel.includes('\0')) {
     return { status: 'error', name: itemName, error: 'install_path resolves outside community directory' };
   }
 
@@ -340,10 +343,12 @@ export function prepareSubmission(
   // Staging directory
   const stagingDir = join(ctxRoot, 'community-staging', itemName);
 
-  // Verify staging path is under community-staging/
+  // Verify staging path is under community-staging/ using relative() so the
+  // check works on both POSIX and Windows path separators.
   const resolvedStaging = resolve(stagingDir);
   const resolvedStagingBase = resolve(join(ctxRoot, 'community-staging'));
-  if (!resolvedStaging.startsWith(resolvedStagingBase + '/') && resolvedStaging !== resolvedStagingBase) {
+  const stagingRel = relative(resolvedStagingBase, resolvedStaging);
+  if (stagingRel.startsWith('..') || stagingRel.includes('\0')) {
     return { status: 'error', name: itemName, type: itemType, staging_dir: '', file_count: 0, files: [], pii_detected: ['staging directory resolves outside expected path'] };
   }
 

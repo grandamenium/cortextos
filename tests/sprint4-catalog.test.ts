@@ -204,7 +204,7 @@ describe('Sprint 4: Community Catalog', () => {
     it('installs agent templates to templates/personas/', () => {
       const result = installCommunityItem(frameworkRoot, ctxRoot, 'research-agent');
       expect(result.status).toBe('installed');
-      expect(result.target).toContain('templates/personas/research-agent');
+      expect(result.target).toContain(join('templates', 'personas', 'research-agent'));
     });
 
     it('rejects path traversal in install_path', () => {

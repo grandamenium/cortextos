@@ -96,7 +96,7 @@ afterEach(() => {
  */
 function mockMissingKbConfig(): void {
   fsMocks.existsSync.mockImplementation((p: any) => {
-    const path = String(p);
+    const path = String(p).replace(/\\/g, '/');
     if (path.endsWith('/knowledge-base/config.json')) return false;
     return true;
   });

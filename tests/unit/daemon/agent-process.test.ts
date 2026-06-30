@@ -177,7 +177,7 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     // to stdout and left restarts.log empty.
     expect(fsMocks.appendFileSync).toHaveBeenCalledTimes(1);
     const [logPath, logLine] = fsMocks.appendFileSync.mock.calls[0];
-    expect(String(logPath)).toContain('/logs/alice/restarts.log');
+    expect(String(logPath).replace(/\\/g, '/')).toContain('/logs/alice/restarts.log');
     expect(String(logLine)).toMatch(/\] CRASH: exit_code=1 crash_count=1 backoff_s=5\b/);
     expect(String(logLine).endsWith('\n')).toBe(true);
   });
@@ -187,7 +187,7 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
     // marker moments ago. handleExit should recognize the shutdown-in-progress
     // signal and bail out before touching the crash counter or restarts.log.
     fsMocks.existsSync.mockImplementation((p: any) => {
-      const path = String(p);
+      const path = String(p).replace(/\\/g, '/');
       return path.endsWith('/state/alice/.daemon-stop');
     });
     fsMocks.statSync.mockImplementation((p: any) => ({ mtimeMs: Date.now() - 2_000 }));
