@@ -24,8 +24,17 @@ Reply using: cortextos bus send-message <agent> normal '<your reply>' <msg_id>
 
 1. Read every message block in the injected content
 2. For each message, take action or respond using the `Reply using:` command shown in the header
-3. For agent messages, always include the `msg_id` as the reply_to argument so conversations thread correctly
+3. For agent messages, always include the **incoming** message's `msg_id` as the reply_to argument so conversations thread correctly. When replying in a multi-turn thread, point at the LATEST incoming message's msg_id — NOT your own outbound msg_id from a prior turn (real miss caught 2026-06-02 audit).
 4. The fast-checker handles temp file cleanup automatically
+
+
+## Non-substantive acks
+
+When a message contains no substantive request and you have nothing to add (e.g. "ACK", "Standby" replies that don't need a reply chain extension), use:
+```bash
+cortextos bus ack-inbox <msg_id>
+```
+This clears the redelivery timer without sending a performative reply. Distinct from `send-message` (used when you have substantive content). Both close the thread for the orchestrator — pick the one that matches what you're actually conveying.
 
 ## Priority
 
