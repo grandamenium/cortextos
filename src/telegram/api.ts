@@ -612,30 +612,44 @@ export class TelegramAPI {
    * Make a POST request to the Telegram API.
    */
   private async post(method: string, data: object): Promise<any> {
-    try {
-      const response = await fetch(`${this.baseUrl}/${method}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-        signal: AbortSignal.timeout(15000),
-      });
-      const result = await response.json() as any;
-      if (!result.ok) {
-        throw new Error(`Telegram API error: ${result.description || 'Unknown error'}`);
+    // Single retry on transport-level errors (e.g. TypeError: fetch failed
+    // from undici keepalive socket reuse against a server-dropped idle
+    // connection). Safe because dead-socket-reuse fires BEFORE any request
+    // body is written, so the message is provably not delivered. Telegram
+    // API errors and timeouts are deliberately NOT retried — a timeout may
+    // have written the body and Telegram may have processed it, so retrying
+    // could duplicate. (Diagnostic + write-up in
+    // orgs/personal/agents/squeege/experiments/send-telegram-cli-diagnostic.md.)
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await fetch(`${this.baseUrl}/${method}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+          signal: AbortSignal.timeout(15000),
+        });
+        const result = await response.json() as any;
+        if (!result.ok) {
+          throw new Error(`Telegram API error: ${result.description || 'Unknown error'}`);
+        }
+        return result;
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith('Telegram API error')) {
+          throw err;
+        }
+        // AbortSignal.timeout surfaces as DOMException name=TimeoutError (or AbortError).
+        // Surface as a clean retryable error so the poller loop recovers next tick
+        // instead of silently hanging on a wedged TCP connection.
+        if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+          throw new Error(`Telegram API request timed out after 15s: ${method}`);
+        }
+        lastErr = err;
+        if (attempt === 0) continue; // transport-level error — retry once
+        break;
       }
-      return result;
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith('Telegram API error')) {
-        throw err;
-      }
-      // AbortSignal.timeout surfaces as DOMException name=TimeoutError (or AbortError).
-      // Surface as a clean retryable error so the poller loop recovers next tick
-      // instead of silently hanging on a wedged TCP connection.
-      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-        throw new Error(`Telegram API request timed out after 15s: ${method}`);
-      }
-      throw new Error(`Telegram API request failed: ${err}`);
     }
+    throw new Error(`Telegram API request failed: ${lastErr}`);
   }
 
   /**

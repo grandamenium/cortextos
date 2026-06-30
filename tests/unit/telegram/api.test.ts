@@ -204,6 +204,10 @@ describe('TelegramAPI.validateCredentials', () => {
   });
 
   it('network_error: fetch throws -> reason=network_error (caller treats as WARN)', async () => {
+    // post() retries once on transport-level errors (undici keepalive fix).
+    // A genuine DNS failure persists across attempts, so queue the same
+    // ENOTFOUND for both calls; final wrapped error still preserves it.
+    queue({ throws: new Error('getaddrinfo ENOTFOUND api.telegram.org') });
     queue({ throws: new Error('getaddrinfo ENOTFOUND api.telegram.org') });
 
     const api = new TelegramAPI('111:AAA');
