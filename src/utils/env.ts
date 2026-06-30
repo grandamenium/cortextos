@@ -3,6 +3,7 @@ import { join, basename, resolve as resolvePath, sep } from 'path';
 import { homedir } from 'os';
 import type { CtxEnv } from '../types/index.js';
 import { ensureDir } from './atomic.js';
+import { getCtxRoot } from './paths.js';
 import { validateAgentName, validateOrgName } from './validate.js';
 import { stripBom } from './strip-bom.js';
 
@@ -133,6 +134,23 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
   }
 
   return { instanceId, ctxRoot, frameworkRoot, agentName, agentDir, org, projectRoot, timezone, orchestrator };
+}
+
+/**
+ * Resolve the data root for a CLI command that takes --instance, honouring the
+ * same sources as resolveEnv() — process env, then .cortextos-env in cwd, then
+ * the ~/.cortextos/{instance} default — WITHOUT resolveEnv()'s agent-name
+ * resolution/validation, so operator commands (start/stop/status/...) work from
+ * any directory. #568 council review: paths and the IPC socket must resolve the
+ * same root in every command, whichever source CTX_ROOT comes from.
+ */
+export function resolveCtxRoot(instanceId: string = 'default'): string {
+  let envFile: Record<string, string> = {};
+  const cortextosEnvPath = join(process.cwd(), '.cortextos-env');
+  if (existsSync(cortextosEnvPath)) {
+    envFile = parseEnvFile(cortextosEnvPath);
+  }
+  return getCtxRoot(instanceId, process.env.CTX_ROOT || envFile.CTX_ROOT || undefined);
 }
 
 /**

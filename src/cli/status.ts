@@ -1,16 +1,17 @@
 import { Command } from 'commander';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 import type { AgentStatus, Heartbeat } from '../types/index.js';
+import { resolveCtxRoot } from '../utils/env.js';
 
 export const statusCommand = new Command('status')
   .option('--instance <id>', 'Instance ID')
   .description('Show agent health and status')
   .action(async (options: { instance?: string }) => {
     const instanceId = options.instance || process.env.CTX_INSTANCE_ID || 'default';
-    const ipc = new IPCClient(instanceId);
+    const ctxRoot = resolveCtxRoot(instanceId);
+    const ipc = new IPCClient(instanceId, ctxRoot);
     const daemonRunning = await ipc.isDaemonRunning();
 
     if (daemonRunning) {
@@ -23,7 +24,7 @@ export const statusCommand = new Command('status')
     } else {
       // Fall back to reading heartbeat files
       console.log('Daemon is not running. Showing last known heartbeats:\n');
-      const ctxRoot = join(homedir(), '.cortextos', instanceId);
+
       const stateDir = join(ctxRoot, 'state');
 
       if (!existsSync(stateDir)) {

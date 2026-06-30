@@ -2,8 +2,7 @@ import { NextRequest } from 'next/server';
 import { execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
-import os from 'os';
-import { getCTXRoot, getFrameworkRoot } from '@/lib/config';
+import { getFrameworkRoot, getKnowledgeBaseDir, getCTXInstanceId } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,10 +26,15 @@ export async function GET(request: NextRequest) {
   }
 
   const frameworkRoot = getFrameworkRoot();
-  const ctxRoot = getCTXRoot();
-  const instanceId = path.basename(ctxRoot);
+  // Council [medium]: use the real CTX_INSTANCE_ID, not path.basename(ctxRoot).
+  // A relocated CTX_ROOT (e.g. /agentic/cortextos-data) basenames to a bogus
+  // instance name ("cortextos-data") that mmrag.py would mis-scope on.
+  const instanceId = getCTXInstanceId();
 
-  const kbRoot = path.join(os.homedir(), '.cortextos', instanceId, 'orgs', org, 'knowledge-base');
+  // #38: resolve the KB data root through CTX_ROOT (same tree the bus-side KB
+  // writer ingests into) instead of rebuilding ~/.cortextos/<instanceId>/...,
+  // which broke whenever CTX_ROOT was relocated.
+  const kbRoot = getKnowledgeBaseDir(org);
   const chromaDir = path.join(kbRoot, 'chromadb');
   const configPath = path.join(kbRoot, 'config.json');
   const isWin = process.platform === 'win32';

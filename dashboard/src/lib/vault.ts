@@ -6,8 +6,7 @@
  */
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-import { CTX_FRAMEWORK_ROOT } from './config';
+import { CTX_ROOT, CTX_FRAMEWORK_ROOT, getOrgs } from './config';
 
 export const PARA_DIRS = [
   '00-inbox',
@@ -21,34 +20,157 @@ export const PARA_DIRS = [
 
 export type ParaDir = (typeof PARA_DIRS)[number];
 
-const VAULT_FALLBACK = process.env.CTX_VAULT_PATH
-  ?? path.join(os.homedir(), 'storage', 'Documents', 'Github', 'sondres-orchestrator', 'vault');
+// Org-name validation. Mirrors VALID_NAME in the dashboard agent/org API routes
+// (/^[a-z0-9_-]+$/) so an org that is addressable elsewhere in the dashboard is
+// addressable in the wiki — underscores included (council: codex/mmax parity
+// finding). Org names become a path segment under CTX_ROOT, so anything that
+// could escape that path (traversal, separators, uppercase) is rejected.
+const ORG_RE = /^[a-z0-9_-]+$/;
 
+// True iff `p` is set and resolves to an existing directory. Single stat,
+// swallowing ENOENT — avoids the existsSync()+statSync() TOCTOU race where the
+// path is removed between the two calls (council: mmax medium).
+function isExistingDir(p: string | undefined): p is string {
+  if (!p) return false;
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// True iff `p` exists on disk as anything (file, dir, symlink target).
+function exists(p: string): boolean {
+  try {
+    fs.lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create the PARA skeleton for a vault root we own (the CTX_ROOT default
+ * vault). Never called on user-declared paths (CTX_VAULT_PATH / knowledge.md)
+ * — those are user-managed vaults and the dashboard must not write into them
+ * (council: codex high — a stale or malicious declared path must not cause
+ * directory creation outside CTX_ROOT).
+ *
+ * Returns false without writing anything if the target (or any PARA entry)
+ * exists but is not a directory — e.g. a regular file squatting on the vault
+ * path (council: mmax high). Uses recursive mkdir, which is idempotent and
+ * safe to call concurrently; multiple wiki routes may race on first access.
+ *
+ * Fast path: when every PARA dir already exists we skip the mkdir calls, so
+ * the steady-state case (every wiki request) does no filesystem writes.
+ */
+function ensureVaultSkeleton(vaultRoot: string): boolean {
+  // Refuse to build a skeleton over (or report success for) a non-directory.
+  // Checked BEFORE the fast path so a file squatting on the vault path can
+  // never be reported as a valid vault (council: mmax medium).
+  if (exists(vaultRoot) && !isExistingDir(vaultRoot)) return false;
+  if (PARA_DIRS.every((dir) => isExistingDir(path.join(vaultRoot, dir)))) {
+    return true;
+  }
+  try {
+    fs.mkdirSync(vaultRoot, { recursive: true });
+    for (const dir of PARA_DIRS) {
+      const p = path.join(vaultRoot, dir);
+      if (exists(p) && !isExistingDir(p)) return false;
+      fs.mkdirSync(p, { recursive: true });
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Parse an "Obsidian vault" path declaration out of a knowledge.md body.
+ * Accepts both the backtick-wrapped form and a plain markdown form, e.g.
+ *   Obsidian vault: `/srv/notes/vault/`
+ *   Obsidian vault: /srv/notes/vault
+ *   The Obsidian vault lives at `/home/me/vault`.
+ *
+ * Paths containing spaces MUST use the backtick form — the plain form stops at
+ * the first whitespace character (council: mmax high, documented limitation).
+ *
+ * Returns the path (trailing slash stripped) or null if no declaration found.
+ */
+function parseKnowledgeVaultPath(content: string): string | null {
+  // Backtick-wrapped path wins (most explicit; required for paths with spaces).
+  const backtick = content.match(/Obsidian vault[^\n]*?`([^`]+)`/i);
+  if (backtick) return backtick[1].trim().replace(/\/+$/, '');
+  // Plain form: an absolute path following "Obsidian vault" on the same line.
+  // The region between the keyword and the path must not cross a backtick —
+  // otherwise an unbalanced backtick declaration would be half-captured and
+  // punctuation-stripped into the wrong path (council: mmax high).
+  const plain = content.match(
+    /Obsidian vault[^\n`]*?[:=]?\s*(\/[^\s`'"]+)/i,
+  );
+  if (plain) {
+    // Strip trailing sentence punctuation (".", ",", ";", ":", ")") that a
+    // prose declaration like "Obsidian vault: /srv/notes/vault." would capture,
+    // then drop any trailing slash.
+    return plain[1].trim().replace(/[.,;:)]+$/, '').replace(/\/+$/, '');
+  }
+  return null;
+}
+
+/**
+ * Resolve the org's vault root. Resolution order:
+ *   1. CTX_VAULT_PATH env override — returned as-is if it is an existing
+ *      directory. User-managed: the dashboard never writes into it.
+ *   2. An "Obsidian vault" path entry in orgs/<org>/knowledge.md (opt-in) —
+ *      returned as-is if it is an existing directory. Also user-managed.
+ *   3. Default: $CTX_ROOT/orgs/<org>/vault — auto-created with the PARA
+ *      skeleton on first access, but ONLY when the org itself is already
+ *      provisioned ($CTX_ROOT/orgs/<org>/ exists). A wiki GET must not be able
+ *      to create directories for arbitrary org names (council: codex high).
+ *
+ * Returns null for: an invalid org name, an unprovisioned org with no
+ * override, or a default-vault path obstructed by a non-directory.
+ *
+ * This is the fix for #41: on a fresh install the default org is provisioned
+ * (orgs/<org>/ exists with context.json etc.) but has no vault/ — previously
+ * the page 404'd; now the vault is created inside the existing org dir.
+ */
 export function getVaultRoot(org: string): string | null {
-  // 1. Try parsing orgs/<org>/knowledge.md for an "Obsidian vault" path entry
+  // Org name becomes a path segment under CTX_ROOT — refuse anything unsafe.
+  if (!ORG_RE.test(org)) return null;
+
+  // 1. Explicit env override wins. User-managed — no skeleton creation.
+  if (isExistingDir(process.env.CTX_VAULT_PATH)) {
+    return process.env.CTX_VAULT_PATH;
+  }
+
+  // 2. Try parsing orgs/<org>/knowledge.md for an "Obsidian vault" path entry.
+  //    User-managed — no skeleton creation.
   const knowledgePath = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'knowledge.md');
   if (fs.existsSync(knowledgePath)) {
     try {
       const content = fs.readFileSync(knowledgePath, 'utf-8');
-      // Match a code path like `/root/.../vault/` after "Obsidian vault" mentions
-      const match = content.match(
-        /Obsidian vault[^\n]*?`([^`]+vault\/?)`/i,
-      );
-      if (match) {
-        const p = match[1].replace(/\/$/, '');
-        if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p;
+      const declared = parseKnowledgeVaultPath(content);
+      if (declared && isExistingDir(declared)) {
+        return declared;
       }
     } catch {
       /* ignore */
     }
   }
 
-  // 2. Fallback to the known sondre-hq vault location
-  if (fs.existsSync(VAULT_FALLBACK) && fs.statSync(VAULT_FALLBACK).isDirectory()) {
-    return VAULT_FALLBACK;
-  }
+  // 3. Default to the per-org vault under CTX_ROOT — but only for an org that
+  //    actually exists. Org membership is resolved via getOrgs() (the same
+  //    discovery the rest of the dashboard uses: framework root + state root,
+  //    framework casing wins) so the wiki agrees with the org switcher about
+  //    which orgs are real (council: codex high). This keeps the fresh-install
+  //    fix (#41) while ensuring a read-only wiki request can never spray
+  //    directories for arbitrary org names.
+  if (!getOrgs().includes(org)) return null;
 
-  return null;
+  const defaultVault = path.join(CTX_ROOT, 'orgs', org, 'vault');
+  if (!ensureVaultSkeleton(defaultVault)) return null;
+  return defaultVault;
 }
 
 export type Frontmatter = {

@@ -3,7 +3,7 @@ import { existsSync, unlinkSync, chmodSync, readFileSync } from 'fs';
 import { join, resolve as pathResolve } from 'path';
 import type { IPCRequest, IPCResponse, CronSummaryRow, CronDefinition } from '../types/index.js';
 import { AgentManager } from './agent-manager.js';
-import { getIpcPath } from '../utils/paths.js';
+import { getIpcPath, getCtxRoot } from '../utils/paths.js';
 import { readCrons, getExecutionLog, getExecutionLogPage, addCron, updateCron, removeCron, getCronByName } from '../bus/crons.js';
 import type { ExecutionLogStatusFilter } from '../bus/crons.js';
 import { nextFireFromCron } from './cron-scheduler.js';
@@ -151,7 +151,7 @@ export function computeNextFire(
  * and cron execution log, and return a combined summary array.
  */
 function listAllCrons(): CronSummaryRow[] {
-  const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+  const ctxRoot = getCtxRoot(process.env.CTX_INSTANCE_ID || 'default');
   const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
 
   let enabledAgents: Record<string, { enabled?: boolean; org?: string }> = {};
@@ -221,7 +221,7 @@ export function computeFleetHealth(
     return _fleetHealthCache.result;
   }
 
-  const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+  const ctxRoot = getCtxRoot(process.env.CTX_INSTANCE_ID || 'default');
   const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
 
   let enabledAgents: Record<string, { enabled?: boolean; org?: string }> = {};
@@ -304,7 +304,7 @@ export function isValidSchedule(schedule: string): boolean {
  * Read the list of enabled agent names from enabled-agents.json.
  */
 function getEnabledAgents(): string[] {
-  const ctxRoot = process.env.CTX_ROOT ?? process.cwd();
+  const ctxRoot = getCtxRoot(process.env.CTX_INSTANCE_ID || 'default');
   const enabledFile = join(ctxRoot, 'config', 'enabled-agents.json');
   if (!existsSync(enabledFile)) return [];
   try {
@@ -479,9 +479,9 @@ export class IPCServer {
   private socketPath: string;
   private agentManager: AgentManager;
 
-  constructor(agentManager: AgentManager, instanceId: string = 'default') {
+  constructor(agentManager: AgentManager, instanceId: string = 'default', ctxRoot?: string) {
     this.agentManager = agentManager;
-    this.socketPath = getIpcPath(instanceId);
+    this.socketPath = getIpcPath(instanceId, ctxRoot);
   }
 
   /**
@@ -670,7 +670,7 @@ export class IPCServer {
             response = { success: false, error: 'Invalid worker name' };
           } else {
             const resolvedDir = pathResolve(d.dir);
-            const ctxRoot = process.env.CTX_ROOT ? pathResolve(process.env.CTX_ROOT) : '';
+            const ctxRoot = pathResolve(getCtxRoot(process.env.CTX_INSTANCE_ID || 'default'));
             const cwd = pathResolve(process.cwd());
             const underCtxRoot = ctxRoot && (resolvedDir === ctxRoot || resolvedDir.startsWith(ctxRoot + '/'));
             const underCwd = resolvedDir === cwd || resolvedDir.startsWith(cwd + '/');
@@ -874,8 +874,8 @@ export class IPCServer {
 export class IPCClient {
   private socketPath: string;
 
-  constructor(instanceId: string = 'default') {
-    this.socketPath = getIpcPath(instanceId);
+  constructor(instanceId: string = 'default', ctxRoot?: string) {
+    this.socketPath = getIpcPath(instanceId, ctxRoot);
   }
 
   /**

@@ -1,6 +1,5 @@
 import { createConnection } from 'net';
-import { homedir } from 'os';
-import { join } from 'path';
+import { getIpcPath } from './paths';
 
 export type ExecutionLogStatusFilter = 'all' | 'success' | 'failure';
 
@@ -87,13 +86,6 @@ export interface IPCResponse {
   success: boolean;
   data?: unknown;
   error?: string;
-}
-
-function getIpcPath(instanceId: string = 'default'): string {
-  if (process.platform === 'win32') {
-    return `\\\\.\\pipe\\cortextos-${instanceId}`;
-  }
-  return join(homedir(), '.cortextos', instanceId, 'daemon.sock');
 }
 
 export class IPCClient {

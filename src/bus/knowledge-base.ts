@@ -1,9 +1,9 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import type { BusPaths } from '../types/index.js';
 import { normalizeOrgName } from '../utils/org.js';
+import { getCtxRoot } from '../utils/paths.js';
 
 /**
  * Knowledge base integration — calls mmrag.py directly (cross-platform,
@@ -80,7 +80,7 @@ function buildKBEnv(
   // MMRAG config.json, splitting KB state across two directories and
   // polluting dashboard sync with hits against a non-existent org.
   const canonicalOrg = normalizeOrgName(frameworkRoot, org);
-  const kbRoot = join(homedir(), '.cortextos', instanceId, 'orgs', canonicalOrg, 'knowledge-base');
+  const kbRoot = join(getCtxRoot(instanceId), 'orgs', canonicalOrg, 'knowledge-base');
   const secrets = loadSecretsEnv(frameworkRoot, canonicalOrg);
   return {
     ...process.env as Record<string, string>,
@@ -287,7 +287,7 @@ export function ingestKnowledgeBase(
   }
 
   // Ensure chromadb dir exists
-  const kbRoot = join(homedir(), '.cortextos', instanceId, 'orgs', org, 'knowledge-base');
+  const kbRoot = join(getCtxRoot(instanceId), 'orgs', org, 'knowledge-base');
   const chromaDir = join(kbRoot, 'chromadb');
   if (!existsSync(chromaDir)) {
     mkdirSync(chromaDir, { recursive: true });
@@ -336,7 +336,7 @@ export function ingestKnowledgeBase(
  */
 export function ensureKBDirs(instanceId: string, frameworkRoot: string, org: string): void {
   const canonicalOrg = normalizeOrgName(frameworkRoot, org);
-  const kbRoot = join(homedir(), '.cortextos', instanceId, 'orgs', canonicalOrg, 'knowledge-base');
+  const kbRoot = join(getCtxRoot(instanceId), 'orgs', canonicalOrg, 'knowledge-base');
   const chromaDir = join(kbRoot, 'chromadb');
   if (!existsSync(chromaDir)) {
     mkdirSync(chromaDir, { recursive: true });
