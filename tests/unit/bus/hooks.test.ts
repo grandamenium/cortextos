@@ -71,9 +71,21 @@ function lastEmittedEvent(): { name: string; meta: Record<string, unknown> } | n
 }
 
 describe('src/bus/hooks — Day-2 per-handler wiring', () => {
+  // After #556 (a89cee2), emitHookBusEvent switches to
+  //   execFile(process.execPath, [cliPath, 'bus', 'log-event', ...])
+  // when CTX_FRAMEWORK_ROOT is set, and falls back to
+  //   execFile('cortextos', ['bus', 'log-event', ...])
+  // when it isn't. The assertions in this file target the fallback shape;
+  // clear the env so the test runner's value doesn't leak into the SUT.
+  let savedFrameworkRoot: string | undefined;
   beforeEach(() => {
     execFileCalls.length = 0;
     clearHandlerRegistry();
+    savedFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+    delete process.env.CTX_FRAMEWORK_ROOT;
+  });
+  afterEach(() => {
+    if (savedFrameworkRoot !== undefined) process.env.CTX_FRAMEWORK_ROOT = savedFrameworkRoot;
   });
 
   describe('loadHookRegistry', () => {
