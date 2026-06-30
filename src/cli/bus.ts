@@ -352,13 +352,15 @@ busCommand
   .option('--status <s>', 'Filter by status')
   .option('--format <fmt>', 'Output format: json or text', 'text')
   .option('--respect-deps', 'Sort DAG-aware: unblocked tasks first, blocked tasks last')
-  .action((opts: { agent?: string; status?: string; format?: string; respectDeps?: boolean }) => {
+  .option('--all-orgs', 'Scan every org under <ctxRoot>/orgs/*/tasks/ and return the union — text output gains an Org column')
+  .action((opts: { agent?: string; status?: string; format?: string; respectDeps?: boolean; allOrgs?: boolean }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const tasks = listTasks(paths, {
       agent: opts.agent,
       status: opts.status as TaskStatus,
       respectDeps: opts.respectDeps ?? false,
+      allOrgs: opts.allOrgs ?? false,
     });
 
     if (opts.format === 'json') {
@@ -376,7 +378,10 @@ busCommand
     const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
 
     console.log(`\n  Tasks (${tasks.length})\n`);
-    const header = '  Status  Pri  ID                        Assignee         Title';
+    const showOrg = opts.allOrgs ?? false;
+    const header = showOrg
+      ? '  Status  Pri  ID                        Org             Assignee         Title'
+      : '  Status  Pri  ID                        Assignee         Title';
     const separator = '  ' + '-'.repeat(header.length - 2);
     console.log(header);
     console.log(separator);
@@ -387,7 +392,12 @@ busCommand
       const id = t.id.substring(0, 26).padEnd(26);
       const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
       const title = t.title.substring(0, 50);
-      console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
+      if (showOrg) {
+        const org = (t.org || '-').substring(0, 15).padEnd(16);
+        console.log(`  ${statusIcon}${priIcon}${id}${org}${assignee}${title}`);
+      } else {
+        console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
+      }
     }
     console.log('');
   });

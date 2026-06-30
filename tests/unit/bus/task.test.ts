@@ -361,12 +361,11 @@ describe('Cross-org task lifecycle', () => {
   it('listTasks scoping regression: must remain single-org, NO cross-org leakage', () => {
     // CRITICAL regression guard. Scoping contract:
     // listTasks must remain single-org by default — cross-org listing
-    // requires an explicit opt-in flag that does not exist yet. A future
-    // well-meaning refactor that 'helpfully' makes listTasks cross-org by
-    // default would silently break the dashboard, which depends on
-    // per-org scoping for its sync loop. If this test fails, the refactor
-    // broke the contract and must be reverted or gated behind an opt-in
-    // flag.
+    // requires an explicit opt-in flag. A future well-meaning refactor
+    // that 'helpfully' makes listTasks cross-org by default would
+    // silently break the dashboard, which depends on per-org scoping for
+    // its sync loop. If this test fails, the refactor broke the contract
+    // and must be reverted or gated behind an opt-in flag.
     const sameOrgId = createTask(orgAPaths, 'agentA', 'OrgA', 'Same-org task');
     writeOrgBTask('task_other_1', { title: 'Sibling-org task 1' });
     writeOrgBTask('task_other_2', { title: 'Sibling-org task 2' });
@@ -375,6 +374,74 @@ describe('Cross-org task lifecycle', () => {
     expect(tasks.length).toBe(1);
     expect(tasks[0].id).toBe(sameOrgId);
     expect(tasks[0].title).toBe('Same-org task');
+  });
+
+  it('listTasks --all-orgs: returns union across every org under <ctxRoot>/orgs/*/tasks/', () => {
+    // Opt-in cross-org scan for orchestrator fleets that need a unified
+    // view of tasks across multiple orgs without N individual calls.
+    const sameOrgId = createTask(orgAPaths, 'agentA', 'OrgA', 'Same-org task');
+    writeOrgBTask('task_other_1', { title: 'Sibling-org task 1' });
+    writeOrgBTask('task_other_2', { title: 'Sibling-org task 2' });
+
+    const tasks = listTasks(orgAPaths, { allOrgs: true });
+    const ids = tasks.map((t) => t.id).sort();
+    expect(ids).toEqual([sameOrgId, 'task_other_1', 'task_other_2'].sort());
+
+    // Task.org field is authoritative — cross-org scan must preserve it.
+    const orgA = tasks.find((t) => t.id === sameOrgId);
+    const orgB = tasks.find((t) => t.id === 'task_other_1');
+    expect(orgA?.org).toBe('OrgA');
+    expect(orgB?.org).toBe('OrgB');
+  });
+
+  it('listTasks --all-orgs respects agent + status filters across orgs', () => {
+    // Filters still narrow the cross-org union. An orchestrator watching
+    // one agent across two orgs should only get that agent's tasks.
+    createTask(orgAPaths, 'agentA', 'OrgA', 'OrgA/agentA task');
+    createTask(orgAPaths, 'agentZ', 'OrgA', 'OrgA/agentZ task');
+    writeOrgBTask('task_b_1', { assigned_to: 'agentA', status: 'pending' });
+    writeOrgBTask('task_b_2', { assigned_to: 'agentZ', status: 'pending' });
+    writeOrgBTask('task_b_3', { assigned_to: 'agentA', status: 'completed' });
+
+    const aTasks = listTasks(orgAPaths, { allOrgs: true, agent: 'agentA' });
+    expect(aTasks.map((t) => t.assigned_to)).toEqual(['agentA', 'agentA', 'agentA']);
+
+    const aPending = listTasks(orgAPaths, {
+      allOrgs: true,
+      agent: 'agentA',
+      status: 'pending',
+    });
+    expect(aPending.length).toBe(2);
+    expect(aPending.every((t) => t.status === 'pending')).toBe(true);
+  });
+
+  it('listTasks --all-orgs dedupes if the same id exists in caller + sibling', () => {
+    // The caller's org is always scanned first. If a sibling happens to
+    // carry a duplicate id (theoretical — epoch+3 digits makes this
+    // vanishingly rare), the caller wins and no duplicate row is emitted.
+    const sharedId = 'task_dup_001';
+    writeFileSync(
+      join(orgAPaths.taskDir, `${sharedId}.json`),
+      JSON.stringify({
+        id: sharedId,
+        title: 'OrgA winner',
+        status: 'pending',
+        org: 'OrgA',
+        assigned_to: 'agentA',
+        priority: 'normal',
+        archived: false,
+        created_at: '2026-04-11T20:00:00Z',
+        updated_at: '2026-04-11T20:00:00Z',
+      }),
+      'utf-8',
+    );
+    writeOrgBTask(sharedId, { title: 'OrgB loser' });
+
+    const tasks = listTasks(orgAPaths, { allOrgs: true });
+    const matches = tasks.filter((t) => t.id === sharedId);
+    expect(matches.length).toBe(1);
+    expect(matches[0].title).toBe('OrgA winner');
+    expect(matches[0].org).toBe('OrgA');
   });
 });
 
