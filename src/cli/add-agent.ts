@@ -15,14 +15,33 @@ type RuntimeKind = typeof VALID_RUNTIMES[number];
 // variants exist (PR 11+).
 const NON_CODEX_TEMPLATES = ['orchestrator', 'analyst', 'm2c1-worker', 'hermes'] as const;
 
+/**
+ * Resolve which instance's enabled-agents.json registry to write to (#373).
+ *
+ * The registry lands at `~/.cortextos/<instanceId>/config/enabled-agents.json`.
+ * Before this fix `--instance` defaulted to the literal `'default'`, so running
+ * `add-agent` in a sandbox context (`CTX_INSTANCE_ID=pr-sandbox`) WITHOUT an
+ * explicit `--instance` flag wrote the registry into the LIVE
+ * `~/.cortextos/default/config` even though the agent dir went to the sandbox
+ * framework root — leaking sandbox/phantom agents into the live roster.
+ *
+ * Precedence: explicit `--instance` flag > `CTX_INSTANCE_ID` env > `'default'`.
+ */
+export function resolveAddAgentInstanceId(
+  optInstance?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return optInstance || env.CTX_INSTANCE_ID || 'default';
+}
+
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')
   .option('--template <type>', 'Agent template (orchestrator, analyst, agent, agent-codex)', 'agent')
   .option('--org <org>', 'Organization name')
-  .option('--instance <id>', 'Instance ID', 'default')
+  .option('--instance <id>', 'Instance ID (defaults to $CTX_INSTANCE_ID, else "default")')
   .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance?: string; runtime: string }) => {
     if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
       console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
       process.exit(1);
@@ -299,8 +318,9 @@ export const addAgentCommand = new Command('add-agent')
       }
     }
 
-    // Register in enabled-agents.json
-    const instanceId = options.instance;
+    // Register in enabled-agents.json — honor CTX_INSTANCE_ID so a sandbox
+    // context never writes the registry into the live default instance (#373).
+    const instanceId = resolveAddAgentInstanceId(options.instance);
     const ctxRoot = join(homedir(), '.cortextos', instanceId);
     const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
     const configDir = join(ctxRoot, 'config');
