@@ -309,7 +309,11 @@ ${lastSentCtx}Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     const removed = newReaction.length === 0 && oldReaction.length > 0;
     const label = removed ? `removed ${render(oldReaction)}` : render(newReaction);
 
-    return `=== REACTION from [USER: ${from}] (chat_id:${chatId}) on message ${messageId}: ${label} ===
+    // Both untrusted interpolations are sanitized. `label` is currently a fixed
+    // Telegram emoji set + a hardcoded [custom_emoji] placeholder (no arbitrary
+    // text), but sanitizing it keeps the header un-forgeable even if render()
+    // ever emits richer content.
+    return `=== REACTION from [USER: ${sanitizeForPtyInjection(from)}] (chat_id:${chatId}) on message ${messageId}: ${sanitizeForPtyInjection(label)} ===
 
 `;
   }
