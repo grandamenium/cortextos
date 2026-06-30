@@ -593,6 +593,14 @@ export interface CtxEnv {
   org: string;
   projectRoot: string;
   timezone?: string;
+  /**
+   * IANA timezone that cron EXPRESSIONS ("0 8 * * *") are interpreted in.
+   * Distinct from `timezone` (which drives day/night-mode): a fleet can run
+   * day/night in one zone and schedule crons in another. Resolved from the org
+   * context.json `cron_timezone` field; defaults to "UTC" when unset so a
+   * cron's firing instant never depends on the daemon's process timezone.
+   */
+  cronTimezone?: string;
   orchestrator?: string;
 }
 

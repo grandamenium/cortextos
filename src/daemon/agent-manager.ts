@@ -10,7 +10,7 @@ import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
 import { resolvePaths } from '../utils/paths.js';
-import { resolveEnv } from '../utils/env.js';
+import { resolveEnv, resolveCronTimezone } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { stripControlChars } from '../utils/validate.js';
@@ -1153,10 +1153,17 @@ export class AgentManager {
       }
     };
 
+    // Cron expressions are interpreted in the agent's org-configured timezone
+    // (default UTC) — NOT the daemon's process timezone. This keeps the firing
+    // instant deterministic regardless of the shell the daemon was launched
+    // from, and keeps it in agreement with the CLI's "next fire" display.
+    const cronTimeZone = resolveCronTimezone(this.resolveAgentOrg(agentName), this.frameworkRoot);
+
     const scheduler = new CronScheduler({
       agentName,
       onFire,
       logger: (msg) => console.log(`[daemon] ${msg}`),
+      timeZone: cronTimeZone,
     });
 
     scheduler.start();

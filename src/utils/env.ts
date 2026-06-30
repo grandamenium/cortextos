@@ -69,9 +69,13 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
     agentDir = join(projectRoot, 'agents', agentName);
   }
 
-  // Resolve timezone and orchestrator from org context.json
+  // Resolve timezone, cron timezone, and orchestrator from org context.json
   let timezone = overrides?.timezone || process.env.CTX_TIMEZONE || '';
   let orchestrator = overrides?.orchestrator || process.env.CTX_ORCHESTRATOR || '';
+  // cronTimezone: an explicit override wins; otherwise resolveCronTimezone()
+  // below owns the CTX_CRON_TIMEZONE / context.json / UTC-default precedence
+  // (and validates the zone) — keep that resolution in one place.
+  let cronTimezone = overrides?.cronTimezone || '';
 
   if ((!timezone || !orchestrator) && org && projectRoot) {
     try {
@@ -86,6 +90,10 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
       }
     } catch { /* ignore */ }
   }
+  // Cron expressions interpret in UTC unless the org explicitly opts into a
+  // zone (org context.json `cron_timezone`) — a missing config must never make
+  // scheduling depend on the daemon's process timezone.
+  if (!cronTimezone) cronTimezone = resolveCronTimezone(org, projectRoot);
 
   // Sandbox/live isolation (issue #313): when both CTX_FRAMEWORK_ROOT and CTX_AGENT_DIR
   // are set, the resolved agentDir MUST be subordinate to frameworkRoot. Catches the leak
@@ -132,7 +140,49 @@ export function resolveEnv(overrides?: Partial<CtxEnv>): CtxEnv {
     }
   }
 
-  return { instanceId, ctxRoot, frameworkRoot, agentName, agentDir, org, projectRoot, timezone, orchestrator };
+  return { instanceId, ctxRoot, frameworkRoot, agentName, agentDir, org, projectRoot, timezone, cronTimezone, orchestrator };
+}
+
+/**
+ * Resolve the IANA timezone that an org's cron EXPRESSIONS are interpreted in.
+ *
+ * Source of truth: the org context.json `cron_timezone` field (overridable by
+ * the CTX_CRON_TIMEZONE env var). Defaults to "UTC" — a missing config must
+ * never make a cron's firing instant depend on the daemon's process timezone.
+ *
+ * This is intentionally SEPARATE from `timezone` (day/night-mode): a fleet may
+ * run day/night in one zone and schedule crons in another. The daemon
+ * (CronScheduler) and the CLI (`bus list-crons`) both resolve through here so
+ * the actual firing time and the displayed next-fire never disagree.
+ */
+export function resolveCronTimezone(org: string, projectRoot: string): string {
+  let candidate = process.env.CTX_CRON_TIMEZONE || '';
+  if (!candidate && org && projectRoot) {
+    try {
+      const contextPath = join(projectRoot, 'orgs', org, 'context.json');
+      if (existsSync(contextPath)) {
+        const ctx = JSON.parse(readFileSync(contextPath, 'utf-8'));
+        if (ctx.cron_timezone) candidate = String(ctx.cron_timezone);
+      }
+    } catch { /* ignore — fall through to UTC */ }
+  }
+  if (!candidate) return 'UTC';
+
+  // Validate the zone. A typo in cron_timezone must not silently drop every
+  // cron-EXPRESSION cron for the org: an invalid zone makes nextFireFromCron
+  // return NaN, which loadCrons logs as "cannot parse schedule" and skips —
+  // a confusing partial outage. Fall back to UTC (warned) so a misconfig
+  // degrades safely instead.
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate });
+    return candidate;
+  } catch {
+    process.stderr.write(
+      `[env] WARNING: invalid cron_timezone "${candidate}"` +
+      `${org ? ` for org "${org}"` : ''} — falling back to UTC\n`,
+    );
+    return 'UTC';
+  }
 }
 
 /**

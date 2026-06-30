@@ -5,6 +5,7 @@
   "icp": "",
   "value_prop": "",
   "timezone": "UTC",
+  "cron_timezone": "UTC",
   "orchestrator": "",
   "day_mode_start": "08:00",
   "day_mode_end": "00:00",
