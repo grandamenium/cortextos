@@ -11,6 +11,25 @@ const INSTANCE_ID = process.env.CTX_INSTANCE_ID || 'default';
 const CTX_ROOT = process.env.CTX_ROOT || path.join(os.homedir(), '.cortextos', INSTANCE_ID);
 const CTX_ORG = process.env.CTX_ORG || '';
 
+// PM2 launched from launchd (or a login-less context) inherits a minimal PATH
+// that omits user-local bin dirs. The daemon spawns agent PTYs via `claude` and
+// shells out to the `cortextos` CLI from its watchdog — both live in user-local
+// bins. Without them on PATH the daemon silently fails to (re)spawn agents after
+// any restart (claude → ENOENT) and the heartbeat watchdog errors (cortextos →
+// ENOENT), leaving a "running"-but-dead fleet. Bake a portable, augmented PATH
+// into the app env so it survives plain `pm2 restart` (watchdog) and resurrect.
+const HOME = os.homedir();
+const PATH_PREPEND = [
+  path.join(HOME, '.local', 'bin'),      // claude
+  path.join(HOME, '.npm-global', 'bin'), // cortextos
+  path.dirname(process.execPath),        // node
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+];
+const DAEMON_PATH = [...PATH_PREPEND, process.env.PATH || '']
+  .filter(Boolean)
+  .join(':');
+
 module.exports = {
   apps: [
     {
@@ -19,6 +38,7 @@ module.exports = {
       args: `--instance ${INSTANCE_ID}`,
       cwd: FRAMEWORK_ROOT,
       env: {
+        PATH: DAEMON_PATH,
         CTX_INSTANCE_ID: INSTANCE_ID,
         CTX_ROOT: CTX_ROOT,
         CTX_FRAMEWORK_ROOT: FRAMEWORK_ROOT,

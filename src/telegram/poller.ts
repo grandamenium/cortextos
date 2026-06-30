@@ -35,6 +35,19 @@ export class TelegramPoller {
   lastExitReason: string = '';
 
   /**
+   * Rate-limit for the "transient poll error" log line. A sustained Telegram
+   * API outage (getUpdates timing out / fetch failing) would otherwise emit
+   * one error line per poll cycle — historically 14k+ lines / tens of MB,
+   * and enough volume to trip the daemon watchdog into a spurious restart
+   * (the poller is healthy, just retrying through a transient outage). We log
+   * at most one poll-error line per POLL_ERROR_LOG_INTERVAL_MS and fold the
+   * count of suppressed errors into the next emitted line for diagnostics.
+   */
+  private static readonly POLL_ERROR_LOG_INTERVAL_MS = 30_000;
+  private lastPollErrorLogTs = 0;
+  private suppressedPollErrorCount = 0;
+
+  /**
    * @param api Telegram API client scoped to a single bot token.
    * @param stateDir Directory for persisted poller state (offset, dedup).
    * @param pollInterval Milliseconds between getUpdates calls.
@@ -102,8 +115,21 @@ export class TelegramPoller {
           this.running = false;
           return;
         }
-        // Other errors are transient — log and continue polling.
-        console.error('[telegram-poller] Poll error:', err);
+        // Other errors are transient — log and continue polling. Rate-limit
+        // the log so a sustained outage cannot spam the daemon error log (and
+        // trip the watchdog into a spurious daemon restart): emit at most one
+        // line per POLL_ERROR_LOG_INTERVAL_MS, folding the suppressed count in.
+        this.suppressedPollErrorCount++;
+        const nowTs = Date.now();
+        const sinceLast = nowTs - this.lastPollErrorLogTs;
+        if (this.lastPollErrorLogTs === 0 || sinceLast >= TelegramPoller.POLL_ERROR_LOG_INTERVAL_MS) {
+          const span = this.lastPollErrorLogTs === 0
+            ? ''
+            : ` (x${this.suppressedPollErrorCount} in last ${Math.round(sinceLast / 1000)}s)`;
+          console.error(`[telegram-poller] Poll error${span}:`, err);
+          this.lastPollErrorLogTs = nowTs;
+          this.suppressedPollErrorCount = 0;
+        }
       }
       await sleep(this.pollInterval);
     }
