@@ -463,6 +463,20 @@ export function checkUpstream(
 
 // --- registerTelegramCommands ---
 
+// Telegram setMyCommands limits. The documented cap is 100 commands with each
+// description 1-256 chars, but the API ALSO rejects the whole call with
+// `BOT_COMMANDS_TOO_MUCH` when the COMBINED description payload is too large
+// (~4KB), even when the command count is well under 100. Agents with many skills
+// (full 256-char skill descriptions) hit this aggregate limit silently. We keep
+// every command but bound the total description size so registration succeeds.
+const TELEGRAM_MAX_COMMANDS = 100;
+const TELEGRAM_DESC_MAX = 256;
+// Conservative aggregate budget. Empirically Telegram accepts ~4KB of combined
+// descriptions and rejects above it; 3500 leaves headroom for command names and
+// JSON overhead in the serialized payload.
+const TELEGRAM_DESC_TOTAL_BUDGET = 3500;
+const TELEGRAM_DESC_MIN = 24;
+
 /**
  * Scan directories for skills/commands, parse YAML frontmatter,
  * and build a list of Telegram bot commands to register.
@@ -488,12 +502,48 @@ export function collectTelegramCommands(scanDirs: string[]): { command: string; 
       if (!cmd || seen.has(cmd)) continue;
       seen.add(cmd);
 
-      const description = (parsed.description || `Skill: ${name}`).slice(0, 256);
+      const description = (parsed.description || `Skill: ${name}`).slice(0, TELEGRAM_DESC_MAX);
       commands.push({ command: cmd, description });
     }
   }
 
-  return commands;
+  return fitCommandsToTelegramLimits(commands);
+}
+
+/**
+ * Bound a collected command list to Telegram's setMyCommands limits: at most 100
+ * commands, and a combined description payload small enough to avoid the
+ * aggregate `BOT_COMMANDS_TOO_MUCH` rejection. Every command is preserved (only
+ * the count's documented 100-cap can drop tail entries); descriptions are
+ * shortened evenly so the total stays within budget.
+ */
+export function fitCommandsToTelegramLimits(
+  commands: { command: string; description: string }[],
+): { command: string; description: string }[] {
+  const capped = commands.slice(0, TELEGRAM_MAX_COMMANDS);
+  if (capped.length === 0) return capped;
+
+  // Even share of the budget per description, clamped to Telegram's per-item max
+  // and a readable floor. For realistic counts (<=100) the floor never binds, so
+  // the combined payload is guaranteed within budget.
+  const perItem = Math.min(
+    TELEGRAM_DESC_MAX,
+    Math.max(TELEGRAM_DESC_MIN, Math.floor(TELEGRAM_DESC_TOTAL_BUDGET / capped.length)),
+  );
+
+  return capped.map(({ command, description }) => ({
+    command,
+    description: truncateDescription(description, perItem),
+  }));
+}
+
+/** Truncate a description to `max` chars, preferring a nearby word boundary. */
+function truncateDescription(desc: string, max: number): string {
+  if (desc.length <= max) return desc;
+  const slice = desc.slice(0, max);
+  const lastSpace = slice.lastIndexOf(' ');
+  const cut = lastSpace > max * 0.6 ? slice.slice(0, lastSpace) : slice;
+  return cut.trimEnd();
 }
 
 /**
