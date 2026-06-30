@@ -356,11 +356,26 @@ export function checkUpstream(
     return { status: 'up_to_date', message: 'No upstream changes available' };
   }
 
-  // Count changes
+  // `commitCount` = commits upstream/main has that HEAD does NOT, i.e. how far
+  // BEHIND we are. This is the only thing that means "updates available".
   let commitCount = 0;
   try {
     commitCount = parseInt(execSync('git rev-list HEAD..upstream/main --count', { ...execOpts, stdio: 'pipe' }).trim(), 10);
   } catch { /* default 0 */ }
+
+  // Heads differ but upstream has NOTHING we lack → we are not behind, we are
+  // AHEAD (local-only commits). Report `local_ahead` (or `up_to_date`) instead
+  // of the misleading `updates_available` the bare head-mismatch used to return,
+  // so the upstream-sync cron doesn't fire on local-only changes (#31).
+  if (commitCount === 0) {
+    let aheadCount = 0;
+    try {
+      aheadCount = parseInt(execSync('git rev-list upstream/main..HEAD --count', { ...execOpts, stdio: 'pipe' }).trim(), 10);
+    } catch { /* default 0 */ }
+    return aheadCount > 0
+      ? { status: 'local_ahead', commits: aheadCount, message: `Local branch is ${aheadCount} commit(s) ahead of upstream; no upstream updates.` }
+      : { status: 'up_to_date', message: 'No upstream changes available' };
+  }
 
   let diffStat = '';
   try {
