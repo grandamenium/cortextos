@@ -93,6 +93,13 @@ export function sendMessage(
  * Recovers stale inflight messages (>5 minutes old).
  * Identical to bash check-inbox.sh behavior.
  */
+// Rate-limit state for lock-contention warnings (once per inbox per minute).
+// A held lock is normal for microseconds; one that fails for a whole minute
+// of 1s polls means the inbox is wedged (2026-07-01: 8 inboxes silently
+// deadlocked for days behind orphaned .lock.d dirs with zero log evidence).
+const lockWarnLastAt = new Map<string, number>();
+const LOCK_WARN_INTERVAL_MS = 60_000;
+
 export function checkInbox(paths: BusPaths): InboxMessage[] {
   const { inbox, inflight } = paths;
   ensureDir(inbox);
@@ -100,8 +107,15 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
 
   // Acquire lock
   if (!acquireLock(inbox)) {
+    const now = Date.now();
+    const last = lockWarnLastAt.get(inbox) ?? 0;
+    if (now - last >= LOCK_WARN_INTERVAL_MS) {
+      lockWarnLastAt.set(inbox, now);
+      console.warn(`[bus/message] WARNING: could not acquire inbox lock at ${inbox} — delivery skipped this poll (stale .lock.d?)`);
+    }
     return [];
   }
+  lockWarnLastAt.delete(inbox);
 
   try {
     // Recover stale inflight messages (>5 min old)

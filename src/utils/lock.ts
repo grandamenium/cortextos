@@ -1,5 +1,51 @@
-import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
+import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
+
+/**
+ * Recover a lock whose holder died before writing a valid PID.
+ *
+ * Called from the two acquireLock branches where the PID file is missing or
+ * unparseable. Those states are legitimate for the microseconds between
+ * mkdirSync(lockDir) and writeFileSync(pid) — but a holder that died in that
+ * window leaves them behind FOREVER, and the PID-liveness stale check can
+ * never run (there is no PID to check). Without an age-based escape hatch,
+ * every subsequent acquire returns false and the resource deadlocks
+ * permanently (2026-07-01: 8 agent inboxes silently wedged for days).
+ *
+ * Must return true ONLY if the lock was stolen and re-acquired for this
+ * process (lockDir recreated, pid file written with process.pid).
+ * Returning false means "holder may still be mid-acquire — let caller retry."
+ */
+// 30s is ~6 orders of magnitude above the real mkdir→writeFile gap, generous
+// even for a swapping/paused acquirer, while keeping recovery bounded for the
+// 1s-poll FastChecker (vs. the permanent wedge this replaces).
+const STALE_LOCK_MS = 30_000;
+
+function tryStealStaleLock(lockDir: string, pidFile: string): boolean {
+  let ageMs: number;
+  try {
+    ageMs = Date.now() - statSync(lockDir).mtimeMs;
+  } catch {
+    // Lock dir vanished — holder released between our EEXIST and the stat.
+    // Let caller retry.
+    return false;
+  }
+
+  if (ageMs < STALE_LOCK_MS) {
+    // Plausibly a live holder mid-acquire — let caller retry.
+    return false;
+  }
+
+  try {
+    rmSync(lockDir, { recursive: true, force: true });
+    mkdirSync(lockDir);
+    writeFileSync(pidFile, String(process.pid));
+    return true;
+  } catch {
+    // Another process beat us to the steal — let caller retry.
+    return false;
+  }
+}
 
 /**
  * Acquire a mutex lock using mkdir (atomic on all filesystems).
@@ -34,17 +80,18 @@ export function acquireLock(dir: string): boolean {
     try {
       storedPidRaw = readFileSync(pidFile, 'utf-8').trim();
     } catch {
-      // PID file not yet written.  Holder is between mkdir and writeFileSync.
-      // Refuse the lock — the caller's retry loop will try again.
-      return false;
+      // PID file not yet written.  Holder is between mkdir and writeFileSync —
+      // or died there and will never write it.  Refuse while the lock is
+      // fresh (caller retries); steal once it is unambiguously stale.
+      return tryStealStaleLock(lockDir, pidFile);
     }
 
     const storedPid = parseInt(storedPidRaw, 10);
     if (isNaN(storedPid) || storedPidRaw === '') {
-      // Corrupt PID file.  Don't steal — let caller retry; if it persists
-      // the holder is broken and a future stale-detection pass (process.kill
-      // check below, after the PID is written cleanly) will recover.
-      return false;
+      // Corrupt/empty PID file.  A live holder rewrites it within µs, so a
+      // persistent one means the holder died mid-write.  The liveness check
+      // below can never run without a PID — age is the only recovery signal.
+      return tryStealStaleLock(lockDir, pidFile);
     }
 
     // Check if process is still alive

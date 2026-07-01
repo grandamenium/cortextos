@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { sendMessage, checkInbox, ackInbox } from '../../../src/bus/message';
+import { acquireLock, releaseLock } from '../../../src/utils/lock';
 import { resolvePaths } from '../../../src/utils/paths';
 import type { BusPaths } from '../../../src/types';
 
@@ -122,6 +123,25 @@ describe('Message Bus', () => {
 
       expect(inboxFiles.length).toBe(0);
       expect(inflightFiles.length).toBe(1);
+    });
+
+    it('warns (rate-limited) when the inbox lock cannot be acquired', () => {
+      sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'test');
+      // Hold the lock from this (live) process so checkInbox cannot acquire it
+      expect(acquireLock(receiverPaths.inbox)).toBe(true);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        expect(checkInbox(receiverPaths)).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(String(warnSpy.mock.calls[0][0])).toContain(receiverPaths.inbox);
+
+        // Immediate re-check must not warn again (rate-limited per inbox)
+        expect(checkInbox(receiverPaths)).toEqual([]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        warnSpy.mockRestore();
+        releaseLock(receiverPaths.inbox);
+      }
     });
   });
 
