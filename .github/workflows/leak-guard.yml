@@ -1,0 +1,42 @@
+name: Leak Guard
+
+# Server-side operational-leak backstop. Runs on every PR (incl. forks) and on
+# push to main, so it covers the paths a LOCAL pre-push hook cannot: fork PRs
+# and GitHub UI-merges. Intended to be a REQUIRED status check on main.
+#
+# SECURITY: uses `pull_request` (NOT `pull_request_target`) so fork PRs run with
+# a read-only token and NO repo secrets — the scanner only needs to read the
+# diff and fail. pull_request_target would expose secrets to untrusted fork code.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  leak-guard:
+    name: Operational-leak scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for operational leaks
+        run: |
+          chmod +x .github/scripts/leak-guard.sh
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+            git fetch origin "${{ github.base_ref }}" --quiet
+            files=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD)
+            if [ -z "$files" ]; then echo "No changed files to scan."; exit 0; fi
+            echo "Scanning changed files:"; echo "$files"
+            echo "$files" | xargs .github/scripts/leak-guard.sh
+          else
+            .github/scripts/leak-guard.sh --tree HEAD
+          fi
+
+      - name: Prove the scanner (falsifiability test)
+        run: bash tests/leak-guard.test.sh
