@@ -129,6 +129,10 @@ export class AgentProcess {
     this.log(`Starting in ${mode} mode`);
     this.status = 'starting';
 
+    // F18: reap orphan PTYs from previous lifecycles before spawning a new one.
+    // Prevents accretion when the daemon restarts without a clean stop (crash, SIGKILL, etc.).
+    this.reapOrphanPTYs();
+
     // BUG-040 fix: clear any stale stop request from a previous lifecycle
     // (e.g. if the previous stop() timed out before the PTY actually exited).
     // We're starting fresh — the new PTY has no pending stop.
@@ -1311,6 +1315,30 @@ export class AgentProcess {
     if (this.onStatusChange) {
       this.onStatusChange(this.getStatus());
     }
+  }
+
+  // F18: kill orphan PTYs for this agent before spawning a new one.
+  // Uses per-agent cwd scope (same as accretion-watch) — surgical, no cross-agent blast radius.
+  private reapOrphanPTYs(): void {
+    const agentDir = this.env.agentDir;
+    if (!agentDir) return;
+    try {
+      const pgrepResult = execFileSync('pgrep', ['-f', 'claude --'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+      const pids = pgrepResult.trim().split('\n').filter(Boolean);
+      let reaped = 0;
+      for (const pid of pids) {
+        // Skip our own daemon process
+        if (parseInt(pid, 10) === process.pid) continue;
+        try {
+          const cwdResult = execFileSync('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn'], { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+          if (cwdResult.includes(agentDir)) {
+            process.kill(parseInt(pid, 10), 'SIGKILL');
+            reaped++;
+          }
+        } catch { /* pid may have exited between pgrep and lsof — safe to skip */ }
+      }
+      if (reaped > 0) this.log(`[F18] Reaped ${reaped} orphan PTY(s) for ${this.name} before spawn`);
+    } catch { /* pgrep not found or no matches — non-fatal */ }
   }
 }
 
