@@ -60,6 +60,10 @@
   },
   "allowScripts": {
     "esbuild@0.27.7": true,
-    "node-pty@1.1.0": true
+    "node-pty@1.1.0": true,
+    "better-sqlite3@12.11.1": true
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.11.1"
   }
 }
