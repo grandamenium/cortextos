@@ -72,6 +72,7 @@ export class FastChecker {
   private ctxHandoffLeaseId: string | null = null;
   private ctxHandoffQueuedLogAt: number = 0;
   private ctxCircuitRestarts: number[] = []; // timestamps of recent context-triggered restarts
+  private ctxHandoffFires: number[] = [];    // timestamps of recent Tier-2 handoff fires (cooperative-restart loop backstop)
   private ctxCircuitBrokenAt: number | null = null; // when circuit tripped (null = healthy)
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
@@ -964,6 +965,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (now - this.ctxCircuitBrokenAt >= 30 * 60_000) {
         this.ctxCircuitBrokenAt = null;
         this.ctxCircuitRestarts = [];
+        this.ctxHandoffFires = [];
         this.saveCtxCircuit();
         this.log('Context circuit breaker reset after 30min pause');
       } else {
@@ -1120,6 +1122,35 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       }
       this.ctxHandoffLeaseId = lease.leaseId;
       this.ctxHandoffFiredAt = now;
+
+      // Cooperative-restart loop backstop. A handoff normally fires ONCE per session and
+      // the fresh session drops well below threshold, so legitimate usage never re-fires
+      // soon. If a runtime fails to reset context on the handoff restart (e.g. a
+      // thread-persistence regression), the fresh session immediately re-crosses the
+      // threshold and re-fires every cycle — a self-sustaining treadmill the restart
+      // circuit breaker misses because these are COOPERATIVE handoff restarts, not Tier-3
+      // force-restarts. Count handoff fires in a persisted 15min window (survives the
+      // restart); if they reach the cap, trip the circuit breaker (30min pause) instead of
+      // handing off again, so any handoff loop self-limits regardless of cause. Cap 3 is
+      // above the benign 1-2 fires a single very-large turn can produce before settling.
+      this.ctxHandoffFires = this.ctxHandoffFires.filter(t => now - t < 15 * 60_000);
+      this.ctxHandoffFires.push(now);
+      this.saveCtxCircuit();
+      if (this.ctxHandoffFires.length >= 3) {
+        this.ctxCircuitBrokenAt = now;
+        this.saveCtxCircuit();
+        // Release the lease we just acquired — we are pausing, not handing off.
+        releaseContextHandoffLease(this.paths.ctxRoot, this.agent.name);
+        this.ctxHandoffLeaseId = null;
+        this.ctxHandoffFiredAt = 0;
+        const msg = `Context handoff loop detected for ${this.agent.name}: ${this.ctxHandoffFires.length} handoffs in 15min — a runtime may not be resetting context on restart. Auto-handoff paused 30min. Check logs/${this.agent.name}/restarts.log.`;
+        this.log(msg);
+        if (this.telegramApi && this.chatId) {
+          this.telegramApi.sendMessage(this.chatId, msg).catch(() => {});
+        }
+        return;
+      }
+
       this.ctxHandoffDeadlineAt = now + 5 * 60_000; // 5min grace for agent to cooperate
       // Reset context_status.json so the new session doesn't re-trigger immediately
       const statusPath = join(this.paths.stateDir, 'context_status.json');
@@ -1276,6 +1307,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (!existsSync(this.ctxCircuitFile)) return;
       const data = JSON.parse(readFileSync(this.ctxCircuitFile, 'utf-8'));
       this.ctxCircuitRestarts = Array.isArray(data.restarts) ? data.restarts : [];
+      this.ctxHandoffFires = Array.isArray(data.handoffFires) ? data.handoffFires : [];
       this.ctxCircuitBrokenAt = typeof data.brokenAt === 'number' ? data.brokenAt : null;
     } catch {
       // Start fresh on error
@@ -1289,6 +1321,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     try {
       writeFileSync(this.ctxCircuitFile, JSON.stringify({
         restarts: this.ctxCircuitRestarts,
+        handoffFires: this.ctxHandoffFires,
         brokenAt: this.ctxCircuitBrokenAt,
       }), 'utf-8');
     } catch {
