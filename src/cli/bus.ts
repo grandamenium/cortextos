@@ -2769,6 +2769,33 @@ busCommand
   });
 
 busCommand
+  .command('fleet-guardrail-update')
+  .description('Propagate a fleet-wide guardrail rule to all agent GUARDRAILS.md files (dry-run by default)')
+  .argument('<rule>', 'The guardrail rule text to add')
+  .option('--apply', 'Write changes (default is dry-run)')
+  .option('--exclude <agents>', 'Comma-separated list of agent names to skip')
+  .action((rule: string, opts: { apply?: boolean; exclude?: string }) => {
+    const env = resolveEnv();
+    // Script lives in forge's scripts dir — resolve from framework root regardless of calling agent
+    const forgeScriptPath = join(
+      env.frameworkRoot || env.projectRoot || process.cwd(),
+      'orgs', env.org || 'atlasos', 'agents', 'forge', 'scripts', 'fleet-guardrail-update.js'
+    );
+    // Fallback: calling agent's own scripts dir (e.g. when run from forge directly)
+    const localScriptPath = join(env.agentDir || process.cwd(), 'scripts', 'fleet-guardrail-update.js');
+    const scriptPath = existsSync(forgeScriptPath) ? forgeScriptPath : localScriptPath;
+    if (!existsSync(scriptPath)) {
+      console.error('fleet-guardrail-update.js not found at:', scriptPath);
+      process.exit(1);
+    }
+    const extra: string[] = [];
+    if (opts.apply) extra.push('--apply');
+    if (opts.exclude) extra.push('--exclude', opts.exclude);
+    const result = spawnSync('node', [scriptPath, rule, ...extra], { stdio: 'inherit' });
+    process.exit(result.status ?? 0);
+  });
+
+busCommand
   .command('print-doc')
   .description('Download a Google Drive/Docs file or public URL and print to the default printer (Windows only)')
   .argument('<url-or-id>', 'Google Drive URL, Docs URL, file ID, or any public URL to a PDF')
