@@ -468,6 +468,20 @@ log('Building...');
 runVisible('npm run build', { cwd: INSTALL_DIR });
 ok('Build complete');
 
+// ─── 9b. Install git pre-push hook (build + test gate) ───────────────────────
+// Best-effort: wire up the tracked hook installer so fresh clones get the
+// pre-push build+test gate. Non-fatal — a hook-install failure must never abort
+// the install. setup-hooks.sh is non-clobbering, so this is safe to re-run.
+
+if (!IS_WINDOWS && existsSync(join(INSTALL_DIR, 'scripts', 'setup-hooks.sh'))) {
+  try {
+    run('bash scripts/setup-hooks.sh', { cwd: INSTALL_DIR });
+    ok('Installed git pre-push hook (build + test gate)');
+  } catch {
+    warn('Could not install git pre-push hook — run manually: bash scripts/setup-hooks.sh');
+  }
+}
+
 // ─── 10. Link CLI globally ────────────────────────────────────────────────────
 
 log('Linking cortextos CLI...');

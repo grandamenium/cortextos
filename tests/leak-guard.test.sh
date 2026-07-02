@@ -36,6 +36,25 @@ printf '%s\n' "$out" | grep -q 'operator home path' \
 printf '%s\n' "$out" | grep -q 'roster' \
   || { echo "FAIL: roster+cron table not detected in planted leak"; fails=1; }
 
+# (c) Windowed heuristic: a MULTI-LINE ops table splits the agent name and its
+#     cron expression across adjacent rows, evading the same-line RE. The
+#     windowed check (WINDOW=3) must still FLAG it. Non-test path required.
+cat > "$TMP/multiline.md" <<'EOF'
+# Fleet Ops Table
+| Agent    | paul                       |
+| Cadence  | morning-review(0 13 * * *) |
+EOF
+bash "$GUARD" "$TMP/multiline.md" >/dev/null 2>&1 \
+  && { echo "FAIL: scanner PASSED a multi-line roster+cron table (should have failed)"; fails=1; }
+printf '%s\n' "$(bash "$GUARD" "$TMP/multiline.md" 2>&1)" | grep -q 'within 3 lines' \
+  || { echo "FAIL: multi-line roster+cron not caught by windowed check"; fails=1; }
+
+# (d) Control: a roster name and a cron expr FAR apart (well beyond the window)
+#     must stay CLEAN — the window must not over-match across a whole document.
+{ printf '| paul | agent |\n'; for i in $(seq 1 12); do printf 'filler line %s\n' "$i"; done; printf 'morning-review runs daily\n'; } > "$TMP/farapart.md"
+bash "$GUARD" "$TMP/farapart.md" >/dev/null 2>&1 \
+  || { echo "FAIL: windowed check flagged name+cron far apart (false positive)"; fails=1; }
+
 # (b) MUST PASS on the current clean tree.
 bash "$GUARD" --tree HEAD >/dev/null 2>&1 \
   || { echo "FAIL: scanner flagged the CLEAN tree (false positive)"; fails=1; }
