@@ -354,6 +354,48 @@ describe('AgentProcess - cron auto-verification', () => {
     const promptArg: string = mockInjectMessage.mock.calls[0][1] as string;
     expect(promptArg).toContain('heartbeat');
     expect(promptArg).toContain('daily-report');
+    // Autonomous cron restoration must use CronCreate directly, never /loop —
+    // /loop calls AskUserQuestion (cloud vs. session) which has no answerer in a
+    // headless PTY and hangs the agent (see fix b6e4515 for the boot path).
+    expect(promptArg).toContain('CronCreate');
+    expect(promptArg).toContain('do NOT use /loop');
+    // No affirmative /loop instruction (guard phrase aside).
+    expect(promptArg).not.toMatch(/using \/loop|\/loop \d|\/loop \{/);
+  });
+
+  it('runGapDetectionLoop: gap nudge tells agent to use CronCreate, never /loop', async () => {
+    vi.useFakeTimers();
+    let nudge: string | undefined;
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {
+        crons: [
+          // Short interval so the gap threshold (2x = 2min) is exceeded after the
+          // initial 10min poll wait, firing a nudge deterministically.
+          { name: 'heartbeat', type: 'recurring' as const, interval: '1m', prompt: 'check in' },
+        ],
+      });
+      await ap.start();
+      mockInjectMessage.mockClear();
+
+      ap.scheduleGapDetection();
+
+      // Advance past the initial 10min wait + first poll so the loop detects the
+      // gap (no cron-state record on disk → lastFire == loopStart) and injects.
+      await vi.advanceTimersByTimeAsync(11 * 60 * 1000);
+
+      const gapCall = mockInjectMessage.mock.calls.find(
+        c => typeof c[1] === 'string' && (c[1] as string).includes('Cron gap detected'),
+      );
+      nudge = gapCall?.[1] as string | undefined;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(nudge).toBeDefined();
+    expect(nudge).toContain('CronCreate');
+    expect(nudge).toContain('do NOT use /loop');
+    // No affirmative /loop instruction (guard phrase aside).
+    expect(nudge).not.toMatch(/using \/loop|\/loop \d|\/loop \{|\/loop <|\/loop \$/);
   });
 });
 

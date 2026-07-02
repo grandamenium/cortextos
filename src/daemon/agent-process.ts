@@ -784,9 +784,13 @@ export class AgentProcess {
         if (gapMs > threshold) {
           const gapMin = Math.round(gapMs / 60_000);
           const expectedMin = Math.round(intervalMs / 60_000);
+          // Restore via CronCreate directly, never /loop: /loop calls AskUserQuestion
+          // (cloud vs. session scheduling) which has no answerer in an autonomous PTY
+          // and hangs the agent. Mirrors the boot-path fix (b6e4515). Interval crons get
+          // the interval→cron-expression table; cron-expression crons already have theirs.
           const restoreHint = cronDef.interval
-            ? `If missing, restore it from config.json: /loop ${cronDef.interval} <cron prompt>.`
-            : `If missing, restore it from config.json using the cron expression in your config.`;
+            ? `If missing, restore it from config.json with CronCreate directly (do NOT use /loop — it prompts about cloud scheduling and blocks autonomous sessions): convert the interval to a cron expression (1h→"0 */1 * * *", 6h→"0 */6 * * *", 24h→"0 0 * * *", Nm→"*/N * * * *") and pass recurring:true.`
+            : `If missing, restore it from config.json with CronCreate directly (do NOT use /loop) using the cron expression in your config, passing recurring:true.`;
           const nudge = `[SYSTEM] Cron gap detected for "${cronDef.name}": last fired ${gapMin} minutes ago (expected every ${expectedMin} minutes). Run CronList to verify the cron is still active. ${restoreHint}`;
 
           this.log(`Gap nudge: ${cronDef.name} silent ${gapMin}min (threshold: ${Math.round(threshold / 60_000)}min)`);
@@ -863,7 +867,9 @@ export class AgentProcess {
 
     // Inject the verification prompt
     const cronList = expectedCrons.join(', ');
-    const verifyPrompt = `[SYSTEM] Cron verification: your config.json defines these recurring crons: ${cronList}. Run CronList now. If any are missing, restore them from config.json using /loop. This is an automated safety check.`;
+    // Restore via CronCreate directly, never /loop (see runGapDetectionLoop above): /loop's
+    // AskUserQuestion has no answerer in an autonomous PTY and would hang the agent.
+    const verifyPrompt = `[SYSTEM] Cron verification: your config.json defines these recurring crons: ${cronList}. Run CronList now. If any are missing, restore them from config.json with CronCreate directly (do NOT use /loop — it prompts about cloud scheduling and blocks autonomous sessions): convert each interval to a cron expression (1h→"0 */1 * * *", 6h→"0 */6 * * *", 24h→"0 0 * * *", Nm→"*/N * * * *") and pass recurring:true. This is an automated safety check.`;
 
     this.log(`Injecting cron verification (expecting: ${cronList})`);
     if (this.pty) {
