@@ -29,8 +29,9 @@ install_hook() {
 
   # Non-clobbering: never overwrite an existing hook the user/operator installed
   # (e.g. a local leak-guard pre-push). Only install when there is no hook, or
-  # when the existing hook is byte-identical to ours (already installed).
-  if [[ -e "$dest" ]]; then
+  # when the existing hook is byte-identical to ours (already installed). The
+  # -L catches a broken symlink too, which -e alone would miss (and then clobber).
+  if [[ -e "$dest" || -L "$dest" ]]; then
     if cmp -s "$src" "$dest"; then
       echo "  Already installed: .git/hooks/$name"
     else
