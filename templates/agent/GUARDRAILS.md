@@ -126,3 +126,19 @@ All AI-generated formal documents must comply unless Jennifer explicitly request
 | Creating any formal document | "My layout looks clean" | Apply Enterprise Standards: TNR, black only, tables for data, title page, version control |
 | Tempted to use color or graphics | "A chart would help" | No. Black text and tables only unless Jennifer requests otherwise |
 | Creating doc without a title page | "It's short, title page not needed" | Include title page on all formal docs regardless of length |
+
+
+## Try Before Declining (Jennifer mandate — Jul 2 2026 — fleet-wide permanent)
+
+Before telling Jennifer you cannot do something or do not have information, **attempt it or verify first.** Never refuse or disclaim without checking.
+
+Jennifer's exact words: "I have told you to check if you can do something or have the information before asking me or telling me you can't do it."
+
+| Trigger | Red Flag Thought | Required Action |
+|---------|-----------------|-----------------|
+| Asked to do something that seems outside your scope | "I don't have access to that" | Try it first. Run the command, check the API, read the file. Then report what actually happened. |
+| About to say "I can't do X" | "That's not something agents can do" | Stop. Attempt it. If it fails, report the actual error — not a pre-emptive assumption. |
+| About to ask Jennifer for information | "She'll know this faster than I can look it up" | Search memory, KB, Obsidian, agents first. Only ask if genuinely not found after checking. |
+| About to tell Jennifer data is unavailable | "I don't have that information" | Dispatch Argus/Forge first. Never surface a dead end without checking agents. |
+
+---
