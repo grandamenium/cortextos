@@ -81,22 +81,34 @@ This skill turns the generic template into a user's assistant. It is intentional
 - required fields
 - custom tags
 
-## Tool Discovery
+## Tool Discovery + Connect (do NOT hand-wave this)
 
-Run discovery commands and write results to `TOOLS.md`.
+This is the make-or-break step. Detecting a tool is not connecting it. For every
+domain the user names a service for, run the full **`tool-discovery` connect loop**:
+prefer a CLI, research that CLI live if you do not already know it, walk the user
+through install + auth in the conversation, and **verify with a real read** before
+moving on. See `tool-discovery/SKILL.md` for the loop; the short version:
+
+1. Detect what is already installed and authed.
+2. Per domain (email, calendar, contacts, meeting notes, messaging/iMessage,
+   external CRM): ask what service they use.
+3. Prefer CLI > connector/MCP > browser. If you do not know the CLI for the named
+   service, research it (WebSearch/WebFetch its install + auth docs, or read
+   `<cli> --help`) before instructing the user.
+4. Walk them through it on the fly — exact install command, then the exact auth
+   command they run themselves (e.g. `! gog login you@example.com`). Secrets never
+   go in chat.
+5. Verify with a real action (`gog auth status` + list today's calendar; list the
+   latest meeting note; a bounded iMessage read) and report the result in Telegram.
+6. Record each connected tool in `TOOLS.md` with how it was verified. Loop.
+
+Only create a `[HUMAN]` task if the user cannot complete an auth step right now
+(e.g. needs an admin, a paid plan, or credentials they do not have). Make it
+specific — the exact tool, the exact command, and where the credential goes — not
+a generic "connect your tools":
 
 ```bash
-command -v gog >/dev/null && gog --version || true
-command -v gh >/dev/null && gh --version | head -1 || true
-command -v agent-browser >/dev/null && agent-browser --version || true
-ls .mcp.json 2>/dev/null || true
-env | grep -E 'GMAIL|GOOGLE|OUTLOOK|NOTION|CRM|HUBSPOT|PIPEDRIVE|AIRTABLE|OPENAI|GEMINI' | sed 's/=.*/=<configured>/'
-```
-
-If no email/calendar/notes tools are found, create a human task:
-
-```bash
-cortextos bus create-task "[HUMAN] Configure assistant tools" --desc "Connect email, calendar, meeting notes, and optional CRM for $CTX_AGENT_NAME. Do not paste secrets in chat; use connector setup, .env, org secrets.env, or provider CLI auth."
+cortextos bus create-task "[HUMAN] Finish <tool> auth for $CTX_AGENT_NAME" --desc "Run: <exact command>. Credential goes in <exact location>. Do not paste secrets in chat. Blocking: <which workflow this unblocks>."
 ```
 
 ## File Writes
@@ -129,11 +141,18 @@ Ask:
 
 ### Batch 2: Tools
 
-Ask:
+Ask which service they use per domain, then run the Tool Discovery + Connect loop
+above for each one (research the CLI, walk them through auth, verify):
 
-1. Which email/calendar/meeting notes/contact/CRM tools do you use?
-2. Are they already connected through MCP, connectors, CLIs, browser login, or env vars?
-3. Should I use local structured CRM files as the source of truth, an external CRM, or local-first with sync?
+1. Email + calendar — which provider (Gmail/Google, Outlook, other)?
+2. Meeting notes — Granola, Fathom, Fireflies, Zoom, other, none?
+3. Messaging — do you want me to read/handle iMessage or another messenger?
+4. Contacts — Google Contacts, phone export, an external CRM, none?
+5. External CRM — HubSpot/Pipedrive/Airtable/Notion/etc, or local files as source of truth?
+
+Tell them up front: for each one they name, I will find the right CLI, walk you
+through connecting it right here, and confirm it works before moving on. No secrets
+in chat.
 
 ### Batch 3: CRM
 
