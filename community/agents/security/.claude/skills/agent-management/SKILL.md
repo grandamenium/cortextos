@@ -29,16 +29,26 @@ triggers: ["new agent", "create agent", "spawn agent", "add agent", "restart", "
 # Option A: CLI (recommended)
 
 # STEP 0 — REQUIRED BEFORE SCAFFOLDING — Ask the user which runtime:
-#   "Should this agent run on Claude Code (Anthropic) or Codex (OpenAI gpt-5-codex)?"
+#   "Should this agent run on Claude Code (Anthropic), Codex (OpenAI gpt-5-codex),
+#    or OpenCode (provider-agnostic TUI, default model openai/gpt-4.1-nano)?"
 # Default to claude-code if the user has no preference. Never silently pick.
-# Codex agents MUST use the agent-codex template; orchestrator/analyst/m2c1-worker
-# do not have codex variants — the CLI will reject the mismatch.
+# Codex agents MUST use the agent-codex template; OpenCode agents MUST use the
+# agent-opencode template. Passing --template agent auto-maps to the runtime's
+# native bootstrap (agent-codex for codex, agent-opencode for opencode).
+# orchestrator/analyst/m2c1-worker have no codex/opencode variant: codex is
+# rejected outright with those templates; opencode is not blocked but would
+# scaffold a Claude-oriented bootstrap under an opencode runtime, so avoid it.
 
 # claude-code path (the common one):
 cortextos add-agent <name> --template agent --org <org> --runtime claude-code
 
 # codex-app-server path (gpt-5-codex via codex CLI app-server JSONRPC):
 cortextos add-agent <name> --template agent-codex --org <org> --runtime codex-app-server
+
+# opencode path (provider-agnostic OpenCode TUI; ships the context-handoff
+# lifecycle, default-on at 60% of the context window; model set in config.json,
+# default openai/gpt-4.1-nano). --template agent auto-maps to agent-opencode:
+cortextos add-agent <name> --template agent-opencode --org <org> --runtime opencode
 
 # Option B: Manual
 TEMPLATE="agent"  # or "orchestrator" or "analyst"

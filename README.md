@@ -29,7 +29,7 @@ Boss:    Done. "morning-inbox" cron set — runs daily at 08:00.
 
 - **Persistent agents** — Claude Code runs 24/7 in PTY sessions, auto-restarting on crash or after 71-hour context rotation.
 - **Multi-agent orchestration** — Orchestrator, Analyst, and specialist agents coordinate via a shared file bus. Tasks, blockers, and approvals flow automatically.
-- **Multi-runtime** — Run agents on `claude-code` (default) or OpenAI's `codex-app-server`. Both runtimes share the same bus, crons, dashboard, and Telegram integration; pick per-agent.
+- **Multi-runtime** — Run agents on `claude-code` (default), OpenAI's `codex-app-server`, or the provider-agnostic `opencode` TUI runtime. All runtimes share the same bus, crons, dashboard, and Telegram integration; pick per-agent.
 - **Telegram + iOS control** — Send commands, approve actions, and get reports from anywhere. Native iOS app coming soon.
 - **Web dashboard** — Full-featured Next.js UI for tasks, approvals, experiments, analytics, and agent fleet health.
 - **Autoresearch (theta wave)** — Agents run autonomous experiments overnight, evaluate results, and surface findings for your review.
@@ -115,6 +115,7 @@ pm2 start ecosystem.config.js && pm2 save && pm2 startup
 | `analyst` | System health, metrics, theta-wave autoresearch, analytics |
 | `agent` | General-purpose worker — use this as the base for specialist agents |
 | `agent-codex` | Codex-runtime worker, scaffolds with `runtime: codex-app-server` and `model: gpt-5-codex` (see `templates/agent-codex/`) |
+| `agent-opencode` | OpenCode-runtime worker, scaffolds with `runtime: opencode` and the context-handoff lifecycle (see `templates/agent-opencode/`) |
 
 Add a codex agent the same way you add a claude agent:
 
@@ -134,9 +135,12 @@ Every agent's `config.json` carries an explicit `runtime` field that the daemon 
 |---|---|---|---|
 | `claude-code` | `ClaudePTY` (default) | claude-sonnet-4-6 | `.claude/skills/<skill>/SKILL.md` |
 | `codex-app-server` | `CodexAppServerPTY` | `gpt-5-codex` | `plugins/cortextos-agent-skills/skills/<skill>/SKILL.md` (linked into `~/.codex/skills/<agent>__<skill>`) |
+| `opencode` | `OpencodePTY` | `openai/gpt-4.1-nano` (set in `config.json`) | `plugins/cortextos-agent-skills/skills/<skill>/SKILL.md` (linked into `.opencode/skills/<skill>`) |
 | `hermes` | `HermesPTY` (experimental) | model per `config.json` | hermes-specific |
 
 Pass `--runtime <kind>` on `add-agent` to set it at scaffold time, or edit the field in `config.json` and restart the agent. The default is `claude-code`. Today only `--template agent` (and the alias `--template agent-codex`) supports `--runtime codex-app-server` — pairing the codex runtime with `--template orchestrator`/`analyst`/`m2c1-worker`/`hermes` errors with a clean message until codex variants of those templates ship.
+
+`opencode` agents run OpenCode's terminal UI as a persistent PTY and are provider-agnostic — set any `provider/model` in `config.json` (default `openai/gpt-4.1-nano`). Scaffold with `--template agent --runtime opencode` (auto-maps to the `agent-opencode` bootstrap) or `--template agent-opencode` directly. OpenCode agents also ship the **context-handoff lifecycle**: the daemon watches each session's context-window usage and, at a configurable threshold (`ctx_handoff_threshold`, default 60%), prompts the agent to write a handoff document under `memory/handoffs/` and hard-restart into a fresh session that resumes from that doc — so long-running agents never lose state to a context overflow. Tune it with `ctx_warning_threshold` (default 30%) and `ctx_handoff_threshold` in `config.json`.
 
 ---
 
