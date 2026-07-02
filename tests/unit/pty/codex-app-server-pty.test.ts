@@ -832,30 +832,35 @@ describe('CodexAppServerPTY thread lifecycle', () => {
     });
   });
 
-  it('resumes the persisted thread in fresh mode when state exists', async () => {
+  it('starts a NEW thread in fresh mode even when persisted state exists (treadmill fix)', async () => {
+    // Regression guard: a context-handoff / .force-fresh restart runs in FRESH
+    // mode and MUST NOT resume the persisted thread. Resuming retains the full
+    // context window, so the handoff never lowers usage and the agent re-crosses
+    // the threshold and re-fires — a restart treadmill (cortext-designer PR-A
+    // live validation 2026-06-29). Fresh mode must thread/start a brand-new thread.
     fsMocks.existsSync.mockReturnValue(true);
     fsMocks.readFileSync.mockReturnValue(JSON.stringify({
       threadId: 'persisted-fresh-thread',
       cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
       updatedAt: '2026-05-07T00:00:00Z',
     }));
-    requestMock.mockResolvedValue({ result: { thread: { id: 'persisted-fresh-thread' } } });
+    requestMock.mockResolvedValue({ result: { thread: { id: 'new-fresh-thread' } } });
     const pty = new CodexAppServerPTY(mockEnv, {});
     (pty as unknown as { _rpc: { request: typeof requestMock } })._rpc = { request: requestMock };
 
     await (pty as unknown as { startOrResumeThread(mode: 'fresh' | 'continue'): Promise<void> }).startOrResumeThread('fresh');
 
-    expect(requestMock).toHaveBeenCalledWith('thread/resume', {
-      threadId: 'persisted-fresh-thread',
+    expect(requestMock).toHaveBeenCalledWith('thread/start', {
       cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
       config: { features: { goals: true } },
-      excludeTurns: true,
+      sessionStartSource: 'startup',
+      experimentalRawEvents: false,
       persistExtendedHistory: true,
     });
     expect(requestMock).not.toHaveBeenCalledWith(
-      'thread/start',
+      'thread/resume',
       expect.anything(),
     );
   });
@@ -930,7 +935,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
     const pty = new CodexAppServerPTY(mockEnv, {});
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
-      last: { cachedInputTokens: 0, inputTokens: 1000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1000 },
+      last: { cachedInputTokens: 5000, inputTokens: 60000, outputTokens: 4000, reasoningOutputTokens: 1000, totalTokens: 70000 },
       total: { cachedInputTokens: 5000, inputTokens: 60000, outputTokens: 4000, reasoningOutputTokens: 1000, totalTokens: 70000 },
       modelContextWindow: 200000,
     });
@@ -956,8 +961,8 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
     const pty = new CodexAppServerPTY(mockEnv, {});
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
-      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
-      total: { cachedInputTokens: 0, inputTokens: 64000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 64000 },
+      last: { cachedInputTokens: 0, inputTokens: 64000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 64000 },
+      total: { cachedInputTokens: 0, inputTokens: 640000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 640000 },
       modelContextWindow: null,
     });
 
@@ -970,8 +975,8 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
     const pty = new CodexAppServerPTY(mockEnv, { codex_context_cap: 100000 });
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
-      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
-      total: { cachedInputTokens: 0, inputTokens: 50000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 50000 },
+      last: { cachedInputTokens: 0, inputTokens: 50000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 50000 },
+      total: { cachedInputTokens: 0, inputTokens: 500000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 500000 },
       modelContextWindow: null,
     });
 
@@ -984,8 +989,8 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
     const pty = new CodexAppServerPTY(mockEnv, {});
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
-      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
-      total: { cachedInputTokens: 0, inputTokens: 210000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 210000 },
+      last: { cachedInputTokens: 0, inputTokens: 210000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 210000 },
+      total: { cachedInputTokens: 0, inputTokens: 2100000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 2100000 },
       modelContextWindow: 1000000,
     });
 
@@ -997,13 +1002,52 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
     const pty = new CodexAppServerPTY(mockEnv, {});
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
-      last: { cachedInputTokens: 0, inputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0 },
-      total: { cachedInputTokens: 0, inputTokens: 300000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 300000 },
+      last: { cachedInputTokens: 0, inputTokens: 300000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 300000 },
+      total: { cachedInputTokens: 0, inputTokens: 3000000, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 3000000 },
       modelContextWindow: 256000,
     });
 
     const payload = lastWrittenPayload()!;
     expect(payload.used_percentage).toBe(100);
+  });
+
+  it('uses current-window last tokens instead of lifetime total tokens', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      last: { cachedInputTokens: 30000, inputTokens: 80000, outputTokens: 2000, reasoningOutputTokens: 0, totalTokens: 82000 },
+      total: { cachedInputTokens: 312000000, inputTokens: 323000000, outputTokens: 880000, reasoningOutputTokens: 0, totalTokens: 324000000 },
+      modelContextWindow: 258400,
+    });
+
+    const payload = lastWrittenPayload()!;
+    expect(payload.used_percentage).toBeCloseTo((82000 / 258400) * 100, 5);
+    expect(payload.used_percentage).not.toBe(100);
+    expect(payload.current_usage).toEqual({
+      input_tokens: 80000,
+      output_tokens: 2000,
+      cache_read_input_tokens: 30000,
+      cache_creation_input_tokens: 0,
+    });
+  });
+
+  it('writes null used_percentage instead of false-100 when current-window data is missing', () => {
+    const pty = new CodexAppServerPTY(mockEnv, {});
+    (pty as unknown as { _threadId: string })._threadId = 'thread-9';
+    feedTokenUsage(pty, {
+      total: { cachedInputTokens: 312000000, inputTokens: 323000000, outputTokens: 880000, reasoningOutputTokens: 0, totalTokens: 324000000 },
+      modelContextWindow: 258400,
+    });
+
+    const payload = lastWrittenPayload()!;
+    expect(payload.used_percentage).toBeNull();
+    expect(payload.exceeds_200k_tokens).toBe(false);
+    expect(payload.current_usage).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
   });
 
   it('skips the write when params.tokenUsage is missing', () => {
@@ -1016,7 +1060,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
     expect(atomicWriteSyncMock).not.toHaveBeenCalled();
   });
 
-  it('skips the write when total.totalTokens is missing', () => {
+  it('writes null used_percentage when total.totalTokens is missing', () => {
     const pty = new CodexAppServerPTY(mockEnv, {});
     (pty as unknown as { _threadId: string })._threadId = 'thread-9';
     feedTokenUsage(pty, {
@@ -1024,7 +1068,7 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → context_status.json', 
       total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 0, reasoningOutputTokens: 0 },
       modelContextWindow: 200000,
     });
-    expect(atomicWriteSyncMock).not.toHaveBeenCalled();
+    expect(lastWrittenPayload()?.used_percentage).toBe(0);
   });
 
   it('still emits the event log line even on a successful context write', () => {
