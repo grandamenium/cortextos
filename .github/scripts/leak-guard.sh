@@ -73,8 +73,23 @@ scan_file() {
   case "$f" in
     tests/*|*.test.*|*.spec.*|*/__tests__/*|*/fixtures/*) ;;
     *)
+      roster_hit=0
       if grep -nEq "$ROSTER_CRON_RE" "$f" 2>/dev/null; then
         report "$f" "fleet roster + cron-schedule table (internal ops detail)"
+        roster_hit=1
+      fi
+      # Windowed heuristic: a multi-line ops table can split an agent name and
+      # its cron expression across adjacent rows, evading the same-line RE above.
+      # Flag when a roster name and a cron expr co-occur within a small window
+      # (WINDOW=3 lines). Only fires when the same-line check did NOT already
+      # report this file, so the roster+cron class is reported at most once.
+      if [ "$roster_hit" -eq 0 ] && awk -v W=3 '
+          /(boris|paul|sentinel|donna|nick)/ { name = NR }
+          /(heartbeat\([0-9]|morning-review|evening-review|human-task-sweep|pr-monitor\([0-9]|\([0-9]+ [0-9*]+ \* \* )/ { cron = NR }
+          (name && cron && name - cron <= W && cron - name <= W) { found = 1; exit }
+          END { exit(found ? 0 : 1) }
+        ' "$f" 2>/dev/null; then
+        report "$f" "fleet roster + cron-schedule within 3 lines (multi-line ops table)"
       fi ;;
   esac
 
