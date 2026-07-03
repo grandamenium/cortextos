@@ -195,6 +195,15 @@ export interface AgentConfig {
    */
   codex_context_cap?: number;
   /**
+   * Enable the wake-latency (non-wake) stuck-session detector's auto-recovery
+   * actions for this agent (see fast-checker.ts checkWakeLatency). Defaults
+   * to false/absent — the code ships fleet-wide with every daemon rebuild
+   * (there is one shared daemon process, not per-agent), but the detector
+   * only takes action for agents that opt in here. This is the actual
+   * canary boundary: flip true for one agent, observe, then roll out.
+   */
+  wake_detector_enabled?: boolean;
+  /**
    * Agent runtime. Defaults to 'claude-code' when absent.
    * 'hermes' selects the HermesPTY spawn path (Python persistent REPL,
    * NousResearch/hermes-agent) with Hermes-specific bootstrap, session

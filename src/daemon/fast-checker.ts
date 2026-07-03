@@ -1119,6 +1119,11 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
    * snapshot alone.
    */
   private async checkWakeLatency(): Promise<void> {
+    // Canary gate: the code ships fleet-wide on every daemon rebuild (one
+    // shared process, not per-agent), so this config flag is the actual
+    // scope boundary — only agents that opt in get the detector's actions.
+    if (this.agent.getConfig().wake_detector_enabled !== true) return;
+
     const now = Date.now();
 
     // Circuit breaker: pause auto-recovery after repeated attempts (storm-safe)

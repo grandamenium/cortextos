@@ -17,7 +17,15 @@ function createMockAgent(name = 'test-agent') {
     getAgentDir: vi.fn().mockReturnValue('/tmp/mock-agent-dir'),
     getOutputBuffer: vi.fn().mockReturnValue({ getRecent: vi.fn().mockReturnValue('') }),
     sessionRefresh: vi.fn().mockResolvedValue(undefined),
+    getConfig: vi.fn().mockReturnValue({}), // wake_detector_enabled absent -> canary default OFF
   } as any;
+}
+
+// Wake-latency detector tests opt in explicitly — the canary flag defaults off.
+function createWakeCanaryAgent(name = 'my-agent') {
+  const agent = createMockAgent(name);
+  agent.getConfig.mockReturnValue({ wake_detector_enabled: true });
+  return agent;
 }
 
 // Minimal mock for TelegramAPI
@@ -863,15 +871,36 @@ describe('FastChecker', () => {
     }
 
     it('no-op when no heartbeat cron has fired yet', async () => {
-      const agent = createMockAgent('my-agent');
+      const agent = createWakeCanaryAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       await (checker as any).checkWakeLatency();
       expect(agent.write).not.toHaveBeenCalled();
       expect(agent.sessionRefresh).not.toHaveBeenCalled();
     });
 
-    it('healthy: a real heartbeat update after the fire is never flagged stuck', async () => {
+    it('canary gate: takes no action at all when wake_detector_enabled is absent (the default)', async () => {
+      const agent = createMockAgent('my-agent'); // getConfig() -> {} — flag absent
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z')); // would be well past grace if enabled
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
+    it('canary gate: takes no action when wake_detector_enabled is explicitly false', async () => {
       const agent = createMockAgent('my-agent');
+      agent.getConfig.mockReturnValue({ wake_detector_enabled: false });
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
+    it('healthy: a real heartbeat update after the fire is never flagged stuck', async () => {
+      const agent = createWakeCanaryAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       writeOwnHeartbeat('heartbeat cycle: all good', '2026-01-01T00:05:00Z');
@@ -882,7 +911,7 @@ describe('FastChecker', () => {
     });
 
     it('a watchdog-only write (status starts with the prefix) does NOT count as real progress', async () => {
-      const agent = createMockAgent('my-agent');
+      const agent = createWakeCanaryAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       // Only the blind watchdog ping wrote after the fire — no real processing.
@@ -894,7 +923,7 @@ describe('FastChecker', () => {
     });
 
     it('stuck: past grace with no real progress sends a cheap ENTER re-inject first, no restart yet', async () => {
-      const agent = createMockAgent('my-agent');
+      const agent = createWakeCanaryAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       vi.setSystemTime(new Date('2026-01-01T00:30:00Z')); // 30min > 25min grace
@@ -904,7 +933,7 @@ describe('FastChecker', () => {
     });
 
     it('still stuck after the reinject grace escalates to a soft (--continue) restart', async () => {
-      const agent = createMockAgent('my-agent');
+      const agent = createWakeCanaryAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
@@ -919,7 +948,7 @@ describe('FastChecker', () => {
     });
 
     it('suppresses recovery while the agent is legitimately active (mid-task)', async () => {
-      const agent = createMockAgent('my-agent');
+      const agent = createWakeCanaryAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
@@ -930,7 +959,7 @@ describe('FastChecker', () => {
     });
 
     it('suppresses recovery while an active API retry/backoff signature is present', async () => {
-      const agent = createMockAgent('my-agent');
+      const agent = createWakeCanaryAgent('my-agent');
       agent.getOutputBuffer.mockReturnValue({ getRecent: vi.fn().mockReturnValue('overloaded_error: retrying in 4s...') });
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
@@ -941,7 +970,7 @@ describe('FastChecker', () => {
     });
 
     it('circuit breaker trips after WAKE_CIRCUIT_MAX recoveries and pauses further restarts', async () => {
-      const agent = createMockAgent('my-agent');
+      const agent = createWakeCanaryAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
 
