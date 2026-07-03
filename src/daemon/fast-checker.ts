@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statS
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { hardRestart } from '../bus/system.js';
+import { hardRestart, selfRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
@@ -10,8 +10,42 @@ import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
+import { cronExecutionLogPathFor } from '../bus/crons-schema.js';
 
 type LogFn = (msg: string) => void;
+
+// Prefix on the idle-session watchdog's own blind heartbeat writes (see
+// FastChecker.start()). The wake-latency detector below must recognize and
+// exclude these writes from "real progress" — that is precisely the
+// camouflage the two-signal design (Vault 2026-06-25-wake-latency-fix.md)
+// exists to see through: a blind ping advances last_heartbeat without the
+// session having actually processed anything.
+const WATCHDOG_HEARTBEAT_PREFIX = '[watchdog]';
+
+// Wake-latency (non-wake) stuck-session detector cadence and thresholds.
+// Tighter than the 50-min blind heartbeat ping so a miss is caught well
+// within a briefing window (hours away), not up to 50 minutes later.
+//
+// KNOWN LIMITATION (accepted, not silently assumed away): isAgentActive()
+// only reflects Telegram-triggered activity (lastMessageInjectedAt is never
+// set for cron/inbox dispatches — see agent-manager.ts's injectAgent() cron
+// path, which bypasses fast-checker's message queue entirely). There is
+// currently no reliable "this cron-triggered turn is still legitimately
+// working" signal in this codebase — raw stdout growth was already tried
+// and rejected for the same reason elsewhere in this file (idle-spinner
+// ANSI writes make it grow even when nothing is happening). WAKE_FIRE_GRACE_MS
+// is sized generously (well above a normal heartbeat cycle's observed
+// duration) as the practical safety margin instead, and the escalation is
+// bounded + reversible (a cheap ENTER re-inject first, a history-preserving
+// --continue restart only after a second grace window) so a false positive
+// is a minor interruption, not data loss. Tighten this once a real
+// turn-in-progress signal exists.
+const WAKE_CHECK_INTERVAL_MS = 7 * 60 * 1000;
+const WAKE_FIRE_GRACE_MS = 25 * 60 * 1000;
+const WAKE_REINJECT_GRACE_MS = 5 * 60 * 1000;
+const WAKE_CIRCUIT_MAX = 2;
+const WAKE_CIRCUIT_WINDOW_MS = 30 * 60 * 1000;
+const WAKE_CIRCUIT_PAUSE_MS = 30 * 60 * 1000;
 
 /**
  * Fast message checker for a single agent.
@@ -48,6 +82,15 @@ export class FastChecker {
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
+  // Wake-latency (non-wake) stuck-session detector state
+  private wakeCheckTimer: NodeJS.Timeout | null = null;
+  private lastRealProgressAt: number = 0; // high-water-mark; survives the watchdog overwriting hb.status
+  private wakeStuckSince: number = 0;     // 0 = not currently flagged stuck
+  private wakeReinjectedAt: number = 0;   // 0 = haven't tried the cheap re-inject yet this episode
+  private wakeCircuitRestarts: number[] = [];
+  private wakeCircuitBrokenAt: number | null = null;
+  private wakeCircuitFile: string = '';
+
   // Context monitor state
   private ctxConfigMtime: number = 0;
   private ctxWarningFiredAt: number = 0;    // dedup: 15min cooldown between warnings
@@ -81,6 +124,10 @@ export class FastChecker {
     // Load persisted circuit breaker state so --continue restarts don't reset it
     this.ctxCircuitFile = join(paths.stateDir, '.ctx-circuit.json');
     this.loadCtxCircuit();
+
+    // Load persisted wake-latency circuit breaker state (same reason)
+    this.wakeCircuitFile = join(paths.stateDir, '.wake-circuit.json');
+    this.loadWakeCircuit();
   }
 
   /**
@@ -111,10 +158,31 @@ export class FastChecker {
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
-        if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-      });
+      // cwd MUST be this agent's own directory: execFile inherits the DAEMON's
+      // cwd/env by default (this call runs inside the daemon process, not the
+      // agent's PTY), and resolveEnv() falls back to basename(cwd) for the
+      // agent name when CTX_AGENT_NAME is unset. Without this, the write
+      // silently lands under state/<basename-of-daemon-cwd>/heartbeat.json
+      // instead of this agent's own file (observed in production as a phantom
+      // "cortextos" pseudo-agent in read-all-heartbeats, never this agent's).
+      execFile(
+        'cortextos',
+        ['bus', 'update-heartbeat', `${WATCHDOG_HEARTBEAT_PREFIX} ${agentName} alive — idle session ${ts}`],
+        { cwd: this.agent.getAgentDir() },
+        (err) => {
+          if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
+        },
+      );
     }, HEARTBEAT_INTERVAL_MS);
+
+    // Wake-latency (non-wake) stuck-session detector: catches an idle session
+    // that received a dispatched cron/message but never processed it (a
+    // dropped submit-Enter leaves it sitting on an unsubmitted paste with no
+    // catch-up). Runs daemon-hosted so it works even when THIS agent's own
+    // session is the one stuck.
+    this.wakeCheckTimer = setInterval(() => {
+      this.checkWakeLatency().catch(err => this.log(`Wake-latency check error: ${err}`));
+    }, WAKE_CHECK_INTERVAL_MS);
 
     while (this.running) {
       try {
@@ -140,6 +208,10 @@ export class FastChecker {
     if (this.heartbeatTimer !== null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.wakeCheckTimer !== null) {
+      clearInterval(this.wakeCheckTimer);
+      this.wakeCheckTimer = null;
     }
   }
 
@@ -1025,6 +1097,200 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       try {
         writeFileSync(join(this.paths.stateDir, '.force-fresh'), '');
       } catch { /* non-fatal */ }
+    }
+  }
+
+  /**
+   * Two-signal stuck-session (wake-latency / non-wake) detector.
+   * Durable fix for Vault 2026-06-25-wake-latency-fix.md: an idle agent
+   * session can receive a dispatched cron/message that pastes into the PTY
+   * but never submits (a delayed-Enter drop), leaving it stuck indefinitely
+   * with no catch-up. Runs inside THIS agent's own daemon-hosted
+   * fast-checker, so it works even when the agent's own REPL is the one
+   * stuck (a detector living in a reasoning session fails exactly when that
+   * session is the stuck one).
+   *
+   * Signal A: a "heartbeat" cron fired for this agent (cron-execution.log).
+   * Signal B: no REAL (non-watchdog) progress has been observed since that
+   * fire. A live heartbeat.json snapshot is not enough for Signal B on its
+   * own — the 50-min blind watchdog ping can overwrite a real update's
+   * status text before we next check — so lastRealProgressAt is tracked as
+   * a high-water-mark across ticks instead of re-derived from the current
+   * snapshot alone.
+   */
+  private async checkWakeLatency(): Promise<void> {
+    const now = Date.now();
+
+    // Circuit breaker: pause auto-recovery after repeated attempts (storm-safe)
+    if (this.wakeCircuitBrokenAt !== null) {
+      if (now - this.wakeCircuitBrokenAt >= WAKE_CIRCUIT_PAUSE_MS) {
+        this.wakeCircuitBrokenAt = null;
+        this.wakeCircuitRestarts = [];
+        this.saveWakeCircuit();
+        this.log('Wake-latency circuit breaker reset after pause');
+      } else {
+        return; // still paused
+      }
+    }
+
+    // Observe any real (non-watchdog) progress since the last tick, before
+    // a subsequent blind ping can overwrite the status field.
+    const hb = this.readOwnHeartbeat();
+    if (hb !== null && !hb.status.startsWith(WATCHDOG_HEARTBEAT_PREFIX)) {
+      const hbTime = new Date(hb.last_heartbeat).getTime();
+      if (hbTime > this.lastRealProgressAt) this.lastRealProgressAt = hbTime;
+    }
+
+    const fireTs = this.getLatestHeartbeatCronFire();
+    if (fireTs === null) return; // no heartbeat cron has fired yet — nothing to check
+
+    if (this.lastRealProgressAt > fireTs) {
+      // Processed normally at some point after this fire.
+      this.wakeStuckSince = 0;
+      this.wakeReinjectedAt = 0;
+      return;
+    }
+
+    if (now - fireTs < WAKE_FIRE_GRACE_MS) {
+      return; // too soon since the fire to call it stuck
+    }
+
+    // Suppressions: do not treat a legitimately-busy or resiliently-retrying
+    // agent as stuck. Signal B already protects the long-task case via
+    // isAgentActive(); this covers the API-overload/rate-limit retry case.
+    if (this.isAgentActive()) return;
+    if (this.hasActiveApiRetrySignature()) return;
+
+    if (this.wakeStuckSince === 0) {
+      this.wakeStuckSince = now;
+      this.log(`Wake-latency: heartbeat cron fired ${Math.round((now - fireTs) / 60000)}min ago with no real progress since — flagged stuck`);
+    }
+
+    if (this.wakeReinjectedAt === 0) {
+      // Cheap first step: re-send ENTER in case the original dispatch pasted
+      // but the submit keystroke was dropped (the known root-cause path).
+      this.wakeReinjectedAt = now;
+      this.agent.write(KEYS.ENTER);
+      this.log('Wake-latency: re-sent ENTER (covers a dropped-submit paste)');
+      return;
+    }
+
+    if (now - this.wakeReinjectedAt < WAKE_REINJECT_GRACE_MS) {
+      return; // give the re-injected ENTER a chance to land
+    }
+
+    // Still stuck after the cheap retry — escalate to a soft (--continue) restart.
+    this.wakeCircuitRestarts = this.wakeCircuitRestarts.filter(t => now - t < WAKE_CIRCUIT_WINDOW_MS);
+    if (this.wakeCircuitRestarts.length >= WAKE_CIRCUIT_MAX) {
+      this.wakeCircuitBrokenAt = now;
+      this.saveWakeCircuit();
+      const msg = `Wake-latency circuit breaker TRIPPED for ${this.agent.name}: ${WAKE_CIRCUIT_MAX} auto-recoveries in ${Math.round(WAKE_CIRCUIT_WINDOW_MS / 60000)}min. Paused ${Math.round(WAKE_CIRCUIT_PAUSE_MS / 60000)}min.`;
+      this.log(msg);
+      if (this.telegramApi && this.chatId) {
+        this.telegramApi.sendMessage(this.chatId, msg).catch(() => {});
+      }
+      return;
+    }
+    this.wakeCircuitRestarts.push(now);
+    this.saveWakeCircuit();
+    this.wakeStuckSince = 0;
+    this.wakeReinjectedAt = 0;
+    this.log(`Wake-latency: still stuck after re-inject — soft-restarting ${this.agent.name}`);
+    selfRestart(this.paths, this.agent.name, 'wake-latency: heartbeat cron fired but session did not process it (non-wake bug); re-inject did not recover');
+    this.agent.sessionRefresh().catch(err => this.log(`Wake-latency restart failed: ${err}`));
+  }
+
+  /**
+   * Read the most recent "heartbeat" cron fire timestamp for this agent from
+   * cron-execution.log, scanning from the end (most recent entries last).
+   */
+  private getLatestHeartbeatCronFire(): number | null {
+    try {
+      const logPath = join(this.paths.ctxRoot, cronExecutionLogPathFor(this.agent.name));
+      if (!existsSync(logPath)) return null;
+      const raw = readFileSync(logPath, 'utf-8');
+      const lines = raw.trim().split('\n').filter(Boolean);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const entry = JSON.parse(lines[i]);
+          if (entry.cron === 'heartbeat' && entry.status === 'fired') {
+            return new Date(entry.ts).getTime();
+          }
+        } catch { continue; }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read this agent's own heartbeat.json directly (not via the CLI, to avoid
+   * spawning a process on every 7-min tick).
+   */
+  private readOwnHeartbeat(): { status: string; last_heartbeat: string } | null {
+    try {
+      const hbPath = join(this.paths.stateDir, 'heartbeat.json');
+      if (!existsSync(hbPath)) return null;
+      const data = JSON.parse(readFileSync(hbPath, 'utf-8'));
+      if (typeof data.status !== 'string' || typeof data.last_heartbeat !== 'string') return null;
+      return { status: data.status, last_heartbeat: data.last_heartbeat };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Detect an active Anthropic API retry/backoff signature in recent PTY
+   * output (mirrors hook-crash-alert.ts's detectRateLimitInLog so the two
+   * detectors agree on what counts as "resiliently retrying, not stuck").
+   */
+  private hasActiveApiRetrySignature(): boolean {
+    const recentOutput = this.agent.getOutputBuffer()?.getRecent(8000) ?? '';
+    const text = recentOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').toLowerCase();
+    return (
+      text.includes('overloaded_error') ||
+      text.includes('rate_limit_error') ||
+      text.includes('rate limit') ||
+      text.includes('rate-limit') ||
+      text.includes('too many requests') ||
+      text.includes('quota exceeded') ||
+      text.includes('usage limit') ||
+      text.includes('weekly limit') ||
+      text.includes('5-hour limit') ||
+      text.includes('5h limit') ||
+      /used \d+% of your/.test(text)
+    );
+  }
+
+  /**
+   * Load persisted wake-latency circuit breaker state from disk.
+   * Persisting across --continue restarts is critical: a --continue restart
+   * IS this detector's own recovery action, so an in-memory-only counter
+   * would reset itself on every restart and could never trip.
+   */
+  private loadWakeCircuit(): void {
+    try {
+      if (!existsSync(this.wakeCircuitFile)) return;
+      const data = JSON.parse(readFileSync(this.wakeCircuitFile, 'utf-8'));
+      this.wakeCircuitRestarts = Array.isArray(data.restarts) ? data.restarts : [];
+      this.wakeCircuitBrokenAt = typeof data.brokenAt === 'number' ? data.brokenAt : null;
+    } catch {
+      // Start fresh on error
+    }
+  }
+
+  /**
+   * Persist wake-latency circuit breaker state to disk after every update.
+   */
+  private saveWakeCircuit(): void {
+    try {
+      writeFileSync(this.wakeCircuitFile, JSON.stringify({
+        restarts: this.wakeCircuitRestarts,
+        brokenAt: this.wakeCircuitBrokenAt,
+      }), 'utf-8');
+    } catch {
+      // Non-critical
     }
   }
 

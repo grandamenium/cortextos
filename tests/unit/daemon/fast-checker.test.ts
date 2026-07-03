@@ -14,6 +14,9 @@ function createMockAgent(name = 'test-agent') {
     isBootstrapped: vi.fn().mockReturnValue(true),
     injectMessage: vi.fn().mockReturnValue(true),
     write: vi.fn(),
+    getAgentDir: vi.fn().mockReturnValue('/tmp/mock-agent-dir'),
+    getOutputBuffer: vi.fn().mockReturnValue({ getRecent: vi.fn().mockReturnValue('') }),
+    sessionRefresh: vi.fn().mockResolvedValue(undefined),
   } as any;
 }
 
@@ -789,7 +792,7 @@ describe('FastChecker', () => {
     beforeEach(() => { vi.useFakeTimers(); });
     afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 
-    it('fires exec after bootstrap at 50-min interval', async () => {
+    it('fires exec after bootstrap at 50-min interval, scoped to the agent dir', async () => {
       const { execFile } = await import('child_process');
       const agent = createMockAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
@@ -798,6 +801,10 @@ describe('FastChecker', () => {
       expect(execFile).toHaveBeenCalledWith(
         'cortextos',
         expect.arrayContaining(['bus', 'update-heartbeat', expect.stringContaining('[watchdog] my-agent alive — idle session')]),
+        // cwd must be this agent's own dir — execFile otherwise inherits the
+        // daemon's cwd/env and resolveEnv() falls back to basename(cwd) for
+        // the agent name, silently writing the wrong agent's heartbeat.json.
+        { cwd: agent.getAgentDir() },
         expect.any(Function),
       );
       checker.stop();
@@ -829,10 +836,144 @@ describe('FastChecker', () => {
       expect(execFile).not.toHaveBeenCalledWith(
         'cortextos',
         expect.arrayContaining([expect.stringContaining('[watchdog]')]),
+        expect.anything(),
         expect.any(Function),
       );
       checker.stop();
       checker.wake();
+    });
+  });
+
+  describe('wake-latency (non-wake stuck-session) detector', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+
+    function writeHeartbeatCronFire(agentName: string, ts: string, status: 'fired' | 'retried' | 'failed' = 'fired') {
+      const dir = join(testDir, '.cortextOS', 'state', 'agents', agentName);
+      mkdirSync(dir, { recursive: true });
+      const line = JSON.stringify({ ts, cron: 'heartbeat', status, attempt: 1, duration_ms: 0, error: null }) + '\n';
+      writeFileSync(join(dir, 'cron-execution.log'), line);
+    }
+
+    function writeOwnHeartbeat(status: string, lastHeartbeatIso: string) {
+      writeFileSync(
+        join(paths.stateDir, 'heartbeat.json'),
+        JSON.stringify({ agent: 'my-agent', org: '', status, current_task: '', mode: 'day', last_heartbeat: lastHeartbeatIso, loop_interval: '' }),
+      );
+    }
+
+    it('no-op when no heartbeat cron has fired yet', async () => {
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
+    it('healthy: a real heartbeat update after the fire is never flagged stuck', async () => {
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      writeOwnHeartbeat('heartbeat cycle: all good', '2026-01-01T00:05:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:40:00Z')); // well past the 25-min grace
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
+    it('a watchdog-only write (status starts with the prefix) does NOT count as real progress', async () => {
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      // Only the blind watchdog ping wrote after the fire — no real processing.
+      writeOwnHeartbeat('[watchdog] my-agent alive — idle session 2026-01-01T00:05:00.000Z', '2026-01-01T00:05:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z')); // past the 25-min grace
+      await (checker as any).checkWakeLatency();
+      // Still treated as stuck — first escalation step is the cheap re-inject.
+      expect(agent.write).toHaveBeenCalledWith('\r');
+    });
+
+    it('stuck: past grace with no real progress sends a cheap ENTER re-inject first, no restart yet', async () => {
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z')); // 30min > 25min grace
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).toHaveBeenCalledWith('\r');
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
+    it('still stuck after the reinject grace escalates to a soft (--continue) restart', async () => {
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
+      await (checker as any).checkWakeLatency(); // first tick: cheap re-inject
+      vi.setSystemTime(new Date('2026-01-01T00:36:00Z')); // +6min > 5min reinject grace
+      await (checker as any).checkWakeLatency(); // second tick: escalate
+      expect(agent.sessionRefresh).toHaveBeenCalledTimes(1);
+      // selfRestart() (soft, --continue) writes .restart-planned but NOT
+      // .force-fresh — a hard/fresh restart would be the wrong tool here.
+      expect(existsSync(join(paths.stateDir, '.restart-planned'))).toBe(true);
+      expect(existsSync(join(paths.stateDir, '.force-fresh'))).toBe(false);
+    });
+
+    it('suppresses recovery while the agent is legitimately active (mid-task)', async () => {
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
+      (checker as any).lastMessageInjectedAt = Date.now(); // isAgentActive() -> true (no idle flag yet)
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
+    it('suppresses recovery while an active API retry/backoff signature is present', async () => {
+      const agent = createMockAgent('my-agent');
+      agent.getOutputBuffer.mockReturnValue({ getRecent: vi.fn().mockReturnValue('overloaded_error: retrying in 4s...') });
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
+    it('circuit breaker trips after WAKE_CIRCUIT_MAX recoveries and pauses further restarts', async () => {
+      const agent = createMockAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+
+      // Episode 1: re-inject, then escalate to restart (WAKE_CIRCUIT_MAX = 2, so this is recovery #1).
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
+      await (checker as any).checkWakeLatency();
+      vi.setSystemTime(new Date('2026-01-01T00:36:00Z'));
+      await (checker as any).checkWakeLatency();
+      expect(agent.sessionRefresh).toHaveBeenCalledTimes(1);
+
+      // Episode 2: still no real progress (fire ts unchanged, still stuck) — recovery #2,
+      // within the 30min circuit window of recovery #1 (00:36).
+      vi.setSystemTime(new Date('2026-01-01T00:42:00Z'));
+      await (checker as any).checkWakeLatency(); // re-inject
+      vi.setSystemTime(new Date('2026-01-01T00:48:00Z'));
+      await (checker as any).checkWakeLatency(); // escalate — 2nd restart, breaker not yet tripped
+      expect(agent.sessionRefresh).toHaveBeenCalledTimes(2);
+
+      // Episode 3: a 3rd attempt within 30min of BOTH prior recoveries should
+      // trip the breaker instead of restarting again.
+      vi.setSystemTime(new Date('2026-01-01T00:54:00Z'));
+      await (checker as any).checkWakeLatency(); // re-inject
+      vi.setSystemTime(new Date('2026-01-01T01:00:00Z'));
+      await (checker as any).checkWakeLatency(); // would-be 3rd restart — trips instead
+      expect(agent.sessionRefresh).toHaveBeenCalledTimes(2); // unchanged — tripped, not restarted
+
+      // Episode 4: breaker is paused — no further action at all, not even a re-inject.
+      const writeCallsBefore = agent.write.mock.calls.length;
+      vi.setSystemTime(new Date('2026-01-01T01:10:00Z'));
+      await (checker as any).checkWakeLatency();
+      expect(agent.write.mock.calls.length).toBe(writeCallsBefore); // unchanged — paused
+      expect(agent.sessionRefresh).toHaveBeenCalledTimes(2); // still unchanged
     });
   });
 
