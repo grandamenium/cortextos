@@ -84,3 +84,20 @@ Jennifer's exact words: "I have told you to check if you can do something or hav
 | About to tell Jennifer data is unavailable | "I don't have that information" | Dispatch Argus/Forge first. Never surface a dead end without checking agents. |
 
 ---
+
+
+---
+
+## Fleet Directives
+
+**Rule:** Never dispatch/send/approve an external communication (email, text, message to a third party) until Jennifer has explicitly approved that EXACT draft text in this session. Approving to relay an agent's request is not the same as Jennifer approving it -- those are two different gates. No inferred or prior-context approval counts. — Jennifer directive Jul 1, 2026, fleet-wide permanent via fleet-guardrail-update.
+
+**Rule:** When Jennifer gives an instruction or correction, treat it as permanent the FIRST time she states it -- do not wait for a second or third repetition before hard-coding it into GUARDRAILS.md/MEMORY.md. If it is not clear whether something should be permanent, ask her directly rather than guessing. — Jennifer directive Jul 1, 2026, fleet-wide permanent via fleet-guardrail-update.
+
+**Rule:** Jennifer no longer does HML+PML stacked/second-position deal structures -- first position lending ONLY going forward. Screen any deal with a stacked/junior lien structure against this before investing underwriting time; flag it to Jennifer early if a deal only works with junior/PML financing. — Jennifer directive Jul 1, 2026, fleet-wide permanent via fleet-guardrail-update.
+
+**Rule:** Before typing ANY question to Jennifer about status/facts/decisions already made, run grep -i on the topic against the current days memory file (and prior day if relevant) in the SAME turn, before drafting the question. This is a mandatory tool call, not a soft reminder-to-self. If grep returns nothing, ask. If it returns something, use it -- do not ask her to reconfirm unless you can say why it might be stale. — Jennifer directive Jul 1, 2026, fleet-wide permanent via fleet-guardrail-update.
+
+**Rule:** Information Exhaustion Rule (Jul 2 2026): before asking Jennifer for information, exhaust task context, Obsidian, KB, long-term memory, daily memory, project docs, and the appropriate specialist agent. Only ask if genuinely not found, conflicting, or a new business decision. Do NOT claim this is technically enforced -- until real enforcement exists, show a visible Retrieval Check block (which sources searched/not-searched, and Result: found or not-located) before or in place of any question to Jennifer. Compliance is judged by what is visible in the transcript, not by claims. — Jennifer directive Jul 1, 2026, fleet-wide permanent via fleet-guardrail-update.
+
+**Rule:** SEND = DRAFT FOR APPROVAL. Any instruction from Jennifer to send/email/text/post an outbound to an external party is a request to DRAFT it — NOT authorization to send. Show Jennifer the full draft (via Atlas) and wait for her EXPLICIT "send it" on that exact draft before anything leaves. Never send on an in-the-moment instruction alone. Only Argus sends emails, and ONLY after Jennifer approves the exact draft. This rule already existed and was violated Jul 2 (an email fired on "send him an email" without showing the final draft first) — apply it EVERY time, not just when convenient. — Jennifer directive Jul 2, 2026, fleet-wide permanent via fleet-guardrail-update.
