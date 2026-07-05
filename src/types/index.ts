@@ -195,14 +195,26 @@ export interface AgentConfig {
    */
   codex_context_cap?: number;
   /**
-   * Enable the wake-latency (non-wake) stuck-session detector's auto-recovery
-   * actions for this agent (see fast-checker.ts checkWakeLatency). Defaults
-   * to false/absent — the code ships fleet-wide with every daemon rebuild
-   * (there is one shared daemon process, not per-agent), but the detector
-   * only takes action for agents that opt in here. This is the actual
-   * canary boundary: flip true for one agent, observe, then roll out.
+   * Enable the wake-latency (non-wake) stuck-session detector for this agent
+   * (see fast-checker.ts checkWakeLatency). Defaults to false/absent — the
+   * code ships fleet-wide with every daemon rebuild (there is one shared
+   * daemon process, not per-agent), but the detector only runs at all for
+   * agents that opt in here. This is the actual canary boundary: flip true
+   * for one agent, observe, then roll out.
    */
   wake_detector_enabled?: boolean;
+  /**
+   * Allow the wake-latency detector to actually re-inject ENTER and, if that
+   * doesn't recover it, soft-restart this agent when it flags a session
+   * stuck. Defaults to false/absent — alert-only (detect + notify, take no
+   * action) until this is explicitly turned on. Kept separate from
+   * `wake_detector_enabled` after a 2026-07-04 false-positive restart: a
+   * genuinely long, quiet turn with zero bus activity of any kind is still
+   * indistinguishable from a real freeze with current signals, so
+   * auto-recovery is not safe to enable fleet-wide even once detection
+   * itself is trusted.
+   */
+  wake_detector_auto_recover?: boolean;
   /**
    * Agent runtime. Defaults to 'claude-code' when absent.
    * 'hermes' selects the HermesPTY spawn path (Python persistent REPL,

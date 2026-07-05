@@ -1146,6 +1146,17 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       if (hbTime > this.lastRealProgressAt) this.lastRealProgressAt = hbTime;
     }
 
+    // ANY agent-initiated bus activity counts as progress, not just a literal
+    // heartbeat.json write (2026-07-04 false-positive fix: an agent busy
+    // sending/acking messages is demonstrably alive even if it hasn't run its
+    // own heartbeat checklist since the last cron fire — restarting it over
+    // one unprocessed status update, while it is clearly responsive to
+    // everything else, is the wrong trade).
+    const activityTs = this.getLatestAgentActivity();
+    if (activityTs !== null && activityTs > this.lastRealProgressAt) {
+      this.lastRealProgressAt = activityTs;
+    }
+
     const fireTs = this.getLatestHeartbeatCronFire();
     if (fireTs === null) return; // no heartbeat cron has fired yet — nothing to check
 
@@ -1166,9 +1177,28 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     if (this.isAgentActive()) return;
     if (this.hasActiveApiRetrySignature()) return;
 
-    if (this.wakeStuckSince === 0) {
+    const firstDetection = this.wakeStuckSince === 0;
+    if (firstDetection) {
       this.wakeStuckSince = now;
       this.log(`Wake-latency: heartbeat cron fired ${Math.round((now - fireTs) / 60000)}min ago with no real progress since — flagged stuck`);
+    }
+
+    // Alert-only mode (the default): detect and notify, but do not act.
+    // Auto-recovery (re-inject then restart) stays opt-in per-agent behind a
+    // second flag, separate from the detector being enabled at all — a
+    // remaining known gap (a genuinely long, quiet turn with zero bus
+    // activity of any kind is indistinguishable from a real freeze with
+    // current signals) means restarting on this alone is not yet safe to
+    // re-enable fleet-wide, even with the Signal-B fix above.
+    if (this.agent.getConfig().wake_detector_auto_recover !== true) {
+      if (firstDetection) {
+        const msg = `Wake-latency ALERT (not acting, alert-only mode): ${this.agent.name}'s heartbeat cron fired ${Math.round((now - fireTs) / 60000)}min ago with no bus activity since. May be stuck, or may be a long quiet turn — check manually.`;
+        this.log(msg);
+        if (this.telegramApi && this.chatId) {
+          this.telegramApi.sendMessage(this.chatId, msg).catch(() => {});
+        }
+      }
+      return;
     }
 
     if (this.wakeReinjectedAt === 0) {
@@ -1203,6 +1233,40 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     this.log(`Wake-latency: still stuck after re-inject — soft-restarting ${this.agent.name}`);
     selfRestart(this.paths, this.agent.name, 'wake-latency: heartbeat cron fired but session did not process it (non-wake bug); re-inject did not recover');
     this.agent.sessionRefresh().catch(err => this.log(`Wake-latency restart failed: ${err}`));
+  }
+
+  /**
+   * Read the most recent activity-event timestamp for this agent from its
+   * own daily event log (analytics/events/{agent}/{date}.jsonl). Bus
+   * mutating commands (send-message, send-telegram, ack-inbox,
+   * update-heartbeat, log-event, ...) already auto-emit an event here, so
+   * this captures ANY agent-initiated action as evidence of life, not just
+   * a literal heartbeat.json write. Checks today's file first (the common
+   * case); falls back to yesterday's only if today's is missing or empty
+   * (e.g. just after a UTC date rollover before anything has logged yet).
+   */
+  private getLatestAgentActivity(): number | null {
+    try {
+      const eventsDir = join(this.paths.analyticsDir, 'events', this.agent.name);
+      const candidates = [new Date(), new Date(Date.now() - 24 * 60 * 60 * 1000)];
+      for (const d of candidates) {
+        const file = join(eventsDir, `${d.toISOString().slice(0, 10)}.jsonl`);
+        if (!existsSync(file)) continue;
+        const raw = readFileSync(file, 'utf-8');
+        const lines = raw.trim().split('\n').filter(Boolean);
+        if (lines.length === 0) continue;
+        try {
+          const entry = JSON.parse(lines[lines.length - 1]);
+          if (typeof entry.timestamp === 'string') {
+            const t = new Date(entry.timestamp).getTime();
+            if (!Number.isNaN(t)) return t;
+          }
+        } catch { /* fall through to the next candidate date */ }
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /**

@@ -22,9 +22,19 @@ function createMockAgent(name = 'test-agent') {
 }
 
 // Wake-latency detector tests opt in explicitly — the canary flag defaults off.
+// This is the actual current production posture: detector on, auto-recovery
+// off (alert-only), after the 2026-07-04 false-positive restart.
 function createWakeCanaryAgent(name = 'my-agent') {
   const agent = createMockAgent(name);
   agent.getConfig.mockReturnValue({ wake_detector_enabled: true });
+  return agent;
+}
+
+// Full auto-recovery (re-inject + restart) — not currently enabled in
+// production, but the code path still needs coverage.
+function createWakeAutoRecoverAgent(name = 'my-agent') {
+  const agent = createMockAgent(name);
+  agent.getConfig.mockReturnValue({ wake_detector_enabled: true, wake_detector_auto_recover: true });
   return agent;
 }
 
@@ -911,7 +921,7 @@ describe('FastChecker', () => {
     });
 
     it('a watchdog-only write (status starts with the prefix) does NOT count as real progress', async () => {
-      const agent = createWakeCanaryAgent('my-agent');
+      const agent = createWakeAutoRecoverAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       // Only the blind watchdog ping wrote after the fire — no real processing.
@@ -922,8 +932,29 @@ describe('FastChecker', () => {
       expect(agent.write).toHaveBeenCalledWith('\r');
     });
 
-    it('stuck: past grace with no real progress sends a cheap ENTER re-inject first, no restart yet', async () => {
-      const agent = createWakeCanaryAgent('my-agent');
+    it('alert-only mode (production default): flags stuck and notifies, but never re-injects or restarts', async () => {
+      const agent = createWakeCanaryAgent('my-agent'); // enabled, auto_recover NOT set
+      agent.getOutputBuffer.mockReturnValue({ getRecent: vi.fn().mockReturnValue('') });
+      const telegramApi = createMockTelegramApi();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { telegramApi, chatId: '123' });
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      vi.setSystemTime(new Date('2026-01-01T00:30:00Z')); // 30min > 25min grace
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+      expect(telegramApi.sendMessage).toHaveBeenCalledWith('123', expect.stringContaining('Wake-latency ALERT'));
+
+      // A later tick, still stuck, still does not act, and does not spam a second alert.
+      telegramApi.sendMessage.mockClear();
+      vi.setSystemTime(new Date('2026-01-01T00:45:00Z'));
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+      expect(telegramApi.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('stuck: past grace with no real progress sends a cheap ENTER re-inject first, no restart yet (auto-recover on)', async () => {
+      const agent = createWakeAutoRecoverAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       vi.setSystemTime(new Date('2026-01-01T00:30:00Z')); // 30min > 25min grace
@@ -932,8 +963,8 @@ describe('FastChecker', () => {
       expect(agent.sessionRefresh).not.toHaveBeenCalled();
     });
 
-    it('still stuck after the reinject grace escalates to a soft (--continue) restart', async () => {
-      const agent = createWakeCanaryAgent('my-agent');
+    it('still stuck after the reinject grace escalates to a soft (--continue) restart (auto-recover on)', async () => {
+      const agent = createWakeAutoRecoverAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
@@ -947,8 +978,25 @@ describe('FastChecker', () => {
       expect(existsSync(join(paths.stateDir, '.force-fresh'))).toBe(false);
     });
 
+    it('a real activity-log event after the fire counts as progress, even with no heartbeat.json write (2026-07-04 false-positive fix)', async () => {
+      const agent = createWakeAutoRecoverAgent('my-agent');
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
+      // No heartbeat.json write at all — but the agent sent a message 5 min after the fire.
+      const eventsDir = join(paths.analyticsDir, 'events', 'my-agent');
+      mkdirSync(eventsDir, { recursive: true });
+      writeFileSync(
+        join(eventsDir, '2026-01-01.jsonl'),
+        JSON.stringify({ id: 'x', agent: 'my-agent', timestamp: '2026-01-01T00:05:00Z', category: 'message', event: 'agent_message_sent' }) + '\n',
+      );
+      vi.setSystemTime(new Date('2026-01-01T00:40:00Z')); // well past the 25-min grace
+      await (checker as any).checkWakeLatency();
+      expect(agent.write).not.toHaveBeenCalled();
+      expect(agent.sessionRefresh).not.toHaveBeenCalled();
+    });
+
     it('suppresses recovery while the agent is legitimately active (mid-task)', async () => {
-      const agent = createWakeCanaryAgent('my-agent');
+      const agent = createWakeAutoRecoverAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
       vi.setSystemTime(new Date('2026-01-01T00:30:00Z'));
@@ -959,7 +1007,7 @@ describe('FastChecker', () => {
     });
 
     it('suppresses recovery while an active API retry/backoff signature is present', async () => {
-      const agent = createWakeCanaryAgent('my-agent');
+      const agent = createWakeAutoRecoverAgent('my-agent');
       agent.getOutputBuffer.mockReturnValue({ getRecent: vi.fn().mockReturnValue('overloaded_error: retrying in 4s...') });
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
@@ -970,7 +1018,7 @@ describe('FastChecker', () => {
     });
 
     it('circuit breaker trips after WAKE_CIRCUIT_MAX recoveries and pauses further restarts', async () => {
-      const agent = createWakeCanaryAgent('my-agent');
+      const agent = createWakeAutoRecoverAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       writeHeartbeatCronFire('my-agent', '2026-01-01T00:00:00Z');
 
