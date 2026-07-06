@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createTask, updateTask, completeTask, cancelTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile, archiveTasks } from '../../../src/bus/task';
+import { createTask, updateTask, completeTask, cancelTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile, archiveTasks, classifyTask } from '../../../src/bus/task';
 import type { BusPaths } from '../../../src/types';
 
 describe('Task Management', () => {
@@ -89,6 +89,12 @@ describe('Task Management', () => {
       expect(content.completed_at).toBeNull();
       expect(content.due_date).toBeNull();
       expect(content.archived).toBe(false);
+    });
+
+    it('auto-tags system-spawned tasks when project is unset', () => {
+      const taskId = createTask(paths, 'comms-check-999', 'acme', 'Poll inbox');
+      const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
+      expect(content.project).toBe('system');
     });
   });
 
@@ -236,6 +242,46 @@ describe('Task Management', () => {
       expect(cancelled).toHaveLength(1);
       expect(cancelled[0].id).toBe(taskId);
       expect(cancelled[0].status).toBe('cancelled');
+    });
+
+    it('filters by derived class', () => {
+      createTask(paths, 'comms-check-123', 'acme', 'System row');
+      const buildTaskId = createTask(paths, 'paul', 'acme', 'Build row');
+
+      const buildTasks = listTasks(paths, { class: 'build' });
+      expect(buildTasks).toHaveLength(1);
+      expect(buildTasks[0].id).toBe(buildTaskId);
+      expect(buildTasks[0].title).toBe('Build row');
+    });
+  });
+
+  describe('classifyTask', () => {
+    it('derives system, human, and build buckets from task metadata', () => {
+      const baseTask = {
+        id: 'task_test_001',
+        title: 'Base task',
+        description: '',
+        type: 'agent' as const,
+        needs_approval: false,
+        status: 'pending' as const,
+        assigned_to: 'paul',
+        created_by: 'paul',
+        org: 'acme',
+        priority: 'normal' as const,
+        project: '',
+        kpi_key: null,
+        created_at: '2026-07-06T00:00:00Z',
+        updated_at: '2026-07-06T00:00:00Z',
+        completed_at: null,
+        due_date: null,
+        archived: false,
+      };
+
+      expect(classifyTask({ ...baseTask, created_by: 'transcript-scanner-123' })).toBe('system');
+      expect(classifyTask({ ...baseTask, title: 'Cron: heartbeat' })).toBe('system');
+      expect(classifyTask({ ...baseTask, assigned_to: 'human' })).toBe('human');
+      expect(classifyTask({ ...baseTask, title: 'Josh: send token' })).toBe('human');
+      expect(classifyTask(baseTask)).toBe('build');
     });
   });
 });

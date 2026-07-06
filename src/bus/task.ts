@@ -7,6 +7,33 @@ import { randomDigits } from '../utils/random.js';
 import { validatePriority, validateTaskId } from '../utils/validate.js';
 import { logEvent } from './event.js';
 
+export type TaskClass = 'system' | 'human' | 'build';
+
+const SYSTEM_TASK_CREATOR_RE = /^(transcript-scanner|comms-check|session-save|heartbeat)-/;
+const HUMAN_TITLE_RE = /^(\[HUMAN\]|Josh:|Decide:)/i;
+const SYSTEM_TITLE_RE = /^cron:/i;
+
+export function classifyTask(task: Task): TaskClass {
+  const by = task.created_by || '';
+  const title = task.title || '';
+  if (
+    SYSTEM_TASK_CREATOR_RE.test(by)
+    || task.project === 'system'
+    || SYSTEM_TITLE_RE.test(title)
+  ) {
+    return 'system';
+  }
+  if (
+    task.assigned_to === 'human'
+    || task.assigned_to === 'user'
+    || task.project === 'human-tasks'
+    || HUMAN_TITLE_RE.test(title)
+  ) {
+    return 'human';
+  }
+  return 'build';
+}
+
 /**
  * Create a new task. Identical JSON format to bash create-task.sh.
  */
@@ -30,7 +57,7 @@ export function createTask(
     description = '',
     assignee = agentName,
     priority = 'normal',
-    project = '',
+    project: requestedProject = '',
     needsApproval = false,
     dueDate = '',
     blockedBy = [],
@@ -47,6 +74,9 @@ export function createTask(
   const rand = randomDigits(8);
   const taskId = `task_${epoch}_${rand}`;
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const project = requestedProject === '' && SYSTEM_TASK_CREATOR_RE.test(agentName)
+    ? 'system'
+    : requestedProject;
 
   const task: Task = {
     id: taskId,
@@ -580,6 +610,7 @@ export function listTasks(
     agent?: string;
     status?: TaskStatus;
     priority?: Priority;
+    class?: TaskClass;
     respectDeps?: boolean;
   },
 ): Task[] {
@@ -607,6 +638,7 @@ export function listTasks(
       // Cancelled tasks are hidden from every default view (like archived).
       // An explicit `--status cancelled` query still surfaces them for audit/recovery.
       if (task.status === 'cancelled' && filters?.status !== 'cancelled') continue;
+      if (filters?.class && classifyTask(task) !== filters.class) continue;
 
       tasks.push(task);
     } catch {
