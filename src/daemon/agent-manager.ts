@@ -536,7 +536,7 @@ export class AgentManager {
         } else if (status.status === 'halted') {
           tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
         } else if (status.status === 'running' && prevStatus === 'crashed') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
+          tgApi.sendMessage(tgChatId, `_Agent ${name} recovered and is back online_`, undefined, { silent: true }).catch(() => {});
         }
         prevStatus = status.status;
       });

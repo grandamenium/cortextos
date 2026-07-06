@@ -14,6 +14,7 @@ export const meta = {
 
 const runtimeBridgeModule = await import('./lib/runtime-bridge.js')
 const routingPolicyModule = await import('./lib/routing-policy.js')
+const lessonProfileModule = await import('./lib/lesson-profile.js')
 const { execFileSync } = await import('node:child_process')
 const { existsSync, mkdirSync, rmSync } = await import('node:fs')
 const { join } = await import('node:path')
@@ -21,6 +22,7 @@ const { join } = await import('node:path')
 const { sendWork } = runtimeBridgeModule.default ?? runtimeBridgeModule
 const { buildAnthropicAgentOptions, loadRoutingConfig, resolveStageRoute } =
   routingPolicyModule.default ?? routingPolicyModule
+const { upsertLesson, topLessons } = lessonProfileModule.default ?? lessonProfileModule
 
 // ----------------------------------------------------------------------------
 // ARGS  (all optional except task)
@@ -56,6 +58,15 @@ function stageRoute(stageName) {
 }
 
 async function executeStage(stageName, prompt, baseOpts, bridgeOpts = {}) {
+  if (stageName === 'plan') {
+    const lessonsBlock = topLessons(20)
+    if (lessonsBlock) {
+      prompt =
+        `LESSONS PROFILE — recurring failure modes from prior runs. Your plan MUST NOT repeat these:\n` +
+        `${lessonsBlock}\n---\n\n` + prompt
+    }
+  }
+
   const route = stageRoute(stageName)
   if (route.provider === 'anthropic') {
     return agent(prompt, buildAnthropicAgentOptions(baseOpts, route))
@@ -375,7 +386,8 @@ const lessons = await executeStage(
   `Review outcome: ${JSON.stringify(review)}\nMerge: ${JSON.stringify(lastMerge)}\n\n` +
   `If (and ONLY if) this run produced a NON-OBVIOUS, reusable lesson — a failure and its fix, a gotcha, or a durable standard worth remembering — write ONE lesson per file to ` +
   `/Users/joshweiss/code/knowledge-sync/lessons/<kebab-slug>.md. Each file: a title, a dated Context, the Lesson, and How-to-apply — short and genuinely reusable. ` +
-  `Do NOT write filler or restate the task; if there is no real lesson, write nothing. Return the list of lesson file paths written (empty if none).`,
+  `Do NOT write filler or restate the task; if there is no real lesson, write nothing. Return the list of lesson file paths written (empty if none). ` +
+  `For EACH lesson file you write, ALSO return a matching oneLiner: {domain, lesson} — a <=140-char imperative rule.`,
   {
     label: 'lessons',
     phase: 'Lessons',
@@ -384,10 +396,33 @@ const lessons = await executeStage(
       required: ['lessonFiles'],
       properties: {
         lessonFiles: { type: 'array', items: { type: 'string' } },
+        oneLiners: {
+          type: 'array',
+          items: {
+            type: 'object',
+            required: ['domain', 'lesson'],
+            properties: {
+              domain: { type: 'string' },
+              lesson: { type: 'string', description: 'imperative rule, <=140 chars' },
+            },
+          },
+        },
       },
     },
   },
 )
+
+for (const [i, lesson] of (lessons.oneLiners || []).entries()) {
+  try {
+    upsertLesson({
+      domain: lesson.domain,
+      text: lesson.lesson,
+      source: (lessons.lessonFiles || [])[i] || 'pipeline-run',
+    })
+  } catch (error) {
+    log(`lesson-profile upsert failed (non-fatal): ${error}`)
+  }
+}
 
 return {
   task,

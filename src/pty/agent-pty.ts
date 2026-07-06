@@ -316,8 +316,9 @@ export class AgentPTY {
    * keeps the historical shared injector. Runtime subclasses can override this
    * when their TUI has different paste semantics.
    */
-  injectMessage(content: string): void {
+  injectMessage(content: string): Promise<boolean> {
     injectMessageIntoPty((data) => this.write(data), content);
+    return Promise.resolve(true);
   }
 
   /**

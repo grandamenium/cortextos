@@ -23,6 +23,13 @@ describe('MessageDedup', () => {
     expect(dedup.isDuplicate('msg1')).toBe(false); // no longer in cache
     expect(dedup.isDuplicate('msg4')).toBe(true); // still in cache
   });
+
+  it('can remove a recorded entry so a failed injection can retry', () => {
+    const dedup = new MessageDedup();
+    expect(dedup.isDuplicate('retry-me')).toBe(false);
+    dedup.remove('retry-me');
+    expect(dedup.isDuplicate('retry-me')).toBe(false);
+  });
 });
 
 describe('KEYS', () => {

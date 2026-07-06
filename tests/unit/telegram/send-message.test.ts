@@ -144,6 +144,26 @@ describe('TelegramAPI.sendMessage HTML mode', () => {
     expect(warnLog).toHaveLength(0);
   });
 
+  it('sets disable_notification when silent=true', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 444 } } });
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', '_quiet_', undefined, { silent: true });
+
+    expect(callLog).toHaveLength(1);
+    expect(callLog[0].body.disable_notification).toBe(true);
+  });
+
+  it('omits disable_notification by default', async () => {
+    queue({ status: 200, body: { ok: true, result: { message_id: 445 } } });
+
+    const api = new TelegramAPI('111:AAA');
+    await api.sendMessage('chat1', 'normal message');
+
+    expect(callLog).toHaveLength(1);
+    expect(callLog[0].body).not.toHaveProperty('disable_notification');
+  });
+
   it('chunked long messages: splits at newline boundaries, not raw char offsets', async () => {
     // Build a message with clear paragraph structure so we can verify split point
     const para = 'x'.repeat(2000) + '\n\n';

@@ -150,4 +150,17 @@ describe('PR-12: send-telegram normalizes literal \\n / \\t (codex agent fix)', 
     expect(sentMessage).toContain('codex-research.\n\nA few quick questions');
     expect(sentMessage).not.toContain('\\n');
   });
+
+  it('routes --silent through to TelegramAPI.sendMessage opts', async () => {
+    await busCommand.parseAsync(
+      ['send-telegram', '12345', 'quiet ping', '--silent'],
+      { from: 'user' },
+    );
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0][3]).toEqual({
+      parseMode: 'HTML',
+      silent: true,
+    });
+  });
 });

@@ -30,7 +30,9 @@ async function main(): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: env.chatId,
-        text: `[${agentName}] Context compacting... resuming shortly`,
+        text: `<i>[${agentName}] Context compacting... resuming shortly</i>`,
+        parse_mode: 'HTML',
+        disable_notification: true,
       }),
       signal: controller.signal,
     });

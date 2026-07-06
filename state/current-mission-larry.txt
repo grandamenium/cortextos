@@ -1,0 +1,12 @@
+MISSION: VERIFY-CODE → WAVED/PHASED ROADMAP (Josh directive 2026-07-05), structural-reliability-first. Standing directive "Do 0 1 and 2" — execute Waves 0/1/2 autonomously; only merges/destructive-prod/scope-forks gate on Josh.
+
+OWNER: larry  |  ANCHOR: orgs/clearworksai/agents/larry/memory/handoffs/handoff-2026-07-05T08-24-45Z.md (authoritative)
+NOTE: shared state/current-mission.txt is currently owned by MAVEN — did NOT clobber it (that's the collision bug this mission is fixing). Using this per-agent file instead.
+
+PHASE: W1 in progress. DONE this session: WS-A4 skills prune (196→84), WS-A7 cron-teaching purge (80→0 fleet-wide), WS6 MEMORY.md diet (48KB→7.0KB, lint-clean, zero fact loss).
+
+AWAITING: Josh reply on whether to fix personal-org maven's 8 stale cron refs (out of clearworks scope, held).
+
+NEXT: (1) check Josh maven answer; (2) OBF-spec + dispatch codexer — harden upgrade-cron-teaching scanner (stop over-flagging corrective text); (3) OBF-spec + dispatch codexer — per-agent state path fix for THIS shared-current-mission.txt collision; (4) W0 claim-gate canary (fresh session, self-restart); (5) WAVE 2 (hot-state backup = biggest risk).
+
+UPDATED: 2026-07-05T08:24:45Z

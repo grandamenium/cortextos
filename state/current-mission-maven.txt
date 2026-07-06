@@ -1,0 +1,11 @@
+LIVE PRIORITY (written 2026-07-05T19:00:29Z; context-handoff restart at 80%, agent=maven)
+
+IDLE MONITORING — no action required unless Josh messages first. No new inbound Josh message arrived this entire session (2026-07-05 ~15:11 UTC through 19:00 UTC) — inbox confirmed empty on every keepalive fire (~8min cadence). Only cron fires and context-percentage system notices occurred.
+
+George fluids reminder for Fri Jul 3 already sent via Telegram at 14:31 UTC (prior session, 2026-07-03) — no confirmation from Josh, per no-nagging rule do NOT re-ask or resend. Next scheduled dose is Monday 2026-07-06 (Mon/Wed/Fri cycle) — daily-personal-nudge (weekday-only, ~7:30am PDT) will surface it naturally.
+
+Today (2026-07-05) is Sunday — daily-personal-nudge and evening-personal-check are weekday-only crons and correctly did not fire this weekend.
+
+GOALS.md stale since 2026-05-14 — already flagged repeatedly, do not re-flag again unless Josh asks directly.
+
+Verify against the live tail before acting; if older than 2h treat it as possibly stale.

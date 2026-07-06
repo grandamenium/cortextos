@@ -32,7 +32,7 @@ export class MessageDedup {
    * Returns true if this content has been seen before (duplicate).
    */
   isDuplicate(content: string): boolean {
-    const hash = createHash('md5').update(content).digest('hex');
+    const hash = this.hashContent(content);
     if (this.hashes.includes(hash)) {
       return true;
     }
@@ -43,8 +43,20 @@ export class MessageDedup {
     return false;
   }
 
+  remove(content: string): void {
+    const hash = this.hashContent(content);
+    const idx = this.hashes.lastIndexOf(hash);
+    if (idx >= 0) {
+      this.hashes.splice(idx, 1);
+    }
+  }
+
   clear(): void {
     this.hashes = [];
+  }
+
+  private hashContent(content: string): string {
+    return createHash('md5').update(content).digest('hex');
   }
 }
 

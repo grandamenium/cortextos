@@ -1,14 +1,31 @@
 {
-  "$comment": "Per-stage model routing for dynamic-pipeline. provider ∈ anthropic|openrouter|codex. Fable is opt-in at plan only; when not explicitly confirmed, plan falls back to opus.",
+  "$comment": "LIVE — greenlit by Josh 2026-07-05. Canonical per-stage routing for the multi-harness pipeline (Larry-as-coordinator reads this every pipeline run; dynamic-pipeline.js reads it too). Design = AgenticJames reels transcribed 2026-07-05 (see larry/PIPELINE.md + larry/memory/reference/agenticjames-reel*.txt). All slugs verified against OpenRouter /models 2026-07-05. Stages: research(Gemini grounded search) → explore(Sonnet) → synthesize(Opus) → plan(Fable HIGH, opus fallback) → implement_light(DeepSeek V4)/implement_heavy(Codex GPT 5.5) → review(cheap Gemini lens first, Opus escalation) → pr. Change routing here; do not hardcode models in the coordinator.",
   "fableGate": {
     "fallback": "opus"
   },
   "stages": {
-    "explore": {
+    "research": {
+      "$comment": "reel1 step1 — Gemini grounded search via Opencoder. External research Larry had dropped.",
       "provider": "openrouter",
-      "model": "openrouter/google/gemini-3.5-flash"
+      "model": "openrouter/google/gemini-3.5-flash",
+      "worker": "opencoder",
+      "feature": "grounded-search"
+    },
+    "explore": {
+      "$comment": "reel2 — parallel Sonnet 5 explore agents per domain; pair with Graphify on large repos. (Opencoder Gemini also usable for cheap explore.)",
+      "provider": "anthropic",
+      "model": "sonnet",
+      "parallelPerDomain": true,
+      "pairWith": "graphify"
+    },
+    "synthesize": {
+      "$comment": "reel1 step2 — Opus 4.8 folds research/explore docs together before planning.",
+      "provider": "anthropic",
+      "model": "opus",
+      "effort": "high"
     },
     "plan": {
+      "$comment": "reel1 step3 / reel2 — Fable 5 HIGH, stripped/lean context. Opt-in; falls back to opus.",
       "provider": "anthropic",
       "model": "fable",
       "effort": "high",
@@ -16,18 +33,44 @@
       "requiresConfirmation": true,
       "fallback": "opus"
     },
-    "implement": {
+    "implement_light": {
+      "$comment": "reel1 step4 (light) — cheaper coding impl on DeepSeek V4 via Opencoder.",
+      "provider": "openrouter",
+      "model": "openrouter/deepseek/deepseek-v4-flash",
+      "worker": "opencoder"
+    },
+    "implement_heavy": {
+      "$comment": "reel1 step4 (heavy) — GPT 5.5 in Codex CLI via Codexer; plan split across sessions. reel2 alt: Fable 5 MEDIUM subagents per worktree.",
       "provider": "codex",
-      "model": "gpt-5.4"
+      "model": "gpt-5.5",
+      "worker": "codexer"
     },
     "merge": {
       "provider": "anthropic",
       "model": "haiku"
     },
     "review": {
-      "provider": "anthropic",
-      "model": "opus",
-      "effort": "high"
+      "$comment": "INVERTED review stack (Fable pick 2026-07-05, agent a6d340fec96cbd119). Review is read-heavy, so put the CHEAP cross-model lens first (always-on, diff-scoped) and demote Opus to a capped, diff-only, conditional 2nd pass. Deterministic gates (build/test/lint) run BEFORE any review token; a failing gate bounces to implement with the error text, zero review spend. Reviewers are ALWAYS diff-scoped — never re-read the repo (biggest token save).",
+      "diffScopedOnly": true,
+      "runGatesFirst": true,
+      "primary": {
+        "$comment": "First lens — cheap non-Anthropic model, always-on. Cross-model lens per commenters (Gemini/GPT/Grok each catch 1-2 extra bugs). Start with one Gemini lens; add GPT/Grok later if worth it.",
+        "provider": "openrouter",
+        "model": "openrouter/google/gemini-3.5-flash",
+        "worker": "opencoder",
+        "diffScoped": true,
+        "alwaysOn": true
+      },
+      "escalation": {
+        "$comment": "Second pass — Opus HIGH, diff-only, triggered ONLY when the primary lens flags OR a deterministic gate fails. Loop capped at 2. NEVER off-Anthropic.",
+        "provider": "anthropic",
+        "model": "opus",
+        "effort": "high",
+        "diffScoped": true,
+        "triggerOn": ["primaryFlagged", "gateFailed"],
+        "loopToImplement": true,
+        "maxLoops": 2
+      }
     },
     "pr": {
       "provider": "anthropic",

@@ -6,6 +6,7 @@ const mockOpencodePty = {
   spawn: vi.fn().mockResolvedValue(undefined),
   kill: vi.fn(),
   write: vi.fn(),
+  injectMessage: vi.fn().mockResolvedValue(true),
   getPid: vi.fn().mockReturnValue(13579),
   isAlive: vi.fn().mockReturnValue(true),
   onExit: vi.fn().mockImplementation((cb: (exitCode: number, signal?: number) => void) => {
@@ -44,7 +45,21 @@ vi.mock('../../../src/pty/opencode-pty.js', () => ({
 
 vi.mock('../../../src/pty/inject.js', () => ({
   injectMessage: vi.fn(),
-  MessageDedup: class { isDuplicate() { return false; } },
+  MessageDedup: class {
+    private seen = new Set<string>();
+
+    isDuplicate(content: string) {
+      if (this.seen.has(content)) {
+        return true;
+      }
+      this.seen.add(content);
+      return false;
+    }
+
+    remove(content: string) {
+      this.seen.delete(content);
+    }
+  },
 }));
 
 vi.mock('../../../src/utils/atomic.js', () => ({
@@ -105,6 +120,8 @@ beforeEach(() => {
     pty.spawn.mockClear();
     pty.kill.mockClear();
     pty.write.mockClear();
+    pty.injectMessage.mockClear();
+    pty.injectMessage.mockResolvedValue(true);
     pty.getPid.mockClear();
     pty.isAlive.mockReset().mockReturnValue(true);
     pty.onExit.mockClear();
@@ -152,14 +169,27 @@ describe('AgentProcess opencode runtime', () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it('prompts Telegram-enabled opencode agents to send back-online Telegram on fresh start', async () => {
+  it('rolls back dedup when opencode injection fails so the same content can retry', async () => {
+    const ap = new AgentProcess('opencode-agent', mockEnv, { runtime: 'opencode' });
+    await ap.start();
+
+    mockOpencodePty.injectMessage.mockResolvedValueOnce(false);
+    await expect(ap.injectMessage('retry-me')).resolves.toBe(false);
+
+    mockOpencodePty.injectMessage.mockResolvedValueOnce(true);
+    await expect(ap.injectMessage('retry-me')).resolves.toBe(true);
+    expect(mockOpencodePty.injectMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not prompt Telegram-enabled opencode agents to send a second back-online Telegram on fresh start', async () => {
     const ap = new AgentProcess('opencode-agent', mockEnv, { runtime: 'opencode' });
 
     ap.setTelegramHandle({ sendChatAction: vi.fn().mockResolvedValue(undefined) } as any, '12345');
     await ap.start();
 
     const prompt = mockOpencodePty.spawn.mock.calls[0]?.[1] ?? '';
-    expect(prompt).toContain('Send a Telegram message to the user saying you are back online.');
+    expect(prompt).not.toContain('Send a Telegram message to the user saying you are back online.');
+    expect(prompt).not.toContain('cortextos bus send-telegram --silent');
   });
 
   it('sends daemon-direct back-online Telegram for opencode fresh start', async () => {
@@ -170,10 +200,15 @@ describe('AgentProcess opencode runtime', () => {
     ap.setTelegramHandle(api as any, '12345');
     await ap.start();
 
-    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online');
+    expect(sendMessage).toHaveBeenCalledWith(
+      '12345',
+      '_Agent opencode-agent is back online_',
+      undefined,
+      { silent: true },
+    );
   });
 
-  it('prompts Telegram-enabled opencode agents to send back-online Telegram on continue start', async () => {
+  it('does not prompt Telegram-enabled opencode agents to send a second back-online Telegram on continue start', async () => {
     mockOpencodeSessionExists.mockReturnValue(true);
     const ap = new AgentProcess('opencode-agent', mockEnv, { runtime: 'opencode' });
 
@@ -182,7 +217,8 @@ describe('AgentProcess opencode runtime', () => {
 
     const prompt = mockOpencodePty.spawn.mock.calls[0]?.[1] ?? '';
     expect(mockOpencodePty.spawn).toHaveBeenCalledWith('continue', expect.any(String));
-    expect(prompt).toContain('After checking inbox, send a Telegram message to the user saying you are back online.');
+    expect(prompt).not.toContain('After checking inbox, send a Telegram message to the user saying you are back online.');
+    expect(prompt).not.toContain('cortextos bus send-telegram --silent');
   });
 
   it('sends daemon-direct back-online Telegram for opencode continue start', async () => {
@@ -195,7 +231,12 @@ describe('AgentProcess opencode runtime', () => {
     await ap.start();
 
     expect(mockOpencodePty.spawn).toHaveBeenCalledWith('continue', expect.any(String));
-    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online');
+    expect(sendMessage).toHaveBeenCalledWith(
+      '12345',
+      '_Agent opencode-agent is back online_',
+      undefined,
+      { silent: true },
+    );
   });
 
   it('sends daemon msg1 and relies on the handoff prompt for opencode msg2', async () => {
@@ -225,7 +266,12 @@ describe('AgentProcess opencode runtime', () => {
     expect(prompt).toContain("cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'back");
     // msg1: hook parity — codex/opencode don't run Claude Code hooks, so the
     // daemon emits the planned-restart lifecycle notif itself.
-    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 opencode-agent restarted (planned): context handoff at 92%');
+    expect(sendMessage).toHaveBeenCalledWith(
+      '12345',
+      '_🔄 opencode-agent restarted (planned): context handoff at 92%_',
+      undefined,
+      { silent: true },
+    );
     // msg2: opencode receives the same prompt-level first-action requirement as
     // codex, so the daemon must not synthesize a weaker generic handoff ping.
     expect(sendMessage).not.toHaveBeenCalledWith('12345', 'Agent opencode-agent is back online (context handoff)');
@@ -255,7 +301,12 @@ describe('AgentProcess opencode runtime', () => {
     await ap.start();
 
     // msg1: daemon-emitted hook parity, same as opencode.
-    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 codex-agent restarted (planned): context handoff at 88%');
+    expect(sendMessage).toHaveBeenCalledWith(
+      '12345',
+      '_🔄 codex-agent restarted (planned): context handoff at 88%_',
+      undefined,
+      { silent: true },
+    );
     // msg2: codex reliably self-sends its own "back — ..." reply, so the daemon
     // must NOT also send a back-online ping (that would double up).
     expect(sendMessage).not.toHaveBeenCalledWith('12345', 'Agent codex-agent is back online (context handoff)');

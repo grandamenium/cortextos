@@ -138,7 +138,12 @@ describe('AgentProcess codex-app-server runtime', () => {
     ap.setTelegramHandle(api as any, '12345');
     await ap.start();
 
-    expect(sendMessage).toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online');
+    expect(sendMessage).toHaveBeenCalledWith(
+      '12345',
+      '_Agent codex-app-agent is back online_',
+      undefined,
+      { silent: true },
+    );
   });
 
   it('sends planned-restart msg1 but skips generic back-online Telegram on handoff restart', async () => {
@@ -163,10 +168,27 @@ describe('AgentProcess codex-app-server runtime', () => {
 
     const prompt = mockCodexAppServerPty.spawn.mock.calls[0]?.[1] ?? '';
     expect(prompt).toContain('CONTEXT HANDOFF');
-    expect(sendMessage).toHaveBeenCalledWith('12345', '🔄 codex-app-agent restarted (planned): no reason given');
+    expect(sendMessage).toHaveBeenCalledWith(
+      '12345',
+      '_🔄 codex-app-agent restarted (planned): no reason given_',
+      undefined,
+      { silent: true },
+    );
     expect(sendMessage).not.toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online');
     expect(sendMessage).not.toHaveBeenCalledWith('12345', 'Agent codex-app-agent is back online (context handoff)');
     expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a silent prompt-based back-online instruction for claude-code runtime', async () => {
+    const ap = new AgentProcess('claude-agent', mockEnv, { runtime: 'claude-code' });
+    const api = { sendChatAction: vi.fn().mockResolvedValue(undefined) };
+
+    ap.setTelegramHandle(api as any, '12345');
+    await ap.start();
+
+    const prompt = mockAgentPty.spawn.mock.calls[0]?.[1] ?? '';
+    expect(prompt).toContain('cortextos bus send-telegram --silent $CTX_TELEGRAM_CHAT_ID');
+    expect(prompt).toContain("_Back online._");
   });
 
   it('does not send daemon-direct back-online Telegram for claude-code runtime (issue #392)', async () => {

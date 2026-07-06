@@ -1,5 +1,9 @@
-LIVE PRIORITY (2026-07-04T04:32Z): No new Josh chat text since a 🔥 reaction at ~00:42Z (ack, not an instruction). Two threads remain open from prior turns: (1) 1Password CLI service-account auth — Josh approved the macOS TCC dialog, `op` no longer hangs but `op whoami` reports "account is not signed in"; waiting on Josh to run an isolation test with OP_SERVICE_ACCOUNT_TOKEN set from frank2's .env to determine token-vs-environment cause. (2) Approval approval_1783119862_n7naz (silent_failure_detection_rate experiment, proposed in Friday's theta-wave) still pending ~5.5h, reminded twice via Telegram, check-approvals cron (every 2h) will keep nudging. Full detail in handoff-2026-07-04T04-32-47Z.md.
+LIVE PRIORITY (written 2026-07-05T17:50:50Z; context-handoff restart at 80%, agent=frank2)
 
-Resolved/stale, do not resurrect: the excalidraw "Skill Architecture" masterclass map search (located 2026-07-03 ~2:55pm) and the briefs PR #30 dashboard-fix item referenced in an older version of this file (already verified/retired 2026-07-03 evening).
+Newest Josh Telegram message: "new token oops 03 Service Account Auth Token: Cortext" (2026-07-04T19:43:19Z, unchanged across many sessions now, open ~22h)
 
-Weekly review delivered 2026-07-04T01:03Z: https://briefs.clearworks.ai/briefs/Aa1aJJAqRhYVb-wn?token=d46b27bba25d9a4cd414eee71491fa0e — do not re-run this week.
+Context: the "02" Cortext token installed and verified earlier was found already deleted server-side (op vault list -> 403 "Service Account Deleted"). Josh named a newer item, "03: Service Account Auth Token: Cortext", but has NOT yet pasted its actual ops_... value. Pinged 12x total (19:43Z, 19:48Z, 22:09Z, 23:35Z, 01:10Z, 03:03Z, 04:56Z, 06:51Z, 07:25Z, 09:41Z, 12:14Z, 16:50Z) with no reply beyond that single named-item message. Do NOT send a 13th duplicate ping immediately on resume — check inbox first, only re-ping after a materially longer gap.
+
+Secondary open item: weekly-cleanup sent Josh a Telegram summary at 17:04Z (Todoist has 31/50 tasks stale >7d, 0 due dates, active.md files don't exist) — awaiting his triage decision on whether to archive stale items. No destructive action taken.
+
+Verify against the live tail before acting; if older than 2h treat it as possibly stale.
