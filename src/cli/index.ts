@@ -71,4 +71,13 @@ const crashAlertCommand = new Command('crash-alert')
   });
 program.addCommand(crashAlertCommand);
 
-program.parse();
+// Use parseAsync + a catch so a thrown Error from any action handler (e.g.
+// "Task <id> not found" from complete-task/update-task) prints a clean one-line
+// message and exits non-zero, instead of escaping as an uncaught exception that
+// crashes with a full stack trace (the sync program.parse() had no error
+// boundary). commander v14 awaits action results, so sync throws surface here as
+// rejections. Keeps a task's status transition from silently "sticking" on error.
+program.parseAsync(process.argv).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});
