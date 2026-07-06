@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto';
 
+// Lowercase alphanumeric character set used for generating standard unique identifiers.
 const ALPHA_NUMERIC = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const DIGITS = '0123456789';
 
