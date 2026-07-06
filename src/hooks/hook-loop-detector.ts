@@ -22,12 +22,13 @@
  * State: {ctxRoot}/state/{agentName}/loop-detector.json
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
 import { readStdin, parseHookInput } from './index.js';
 import { atomicWriteSync } from '../utils/atomic.js';
+import { withFileLockSync } from '../utils/lock.js';
 
 export const HISTORY_SIZE = 30;
 export const REPETITION_BLOCK = 15;
@@ -80,6 +81,10 @@ function statePath(stateDir: string): string {
   return join(stateDir, 'loop-detector.json');
 }
 
+function stateLockDir(stateDir: string): string {
+  return join(stateDir, '.locks', 'loop-detector');
+}
+
 export function loadState(stateDir: string): LoopDetectorState {
   const p = statePath(stateDir);
   if (!existsSync(p)) return { history: [], firstBlockedAt: null, emergencyEscapeUsed: false };
@@ -107,7 +112,7 @@ export function loadState(stateDir: string): LoopDetectorState {
 function saveState(stateDir: string, state: LoopDetectorState): void {
   try {
     mkdirSync(stateDir, { recursive: true });
-    writeFileSync(statePath(stateDir), JSON.stringify(state, null, 2) + '\n', 'utf-8');
+    atomicWriteSync(statePath(stateDir), JSON.stringify(state, null, 2), /* keepBak= */ true);
   } catch {
     // Best-effort; never break a hook.
   }
@@ -260,12 +265,16 @@ async function main(): Promise<void> {
   const agentName = process.env.CTX_AGENT_NAME || '';
   const ctxRoot = process.env.CTX_ROOT || join(homedir(), '.cortextos', 'default');
   const stateDir = join(ctxRoot, 'state', agentName);
+  const lockDir = stateLockDir(stateDir);
+  mkdirSync(lockDir, { recursive: true });
 
-  const state = loadState(stateDir);
   const argsHash = hashArgs(tool_input);
-  const decision = decideHookAction(state, tool_name, argsHash, Date.now());
-
-  saveState(stateDir, decision.nextState);
+  const decision = withFileLockSync(lockDir, () => {
+    const state = loadState(stateDir);
+    const nextDecision = decideHookAction(state, tool_name, argsHash, Date.now());
+    saveState(stateDir, nextDecision.nextState);
+    return nextDecision;
+  });
 
   if (decision.action === 'block' && decision.reason) {
     blockCall(decision.reason);

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('child_process', () => ({ execFile: vi.fn() }));
 vi.mock('../../../src/bus/system', () => ({ hardRestart: vi.fn() }));
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { FastChecker } from '../../../src/daemon/fast-checker';
@@ -71,6 +71,26 @@ function createTestPaths(testDir: string): BusPaths {
     }
   }
   return paths;
+}
+
+function writeInboxMessage(
+  paths: BusPaths,
+  overrides: Partial<{ id: string; from: string; to: string; text: string; fileName: string }> = {},
+): void {
+  const id = overrides.id ?? 'msg-1';
+  const from = overrides.from ?? 'larry';
+  const to = overrides.to ?? 'test-agent';
+  const text = overrides.text ?? 'dispatch payload';
+  const fileName = overrides.fileName ?? `2-1000-from-${from}-abcde.json`;
+  writeFileSync(join(paths.inbox, fileName), JSON.stringify({
+    id,
+    from,
+    to,
+    priority: 'normal',
+    timestamp: '2026-07-05T22:00:00.000Z',
+    text,
+    reply_to: null,
+  }));
 }
 
 describe('FastChecker', () => {
@@ -328,6 +348,77 @@ describe('FastChecker', () => {
       const sendTyping = (checker as any).sendTyping.bind(checker);
       // Should not throw
       await expect(sendTyping(api, '12345')).resolves.toBeUndefined();
+    });
+  });
+
+  describe('opencode inbox delivery confirmation', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('ACKs once on confirmed success and sends no error reply', async () => {
+      const agent = createMockAgent('test-agent', { runtime: 'opencode' });
+      agent.injectMessage.mockResolvedValue(true);
+      writeInboxMessage(paths);
+
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      const pollPromise = (checker as any).pollCycle();
+      await vi.runAllTimersAsync();
+      await pollPromise;
+
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+      expect(readdirSync(paths.processed).filter((name) => name.endsWith('.json'))).toHaveLength(1);
+      expect(readdirSync(paths.inbox).filter((name) => name.endsWith('.json'))).toHaveLength(0);
+      expect(existsSync(join(paths.ctxRoot, 'inbox', 'larry'))).toBe(false);
+    });
+
+    it('requeues a failed opencode dispatch and retries the same content next cycle', async () => {
+      const agent = createMockAgent('test-agent', { runtime: 'opencode' });
+      agent.injectMessage
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+      writeInboxMessage(paths, { id: 'retry-msg' });
+
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      await (checker as any).pollCycle();
+      expect(readdirSync(paths.inbox).filter((name) => name.endsWith('.json'))).toHaveLength(1);
+      expect(readdirSync(paths.processed).filter((name) => name.endsWith('.json'))).toHaveLength(0);
+
+      const retryPoll = (checker as any).pollCycle();
+      await vi.runAllTimersAsync();
+      await retryPoll;
+
+      expect(agent.injectMessage).toHaveBeenCalledTimes(2);
+      expect(readdirSync(paths.processed).filter((name) => name.endsWith('.json'))).toHaveLength(1);
+      expect(readdirSync(paths.inbox).filter((name) => name.endsWith('.json'))).toHaveLength(0);
+      expect(existsSync(join(paths.ctxRoot, 'inbox', 'larry'))).toBe(false);
+    });
+
+    it('sends one explicit error reply and dead-letters after 3 failed attempts', async () => {
+      const agent = createMockAgent('test-agent', { runtime: 'opencode' });
+      agent.injectMessage.mockResolvedValue(false);
+      writeInboxMessage(paths, { id: 'dead-letter-msg' });
+
+      const checker = new FastChecker(agent, paths, '/tmp/framework');
+      await (checker as any).pollCycle();
+      await (checker as any).pollCycle();
+      await (checker as any).pollCycle();
+
+      expect(agent.injectMessage).toHaveBeenCalledTimes(3);
+      expect(readdirSync(paths.processed).filter((name) => name.endsWith('.json'))).toHaveLength(1);
+      expect(readdirSync(paths.inbox).filter((name) => name.endsWith('.json'))).toHaveLength(0);
+
+      const senderInbox = join(paths.ctxRoot, 'inbox', 'larry');
+      expect(readdirSync(senderInbox).filter((name) => name.endsWith('.json'))).toHaveLength(1);
+      const replyFile = readdirSync(senderInbox).find((name) => name.endsWith('.json'))!;
+      const reply = JSON.parse(readFileSync(join(senderInbox, replyFile), 'utf-8'));
+      expect(reply.text).toContain('[opencode] dispatch injection failed after 3 attempts');
+      expect(reply.text).toContain('dead-letter-msg');
+      expect(reply.reply_to).toBe('dead-letter-msg');
     });
   });
 

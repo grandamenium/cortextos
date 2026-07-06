@@ -438,7 +438,7 @@ export class AgentProcess {
    * See issue #346 — both used to surface as a bare `false` and got mistaken
    * for "agent not found" by operators investigating restart/cron failures.
    */
-  injectMessageDetailed(content: string): { ok: true } | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED'; message: string } {
+  injectMessageDetailed(content: string): { ok: true; delivery: Promise<boolean> } | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED'; message: string } {
     if (!this.pty || this.status !== 'running') {
       return { ok: false, code: 'NOT_RUNNING', message: `agent "${this.name}" is registered but not running (status: ${this.status})` };
     }
@@ -448,23 +448,42 @@ export class AgentProcess {
       return { ok: false, code: 'DEDUPED', message: `inject for "${this.name}" deduped — content matches MessageDedup hash window` };
     }
 
-    if ('injectMessage' in this.pty && typeof this.pty.injectMessage === 'function') {
-      this.pty.injectMessage(content);
-    } else {
-      // CodexAppServerPTY intentionally models stdin writes itself and does not
-      // inherit AgentPTY. Feed it through the same write path used historically.
-      injectMessageIntoPty((data) => this.pty?.write(data), content);
-    }
-    return { ok: true };
+    const delivery = this.injectIntoPty(content).then((ok) => {
+      if (!ok) {
+        this.dedup.remove(content);
+      }
+      return ok;
+    });
+    return { ok: true, delivery };
   }
 
   /**
-   * Inject a message into the agent's PTY (back-compat boolean wrapper).
-   * New callers that need to distinguish DEDUPED from NOT_RUNNING should use
-   * `injectMessageDetailed()` instead.
+   * Inject a message into the agent's PTY and await delivery confirmation.
    */
-  injectMessage(content: string): boolean {
-    return this.injectMessageDetailed(content).ok;
+  async injectMessage(content: string): Promise<boolean> {
+    const result = this.injectMessageDetailed(content);
+    return result.ok ? result.delivery : false;
+  }
+
+  private async injectIntoPty(content: string): Promise<boolean> {
+    const pty = this.pty;
+    if (!pty || this.status !== 'running') {
+      return false;
+    }
+
+    if ('injectMessage' in pty && typeof pty.injectMessage === 'function') {
+      return pty.injectMessage(content);
+    }
+
+    try {
+      // CodexAppServerPTY intentionally models stdin writes itself and does not
+      // inherit AgentPTY. Feed it through the same write path used historically.
+      injectMessageIntoPty((data) => pty.write(data), content);
+      return true;
+    } catch (err) {
+      this.log(`Injection failed before write completed: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
   }
 
   /**

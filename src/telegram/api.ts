@@ -123,19 +123,40 @@ export class TelegramAPI {
     // facing copy. Fixed by short-circuiting before the escape step.
     if (plainText) return text;
 
-    // Step 1: HTML-escape (& must be first to avoid double-escaping)
+    // Step 1: HTML-escape (& must be first to avoid double-escaping).
+    // NUL bytes never appear in legitimate messages; strip them so the
+    // \u0000-delimited code-span placeholders below can never collide
+    // with user text.
     let html = text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/\u0000/g, '');
 
     // Step 2: Fenced code blocks — multiline, processed before inline `
     html = html.replace(/```(?:\w*\n?)?([\s\S]*?)```/g, (_, code) =>
-      `<pre><code>${code.trimEnd()}</code></pre>`,
+      `<pre><code>${String(code).trimEnd()}</code></pre>`,
     );
 
     // Step 3: Inline code — single backtick, no newlines inside
     html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+    // Steps 4-6 must NOT run over text already inside code spans — a code
+    // block containing * or _ or [..](..) would get <b>/<i>/<a> injected
+    // inside it, producing nested entities Telegram rejects wholesale.
+    // Swap each emitted code span for a placeholder, run the replacements,
+    // then restore. The placeholder is \u0000 + index + \u0000 with an
+    // embedded newline: NULs cannot appear in the input (stripped in step 1),
+    // and the newline keeps the bold/italic regexes (which exclude \n) from
+    // wrapping ACROSS a code span — Telegram forbids code nested in b/i/a.
+    const codeSpans: string[] = [];
+    html = html.replace(
+      /<pre><code>[\s\S]*?<\/code><\/pre>|<code>[^<]*<\/code>/g,
+      (span) => {
+        codeSpans.push(span);
+        return `\u0000\n${codeSpans.length - 1}\u0000`;
+      },
+    );
 
     // Step 4: Bold — *text* (no newlines, greedy-avoided)
     html = html.replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
@@ -146,6 +167,9 @@ export class TelegramAPI {
     // Step 6: Links — [text](url). URL may contain HTML-escaped & (&amp;) which is fine.
     html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2">$1</a>');
 
+    // Restore the protected code spans.
+    html = html.replace(/\u0000\n(\d+)\u0000/g, (_, i) => codeSpans[Number(i)]);
+
     return html;
   }
 
@@ -153,28 +177,120 @@ export class TelegramAPI {
    * Split HTML text into chunks at paragraph/newline boundaries to avoid
    * breaking mid-entity. Falls back to hard split only if a single line
    * exceeds maxLen.
+   *
+   * HTML-safety guarantees (every emitted chunk is independently valid):
+   *  - never splits inside a <...> tag or an &...; entity (the cut point is
+   *    moved back to just before the tag/entity start)
+   *  - when the split falls inside an open <pre><code> block (or an inline
+   *    <code> span), the block is CLOSED at the end of the emitted chunk and
+   *    RE-OPENED at the start of the next one, so Telegram accepts each
+   *    chunk on its own instead of rejecting both halves for unbalanced tags.
    */
   private splitHtml(text: string, maxLen: number): string[] {
     if (text.length <= maxLen) return [text];
 
+    const PRE_OPEN = '<pre><code>';
+    const PRE_CLOSE = '</code></pre>';
+    const CODE_OPEN = '<code>';
+    const CODE_CLOSE = '</code>';
+
     const chunks: string[] = [];
     let remaining = text;
     while (remaining.length > maxLen) {
-      const window = remaining.slice(0, maxLen);
-      // Prefer splitting at a paragraph break (\n\n), then a newline
-      let splitAt = window.lastIndexOf('\n\n');
-      if (splitAt > 0) {
-        splitAt += 2; // include the double-newline in the preceding chunk
-      } else {
-        splitAt = window.lastIndexOf('\n');
-        if (splitAt > 0) splitAt += 1;
-        else splitAt = maxLen; // no newline — hard split as last resort
+      // First pass: pick a boundary assuming no code-span surgery is needed.
+      let splitAt = this.pickSplitPoint(remaining, maxLen);
+      let chunk = remaining.slice(0, splitAt);
+
+      const context = this.unclosedCodeContext(chunk);
+      if (context !== null) {
+        const closeTag = context === 'pre' ? PRE_CLOSE : CODE_CLOSE;
+        const openTag = context === 'pre' ? PRE_OPEN : CODE_OPEN;
+        // Re-pick with room reserved for the closing tag suffix.
+        splitAt = this.pickSplitPoint(remaining, maxLen - closeTag.length);
+        chunk = remaining.slice(0, splitAt);
+        if (this.unclosedCodeContext(chunk) === context) {
+          chunks.push(chunk + closeTag);
+          remaining = openTag + remaining.slice(splitAt);
+          continue;
+        }
+        // The narrower window moved the boundary out of the code span —
+        // the chunk is already balanced; fall through and emit as-is.
       }
-      chunks.push(remaining.slice(0, splitAt));
+      chunks.push(chunk);
       remaining = remaining.slice(splitAt);
     }
     if (remaining.length > 0) chunks.push(remaining);
     return chunks;
+  }
+
+  /**
+   * Choose a split offset within `budget` chars of the start of `text`:
+   * prefer a paragraph break (\n\n), then a newline, then a hard cut —
+   * and in all cases back the cut out of any <...> tag or &...; entity
+   * so no chunk ever starts or ends mid-tag/mid-entity.
+   */
+  private pickSplitPoint(text: string, budget: number): number {
+    const window = text.slice(0, budget);
+    // Prefer splitting at a paragraph break (\n\n), then a newline
+    let splitAt = window.lastIndexOf('\n\n');
+    if (splitAt > 0) {
+      splitAt += 2; // include the double-newline in the preceding chunk
+    } else {
+      splitAt = window.lastIndexOf('\n');
+      if (splitAt > 0) splitAt += 1;
+      else splitAt = budget; // no newline — hard split as last resort
+    }
+
+    // Never cut inside a <...> tag: if the last '<' before the cut has no
+    // matching '>' before the cut, move the cut to that '<'.
+    const lt = text.lastIndexOf('<', splitAt - 1);
+    if (lt >= 0) {
+      const gt = text.indexOf('>', lt);
+      if (gt === -1 || gt >= splitAt) splitAt = lt;
+    }
+
+    // Never cut inside an &...; entity. Every raw '&' is escaped to &amp;
+    // by markdownToHtml, so any '&' not yet terminated by ';' at the cut
+    // point is a severed entity — move the cut to the '&'.
+    const amp = text.lastIndexOf('&', splitAt - 1);
+    if (amp >= 0) {
+      const semi = text.indexOf(';', amp);
+      if (semi === -1 || semi >= splitAt) splitAt = amp;
+    }
+
+    // Pathological safety valve: if backing out consumed the whole window
+    // (e.g. a single tag/entity longer than the budget), hard-cut rather
+    // than emit an empty chunk and loop forever.
+    if (splitAt <= 0) splitAt = budget;
+    return splitAt;
+  }
+
+  /**
+   * Determine whether `chunk` ends inside an unclosed code span:
+   * 'pre' for <pre><code>...</code></pre> blocks, 'code' for inline
+   * <code>...</code> spans, or null when all code spans are closed.
+   * Scans open/close markers in document order; <pre><code> variants are
+   * matched first so a block opener is never mistaken for an inline one.
+   */
+  private unclosedCodeContext(chunk: string): 'pre' | 'code' | null {
+    const re = /<pre><code>|<\/code><\/pre>|<code>|<\/code>/g;
+    let state: 'pre' | 'code' | null = null;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(chunk)) !== null) {
+      switch (m[0]) {
+        case '<pre><code>':
+          state = 'pre';
+          break;
+        case '<code>':
+          state = 'code';
+          break;
+        default:
+          // '</code></pre>' or '</code>' — either way the span is closed.
+          state = null;
+          break;
+      }
+    }
+    return state;
   }
 
   /**

@@ -329,4 +329,16 @@ describe('AgentProcess opencode runtime', () => {
     capturedOnExit!(0, 0);
     await stopPromise;
   }, 10000);
+
+  it('rolls back dedup when opencode injection fails so the same content can retry', async () => {
+    const ap = new AgentProcess('opencode-agent', mockEnv, { runtime: 'opencode' });
+    await ap.start();
+
+    mockOpencodePty.injectMessage.mockResolvedValueOnce(false);
+    await expect(ap.injectMessage('retry-me')).resolves.toBe(false);
+
+    mockOpencodePty.injectMessage.mockResolvedValueOnce(true);
+    await expect(ap.injectMessage('retry-me')).resolves.toBe(true);
+    expect(mockOpencodePty.injectMessage).toHaveBeenCalledTimes(2);
+  });
 });

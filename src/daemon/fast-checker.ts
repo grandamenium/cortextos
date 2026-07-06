@@ -1,15 +1,16 @@
-import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, mkdirSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, mkdirSync, renameSync } from 'fs';
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery, ConversationBufferEntry } from '../types/index.js';
-import { checkInbox, ackInbox } from '../bus/message.js';
+import { checkInbox, ackInbox, sendMessage } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { readCronState } from '../bus/cron-state.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
+import { atomicWriteSync } from '../utils/atomic.js';
 import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
 import { loadBuffer } from './conversation-buffer.js';
 import { agentHoldsContextHandoffLease, releaseContextHandoffLease, requestContextHandoffLease } from './context-handoff-lease.js';
@@ -142,6 +143,7 @@ export class FastChecker {
 
   // External Telegram handler (set by daemon)
   private telegramMessages: Array<{ formatted: string; ackIds: string[] }> = [];
+  private inboxInjectionFailures = new Map<string, number>();
 
   // Persistent dedup: message hashes to prevent duplicate delivery
   private seenHashes: Set<string> = new Set();
@@ -291,13 +293,14 @@ export class FastChecker {
    */
   private async pollCycle(): Promise<void> {
     let messageBlock = '';
-    const ackIds: string[] = [];
     const queuedTelegramCount = this.telegramMessages.length;
+    const drainedTelegramMessages: Array<{ formatted: string; ackIds: string[] }> = [];
 
     // Process queued Telegram messages
     let hasTelegramMessage = false;
     while (this.telegramMessages.length > 0) {
       const msg = this.telegramMessages.shift()!;
+      drainedTelegramMessages.push(msg);
       messageBlock += msg.formatted;
       hasTelegramMessage = true;
     }
@@ -307,16 +310,16 @@ export class FastChecker {
     const unreadInboxCount = inboxMessages.length + queuedTelegramCount;
     for (const msg of inboxMessages) {
       messageBlock += this.formatInboxMessage(msg);
-      ackIds.push(msg.id);
     }
 
     // Inject if there's anything
     if (messageBlock) {
-      const injected = this.agent.injectMessage(messageBlock);
+      const injected = await this.agent.injectMessage(messageBlock);
       if (injected) {
         // ACK inbox messages
-        for (const id of ackIds) {
-          ackInbox(this.paths, id);
+        for (const msg of inboxMessages) {
+          ackInbox(this.paths, msg.id);
+          this.inboxInjectionFailures.delete(msg.id);
         }
         this.log(`Injected ${messageBlock.length} bytes`);
         this.lastWorkInjectedAt = Date.now();
@@ -329,6 +332,15 @@ export class FastChecker {
         }
         // Cooldown after injection
         await sleep(5000);
+      } else {
+        if (drainedTelegramMessages.length > 0) {
+          this.telegramMessages.unshift(...drainedTelegramMessages);
+        }
+        if (this.agent.getConfig().runtime === 'opencode') {
+          for (const msg of inboxMessages) {
+            await this.handleFailedOpencodeDispatch(msg);
+          }
+        }
       }
     }
 
@@ -343,6 +355,62 @@ export class FastChecker {
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
     await this.checkContextStatus();
+  }
+
+  private async handleFailedOpencodeDispatch(msg: InboxMessage): Promise<void> {
+    const attempts = (this.inboxInjectionFailures.get(msg.id) ?? 0) + 1;
+    this.inboxInjectionFailures.set(msg.id, attempts);
+
+    if (attempts < 3) {
+      if (!this.requeueInflightMessage(msg.id)) {
+        this.log(`Failed to requeue opencode inbox message ${msg.id} after injection miss ${attempts}/3`);
+      }
+      return;
+    }
+
+    try {
+      sendMessage(
+        this.paths,
+        this.agent.name,
+        msg.from,
+        'normal',
+        `[opencode] dispatch injection failed after 3 attempts (id ${msg.id}) — not delivered`,
+        msg.id,
+      );
+      ackInbox(this.paths, msg.id);
+      this.inboxInjectionFailures.delete(msg.id);
+    } catch (err) {
+      this.log(`Failed to send opencode delivery error for ${msg.id}: ${err instanceof Error ? err.message : String(err)}`);
+      if (!this.requeueInflightMessage(msg.id)) {
+        this.log(`Failed to requeue opencode inbox message ${msg.id} after delivery error send failure`);
+      }
+    }
+  }
+
+  private requeueInflightMessage(messageId: string): boolean {
+    let files: string[];
+    try {
+      files = readdirSync(this.paths.inflight).filter((fileName) => fileName.endsWith('.json'));
+    } catch {
+      return false;
+    }
+
+    for (const fileName of files) {
+      const filePath = join(this.paths.inflight, fileName);
+      try {
+        const content = readFileSync(filePath, 'utf-8');
+        const msg = JSON.parse(content) as InboxMessage;
+        if (msg.id === messageId) {
+          renameSync(filePath, join(this.paths.inbox, fileName));
+          return true;
+        }
+      } catch {
+        // Ignore corrupt files here — the standard inbox/error recovery paths
+        // handle them independently.
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -717,7 +785,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       const [, decision, hexId] = permMatch;
       const hookDecision = decision === 'continue' ? 'deny' : decision;
       const responseFile = join(this.paths.stateDir, `hook-response-${hexId}.json`);
-      writeFileSync(responseFile, JSON.stringify({ decision: hookDecision }) + '\n', 'utf-8');
+      atomicWriteSync(responseFile, JSON.stringify({ decision: hookDecision }), /* keepBak= */ true);
 
       if (this.telegramApi) {
         try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
@@ -735,7 +803,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     if (restartMatch) {
       const [, decision, hexId] = restartMatch;
       const responseFile = join(this.paths.stateDir, `restart-response-${hexId}.json`);
-      writeFileSync(responseFile, JSON.stringify({ decision }) + '\n', 'utf-8');
+      atomicWriteSync(responseFile, JSON.stringify({ decision }), /* keepBak= */ true);
 
       if (this.telegramApi) {
         try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
@@ -928,7 +996,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         `message_id: ${messageId}`,
         `Reply using: cortextos bus send-telegram ${chatId} '<your reply>'`,
       ].join('\n');
-      const injected = this.agent.injectMessage(msg);
+      const injected = await this.agent.injectMessage(msg);
       if (injected && this.telegramApi) {
         try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Got it'); } catch { /* ignore */ }
       }
@@ -1030,7 +1098,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         // daemon containment headers.
         if (content) {
           const urgentMsg = `=== URGENT SIGNAL ===\n${wrapFenceSafe(content)}\n\n`;
-          this.agent.injectMessage(urgentMsg);
+          void this.agent.injectMessage(urgentMsg);
         }
       } catch (err) {
         this.log(`Error processing urgent signal: ${err}`);
@@ -1472,7 +1540,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       this.ctxWarningFiredAt = now;
       const pctRound = Math.round(effectivePct);
       const statusSuffix = effectivePct >= handoff ? 'Handoff in progress.' : `Handoff triggers at ${handoff}%.`;
-      this.agent.injectMessage(`[CONTEXT] Window at ${pctRound}%. ${statusSuffix}`);
+      void this.agent.injectMessage(`[CONTEXT] Window at ${pctRound}%. ${statusSuffix}`);
       this.log(`Context warning fired at ${pctRound}%`);
     }
 
@@ -1581,7 +1649,7 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       } catch { /* non-fatal */ }
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + 'Z';
       const handoffPrompt = `[CONTEXT HANDOFF REQUIRED] Context is at ${Math.round(effectivePct)}%. Write a handoff document to memory/handoffs/handoff-${ts}.md that begins with ## LIVE PRIORITY quoting the newest inbound user message(s) verbatim, ABOVE all stale task state. Then include these sections in order: ## Current Tasks, ## Next Actions, ## Active Crons, ## Key Context, ## Files Modified This Session. Before calling hard-restart, write or refresh state/current-mission.txt with the LIVE PRIORITY. Then run: cortextos bus hard-restart --reason "context handoff at ${Math.round(effectivePct)}%" --handoff-doc <absolute path to the handoff doc you just wrote>. Do this NOW before the context window is exhausted.`;
-      this.agent.injectMessage(handoffPrompt);
+      void this.agent.injectMessage(handoffPrompt);
       this.log(`Handoff prompt injected at ${Math.round(effectivePct)}%`);
       // Pre-arm .force-fresh so the next restart is always a clean fresh session.
       // If the agent cooperates and calls hard-restart, it also writes .force-fresh — no-op.

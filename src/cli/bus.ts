@@ -28,10 +28,12 @@ import { resolvePaths } from '../utils/paths.js';
 import { lintMemory, formatLintReport, DEFAULT_MEMORY_BUDGET } from '../utils/memory-lint.js';
 import { extractClaims, verifyClaims, formatCorrectnessReport } from '../utils/memory-correctness.js';
 import { resolveEnv } from '../utils/env.js';
+import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { withFileLockSync } from '../utils/lock.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
-import { checkAndRecord } from '../telegram/dedup.js';
+import { checkAndRecord, removeRecord } from '../telegram/dedup.js';
 import { appendToBuffer } from '../daemon/conversation-buffer.js';
 import { findBannedCronPrompts } from '../utils/cron-prompt-validator.js';
 import { recordVerificationReceipt, emitClaimWithoutReceiptWarning, evaluateClaimGate } from '../utils/verification-receipt.js';
@@ -1128,6 +1130,7 @@ busCommand
       process.exit(1);
     }
 
+    let recordedDedup = false;
     const dedupEnabled = opts.dedup !== false && !opts.streaming && !!env.ctxRoot;
     if (dedupEnabled) {
       const parsedWindow = Number(opts.dedupWindow ?? process.env.CTX_TELEGRAM_DEDUP_WINDOW_SEC ?? 21600);
@@ -1146,6 +1149,7 @@ busCommand
         }
         return;
       }
+      recordedDedup = true;
     }
 
     // -----------------------------------------------------------------------
@@ -1206,6 +1210,13 @@ busCommand
           process.stderr.write(
             `[claim-gate] HOLD (${decision.rung}): ${decision.reason}\n`
           );
+          try {
+            if (recordedDedup && env.ctxRoot) {
+              removeRecord(env.ctxRoot, chatId, message);
+            }
+          } catch {
+            // Non-fatal: rollback best-effort only.
+          }
           process.exit(2);
         }
         // For 'warn' decision the post-send emitClaimWithoutReceiptWarning
@@ -1322,6 +1333,13 @@ busCommand
 
       console.log('Message sent');
     } catch (err: any) {
+      try {
+        if (recordedDedup && env.ctxRoot) {
+          removeRecord(env.ctxRoot, chatId, message);
+        }
+      } catch {
+        // Non-fatal: rollback best-effort only.
+      }
       console.error(`Failed to send: ${err.message || err}`);
       process.exit(1);
     }
@@ -1998,7 +2016,6 @@ busCommand
   .argument('<agent>', 'Target agent name')
   .argument('<message>', 'Urgent message text')
   .action((targetAgent: string, message: string) => {
-    const { mkdirSync, writeFileSync } = require('fs');
     const { join } = require('path');
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
@@ -2006,13 +2023,17 @@ busCommand
 
     // Write urgent signal file that fast-checker checks on every poll
     const signalDir = join(ctxRoot, 'state', targetAgent);
-    mkdirSync(signalDir, { recursive: true });
+    ensureDir(signalDir);
+    const signalLockDir = join(signalDir, '.locks', 'urgent-signal');
+    ensureDir(signalLockDir);
     const signal = {
       from: env.agentName,
       message,
       timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
     };
-    writeFileSync(join(signalDir, '.urgent-signal'), JSON.stringify(signal));
+    withFileLockSync(signalLockDir, () => {
+      atomicWriteSync(join(signalDir, '.urgent-signal'), JSON.stringify(signal), /* keepBak= */ true);
+    });
 
     // Also send via normal message bus for persistence
     try {

@@ -16,6 +16,7 @@ import { existsSync, readFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { withFileLockSync } from '../utils/lock.js';
 
 // --- Types ---
 
@@ -125,6 +126,23 @@ function saveAccounts(ctxRoot: string, store: AccountsStore): void {
   const path = accountsPath(ctxRoot);
   atomicWriteSync(path, JSON.stringify(store, null, 2));
   try { chmodSync(path, 0o600); } catch { /* ignore */ }
+}
+
+/**
+ * Locked read-modify-write of accounts.json. Reloads INSIDE the lock so a
+ * concurrent writer is never clobbered by a stale snapshot.
+ */
+export function mutateAccounts(
+  ctxRoot: string,
+  mutator: (store: AccountsStore) => void,
+): AccountsStore | null {
+  return withFileLockSync(oauthDir(ctxRoot), () => {
+    const store = loadAccounts(ctxRoot);
+    if (!store) return null;
+    mutator(store);
+    saveAccounts(ctxRoot, store);
+    return store;
+  });
 }
 
 export function getActiveAccount(ctxRoot: string): { name: string; account: OAuthAccount } | null {
@@ -256,12 +274,13 @@ export async function checkUsageApi(
   // Update cache and accounts.json utilization fields
   saveCache(ctxRoot, snapshot);
 
-  const store = loadAccounts(ctxRoot);
-  if (store && store.accounts[accountName]) {
-    store.accounts[accountName].five_hour_utilization = fiveHour;
-    store.accounts[accountName].seven_day_utilization = sevenDay;
-    saveAccounts(ctxRoot, store);
-  }
+  mutateAccounts(ctxRoot, (store) => {
+    const acct = store.accounts[accountName];
+    if (acct) {
+      acct.five_hour_utilization = fiveHour;
+      acct.seven_day_utilization = sevenDay;
+    }
+  });
 
   return { ...snapshot, cached: false };
 }
@@ -309,16 +328,21 @@ export async function refreshOAuthToken(
   }
 
   const expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
+  const lastRefreshed = new Date().toISOString();
 
   // ATOMIC WRITE — must happen before any further use of the new tokens
-  store.accounts[name] = {
-    ...account,
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token,
-    expires_at: expiresAt,
-    last_refreshed: new Date().toISOString(),
-  };
-  saveAccounts(ctxRoot, store);
+  const savedStore = mutateAccounts(ctxRoot, (reloadedStore) => {
+    const prev = reloadedStore.accounts[name];
+    if (!prev) throw new Error(`Account "${name}" vanished during refresh`);
+    reloadedStore.accounts[name] = {
+      ...prev,
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_at: expiresAt,
+      last_refreshed: lastRefreshed,
+    };
+  });
+  if (!savedStore) throw new Error('No accounts.json found. Cannot refresh.');
 
   return { account: name, expires_at: expiresAt };
 }
@@ -389,11 +413,6 @@ export async function rotateOAuth(
   }
 
   // PHASE 1: Update accounts.json (active + rotation_log)
-  const reloaded = loadAccounts(ctxRoot)!;
-  reloaded.active = nextName;
-  reloaded.accounts[nextName].five_hour_utilization = preflight.five_hour_utilization;
-  reloaded.accounts[nextName].seven_day_utilization = preflight.seven_day_utilization;
-
   const logEntry: RotationLogEntry = {
     timestamp: new Date().toISOString(),
     from: currentName,
@@ -402,8 +421,15 @@ export async function rotateOAuth(
     five_hour_util: current.five_hour_utilization,
     seven_day_util: current.seven_day_utilization,
   };
-  reloaded.rotation_log = [logEntry, ...reloaded.rotation_log].slice(0, ROTATION_LOG_MAX);
-  saveAccounts(ctxRoot, reloaded);
+  const updatedStore = mutateAccounts(ctxRoot, (reloaded) => {
+    const next = reloaded.accounts[nextName];
+    if (!next) throw new Error(`Account "${nextName}" vanished during rotation`);
+    reloaded.active = nextName;
+    next.five_hour_utilization = preflight.five_hour_utilization;
+    next.seven_day_utilization = preflight.seven_day_utilization;
+    reloaded.rotation_log = [logEntry, ...reloaded.rotation_log].slice(0, ROTATION_LOG_MAX);
+  });
+  if (!updatedStore) return { rotated: false, reason: 'No accounts.json found' };
 
   // PHASE 2: Write bare access token to agent .env files
   const finalStore = loadAccounts(ctxRoot)!;

@@ -4,7 +4,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import type { InboxMessage, Priority, BusPaths } from '../types/index.js';
 import { PRIORITY_MAP } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
-import { acquireLock, releaseLock } from '../utils/lock.js';
+import { acquireLock, releaseLock, withFileLockSync } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
 
@@ -169,29 +169,31 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
  */
 export function ackInbox(paths: BusPaths, messageId: string): void {
   const { inflight, processed } = paths;
+  ensureDir(paths.inbox);
   ensureDir(processed);
-
-  // Find the file in inflight that contains this message ID
-  let files: string[];
-  try {
-    files = readdirSync(inflight).filter(f => f.endsWith('.json'));
-  } catch {
-    return;
-  }
-
-  for (const file of files) {
-    const filePath = join(inflight, file);
+  withFileLockSync(paths.inbox, () => {
+    // Find the file in inflight that contains this message ID
+    let files: string[];
     try {
-      const content = readFileSync(filePath, 'utf-8');
-      const msg = JSON.parse(content);
-      if (msg.id === messageId) {
-        renameSync(filePath, join(processed, file));
-        return;
-      }
+      files = readdirSync(inflight).filter(f => f.endsWith('.json'));
     } catch {
-      // Skip corrupt files
+      return;
     }
-  }
+
+    for (const file of files) {
+      const filePath = join(inflight, file);
+      try {
+        const content = readFileSync(filePath, 'utf-8');
+        const msg = JSON.parse(content);
+        if (msg.id === messageId) {
+          renameSync(filePath, join(processed, file));
+          return;
+        }
+      } catch {
+        // Skip corrupt files
+      }
+    }
+  });
 }
 
 /**

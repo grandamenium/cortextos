@@ -1,7 +1,8 @@
-import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync, unlinkSync, appendFileSync } from 'fs';
-import { join } from 'path';
+import { appendFileSync, closeSync, existsSync, openSync, readdirSync, readFileSync, unlinkSync, writeSync } from 'fs';
+import { dirname, join } from 'path';
 import type { Task, Priority, TaskStatus, BusPaths, StaleTaskReport, ArchiveReport } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { withFileLockSync } from '../utils/lock.js';
 import { randomDigits } from '../utils/random.js';
 import { validatePriority, validateTaskId } from '../utils/validate.js';
 import { logEvent } from './event.js';
@@ -47,19 +48,6 @@ export function createTask(
   const taskId = `task_${epoch}_${rand}`;
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-  // Dependency validation FIRST — a cycle must never be allowed to
-  // leave partial state on disk. Earlier iteration wrote the task
-  // JSON before detectCycleOrThrow ran, so a failed cycle check left
-  // a dangling task with a one-way edge and no symmetric peer update.
-  // Order is now: validate → write task → mutate peers → audit. The
-  // cycle walker gets a `virtual` description of the not-yet-written
-  // task so chains that pass through it are still detectable.
-  const virtualTask = { id: taskId, blocked_by: blockedBy };
-  if (blockedBy.length) detectCycleOrThrow(paths, taskId, blockedBy, virtualTask);
-  if (blocks.length) {
-    for (const downId of blocks) detectCycleOrThrow(paths, downId, [taskId], virtualTask);
-  }
-
   const task: Task = {
     id: taskId,
     title,
@@ -83,12 +71,27 @@ export function createTask(
   };
 
   ensureDir(paths.taskDir);
-  atomicWriteSync(join(paths.taskDir, `${taskId}.json`), JSON.stringify(task));
+  withFileLockSync(paths.taskDir, () => {
+    // Dependency validation FIRST — a cycle must never be allowed to
+    // leave partial state on disk. Earlier iteration wrote the task
+    // JSON before detectCycleOrThrow ran, so a failed cycle check left
+    // a dangling task with a one-way edge and no symmetric peer update.
+    // Order is now: validate → write task → mutate peers → audit. The
+    // cycle walker gets a `virtual` description of the not-yet-written
+    // task so chains that pass through it are still detectable.
+    const virtualTask = { id: taskId, blocked_by: blockedBy };
+    if (blockedBy.length) detectCycleOrThrow(paths, taskId, blockedBy, virtualTask);
+    if (blocks.length) {
+      for (const downId of blocks) detectCycleOrThrow(paths, downId, [taskId], virtualTask);
+    }
 
-  // Cycle-safe now: validation already passed, so symmetric-edge
-  // maintenance is just mutating peer JSONs.
-  for (const depId of blockedBy) addSymmetricEdge(paths, depId, 'blocks', taskId);
-  for (const downId of blocks) addSymmetricEdge(paths, downId, 'blocked_by', taskId);
+    atomicWriteSync(join(paths.taskDir, `${taskId}.json`), JSON.stringify(task), /* keepBak= */ true);
+
+    // Cycle-safe now: validation already passed, so symmetric-edge
+    // maintenance is just mutating peer JSONs.
+    for (const depId of blockedBy) addSymmetricEdge(paths, depId, 'blocks', taskId);
+    for (const downId of blocks) addSymmetricEdge(paths, downId, 'blocked_by', taskId);
+  });
 
   appendTaskAudit(paths, taskId, { event: 'create', agent: agentName, to: 'pending', note: title });
 
@@ -113,7 +116,7 @@ function addSymmetricEdge(
     const list = task[field] ?? [];
     if (!list.includes(peerId)) {
       task[field] = [...list, peerId];
-      atomicWriteSync(filePath, JSON.stringify(task));
+      atomicWriteSync(filePath, JSON.stringify(task), /* keepBak= */ true);
     }
   } catch { /* best-effort */ }
 }
@@ -274,13 +277,15 @@ export function updateTask(
   let prevStatus: TaskStatus | undefined;
   let assignee: string | undefined;
   try {
-    const content = readFileSync(filePath, 'utf-8');
-    const task: Task = JSON.parse(content);
-    prevStatus = task.status;
-    assignee = task.assigned_to;
-    task.status = status;
-    task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-    atomicWriteSync(filePath, JSON.stringify(task));
+    withFileLockSync(dirname(filePath), () => {
+      const content = readFileSync(filePath, 'utf-8');
+      const task: Task = JSON.parse(content);
+      prevStatus = task.status;
+      assignee = task.assigned_to;
+      task.status = status;
+      task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      atomicWriteSync(filePath, JSON.stringify(task), /* keepBak= */ true);
+    });
   } catch (err) {
     throw new Error(`Task ${taskId} update failed: ${err}`);
   }
@@ -360,9 +365,9 @@ export function readTaskAudit(
  * `update-task <id> in_progress` was a read-modify-write with no lock.
  *
  * Mechanism: write a companion claim-lock file via the POSIX O_EXCL
- * path (`writeFileSync` with `flag: 'wx'`). The first writer wins; the
- * second gets EEXIST and claimTask throws "already claimed by X". Only
- * after the lock is taken do we flip the task's status + assigned_to.
+ * path (`openSync(..., 'wx')`). The first writer wins; the second gets
+ * EEXIST and claimTask throws "already claimed by X". Only after the
+ * lock is taken do we flip the task's status + assigned_to.
  *
  * Re-claiming a task you already own is idempotent (returns the task
  * without mutation). Claiming a non-pending task is rejected with a
@@ -421,7 +426,12 @@ export function claimTask(
   // Atomic: O_EXCL fails if the file exists, giving us true mutual
   // exclusion even under concurrent claims from two agents.
   try {
-    writeFileSync(claimPath, `${agent}\t${now}\n`, { flag: 'wx', encoding: 'utf-8', mode: 0o600 });
+    const fd = openSync(claimPath, 'wx', 0o600);
+    try {
+      writeSync(fd, `${agent}\t${now}\n`, undefined, 'utf-8');
+    } finally {
+      closeSync(fd);
+    }
   } catch (err) {
     // Someone else won the race — read the winner and surface it.
     let owner = 'unknown';
@@ -474,18 +484,20 @@ export function completeTask(
   let assignee: string | undefined;
   let taskOrg: string = '';
   try {
-    const content = readFileSync(filePath, 'utf-8');
-    const task: Task = JSON.parse(content);
-    prevStatus = task.status;
-    assignee = task.assigned_to;
-    taskOrg = task.org || '';
-    task.status = 'completed';
-    task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-    task.completed_at = task.updated_at;
-    if (result) {
-      task.result = result;
-    }
-    atomicWriteSync(filePath, JSON.stringify(task));
+    withFileLockSync(dirname(filePath), () => {
+      const content = readFileSync(filePath, 'utf-8');
+      const task: Task = JSON.parse(content);
+      prevStatus = task.status;
+      assignee = task.assigned_to;
+      taskOrg = task.org || '';
+      task.status = 'completed';
+      task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      task.completed_at = task.updated_at;
+      if (result) {
+        task.result = result;
+      }
+      atomicWriteSync(filePath, JSON.stringify(task), /* keepBak= */ true);
+    });
   } catch (err) {
     throw new Error(`Task ${taskId} complete failed: ${err}`);
   }
@@ -537,13 +549,15 @@ export function cancelTask(
   let prevStatus: TaskStatus | undefined;
   let assignee: string | undefined;
   try {
-    const content = readFileSync(filePath, 'utf-8');
-    const task: Task = JSON.parse(content);
-    prevStatus = task.status;
-    assignee = task.assigned_to;
-    task.status = 'cancelled';
-    task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-    atomicWriteSync(filePath, JSON.stringify(task));
+    withFileLockSync(dirname(filePath), () => {
+      const content = readFileSync(filePath, 'utf-8');
+      const task: Task = JSON.parse(content);
+      prevStatus = task.status;
+      assignee = task.assigned_to;
+      task.status = 'cancelled';
+      task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      atomicWriteSync(filePath, JSON.stringify(task), /* keepBak= */ true);
+    });
   } catch (err) {
     throw new Error(`Task ${taskId} cancel failed: ${err}`);
   }
@@ -720,39 +734,40 @@ export function archiveTasks(paths: BusPaths, dryRun: boolean = false): ArchiveR
   let archived = 0;
   let skipped = 0;
 
-  const tasks = readAllTasks(paths.taskDir);
+  ensureDir(paths.taskDir);
+  withFileLockSync(paths.taskDir, () => {
+    const tasks = readAllTasks(paths.taskDir);
 
-  for (const task of tasks) {
-    // Only archive completed tasks
-    if (task.status !== 'completed') continue;
+    for (const task of tasks) {
+      // Only archive completed tasks
+      if (task.status !== 'completed') continue;
 
-    if (!task.completed_at) {
-      skipped++;
-      continue;
-    }
-
-    const completedEpoch = Math.floor(new Date(task.completed_at).getTime() / 1000);
-    const age = nowEpoch - completedEpoch;
-
-    if (age > ARCHIVE_AGE) {
-      // task.id comes from the file's JSON body and is used to build the
-      // rename source/dest below; a tampered id must not escape the task tree.
-      try { validateTaskId(task.id); } catch { skipped++; continue; }
-      if (!dryRun) {
-        const archiveDir = join(paths.taskDir, 'archive');
-        ensureDir(archiveDir);
-
-        // Mark as archived
-        task.archived = true;
-        const srcPath = join(paths.taskDir, `${task.id}.json`);
-        atomicWriteSync(srcPath, JSON.stringify(task));
-
-        // Move to archive
-        renameSync(srcPath, join(archiveDir, `${task.id}.json`));
+      if (!task.completed_at) {
+        skipped++;
+        continue;
       }
-      archived++;
+
+      const completedEpoch = Math.floor(new Date(task.completed_at).getTime() / 1000);
+      const age = nowEpoch - completedEpoch;
+
+      if (age > ARCHIVE_AGE) {
+        // task.id comes from the file's JSON body and is used to build the
+        // write/unlink below; a tampered id must not escape the task tree.
+        try { validateTaskId(task.id); } catch { skipped++; continue; }
+        if (!dryRun) {
+          const archiveDir = join(paths.taskDir, 'archive');
+          ensureDir(archiveDir);
+
+          task.archived = true;
+          const srcPath = join(paths.taskDir, `${task.id}.json`);
+          const destPath = join(archiveDir, `${task.id}.json`);
+          atomicWriteSync(destPath, JSON.stringify(task), /* keepBak= */ true);
+          unlinkSync(srcPath);
+        }
+        archived++;
+      }
     }
-  }
+  });
 
   return { archived, skipped, dry_run: dryRun };
 }

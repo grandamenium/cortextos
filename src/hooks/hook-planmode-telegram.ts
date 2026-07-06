@@ -20,6 +20,11 @@ import { join } from 'path';
 import { mkdirSync, readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { homedir } from 'os';
 
+export interface PlanDecisionResult {
+  decision: 'allow' | 'deny';
+  reason?: string;
+}
+
 /**
  * Find the most recent plan file in ~/.claude/plans/
  */
@@ -53,6 +58,29 @@ function readPlanContent(planPath: string): string {
     return lines.join('\n');
   } catch {
     return '';
+  }
+}
+
+export function resolvePlanDecision(content: string | null): PlanDecisionResult {
+  if (content === null) {
+    return { decision: 'allow' };
+  }
+
+  try {
+    const response = JSON.parse(content) as { decision?: string };
+    const decision = response.decision || 'deny';
+    if (decision === 'allow') {
+      return { decision: 'allow' };
+    }
+    return {
+      decision: 'deny',
+      reason: 'Plan denied by user via Telegram. Ask what they want to change.',
+    };
+  } catch {
+    return {
+      decision: 'deny',
+      reason: 'Plan approval response was unreadable — denying for safety. Re-plan.',
+    };
   }
 }
 
@@ -116,16 +144,11 @@ async function main(): Promise<void> {
   const content = await waitForResponseFile(responseFile, TIMEOUT_MS);
 
   if (content !== null) {
-    try {
-      const response = JSON.parse(content);
-      const decision = response.decision || 'deny';
-      if (decision === 'allow') {
-        outputDecision('allow');
-      } else {
-        outputDecision('deny', 'Plan denied by user via Telegram. Ask what they want to change.');
-      }
-    } catch {
+    const decision = resolvePlanDecision(content);
+    if (decision.decision === 'allow') {
       outputDecision('allow');
+    } else {
+      outputDecision('deny', decision.reason);
     }
   } else {
     // Timeout - auto-APPROVE (not deny!) so agents aren't blocked
@@ -141,7 +164,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  process.stderr.write(`hook-planmode-telegram error: ${err}\n`);
-  outputDecision('allow');
-});
+if (require.main === module) {
+  main().catch((err) => {
+    process.stderr.write(`hook-planmode-telegram error: ${err}\n`);
+    outputDecision('allow');
+  });
+}

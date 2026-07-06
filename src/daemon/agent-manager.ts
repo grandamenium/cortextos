@@ -280,9 +280,12 @@ export class AgentManager {
     if (!entry) return false;
 
     const pid = entry.process.getStatus().pid;
-    if (!pid || this.isPidAlive(pid)) return false;
+    // A registered entry whose process reports no pid is a dead-but-registered
+    // phantom (process died abnormally, registry entry survived) — reconcile it.
+    // Only a genuinely-alive pid may keep the entry.
+    if (pid && this.isPidAlive(pid)) return false;
 
-    console.warn(`[agent-manager] Reconciled dead registry entry for ${name} (pid ${pid} is no longer alive)`);
+    console.warn(`[agent-manager] Reconciled dead registry entry for ${name} (pid ${pid ?? 'none'} not alive)`);
     entry.poller?.stop();
     entry.activityPoller?.stop();
     entry.checker.stop();
@@ -383,6 +386,13 @@ export class AgentManager {
 
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
     this.reconcileDeadRegistryEntry(name);
+    const lingeringEntry = this.agents.get(name);
+    if (lingeringEntry) {
+      const pid = lingeringEntry.process.getStatus().pid;
+      if (!pid || !this.isPidAlive(pid)) {
+        this.reconcileDeadRegistryEntry(name);
+      }
+    }
     if (this.agents.has(name)) {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
       // (restart-all could send stop+start simultaneously, and the new

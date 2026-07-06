@@ -137,7 +137,7 @@ describe('PR-12: send-telegram normalizes literal \\n / \\t (codex agent fix)', 
   });
 
   it('normalizes the exact pattern observed in codex-research outbound log', async () => {
-    // Verbatim shape from /Users/cortextos/.cortextos/default/logs/codex-research/
+    // Verbatim shape from /Users/example/.cortextos/default/logs/codex-research/
     // outbound-messages.jsonl (2026-05-08 16:48Z) — proves the patch covers the
     // production-observed bug.
     const codexShape = "Hey James! I'm codex-research.\\n\\nA few quick questions";

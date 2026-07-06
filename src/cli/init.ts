@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { execSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, copyFileSync, readFileSync, readdirSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -210,6 +211,21 @@ export const initCommand = new Command('init')
         if (regenerated > 0) {
           console.log(`  Regenerated SYSTEM.md for ${regenerated} agent(s)`);
         }
+      }
+    }
+
+    // Best-effort: install the tracked git pre-push hook (build + test gate) so
+    // this clone gets the gate without a manual step. Non-fatal — only runs when
+    // the project is a git repo AND ships the installer; setup-hooks.sh is
+    // non-clobbering, so this is safe to run on every init.
+    if (process.platform !== 'win32' &&
+        existsSync(join(projectRoot, '.git')) &&
+        existsSync(join(projectRoot, 'scripts', 'setup-hooks.sh'))) {
+      try {
+        execSync('bash scripts/setup-hooks.sh', { cwd: projectRoot, stdio: 'ignore' });
+        console.log('  Installed git pre-push hook (build + test gate)');
+      } catch {
+        console.log('  Skipped git pre-push hook install (run: bash scripts/setup-hooks.sh)');
       }
     }
 

@@ -15,9 +15,10 @@
  * Storage: state/<agent>/cron-state.json (same dir as pending-reminders.json).
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { ensureDir } from '../utils/atomic.js';
+import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { withFileLockSync } from '../utils/lock.js';
 
 export interface CronFireRecord {
   name: string;
@@ -34,20 +35,40 @@ function cronStatePath(stateDir: string): string {
   return join(stateDir, 'cron-state.json');
 }
 
-export function readCronState(stateDir: string): CronStateFile {
-  const filePath = cronStatePath(stateDir);
+function cronStateLockDir(stateDir: string): string {
+  return join(stateDir, '.locks', 'cron-state');
+}
+
+function emptyCronState(): CronStateFile {
+  return { updated_at: new Date().toISOString(), crons: [] };
+}
+
+function parseCronStateFile(filePath: string): CronStateFile | null {
   if (!existsSync(filePath)) {
-    return { updated_at: new Date().toISOString(), crons: [] };
+    return null;
   }
   try {
     const raw = readFileSync(filePath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return parsed && Array.isArray(parsed.crons)
-      ? parsed
-      : { updated_at: new Date().toISOString(), crons: [] };
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      Array.isArray((parsed as CronStateFile).crons) &&
+      typeof (parsed as CronStateFile).updated_at === 'string'
+    ) {
+      return parsed as CronStateFile;
+    }
   } catch {
-    return { updated_at: new Date().toISOString(), crons: [] };
+    // Fall through to caller-controlled fallback.
   }
+  return null;
+}
+
+export function readCronState(stateDir: string): CronStateFile {
+  const filePath = cronStatePath(stateDir);
+  return parseCronStateFile(filePath)
+    ?? parseCronStateFile(filePath + '.bak')
+    ?? emptyCronState();
 }
 
 /**
@@ -60,20 +81,24 @@ export function updateCronFire(
   interval?: string,
 ): void {
   ensureDir(stateDir);
-  const state = readCronState(stateDir);
-  const now = new Date().toISOString();
+  const lockDir = cronStateLockDir(stateDir);
+  ensureDir(lockDir);
+  withFileLockSync(lockDir, () => {
+    const state = readCronState(stateDir);
+    const now = new Date().toISOString();
 
-  const idx = state.crons.findIndex(r => r.name === cronName);
-  const record: CronFireRecord = { name: cronName, last_fire: now, ...(interval ? { interval } : {}) };
+    const idx = state.crons.findIndex(r => r.name === cronName);
+    const record: CronFireRecord = { name: cronName, last_fire: now, ...(interval ? { interval } : {}) };
 
-  if (idx === -1) {
-    state.crons.push(record);
-  } else {
-    state.crons[idx] = record;
-  }
+    if (idx === -1) {
+      state.crons.push(record);
+    } else {
+      state.crons[idx] = record;
+    }
 
-  state.updated_at = now;
-  writeFileSync(cronStatePath(stateDir), JSON.stringify(state, null, 2) + '\n', 'utf-8');
+    state.updated_at = now;
+    atomicWriteSync(cronStatePath(stateDir), JSON.stringify(state, null, 2), /* keepBak= */ true);
+  });
 }
 
 /**

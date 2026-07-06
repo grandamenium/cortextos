@@ -4,6 +4,22 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
 
+interface RegistryEntryLike {
+  process: {
+    getStatus: () => { name?: string; status?: string; pid?: number };
+  };
+  checker: { stop: () => void };
+  poller?: { stop: () => void };
+  activityPoller?: { stop: () => void };
+}
+
+interface AgentManagerInternals {
+  agents: Map<string, RegistryEntryLike>;
+  pendingRestarts: Set<string>;
+  cronSchedulers: Map<string, { stop: () => void }>;
+  isPidAlive(pid: number): boolean;
+}
+
 // Mock the PTY layer so we don't load native bindings or spawn real processes.
 // AgentManager → AgentProcess → AgentPTY → node-pty. We mock at AgentProcess.
 vi.mock('../../../src/daemon/agent-process.js', () => ({
@@ -24,7 +40,7 @@ vi.mock('../../../src/daemon/agent-process.js', () => ({
 // Mock FastChecker so it doesn't try to spawn anything either.
 vi.mock('../../../src/daemon/fast-checker.js', () => ({
   FastChecker: class {
-    start() { /* no-op */ }
+    start() { return Promise.resolve(); }
     stop() { /* no-op */ }
     wake() { /* no-op */ }
   },
@@ -340,6 +356,61 @@ describe('AgentManager.startAgent - daemon supervision hardening', () => {
     expect((am as any).agents.has('alice')).toBe(false);
     expect((am as any).pendingRestarts.has('alice')).toBe(false);
     expect((am as any).cronSchedulers.has('alice')).toBe(false);
+  });
+
+  it('reconciles a pid-less phantom registry entry and starts fresh without pendingRestarts noise', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const internals = am as unknown as AgentManagerInternals;
+    const checkerStop = vi.fn();
+    const pollerStop = vi.fn();
+    const activityPollerStop = vi.fn();
+    const schedulerStop = vi.fn();
+    const phantomEntry: RegistryEntryLike = {
+      process: {
+        getStatus: () => ({ name: 'alice', status: 'stopped', pid: undefined }),
+      },
+      checker: { stop: checkerStop },
+      poller: { stop: pollerStop },
+      activityPoller: { stop: activityPollerStop },
+    };
+
+    internals.agents.set('alice', phantomEntry);
+    internals.cronSchedulers.set('alice', { stop: schedulerStop });
+
+    await am.startAgent('alice', join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), undefined, 'acme');
+
+    const currentEntry = internals.agents.get('alice');
+    expect(currentEntry).toBeDefined();
+    expect(currentEntry).not.toBe(phantomEntry);
+    expect(checkerStop).toHaveBeenCalledTimes(1);
+    expect(pollerStop).toHaveBeenCalledTimes(1);
+    expect(activityPollerStop).toHaveBeenCalledTimes(1);
+    expect(schedulerStop).toHaveBeenCalledTimes(1);
+    expect(internals.pendingRestarts.has('alice')).toBe(false);
+  });
+
+  it('keeps the existing entry and defers via pendingRestarts when the registry pid is genuinely alive', async () => {
+    const am = new AgentManager('test-instance', ctxRoot, frameworkRoot, 'acme');
+    const internals = am as unknown as AgentManagerInternals;
+    const checkerStop = vi.fn();
+    const schedulerStop = vi.fn();
+    const liveEntry: RegistryEntryLike = {
+      process: {
+        getStatus: () => ({ name: 'alice', status: 'running', pid: 4321 }),
+      },
+      checker: { stop: checkerStop },
+    };
+
+    internals.agents.set('alice', liveEntry);
+    internals.cronSchedulers.set('alice', { stop: schedulerStop });
+    vi.spyOn(internals, 'isPidAlive').mockReturnValue(true);
+
+    await am.startAgent('alice', join(frameworkRoot, 'orgs', 'acme', 'agents', 'alice'), undefined, 'acme');
+
+    expect(internals.agents.get('alice')).toBe(liveEntry);
+    expect(internals.pendingRestarts.has('alice')).toBe(true);
+    expect(checkerStop).not.toHaveBeenCalled();
+    expect(schedulerStop).not.toHaveBeenCalled();
   });
 });
 
