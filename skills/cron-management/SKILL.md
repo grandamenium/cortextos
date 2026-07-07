@@ -42,6 +42,20 @@ cortextos bus add-cron $CTX_AGENT_NAME <name> <interval> "<prompt>"
 cortextos bus add-cron $CTX_AGENT_NAME <name> "<cron-expr>" "<prompt>"
 ```
 
+**⚠️ Cron-expression hour/day/month fields are evaluated in the daemon
+server's LOCAL timezone, not UTC** (confirmed 2026-07-06: the scheduler uses
+`Date.getHours()`/`getDate()`/`getMonth()`, which read local time; the
+daemon has no `TZ` override, so it inherits the host's system timezone).
+If you write `"0 22 6 7 *"` intending "22:00 UTC," it actually fires at
+22:00 in the server's local zone — a consistent, silent offset (7h for
+Pacific in summer) that produces a cron which still "works" but at the
+wrong real-world time, and looks like a missed/broken fire if you're
+watching for the UTC-equivalent moment. Author hour/day/month fields in
+the server's local time (check `date` on the host, or `$CTX_TIMEZONE`),
+not UTC — this matters most for one-off, date-specific crons (a fixed
+day+month+hour target), less for recurring daily/interval crons where the
+offset is consistent and usually harmless.
+
 The cron is written to `crons.json` atomically and the scheduler is reloaded.
 No `/loop` call needed — the daemon fires crons directly into your PTY.
 
