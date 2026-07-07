@@ -89,6 +89,45 @@ export function loadEnv(): {
 }
 
 /**
+ * Resolve where a Telegram-facing hook should send, applying the customer-box
+ * redirect-or-suppress rule (same rule hook-crash-alert.ts applies inline):
+ * on a customer box (CTX_IS_CUSTOMER_BOX=1), a raw system-hook message must
+ * never reach the customer's own CHAT_ID. Redirect to the operator channel
+ * when OPERATOR_CHAT_ID is configured; otherwise return null so the caller
+ * fails closed IMMEDIATELY — never sends, never waits on a response file.
+ *
+ * A configured OPERATOR_CHAT_ID equal to the customer's own chatId is treated
+ * as unset (fails closed) rather than trusted — it can only be a
+ * misconfiguration, and trusting it would route straight back to the
+ * customer, defeating the guard entirely.
+ *
+ * opts.allowOperatorBotToken (default true) lets a caller pin the token to
+ * the primary botToken even when redirecting the chatId. Set this to false
+ * for any hook whose flow depends on receiving a Telegram callback query
+ * (Approve/Deny buttons) back: the daemon polls getUpdates on exactly one
+ * bot per agent — the agent's own BOT_TOKEN (see agent-manager.ts's single
+ * `telegramApi = new TelegramAPI(botToken)`). Sending buttons via a distinct
+ * OPERATOR_BOT_TOKEN would deliver them to a bot nothing is listening on,
+ * silently breaking the interaction until its timeout fallback fires.
+ * Fire-and-forget notifications (e.g. hook-crash-alert.ts) have no such
+ * constraint and may safely swap bots.
+ */
+export function resolveCustomerBoxTarget(
+  botToken: string,
+  chatId: string,
+  opts: { allowOperatorBotToken?: boolean } = {},
+): { token: string; chatId: string } | null {
+  if (process.env.CTX_IS_CUSTOMER_BOX !== '1') {
+    return { token: botToken, chatId };
+  }
+  const opChat = (process.env.OPERATOR_CHAT_ID || '').trim();
+  if (!opChat || opChat === chatId.trim()) return null;
+  const allowOperatorBotToken = opts.allowOperatorBotToken !== false;
+  const token = allowOperatorBotToken ? (process.env.OPERATOR_BOT_TOKEN || botToken) : botToken;
+  return { token, chatId: opChat };
+}
+
+/**
  * Write a PermissionRequest decision to stdout and exit.
  */
 export function outputDecision(behavior: 'allow' | 'deny', message?: string): void {

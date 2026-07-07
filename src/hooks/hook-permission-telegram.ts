@@ -19,6 +19,7 @@ import {
   sanitizeCodeBlock,
   buildPermissionKeyboard,
   cleanupResponseFile,
+  resolveCustomerBoxTarget,
 } from './index';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
@@ -45,6 +46,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Customer-box noise suppression + operator routing (mirrors hook-crash-alert.ts).
+  // allowOperatorBotToken:false — Approve/Deny callback queries are only ever
+  // received by THIS agent's own bot poller, which the daemon starts only when
+  // primary BOT_TOKEN+CHAT_ID are both present (already confirmed above). A
+  // distinct OPERATOR_BOT_TOKEN has no poller listening on it, so the token
+  // here always stays the primary bot — only the destination CHAT_ID redirects.
+  // Fail-closed deny is IMMEDIATE — no 30-min wait — since there is no one on
+  // the customer's own chat who could ever approve this.
+  const target = resolveCustomerBoxTarget(env.botToken, env.chatId, { allowOperatorBotToken: false });
+  if (!target) {
+    outputDecision('deny', 'Customer box: no operator channel configured for remote approval');
+    return;
+  }
+  const sendToken = target.token;
+  const sendChat = target.chatId;
+
   // Build human-readable summary
   const summary = formatToolSummary(tool_name, tool_input);
 
@@ -68,10 +85,10 @@ async function main(): Promise<void> {
   }
 
   const keyboard = buildPermissionKeyboard(uniqueId);
-  const api = new TelegramAPI(env.botToken);
+  const api = new TelegramAPI(sendToken);
 
   try {
-    await api.sendMessage(env.chatId, message, keyboard);
+    await api.sendMessage(sendChat, message, keyboard);
   } catch {
     outputDecision('deny', 'Failed to send permission request to Telegram');
     return;
@@ -97,7 +114,7 @@ async function main(): Promise<void> {
     // Timeout - deny and notify
     try {
       await api.sendMessage(
-        env.chatId,
+        sendChat,
         `Permission request TIMED OUT (auto-denied): ${tool_name}`,
       );
     } catch {

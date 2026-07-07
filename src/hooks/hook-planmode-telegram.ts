@@ -15,6 +15,7 @@ import {
   waitForResponseFile,
   buildPlanKeyboard,
   cleanupResponseFile,
+  resolveCustomerBoxTarget,
 } from './index';
 import { join } from 'path';
 import { mkdirSync, readFileSync, existsSync, readdirSync, statSync } from 'fs';
@@ -67,6 +68,23 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Customer-box noise suppression + operator routing (mirrors hook-crash-alert.ts).
+  // allowOperatorBotToken:false — Approve/Deny callback queries are only ever
+  // received by THIS agent's own bot poller, which the daemon starts only when
+  // primary BOT_TOKEN+CHAT_ID are both present (already confirmed above). A
+  // distinct OPERATOR_BOT_TOKEN has no poller listening on it, so the token
+  // here always stays the primary bot — only the destination CHAT_ID redirects.
+  // Fail-closed auto-APPROVE is IMMEDIATE — no 30-min wait — since there is no
+  // one on the customer's own chat who could ever review this, and auto-approve
+  // is this hook's existing safe default so the agent is never blocked.
+  const target = resolveCustomerBoxTarget(env.botToken, env.chatId, { allowOperatorBotToken: false });
+  if (!target) {
+    outputDecision('allow');
+    return;
+  }
+  const sendToken = target.token;
+  const sendChat = target.chatId;
+
   // Find plan file
   let planPath = tool_input.plan_file || '';
   if (!planPath) {
@@ -101,10 +119,10 @@ async function main(): Promise<void> {
 
   const messageText = `PLAN REVIEW - ${env.agentName}\n\n${planContent}`;
   const keyboard = buildPlanKeyboard(uniqueId);
-  const api = new TelegramAPI(env.botToken);
+  const api = new TelegramAPI(sendToken);
 
   try {
-    await api.sendMessage(env.chatId, messageText, keyboard);
+    await api.sendMessage(sendChat, messageText, keyboard);
   } catch {
     // If send fails, auto-approve so agent isn't blocked
     outputDecision('allow');
@@ -131,7 +149,7 @@ async function main(): Promise<void> {
     // Timeout - auto-APPROVE (not deny!) so agents aren't blocked
     try {
       await api.sendMessage(
-        env.chatId,
+        sendChat,
         `Plan review TIMED OUT (auto-approved): ${env.agentName}`,
       );
     } catch {

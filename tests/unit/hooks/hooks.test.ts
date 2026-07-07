@@ -14,6 +14,7 @@ import {
   buildAskMultiSelectKeyboard,
   buildAskState,
   formatQuestionMessage,
+  resolveCustomerBoxTarget,
 } from '../../../src/hooks/index';
 
 describe('Hook Utilities', () => {
@@ -531,6 +532,88 @@ describe('Hook Utilities', () => {
       const json = JSON.stringify(output);
       expect(json).toContain('"behavior":"deny"');
       expect(json).toContain('"message":"Not allowed"');
+    });
+  });
+
+  describe('resolveCustomerBoxTarget (customer-box redirect-or-suppress)', () => {
+    const origEnv: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      origEnv.CTX_IS_CUSTOMER_BOX = process.env.CTX_IS_CUSTOMER_BOX;
+      origEnv.OPERATOR_CHAT_ID = process.env.OPERATOR_CHAT_ID;
+      origEnv.OPERATOR_BOT_TOKEN = process.env.OPERATOR_BOT_TOKEN;
+    });
+
+    afterEach(() => {
+      for (const [key, val] of Object.entries(origEnv)) {
+        if (val === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = val;
+        }
+      }
+    });
+
+    it('not a customer box → passes through the given botToken/chatId unchanged', () => {
+      delete process.env.CTX_IS_CUSTOMER_BOX;
+      delete process.env.OPERATOR_CHAT_ID;
+      delete process.env.OPERATOR_BOT_TOKEN;
+      const result = resolveCustomerBoxTarget('bot-abc', 'chat-123');
+      expect(result).toEqual({ token: 'bot-abc', chatId: 'chat-123' });
+    });
+
+    it('customer box + OPERATOR_CHAT_ID set → redirects to the operator channel', () => {
+      process.env.CTX_IS_CUSTOMER_BOX = '1';
+      process.env.OPERATOR_CHAT_ID = 'op-chat-1';
+      process.env.OPERATOR_BOT_TOKEN = 'op-bot-1';
+      const result = resolveCustomerBoxTarget('customer-bot', 'customer-chat');
+      expect(result).toEqual({ token: 'op-bot-1', chatId: 'op-chat-1' });
+    });
+
+    it('customer box + OPERATOR_CHAT_ID set but no OPERATOR_BOT_TOKEN → falls back to the given botToken', () => {
+      process.env.CTX_IS_CUSTOMER_BOX = '1';
+      process.env.OPERATOR_CHAT_ID = 'op-chat-1';
+      delete process.env.OPERATOR_BOT_TOKEN;
+      const result = resolveCustomerBoxTarget('customer-bot', 'customer-chat');
+      expect(result).toEqual({ token: 'customer-bot', chatId: 'op-chat-1' });
+    });
+
+    it('customer box + no OPERATOR_CHAT_ID → returns null (fail-closed, never the customer chatId)', () => {
+      process.env.CTX_IS_CUSTOMER_BOX = '1';
+      delete process.env.OPERATOR_CHAT_ID;
+      delete process.env.OPERATOR_BOT_TOKEN;
+      const result = resolveCustomerBoxTarget('customer-bot', 'customer-chat');
+      expect(result).toBeNull();
+    });
+
+    it('CTX_IS_CUSTOMER_BOX set to a non-"1" value is NOT treated as a customer box', () => {
+      process.env.CTX_IS_CUSTOMER_BOX = 'true';
+      delete process.env.OPERATOR_CHAT_ID;
+      const result = resolveCustomerBoxTarget('bot-abc', 'chat-123');
+      expect(result).toEqual({ token: 'bot-abc', chatId: 'chat-123' });
+    });
+
+    it('OPERATOR_CHAT_ID equal to the customer chatId is treated as unset (fail-closed, never routes back to the customer)', () => {
+      process.env.CTX_IS_CUSTOMER_BOX = '1';
+      process.env.OPERATOR_CHAT_ID = 'customer-chat';
+      process.env.OPERATOR_BOT_TOKEN = 'op-bot-1';
+      const result = resolveCustomerBoxTarget('customer-bot', 'customer-chat');
+      expect(result).toBeNull();
+    });
+
+    it('{ allowOperatorBotToken: false } pins the token to the primary bot even when redirecting the chatId', () => {
+      process.env.CTX_IS_CUSTOMER_BOX = '1';
+      process.env.OPERATOR_CHAT_ID = 'op-chat-1';
+      process.env.OPERATOR_BOT_TOKEN = 'op-bot-1';
+      const result = resolveCustomerBoxTarget('customer-bot', 'customer-chat', { allowOperatorBotToken: false });
+      expect(result).toEqual({ token: 'customer-bot', chatId: 'op-chat-1' });
+    });
+
+    it('{ allowOperatorBotToken: false } has no effect when not a customer box', () => {
+      delete process.env.CTX_IS_CUSTOMER_BOX;
+      process.env.OPERATOR_BOT_TOKEN = 'op-bot-1';
+      const result = resolveCustomerBoxTarget('bot-abc', 'chat-123', { allowOperatorBotToken: false });
+      expect(result).toEqual({ token: 'bot-abc', chatId: 'chat-123' });
     });
   });
 });
