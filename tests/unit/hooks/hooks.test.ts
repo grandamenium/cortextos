@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, symlinkSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, symlinkSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -137,7 +137,9 @@ describe('Hook Utilities', () => {
     });
 
     it('refuses a write that escapes via a symlink inside .claude (#18, codex)', () => {
-      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      // realpathSync: macOS tmpdir() is a symlink (/var -> /private/var) and
+      // isClaudeDirOperation resolves real paths, so canonicalize the fixture root.
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'hookperm-')));
       try {
         const realAgentDir = join(base, 'agent');
         mkdirSync(join(realAgentDir, '.claude'), { recursive: true });
@@ -158,7 +160,9 @@ describe('Hook Utilities', () => {
     });
 
     it('refuses a symlinked .claude root that redirects the gate (codex)', () => {
-      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      // realpathSync: macOS tmpdir() is a symlink (/var -> /private/var) and
+      // isClaudeDirOperation resolves real paths, so canonicalize the fixture root.
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'hookperm-')));
       try {
         const realAgentDir = join(base, 'agent');
         mkdirSync(realAgentDir, { recursive: true });
@@ -174,7 +178,9 @@ describe('Hook Utilities', () => {
     });
 
     it('refuses a write through a DANGLING symlink inside .claude (codex blocker)', () => {
-      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      // realpathSync: macOS tmpdir() is a symlink (/var -> /private/var) and
+      // isClaudeDirOperation resolves real paths, so canonicalize the fixture root.
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'hookperm-')));
       try {
         const realAgentDir = join(base, 'agent');
         mkdirSync(join(realAgentDir, '.claude'), { recursive: true });
@@ -189,7 +195,9 @@ describe('Hook Utilities', () => {
     });
 
     it('handles a symlinked agent-dir ancestor without leaking (mmax)', () => {
-      const base = mkdtempSync(join(tmpdir(), 'hookperm-'));
+      // realpathSync: macOS tmpdir() is a symlink (/var -> /private/var) and
+      // isClaudeDirOperation resolves real paths, so canonicalize the fixture root.
+      const base = realpathSync(mkdtempSync(join(tmpdir(), 'hookperm-')));
       try {
         const realRoot = join(base, 'real');
         mkdirSync(join(realRoot, '.claude'), { recursive: true });
