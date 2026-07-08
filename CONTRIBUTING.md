@@ -2,6 +2,27 @@
 
 Thank you for contributing a skill or agent template to the cortextOS community catalog. This guide covers everything you need to submit a contribution.
 
+## Local Development Setup
+
+After cloning, install the git hooks:
+
+```bash
+bash scripts/setup-hooks.sh
+```
+
+This installs a **pre-push** hook (runs `npm run build && npm test`) and a **pre-commit** hook that scans staged changes for secrets with [gitleaks](https://github.com/gitleaks/gitleaks).
+
+The pre-commit hook requires gitleaks to be installed:
+
+```bash
+brew install gitleaks   # macOS
+# or see https://github.com/gitleaks/gitleaks#installing for other platforms
+```
+
+If gitleaks is missing, the hook fails closed with an install hint — install it rather than bypassing the hook. In a genuine emergency you can bypass with `git commit --no-verify`, but never do this to commit an actual secret: remove the secret instead.
+
+---
+
 ## What Can Be Contributed
 
 | Type | Description |
