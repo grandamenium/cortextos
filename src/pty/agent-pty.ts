@@ -153,9 +153,40 @@ export class AgentPTY {
 
     this._alive = true;
 
-    // Set up output capture
+    // Track which interactive prompts have already been responded to so we
+    // don't send duplicate keystrokes if the same chunk appears twice.
+    let bypassAccepted = false;
+    let trustAccepted = false;
+
+    // Set up output capture — detect interactive prompts in real time and
+    // respond immediately rather than relying on fixed-delay timers.
     this.pty.onData((data: string) => {
       this.outputBuffer.push(data);
+
+      if (!this.pty) return;
+
+      // Bypass-permissions confirmation dialog (Claude Code 2.1+):
+      //   ❯ 1. No, exit
+      //     2. Yes, I accept
+      // The cursor starts on "No, exit". We type "2" then Enter to pick the
+      // second option directly — more reliable than arrow-key navigation.
+      if (!bypassAccepted && (data.includes('I accept') || data.includes('Bypass Permissions') || data.includes('bypass'))) {
+        bypassAccepted = true;
+        setTimeout(() => {
+          if (this.pty) {
+            this.pty.write('2');   // select option 2: "Yes, I accept"
+            this.pty.write('\r');  // confirm
+          }
+        }, 150); // brief delay so the UI finishes rendering before we respond
+      }
+
+      // Trust-this-folder dialog — Enter confirms the highlighted "Yes" option.
+      if (!trustAccepted && (data.includes('trust') || data.includes('Do you trust'))) {
+        trustAccepted = true;
+        setTimeout(() => {
+          if (this.pty) this.pty.write('\r');
+        }, 150);
+      }
     });
 
     // Set up exit handler
@@ -166,26 +197,6 @@ export class AgentPTY {
         this.onExitHandler(exitCode, signal);
       }
     });
-
-    // Claude Code shows a "trust this folder?" prompt on first run in a new directory.
-    // Auto-accept by sending Enter after the prompt appears.
-    // The prompt takes ~3-5s to render; we send Enter at 5s and 8s for reliability.
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 5000);
-    setTimeout(() => {
-      if (this.pty) {
-        const recent = this.outputBuffer.getRecent();
-        if (recent.includes('trust') || recent.includes('Yes')) {
-          this.pty.write('\r');
-        }
-      }
-    }, 8000);
   }
 
   /**

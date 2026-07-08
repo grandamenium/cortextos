@@ -13,7 +13,7 @@ type RuntimeKind = typeof VALID_RUNTIMES[number];
 // (`.claude/skills/`, `CLAUDE_CODE_OAUTH_TOKEN`, `/loop` references) into a
 // codex agent — degrading on first boot. Reject the combo until codex
 // variants exist (PR 11+).
-const NON_CODEX_TEMPLATES = ['orchestrator', 'analyst', 'm2c1-worker', 'hermes'] as const;
+const NON_CODEX_TEMPLATES = ['orchestrator', 'analyst', 'm2c1-worker', 'hermes', 'ops-manager'] as const;
 
 export const addAgentCommand = new Command('add-agent')
   .argument('<name>', 'Agent name')

@@ -1,0 +1,11 @@
+{
+  "focus": "What is one improvement we can make today that makes tomorrow better?",
+  "goals": [
+    "Read the ops digest for every agent in the org each morning",
+    "Write one daily brief: per-agent summary + a single headline improvement",
+    "Flag stale heartbeats, stale goals, and repeated errors before they become incidents"
+  ],
+  "bottleneck": "",
+  "updated_at": "",
+  "updated_by": "template"
+}

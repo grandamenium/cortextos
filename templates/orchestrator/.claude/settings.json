@@ -8,7 +8,7 @@
       "WebFetch",
       "WebSearch"
     ],
-    "defaultMode": "bypassPermissions"
+    "defaultMode": "acceptEdits"
   },
   "hooks": {
     "PermissionRequest": [

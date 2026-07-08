@@ -1,0 +1,38 @@
+{
+  "agent_name": "{{agent_name}}",
+  "enabled": true,
+  "runtime": "claude-code",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "",
+  "communication_style": "direct and casual",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  },
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat and check inbox."
+    },
+    {
+      "name": "daily-ops-review",
+      "type": "recurring",
+      "cron": "0 7 * * *",
+      "prompt": "Read .claude/skills/daily-ops-review/SKILL.md and execute the full daily ops review workflow."
+    }
+  ],
+  "ecosystem": {
+    "local_version_control": { "enabled": false }
+  },
+  "dangerously_skip_permissions": false
+}

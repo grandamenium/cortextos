@@ -12,6 +12,7 @@ import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity 
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
+import { generateOpsDigest } from '../bus/ops-digest.js';
 import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
@@ -911,6 +912,22 @@ busCommand
     const env = resolveEnv();
     const report = collectMetrics(env.ctxRoot, env.org || undefined);
     console.log(JSON.stringify(report, null, 2));
+  });
+
+busCommand
+  .command('ops-digest')
+  .description('Aggregate fleet-wide data (tasks, errors, heartbeats, goal staleness, memory) for the Ops Manager daily review')
+  .option('--org <org>', 'Organization to digest (defaults to CTX_ORG)')
+  .action((opts: { org?: string }) => {
+    const env = resolveEnv();
+    const org = opts.org || env.org;
+    if (!org) {
+      console.error('Error: --org is required (or set CTX_ORG)');
+      process.exit(1);
+    }
+    const projectRoot = env.projectRoot || env.frameworkRoot || process.cwd();
+    const digest = generateOpsDigest(env.ctxRoot, projectRoot, org);
+    console.log(JSON.stringify(digest, null, 2));
   });
 
 busCommand
