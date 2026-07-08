@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# pre-commit hook — installed by scripts/setup-hooks.sh
+#
+# Scans staged changes for secrets before they're committed.
+#
+# To bypass in an emergency (last resort):
+#   git commit --no-verify
+# Do NOT use --no-verify routinely. Remove the secret instead.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+if ! command -v gitleaks &> /dev/null; then
+  echo "[pre-commit] gitleaks not installed. Run: brew install gitleaks" >&2
+  exit 1
+fi
+
+echo "[pre-commit] Scanning staged changes for secrets..."
+if ! gitleaks protect --staged --redact -v; then
+  echo ""
+  echo "[pre-commit] Potential secret detected. Fix before committing." >&2
+  echo "[pre-commit] Commit aborted." >&2
+  exit 1
+fi
