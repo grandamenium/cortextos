@@ -294,10 +294,20 @@ class Daemon {
           `(${new Date(ep.sleptFromMs).toISOString()} → ${new Date(ep.wokeAtMs).toISOString()}, ` +
           `${ep.gapCount} gap(s)) — telegram ${sent ? 'sent' : 'NOT sent'}`
         );
+        // FullWake: deliver cron fires queued during the episode, same-named
+        // fires collapsed to one injection per agent (count + span noted).
+        if (this.agentManager) {
+          void this.agentManager.drainCoalescedCronFires().catch(err => {
+            console.error('[daemon] coalesced cron drain failed:', err);
+          });
+        }
       },
       logger: (msg) => console.log(`[daemon] ${msg}`),
     });
     this.wakeDetector.start();
+    // Route cron fires into the coalescing queue while a sleep episode is open.
+    const detectorForPredicate = this.wakeDetector;
+    this.agentManager.setSleepWindowPredicate(() => detectorForPredicate.inSleepAdjacentWindow());
 
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
