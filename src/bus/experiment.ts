@@ -17,6 +17,13 @@ export interface Experiment {
   status: 'proposed' | 'running' | 'completed';
   baseline_value: number;
   result_value: number | null;
+  /**
+   * Set on a 'keep' decision: the value the metric's baseline should ratchet
+   * to for FUTURE experiments. Kept separate so the completed record still
+   * shows the baseline the experiment actually ran against — completed
+   * records are never mutated.
+   */
+  new_baseline?: number | null;
   decision: 'keep' | 'discard' | null;
   learning: string;
   experiment_commit: string | null;
@@ -262,32 +269,31 @@ export function evaluateExperiment(
     throw new Error(`Experiment ${experimentId} is '${experiment.status}', expected 'running'`);
   }
 
-  // Compare measured vs baseline using direction
-  let decision: 'keep' | 'discard';
-  if (experiment.direction === 'higher') {
-    decision = measuredValue > experiment.baseline_value ? 'keep' : 'discard';
-  } else {
-    decision = measuredValue < experiment.baseline_value ? 'keep' : 'discard';
+  // PLACEHOLDER CONTRACT for qualitative metrics: the positional measured
+  // value must be 0 (a placeholder) when --score carries the real value.
+  // Passing both a nonzero measurement AND a score is ambiguous — earlier
+  // versions silently let the score overwrite the measurement, recording a
+  // result that matched neither intention. Reject instead.
+  if (options?.score !== undefined && measuredValue !== 0) {
+    throw new Error(
+      `Pass EITHER a measured value OR --score, not both ` +
+      `(got value=${measuredValue}, score=${options.score}). ` +
+      `--score is for qualitative metrics: pass 0 as the positional placeholder.`,
+    );
   }
+
+  // Resolve the effective measured value once, then decide once.
+  const effectiveValue = options?.score !== undefined ? options.score : measuredValue;
+  const originalBaseline = experiment.baseline_value;
+  const decision: 'keep' | 'discard' =
+    experiment.direction === 'higher'
+      ? (effectiveValue > originalBaseline ? 'keep' : 'discard')
+      : (effectiveValue < originalBaseline ? 'keep' : 'discard');
 
   experiment.status = 'completed';
   experiment.completed_at = nowISO();
-  experiment.result_value = measuredValue;
+  experiment.result_value = effectiveValue;
   experiment.decision = decision;
-
-  // For qualitative metrics: if score is provided, use it as the measured value
-  // (agent passes 0 as placeholder measuredValue and --score 7 as the actual value)
-  if (options?.score !== undefined) {
-    measuredValue = options.score;
-    // Re-evaluate decision with the correct measured value
-    if (experiment.direction === 'higher') {
-      decision = measuredValue > experiment.baseline_value ? 'keep' : 'discard';
-    } else {
-      decision = measuredValue < experiment.baseline_value ? 'keep' : 'discard';
-    }
-    experiment.result_value = measuredValue;
-    experiment.decision = decision;
-  }
 
   // Build learning from options
   const learningParts: string[] = [];
@@ -297,10 +303,10 @@ export function evaluateExperiment(
     experiment.learning = learningParts.join(' — ');
   }
 
-  // If keep, baseline becomes the measured value
-  if (decision === 'keep') {
-    experiment.baseline_value = measuredValue;
-  }
+  // Completed records are never mutated: baseline_value stays what the
+  // experiment actually ran against. A 'keep' records the ratchet target
+  // separately for future experiments to build on.
+  experiment.new_baseline = decision === 'keep' ? effectiveValue : null;
 
   saveExperiment(agentDir, experiment);
 
@@ -319,8 +325,8 @@ export function evaluateExperiment(
     experiment.id,
     experiment.agent,
     experiment.metric,
-    String(measuredValue),
-    String(decision === 'keep' ? measuredValue : experiment.baseline_value),
+    String(effectiveValue),
+    String(originalBaseline),
     decision,
     experiment.hypothesis,
     experiment.completed_at,
@@ -336,7 +342,7 @@ export function evaluateExperiment(
     `## ${experiment.id} (${decision})`,
     `- **Metric:** ${experiment.metric}`,
     `- **Hypothesis:** ${experiment.hypothesis}`,
-    `- **Result:** ${measuredValue} (baseline: ${decision === 'keep' ? measuredValue : experiment.baseline_value})`,
+    `- **Result:** ${effectiveValue} (baseline: ${originalBaseline})`,
     experiment.learning ? `- **Learning:** ${experiment.learning}` : '',
     '',
   ]
