@@ -153,10 +153,11 @@ export class AgentPTY {
 
     this._alive = true;
 
-    // Track which interactive prompts have already been responded to so we
-    // don't send duplicate keystrokes if the same chunk appears twice.
-    let bypassAccepted = false;
-    let trustAccepted = false;
+    // Cap retries per dialog so a persistently-unmatched screen can't spam
+    // keystrokes into a session that has already moved past it.
+    const MAX_DIALOG_RETRIES = 3;
+    let bypassRetries = 0;
+    let trustRetries = 0;
 
     // Set up output capture — detect interactive prompts in real time and
     // respond immediately rather than relying on fixed-delay timers.
@@ -168,24 +169,35 @@ export class AgentPTY {
       // Bypass-permissions confirmation dialog (Claude Code 2.1+):
       //   ❯ 1. No, exit
       //     2. Yes, I accept
-      // The cursor starts on "No, exit". We type "2" then Enter to pick the
-      // second option directly — more reliable than arrow-key navigation.
-      if (!bypassAccepted && (data.includes('I accept') || data.includes('Bypass Permissions') || data.includes('bypass'))) {
-        bypassAccepted = true;
+      // BUG (found 2026-07-09): matching on 'Bypass Permissions' or 'bypass'
+      // alone fires on the static WARNING banner heading, which streams in
+      // *before* the selectable menu renders. The keystroke landed on a
+      // still-forming screen, did nothing, and — because the old code
+      // latched a single "already responded" flag — never retried once the
+      // real menu appeared moments later. Result: the dialog sat unanswered
+      // forever and the daemon's crash-loop restarted the whole PTY from
+      // scratch each time. Now we only respond once both option lines of
+      // the actual menu are visible, and allow a few retries (the terminal
+      // redraws this screen several times as it renders, so one attempt can
+      // still land on a stale paint).
+      if (bypassRetries < MAX_DIALOG_RETRIES && data.includes('No, exit') && data.includes('I accept')) {
+        bypassRetries++;
         setTimeout(() => {
           if (this.pty) {
             this.pty.write('2');   // select option 2: "Yes, I accept"
             this.pty.write('\r');  // confirm
           }
-        }, 150); // brief delay so the UI finishes rendering before we respond
+        }, 250 * bypassRetries); // stagger retries so we don't hammer the same stale paint
       }
 
       // Trust-this-folder dialog — Enter confirms the highlighted "Yes" option.
-      if (!trustAccepted && (data.includes('trust') || data.includes('Do you trust'))) {
-        trustAccepted = true;
+      // Same fix as above: wait for the actual option text, not the generic
+      // banner copy ("Is this a project you trust?") that precedes it.
+      if (trustRetries < MAX_DIALOG_RETRIES && data.includes('Yes, I trust this folder')) {
+        trustRetries++;
         setTimeout(() => {
           if (this.pty) this.pty.write('\r');
-        }, 150);
+        }, 250 * trustRetries);
       }
     });
 
