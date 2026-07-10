@@ -110,3 +110,22 @@ describe('fast-checker ack-on-confirm contract', () => {
     expect(shouldAck({ ok: false, confirmed: null })).toBe(false);
   });
 });
+
+describe('MessageDedup.forget — redelivery after DELIVERY_FAILED', () => {
+  it('forgotten content can inject again; unforgotten stays deduped', async () => {
+    const { MessageDedup } = await import('../../../src/pty/inject.js');
+    const dedup = new MessageDedup();
+    expect(dedup.isDuplicate('msg-a')).toBe(false); // first sight records it
+    expect(dedup.isDuplicate('msg-a')).toBe(true);  // redelivery would be dropped
+    dedup.forget('msg-a');
+    expect(dedup.isDuplicate('msg-a')).toBe(false); // retry path open again
+    expect(dedup.isDuplicate('msg-a')).toBe(true);
+  });
+
+  it('forget of unseen content is a no-op', async () => {
+    const { MessageDedup } = await import('../../../src/pty/inject.js');
+    const dedup = new MessageDedup();
+    dedup.forget('never-seen');
+    expect(dedup.isDuplicate('other')).toBe(false);
+  });
+});

@@ -441,6 +441,9 @@ export class AgentProcess {
     const res = await loop;
     if (!res.confirmed) {
       this.log(`DELIVERY_FAILED: no turn-start after ${res.enterAttempts} Enter attempts — content may be stuck in the input box`);
+      // The un-ACKed message will redeliver with identical content; drop the
+      // dedup hash so the retry is not silently swallowed as a duplicate.
+      this.dedup.forget(content);
     }
     return { ok: true, ...res };
   }

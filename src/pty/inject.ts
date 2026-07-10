@@ -43,6 +43,17 @@ export class MessageDedup {
     return false;
   }
 
+  /**
+   * Forget one content hash so the same content can inject again.
+   * Used when delivery confirmation fails: the un-ACKed message redelivers
+   * with identical content, which isDuplicate() would otherwise drop.
+   */
+  forget(content: string): void {
+    const hash = createHash('md5').update(content).digest('hex');
+    const idx = this.hashes.indexOf(hash);
+    if (idx >= 0) this.hashes.splice(idx, 1);
+  }
+
   clear(): void {
     this.hashes = [];
   }
