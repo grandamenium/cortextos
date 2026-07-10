@@ -4,7 +4,7 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
-import { checkInbox, ackInbox } from '../bus/message.js';
+import { checkInbox, ackInbox, writeDeferredMarker, clearDeferredMarker, listDeferredMarkers } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -58,6 +58,19 @@ export class FastChecker {
 
   // SIGUSR1 wake: resolve to immediately wake from sleep
   private wakeResolve: (() => void) | null = null;
+
+  // DEFERRED_CONFIRM holds (ACKFIX G-D2-1..7): injections paste-queued into an
+  // alive-but-mid-turn session, awaiting attribution at the next turn boundary.
+  // Mirrored on disk as inflight/.deferred markers so stale-inflight recovery
+  // exempts them and a daemon restart rebuilds this list with the ORIGINAL
+  // deadline (a restart must never extend a hold — G-D2-7 clock rule).
+  private deferredHolds: Array<{
+    ackIds: string[];
+    content: string;
+    contentSha: string;
+    injectedAt: number;
+    deadline: number;
+  }> = [];
 
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -124,6 +137,13 @@ export class FastChecker {
     await this.waitForBootstrap();
     this.log('Bootstrap complete. Beginning poll loop.');
 
+    // Rebuild DEFERRED_CONFIRM holds from on-disk markers (G-D2-7): the
+    // registry is a pure function of visible state, and rebuilt entries keep
+    // their ORIGINAL deadline — a daemon restart mid-hold must not reset the
+    // 10-min timeout (a crash-looping daemon would otherwise extend holds
+    // unbounded and messages would never time out to redelivery).
+    this.rebuildDeferredHolds();
+
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
@@ -188,10 +208,97 @@ export class FastChecker {
     this.telegramMessages.push({ formatted, ackIds: [] });
   }
 
+  /** Find the inflight filename holding a given message id (marker key). */
+  private findInflightFileById(messageId: string): string | null {
+    try {
+      for (const file of readdirSync(this.paths.inflight).filter(f => f.endsWith('.json'))) {
+        try {
+          const msg = JSON.parse(readFileSync(join(this.paths.inflight, file), 'utf-8'));
+          if (msg.id === messageId) return file;
+        } catch { /* skip corrupt */ }
+      }
+    } catch { /* no inflight dir yet */ }
+    return null;
+  }
+
+  /** Open a DEFERRED_CONFIRM hold: in-memory entry + on-disk markers. */
+  private registerDeferredHold(
+    ackIds: string[],
+    content: string,
+    deferred: { injectedAt: number; deadline: number; contentSha: string },
+  ): void {
+    for (const id of ackIds) {
+      const file = this.findInflightFileById(id);
+      if (file) {
+        writeDeferredMarker(this.paths.inflight, file, { ...deferred, content });
+      }
+    }
+    this.deferredHolds.push({ ackIds: [...ackIds], content, ...deferred });
+    this.log(`DEFERRED_CONFIRM: hold opened for ${ackIds.length} message(s), sha=${deferred.contentSha.slice(0, 12)}, deadline=${new Date(deferred.deadline).toISOString()}`);
+  }
+
+  /** Rebuild holds from on-disk markers after a daemon restart (G-D2-7). */
+  private rebuildDeferredHolds(): void {
+    const markers = listDeferredMarkers(this.paths.inflight);
+    const bySha = new Map<string, { files: string[]; injectedAt: number; deadline: number; content: string }>();
+    for (const { messageFile, marker } of markers) {
+      const e = bySha.get(marker.contentSha) ??
+        { files: [], injectedAt: marker.injectedAt, deadline: marker.deadline, content: marker.content };
+      e.files.push(messageFile);
+      bySha.set(marker.contentSha, e);
+    }
+    for (const [contentSha, e] of bySha) {
+      const ackIds: string[] = [];
+      for (const file of e.files) {
+        try {
+          ackIds.push(JSON.parse(readFileSync(join(this.paths.inflight, file), 'utf-8')).id);
+        } catch { /* skip */ }
+      }
+      if (!ackIds.length) continue;
+      this.deferredHolds.push({ ackIds, content: e.content, contentSha, injectedAt: e.injectedAt, deadline: e.deadline });
+      this.log(`DEFERRED_CONFIRM: hold rebuilt from markers (${ackIds.length} message(s), original deadline ${new Date(e.deadline).toISOString()})`);
+    }
+  }
+
+  /** Resolve DEFERRED_CONFIRM holds: attributed confirm → ack; deadline passed
+   *  → DELIVERY_FAILED + forget ALL dedup state for the block (G-D2-5) so the
+   *  now-unblocked recovery redelivery is not swallowed as a duplicate. */
+  private checkDeferredHolds(): void {
+    if (!this.deferredHolds.length) return;
+    const now = Date.now();
+    this.deferredHolds = this.deferredHolds.filter((hold) => {
+      const flagMtime = this.agent.promptFlagMtimeMs();
+      const attributed = flagMtime > hold.injectedAt && this.agent.submittedPromptContains(hold.content);
+      if (attributed) {
+        for (const id of hold.ackIds) {
+          ackInbox(this.paths, id); // ackInbox clears the marker with the file
+        }
+        this.log(`[confirm] verdict=CONFIRMED-DEFERRED flagMtime=${Math.round(flagMtime)} injectedAt=${hold.injectedAt} ` +
+          `heldMs=${now - hold.injectedAt} payloadSha=${hold.contentSha.slice(0, 12)} acked=${hold.ackIds.length}`);
+        return false;
+      }
+      if (now >= hold.deadline) {
+        for (const id of hold.ackIds) {
+          const file = this.findInflightFileById(id);
+          if (file) clearDeferredMarker(this.paths.inflight, file);
+        }
+        this.agent.forgetDedup(hold.content);
+        this.log(`DELIVERY_FAILED: deferred-confirm timeout after ${Math.round((now - hold.injectedAt) / 1000)}s — ` +
+          `${hold.ackIds.length} message(s) released to stale-inflight recovery, payloadSha=${hold.contentSha.slice(0, 12)}`);
+        return false;
+      }
+      return true;
+    });
+  }
+
   /**
    * Single poll cycle: check inbox + queued Telegram messages.
    */
   private async pollCycle(): Promise<void> {
+    // Resolve any DEFERRED_CONFIRM holds first: a hold confirming at the turn
+    // boundary must ack before this cycle's checkInbox can re-read anything.
+    this.checkDeferredHolds();
+
     let messageBlock = '';
     const ackIds: string[] = [];
 
@@ -232,6 +339,12 @@ export class FastChecker {
           this.lastMessageInjectedAt = Date.now();
         }
         // Cooldown after injection
+        await sleep(5000);
+      } else if (result.ok && 'deferred' in result && result.deferred) {
+        // DEFERRED_CONFIRM (G-D2-1): the paste is queued in an alive-but-
+        // mid-turn session. Not acked, not failed — hold until the payload is
+        // attributed at a turn boundary or the G-D2-5 deadline passes.
+        this.registerDeferredHold(ackIds, messageBlock, result.deferred);
         await sleep(5000);
       }
     }
