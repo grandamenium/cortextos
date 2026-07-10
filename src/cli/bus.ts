@@ -137,7 +137,12 @@ busCommand
   .action((id: string) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    ackInbox(paths, id);
+    const acked = ackInbox(paths, id);
+    if (!acked) {
+      console.error(`ACK miss: ${id} not found in inflight — already ACK'd, or never checked out via check-inbox`);
+      process.exitCode = 1;
+      return;
+    }
     try {
       logEvent(paths, env.agentName, env.org, 'message', 'inbox_ack', 'info', JSON.stringify({ msg_id: id }));
     } catch { /* non-fatal */ }
