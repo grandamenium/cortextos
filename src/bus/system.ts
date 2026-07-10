@@ -43,7 +43,10 @@ const EXCLUDED_DIR_PREFIXES = [
   '.venv/',
 ];
 
-const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-|ghp_|xoxb-|AKIA)/;
+// gsk_ (Groq), nfp_ (Nebius), and AIza (Google API) key prefixes are blocked
+// alongside the original set — all three are live-key formats that the
+// previous pattern let through.
+const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-|ghp_|xoxb-|AKIA|gsk_|nfp_|AIza)/;
 
 const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
 
