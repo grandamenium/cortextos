@@ -212,13 +212,19 @@ export class FastChecker {
 
     // Inject if there's anything
     if (messageBlock) {
-      const injected = this.agent.injectMessage(messageBlock);
-      if (injected) {
-        // ACK inbox messages
+      const result =
+        typeof this.agent.injectMessageConfirmedDetailed === 'function'
+          ? await this.agent.injectMessageConfirmedDetailed(messageBlock)
+          : ({ ok: this.agent.injectMessage(messageBlock), confirmed: null, enterAttempts: 1 } as const);
+      if (result.ok && result.confirmed !== false) {
+        // ACK only once delivery is confirmed (turn started) or when no
+        // confirmation channel exists (legacy sessions, confirmed === null).
+        // Ack-on-write was how messages got marked delivered while the
+        // content sat in a stuck input box (2026-07-09 stall class).
         for (const id of ackIds) {
           ackInbox(this.paths, id);
         }
-        this.log(`Injected ${messageBlock.length} bytes`);
+        this.log(`Injected ${messageBlock.length} bytes${result.confirmed === true ? ` (delivery confirmed, ${result.enterAttempts} Enter attempt${result.enterAttempts > 1 ? 's' : ''})` : ''}`);
         // Only update typing timestamp for Telegram messages, not inbox/cron.
         // Inbox messages (agent-to-agent, session continuations) must not
         // restart the typing indicator after Stop has cleared it.

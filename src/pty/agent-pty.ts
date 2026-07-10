@@ -3,7 +3,8 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
-import { injectMessage as injectMessageIntoPty } from './inject.js';
+import { injectMessage as injectMessageIntoPty, injectMessageConfirmed as injectMessageConfirmedIntoPty, KEYS } from './inject.js';
+import type { ConfirmedInjectOptions, ConfirmedInjectResult } from './inject.js';
 
 // node-pty types
 interface IPty {
@@ -310,6 +311,27 @@ export class AgentPTY {
    */
   injectMessage(content: string): void {
     injectMessageIntoPty((data) => this.write(data), content);
+  }
+
+  /**
+   * Confirmed injection: paste + Enter with turn-start verification and
+   * Enter retries (see injectMessageConfirmed in inject.ts). Runtime
+   * subclasses whose paste semantics differ (OpenCode) return null to tell
+   * the caller to use their own injectMessage() path instead.
+   */
+  injectMessageConfirmed(
+    content: string,
+    options: ConfirmedInjectOptions,
+  ): Promise<ConfirmedInjectResult> | null {
+    return injectMessageConfirmedIntoPty((data) => this.write(data), content, options);
+  }
+
+  /**
+   * Send a bare Enter — used by the boot-prompt delivery check to re-submit
+   * a prompt stuck in the input box. No-op against an empty input box.
+   */
+  sendEnter(): void {
+    this.write(KEYS.ENTER);
   }
 
   /**

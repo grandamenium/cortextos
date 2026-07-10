@@ -148,6 +148,13 @@ export class OpencodePTY extends AgentPTY {
     }
   }
 
+  override injectMessageConfirmed(): null {
+    // OpenCode's TUI paste path differs from Claude Code's; the Enter-retry
+    // confirmation loop is not validated there. Callers fall back to
+    // injectMessage().
+    return null;
+  }
+
   override injectMessage(content: string): void {
     // OpenCode v1.17.9's TUI does not reliably surface content delivered with
     // bracketed paste (`ESC[200~ ... ESC[201~`): sandbox validation showed the

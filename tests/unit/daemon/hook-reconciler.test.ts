@@ -27,7 +27,8 @@ describe('ensureRequiredHooks', () => {
   it('adds the Stop hook when the event is entirely missing (kirk/spock case)', () => {
     const dir = track(agentDirWith({ hooks: { PreToolUse: [] } }));
     const added = ensureRequiredHooks(dir);
-    expect(added).toEqual([`Stop → ${STOP_CMD}`]);
+    expect(added).toContain(`Stop → ${STOP_CMD}`);
+    expect(added).toHaveLength(REQUIRED_HOOKS.length);
     const s = readSettings(dir);
     expect(s.hooks.Stop).toHaveLength(1);
     expect(s.hooks.Stop[0].hooks[0].command).toBe(STOP_CMD);
@@ -44,9 +45,11 @@ describe('ensureRequiredHooks', () => {
     expect(s.hooks.Stop[0].hooks[0].command).toBe(STOP_CMD);
   });
 
-  it('is idempotent — hook already present means no change', () => {
+  it('is idempotent — hooks already present mean no change', () => {
     const dir = track(agentDirWith({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: STOP_CMD, timeout: 5 }] }] },
+      hooks: Object.fromEntries(REQUIRED_HOOKS.map(r => [
+        r.event, [{ hooks: [{ type: 'command', command: r.command, timeout: r.timeout }] }],
+      ])),
     }));
     const before = readFileSync(join(dir, '.claude', 'settings.json'), 'utf-8');
     expect(ensureRequiredHooks(dir)).toEqual([]);
@@ -55,10 +58,13 @@ describe('ensureRequiredHooks', () => {
 
   it('detects presence by command substring within existing Stop groups', () => {
     const dir = track(agentDirWith({
-      hooks: { Stop: [{ hooks: [
-        { type: 'command', command: 'some-other-hook' },
-        { type: 'command', command: `${STOP_CMD} --extra-arg` },
-      ] }] },
+      hooks: {
+        Stop: [{ hooks: [
+          { type: 'command', command: 'some-other-hook' },
+          { type: 'command', command: `${STOP_CMD} --extra-arg` },
+        ] }],
+        UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'cortextos bus hook-prompt-flag' }] }],
+      },
     }));
     expect(ensureRequiredHooks(dir)).toEqual([]);
   });
@@ -68,7 +74,7 @@ describe('ensureRequiredHooks', () => {
       hooks: { Stop: [{ hooks: [{ type: 'command', command: 'user-custom-stop' }] }] },
     }));
     const added = ensureRequiredHooks(dir);
-    expect(added).toHaveLength(1);
+    expect(added).toContain(`Stop → ${STOP_CMD}`);
     const s = readSettings(dir);
     expect(s.hooks.Stop).toHaveLength(2);
     expect(s.hooks.Stop[0].hooks[0].command).toBe('user-custom-stop');

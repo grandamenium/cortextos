@@ -179,3 +179,102 @@ export async function toggleAndSubmit(
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+/**
+ * Result of a confirmed injection attempt.
+ */
+export interface ConfirmedInjectResult {
+  /** true = turn-start confirmed; false = every Enter retry exhausted */
+  confirmed: boolean;
+  /** how many Enters were sent (1 = first attempt confirmed) */
+  enterAttempts: number;
+}
+
+export interface ConfirmedInjectOptions {
+  /** Returns true once the runtime shows the prompt actually submitted */
+  isConfirmed: () => boolean;
+  /** ms before the first Enter (mirrors injectMessage default) */
+  enterDelay?: number;
+  /** ms to poll isConfirmed() after each Enter before retrying */
+  attemptTimeoutMs?: number;
+  /** poll granularity */
+  pollMs?: number;
+  /** total Enter attempts (first + retries) */
+  maxEnterAttempts?: number;
+  log?: (msg: string) => void;
+  /** injectable for tests */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Inject a message and CONFIRM it submitted, retrying Enter when it did not.
+ *
+ * The fire-and-forget injectMessage() above sends Enter 300 ms after the
+ * paste and swallows failures — "the dropped Enter is the acceptable cost."
+ * The 2026-07-09 fleet stalls showed the real cost: when the Enter fails to
+ * submit, the pasted content sits in the CLI input box, the session looks
+ * idle, every later injection appends to the same unsubmitted box, and the
+ * whole backlog flushes as one batch whenever any later Enter finally lands.
+ *
+ * This variant closes the loop: paste once, then send Enter and poll a
+ * turn-start signal (last_prompt.flag via the UserPromptSubmit hook); no
+ * signal within the window → send Enter again (idempotent against a loaded
+ * input box — an empty box treats it as a no-op) up to maxEnterAttempts.
+ * Defaults: 3 attempts × 9 s ≈ 28 s worst case, inside the 30-second
+ * delivery gate.
+ */
+export async function injectMessageConfirmed(
+  write: (data: string) => void,
+  content: string,
+  options: ConfirmedInjectOptions,
+): Promise<ConfirmedInjectResult> {
+  const {
+    isConfirmed,
+    enterDelay = 300,
+    attemptTimeoutMs = 9000,
+    pollMs = 500,
+    maxEnterAttempts = 3,
+    log = () => {},
+    sleep: doSleep = sleep,
+  } = options;
+
+  const MAX_CHUNK = 4096;
+  if (content.length <= MAX_CHUNK) {
+    write(PASTE_START + content + PASTE_END);
+  } else {
+    write(PASTE_START);
+    for (let i = 0; i < content.length; i += MAX_CHUNK) {
+      write(content.slice(i, i + MAX_CHUNK));
+    }
+    write(PASTE_END);
+  }
+  await doSleep(enterDelay);
+
+  let enterAttempts = 0;
+  while (enterAttempts < maxEnterAttempts) {
+    enterAttempts++;
+    try {
+      write(KEYS.ENTER);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`[inject] Enter attempt ${enterAttempts} failed (pty likely torn down): ${msg}`);
+      return { confirmed: false, enterAttempts };
+    }
+
+    const deadline = attemptTimeoutMs;
+    let waited = 0;
+    while (waited < deadline) {
+      await doSleep(pollMs);
+      waited += pollMs;
+      if (isConfirmed()) {
+        if (enterAttempts > 1) {
+          log(`[inject] delivery confirmed after ${enterAttempts} Enter attempts`);
+        }
+        return { confirmed: true, enterAttempts };
+      }
+    }
+    log(`[inject] no turn-start signal ${deadline} ms after Enter attempt ${enterAttempts}/${maxEnterAttempts} — retrying`);
+  }
+
+  return { confirmed: false, enterAttempts };
+}

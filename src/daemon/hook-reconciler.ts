@@ -37,6 +37,9 @@ export const REQUIRED_HOOKS: RequiredHook[] = [
   // Turn-end signal: fast-checker liveness/typing detection and the
   // delivery-confirmation loop both consume last_idle.flag transitions.
   { event: 'Stop', command: 'cortextos bus hook-idle-flag', timeout: 5 },
+  // Turn-start signal: the delivery-confirmation loop watches last_prompt.flag
+  // to verify an injected message actually submitted.
+  { event: 'UserPromptSubmit', command: 'cortextos bus hook-prompt-flag', timeout: 5 },
 ];
 
 interface HookCommandEntry {
