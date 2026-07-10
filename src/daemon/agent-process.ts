@@ -711,7 +711,26 @@ export class AgentProcess {
     }
 
     if (!existsSync(onboardedPath) && existsSync(onboardingPath)) {
-      onboardingAppend = ' IMPORTANT: This is your FIRST BOOT. Before doing anything else, read ONBOARDING.md and complete the onboarding protocol.';
+      // Guard: before triggering onboarding, check whether this agent has prior config.
+      // A missing .onboarded + existing config = marker was lost (bug), not first boot.
+      // Signals checked in the agent dir (survives CTX_ROOT resets) and state dir.
+      const stateDir = join(this.env.ctxRoot, 'state', this.name);
+      const configSignals = [
+        join(stateDir, 'config.json'),
+        join(stateDir, 'crons.json'),
+        join(this.env.agentDir, 'MEMORY.md'),
+      ];
+      const hasPriorConfig = configSignals.some(p => {
+        try { return existsSync(p) && statSync(p).size > 0; } catch { return false; }
+      });
+
+      if (hasPriorConfig) {
+        // .onboarded was lost but agent is live — restore marker and warn, do NOT re-onboard
+        try { writeFileSync(onboardedPath, '', 'utf-8'); } catch { /* ignore */ }
+        onboardingAppend = ' WARNING: The .onboarded marker was missing but existing agent config was detected (CTX_ROOT mismatch or state directory reset). Marker has been auto-restored. DO NOT run onboarding — you were already set up. Your first action after reading AGENTS.md must be to alert Atlas: cortextos bus send-message atlas high \'ONBOARDING GUARD triggered on <agent_name> — .onboarded was missing but prior config exists. Marker auto-restored. Investigate root cause.\'';
+      } else {
+        onboardingAppend = ' IMPORTANT: This is your FIRST BOOT. Before doing anything else, read ONBOARDING.md and complete the onboarding protocol.';
+      }
     }
 
     const nowUtc = new Date().toISOString();

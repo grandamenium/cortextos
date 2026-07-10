@@ -1123,6 +1123,8 @@ def cmd_ingest(args):
     if errors:
         print(f"  Errors: {errors}")
     print(_tracker.summary_line())
+    if errors:
+        sys.exit(1)
 
 
 def deduplicate_results(results, similarity_ratio=0.85):

@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
+import { stripBom } from '../utils/strip-bom.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
@@ -155,21 +156,44 @@ busCommand
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const parseList = (raw?: string) => (raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []);
+    const effectiveAssignee = opts.assignee ?? env.agentName;
+
+    // Guard: [HUMAN] tasks must be explicitly routed to 'human' or 'user'.
+    // Silently defaulting to the calling agent makes them invisible to Jennifer.
+    if (/^\[HUMAN\]/i.test(title.trim()) && effectiveAssignee !== 'human' && effectiveAssignee !== 'user') {
+      console.error(
+        `ERROR: Title begins with [HUMAN] but assignee is '${effectiveAssignee}', not 'human'.\n` +
+        `[HUMAN] tasks must be created with --assignee human so they appear in Jennifer's queue.\n` +
+        `Fix: cortextos bus create-task "${title}" --assignee human`,
+      );
+      process.exit(1);
+    }
+    // Warn when [HUMAN] task has no prior attempt recorded in description.
+    // A [HUMAN] label is a capability denial — it should name what was tried.
+    if (/^\[HUMAN\]/i.test(title.trim()) && (effectiveAssignee === 'human' || effectiveAssignee === 'user') && !opts.desc?.trim()) {
+      process.stderr.write(
+        `[create-task] WARN: [HUMAN] task has no --desc. ` +
+        `Describe what was attempted before routing to Jennifer (e.g. --desc "Tried X, requires browser OAuth flow").\n`,
+      );
+    }
+
     const taskId = createTask(paths, env.agentName, env.org, title, {
       description: opts.desc,
-      assignee: opts.assignee,
+      assignee: effectiveAssignee,
       priority: opts.priority as Priority,
       project: opts.project,
       needsApproval: opts.needsApproval ?? false,
       blockedBy: parseList(opts.blockedBy),
       blocks: parseList(opts.blocks),
     });
+    // Print task ID on stdout (parseable by scripts), assignee on stderr (visible but non-breaking).
     console.log(taskId);
+    process.stderr.write(`[create-task] Assigned to: ${effectiveAssignee}\n`);
     // Auto-notify assignee so the task is visible immediately (issue #78)
-    if (opts.assignee && opts.assignee !== env.agentName) {
-      const assigneePaths = resolvePaths(opts.assignee, env.instanceId, env.org);
+    if (effectiveAssignee !== env.agentName) {
+      const assigneePaths = resolvePaths(effectiveAssignee, env.instanceId, env.org);
       const desc = opts.desc ? ` — ${opts.desc.slice(0, 120)}` : '';
-      sendMessage(assigneePaths, env.agentName, opts.assignee, 'normal',
+      sendMessage(assigneePaths, env.agentName, effectiveAssignee, 'normal',
         `Task assigned: [${opts.priority}] ${title}${desc} (id: ${taskId})`);
     }
   });
@@ -178,7 +202,8 @@ busCommand
   .command('update-task')
   .argument('<id>', 'Task ID')
   .argument('<status>', 'New status (pending, in_progress, completed, blocked, cancelled)')
-  .action((id: string, status: string) => {
+  .option('--assignee <agent>', 'Reassign task to a different agent')
+  .action((id: string, status: string, opts: { assignee?: string }) => {
     const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
     if (!validStatuses.includes(status as TaskStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
@@ -198,8 +223,9 @@ busCommand
       }
     }
 
-    updateTask(paths, id, status as TaskStatus);
-    console.log(`Updated ${id} -> ${status}`);
+    updateTask(paths, id, status as TaskStatus, opts.assignee ? { assignee: opts.assignee } : undefined);
+    const reassign = opts.assignee ? ` (reassigned to: ${opts.assignee})` : '';
+    console.log(`Updated ${id} -> ${status}${reassign}`);
   });
 
 busCommand
@@ -349,14 +375,30 @@ busCommand
   .option('--status <s>', 'Filter by status')
   .option('--format <fmt>', 'Output format: json or text', 'text')
   .option('--respect-deps', 'Sort DAG-aware: unblocked tasks first, blocked tasks last')
-  .action((opts: { agent?: string; status?: string; format?: string; respectDeps?: boolean }) => {
+  .option('--all-orgs', 'Scan all orgs under CTX_ROOT (matches dashboard view)', false)
+  .action((opts: { agent?: string; status?: string; format?: string; respectDeps?: boolean; allOrgs?: boolean }) => {
     const env = resolveEnv();
-    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const tasks = listTasks(paths, {
+    const { existsSync: _existsSync, readdirSync: _readdirSync } = require('fs');
+    const { homedir: _homedir2 } = require('os');
+    const filters = {
       agent: opts.agent,
       status: opts.status as TaskStatus,
       respectDeps: opts.respectDeps ?? false,
-    });
+    };
+    let tasks: Task[];
+    if (opts.allOrgs) {
+      const ctxRoot = require('path').join(_homedir2(), '.cortextos', env.instanceId);
+      const orgsDir = require('path').join(ctxRoot, 'orgs');
+      const orgs: string[] = _existsSync(orgsDir)
+        ? _readdirSync(orgsDir, { withFileTypes: true })
+            .filter((d: { isDirectory(): boolean }) => d.isDirectory())
+            .map((d: { name: string }) => d.name)
+        : [];
+      tasks = orgs.flatMap((org: string) => listTasks(resolvePaths(env.agentName, env.instanceId, org), filters));
+    } else {
+      const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+      tasks = listTasks(paths, filters);
+    }
 
     if (opts.format === 'json') {
       console.log(JSON.stringify(tasks, null, 2));
@@ -373,7 +415,7 @@ busCommand
     const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
 
     console.log(`\n  Tasks (${tasks.length})\n`);
-    const header = '  Status  Pri  ID                        Assignee         Title';
+    const header = '  Status  Pri  ID                          Assignee         Title';
     const separator = '  ' + '-'.repeat(header.length - 2);
     console.log(header);
     console.log(separator);
@@ -381,7 +423,7 @@ busCommand
     for (const t of tasks) {
       const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
       const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
-      const id = t.id.substring(0, 26).padEnd(26);
+      const id = t.id.substring(0, 28).padEnd(28);
       const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
       const title = t.title.substring(0, 50);
       console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
@@ -1362,6 +1404,69 @@ busCommand
 // ---------------------------------------------------------------------------
 // Agent discovery and skill discovery
 // ---------------------------------------------------------------------------
+
+busCommand
+  .command('who-can')
+  .description('Look up which capability (email account, drive, API, device) serves a need, and how to use it')
+  .argument('<query>', 'Free text: an email address, "drive", "print", "doorloop", etc.')
+  .option('--org <org>', 'Organization to search (defaults to CTX_ORG)')
+  .option('--format <fmt>', 'Output format: json|text', 'text')
+  .action(async (query: string, opts: { org?: string; format?: string }) => {
+    const { existsSync, readFileSync } = require('fs');
+    const { join } = require('path');
+    const env = resolveEnv();
+    const frameworkRoot = env.frameworkRoot || process.cwd();
+    const org = opts.org || env.org;
+
+    if (!org) {
+      console.error('No org resolved. Pass --org.');
+      process.exit(1);
+    }
+
+    const regPath = join(frameworkRoot, 'orgs', org, 'capabilities.json');
+    if (!existsSync(regPath)) {
+      console.error(`No capability registry at ${regPath}.`);
+      process.exit(1);
+    }
+
+    let registry: { capabilities?: Array<Record<string, string>> };
+    try {
+      registry = JSON.parse(stripBom(readFileSync(regPath, 'utf-8')));
+    } catch (err) {
+      console.error(`Capability registry is not valid JSON: ${(err as Error).message}`);
+      process.exit(1);
+      return;
+    }
+
+    const needle = query.trim().toLowerCase();
+    const matches = (registry.capabilities ?? []).filter((c) =>
+      Object.values(c).some((v) => typeof v === 'string' && v.toLowerCase().includes(needle)),
+    );
+
+    if (opts.format === 'json') {
+      console.log(JSON.stringify({ query, matches }, null, 2));
+      return;
+    }
+
+    if (matches.length === 0) {
+      console.log(`No capability matches "${query}".`);
+      console.log('This does NOT mean the fleet cannot do it — it means it is not registered.');
+      console.log(`Tell Jennifer what is missing, and add it to orgs/${org}/capabilities.json.`);
+      return;
+    }
+
+    console.log(`${matches.length} capability match(es) for "${query}":\n`);
+    for (const c of matches) {
+      console.log(`  ${c.id}`);
+      if (c.address) console.log(`    address:    ${c.address}`);
+      if (c.kind) console.log(`    kind:       ${c.kind}`);
+      if (c.owner) console.log(`    maintainer: ${c.owner} (maintainer, not gatekeeper — you may use it directly)`);
+      if (c.credential) console.log(`    credential: ${c.credential}`);
+      if (c.howto) console.log(`    how:        ${c.howto}`);
+      if (c.warning) console.log(`    WARNING:    ${c.warning}`);
+      console.log('');
+    }
+  });
 
 busCommand
   .command('list-agents')

@@ -5,6 +5,7 @@ import { spawnSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
+import { logOutboundMessage } from '../telegram/logging.js';
 
 // Each fast-checker registers a process-level SIGUSR1 handler (see
 // fast-checker.ts:102). With >10 active agents the default Node listener cap
@@ -149,6 +150,7 @@ function getOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken
 
 function sendCrashLoopAlertBestEffort(
   frameworkRoot: string,
+  ctxRoot: string,
   crashCount: number,
   errStr: string,
 ): boolean {
@@ -173,6 +175,14 @@ function sendCrashLoopAlertBestEffort(
     ], { timeout: TELEGRAM_SEND_TIMEOUT_MS, stdio: 'pipe' });
     if (r.status === 0) {
       console.error('[daemon] Crash-loop alert sent to operator chat');
+      let msgId = -1;
+      try {
+        const resp = JSON.parse(r.stdout?.toString() || '{}');
+        if (resp.ok && resp.result?.message_id) msgId = resp.result.message_id;
+      } catch { /* non-fatal */ }
+      try {
+        logOutboundMessage(ctxRoot, 'daemon', creds.chatId, message, msgId);
+      } catch { /* must not block crash handling */ }
       return true;
     }
     console.error('[daemon] Crash-loop alert send failed (non-fatal)');
@@ -204,7 +214,7 @@ function handleFatal(
 
   if (shouldSendCrashLoopAlert(history)) {
     const recent = countRecentCrashes(history);
-    if (sendCrashLoopAlertBestEffort(frameworkRoot, recent, errStr)) {
+    if (sendCrashLoopAlertBestEffort(frameworkRoot, ctxRoot, recent, errStr)) {
       history.lastAlertAt = new Date().toISOString();
       writeCrashHistory(ctxRoot, history);
     }

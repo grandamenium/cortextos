@@ -201,15 +201,38 @@ export class AgentPTY {
     // it spawns more cleanly under ConPTY than a `.cmd` wrapper, and matches
     // what `where.exe claude` returns on current installs.
     const pathDirs = (process.env.PATH || '').split(';').filter(Boolean);
-    for (const ext of ['.exe', '.cmd']) {
-      for (const dir of pathDirs) {
-        if (existsSync(join(dir, `claude${ext}`))) {
-          return `claude${ext}`;
-        }
-      }
+
+    // First pass: a real claude.exe directly on PATH is the ideal case.
+    for (const dir of pathDirs) {
+      if (existsSync(join(dir, 'claude.exe'))) return join(dir, 'claude.exe');
     }
-    // Neither found on PATH — fall back to the legacy default so the error
-    // message from node-pty surfaces a recognizable filename for debugging.
+
+    // Second pass: only claude.cmd is on PATH (the npm-global install shape,
+    // where PATH points at %APPDATA%\npm and the real binary lives in a nested
+    // node_modules bin dir). ConPTY spawns the .cmd shim unreliably — an empty
+    // "File not found" that boots ~0/14 to ~14/14 agents depending on race
+    // timing. Resolve the shim to its target claude.exe and spawn that directly.
+    for (const dir of pathDirs) {
+      const cmdPath = join(dir, 'claude.cmd');
+      if (!existsSync(cmdPath)) continue;
+      const nested = join(dir, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+      if (existsSync(nested)) return nested;
+      try {
+        // Shim form: `"%dp0%\node_modules\...\claude.exe" %*`. Extract the
+        // quoted path and de-reference %dp0% to the shim's own directory.
+        const shim = readFileSync(cmdPath, 'utf-8');
+        const m = shim.match(/"%dp0%\\?(.+claude\.exe)"/i);
+        if (m) {
+          const resolved = join(dir, m[1]);
+          if (existsSync(resolved)) return resolved;
+        }
+      } catch { /* fall through to returning the .cmd */ }
+      // Shim present but target not locatable — return the .cmd so node-pty's
+      // error at least names a real file.
+      return cmdPath;
+    }
+
+    // Nothing on PATH — legacy fallback surfaces a recognizable filename.
     return 'claude.cmd';
   }
 

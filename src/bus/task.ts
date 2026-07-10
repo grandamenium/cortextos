@@ -221,20 +221,47 @@ export function checkTaskDependencies(
  * task-graph visualization, or cross-org list-tasks flag).
  */
 export function findTaskFile(paths: BusPaths, taskId: string): string | null {
-  // Fast path: same-org lookup.
+  // Fast path: same-org exact lookup.
   const sameOrg = join(paths.taskDir, `${taskId}.json`);
   if (existsSync(sameOrg)) return sameOrg;
 
-  // Fallback: cross-org scan.
+  // Prefix fallback: agents sometimes store only the epoch prefix (e.g.
+  // "task_1782996732192" instead of "task_1782996732192_75727392"). Scan
+  // the own-org dir for a file that starts with the given prefix.
+  const prefix = `${taskId}_`;
+  try {
+    const ownOrgFiles = readdirSync(paths.taskDir).filter(
+      (f) => f.startsWith(prefix) && f.endsWith('.json'),
+    );
+    if (ownOrgFiles.length === 1) return join(paths.taskDir, ownOrgFiles[0]);
+    if (ownOrgFiles.length > 1) {
+      console.warn(
+        `[task] Ambiguous prefix ${taskId}: matched ${ownOrgFiles.length} files in own org. ` +
+        `Operating on first match '${ownOrgFiles[0]}'. Use the full task ID to be precise.`,
+      );
+      return join(paths.taskDir, ownOrgFiles[0]);
+    }
+  } catch { /* taskDir missing — fall through to cross-org scan */ }
+
+  // Fallback: cross-org scan (exact then prefix).
   const orgsRoot = join(paths.ctxRoot, 'orgs');
   const matches: Array<{ path: string; org: string }> = [];
   try {
     for (const entry of readdirSync(orgsRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      const candidate = join(orgsRoot, entry.name, 'tasks', `${taskId}.json`);
-      if (existsSync(candidate)) {
-        matches.push({ path: candidate, org: entry.name });
+      const taskDir = join(orgsRoot, entry.name, 'tasks');
+      const exact = join(taskDir, `${taskId}.json`);
+      if (existsSync(exact)) {
+        matches.push({ path: exact, org: entry.name });
+        continue;
       }
+      // Prefix scan within this org.
+      try {
+        const prefixed = readdirSync(taskDir).filter(
+          (f) => f.startsWith(prefix) && f.endsWith('.json'),
+        );
+        for (const f of prefixed) matches.push({ path: join(taskDir, f), org: entry.name });
+      } catch { /* org taskDir missing — skip */ }
     }
   } catch {
     return null; // orgs/ missing or unreadable
@@ -261,6 +288,7 @@ export function updateTask(
   paths: BusPaths,
   taskId: string,
   status: TaskStatus,
+  options?: { assignee?: string },
 ): void {
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
@@ -276,6 +304,7 @@ export function updateTask(
     prevStatus = task.status;
     assignee = task.assigned_to;
     task.status = status;
+    if (options?.assignee) task.assigned_to = options.assignee;
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     atomicWriteSync(filePath, JSON.stringify(task));
   } catch (err) {

@@ -84,6 +84,7 @@ Jennifer's exact words: "I have told you to check if you can do something or hav
 | About to say "I can't do X" | "That's not something agents can do" | Stop. Attempt it. If it fails, report the actual error — not a pre-emptive assumption. |
 | About to ask Jennifer for information | "She'll know this faster than I can look it up" | Search memory, KB, Obsidian, agents first. Only ask if genuinely not found after checking. |
 | About to tell Jennifer data is unavailable | "I don't have that information" | Dispatch Argus/Forge first. Never surface a dead end without checking agents. |
+| Asked to send email / pull a file / use an account you think you lack | "That's another agent's account" | Run `cortextos bus who-can "<account or need>"`. Credentials in `orgs/<org>/secrets/` are readable by ALL agents — access is shared, not exclusive. Use the capability directly, or delegate via `bus send-message`. Never tell the user to route it themselves. |
 
 ---
 

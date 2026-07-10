@@ -472,34 +472,18 @@ cortextos bus submit-community-item <item-name> <item-type> "<description>" [--d
 - **Note**: Works in headful mode only (needs a display). All agents running under the daemon have access.
 
 
-### Email & Google Workspace — routing contract
-
-**`gog` is NOT installed on this machine.** The gogcli binary is macOS-only (Homebrew). Any
-`gog` invocation fails with command-not-found. **A failed `gog` call means the tool is absent —
-it does NOT mean you lack email access.** Do not report "I don't have access" on that basis.
-
-**Reaching an account you can't read directly is a routing problem, not a permissions problem.**
-Route it yourself. Do not ask Jennifer to remind you who has access.
-
-Read path, in order — escalate only when a rung genuinely fails:
-
-1. **Gmail MCP** (`mcp__claude_ai_Gmail__search_threads`) — `jlb` account only, no account param.
-2. **Fyxer** (`mcp__claude_ai_Fyxer__search_context`, `sources:["emails"]`) — indexed, not live.
-   A miss is NOT-FOUND, never "does not exist."
-3. **Forge Gmail proxy** — all 9 accounts, for any non-`jlb` account or exhaustive verification:
-   ```bash
-   cortextos bus send-message forge normal 'GMAIL_PROXY: account=<key> query=<query> days=<n>'
-   ```
-   Account keys: `jlb`, `tis`, `tis4u`, `jb1979`, `jordanreyes`, `ilp`, `tt23`, `wti`, `ahr`.
-
-Send path — **never send directly.** All outbound email routes through Forge, and Forge will not
-act on an agent's say-so. It requires the exact text plus confirmation *from Atlas* that Jennifer
-approved that exact text. **Routing through Forge is transport, not approval. SEND = DRAFT until
-Jennifer says "send it" on the exact text.** Argus is the sender of record; Forge is transport only.
-
-```bash
-cortextos bus send-message forge normal 'GMAIL_SEND: account=jlb to=<addr> subject=<subj> body=<text> atlas_approval_msg=<Atlas msg_id>'
-```
-
-Calendar / Drive / Sheets / Docs: use the corresponding `mcp__claude_ai_Google_*` tools. See your
-agent's `TOOLS.md` for the full capability inventory and per-agent specifics.
+### gogcli (Google Workspace CLI)
+- **Binary**: `gog`
+- **Use for**: Gmail (search, send, archive, labels, drafts, filters), Calendar (list/create/update events, free/busy, conflicts), Drive (list/upload/download), Contacts, Tasks, Sheets, Docs
+- **Auth**: OAuth via `gog auth credentials` + `gog auth add`
+- **Accounts**: Configure during onboarding. Use `-a email@gmail.com` to specify which account.
+- **Multi-account**: Use `-a email@gmail.com` or `--account email@gmail.com` flag
+- **JSON output**: All commands support `-j` or `--json` for structured output
+- **Plain output**: Use `-p` or `--plain` for TSV parseable output
+- **Usage examples**:
+  - `gog gmail ls -a YOUR_EMAIL "is:unread" --max 10`
+  - `gog gmail send -a YOUR_EMAIL --to "user@example.com" --subject "Subject" --body "Body"`
+  - `gog calendar ls -a YOUR_EMAIL --max 5`
+  - `gog calendar create -a YOUR_EMAIL --summary "Meeting" --start "2026-03-28T14:00:00" --end "2026-03-28T15:00:00"`
+  - `gog drive ls -a YOUR_EMAIL --max 10`
+- **Important**: gog replaces Gmail/Calendar MCP tools. Use gog instead of MCP for full capabilities (send, archive, labels).

@@ -107,13 +107,30 @@ export class FastChecker {
     this.log('Bootstrap complete. Beginning poll loop.');
 
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
+    //
+    // PATH-unaware execFile is unreliable on Windows: 'cortextos' is a .cmd shim,
+    // which execFile cannot resolve, and the PM2-spawned daemon does not inherit
+    // the npm global bin dir anyway. The result was `spawn cortextos ENOENT` for
+    // every agent on every tick — logged, never surfaced, heartbeats silently
+    // dead. Invoke process.execPath + the bundled dist/cli.js so PATH is
+    // irrelevant. CTX_FRAMEWORK_ROOT is set by the daemon at startup; fall back
+    // to the legacy PATH lookup only when it is absent (e.g. unit tests).
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
+      const args = ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`];
+      const onDone = (err: Error | null) => {
         if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-      });
+      };
+
+      const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+      const cliPath = frameworkRoot ? join(frameworkRoot, 'dist', 'cli.js') : '';
+      if (cliPath && existsSync(cliPath)) {
+        execFile(process.execPath, [cliPath, ...args], { timeout: 30_000 }, onDone);
+      } else {
+        execFile('cortextos', args, { timeout: 30_000 }, onDone);
+      }
     }, HEARTBEAT_INTERVAL_MS);
 
     while (this.running) {

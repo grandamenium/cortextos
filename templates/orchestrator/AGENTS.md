@@ -171,7 +171,12 @@ When you CANNOT do something yourself (needs payment, physical access, login, su
 
 ```bash
 # Create the human task with clear step-by-step instructions
-cortextos bus create-task "[HUMAN] <what needs to be done>" --desc "<instructions>" --project human-tasks
+cortextos bus create-task "[HUMAN] <what needs to be done>" --desc "<instructions>" --assignee human --project human-tasks
+# --assignee human IS LOAD-BEARING. check-human-tasks filters on it. The [HUMAN] title prefix and
+# --project are COSMETIC - they render, they route nothing. Omit --assignee and create-task
+# SILENTLY DEFAULTS THE ASSIGNEE TO YOU, the calling agent, and the task reaches no human. Ever.
+# Verify with: cortextos bus list-tasks --agent human  (NOT check-human-tasks - that is a
+# staleness detector, >24h only, so a correct new task is invisible for its first day.)
 
 # Block your own task pointing to it
 cortextos bus update-task <your_task_id> blocked

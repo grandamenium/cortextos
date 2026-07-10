@@ -316,12 +316,18 @@ export function ingestKnowledgeBase(
       : KB_INGEST_TIMEOUT_DEFAULT_MS,
   );
 
-  execFileSync(pythonPath, args, {
-    encoding: 'utf-8',
-    timeout: ingestTimeoutMs,
-    env,
-    stdio: 'inherit',
-  });
+  try {
+    execFileSync(pythonPath, args, {
+      encoding: 'utf-8',
+      timeout: ingestTimeoutMs,
+      env,
+      stdio: 'inherit',
+    });
+  } catch {
+    // mmrag.py printed its own error(s) via stdio:inherit.
+    // Exit non-zero so cron runners and CI see the failure clearly.
+    process.exit(1);
+  }
 
   console.log(`\nIngest complete → collection: ${collection}`);
 }

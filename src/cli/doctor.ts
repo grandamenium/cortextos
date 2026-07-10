@@ -3,6 +3,10 @@ import { execSync } from 'child_process';
 import { existsSync, readFileSync, readdirSync, statSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { runRuntimeInvariants, formatAlert, type Invariant } from '../utils/invariants.js';
+import { parseEnvFile } from '../utils/env.js';
+import { stripBom } from '../utils/strip-bom.js';
+import { TelegramAPI } from '../telegram/api.js';
 
 interface Check {
   name: string;
@@ -11,11 +15,60 @@ interface Check {
   fix?: string;
 }
 
+/**
+ * Locate the orchestrator agent's directory. Its .env and config.json define
+ * the vault path and timezone the whole fleet is expected to share.
+ */
+function findOrchestratorDir(frameworkRoot: string): string | undefined {
+  const orgsDir = join(frameworkRoot, 'orgs');
+  if (!existsSync(orgsDir)) return undefined;
+  try {
+    for (const org of readdirSync(orgsDir)) {
+      const contextPath = join(orgsDir, org, 'context.json');
+      if (!existsSync(contextPath)) continue;
+      const ctx = JSON.parse(stripBom(readFileSync(contextPath, 'utf-8')));
+      if (typeof ctx.orchestrator === 'string' && ctx.orchestrator) {
+        const dir = join(orgsDir, org, 'agents', ctx.orchestrator);
+        if (existsSync(dir)) return dir;
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  return undefined;
+}
+
+/**
+ * Deliver failures to the operator on the channel they actually read.
+ *
+ * A doctor that only prints to a terminal is itself a silent failure: nobody
+ * watches the terminal of a machine that is supposed to run unattended. We
+ * borrow the orchestrator's bot rather than introducing a new contact, so the
+ * alert lands in the chat the operator already has open.
+ */
+async function sendAlert(orchestratorDir: string, text: string): Promise<void> {
+  const vars = parseEnvFile(join(orchestratorDir, '.env'));
+  const token = vars.BOT_TOKEN;
+  const chatId = vars.CHAT_ID;
+  if (!token || !chatId) {
+    console.error('  [WARN]   --alert: orchestrator .env has no BOT_TOKEN/CHAT_ID; cannot notify operator');
+    return;
+  }
+  try {
+    await new TelegramAPI(token).sendMessage(chatId, text, undefined, { parseMode: null });
+    console.log('  Alert sent to the orchestrator Telegram chat.');
+  } catch (err) {
+    console.error(`  [WARN]   --alert: failed to send Telegram alert: ${(err as Error).message}`);
+  }
+}
+
 export const doctorCommand = new Command('doctor')
   .option('--instance <id>', 'Instance ID', 'default')
-  .description('Diagnose common issues')
-  .action(async (options: { instance: string }) => {
-    console.log('\ncortextOS Doctor\n');
+  .option('--alert', 'Telegram the operator if any runtime invariant fails')
+  .option('--json', 'Emit machine-readable JSON instead of a report')
+  .description('Diagnose install problems and runtime invariants')
+  .action(async (options: { instance: string; alert?: boolean; json?: boolean }) => {
+    if (!options.json) console.log('\ncortextOS Doctor\n');
 
     const checks: Check[] = [];
 
@@ -372,28 +425,60 @@ export const doctorCommand = new Command('doctor')
       }
     }
 
-    // Display results
-    let hasFailures = false;
-    for (const check of checks) {
-      const icon = check.status === 'pass' ? 'OK' : check.status === 'warn' ? 'WARN' : 'FAIL';
-      const prefix = `  [${icon}]`;
-      console.log(`${prefix.padEnd(10)} ${check.name}: ${check.message}`);
-      if (check.fix) {
-        console.log(`           Fix: ${check.fix}`);
+    // ── Runtime invariants ───────────────────────────────────────────────
+    // The install checks above answer "can this machine run cortextOS."
+    // These answer "can it run cortextOS without lying to the operator."
+    const orchestratorDir = findOrchestratorDir(frameworkRoot);
+    const invariants: Invariant[] = runRuntimeInvariants({
+      ctxRoot,
+      frameworkRoot,
+      orchestratorDir,
+    });
+    if (!orchestratorDir) {
+      invariants.push({
+        name: 'Orchestrator',
+        status: 'warn',
+        message: 'No orchestrator found in any org context.json — vault and timezone not checked',
+      });
+    }
+    checks.push(...invariants);
+
+    if (options.json) {
+      console.log(JSON.stringify({ checks, invariants }, null, 2));
+    } else {
+      for (const check of checks) {
+        const icon = check.status === 'pass' ? 'OK' : check.status === 'warn' ? 'WARN' : 'FAIL';
+        const prefix = `  [${icon}]`;
+        console.log(`${prefix.padEnd(10)} ${check.name}: ${check.message}`);
+        if (check.fix) {
+          console.log(`           Fix: ${check.fix}`);
+        }
       }
-      if (check.status === 'fail') hasFailures = true;
     }
 
     const warnCount = checks.filter(c => c.status === 'warn').length;
     const failCount = checks.filter(c => c.status === 'fail').length;
+    const runtimeFailed = invariants.some(i => i.status === 'fail');
 
-    console.log('');
-    if (failCount > 0) {
-      console.log(`  ${failCount} check(s) failed. Fix the issues above and run doctor again.\n`);
-      process.exit(1);
-    } else if (warnCount > 0) {
-      console.log(`  All critical checks passed, ${warnCount} warning(s). See above for details.\n`);
-    } else {
-      console.log('  All checks passed.\n');
+    // Alert before exiting: a failure nobody is told about is the bug this
+    // command exists to eliminate.
+    if (options.alert && runtimeFailed && orchestratorDir) {
+      await sendAlert(orchestratorDir, formatAlert(invariants));
     }
+
+    if (!options.json) {
+      console.log('');
+      if (failCount > 0) {
+        console.log(`  ${failCount} check(s) failed. Fix the issues above and run doctor again.\n`);
+      } else if (warnCount > 0) {
+        console.log(`  All critical checks passed, ${warnCount} warning(s). See above for details.\n`);
+      } else {
+        console.log('  All checks passed.\n');
+      }
+    }
+
+    // Exit explicitly. Loading node-pty and spawning the smoke-test PTY leaves
+    // handles that keep the event loop alive, so the process hangs after the
+    // report is printed. A doctor that never exits cannot gate a daemon boot.
+    process.exit(failCount > 0 ? 1 : 0);
   });

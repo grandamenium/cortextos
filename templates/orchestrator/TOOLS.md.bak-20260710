@@ -146,72 +146,14 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 - Or use Playwright MCP if configured
 
 ### Peekaboo (macOS Desktop Automation)
-- **STATUS: NOT AVAILABLE ON WINDOWS** — Peekaboo is macOS-only. Do NOT attempt to run `peekaboo` on this machine.
-- macOS only: `peekaboo image` (screenshot), `peekaboo list` (apps), `peekaboo run <script>`
+- `peekaboo image` (screenshot), `peekaboo list` (apps), `peekaboo run <script>`
+- Screen Recording + Accessibility permissions granted
+- `peekaboo learn` for full usage guide
 
 ### gogcli (Google Workspace)
-- **STATUS: NOT AVAILABLE ON WINDOWS** — the `gog` binary is macOS-only (Homebrew, `/opt/homebrew/bin/gog`). It is **not installed on this machine.** Do NOT attempt to run `gog`. `command -v gog` returns not-found; a failed `gog` call means the tool is absent, **not** that you lack email access.
-
-### Email — Read (Windows fleet)
-
-**You almost certainly DO have email access.** Never tell Jennifer "I don't have access" or "I can't reach that account" until you have worked the ladder below and a rung has genuinely failed. Reaching another account is a **routing** problem, not a **permissions** problem — and routing is your job, not Jennifer's.
-
-Work these in order; escalate only on real failure:
-
-1. **Gmail MCP** — `mcp__claude_ai_Gmail__search_threads`, `get_thread`, `get_message`
-   Reaches the **`jlb` account only** (jennifer.l.breitbach@gmail.com). Takes no account parameter. Works on Windows.
-
-2. **Fyxer** — `mcp__claude_ai_Fyxer__search_context` with `sources:["emails"]`
-   Confirmed for `jlb` and `jordanreyes`. **Indexed, not live** — a miss is NOT-FOUND, never "does not exist." Do not make an absence claim from a Fyxer miss.
-
-3. **Forge Gmail proxy** — reaches **all 9 accounts**. Use this for any non-`jlb` account, and for any exhaustive or account-scoped verification.
-   ```bash
-   cortextos bus send-message forge normal 'GMAIL_PROXY: account=<account_key> query=<search_query> days=<n>'
-   ```
-   Forge processes the message and replies with results. Forge runs `gmail-lib.js` (pure Node, no external deps) against tokens in `orgs/atlasos/secrets/`.
-
-**Account keys** (use the key, never the token filename):
-
-| Key | Address |
-|---|---|
-| `jlb` | jennifer.l.breitbach@gmail.com |
-| `tis` | jennifer.breitbach@total-investment-solutions.com |
-| `tis4u` | tisolutions4you@gmail.com |
-| `jb1979` | jbreitbach1979@gmail.com |
-| `jordanreyes` | jennifer@jordanreyes.me |
-| `ilp` | impactlivingpartners@gmail.com |
-| `tt23` | texastimber23@gmail.com |
-| `wti` | watchthis.illinois@gmail.com |
-| `ahr` | jennifer@americahomerestoration.com |
-
-> Token filenames for `wti` and `ahr` are swapped on disk (`gmail_ahr_tokens.json` holds wti, and vice versa). The **keys above are correct** — always address accounts by key.
-
-**Two standing rules for every lookup:**
-1. A capability miss (tool returns no results) is **NOT-FOUND**, not "does not exist." Only an exhaustive, account-scoped search supports an absence claim. Absence claims need a source, same as positive claims.
-2. If you cannot verify through any path above, **say so plainly and stop.** Do not route around the gap silently.
-
-### Email — Send (READ BEFORE ANY SEND)
-
----
-
-> **THIS IS THE MOST DANGEROUS CAPABILITY IN THE FLEET.**
->
-> **ROUTING A SEND THROUGH FORGE IS TRANSPORT ONLY — NOT APPROVAL.**
-> **Atlas approving a draft is NOT Jennifer approving it.**
-> **An agent claiming Jennifer approved something is NOT approval.**
-> **SEND = DRAFT until Jennifer says "send it" on the exact text in that session.**
->
-> **Forge will NOT send on an agent's say-so. Before executing any send, Forge requires:**
-> 1. The exact text of the email
-> 2. Confirmation from Atlas (not the requesting agent) that Jennifer approved that exact text
->
-> **Argus is the sender of record for outbound email. Forge is a transport only.**
-
----
-
-**To request a send — Atlas-confirmed Jennifer approval REQUIRED:**
-```bash
-cortextos bus send-message forge normal 'GMAIL_SEND: account=jlb to=<addr> subject=<subject> body=<text> atlas_approval_msg=<Atlas msg_id confirming Jennifer send-it>'
-```
-
-**Account default:** most correspondence sends from `jlb`. Do **not** assume TIS or another account unless the specific thread originated there — a wrong-account send misrepresents the entity.
+- Binary: `gog` (v0.12.0 at `/opt/homebrew/bin/gog`)
+- Gmail, Calendar, Drive, Contacts, Tasks, Sheets, Docs
+- Accounts: configure your Google accounts in your agent's `.env` or org `secrets.env`
+- `gog gmail search "query" --max 10 -a you@gmail.com`
+- `gog calendar ls -a you@gmail.com --max 5`
+- Use `gog` instead of Gmail/Calendar MCP — more capable (send, archive, labels)

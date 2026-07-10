@@ -132,8 +132,8 @@ function TextCell({ value, placeholder, onSave }: { value?: string | null; place
 }
 
 export function TaskListTable({ tasks, onTaskClick, onStatusChange, onFieldUpdate }: TaskListTableProps) {
-  const [sortField, setSortField] = useState<SortField>('created_at');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [sortField, setSortField] = useState<SortField>('project');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
   const sorted = useMemo(() => {
     const copy = [...tasks];
@@ -148,7 +148,17 @@ export function TaskListTable({ tasks, onTaskClick, onStatusChange, onFieldUpdat
         case 'project':    cmp = (a.project ?? '').localeCompare(b.project ?? ''); break;
         case 'created_at': cmp = a.created_at.localeCompare(b.created_at); break;
       }
-      return sortDir === 'asc' ? cmp : -cmp;
+      if (cmp !== 0) return sortDir === 'asc' ? cmp : -cmp;
+      // Secondary sort: project field always groups by org (LLC), then status priority
+      if (sortField !== 'org') {
+        const orgCmp = a.org.localeCompare(b.org);
+        if (orgCmp !== 0) return orgCmp;
+      }
+      if (sortField !== 'project') {
+        const projCmp = (a.project ?? '').localeCompare(b.project ?? '');
+        if (projCmp !== 0) return projCmp;
+      }
+      return (STATUS_ORDER[a.status] ?? 4) - (STATUS_ORDER[b.status] ?? 4);
     });
     return copy;
   }, [tasks, sortField, sortDir]);

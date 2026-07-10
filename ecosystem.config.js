@@ -27,7 +27,13 @@ module.exports = {
       // Daemon was crashing with FATAL ERROR: Reached heap limit (~4 GB) every
       // ~30 min. 1536 MB forces GC earlier and keeps restarts small/fast.
       // (Added manually 2026-06-23.)
-      node_args: '--max-old-space-size=1536',
+      //
+      // Fleet network override: patches dns.lookup (DoH via 8.8.8.8), tls.connect,
+      // and net.createConnection to bind to the WiFi source IP when an Apple USB
+      // tether (172.20.x.x) hijacks the default route. Self-heals within 60 s of
+      // iPhone unplug. Covers the fast-checker's Telegram inbound getUpdates calls.
+      // (Added manually 2026-07-03.)
+      node_args: '--max-old-space-size=1536 --require C:\\cortext-test\\cortextos\\orgs\\atlasos\\agents\\forge\\scripts\\dns-override.js',
       max_restarts: 50,
       restart_delay: 5000,
       autorestart: true,
