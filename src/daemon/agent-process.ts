@@ -21,6 +21,8 @@ type LogFn = (msg: string) => void;
  */
 export class AgentProcess {
   readonly name: string;
+  /** Agent's org (read-only view of env.org) — used by fast-checker heartbeat writes. */
+  get org(): string { return this.env.org; }
   private env: CtxEnv;
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;

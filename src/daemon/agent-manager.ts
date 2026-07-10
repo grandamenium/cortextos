@@ -976,6 +976,13 @@ export class AgentManager {
   }
 
   /**
+   * Live roster with orgs — consumed by the daemon staleness detector.
+   */
+  getAgentRoster(): Array<{ name: string; org: string }> {
+    return [...this.agents.entries()].map(([name, v]) => ({ name, org: v.process.org }));
+  }
+
+  /**
    * Return the CronScheduler for a given agent (for testing / introspection).
    * Returns undefined if no scheduler is running for that agent.
    */
