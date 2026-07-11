@@ -4,9 +4,10 @@
  * and last-sent cache (lines 111-113).
  */
 
-import { appendFileSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { logEvent } from '../bus/event.js';
+import { atomicAppendLineSync } from '../utils/atomic.js';
 import type { BusPaths, TelegramMessage } from '../types/index.js';
 
 /**
@@ -51,7 +52,7 @@ export function logOutboundMessage(
     ...meta,
   });
 
-  appendFileSync(join(logDir, 'outbound-messages.jsonl'), entry + '\n', 'utf-8');
+  atomicAppendLineSync(join(logDir, 'outbound-messages.jsonl'), entry);
 }
 
 /**
@@ -72,7 +73,7 @@ export function logInboundMessage(
     agent: agentName,
   });
 
-  appendFileSync(join(logDir, 'inbound-messages.jsonl'), entry + '\n', 'utf-8');
+  atomicAppendLineSync(join(logDir, 'inbound-messages.jsonl'), entry);
 }
 
 /**

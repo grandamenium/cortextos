@@ -55,14 +55,13 @@ export async function GET(
       return Response.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Enrich with outputs from the source JSON file (outputs are not synced to SQLite)
+    // Enrich with outputs and updates from the source JSON file (not synced to SQLite)
     if (task.source_file && fs.existsSync(task.source_file)) {
       try {
         const raw = JSON.parse(fs.readFileSync(task.source_file, 'utf-8'));
-        if (Array.isArray(raw.outputs)) {
-          task.outputs = raw.outputs;
-        }
-      } catch { /* non-fatal — outputs are optional */ }
+        if (Array.isArray(raw.outputs)) task.outputs = raw.outputs;
+        if (Array.isArray(raw.updates)) task.updates = raw.updates;
+      } catch { /* non-fatal — outputs/updates are optional */ }
     }
 
     return Response.json(task);
@@ -254,16 +253,20 @@ export async function PATCH(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { status, note, blockedBy, outputSummary } = body as {
+  const { status, note, blockedBy, outputSummary, comment } = body as {
     status?: string;
     note?: string;
     blockedBy?: string;
     outputSummary?: string;
+    comment?: string;
   };
 
-  if (!status || !VALID_STATUSES.includes(status)) {
+  // Must provide at least a valid status or a comment
+  const hasComment = typeof comment === 'string' && comment.trim().length > 0;
+  const hasStatus = typeof status === 'string' && VALID_STATUSES.includes(status);
+  if (!hasStatus && !hasComment) {
     return Response.json(
-      { error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` },
+      { error: `Provide a valid status (${VALID_STATUSES.join(', ')}) and/or a comment` },
       { status: 400 },
     );
   }
@@ -281,16 +284,48 @@ export async function PATCH(
   const task = getTaskById(id);
 
   const frameworkRoot = getFrameworkRoot();
+  const ctxRoot = getCTXRoot();
   const env = {
     ...process.env,
     CTX_FRAMEWORK_ROOT: frameworkRoot,
-    CTX_ROOT: getCTXRoot(),
+    CTX_ROOT: ctxRoot,
     CTX_INSTANCE_ID: process.env.CTX_INSTANCE_ID ?? 'default',
     CTX_AGENT_NAME: 'dashboard',
     CTX_ORG: task?.org || '',
   };
 
+  // Helper: notify Atlas via bus — non-fatal, fire-and-forget
+  function notifyAtlas(msg: string) {
+    try {
+      spawnSync(
+        'node',
+        [path.join(frameworkRoot, 'dist', 'cli.js'), 'bus', 'send-message', 'atlas', 'normal', capText(msg)],
+        { timeout: 5000, stdio: 'pipe', env },
+      );
+    } catch { /* non-fatal */ }
+  }
+
   try {
+    // Handle comment-only path (no status change)
+    if (hasComment && !hasStatus) {
+      const commentText = capText(comment!.trim());
+      // Append comment to task JSON updates[]
+      if (task?.source_file && fs.existsSync(task.source_file)) {
+        try {
+          const raw = fs.readFileSync(task.source_file, 'utf-8');
+          const taskData = JSON.parse(raw);
+          if (!Array.isArray(taskData.updates)) taskData.updates = [];
+          taskData.updates.push({ from: 'dashboard', text: commentText, at: new Date().toISOString() });
+          const tmp = task.source_file + '.tmp';
+          fs.writeFileSync(tmp, JSON.stringify(taskData, null, 2) + '\n');
+          fs.renameSync(tmp, task.source_file);
+        } catch { /* non-fatal */ }
+      }
+      notifyAtlas(`DASHBOARD — Jennifer update on [${id}] ${task?.title ?? id}: ${commentText}`);
+      try { syncAll(); } catch { /* best-effort */ }
+      return Response.json({ success: true });
+    }
+
     let spawnResult;
     if (status === 'completed') {
       // Use complete-task.sh for completion (handles additional side effects).
@@ -305,7 +340,7 @@ export async function PATCH(
     } else {
       // Use update-task.sh for other status changes. All args are positional
       // and bounded; blockedBy was validated above, id/status are whitelisted.
-      const args: string[] = [id, status];
+      const args: string[] = [id, status!];
       if (note) args.push(capText(note));
       if (blockedBy) args.push(String(blockedBy));
 
@@ -319,18 +354,37 @@ export async function PATCH(
       throw new Error(spawnResult.stderr || spawnResult.stdout || 'Script failed');
     }
 
+    // Always notify Atlas when Jennifer changes a status from the dashboard
+    notifyAtlas(`DASHBOARD — Jennifer changed [${id}] ${task?.title ?? id} → ${status}`);
+
+    // If a comment was also included with the status change, attach it and notify
+    if (hasComment) {
+      const commentText = capText(comment!.trim());
+      if (task?.source_file && fs.existsSync(task.source_file)) {
+        try {
+          const raw = fs.readFileSync(task.source_file, 'utf-8');
+          const taskData = JSON.parse(raw);
+          if (!Array.isArray(taskData.updates)) taskData.updates = [];
+          taskData.updates.push({ from: 'dashboard', text: commentText, at: new Date().toISOString() });
+          const tmp = task.source_file + '.tmp';
+          fs.writeFileSync(tmp, JSON.stringify(taskData, null, 2) + '\n');
+          fs.renameSync(tmp, task.source_file);
+        } catch { /* non-fatal */ }
+      }
+      notifyAtlas(`DASHBOARD — Jennifer update on [${id}] ${task?.title ?? id}: ${commentText}`);
+    }
+
     // Notify the task creator when a task is completed or status changes significantly.
     // This is how agents find out their blocked tasks can be unblocked.
     if (task?.source_file) {
       try {
-        const fs = await import('fs/promises');
-        const raw = await fs.default.readFile(task.source_file, 'utf-8');
+        const raw = fs.readFileSync(task.source_file, 'utf-8');
         const taskData = JSON.parse(raw);
         const createdBy: string | undefined = taskData.created_by;
         // Only notify agents (not 'dashboard', 'human', etc.) and only when
         // the recipient name passes the agent-name whitelist — prevents
         // passing crafted names into the bus CLI.
-        const agentNames = new Set(['dashboard', 'human', 'user']);
+        const agentNames = new Set(['dashboard', 'human', 'user', 'atlas']);
         if (createdBy && !agentNames.has(createdBy) && isValidAgentName(createdBy)) {
           const rawMsg = status === 'completed'
             ? `Human task completed by user: [${id}] ${task.title} - you can now unblock your work`
@@ -359,7 +413,7 @@ export async function PATCH(
     try {
       const memPath = path.join(getCTXRoot(), 'orgs', task?.org || '', '..', '..', 'agents', 'forge', 'memory',
         `${new Date().toISOString().slice(0,10)}.md`);
-      appendTaskAuditLine(id, task?.title || id, 'status', status, memPath);
+      appendTaskAuditLine(id, task?.title || id, 'status', status!, memPath);
       const allTasks = getTasks({});
       syncTasksPage(allTasks);
     } catch { /* non-fatal */ }

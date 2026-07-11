@@ -62,6 +62,29 @@ export interface PropertyDraws {
   line_items?: DrawLineItem[];
 }
 
+export type ProspectStage = 'applied' | 'screening' | 'approved' | 'lease_signed' | 'moved_in';
+
+export interface ProspectEntry {
+  name: string;
+  stage: ProspectStage;
+  room?: string;
+  applied_date?: string;
+  stage_updated?: string;
+  notes?: string;
+  doorloop_tenant_id?: string;
+  contact?: { email?: string; phone?: string };
+}
+
+export interface CollectionNote {
+  date: string;
+  method: 'text' | 'call' | 'email' | 'in-person';
+  contact: string;
+  room: string;
+  note: string;
+  outcome: 'pending' | 'paid' | 'partial' | 'no-response' | 'promise-to-pay';
+  amount_discussed?: number;
+}
+
 export interface RoomRosterEntry {
   room: string;
   tenant: string | null;
@@ -70,6 +93,31 @@ export interface RoomRosterEntry {
   amount_due: number | null;
   eviction_status?: string;
   notes?: string;
+  collection_notes?: CollectionNote[];
+}
+
+export interface UtilityTracker {
+  provider?: string;
+  account_holder?: string;
+  monthly_est?: number;
+  status: 'current' | 'unknown' | 'overdue';
+}
+
+export interface OutreachEntry {
+  timestamp: string;
+  platform: 'ghl' | 'imessage' | 'call' | 'other';
+  to: string;
+  phone?: string;
+  property?: string;
+  room?: string;
+  message_preview?: string;
+  direction: 'outbound' | 'inbound';
+}
+
+export interface OccupancyOutreachLog {
+  date: string;
+  type: 'text' | 'listing' | 'facebook' | 'call' | 'showing' | 'other';
+  detail: string;
 }
 
 export interface Property {
@@ -79,6 +127,7 @@ export interface Property {
   state: string;
   owner: string;
   entity: string;
+  client_scope?: string;
   manager?: string;
   manager_email?: string;
   type: string;
@@ -118,6 +167,16 @@ export interface Property {
   spreadsheet_url?: string;
   insurance?: { renewal_date: string; carrier?: string; amount?: number };
   taxes?: { due_date: string; amount?: number; status?: string };
+  utilities?: {
+    electric?: UtilityTracker;
+    water?: UtilityTracker;
+    gas?: UtilityTracker;
+    trash?: UtilityTracker;
+  };
+  hoa?: { name?: string; monthly_fee?: number; status: 'not_applicable' | 'current' | 'overdue' | 'unknown' };
+  recent_outreach?: OutreachEntry[];
+  occupancy_outreach?: { vacant_rooms: number; outreach_log?: OccupancyOutreachLog[] };
+  prospect_pipeline?: ProspectEntry[];
   status_note?: string;
   last_report?: string;
   last_report_by?: string;
@@ -196,4 +255,9 @@ export function getProperties(org?: string): Property[] {
 export function getPropertyByShareToken(token: string): Property | null {
   const all = getProperties();
   return all.find((p) => p.share_token === token) ?? null;
+}
+
+export function getPropertiesByClientToken(token: string): Property[] {
+  const all = getProperties();
+  return all.filter((p) => p.client_scope === token);
 }

@@ -12,6 +12,8 @@ import {
   IconReceipt,
   IconUser,
 } from '@tabler/icons-react';
+import { ProspectPipeline } from '@/components/shared/prospect-pipeline';
+import type { ProspectWithProperty } from '@/components/shared/prospect-pipeline';
 
 interface PropertyUnit {
   name: string;
@@ -104,6 +106,15 @@ interface Property {
   last_report?: string;
   last_report_by?: string;
   updated_at: string;
+  prospect_pipeline?: Array<{
+    name: string;
+    stage: 'applied' | 'screening' | 'approved' | 'lease_signed' | 'moved_in';
+    room?: string;
+    applied_date?: string;
+    stage_updated?: string;
+    notes?: string;
+    contact?: { email?: string; phone?: string };
+  }>;
 }
 
 const priorityColors: Record<string, string> = {
@@ -329,10 +340,22 @@ function TenantRosterSection({ property, roster }: { property: Property; roster:
               const leaseLevel = dateLevel(row.lease_expiration);
               const leaseCls = levelClasses[leaseLevel];
               const isVacant = !row.tenant || row.payment_status === 'vacant';
+              const prospectInProcess = isVacant
+                ? (property.prospect_pipeline ?? []).find(
+                    pr => pr.room === row.room && pr.stage !== 'moved_in'
+                  )
+                : undefined;
+              const stageLabel: Record<string, string> = { applied: 'Applied', screening: 'Screening', approved: 'Approved', lease_signed: 'Lease Signed', moved_in: 'Moved In' };
               return (
-                <div key={i} className={`grid grid-cols-[0.8fr_1fr_0.9fr_0.75fr_0.65fr_0.75fr_1.2fr] gap-x-2 px-3 py-2 text-xs items-start ${isVacant ? 'opacity-60' : ''}`}>
+                <div key={i} className={`grid grid-cols-[0.8fr_1fr_0.9fr_0.75fr_0.65fr_0.75fr_1.2fr] gap-x-2 px-3 py-2 text-xs items-start ${isVacant && !prospectInProcess ? 'opacity-60' : ''} ${prospectInProcess ? 'bg-blue-500/5' : ''}`}>
                   <div className="font-semibold truncate pt-px">{row.room}</div>
-                  <div className="truncate text-muted-foreground pt-px">{row.tenant || <span className="italic text-slate-500">Vacant</span>}</div>
+                  <div className="truncate text-muted-foreground pt-px">
+                    {row.tenant || (
+                      prospectInProcess
+                        ? <span className="inline-flex items-center gap-1 text-[10px] text-blue-400 font-medium"><span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />{prospectInProcess.name}</span>
+                        : <span className="italic text-slate-500">Vacant</span>
+                    )}
+                  </div>
                   <div className="pt-px">
                     {row.lease_expiration ? (
                       <div>
@@ -342,7 +365,10 @@ function TenantRosterSection({ property, roster }: { property: Property; roster:
                     ) : <span className="text-[10px] text-muted-foreground">—</span>}
                   </div>
                   <div className="pt-px">
-                    <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${ps.classes}`}>{ps.label}</span>
+                    {prospectInProcess
+                      ? <span className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold bg-blue-500/15 text-blue-400">{stageLabel[prospectInProcess.stage] ?? prospectInProcess.stage}</span>
+                      : <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${ps.classes}`}>{ps.label}</span>
+                    }
                   </div>
                   <div className={`font-semibold pt-px ${row.amount_due && row.amount_due > 0 ? 'text-orange-400' : 'text-muted-foreground'}`}>
                     {row.amount_due != null && row.amount_due > 0 ? formatCurrency(row.amount_due) : '—'}
@@ -352,7 +378,11 @@ function TenantRosterSection({ property, roster }: { property: Property; roster:
                       ? <span className="text-[10px] font-semibold text-red-400">{row.eviction_status}</span>
                       : <span className="text-[10px] text-muted-foreground">—</span>}
                   </div>
-                  <div className="text-[10px] text-muted-foreground leading-relaxed">{row.notes || '—'}</div>
+                  <div className="text-[10px] text-muted-foreground leading-relaxed">
+                    {prospectInProcess && !row.notes
+                      ? <span className="text-blue-400/70 italic">Prospect in process</span>
+                      : row.notes || '—'}
+                  </div>
                 </div>
               );
             })}
@@ -889,6 +919,19 @@ export default function PropertiesPage() {
           </div>
         </div>
       )}
+
+      {/* Prospect Pipeline */}
+      {!loading && (() => {
+        const allProspects: ProspectWithProperty[] = visibleProperties.flatMap(p =>
+          (p.prospect_pipeline ?? []).map(pr => ({
+            ...pr,
+            property_name: p.name,
+            property_id: p.id,
+          }))
+        );
+        if (allProspects.length === 0) return null;
+        return <ProspectPipeline prospects={allProspects} />;
+      })()}
 
       {/* Property Cards */}
       {loading ? (

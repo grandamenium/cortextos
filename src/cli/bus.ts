@@ -1,11 +1,11 @@
 import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { stripBom } from '../utils/strip-bom.js';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks, findTaskFile } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -337,6 +337,37 @@ busCommand
 
     completeTask(paths, id, effectiveResult);
     console.log(`Completed ${id}`);
+  });
+
+busCommand
+  .command('task-comment')
+  .description('Append a comment to a task\'s update thread (visible in the dashboard thread view)')
+  .argument('<task-id>', 'Task ID to comment on')
+  .argument('<message>', 'Comment text to append')
+  .action((taskId: string, message: string) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const taskFile = findTaskFile(paths, taskId);
+    if (!taskFile) {
+      console.error(`task-comment: task ${taskId} not found`);
+      process.exit(1);
+    }
+    try {
+      const taskData = JSON.parse(readFileSync(taskFile, 'utf-8'));
+      if (!Array.isArray(taskData.updates)) taskData.updates = [];
+      taskData.updates.push({
+        from: env.agentName,
+        text: message.trim().slice(0, 2000),
+        at: new Date().toISOString(),
+      });
+      const tmp = taskFile + '.tmp';
+      writeFileSync(tmp, JSON.stringify(taskData, null, 2) + '\n');
+      renameSync(tmp, taskFile);
+      console.log(`Comment appended to ${taskId}`);
+    } catch (err) {
+      console.error(`task-comment: ${(err as Error).message}`);
+      process.exit(1);
+    }
   });
 
 busCommand
@@ -990,11 +1021,21 @@ busCommand
   .command('send-telegram')
   .description('Send a message to a Telegram chat')
   .argument('<chat-id>', 'Telegram chat ID')
-  .argument('<message>', 'Message text (supports Telegram Markdown unless --plain-text is set)')
+  .argument('[message]', 'Message text (supports Telegram Markdown unless --plain-text is set). Omit when using --stdin.')
   .option('--image <path>', 'Send a photo with caption')
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
-  .action(async (chatId: string, message: string, opts: { image?: string; file?: string; plainText?: boolean }) => {
+  .option('--stdin', 'Read message from stdin instead of the positional argument. Prevents shell expansion of $ in double-quoted strings. Usage: printf \'%s\' "$msg" | cortextos bus send-telegram <chat-id> --stdin', false)
+  .action(async (chatId: string, message: string | undefined, opts: { image?: string; file?: string; plainText?: boolean; stdin?: boolean }) => {
+    // --stdin: read message from fd 0 to prevent shell $ expansion stripping
+    if (opts.stdin) {
+      const { readFileSync } = require('fs');
+      message = readFileSync(0, 'utf-8').trimEnd();
+    }
+    if (!message) {
+      console.error('Error: message argument is required (or use --stdin to pipe it).');
+      process.exit(1);
+    }
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
     // Telegram renders them as visible text. Normalize before send + log.
@@ -1804,7 +1845,8 @@ busCommand
       message_id: `mobile-reply-${Date.now()}`,
       type: 'text',
     });
-    appendFileSync(join(logDir, 'outbound-messages.jsonl'), entry + '\n');
+    const { atomicAppendLineSync: atomicAppend } = require('../utils/atomic.js');
+    atomicAppend(join(logDir, 'outbound-messages.jsonl'), entry);
 
     // ACK the original inbox message
     if (msgId) {

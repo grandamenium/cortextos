@@ -29,7 +29,7 @@ import {
 } from '@/components/shared';
 import { IconPencil, IconFile, IconPhoto, IconFileText, IconCode } from '@tabler/icons-react';
 import { DeliverablePreview } from '@/components/tasks/deliverable-preview';
-import type { Task, TaskOutput, TaskStatus, TaskPriority } from '@/lib/types';
+import type { Task, TaskComment, TaskOutput, TaskStatus, TaskPriority } from '@/lib/types';
 
 export interface TaskDetailSheetProps {
   task: Task | null;
@@ -76,6 +76,9 @@ export function TaskDetailSheet({
   onEdit,
 }: TaskDetailSheetProps) {
   const [note, setNote] = useState('');
+  const [comment, setComment] = useState('');
+  const [commentSending, setCommentSending] = useState(false);
+  const [commentSent, setCommentSent] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -92,13 +95,17 @@ export function TaskDetailSheet({
   const [deliverablesEnabled, setDeliverablesEnabled] = useState(false);
   const [previewOutput, setPreviewOutput] = useState<TaskOutput | null>(null);
 
-  // Fetch outputs and deliverables setting when task detail opens
+  // Thread state
+  const [thread, setThread] = useState<TaskComment[]>([]);
+
+  // Fetch outputs, updates, and deliverables setting when task detail opens
   const fetchTaskOutputs = useCallback(async (taskId: string, org: string) => {
     try {
       const res = await fetch(`/api/tasks/${taskId}`);
       if (res.ok) {
         const data = await res.json();
         setOutputs(Array.isArray(data.outputs) ? data.outputs : []);
+        setThread(Array.isArray(data.updates) ? data.updates : []);
       }
     } catch { /* non-fatal */ }
 
@@ -117,8 +124,24 @@ export function TaskDetailSheet({
     } else {
       setOutputs([]);
       setPreviewOutput(null);
+      setThread([]);
     }
   }, [open, task?.id, task?.org, fetchTaskOutputs, task]);
+
+  // Poll for new thread entries every 12s while sheet is open
+  useEffect(() => {
+    if (!open || !task) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/tasks/${task.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          setThread(Array.isArray(data.updates) ? data.updates : []);
+        }
+      } catch { /* non-fatal */ }
+    }, 12000);
+    return () => clearInterval(interval);
+  }, [open, task?.id, task]);
 
   if (!task) return null;
 
@@ -179,9 +202,39 @@ export function TaskDetailSheet({
     }
   }
 
+  async function handleSendComment() {
+    if (!task || !comment.trim()) return;
+    setCommentSending(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: comment.trim() }),
+      });
+      if (res.ok) {
+        setComment('');
+        setCommentSent(true);
+        setTimeout(() => setCommentSent(false), 3000);
+        // Refresh thread so the new entry appears immediately
+        try {
+          const r2 = await fetch(`/api/tasks/${task.id}`);
+          if (r2.ok) { const d = await r2.json(); setThread(Array.isArray(d.updates) ? d.updates : []); }
+        } catch { /* non-fatal */ }
+      } else {
+        const data = await res.json();
+        setError(data.error || 'Failed to send update');
+      }
+    } catch {
+      setError('Network error');
+    } finally {
+      setCommentSending(false);
+    }
+  }
+
   return (
     <>
-    <Sheet open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setEditing(false); setConfirmDelete(false); setError(null); setPreviewOutput(null); } }}>
+    <Sheet open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setEditing(false); setConfirmDelete(false); setError(null); setPreviewOutput(null); setComment(''); setCommentSent(false); } }}>
       <SheetContent side="right" className="sm:max-w-lg overflow-y-auto">
         <SheetHeader>
           {editing ? (
@@ -377,6 +430,65 @@ export function TaskDetailSheet({
                     maxLength={2000}
                   />
                 </div>
+              </div>
+
+              <Separator />
+              {/* Thread — Jennifer ↔ Atlas back-and-forth */}
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  Updates{thread.length > 0 ? ` (${thread.length})` : ''}
+                </p>
+                {thread.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">No updates yet.</p>
+                ) : (
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {thread.map((entry, idx) => {
+                      const isAtlas = entry.from === 'atlas';
+                      const isDashboard = entry.from === 'dashboard';
+                      const label = isDashboard ? 'Jennifer' : entry.from;
+                      const ts = new Date(entry.at).toLocaleString('en-US', {
+                        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
+                      });
+                      return (
+                        <div key={idx} className={`rounded-lg px-3 py-2 text-sm ${isAtlas ? 'bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900' : 'bg-muted/50 border border-border'}`}>
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className={`text-[11px] font-semibold ${isAtlas ? 'text-blue-700 dark:text-blue-400' : 'text-foreground'}`}>
+                              {label}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground">{ts}</span>
+                          </div>
+                          <p className="whitespace-pre-wrap text-sm">{entry.text}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+              {/* Send update to Atlas */}
+              <div className="space-y-2">
+                <Label htmlFor="task-comment" className="flex items-center gap-1.5">
+                  Send update to Atlas
+                  <span className="text-[10px] font-normal text-muted-foreground">(routes to Atlas inbox)</span>
+                </Label>
+                <Textarea
+                  id="task-comment"
+                  placeholder="Type an update or note — Atlas will be notified immediately..."
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  maxLength={2000}
+                  rows={3}
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={commentSending || !comment.trim()}
+                  onClick={handleSendComment}
+                  className="w-full"
+                >
+                  {commentSending ? 'Sending...' : commentSent ? 'Sent to Atlas ✓' : 'Send Update to Atlas'}
+                </Button>
               </div>
             </>
           )}

@@ -56,6 +56,12 @@ export interface TaskOutput {
   label?: string;
 }
 
+export interface TaskComment {
+  from: string;
+  text: string;
+  at: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -74,6 +80,7 @@ export interface Task {
   notes?: string;
   source_file?: string;
   outputs?: TaskOutput[];
+  updates?: TaskComment[];
 }
 
 // -- Deal Types --
