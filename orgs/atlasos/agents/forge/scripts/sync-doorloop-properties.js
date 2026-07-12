@@ -90,13 +90,24 @@ async function main() {
   const apiKey = loadKey();
   console.log('[doorloop-sync] Starting...');
 
-  const [allLeases, allUnits, allTasks] = await Promise.all([
+  const [allLeases, allUnits, allTasks, allPayments] = await Promise.all([
     fetchAll(apiKey, 'leases'),
     fetchAll(apiKey, 'units'),
     fetchAll(apiKey, 'tasks'),
+    fetchAll(apiKey, 'lease-payments'),
   ]);
 
-  console.log(`[doorloop-sync] Fetched ${allLeases.length} leases, ${allUnits.length} units, ${allTasks.length} tasks`);
+  console.log(`[doorloop-sync] Fetched ${allLeases.length} leases, ${allUnits.length} units, ${allTasks.length} tasks, ${allPayments.length} payments`);
+
+  // Build latest payment per lease ID (most recent date wins)
+  const latestPaymentByLease = {};
+  for (const pmt of allPayments) {
+    if (!pmt.lease || !pmt.date || !pmt.amountReceived) continue;
+    const existing = latestPaymentByLease[pmt.lease];
+    if (!existing || pmt.date > existing.date) {
+      latestPaymentByLease[pmt.lease] = { date: pmt.date, amount: pmt.amountReceived };
+    }
+  }
 
   // Group open tasks by DoorLoop property ID
   const tasksByProperty = {};
@@ -178,6 +189,7 @@ async function main() {
           lease_expiration: lease.end || null,
           payment_status: derivePaymentStatus(lease),
           amount_due: lease.totalBalanceDue > 0 ? lease.totalBalanceDue : null,
+          last_payment: latestPaymentByLease[lease.id] ?? null,
           eviction_status: deriveEvictionStatus(lease),
           notes: priorNotes.get(normRoom(roomName)) ?? null,
         };
@@ -188,6 +200,7 @@ async function main() {
           lease_expiration: null,
           payment_status: 'vacant',
           amount_due: null,
+          last_payment: null,
           eviction_status: null,
           notes: priorNotes.get(normRoom(roomName)) ?? null,
         };
@@ -205,6 +218,7 @@ async function main() {
             lease_expiration: lease.end || null,
             payment_status: derivePaymentStatus(lease),
             amount_due: lease.totalBalanceDue > 0 ? lease.totalBalanceDue : null,
+            last_payment: latestPaymentByLease[lease.id] ?? null,
             eviction_status: deriveEvictionStatus(lease),
             notes: priorNotes.get(normRoom(roomName)) ?? null,
           });
@@ -247,7 +261,8 @@ async function main() {
     prop.last_report_by = 'DoorLoop sync';
 
     atomicWrite(filePath, prop);
-    console.log(`[doorloop-sync] ${file}: ${roster.length} units (${roster.filter(r => r.tenant).length} occ), ${dlNeeds.length} open tasks`);
+    const pmtCount = roster.filter(r => r.last_payment).length;
+    console.log(`[doorloop-sync] ${file}: ${roster.length} units (${roster.filter(r => r.tenant).length} occ), ${dlNeeds.length} open tasks, ${pmtCount}/${roster.length} rooms with last_payment`);
     synced++;
   }
 

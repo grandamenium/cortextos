@@ -9,6 +9,9 @@ import type { Property, RoomRosterEntry, ProspectEntry } from '@/lib/data/proper
 function prospectRoom(p: ProspectEntry): string | undefined {
   return p.target_room ?? p.room;
 }
+function normalizeRoom(r: string | undefined): string {
+  return (r ?? '').replace(/\s+/g, '').toLowerCase();
+}
 function prospectMoveIn(p: ProspectEntry): string | undefined {
   return p.move_in_date ?? p.expected_move_in;
 }
@@ -161,7 +164,7 @@ function ProspectPanel({ pipeline }: { pipeline: ProspectEntry[] }) {
                 </div>
               )}
               {!moveIn && p.notes && (
-                <div className="text-[9px] text-zinc-400 mt-0.5 pl-0.5 truncate">{p.notes.slice(0, 60)}</div>
+                <div className="text-[9px] text-zinc-400 mt-0.5 pl-0.5 truncate" title={p.notes}>{p.notes.slice(0, 60)}{p.notes.length > 60 ? '…' : ''}</div>
               )}
             </div>
           );
@@ -316,7 +319,7 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
             const unit = property.units.find(u => u.name?.toLowerCase() === room.room?.toLowerCase());
             const monthlyRent = unit?.rent ?? null;
             const recentNote = (room.collection_notes ?? []).slice().sort((a, b) => b.date.localeCompare(a.date))[0];
-            const prospect = pipeline.find(p => (p.target_room ?? p.room) === room.room && p.stage !== 'moved_in');
+            const prospect = pipeline.find(p => normalizeRoom(p.target_room ?? p.room) === normalizeRoom(room.room) && p.stage !== 'moved_in');
             const isVacant = room.payment_status === 'vacant';
             const isFlagged = !!(room.flag || room.move_out_planned);
             const moveIn = prospect ? prospectMoveIn(prospect) : room.expected_move_in ?? null;
@@ -335,9 +338,9 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
             } else if (room.move_out_planned) {
               staticNoteContent = <span className="text-purple-600">Move-out planned{room.move_out_date ? `: ${fmtMoveIn(room.move_out_date)}` : ''}</span>;
             } else if (prospect?.notes) {
-              staticNoteContent = <span className="text-zinc-600">{prospect.notes.slice(0, 80)}</span>;
+              staticNoteContent = <span className="text-zinc-600" title={prospect.notes}>{prospect.notes.slice(0, 80)}{prospect.notes.length > 80 ? '…' : ''}</span>;
             } else if (recentNote) {
-              staticNoteContent = <span className="text-zinc-500">{recentNote.date} — {(recentNote.note ?? '').slice(0, 60)}</span>;
+              staticNoteContent = <span className="text-zinc-500" title={recentNote.note ?? ''}>{recentNote.date} — {(recentNote.note ?? '').slice(0, 60)}{(recentNote.note ?? '').length > 60 ? '…' : ''}</span>;
             } else {
               staticNoteContent = <span className="text-zinc-300">—</span>;
             }
@@ -382,6 +385,11 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
                   )}
                   {room.eviction_status && (
                     <div className="text-[11px] text-red-500 mt-0.5">{room.eviction_status}</div>
+                  )}
+                  {!isVacant && room.last_payment && (
+                    <div className="text-[10px] text-zinc-400 mt-0.5 tabular-nums">
+                      Last pmt: {fmt(room.last_payment.amount)} · {room.last_payment.date}
+                    </div>
                   )}
                 </div>
                 {/* Notes row — full width, larger tap target */}
@@ -460,13 +468,13 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
                   );
                 } else if (isVacant || isCommitted) {
                   if (prospect?.notes) {
-                    staticNoteContent = <span className="text-zinc-600">{prospect.notes.slice(0, 50)}</span>;
+                    staticNoteContent = <span className="text-zinc-600" title={prospect.notes}>{prospect.notes.slice(0, 50)}{prospect.notes.length > 50 ? '…' : ''}</span>;
                   } else if (recentOutreach) {
                     staticNoteContent = (
                       <>
                         <span className="text-zinc-400 tabular-nums mr-1">{recentOutreach.date}</span>
                         <span className="text-zinc-500 uppercase text-[9px] mr-1">{recentOutreach.type}</span>
-                        <span className="text-zinc-600">
+                        <span className="text-zinc-600" title={recentOutreach.detail ?? ''}>
                           {(recentOutreach.detail ?? '').length > 40
                             ? (recentOutreach.detail ?? '').slice(0, 40) + '…'
                             : (recentOutreach.detail ?? '')}
@@ -480,7 +488,7 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
                   staticNoteContent = (
                     <>
                       <span className="text-zinc-400 tabular-nums mr-1">{recentNote.date}</span>
-                      <span className="text-zinc-600">
+                      <span className="text-zinc-600" title={recentNote.note ?? ''}>
                         {(recentNote.note ?? '').length > 40 ? (recentNote.note ?? '').slice(0, 40) + '…' : (recentNote.note ?? '')}
                       </span>
                       {recentNote.outcome && (
@@ -510,11 +518,11 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
                     </td>
                     <td className="py-2 pr-3 max-w-[160px]">
                       {room.tenant && !isCommitted ? (
-                        <span className="text-[11px] text-zinc-700 truncate block">{room.tenant}</span>
+                        <span className="text-[11px] text-zinc-700 truncate block" title={room.tenant ?? ''}>{room.tenant}</span>
                       ) : prospect ? (
                         <div>
                           <div className="flex items-center gap-1 flex-wrap">
-                            <span className={`text-[11px] font-medium truncate ${isCommitted ? 'text-purple-700' : 'text-blue-600'}`}>{prospect.name}</span>
+                            <span className={`text-[11px] font-medium truncate ${isCommitted ? 'text-purple-700' : 'text-blue-600'}`} title={prospect.name}>{prospect.name}</span>
                             <span className={`text-[9px] px-1 py-0.5 rounded border whitespace-nowrap ${stageCls[prospect.stage] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
                               {stageLabel[prospect.stage] ?? prospect.stage}
                             </span>
@@ -535,8 +543,15 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
                         ? <span className="text-[11px] text-zinc-600 tabular-nums">{fmt(monthlyRent)}</span>
                         : <span className="text-[11px] text-zinc-300">—</span>}
                     </td>
-                    <td className="py-2 pr-3 text-right align-top">
-                      <span className="text-[11px] text-zinc-300">—</span>
+                    <td className="py-2 pr-3 text-right align-top whitespace-nowrap">
+                      {room.last_payment ? (
+                        <div>
+                          <div className="text-[11px] text-zinc-700 tabular-nums">{fmt(room.last_payment.amount)}</div>
+                          <div className="text-[9px] text-zinc-400">{room.last_payment.date}</div>
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-zinc-300">—</span>
+                      )}
                     </td>
                     <td className="py-2 pr-3 text-right align-top">
                       {!isVacant && !isCommitted
@@ -587,7 +602,7 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
                       <span className={`text-[9px] w-4 text-center py-0.5 rounded border shrink-0 ${needPriorityCls[n.priority] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
                         {n.priority[0].toUpperCase()}
                       </span>
-                      <span className="text-[11px] text-zinc-700 flex-1 truncate">{n.item}</span>
+                      <span className="text-[11px] text-zinc-700 flex-1 truncate" title={n.item}>{n.item}</span>
                       {n.unit && (
                         <span className="text-[9px] bg-zinc-100 text-zinc-500 border border-zinc-200 rounded px-1 py-0.5 shrink-0">{n.unit}</span>
                       )}

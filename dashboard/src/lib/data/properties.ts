@@ -104,6 +104,7 @@ export interface RoomRosterEntry {
   lease_expiration?: string;
   payment_status: 'current' | 'late' | 'delinquent' | 'vacant' | 'eviction' | string;
   amount_due: number | null;
+  last_payment?: { date: string; amount: number } | null;
   eviction_status?: string;
   notes?: string;
   collection_notes?: CollectionNote[];

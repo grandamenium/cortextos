@@ -100,6 +100,7 @@ function RoomRow({ room, prospect }: { room: RoomRosterEntry; prospect?: { name:
         <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[11px] text-zinc-400">
           {room.tenant && <span>{room.tenant}</span>}
           {room.amount_due != null && <span className="tabular-nums">Due: {fmt(room.amount_due)}</span>}
+          {room.last_payment && <span className="tabular-nums">Last pmt: {fmt(room.last_payment.amount)} · {room.last_payment.date}</span>}
           {room.lease_expiration && <span>Exp: {room.lease_expiration}</span>}
           {room.eviction_status && <span className="text-red-500">{room.eviction_status}</span>}
           {room.notes && <span className="italic">{room.notes}</span>}
