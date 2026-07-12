@@ -165,6 +165,19 @@ export class FastChecker {
       // silently lands under state/<basename-of-daemon-cwd>/heartbeat.json
       // instead of this agent's own file (observed in production as a phantom
       // "cortextos" pseudo-agent in read-all-heartbeats, never this agent's).
+      //
+      // TEMP DIAGNOSTIC (2026-07-12, task_1783847243268_19095709): a live
+      // instance wrote "[watchdog] cleo alive" into anam's own heartbeat.json
+      // (agent field + directory both correctly "anam") — cannot be
+      // explained by anything found in static tracing of this file, the
+      // construction chain, the compiled build, or the on-disk .cortextos-env
+      // files. Logging the start()-captured agentName against a FRESH read
+      // of this.agent.name (and getAgentDir()) at the actual firing moment,
+      // to catch a possible divergence between them that static reading
+      // can't reveal. Remove once root-caused.
+      if (agentName !== this.agent.name) {
+        this.log(`WATCHDOG DIAGNOSTIC: agentName mismatch! captured-at-start="${agentName}" vs live-this.agent.name="${this.agent.name}" (dir=${this.agent.getAgentDir()})`);
+      }
       execFile(
         'cortextos',
         ['bus', 'update-heartbeat', `${WATCHDOG_HEARTBEAT_PREFIX} ${agentName} alive — idle session ${ts}`],
