@@ -157,31 +157,39 @@ async function main() {
       continue;
     }
 
+    // room_roster[].notes is a CURATED, human/agent-owned field (edited via the
+    // dashboard + set by Atlas/Timber) and is the authoritative Notes column.
+    // It must survive every sync: snapshot the existing notes by normalized room
+    // key and re-apply them onto the rebuilt roster. The sync NEVER writes note
+    // text of its own (overdue/deposit amounts live in the Due column, not Notes).
+    const normRoom = s => (s || '').toLowerCase().replace(/\s+/g, '');
+    const priorNotes = new Map(
+      (prop.room_roster || []).map(r => [normRoom(r.room), r.notes ?? null])
+    );
+
     // Build room_roster from units (each unit gets a row, occupied or vacant)
     const roster = propUnits.map(unit => {
       const lease = unitLeaseMap[unit.id];
+      const roomName = unitNames[unit.id] || unit.id;
       if (lease) {
         return {
-          room: unitNames[unit.id] || unit.id,
+          room: roomName,
           tenant: lease.name || null,
           lease_expiration: lease.end || null,
           payment_status: derivePaymentStatus(lease),
           amount_due: lease.totalBalanceDue > 0 ? lease.totalBalanceDue : null,
           eviction_status: deriveEvictionStatus(lease),
-          notes: [
-            lease.overdueBalance > 0 ? `Overdue: $${lease.overdueBalance}` : null,
-            lease.totalDepositsHeld > 0 ? `Deposit held: $${lease.totalDepositsHeld}` : null,
-          ].filter(Boolean).join(' | ') || null,
+          notes: priorNotes.get(normRoom(roomName)) ?? null,
         };
       } else {
         return {
-          room: unitNames[unit.id] || unit.id,
+          room: roomName,
           tenant: null,
           lease_expiration: null,
           payment_status: 'vacant',
           amount_due: null,
           eviction_status: null,
-          notes: null,
+          notes: priorNotes.get(normRoom(roomName)) ?? null,
         };
       }
     });
@@ -190,14 +198,15 @@ async function main() {
     for (const lease of propLeases) {
       for (const unitId of (lease.units || [])) {
         if (!propUnits.find(u => u.id === unitId)) {
+          const roomName = unitNames[unitId] || unitId;
           roster.push({
-            room: unitNames[unitId] || unitId,
+            room: roomName,
             tenant: lease.name || null,
             lease_expiration: lease.end || null,
             payment_status: derivePaymentStatus(lease),
             amount_due: lease.totalBalanceDue > 0 ? lease.totalBalanceDue : null,
             eviction_status: deriveEvictionStatus(lease),
-            notes: lease.totalDepositsHeld > 0 ? `Deposit held: $${lease.totalDepositsHeld}` : null,
+            notes: priorNotes.get(normRoom(roomName)) ?? null,
           });
         }
       }
