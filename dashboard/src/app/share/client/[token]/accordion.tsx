@@ -301,10 +301,108 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
   const pipeline = property.prospect_pipeline ?? [];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-3">
+    <div className="grid grid-cols-1 md:grid-cols-[3fr_2fr] gap-3">
 
-      {/* LEFT: Room Status table */}
-      <div className="bg-white rounded-md border border-zinc-100 p-3 min-w-0 overflow-x-auto">
+      {/* LEFT: Room Status */}
+      <div>
+        {/* Mobile card stack — visible only below md (768px) */}
+        <div className="block md:hidden space-y-2">
+          <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1">
+            Room Status{editKey && <span className="ml-1 text-blue-400">✎ tap notes to edit</span>}
+          </div>
+          {roster.length === 0 ? (
+            <p className="text-[11px] text-zinc-400 italic">No room data</p>
+          ) : roster.map((room, i) => {
+            const unit = property.units.find(u => u.name?.toLowerCase() === room.room?.toLowerCase());
+            const monthlyRent = unit?.rent ?? null;
+            const recentNote = (room.collection_notes ?? []).slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+            const prospect = pipeline.find(p => (p.target_room ?? p.room) === room.room && p.stage !== 'moved_in');
+            const isVacant = room.payment_status === 'vacant';
+            const isFlagged = !!(room.flag || room.move_out_planned);
+            const moveIn = prospect ? prospectMoveIn(prospect) : room.expected_move_in ?? null;
+            const isCommitted = !!(moveIn && moveIn > today && prospect &&
+              (prospect.stage === 'committed' || prospect.stage === 'approved' || prospect.stage === 'lease_signed'));
+            const dotCls = statusDotCls[room.payment_status] ?? 'text-zinc-300';
+            const effectiveNote = localNotes[room.room ?? ''] !== undefined
+              ? localNotes[room.room ?? '']
+              : (room.notes ?? null);
+
+            let staticNoteContent: JSX.Element;
+            if (effectiveNote) {
+              staticNoteContent = <span className="text-zinc-600">{effectiveNote}</span>;
+            } else if (room.flag) {
+              staticNoteContent = <span className="text-orange-600 font-medium">{room.flag}</span>;
+            } else if (room.move_out_planned) {
+              staticNoteContent = <span className="text-purple-600">Move-out planned{room.move_out_date ? `: ${fmtMoveIn(room.move_out_date)}` : ''}</span>;
+            } else if (prospect?.notes) {
+              staticNoteContent = <span className="text-zinc-600">{prospect.notes.slice(0, 80)}</span>;
+            } else if (recentNote) {
+              staticNoteContent = <span className="text-zinc-500">{recentNote.date} — {(recentNote.note ?? '').slice(0, 60)}</span>;
+            } else {
+              staticNoteContent = <span className="text-zinc-300">—</span>;
+            }
+
+            return (
+              <div key={i} className="bg-white rounded-md border border-zinc-100 p-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[10px] leading-none ${isCommitted ? 'text-purple-400' : dotCls}`}>●</span>
+                    <span className={`text-[15px] font-semibold ${isFlagged ? 'text-orange-700' : isCommitted ? 'text-purple-700' : 'text-zinc-900'}`}>
+                      {room.room}
+                    </span>
+                    {isFlagged && <span className="text-[11px] text-orange-400">⚑</span>}
+                  </div>
+                  <div className="flex items-center gap-2 text-right">
+                    {monthlyRent != null && (
+                      <span className="text-[12px] text-zinc-500 tabular-nums">{fmt(monthlyRent)}<span className="text-[10px] text-zinc-300">/mo</span></span>
+                    )}
+                    {!isVacant && !isCommitted && room.amount_due != null && room.amount_due > 0 && (
+                      <span className="text-[12px] font-semibold text-red-600 tabular-nums">{fmt(room.amount_due)} due</span>
+                    )}
+                    {!isVacant && !isCommitted && (room.amount_due == null || room.amount_due === 0) && (
+                      <span className="text-[11px] text-green-600">current</span>
+                    )}
+                  </div>
+                </div>
+                <div className="mb-1.5">
+                  {room.tenant && !isCommitted ? (
+                    <span className="text-[13px] text-zinc-700">{room.tenant}</span>
+                  ) : prospect ? (
+                    <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className={`text-[13px] font-medium ${isCommitted ? 'text-purple-700' : 'text-blue-600'}`}>{prospect.name}</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded border ${stageCls[prospect.stage] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
+                          {stageLabel[prospect.stage] ?? prospect.stage}
+                        </span>
+                      </div>
+                      {moveIn && <span className="text-[11px] text-purple-600 mt-0.5 block">Moving in {fmtMoveIn(moveIn)}</span>}
+                    </div>
+                  ) : (
+                    <span className="text-[13px] text-zinc-400 italic">Vacant</span>
+                  )}
+                  {room.eviction_status && (
+                    <div className="text-[11px] text-red-500 mt-0.5">{room.eviction_status}</div>
+                  )}
+                </div>
+                {/* Notes row — full width, larger tap target */}
+                <div className="border-t border-zinc-50 pt-2 mt-1 text-[12px] leading-snug min-h-[36px]">
+                  <NotesCell
+                    currentNote={effectiveNote}
+                    staticContent={staticNoteContent}
+                    editKey={editKey}
+                    token={token}
+                    propertyId={property.id}
+                    room={room.room ?? ''}
+                    onSaved={(newNote) => setLocalNotes(prev => ({ ...prev, [room.room ?? '']: newNote }))}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Desktop table — visible only at md (768px) and above */}
+        <div className="hidden md:block bg-white rounded-md border border-zinc-100 p-3 min-w-0 overflow-x-auto">
         <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-2">Room Status</div>
 
         {roster.length === 0 ? (
@@ -464,7 +562,8 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
             </tbody>
           </table>
         )}
-      </div>
+        </div>{/* end desktop table wrapper */}
+      </div>{/* end left column */}
 
       {/* RIGHT: panels */}
       <div className="space-y-2 min-w-0">

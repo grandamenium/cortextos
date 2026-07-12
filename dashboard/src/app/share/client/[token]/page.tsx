@@ -66,7 +66,7 @@ export default async function ClientPortalPage({
 
       <div className="max-w-[1400px] mx-auto px-4 py-4 space-y-3">
         {/* Portfolio summary strip */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <div className="bg-white rounded-lg border border-zinc-200 p-3.5 shadow-sm">
             <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">Occupancy</div>
             <div className={`text-2xl font-bold tabular-nums ${
