@@ -368,18 +368,10 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
                   </div>
                 </div>
                 <div className="mb-1.5">
-                  {room.tenant && !isCommitted ? (
+                  {room.tenant ? (
                     <span className="text-[13px] text-zinc-700">{room.tenant}</span>
-                  ) : prospect ? (
-                    <div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className={`text-[13px] font-medium ${isCommitted ? 'text-purple-700' : 'text-blue-600'}`}>{prospect.name}</span>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded border ${stageCls[prospect.stage] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
-                          {stageLabel[prospect.stage] ?? prospect.stage}
-                        </span>
-                      </div>
-                      {moveIn && <span className="text-[11px] text-purple-600 mt-0.5 block">Moving in {fmtMoveIn(moveIn)}</span>}
-                    </div>
+                  ) : moveIn && moveIn > today ? (
+                    <span className="text-[13px] text-purple-600">Reserved · {fmtMoveIn(moveIn)}</span>
                   ) : (
                     <span className="text-[13px] text-zinc-400 italic">Vacant</span>
                   )}
@@ -517,23 +509,10 @@ function PropertyDetail({ property, token, editKey }: DetailProps) {
                       )}
                     </td>
                     <td className="py-2 pr-3 max-w-[160px]">
-                      {room.tenant && !isCommitted ? (
+                      {room.tenant ? (
                         <span className="text-[11px] text-zinc-700 truncate block" title={room.tenant ?? ''}>{room.tenant}</span>
-                      ) : prospect ? (
-                        <div>
-                          <div className="flex items-center gap-1 flex-wrap">
-                            <span className={`text-[11px] font-medium truncate ${isCommitted ? 'text-purple-700' : 'text-blue-600'}`} title={prospect.name}>{prospect.name}</span>
-                            <span className={`text-[9px] px-1 py-0.5 rounded border whitespace-nowrap ${stageCls[prospect.stage] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
-                              {stageLabel[prospect.stage] ?? prospect.stage}
-                            </span>
-                            {prospect.no_reply && (
-                              <span className="text-[9px] px-1 py-0.5 rounded border bg-red-50 text-red-500 border-red-200 whitespace-nowrap">No reply</span>
-                            )}
-                          </div>
-                          {moveIn && (
-                            <span className="text-[9px] text-purple-600 mt-0.5 block">Planning to move in {fmtMoveIn(moveIn)}</span>
-                          )}
-                        </div>
+                      ) : moveIn && moveIn > today ? (
+                        <span className="text-[11px] text-purple-600">Reserved · {fmtMoveIn(moveIn)}</span>
                       ) : (
                         <span className="text-[11px] text-zinc-400 italic">Vacant</span>
                       )}
