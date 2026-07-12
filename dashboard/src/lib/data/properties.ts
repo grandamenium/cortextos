@@ -16,10 +16,13 @@ export interface PropertyNeed {
   unit?: string;
   vendor?: string;
   cost: number | null;
+  quoted_amount?: number | null;
   status: 'needed' | 'in_progress' | 'on_hold' | 'quote_pending' | 'pending' | 'done';
   priority: 'urgent' | 'high' | 'medium' | 'low';
   expected_completion_date?: string;
   notes?: string;
+  doorloop_task_id?: string;
+  doorloop_updated_at?: string | null;
 }
 
 export interface BalanceOwed {
@@ -177,6 +180,7 @@ export interface Property {
   recent_outreach?: OutreachEntry[];
   occupancy_outreach?: { vacant_rooms: number; outreach_log?: OccupancyOutreachLog[] };
   prospect_pipeline?: ProspectEntry[];
+  status_updates?: { from: string; text: string; at: string; }[];
   status_note?: string;
   last_report?: string;
   last_report_by?: string;

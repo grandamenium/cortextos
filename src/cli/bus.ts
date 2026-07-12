@@ -371,6 +371,38 @@ busCommand
   });
 
 busCommand
+  .command('property-note')
+  .description("Append an intraday agent note to a property's status_updates thread (visible in the client dashboard)")
+  .argument('<property-id>', 'Property ID — matches the JSON filename stem under orgs/{org}/properties/')
+  .argument('<message>', 'Note text to append (max 2000 chars)')
+  .action((propertyId: string, message: string) => {
+    const env = resolveEnv();
+    const { homedir: _homedirPn } = require('os') as typeof import('os');
+    const propertiesDir = join(_homedirPn(), '.cortextos', env.instanceId, 'orgs', env.org, 'properties');
+    const propFile = join(propertiesDir, `${propertyId}.json`);
+    if (!existsSync(propFile)) {
+      console.error(`property-note: property file not found: ${propFile}`);
+      process.exit(1);
+    }
+    try {
+      const propData = JSON.parse(readFileSync(propFile, 'utf-8'));
+      if (!Array.isArray(propData.status_updates)) propData.status_updates = [];
+      propData.status_updates.push({
+        from: env.agentName,
+        text: message.trim().slice(0, 2000),
+        at: new Date().toISOString(),
+      });
+      const tmp = propFile + '.tmp';
+      writeFileSync(tmp, JSON.stringify(propData, null, 2) + '\n');
+      renameSync(tmp, propFile);
+      console.log(`Note appended to property ${propertyId}`);
+    } catch (err) {
+      console.error(`property-note: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
   .command('save-output')
   .description('Copy a file into the per-task deliverables tree and link it to the task as a file output')
   .argument('<task-id>', 'Target task ID')
