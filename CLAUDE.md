@@ -12,10 +12,22 @@ npm test
 
 ## Before Submitting Changes
 
-1. `npm run build` — TypeScript must compile cleanly
+1. `npm run typecheck` — TypeScript must compile cleanly
 2. `npm test` — all tests must pass
 3. Match existing patterns in `src/` for new features
 4. Add unit tests in `tests/` for any new code
+
+> **Use `npm run typecheck`, not `npm run build`, to check that your code compiles.**
+>
+> `bin.cortextos` points at `dist/cli.js`. On any host where cortextOS is
+> installed from a working checkout (`npm link` / `npm i -g .`), the global
+> `cortextos` command resolves *into that checkout's `dist/`* — so **`npm run
+> build` is a DEPLOY**: every agent, cron and hook on that box immediately
+> starts executing whatever you just compiled, branch and all.
+>
+> `npm run typecheck` (`tsc --noEmit`) verifies the code and writes nothing.
+> `npm run build` is guarded on live hosts (see `scripts/guard-live-build.mjs`);
+> to deploy deliberately, use `npm run build:deploy`.
 
 ## Project Structure
 
