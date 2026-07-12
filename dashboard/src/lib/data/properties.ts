@@ -65,16 +65,26 @@ export interface PropertyDraws {
   line_items?: DrawLineItem[];
 }
 
-export type ProspectStage = 'applied' | 'screening' | 'approved' | 'lease_signed' | 'moved_in';
+export type ProspectStage = 'lead' | 'applied' | 'screening' | 'approved' | 'committed' | 'lease_signed' | 'moved_in';
 
 export interface ProspectEntry {
   name: string;
   stage: ProspectStage;
   room?: string;
+  target_room?: string;        // Timber's field name — same as room
   applied_date?: string;
   stage_updated?: string;
-  notes?: string;
+  last_contact_date?: string;
+  expected_move_in?: string;
+  move_in_date?: string;       // Timber's field name — same as expected_move_in
+  no_reply?: boolean;
+  source?: string;
+  ghl_conv_id?: string;
+  dl_tenant_id?: string;
   doorloop_tenant_id?: string;
+  notes?: string;
+  phone?: string;
+  email?: string;
   contact?: { email?: string; phone?: string };
 }
 
@@ -97,6 +107,10 @@ export interface RoomRosterEntry {
   eviction_status?: string;
   notes?: string;
   collection_notes?: CollectionNote[];
+  move_out_planned?: boolean;
+  move_out_date?: string;
+  expected_move_in?: string;
+  flag?: string | null;
 }
 
 export interface UtilityTracker {

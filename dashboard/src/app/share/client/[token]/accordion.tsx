@@ -2,19 +2,45 @@
 
 import { useState } from 'react';
 import type { JSX } from 'react';
-import type { Property, RoomRosterEntry } from '@/lib/data/properties';
+import type { Property, RoomRosterEntry, ProspectEntry } from '@/lib/data/properties';
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
+function prospectRoom(p: ProspectEntry): string | undefined {
+  return p.target_room ?? p.room;
+}
+function prospectMoveIn(p: ProspectEntry): string | undefined {
+  return p.move_in_date ?? p.expected_move_in;
+}
+
 function occupancySummary(p: Property) {
   const roster = p.room_roster ?? [];
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Rooms with a committed/approved/lease_signed prospect whose move-in is still future
+  const committedRooms = new Set<string>();
+  for (const prospect of (p.prospect_pipeline ?? [])) {
+    const moveIn = prospectMoveIn(prospect);
+    if (moveIn && moveIn > today &&
+        (prospect.stage === 'committed' || prospect.stage === 'approved' || prospect.stage === 'lease_signed')) {
+      const r = prospectRoom(prospect);
+      if (r) committedRooms.add(r.toLowerCase());
+    }
+  }
+
   if (roster.length === 0) {
     return {
       occupied: p.units?.filter(u => u.status === 'occupied').length ?? 0,
       total: p.units?.length ?? 0,
+      committed: committedRooms.size,
     };
   }
-  return { occupied: roster.filter(r => r.payment_status !== 'vacant').length, total: roster.length };
+
+  const committed = roster.filter(r => committedRooms.has((r.room ?? '').toLowerCase())).length;
+  const occupied = roster.filter(r =>
+    r.payment_status !== 'vacant' && !committedRooms.has((r.room ?? '').toLowerCase())
+  ).length;
+  return { occupied, total: roster.length, committed };
 }
 
 function paymentSummary(roster: RoomRosterEntry[]) {
@@ -70,26 +96,88 @@ const priorityOrder: Record<string, number> = {
   urgent: 0, high: 1, medium: 2, low: 3,
 };
 
-// Stage label + color for prospect pipeline
 const stageLabel: Record<string, string> = {
-  applied: 'Applied', screening: 'Screening', approved: 'Approved',
-  lease_signed: 'Lease Signed', moved_in: 'Moved In',
+  lead:        'Lead',
+  applied:     'Applied',
+  screening:   'Screening',
+  approved:    'Approved',
+  committed:   'Committed',
+  lease_signed:'Lease Signed',
+  moved_in:    'Moved In',
 };
 const stageCls: Record<string, string> = {
+  lead:        'bg-zinc-100 text-zinc-500 border-zinc-200',
   applied:     'bg-zinc-100 text-zinc-500 border-zinc-200',
   screening:   'bg-amber-50 text-amber-700 border-amber-200',
   approved:    'bg-blue-50 text-blue-700 border-blue-200',
+  committed:   'bg-purple-50 text-purple-700 border-purple-200',
   lease_signed:'bg-green-50 text-green-700 border-green-200',
   moved_in:    'bg-green-100 text-green-800 border-green-200',
 };
 
 const NEEDS_PREVIEW = 3;
 
+// ── Prospect Pipeline panel ────────────────────────────────────────────────
+
+function ProspectPanel({ pipeline }: { pipeline: ProspectEntry[] }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const active = pipeline
+    .filter(p => p.stage !== 'moved_in')
+    .sort((a, b) => {
+      const stageOrder: Record<string, number> = {
+        committed: 0, approved: 1, lease_signed: 2, screening: 3, applied: 4, lead: 5,
+      };
+      return (stageOrder[a.stage] ?? 9) - (stageOrder[b.stage] ?? 9);
+    });
+
+  if (active.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-md border border-zinc-100 p-3">
+      <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">
+        Prospect Pipeline · {active.length}
+      </div>
+      <div className="divide-y divide-zinc-50">
+        {active.map((p, i) => {
+          const moveIn = prospectMoveIn(p);
+          const room = prospectRoom(p);
+          const isFuture = moveIn && moveIn > today;
+          return (
+            <div key={i} className="py-1.5 first:pt-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-medium text-zinc-800">{p.name}</span>
+                <span className={`text-[9px] px-1 py-0.5 rounded border whitespace-nowrap ${stageCls[p.stage] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
+                  {stageLabel[p.stage] ?? p.stage}
+                </span>
+                {p.no_reply && (
+                  <span className="text-[9px] px-1 py-0.5 rounded border bg-red-50 text-red-500 border-red-200 whitespace-nowrap">No reply</span>
+                )}
+                {room && room !== 'TBD' && (
+                  <span className="text-[9px] text-zinc-400">{room}</span>
+                )}
+              </div>
+              {moveIn && (
+                <div className={`text-[9px] mt-0.5 pl-0.5 ${isFuture ? 'text-purple-600' : 'text-zinc-400'}`}>
+                  Planning to move in {fmtMoveIn(moveIn)}
+                </div>
+              )}
+              {!moveIn && p.notes && (
+                <div className="text-[9px] text-zinc-400 mt-0.5 pl-0.5 truncate">{p.notes.slice(0, 60)}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── expanded detail — two-column dashboard layout ───────────────────────────
 
 function PropertyDetail({ property }: { property: Property }) {
   const roster = property.room_roster ?? [];
   const [showAllNeeds, setShowAllNeeds] = useState(false);
+  const today = new Date().toISOString().slice(0, 10);
 
   const openNeeds = (property.needs?.filter(n => n.status !== 'done') ?? [])
     .slice()
@@ -103,6 +191,7 @@ function PropertyDetail({ property }: { property: Property }) {
   const hasAnyQuote = openNeeds.some(n => n.quoted_amount != null);
 
   const recentOutreach = (property.occupancy_outreach?.outreach_log ?? []).slice(-1)[0];
+  const pipeline = property.prospect_pipeline ?? [];
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-3">
@@ -134,16 +223,16 @@ function PropertyDetail({ property }: { property: Property }) {
                 const recentNote = (room.collection_notes ?? [])
                   .slice()
                   .sort((a, b) => b.date.localeCompare(a.date))[0];
-                const prospect = (property.prospect_pipeline ?? []).find(
-                  p => p.room === room.room && p.stage !== 'moved_in'
+                const prospect = pipeline.find(
+                  p => (p.target_room ?? p.room) === room.room && p.stage !== 'moved_in'
                 );
                 const isVacant = room.payment_status === 'vacant';
                 const isFlagged = !!(room.flag || room.move_out_planned);
+                const moveIn = prospect ? prospectMoveIn(prospect) : room.expected_move_in ?? null;
+                const isCommitted = !!(moveIn && moveIn > today && prospect &&
+                  (prospect.stage === 'committed' || prospect.stage === 'approved' || prospect.stage === 'lease_signed'));
                 const dotCls = statusDotCls[room.payment_status] ?? 'text-zinc-300';
                 const rowBg = i % 2 === 1 ? 'bg-zinc-50/50' : '';
-
-                // Effective move-in date: from room directly OR from matched prospect
-                const expectedMoveIn = room.expected_move_in ?? prospect?.expected_move_in ?? null;
 
                 // Context-aware notes cell
                 let noteCell: JSX.Element;
@@ -155,9 +244,8 @@ function PropertyDetail({ property }: { property: Property }) {
                       Move-out planned{room.move_out_date ? `: ${fmtMoveIn(room.move_out_date)}` : ''}
                     </span>
                   );
-                } else if (isVacant) {
+                } else if (isVacant || isCommitted) {
                   if (prospect) {
-                    // Prospect in pipeline — notes = any prospect-specific notes
                     noteCell = prospect.notes
                       ? <span className="text-zinc-600">{prospect.notes.slice(0, 50)}</span>
                       : <span className="text-zinc-300">—</span>;
@@ -200,8 +288,8 @@ function PropertyDetail({ property }: { property: Property }) {
                     {/* Room + flag indicator */}
                     <td className="py-2 pr-3">
                       <div className="flex items-center gap-1 whitespace-nowrap">
-                        <span className={`text-[8px] shrink-0 leading-none ${dotCls}`}>●</span>
-                        <span className={`text-[12px] font-semibold ${isFlagged ? 'text-orange-700' : 'text-zinc-900'}`}>
+                        <span className={`text-[8px] shrink-0 leading-none ${isCommitted ? 'text-purple-400' : dotCls}`}>●</span>
+                        <span className={`text-[12px] font-semibold ${isFlagged ? 'text-orange-700' : isCommitted ? 'text-purple-700' : 'text-zinc-900'}`}>
                           {room.room}
                         </span>
                         {isFlagged && <span className="text-[10px] text-orange-400">⚑</span>}
@@ -213,28 +301,24 @@ function PropertyDetail({ property }: { property: Property }) {
 
                     {/* Tenant / Prospect + stage + move-in */}
                     <td className="py-2 pr-3 max-w-[160px]">
-                      {room.tenant ? (
-                        // Occupied room — show tenant + optional move-in date
+                      {room.tenant && !isCommitted ? (
                         <div>
                           <span className="text-[11px] text-zinc-700 truncate block">{room.tenant}</span>
-                          {expectedMoveIn && (
-                            <span className="text-[9px] text-green-600">
-                              Moves in {fmtMoveIn(expectedMoveIn)}
-                            </span>
-                          )}
                         </div>
                       ) : prospect ? (
-                        // Vacant + prospect in pipeline
                         <div>
                           <div className="flex items-center gap-1 flex-wrap">
-                            <span className="text-[11px] text-blue-600 font-medium truncate">{prospect.name}</span>
+                            <span className={`text-[11px] font-medium truncate ${isCommitted ? 'text-purple-700' : 'text-blue-600'}`}>{prospect.name}</span>
                             <span className={`text-[9px] px-1 py-0.5 rounded border whitespace-nowrap ${stageCls[prospect.stage] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
                               {stageLabel[prospect.stage] ?? prospect.stage}
                             </span>
+                            {prospect.no_reply && (
+                              <span className="text-[9px] px-1 py-0.5 rounded border bg-red-50 text-red-500 border-red-200 whitespace-nowrap">No reply</span>
+                            )}
                           </div>
-                          {expectedMoveIn && (
-                            <span className="text-[9px] text-green-600 mt-0.5 block">
-                              Move-in {fmtMoveIn(expectedMoveIn)}
+                          {moveIn && (
+                            <span className="text-[9px] text-purple-600 mt-0.5 block">
+                              Planning to move in {fmtMoveIn(moveIn)}
                             </span>
                           )}
                         </div>
@@ -259,7 +343,7 @@ function PropertyDetail({ property }: { property: Property }) {
 
                     {/* Amount Due */}
                     <td className="py-2 pr-3 text-right align-top">
-                      {!isVacant ? (
+                      {!isVacant && !isCommitted ? (
                         room.amount_due != null && room.amount_due > 0 ? (
                           <span className="text-[11px] font-semibold text-red-600 tabular-nums">{fmt(room.amount_due)}</span>
                         ) : (
@@ -282,6 +366,11 @@ function PropertyDetail({ property }: { property: Property }) {
 
       {/* RIGHT: Secondary info panels */}
       <div className="space-y-2 min-w-0">
+
+        {/* Prospect Pipeline */}
+        {pipeline.filter(p => p.stage !== 'moved_in').length > 0 && (
+          <ProspectPanel pipeline={pipeline} />
+        )}
 
         {/* Open Maintenance — top N by priority, expandable */}
         <div className="bg-white rounded-md border border-zinc-100 p-3">
@@ -462,7 +551,7 @@ function PropertyRow({ property, isOpen, onToggle }: {
   const openNeeds = property.needs?.filter(n => n.status !== 'done') ?? [];
   const urgentNeeds = openNeeds.filter(n => n.priority === 'urgent' || n.priority === 'high');
   const flaggedRooms = roster.filter(r => r.flag || r.move_out_planned).length;
-  const vacantRooms = occ.total - occ.occupied;
+  const vacantRooms = occ.total - occ.occupied - occ.committed;
   const pct = occ.total > 0 ? Math.round((occ.occupied / occ.total) * 100) : null;
   const latestNote = (property.status_updates ?? [])
     .slice()
@@ -501,6 +590,11 @@ function PropertyRow({ property, isOpen, onToggle }: {
                 {occ.occupied}/{occ.total}
               </span>
             </>
+          )}
+          {occ.committed > 0 && (
+            <span className="text-[10px] bg-purple-50 text-purple-700 border border-purple-100 rounded-full px-2 py-0.5">
+              {occ.committed} committed
+            </span>
           )}
           {eviction > 0 && (
             <span className="text-[10px] bg-red-100 text-red-700 border border-red-200 rounded-full px-2 py-0.5 font-medium">

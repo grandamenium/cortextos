@@ -16,9 +16,11 @@ const STAGES: { key: ProspectStage; label: string }[] = [
 ];
 
 const STAGE_COLORS: Record<ProspectStage, { bg: string; text: string; dot: string; border: string }> = {
+  lead:         { bg: 'bg-zinc-500/10',   text: 'text-zinc-400',   dot: 'bg-zinc-400',   border: 'border-zinc-500/30' },
   applied:      { bg: 'bg-blue-500/10',   text: 'text-blue-400',   dot: 'bg-blue-500',   border: 'border-blue-500/30' },
   screening:    { bg: 'bg-yellow-500/10', text: 'text-yellow-400', dot: 'bg-yellow-400', border: 'border-yellow-500/30' },
   approved:     { bg: 'bg-green-500/10',  text: 'text-green-400',  dot: 'bg-green-500',  border: 'border-green-500/30' },
+  committed:    { bg: 'bg-purple-500/10', text: 'text-purple-400', dot: 'bg-purple-500', border: 'border-purple-500/30' },
   lease_signed: { bg: 'bg-purple-500/10', text: 'text-purple-400', dot: 'bg-purple-500', border: 'border-purple-500/30' },
   moved_in:     { bg: 'bg-slate-500/10',  text: 'text-slate-400',  dot: 'bg-slate-400',  border: 'border-slate-500/30' },
 };
@@ -91,9 +93,11 @@ export function ProspectPipeline({ prospects }: Props) {
   }
 
   const byStage: Record<ProspectStage, ProspectWithProperty[]> = {
+    lead: [],
     applied: [],
     screening: [],
     approved: [],
+    committed: [],
     lease_signed: [],
     moved_in: [],
   };
