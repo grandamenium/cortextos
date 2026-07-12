@@ -36,7 +36,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
     <div className="min-h-screen bg-zinc-50">
       {/* Header */}
       <div className="bg-zinc-900 px-5 py-4">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
+        <div className="max-w-[1400px] mx-auto flex items-center justify-between">
           <div>
             <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 mb-0.5">Client Portfolio</p>
             <h1 className="text-lg font-semibold text-white tracking-tight leading-tight">
@@ -50,7 +50,7 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 py-4 space-y-3">
+      <div className="max-w-[1400px] mx-auto px-4 py-4 space-y-3">
         {/* Portfolio summary strip */}
         <div className="grid grid-cols-4 gap-2">
           <div className="bg-white rounded-lg border border-zinc-200 p-3.5 shadow-sm">
