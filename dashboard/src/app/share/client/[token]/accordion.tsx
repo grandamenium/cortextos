@@ -187,11 +187,13 @@ function NotesCell({ currentNote, staticContent, editKey, token, propertyId, roo
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const startEdit = useCallback(() => {
     setValue(currentNote ?? '');
     setError(null);
+    setSaved(false);
     setEditing(true);
   }, [currentNote]);
 
@@ -206,15 +208,22 @@ function NotesCell({ currentNote, staticContent, editKey, token, propertyId, roo
     try {
       const res = await fetch(`/api/properties/client/${token}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
         body: JSON.stringify({ propertyId, room, notes: value, editKey }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `HTTP ${res.status}`);
+      // Parse body first — ngrok warning page returns 200 HTML (not JSON),
+      // so we must verify the response is actually our {ok:true} payload.
+      const body = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !body?.ok) {
+        throw new Error(body?.error ?? (res.ok ? 'Save failed — unexpected response' : `HTTP ${res.status}`));
       }
       onSaved(value);
       setEditing(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -256,7 +265,7 @@ function NotesCell({ currentNote, staticContent, editKey, token, propertyId, roo
   return (
     <button onClick={startEdit} className="text-left w-full group" title="Click to edit note">
       <span className="inline-flex items-center gap-1">
-        {staticContent}
+        {saved ? <span className="text-green-600 font-medium">Saved ✓</span> : staticContent}
         <span className="text-[9px] text-zinc-300 group-hover:text-blue-400 transition-colors ml-1">✎</span>
       </span>
     </button>
