@@ -233,10 +233,21 @@ function PropertyDetail({ property }: { property: Property }) {
                   (prospect.stage === 'committed' || prospect.stage === 'approved' || prospect.stage === 'lease_signed'));
                 const dotCls = statusDotCls[room.payment_status] ?? 'text-zinc-300';
                 const rowBg = i % 2 === 1 ? 'bg-zinc-50/50' : '';
+                // Per-room outreach — only surface an outreach line that actually
+                // names this room, so a vacant room can't inherit another room's note.
+                const roomKey = room.room.toLowerCase().replace(/\s+/g, '');
+                const roomOutreach = (property.occupancy_outreach?.outreach_log ?? [])
+                  .filter(o => (o.detail ?? '').toLowerCase().replace(/\s+/g, '').includes(roomKey))
+                  .slice(-1)[0];
 
-                // Context-aware notes cell
+                // Context-aware notes cell.
+                // room_roster[].notes is the authoritative per-room override —
+                // if set, it renders verbatim (curated by Atlas/Timber). Only when
+                // it is empty do we fall back to the derived chain below.
                 let noteCell: JSX.Element;
-                if (room.flag) {
+                if (room.notes) {
+                  noteCell = <span className="text-zinc-700">{room.notes}</span>;
+                } else if (room.flag) {
                   noteCell = <span className="text-orange-600 font-medium">{room.flag}</span>;
                 } else if (room.move_out_planned) {
                   noteCell = (
@@ -249,15 +260,15 @@ function PropertyDetail({ property }: { property: Property }) {
                     noteCell = prospect.notes
                       ? <span className="text-zinc-600">{prospect.notes.slice(0, 50)}</span>
                       : <span className="text-zinc-300">—</span>;
-                  } else if (recentOutreach) {
+                  } else if (roomOutreach) {
                     noteCell = (
                       <>
-                        <span className="text-zinc-400 tabular-nums mr-1">{recentOutreach.date}</span>
-                        <span className="text-zinc-500 uppercase text-[9px] mr-1">{recentOutreach.type}</span>
+                        <span className="text-zinc-400 tabular-nums mr-1">{roomOutreach.date}</span>
+                        <span className="text-zinc-500 uppercase text-[9px] mr-1">{roomOutreach.type}</span>
                         <span className="text-zinc-600">
-                          {(recentOutreach.detail ?? '').length > 40
-                            ? (recentOutreach.detail ?? '').slice(0, 40) + '…'
-                            : (recentOutreach.detail ?? '')}
+                          {(roomOutreach.detail ?? '').length > 40
+                            ? (roomOutreach.detail ?? '').slice(0, 40) + '…'
+                            : (roomOutreach.detail ?? '')}
                         </span>
                       </>
                     );
