@@ -2,7 +2,8 @@ import { Command } from 'commander';
 import { spawnSync, execFileSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
+import { sendMessage, checkInbox, ackInbox, InboxLockedError } from '../bus/message.js';
+import { LOCK_STALE_MS } from '../utils/lock.js';
 import { validateAgentName, validateTaskId } from '../utils/validate.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
@@ -127,7 +128,25 @@ busCommand
   .action(() => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const messages = checkInbox(paths);
+    let messages;
+    try {
+      messages = checkInbox(paths);
+    } catch (err) {
+      // A locked inbox must never print `[]` — that is the failure mode this
+      // guards: an agent reads `[]` as "no messages" and goes quietly deaf.
+      // Print to stderr and exit non-zero so it cannot be mistaken for empty
+      // by a human OR by a script parsing stdout.
+      if (err instanceof InboxLockedError) {
+        console.error(`ERROR: ${err.message}`);
+        console.error(
+          'The inbox was NOT read. Do not treat this as an empty inbox. ' +
+          'If the holder is dead, the lock is broken automatically after ' +
+          `${LOCK_STALE_MS / 1000}s — retry. If it persists, inspect ${err.inbox}/.lock.d`,
+        );
+        process.exit(1);
+      }
+      throw err;
+    }
     console.log(JSON.stringify(messages));
   });
 
