@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import type { JSX } from 'react';
 import type { Property, RoomRosterEntry } from '@/lib/data/properties';
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -27,21 +28,20 @@ function fmt(n: number | null | undefined) {
   return n == null ? '—' : '$' + n.toLocaleString('en-US');
 }
 
-const paymentBadgeCls: Record<string, string> = {
-  current:    'bg-green-50 text-green-700 border-green-200',
-  late:       'bg-red-50 text-red-700 border-red-200',
-  delinquent: 'bg-red-100 text-red-800 border-red-300 font-semibold',
-  eviction:   'bg-red-200 text-red-900 border-red-400 font-bold',
-  vacant:     'bg-zinc-100 text-zinc-500 border-zinc-200',
-};
+function relativeTime(isoStr: string): string {
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.round(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(diff / 3600000);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(diff / 86400000)}d ago`;
+}
 
-const statusLeftBorder: Record<string, string> = {
-  current:    'border-l-green-500',
-  late:       'border-l-red-400',
-  delinquent: 'border-l-red-500',
-  eviction:   'border-l-red-700',
-  vacant:     'border-l-zinc-200',
-};
+function fmtMoveIn(d: string): string {
+  try {
+    return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  } catch { return d; }
+}
 
 const needPriorityCls: Record<string, string> = {
   urgent: 'bg-red-100 text-red-700 border-red-200',
@@ -51,181 +51,293 @@ const needPriorityCls: Record<string, string> = {
 };
 
 const outcomeColor: Record<string, string> = {
-  paid:              'text-green-600',
-  partial:           'text-amber-600',
-  'promise-to-pay':  'text-blue-600',
-  pending:           'text-zinc-400',
-  'no-response':     'text-red-500',
+  paid:             'text-green-600',
+  partial:          'text-amber-600',
+  'promise-to-pay': 'text-blue-600',
+  pending:          'text-zinc-400',
+  'no-response':    'text-red-500',
 };
+
+const statusDotCls: Record<string, string> = {
+  current:    'text-green-500',
+  late:       'text-red-400',
+  delinquent: 'text-red-500',
+  eviction:   'text-red-700',
+  vacant:     'text-zinc-300',
+};
+
+const priorityOrder: Record<string, number> = {
+  urgent: 0, high: 1, medium: 2, low: 3,
+};
+
+// Stage label + color for prospect pipeline
+const stageLabel: Record<string, string> = {
+  applied: 'Applied', screening: 'Screening', approved: 'Approved',
+  lease_signed: 'Lease Signed', moved_in: 'Moved In',
+};
+const stageCls: Record<string, string> = {
+  applied:     'bg-zinc-100 text-zinc-500 border-zinc-200',
+  screening:   'bg-amber-50 text-amber-700 border-amber-200',
+  approved:    'bg-blue-50 text-blue-700 border-blue-200',
+  lease_signed:'bg-green-50 text-green-700 border-green-200',
+  moved_in:    'bg-green-100 text-green-800 border-green-200',
+};
+
+const NEEDS_PREVIEW = 3;
 
 // ── expanded detail — two-column dashboard layout ───────────────────────────
 
 function PropertyDetail({ property }: { property: Property }) {
   const roster = property.room_roster ?? [];
-  const openNeeds = property.needs?.filter(n => n.status !== 'done') ?? [];
+  const [showAllNeeds, setShowAllNeeds] = useState(false);
+
+  const openNeeds = (property.needs?.filter(n => n.status !== 'done') ?? [])
+    .slice()
+    .sort((a, b) => (priorityOrder[a.priority] ?? 9) - (priorityOrder[b.priority] ?? 9));
+
+  const visibleNeeds = showAllNeeds ? openNeeds : openNeeds.slice(0, NEEDS_PREVIEW);
+  const hiddenCount = openNeeds.length - NEEDS_PREVIEW;
+  const totalEst = openNeeds.reduce((s, n) => s + (n.cost ?? 0), 0);
+  const totalQuoted = openNeeds.reduce((s, n) => s + (n.quoted_amount ?? 0), 0);
+  const hasAnyCost = openNeeds.some(n => n.cost != null);
+  const hasAnyQuote = openNeeds.some(n => n.quoted_amount != null);
+
+  const recentOutreach = (property.occupancy_outreach?.outreach_log ?? []).slice(-1)[0];
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-3">
 
-      {/* LEFT: Room Status — primary panel */}
-      <div className="bg-white rounded-md border border-zinc-100 p-3 min-w-0">
+      {/* LEFT: Room Status table */}
+      <div className="bg-white rounded-md border border-zinc-100 p-3 min-w-0 overflow-x-auto">
         <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-2">Room Status</div>
 
         {roster.length === 0 ? (
           <p className="text-[11px] text-zinc-400 italic">No room data</p>
         ) : (
-          <div className="divide-y divide-zinc-50">
-            {roster.map((room, i) => {
-              // Try to match rent from the units[] array
-              const unit = property.units.find(
-                u => u.name?.toLowerCase() === room.room?.toLowerCase()
-              );
-              const monthlyRent = unit?.rent ?? null;
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-zinc-100">
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[88px]">Room</th>
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3">Tenant / Prospect</th>
+                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Rent/mo</th>
+                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Last Pmt</th>
+                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Due</th>
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {roster.map((room, i) => {
+                const unit = property.units.find(
+                  u => u.name?.toLowerCase() === room.room?.toLowerCase()
+                );
+                const monthlyRent = unit?.rent ?? null;
+                const recentNote = (room.collection_notes ?? [])
+                  .slice()
+                  .sort((a, b) => b.date.localeCompare(a.date))[0];
+                const prospect = (property.prospect_pipeline ?? []).find(
+                  p => p.room === room.room && p.stage !== 'moved_in'
+                );
+                const isVacant = room.payment_status === 'vacant';
+                const isFlagged = !!(room.flag || room.move_out_planned);
+                const dotCls = statusDotCls[room.payment_status] ?? 'text-zinc-300';
+                const rowBg = i % 2 === 1 ? 'bg-zinc-50/50' : '';
 
-              // Most-recent 2 collection notes (only for non-vacant)
-              const notes = room.payment_status !== 'vacant'
-                ? (room.collection_notes ?? [])
-                    .slice()
-                    .sort((a, b) => b.date.localeCompare(a.date))
-                    .slice(0, 2)
-                : [];
+                // Effective move-in date: from room directly OR from matched prospect
+                const expectedMoveIn = room.expected_move_in ?? prospect?.expected_move_in ?? null;
 
-              const prospect =
-                room.payment_status === 'vacant'
-                  ? (property.prospect_pipeline ?? []).find(
-                      p => p.room === room.room && p.stage !== 'moved_in'
-                    )
-                  : undefined;
-
-              const isVacant = room.payment_status === 'vacant';
-              const borderCls = statusLeftBorder[room.payment_status] ?? 'border-l-zinc-200';
-              const badgeCls = paymentBadgeCls[room.payment_status] ?? 'bg-amber-50 text-amber-700 border-amber-200';
-
-              return (
-                <div key={i} className={`py-2 pl-2.5 border-l-[3px] ${borderCls}`}>
-                  {/* Room header row */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-[13px] font-semibold text-zinc-900 shrink-0">
-                      {room.room}
+                // Context-aware notes cell
+                let noteCell: JSX.Element;
+                if (room.flag) {
+                  noteCell = <span className="text-orange-600 font-medium">{room.flag}</span>;
+                } else if (room.move_out_planned) {
+                  noteCell = (
+                    <span className="text-purple-600">
+                      Move-out planned{room.move_out_date ? `: ${fmtMoveIn(room.move_out_date)}` : ''}
                     </span>
-                    <span className="text-[11px] text-zinc-500 flex-1 min-w-0 truncate">
-                      {room.tenant
-                        ? room.tenant
-                        : prospect
-                        ? `${prospect.name} · ${prospect.stage.replace(/_/g, ' ')}`
-                        : 'Vacant'}
-                    </span>
-                    {monthlyRent != null && (
-                      <span className="text-[10px] text-zinc-400 tabular-nums shrink-0">
-                        {fmt(monthlyRent)}/mo
-                      </span>
-                    )}
-                    {!isVacant && (
-                      room.amount_due != null && room.amount_due > 0 ? (
-                        <span className="text-[11px] font-semibold text-red-600 tabular-nums shrink-0">
-                          {fmt(room.amount_due)} due
+                  );
+                } else if (isVacant) {
+                  if (prospect) {
+                    // Prospect in pipeline — notes = any prospect-specific notes
+                    noteCell = prospect.notes
+                      ? <span className="text-zinc-600">{prospect.notes.slice(0, 50)}</span>
+                      : <span className="text-zinc-300">—</span>;
+                  } else if (recentOutreach) {
+                    noteCell = (
+                      <>
+                        <span className="text-zinc-400 tabular-nums mr-1">{recentOutreach.date}</span>
+                        <span className="text-zinc-500 uppercase text-[9px] mr-1">{recentOutreach.type}</span>
+                        <span className="text-zinc-600">
+                          {(recentOutreach.detail ?? '').length > 40
+                            ? (recentOutreach.detail ?? '').slice(0, 40) + '…'
+                            : (recentOutreach.detail ?? '')}
                         </span>
-                      ) : (
-                        <span className="text-[10px] text-zinc-300 tabular-nums shrink-0">—</span>
-                      )
-                    )}
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full border shrink-0 capitalize ${badgeCls}`}>
-                      {room.payment_status}
-                    </span>
-                  </div>
+                      </>
+                    );
+                  } else {
+                    noteCell = <span className="text-zinc-300">No fill outreach</span>;
+                  }
+                } else if (recentNote) {
+                  noteCell = (
+                    <>
+                      <span className="text-zinc-400 tabular-nums mr-1">{recentNote.date}</span>
+                      <span className="text-zinc-600">
+                        {(recentNote.note ?? '').length > 40 ? (recentNote.note ?? '').slice(0, 40) + '…' : (recentNote.note ?? '')}
+                      </span>
+                      {recentNote.outcome && (
+                        <span className={`ml-1 font-medium ${outcomeColor[recentNote.outcome] ?? 'text-zinc-400'}`}>
+                          · {recentNote.outcome.replace(/-/g, ' ')}
+                        </span>
+                      )}
+                    </>
+                  );
+                } else {
+                  noteCell = <span className="text-zinc-300">—</span>;
+                }
 
-                  {/* Rent-recovery notes */}
-                  {notes.length > 0 && (
-                    <div className="mt-0.5 space-y-0.5">
-                      {notes.map((n, ni) => (
-                        <div key={ni} className="flex items-baseline gap-1.5 text-[10px] pl-1">
-                          <span className="text-zinc-300 shrink-0">↳</span>
-                          <span className="text-zinc-400 shrink-0 tabular-nums w-14">{n.date}</span>
-                          <span className="text-zinc-500 flex-1 min-w-0 truncate">{n.note}</span>
-                          <span className={`shrink-0 font-medium ${outcomeColor[n.outcome] ?? 'text-zinc-400'}`}>
-                            {n.outcome.replace(/-/g, ' ')}
-                          </span>
+                return (
+                  <tr key={i} className={`border-b border-zinc-50 last:border-0 align-top ${rowBg}`}>
+
+                    {/* Room + flag indicator */}
+                    <td className="py-2 pr-3">
+                      <div className="flex items-center gap-1 whitespace-nowrap">
+                        <span className={`text-[8px] shrink-0 leading-none ${dotCls}`}>●</span>
+                        <span className={`text-[12px] font-semibold ${isFlagged ? 'text-orange-700' : 'text-zinc-900'}`}>
+                          {room.room}
+                        </span>
+                        {isFlagged && <span className="text-[10px] text-orange-400">⚑</span>}
+                      </div>
+                      {room.eviction_status && (
+                        <div className="text-[9px] text-red-500 mt-0.5 pl-3">{room.eviction_status}</div>
+                      )}
+                    </td>
+
+                    {/* Tenant / Prospect + stage + move-in */}
+                    <td className="py-2 pr-3 max-w-[160px]">
+                      {room.tenant ? (
+                        // Occupied room — show tenant + optional move-in date
+                        <div>
+                          <span className="text-[11px] text-zinc-700 truncate block">{room.tenant}</span>
+                          {expectedMoveIn && (
+                            <span className="text-[9px] text-green-600">
+                              Moves in {fmtMoveIn(expectedMoveIn)}
+                            </span>
+                          )}
                         </div>
-                      ))}
-                    </div>
-                  )}
+                      ) : prospect ? (
+                        // Vacant + prospect in pipeline
+                        <div>
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className="text-[11px] text-blue-600 font-medium truncate">{prospect.name}</span>
+                            <span className={`text-[9px] px-1 py-0.5 rounded border whitespace-nowrap ${stageCls[prospect.stage] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
+                              {stageLabel[prospect.stage] ?? prospect.stage}
+                            </span>
+                          </div>
+                          {expectedMoveIn && (
+                            <span className="text-[9px] text-green-600 mt-0.5 block">
+                              Move-in {fmtMoveIn(expectedMoveIn)}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-zinc-400 italic">Vacant</span>
+                      )}
+                    </td>
 
-                  {/* Eviction note */}
-                  {room.eviction_status && (
-                    <div className="text-[10px] text-red-500 mt-0.5 pl-1">{room.eviction_status}</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                    {/* Rent/mo */}
+                    <td className="py-2 pr-3 text-right align-top">
+                      {monthlyRent != null ? (
+                        <span className="text-[11px] text-zinc-600 tabular-nums">{fmt(monthlyRent)}</span>
+                      ) : (
+                        <span className="text-[11px] text-zinc-300">—</span>
+                      )}
+                    </td>
+
+                    {/* Last Pmt */}
+                    <td className="py-2 pr-3 text-right align-top">
+                      <span className="text-[11px] text-zinc-300">—</span>
+                    </td>
+
+                    {/* Amount Due */}
+                    <td className="py-2 pr-3 text-right align-top">
+                      {!isVacant ? (
+                        room.amount_due != null && room.amount_due > 0 ? (
+                          <span className="text-[11px] font-semibold text-red-600 tabular-nums">{fmt(room.amount_due)}</span>
+                        ) : (
+                          <span className="text-[11px] text-green-600">—</span>
+                        )
+                      ) : (
+                        <span className="text-[11px] text-zinc-300">—</span>
+                      )}
+                    </td>
+
+                    {/* Context-aware Notes */}
+                    <td className="py-2 text-[10px] leading-snug align-top">{noteCell}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
 
       {/* RIGHT: Secondary info panels */}
       <div className="space-y-2 min-w-0">
 
-        {/* Open Maintenance */}
-        {(() => {
-          const totalEst = openNeeds.reduce((s, n) => s + (n.cost ?? 0), 0);
-          const totalQuoted = openNeeds.reduce((s, n) => s + (n.quoted_amount ?? 0), 0);
-          const hasAnyCost = openNeeds.some(n => n.cost != null);
-          const hasAnyQuote = openNeeds.some(n => n.quoted_amount != null);
-          return (
-            <div className="bg-white rounded-md border border-zinc-100 p-3">
-              <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">
-                Maintenance{openNeeds.length > 0 ? ` · ${openNeeds.length} open` : ''}
-              </div>
-              {openNeeds.length === 0 ? (
-                <p className="text-[11px] text-zinc-300">None open</p>
-              ) : (
-                <>
-                  <div className="divide-y divide-zinc-50">
-                    {openNeeds.slice(0, 6).map((n, i) => (
-                      <div key={i} className="py-1.5 first:pt-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className={`text-[9px] w-4 text-center py-0.5 rounded border shrink-0 ${
-                            needPriorityCls[n.priority] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'
-                          }`}>
-                            {n.priority[0].toUpperCase()}
-                          </span>
-                          <span className="text-[11px] text-zinc-700 flex-1 truncate">{n.item}</span>
-                          {n.cost != null && (
-                            <span className="text-[10px] text-zinc-400 tabular-nums shrink-0">
-                              {fmt(n.cost)}
-                            </span>
-                          )}
-                        </div>
-                        {/* Quoted indicator */}
-                        {n.quoted_amount != null ? (
-                          <div className="text-[10px] text-green-600 pl-5 mt-0.5">
-                            Quoted: {fmt(n.quoted_amount)}
-                            {n.vendor && <span className="text-zinc-400"> · {n.vendor}</span>}
-                          </div>
-                        ) : n.status === 'quote_pending' ? (
-                          <div className="text-[10px] text-amber-500 pl-5 mt-0.5">Quote pending</div>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                  {openNeeds.length > 6 && (
-                    <div className="text-[10px] text-zinc-400 mt-1">+{openNeeds.length - 6} more</div>
-                  )}
-                  {/* Totals row */}
-                  {(hasAnyCost || hasAnyQuote) && (
-                    <div className="mt-2 pt-2 border-t border-zinc-100 flex justify-between text-[10px]">
-                      {hasAnyCost && (
-                        <span className="text-zinc-500">Est: <span className="font-medium text-zinc-700 tabular-nums">{fmt(totalEst)}</span></span>
-                      )}
-                      {hasAnyQuote && (
-                        <span className="text-zinc-500">Quoted: <span className="font-medium text-green-600 tabular-nums">{fmt(totalQuoted)}</span></span>
+        {/* Open Maintenance — top N by priority, expandable */}
+        <div className="bg-white rounded-md border border-zinc-100 p-3">
+          <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">
+            Maintenance{openNeeds.length > 0 ? ` · ${openNeeds.length} open` : ''}
+          </div>
+          {openNeeds.length === 0 ? (
+            <p className="text-[11px] text-zinc-300">None open</p>
+          ) : (
+            <>
+              <div className="divide-y divide-zinc-50">
+                {visibleNeeds.map((n, i) => (
+                  <div key={i} className="py-1.5 first:pt-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-[9px] w-4 text-center py-0.5 rounded border shrink-0 ${
+                        needPriorityCls[n.priority] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'
+                      }`}>
+                        {n.priority[0].toUpperCase()}
+                      </span>
+                      <span className="text-[11px] text-zinc-700 flex-1 truncate">{n.item}</span>
+                      {n.cost != null && (
+                        <span className="text-[10px] text-zinc-400 tabular-nums shrink-0">{fmt(n.cost)}</span>
                       )}
                     </div>
-                  )}
-                </>
+                    {n.quoted_amount != null ? (
+                      <div className="text-[10px] text-green-600 pl-5 mt-0.5">
+                        Quoted: {fmt(n.quoted_amount)}
+                        {n.vendor && <span className="text-zinc-400"> · {n.vendor}</span>}
+                      </div>
+                    ) : n.status === 'quote_pending' ? (
+                      <div className="text-[10px] text-amber-500 pl-5 mt-0.5">Quote pending</div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+              {hiddenCount > 0 && (
+                <button
+                  onClick={() => setShowAllNeeds(v => !v)}
+                  className="mt-1.5 text-[10px] text-blue-500 hover:text-blue-700 transition-colors"
+                >
+                  {showAllNeeds ? '▴ Show less' : `▾ View all (${openNeeds.length})`}
+                </button>
               )}
-            </div>
-          );
-        })()}
+              {(hasAnyCost || hasAnyQuote) && (
+                <div className="mt-2 pt-2 border-t border-zinc-100 flex justify-between text-[10px]">
+                  {hasAnyCost && (
+                    <span className="text-zinc-500">Est: <span className="font-medium text-zinc-700 tabular-nums">{fmt(totalEst)}</span></span>
+                  )}
+                  {hasAnyQuote && (
+                    <span className="text-zinc-500">Quoted: <span className="font-medium text-green-600 tabular-nums">{fmt(totalQuoted)}</span></span>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
 
         {/* Insurance + Taxes */}
         <div className="bg-white rounded-md border border-zinc-100 p-3">
@@ -303,35 +415,11 @@ function PropertyDetail({ property }: { property: Property }) {
           </div>
         )}
 
-        {/* Fill Effort — only when vacancies exist */}
-        {property.occupancy_outreach && property.occupancy_outreach.vacant_rooms > 0 && (
-          <div className="bg-white rounded-md border border-amber-100 p-3">
-            <div className="text-[9px] uppercase tracking-[0.14em] text-amber-600 mb-1.5">
-              Fill Effort · {property.occupancy_outreach.vacant_rooms} vacant
-            </div>
-            <div className="space-y-0.5">
-              {(property.occupancy_outreach.outreach_log ?? [])
-                .slice(-3)
-                .reverse()
-                .map((e, i) => (
-                  <div key={i} className="flex gap-2 text-[10px]">
-                    <span className="text-zinc-400 shrink-0 tabular-nums">{e.date}</span>
-                    <span className="text-zinc-500 uppercase shrink-0 w-10">{e.type}</span>
-                    <span className="text-zinc-600 truncate">{e.detail}</span>
-                  </div>
-                ))}
-              {!property.occupancy_outreach.outreach_log?.length && (
-                <p className="text-[11px] text-zinc-300">No outreach logged</p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Agent Notes (status_updates) */}
+        {/* Property Notes (status_updates) */}
         {(property.status_updates ?? []).length > 0 && (
           <div className="bg-white rounded-md border border-blue-100 p-3">
             <div className="text-[9px] uppercase tracking-[0.14em] text-blue-500 mb-1.5">
-              Agent Notes
+              Property Notes
             </div>
             <div className="space-y-1">
               {(property.status_updates ?? [])
@@ -347,7 +435,7 @@ function PropertyDetail({ property }: { property: Property }) {
                       <span className="text-zinc-300 shrink-0">·</span>
                       <span className="text-blue-500 shrink-0">{note.from}</span>
                     </div>
-                    <div className="text-zinc-600 mt-0.5 pl-0.5">{note.text}</div>
+                    <div className="text-zinc-600 mt-0.5">{note.text}</div>
                   </div>
                 ))}
             </div>
@@ -360,15 +448,6 @@ function PropertyDetail({ property }: { property: Property }) {
 
 // ── accordion row ───────────────────────────────────────────────────────────
 
-function relativeTime(isoStr: string): string {
-  const diff = Date.now() - new Date(isoStr).getTime();
-  const mins = Math.round(diff / 60000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(diff / 3600000);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(diff / 86400000)}d ago`;
-}
-
 function PropertyRow({ property, isOpen, onToggle }: {
   property: Property;
   isOpen: boolean;
@@ -379,6 +458,7 @@ function PropertyRow({ property, isOpen, onToggle }: {
   const { late, eviction } = paymentSummary(roster);
   const openNeeds = property.needs?.filter(n => n.status !== 'done') ?? [];
   const urgentNeeds = openNeeds.filter(n => n.priority === 'urgent' || n.priority === 'high');
+  const flaggedRooms = roster.filter(r => r.flag || r.move_out_planned).length;
   const vacantRooms = occ.total - occ.occupied;
   const pct = occ.total > 0 ? Math.round((occ.occupied / occ.total) * 100) : null;
   const latestNote = (property.status_updates ?? [])
@@ -390,7 +470,6 @@ function PropertyRow({ property, isOpen, onToggle }: {
 
   return (
     <div>
-      {/* Collapsed header row */}
       <button
         onClick={onToggle}
         className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-zinc-50/80 transition-colors"
@@ -400,7 +479,6 @@ function PropertyRow({ property, isOpen, onToggle }: {
           {isOpen ? '▾' : '▸'}
         </span>
 
-        {/* Name + location */}
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2 flex-wrap">
             <span className={`text-[14px] font-semibold ${isOpen ? 'text-blue-600' : 'text-zinc-900'} transition-colors`}>
@@ -410,7 +488,6 @@ function PropertyRow({ property, isOpen, onToggle }: {
           </div>
         </div>
 
-        {/* Metrics */}
         <div className="flex items-center gap-2 shrink-0">
           {occ.total > 0 && (
             <>
@@ -437,6 +514,11 @@ function PropertyRow({ property, isOpen, onToggle }: {
               {urgentNeeds.length} maint
             </span>
           )}
+          {flaggedRooms > 0 && (
+            <span className="text-[10px] bg-orange-50 text-orange-700 border border-orange-100 rounded-full px-2 py-0.5">
+              ⚑ {flaggedRooms}
+            </span>
+          )}
           {latestNote && (
             <span className="text-[10px] text-blue-400 hidden sm:inline-block">
               ↳ note {relativeTime(latestNote.at)}
@@ -445,7 +527,6 @@ function PropertyRow({ property, isOpen, onToggle }: {
         </div>
       </button>
 
-      {/* Expanded detail */}
       {isOpen && (
         <div className="border-t border-zinc-100 bg-zinc-50 px-4 py-3">
           <PropertyDetail property={property} />
