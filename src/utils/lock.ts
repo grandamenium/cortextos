@@ -36,7 +36,11 @@ export interface LockHeldInfo {
  * the two apart.
  */
 export function inspectLock(dir: string): LockHeldInfo | null {
-  const lockDir = join(dir, '.lock.d');
+  return inspectLockDir(join(dir, '.lock.d'));
+}
+
+/** Same, but takes the lock directory itself rather than the directory it guards. */
+function inspectLockDir(lockDir: string): LockHeldInfo | null {
   let ageMs: number;
   try {
     ageMs = Date.now() - statSync(lockDir).mtimeMs;
@@ -156,80 +160,110 @@ export function acquireLock(dir: string): boolean {
  * reliably reproduce, so it is asserted directly against this function.
  */
 export function stealLock(lockDir: string, pidFile: string): boolean {
-  // 1. CAPTURE. rename() is atomic: of all processes trying to move this lock
-  //    aside, exactly one succeeds. The losers get ENOENT and return without
-  //    ever touching an rmSync, so they cannot destroy anyone's live lock.
-  const steal = `${lockDir}.steal.${process.pid}.${Date.now()}`;
-  try {
-    renameSync(lockDir, steal);
-  } catch {
-    return false; // someone else captured it, or it vanished — retry.
-  }
+  // 1. EXCLUDE OTHER STEALERS.
+  //
+  //    You cannot judge an object safely unless nothing can change it under you.
+  //    The way to get that is NOT to own the object — owning it means MOVING it,
+  //    and a lock moved aside is ABSENT, which an ordinary acquirer's mkdirSync
+  //    will happily succeed into. That is a second holder. Exclude the things
+  //    that could change it instead, and judge it IN PLACE.
+  const claim = `${lockDir}.stealing`;
+  if (!acquireClaim(claim)) return false;
 
-  // 2. RE-VERIFY WHAT WE ACTUALLY CAPTURED — on the object we now own alone.
-  //
-  //    The caller's staleness decision was made on a `stat` that may already be
-  //    out of date: between that stat and this rename, the rightful winner can
-  //    have finished its own steal and created a BRAND NEW, LIVE lock. Our
-  //    rename would then have moved *that* aside, and stealing on the strength
-  //    of the earlier stat would hand two processes the same lock.
-  //
-  //    So we re-decide here, where the object is exclusively ours and cannot
-  //    change under us. Capture first, judge second.
-  if (looksLive(steal)) {
-    // We captured a live lock. Put it back and lose gracefully.
+  try {
+    // 2. RE-INSPECT UNDER THE CLAIM. The caller's staleness verdict came from an
+    //    earlier stat and may already be stale: the rightful winner could have
+    //    finished its own steal and installed a fresh, LIVE lock since.
+    //
+    //    Under the claim that cannot happen beneath us:
+    //      - other stealers are excluded by the claim;
+    //      - an ordinary acquirer only calls mkdirSync(lockDir), which EEXISTs
+    //        while the lock is still present.
+    //    So a lock observed abandoned while we hold the claim STAYS abandoned.
+    const info = inspectLockDir(lockDir);
+    if (!info) return false;              // already gone — the caller's mkdir will take it
+    if (holderAlive(info)) return false;  // a live process holds it: leave it untouched
+    if (info.pidUnreadable && info.ageMs < LOCK_STALE_MS) return false; // mid-acquire
+
+    // 3. Verified abandoned, and it cannot turn live under us. Move it aside with
+    //    rename — ATOMIC, so even under a pathological double-claim exactly one
+    //    process can be the mover and the loser gets ENOENT. We NEVER rmSync the
+    //    lock directly, so no path can force-delete a lock that someone holds.
+    const dead = `${lockDir}.dead.${process.pid}.${Date.now()}`;
     try {
-      renameSync(steal, lockDir);
+      renameSync(lockDir, dead);
     } catch {
-      // Restore failed only if something already occupies lockDir — i.e. a
-      // third process holds it. Discard ours rather than clobber theirs.
-      try { rmSync(steal, { recursive: true, force: true }); } catch { /* inert */ }
+      return false; // someone else moved it first — nothing of ours destroyed
     }
-    return false;
-  }
+    try { rmSync(dead, { recursive: true, force: true }); } catch { /* inert */ }
 
-  // 3. It is genuinely abandoned and it is ours. Replace it.
-  try { rmSync(steal, { recursive: true, force: true }); } catch { /* inert */ }
-
-  try {
-    // Atomic. EEXIST means an ordinary acquirer took the freed slot first —
-    // a legitimate loss, and nothing of theirs was destroyed to discover it.
-    mkdirSync(lockDir);
-    writeFileSync(pidFile, String(process.pid));
-    return true;
-  } catch {
-    return false;
+    try {
+      // Atomic. EEXIST means an ordinary acquirer took the freed slot ahead of
+      // us — a legitimate loss, and nothing live was destroyed to discover it.
+      mkdirSync(lockDir);
+      writeFileSync(pidFile, String(process.pid));
+      return true;
+    } catch {
+      return false;
+    }
+  } finally {
+    releaseClaim(claim);
   }
 }
 
 /**
- * Does this captured lock dir belong to a holder that is still alive — either a
- * running PID, or one young enough to be legitimately mid-acquire?
+ * Serialise stealers. `mkdir` is the atomic exclusive primitive.
+ *
+ * The claim must itself be recoverable: a process killed while holding it would
+ * leak an empty directory that blocks EVERY future recovery — which is precisely
+ * the permanent-deadlock disease this change exists to cure, relocated one level
+ * up. The cure must not reintroduce the disease.
+ *
+ * Age is the only recovery signal available (the claim is deliberately empty, so
+ * there is no PID to test), and an age-based break can in principle let two
+ * stealers hold the claim at the same instant. That is survivable BY DESIGN:
+ * stealLock's only destructive step is an atomic rename of a lock it has just
+ * verified abandoned, so two claim-holders still cannot both win, and neither can
+ * destroy a live lock. The claim reduces contention; it is not load-bearing for
+ * correctness.
  */
-function looksLive(dir: string): boolean {
-  let raw: string;
+function acquireClaim(claim: string): boolean {
   try {
-    raw = readFileSync(join(dir, 'pid'), 'utf-8').trim();
+    mkdirSync(claim);
+    return true;
   } catch {
-    raw = '';
-  }
-
-  const pid = parseInt(raw, 10);
-  if (raw !== '' && !isNaN(pid)) {
+    let ageMs: number;
     try {
-      process.kill(pid, 0);
-      return true; // a live process holds this
+      ageMs = Date.now() - statSync(claim).mtimeMs;
     } catch {
-      return false; // dead pid — safe to take
+      return false; // vanished — caller retries
+    }
+    if (ageMs < LOCK_STALE_MS) return false; // a stealer is genuinely working
+
+    // Leaked by a killed stealer. rmdirSync removes only an EMPTY directory, so
+    // it cannot destroy anything carrying state.
+    try {
+      rmdirSync(claim);
+      mkdirSync(claim);
+      return true;
+    } catch {
+      return false;
     }
   }
+}
 
-  // No readable PID. Young => a holder is mid-acquire right now. Old => the
-  // holder was killed in that window and is never coming back.
+function releaseClaim(claim: string): void {
+  try { rmdirSync(claim); } catch { /* already gone */ }
+}
+
+/** Is this lock held by a process that is actually running? */
+function holderAlive(info: LockHeldInfo): boolean {
+  if (info.pidUnreadable || info.pid === undefined) return false;
   try {
-    return Date.now() - statSync(dir).mtimeMs < LOCK_STALE_MS;
+    process.kill(info.pid, 0);
+    return true;
   } catch {
-    return false;
+    return false; // dead pid
   }
 }
 
