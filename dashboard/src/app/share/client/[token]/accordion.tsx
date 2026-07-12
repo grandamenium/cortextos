@@ -302,6 +302,9 @@ function PropertyDetail({ property }: { property: Property }) {
                         {n.priority[0].toUpperCase()}
                       </span>
                       <span className="text-[11px] text-zinc-700 flex-1 truncate">{n.item}</span>
+                      {n.unit && (
+                        <span className="text-[9px] bg-zinc-100 text-zinc-500 border border-zinc-200 rounded px-1 py-0.5 shrink-0">{n.unit}</span>
+                      )}
                       {n.cost != null && (
                         <span className="text-[10px] text-zinc-400 tabular-nums shrink-0">{fmt(n.cost)}</span>
                       )}
