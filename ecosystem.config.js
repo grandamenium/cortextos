@@ -18,7 +18,8 @@ module.exports = {
         CTX_PROJECT_ROOT: "/home/lauren/cortextos",
         CTX_ORG: process.env.CTX_ORG || "smoothie-hq",
       },
-      max_restarts: 50,
+      max_restarts: 15,
+      min_uptime: 10000,
       restart_delay: 5000,
       autorestart: true,
     },
@@ -33,7 +34,8 @@ module.exports = {
       // Dashboard reads its real config from dashboard/.env.local — populated
       // by /onboarding Phase 7. PM2 just supervises the dashboard process.
       windowsHide: true,
-      max_restarts: 50,
+      max_restarts: 15,
+      min_uptime: 10000,
       restart_delay: 5000,
       autorestart: true,
     },

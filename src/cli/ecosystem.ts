@@ -75,7 +75,24 @@ export const ecosystemCommand = new Command('ecosystem')
     // controls how many times PM2 itself restarts cortextos-daemon if it
     // crashes — independent of in-daemon agent crash counting. 10 was too
     // low: a transient infrastructure wobble could exhaust retries before
-    // the daemon stabilized. 50 leaves real headroom.
+    // the daemon stabilized. 50 leaves real headroom, but it also means a
+    // genuine crash-storm (bad deploy, corrupt config) gets up to 50 * 5s
+    // restart_delay ≈ 4+ minutes of continuous crash-restart thrash before
+    // PM2 gives up — much longer than needed, and 50 alone doesn't actually
+    // fix the BUG-016 scenario either: PM2 only counts a restart as
+    // "unstable" (against max_restarts) if the process dies before
+    // min_uptime elapses, and no min_uptime was ever set, so it silently
+    // used PM2's 1000ms default. A transient wobble that takes a few
+    // seconds to resolve was already safely NOT counted against the budget
+    // even at max_restarts=10 — the real fix for BUG-016 was always an
+    // explicit min_uptime, not a higher restart ceiling. 2026-07-12: restore
+    // a real crash-storm breaker (max_restarts back down to a moderate 15,
+    // still generous headroom for genuine transient wobbles) PLUS an
+    // explicit min_uptime (10s) so a restart only counts as "unstable" if
+    // the daemon dies within 10s of starting — a true rapid crash-loop trips
+    // the breaker in under 3 minutes instead of 4+, while anything that
+    // survives its first 10s (including any realistic infra wobble) doesn't
+    // consume the budget at all.
     //
     // BUG-019 fix: emit a cortextos-dashboard PM2 entry alongside the daemon
     // so the dashboard runs under PM2 supervision instead of as an orphan
@@ -114,7 +131,8 @@ export const ecosystemCommand = new Command('ecosystem')
       // Dashboard reads its real config from dashboard/.env.local — populated
       // by /onboarding Phase 7. PM2 just supervises the dashboard process.
       windowsHide: true,
-      max_restarts: 50,
+      max_restarts: 15,
+      min_uptime: 10000,
       restart_delay: 5000,
       autorestart: true,
     }`
@@ -140,7 +158,8 @@ module.exports = {
         CTX_PROJECT_ROOT: ${JSON.stringify(projectRoot)},
         CTX_ORG: process.env.CTX_ORG || ${JSON.stringify(detectedOrg)},
       },
-      max_restarts: 50,
+      max_restarts: 15,
+      min_uptime: 10000,
       restart_delay: 5000,
       autorestart: true,
     }${dashboardAppBlock},
