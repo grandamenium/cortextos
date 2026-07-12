@@ -1,4 +1,4 @@
-import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'fs';
+import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync, statSync, renameSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -114,17 +114,122 @@ export function acquireLock(dir: string): boolean {
       // Process is alive - lock is held
       return false;
     } catch {
-      // Process is dead - stale lock, remove and re-acquire atomically.
-      try {
-        rmSync(lockDir, { recursive: true, force: true });
-        mkdirSync(lockDir);
-        writeFileSync(pidFile, String(process.pid));
-        return true;
-      } catch {
-        // Another process beat us to the steal — let caller retry.
-        return false;
-      }
+      // Process is dead — stale lock. Steal it ATOMICALLY.
+      //
+      // This path used to rmSync(force) + mkdirSync, which is not a steal but a
+      // free-for-all: two processes can both observe the same dead PID, and the
+      // second one's force-delete removes the FIRST one's freshly-created live
+      // lock, after which its mkdirSync succeeds. Both then hold the lock. See
+      // stealLock — rename() makes exactly one winner possible.
+      return stealLock(lockDir, pidFile);
     }
+  }
+}
+
+/**
+ * Take over a lock that is provably not held by a live process, WITHOUT ever
+ * being able to destroy a lock that IS.
+ *
+ * THE RACE THIS EXISTS TO KILL:
+ *
+ * The obvious steal — `rmSync(lockDir, {force: true})` then `mkdirSync` — is
+ * not mutual exclusion at all. Two processes routinely reach a recovery path on
+ * the same stale lock (the fast-checker's poll loop and any CLI invocation both
+ * find it, and both finish their liveness/age check before either acts):
+ *
+ *   A: rmSync (clears the stale lock) -> mkdirSync -> writes pid=A -> HOLDS IT
+ *   B: rmSync(force) -> DELETES A's LIVE LOCK -> mkdirSync now SUCCEEDS -> pid=B
+ *
+ * Both believe they hold it and enter the critical section together. Guarding
+ * with EEXIST on `mkdirSync` cannot help, because the caller's own force-delete
+ * destroyed the winner's lock one line earlier.
+ *
+ * The recovery path is precisely where this fires — which is the whole purpose
+ * of the function. Code written to prevent silent message loss would cause it.
+ *
+ * `rename()` is atomic: exactly one process can move the directory aside. The
+ * loser gets ENOENT and returns immediately, never reaching an `rmSync`, so it
+ * cannot delete anyone's live lock.
+ *
+ * Exported for tests: the failure mode (capturing a lock that turns out to be
+ * LIVE) is a nanosecond-wide interleaving that spawning real processes cannot
+ * reliably reproduce, so it is asserted directly against this function.
+ */
+export function stealLock(lockDir: string, pidFile: string): boolean {
+  // 1. CAPTURE. rename() is atomic: of all processes trying to move this lock
+  //    aside, exactly one succeeds. The losers get ENOENT and return without
+  //    ever touching an rmSync, so they cannot destroy anyone's live lock.
+  const steal = `${lockDir}.steal.${process.pid}.${Date.now()}`;
+  try {
+    renameSync(lockDir, steal);
+  } catch {
+    return false; // someone else captured it, or it vanished — retry.
+  }
+
+  // 2. RE-VERIFY WHAT WE ACTUALLY CAPTURED — on the object we now own alone.
+  //
+  //    The caller's staleness decision was made on a `stat` that may already be
+  //    out of date: between that stat and this rename, the rightful winner can
+  //    have finished its own steal and created a BRAND NEW, LIVE lock. Our
+  //    rename would then have moved *that* aside, and stealing on the strength
+  //    of the earlier stat would hand two processes the same lock.
+  //
+  //    So we re-decide here, where the object is exclusively ours and cannot
+  //    change under us. Capture first, judge second.
+  if (looksLive(steal)) {
+    // We captured a live lock. Put it back and lose gracefully.
+    try {
+      renameSync(steal, lockDir);
+    } catch {
+      // Restore failed only if something already occupies lockDir — i.e. a
+      // third process holds it. Discard ours rather than clobber theirs.
+      try { rmSync(steal, { recursive: true, force: true }); } catch { /* inert */ }
+    }
+    return false;
+  }
+
+  // 3. It is genuinely abandoned and it is ours. Replace it.
+  try { rmSync(steal, { recursive: true, force: true }); } catch { /* inert */ }
+
+  try {
+    // Atomic. EEXIST means an ordinary acquirer took the freed slot first —
+    // a legitimate loss, and nothing of theirs was destroyed to discover it.
+    mkdirSync(lockDir);
+    writeFileSync(pidFile, String(process.pid));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Does this captured lock dir belong to a holder that is still alive — either a
+ * running PID, or one young enough to be legitimately mid-acquire?
+ */
+function looksLive(dir: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(join(dir, 'pid'), 'utf-8').trim();
+  } catch {
+    raw = '';
+  }
+
+  const pid = parseInt(raw, 10);
+  if (raw !== '' && !isNaN(pid)) {
+    try {
+      process.kill(pid, 0);
+      return true; // a live process holds this
+    } catch {
+      return false; // dead pid — safe to take
+    }
+  }
+
+  // No readable PID. Young => a holder is mid-acquire right now. Old => the
+  // holder was killed in that window and is never coming back.
+  try {
+    return Date.now() - statSync(dir).mtimeMs < LOCK_STALE_MS;
+  } catch {
+    return false;
   }
 }
 
@@ -132,8 +237,6 @@ export function acquireLock(dir: string): boolean {
  * Break a lock whose PID cannot be read, but only once it is older than
  * LOCK_STALE_MS — i.e. far past any legitimate mkdir→writeFileSync window, so
  * a live mid-acquire holder is never robbed.
- *
- * Returns true if the lock was broken and re-acquired by us.
  */
 function breakIfAbandoned(lockDir: string, pidFile: string): boolean {
   let ageMs: number;
@@ -149,16 +252,7 @@ function breakIfAbandoned(lockDir: string, pidFile: string): boolean {
     return false;
   }
 
-  // Abandoned: no PID to check for liveness and far too old to be mid-acquire.
-  try {
-    rmSync(lockDir, { recursive: true, force: true });
-    mkdirSync(lockDir);
-    writeFileSync(pidFile, String(process.pid));
-    return true;
-  } catch {
-    // Another process beat us to the steal — let the caller retry.
-    return false;
-  }
+  return stealLock(lockDir, pidFile);
 }
 
 /**
