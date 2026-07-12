@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import type { JSX } from 'react';
 import type { Property, RoomRosterEntry, ProspectEntry } from '@/lib/data/properties';
 
@@ -17,7 +17,6 @@ function occupancySummary(p: Property) {
   const roster = p.room_roster ?? [];
   const today = new Date().toISOString().slice(0, 10);
 
-  // Rooms with a committed/approved/lease_signed prospect whose move-in is still future
   const committedRooms = new Set<string>();
   for (const prospect of (p.prospect_pipeline ?? [])) {
     const moveIn = prospectMoveIn(prospect);
@@ -172,11 +171,110 @@ function ProspectPanel({ pipeline }: { pipeline: ProspectEntry[] }) {
   );
 }
 
-// ── expanded detail — two-column dashboard layout ───────────────────────────
+// ── Inline Notes cell ─────────────────────────────────────────────────────
 
-function PropertyDetail({ property }: { property: Property }) {
+interface NotesCellProps {
+  currentNote: string | null;
+  staticContent: JSX.Element;
+  editKey: string | undefined;
+  token: string;
+  propertyId: string;
+  room: string;
+  onSaved: (newNote: string) => void;
+}
+
+function NotesCell({ currentNote, staticContent, editKey, token, propertyId, room, onSaved }: NotesCellProps) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const startEdit = useCallback(() => {
+    setValue(currentNote ?? '');
+    setError(null);
+    setEditing(true);
+  }, [currentNote]);
+
+  const cancel = useCallback(() => {
+    setEditing(false);
+    setError(null);
+  }, []);
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/properties/client/${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ propertyId, room, notes: value, editKey }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      onSaved(value);
+      setEditing(false);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }, [token, propertyId, room, value, editKey, onSaved]);
+
+  if (!editKey) return <>{staticContent}</>;
+
+  if (editing) {
+    return (
+      <div className="flex flex-col gap-1 min-w-[160px]">
+        <textarea
+          autoFocus
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          rows={3}
+          maxLength={500}
+          className="text-[10px] border border-blue-300 rounded px-1.5 py-1 resize-none outline-none focus:border-blue-500 w-full bg-white"
+          placeholder="Add a note…"
+        />
+        {error && <span className="text-[9px] text-red-500">{error}</span>}
+        <div className="flex gap-1">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="text-[9px] bg-blue-600 text-white rounded px-2 py-0.5 hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={cancel} disabled={saving} className="text-[9px] text-zinc-500 hover:text-zinc-800 px-1 py-0.5">
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <button onClick={startEdit} className="text-left w-full group" title="Click to edit note">
+      <span className="inline-flex items-center gap-1">
+        {staticContent}
+        <span className="text-[9px] text-zinc-300 group-hover:text-blue-400 transition-colors ml-1">✎</span>
+      </span>
+    </button>
+  );
+}
+
+// ── expanded detail ───────────────────────────────────────────────────────
+
+interface DetailProps {
+  property: Property;
+  token: string;
+  editKey: string | undefined;
+}
+
+function PropertyDetail({ property, token, editKey }: DetailProps) {
   const roster = property.room_roster ?? [];
   const [showAllNeeds, setShowAllNeeds] = useState(false);
+  const [localNotes, setLocalNotes] = useState<Record<string, string>>({});
   const today = new Date().toISOString().slice(0, 10);
 
   const openNeeds = (property.needs?.filter(n => n.status !== 'done') ?? [])
@@ -206,11 +304,14 @@ function PropertyDetail({ property }: { property: Property }) {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-zinc-100">
-                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-2 w-[52px]">Room</th>
-                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-2 w-[118px]">Tenant / Prospect</th>
-                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-2 w-[46px]">Rent</th>
-                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-2 w-[42px]">Due</th>
-                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 min-w-[180px]">Notes</th>
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[88px]">Room</th>
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3">Tenant / Prospect</th>
+                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Rent/mo</th>
+                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Last Pmt</th>
+                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Due</th>
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5">
+                  Notes{editKey && <span className="ml-1 text-blue-400 font-normal">✎</span>}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -232,50 +333,44 @@ function PropertyDetail({ property }: { property: Property }) {
                   (prospect.stage === 'committed' || prospect.stage === 'approved' || prospect.stage === 'lease_signed'));
                 const dotCls = statusDotCls[room.payment_status] ?? 'text-zinc-300';
                 const rowBg = i % 2 === 1 ? 'bg-zinc-50/50' : '';
-                // Per-room outreach — only surface an outreach line that actually
-                // names this room, so a vacant room can't inherit another room's note.
-                const roomKey = room.room.toLowerCase().replace(/\s+/g, '');
-                const roomOutreach = (property.occupancy_outreach?.outreach_log ?? [])
-                  .filter(o => (o.detail ?? '').toLowerCase().replace(/\s+/g, '').includes(roomKey))
-                  .slice(-1)[0];
 
-                // Context-aware notes cell.
-                // room_roster[].notes is the authoritative per-room override —
-                // if set, it renders verbatim (curated by Atlas/Timber). Only when
-                // it is empty do we fall back to the derived chain below.
-                let noteCell: JSX.Element;
-                if (room.notes) {
-                  noteCell = <span className="text-zinc-700">{room.notes}</span>;
+                // Optimistic local override wins over server note
+                const effectiveNote = localNotes[room.room ?? ''] !== undefined
+                  ? localNotes[room.room ?? '']
+                  : (room.notes ?? null);
+
+                // Context-aware static content
+                let staticNoteContent: JSX.Element;
+                if (effectiveNote) {
+                  staticNoteContent = <span className="text-zinc-600">{effectiveNote}</span>;
                 } else if (room.flag) {
-                  noteCell = <span className="text-orange-600 font-medium">{room.flag}</span>;
+                  staticNoteContent = <span className="text-orange-600 font-medium">{room.flag}</span>;
                 } else if (room.move_out_planned) {
-                  noteCell = (
+                  staticNoteContent = (
                     <span className="text-purple-600">
                       Move-out planned{room.move_out_date ? `: ${fmtMoveIn(room.move_out_date)}` : ''}
                     </span>
                   );
                 } else if (isVacant || isCommitted) {
-                  if (prospect) {
-                    noteCell = prospect.notes
-                      ? <span className="text-zinc-600">{prospect.notes.slice(0, 50)}</span>
-                      : <span className="text-zinc-300">—</span>;
-                  } else if (roomOutreach) {
-                    noteCell = (
+                  if (prospect?.notes) {
+                    staticNoteContent = <span className="text-zinc-600">{prospect.notes.slice(0, 50)}</span>;
+                  } else if (recentOutreach) {
+                    staticNoteContent = (
                       <>
-                        <span className="text-zinc-400 tabular-nums mr-1">{roomOutreach.date}</span>
-                        <span className="text-zinc-500 uppercase text-[9px] mr-1">{roomOutreach.type}</span>
+                        <span className="text-zinc-400 tabular-nums mr-1">{recentOutreach.date}</span>
+                        <span className="text-zinc-500 uppercase text-[9px] mr-1">{recentOutreach.type}</span>
                         <span className="text-zinc-600">
-                          {(roomOutreach.detail ?? '').length > 40
-                            ? (roomOutreach.detail ?? '').slice(0, 40) + '…'
-                            : (roomOutreach.detail ?? '')}
+                          {(recentOutreach.detail ?? '').length > 40
+                            ? (recentOutreach.detail ?? '').slice(0, 40) + '…'
+                            : (recentOutreach.detail ?? '')}
                         </span>
                       </>
                     );
                   } else {
-                    noteCell = <span className="text-zinc-300">No fill outreach</span>;
+                    staticNoteContent = <span className="text-zinc-300">No fill outreach</span>;
                   }
                 } else if (recentNote) {
-                  noteCell = (
+                  staticNoteContent = (
                     <>
                       <span className="text-zinc-400 tabular-nums mr-1">{recentNote.date}</span>
                       <span className="text-zinc-600">
@@ -289,14 +384,12 @@ function PropertyDetail({ property }: { property: Property }) {
                     </>
                   );
                 } else {
-                  noteCell = <span className="text-zinc-300">—</span>;
+                  staticNoteContent = <span className="text-zinc-300">—</span>;
                 }
 
                 return (
                   <tr key={i} className={`border-b border-zinc-50 last:border-0 align-top ${rowBg}`}>
-
-                    {/* Room + flag indicator */}
-                    <td className="py-2 pr-2">
+                    <td className="py-2 pr-3">
                       <div className="flex items-center gap-1 whitespace-nowrap">
                         <span className={`text-[8px] shrink-0 leading-none ${isCommitted ? 'text-purple-400' : dotCls}`}>●</span>
                         <span className={`text-[12px] font-semibold ${isFlagged ? 'text-orange-700' : isCommitted ? 'text-purple-700' : 'text-zinc-900'}`}>
@@ -308,13 +401,9 @@ function PropertyDetail({ property }: { property: Property }) {
                         <div className="text-[9px] text-red-500 mt-0.5 pl-3">{room.eviction_status}</div>
                       )}
                     </td>
-
-                    {/* Tenant / Prospect + stage + move-in */}
-                    <td className="py-2 pr-2 max-w-[118px]">
+                    <td className="py-2 pr-3 max-w-[160px]">
                       {room.tenant && !isCommitted ? (
-                        <div>
-                          <span className="text-[11px] text-zinc-700 truncate block">{room.tenant}</span>
-                        </div>
+                        <span className="text-[11px] text-zinc-700 truncate block">{room.tenant}</span>
                       ) : prospect ? (
                         <div>
                           <div className="flex items-center gap-1 flex-wrap">
@@ -327,40 +416,39 @@ function PropertyDetail({ property }: { property: Property }) {
                             )}
                           </div>
                           {moveIn && (
-                            <span className="text-[9px] text-purple-600 mt-0.5 block">
-                              Planning to move in {fmtMoveIn(moveIn)}
-                            </span>
+                            <span className="text-[9px] text-purple-600 mt-0.5 block">Planning to move in {fmtMoveIn(moveIn)}</span>
                           )}
                         </div>
                       ) : (
                         <span className="text-[11px] text-zinc-400 italic">Vacant</span>
                       )}
                     </td>
-
-                    {/* Rent/mo */}
-                    <td className="py-2 pr-2 text-right align-top">
-                      {monthlyRent != null ? (
-                        <span className="text-[11px] text-zinc-600 tabular-nums">{fmt(monthlyRent)}</span>
-                      ) : (
-                        <span className="text-[11px] text-zinc-300">—</span>
-                      )}
+                    <td className="py-2 pr-3 text-right align-top">
+                      {monthlyRent != null
+                        ? <span className="text-[11px] text-zinc-600 tabular-nums">{fmt(monthlyRent)}</span>
+                        : <span className="text-[11px] text-zinc-300">—</span>}
                     </td>
-
-                    {/* Amount Due */}
-                    <td className="py-2 pr-2 text-right align-top">
-                      {!isVacant && !isCommitted ? (
-                        room.amount_due != null && room.amount_due > 0 ? (
-                          <span className="text-[11px] font-semibold text-red-600 tabular-nums">{fmt(room.amount_due)}</span>
-                        ) : (
-                          <span className="text-[11px] text-green-600">—</span>
-                        )
-                      ) : (
-                        <span className="text-[11px] text-zinc-300">—</span>
-                      )}
+                    <td className="py-2 pr-3 text-right align-top">
+                      <span className="text-[11px] text-zinc-300">—</span>
                     </td>
-
-                    {/* Context-aware Notes */}
-                    <td className="py-2 text-[10px] leading-snug align-top">{noteCell}</td>
+                    <td className="py-2 pr-3 text-right align-top">
+                      {!isVacant && !isCommitted
+                        ? room.amount_due != null && room.amount_due > 0
+                          ? <span className="text-[11px] font-semibold text-red-600 tabular-nums">{fmt(room.amount_due)}</span>
+                          : <span className="text-[11px] text-green-600">—</span>
+                        : <span className="text-[11px] text-zinc-300">—</span>}
+                    </td>
+                    <td className="py-2 text-[10px] leading-snug align-top">
+                      <NotesCell
+                        currentNote={effectiveNote}
+                        staticContent={staticNoteContent}
+                        editKey={editKey}
+                        token={token}
+                        propertyId={property.id}
+                        room={room.room ?? ''}
+                        onSaved={(newNote) => setLocalNotes(prev => ({ ...prev, [room.room ?? '']: newNote }))}
+                      />
+                    </td>
                   </tr>
                 );
               })}
@@ -369,15 +457,13 @@ function PropertyDetail({ property }: { property: Property }) {
         )}
       </div>
 
-      {/* RIGHT: Secondary info panels */}
+      {/* RIGHT: panels */}
       <div className="space-y-2 min-w-0">
 
-        {/* Prospect Pipeline */}
         {pipeline.filter(p => p.stage !== 'moved_in').length > 0 && (
           <ProspectPanel pipeline={pipeline} />
         )}
 
-        {/* Open Maintenance — top N by priority, expandable */}
         <div className="bg-white rounded-md border border-zinc-100 p-3">
           <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">
             Maintenance{openNeeds.length > 0 ? ` · ${openNeeds.length} open` : ''}
@@ -390,9 +476,7 @@ function PropertyDetail({ property }: { property: Property }) {
                 {visibleNeeds.map((n, i) => (
                   <div key={i} className="py-1.5 first:pt-0">
                     <div className="flex items-center gap-1.5">
-                      <span className={`text-[9px] w-4 text-center py-0.5 rounded border shrink-0 ${
-                        needPriorityCls[n.priority] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'
-                      }`}>
+                      <span className={`text-[9px] w-4 text-center py-0.5 rounded border shrink-0 ${needPriorityCls[n.priority] ?? 'bg-zinc-100 text-zinc-500 border-zinc-200'}`}>
                         {n.priority[0].toUpperCase()}
                       </span>
                       <span className="text-[11px] text-zinc-700 flex-1 truncate">{n.item}</span>
@@ -405,8 +489,7 @@ function PropertyDetail({ property }: { property: Property }) {
                     </div>
                     {n.quoted_amount != null ? (
                       <div className="text-[10px] text-green-600 pl-5 mt-0.5">
-                        Quoted: {fmt(n.quoted_amount)}
-                        {n.vendor && <span className="text-zinc-400"> · {n.vendor}</span>}
+                        Quoted: {fmt(n.quoted_amount)}{n.vendor && <span className="text-zinc-400"> · {n.vendor}</span>}
                       </div>
                     ) : n.status === 'quote_pending' ? (
                       <div className="text-[10px] text-amber-500 pl-5 mt-0.5">Quote pending</div>
@@ -415,96 +498,67 @@ function PropertyDetail({ property }: { property: Property }) {
                 ))}
               </div>
               {hiddenCount > 0 && (
-                <button
-                  onClick={() => setShowAllNeeds(v => !v)}
-                  className="mt-1.5 text-[10px] text-blue-500 hover:text-blue-700 transition-colors"
-                >
+                <button onClick={() => setShowAllNeeds(v => !v)} className="mt-1.5 text-[10px] text-blue-500 hover:text-blue-700 transition-colors">
                   {showAllNeeds ? '▴ Show less' : `▾ View all (${openNeeds.length})`}
                 </button>
               )}
               {(hasAnyCost || hasAnyQuote) && (
                 <div className="mt-2 pt-2 border-t border-zinc-100 flex justify-between text-[10px]">
-                  {hasAnyCost && (
-                    <span className="text-zinc-500">Est: <span className="font-medium text-zinc-700 tabular-nums">{fmt(totalEst)}</span></span>
-                  )}
-                  {hasAnyQuote && (
-                    <span className="text-zinc-500">Quoted: <span className="font-medium text-green-600 tabular-nums">{fmt(totalQuoted)}</span></span>
-                  )}
+                  {hasAnyCost && <span className="text-zinc-500">Est: <span className="font-medium text-zinc-700 tabular-nums">{fmt(totalEst)}</span></span>}
+                  {hasAnyQuote && <span className="text-zinc-500">Quoted: <span className="font-medium text-green-600 tabular-nums">{fmt(totalQuoted)}</span></span>}
                 </div>
               )}
             </>
           )}
         </div>
 
-        {/* Insurance + Taxes */}
         <div className="bg-white rounded-md border border-zinc-100 p-3">
-          <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">
-            Insurance &amp; Taxes
-          </div>
+          <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">Insurance &amp; Taxes</div>
           <div className="space-y-1.5">
             {property.insurance ? (
               <div className="flex items-baseline justify-between gap-2 text-[11px]">
                 <span className="text-zinc-500 shrink-0">Insurance</span>
                 <span className="text-zinc-700 text-right">
                   Renews {property.insurance.renewal_date}
-                  {property.insurance.carrier && (
-                    <span className="text-zinc-400"> · {property.insurance.carrier}</span>
-                  )}
+                  {property.insurance.carrier && <span className="text-zinc-400"> · {property.insurance.carrier}</span>}
                 </span>
               </div>
             ) : (
-              <div className="flex items-baseline justify-between text-[11px]">
-                <span className="text-zinc-400">Insurance</span>
-                <span className="text-zinc-300">not tracked</span>
-              </div>
+              <div className="flex items-baseline justify-between text-[11px]"><span className="text-zinc-400">Insurance</span><span className="text-zinc-300">not tracked</span></div>
             )}
             {property.taxes ? (
               <div className="flex items-baseline justify-between gap-2 text-[11px]">
                 <span className="text-zinc-500 shrink-0">Property tax</span>
                 <span className="text-zinc-700 text-right">
                   Due {property.taxes.due_date}
-                  {property.taxes.status && (
-                    <span className="text-zinc-400"> · {property.taxes.status}</span>
-                  )}
+                  {property.taxes.status && <span className="text-zinc-400"> · {property.taxes.status}</span>}
                 </span>
               </div>
             ) : (
-              <div className="flex items-baseline justify-between text-[11px]">
-                <span className="text-zinc-400">Property tax</span>
-                <span className="text-zinc-300">not tracked</span>
-              </div>
+              <div className="flex items-baseline justify-between text-[11px]"><span className="text-zinc-400">Property tax</span><span className="text-zinc-300">not tracked</span></div>
             )}
           </div>
         </div>
 
-        {/* Utilities + HOA */}
-        {(property.utilities ||
-          (property.hoa && property.hoa.status !== 'not_applicable')) && (
+        {(property.utilities || (property.hoa && property.hoa.status !== 'not_applicable')) && (
           <div className="bg-white rounded-md border border-zinc-100 p-3">
-            <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">
-              Utilities &amp; HOA
-            </div>
+            <div className="text-[9px] uppercase tracking-[0.14em] text-zinc-400 mb-1.5">Utilities &amp; HOA</div>
             <div className="space-y-1">
-              {property.utilities &&
-                (['electric', 'water', 'gas', 'trash'] as const).map(key => {
-                  const u = property.utilities?.[key];
-                  if (!u) return null;
-                  return (
-                    <div key={key} className="flex items-baseline justify-between text-[11px]">
-                      <span className="text-zinc-400 capitalize">{key}</span>
-                      <span className="text-zinc-600 tabular-nums">
-                        {u.monthly_est != null ? `${fmt(u.monthly_est)}/mo` : (u.provider ?? '—')}
-                      </span>
-                    </div>
-                  );
-                })}
+              {property.utilities && (['electric', 'water', 'gas', 'trash'] as const).map(key => {
+                const u = property.utilities?.[key];
+                if (!u) return null;
+                return (
+                  <div key={key} className="flex items-baseline justify-between text-[11px]">
+                    <span className="text-zinc-400 capitalize">{key}</span>
+                    <span className="text-zinc-600 tabular-nums">{u.monthly_est != null ? `${fmt(u.monthly_est)}/mo` : (u.provider ?? '—')}</span>
+                  </div>
+                );
+              })}
               {property.hoa && property.hoa.status !== 'not_applicable' && (
                 <div className="flex items-baseline justify-between text-[11px]">
                   <span className="text-zinc-400">HOA</span>
                   <span className={`tabular-nums ${property.hoa.status === 'overdue' ? 'text-red-600' : 'text-zinc-600'}`}>
-                    {property.hoa.monthly_fee != null
-                      ? `${fmt(property.hoa.monthly_fee)}/mo`
-                      : property.hoa.status}
+                    {property.hoa.monthly_fee != null ? `${fmt(property.hoa.monthly_fee)}/mo` : property.hoa.status}
                   </span>
                 </div>
               )}
@@ -512,29 +566,22 @@ function PropertyDetail({ property }: { property: Property }) {
           </div>
         )}
 
-        {/* Property Notes (status_updates) */}
         {(property.status_updates ?? []).length > 0 && (
           <div className="bg-white rounded-md border border-blue-100 p-3">
-            <div className="text-[9px] uppercase tracking-[0.14em] text-blue-500 mb-1.5">
-              Property Notes
-            </div>
+            <div className="text-[9px] uppercase tracking-[0.14em] text-blue-500 mb-1.5">Property Notes</div>
             <div className="space-y-1">
-              {(property.status_updates ?? [])
-                .slice()
-                .sort((a, b) => b.at.localeCompare(a.at))
-                .slice(0, 5)
-                .map((note, i) => (
-                  <div key={i} className="text-[10px]">
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-zinc-400 tabular-nums shrink-0">
-                        {new Date(note.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                      </span>
-                      <span className="text-zinc-300 shrink-0">·</span>
-                      <span className="text-blue-500 shrink-0">{note.from}</span>
-                    </div>
-                    <div className="text-zinc-600 mt-0.5">{note.text}</div>
+              {(property.status_updates ?? []).slice().sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5).map((note, i) => (
+                <div key={i} className="text-[10px]">
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-zinc-400 tabular-nums shrink-0">
+                      {new Date(note.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    </span>
+                    <span className="text-zinc-300 shrink-0">·</span>
+                    <span className="text-blue-500 shrink-0">{note.from}</span>
                   </div>
-                ))}
+                  <div className="text-zinc-600 mt-0.5">{note.text}</div>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -545,10 +592,12 @@ function PropertyDetail({ property }: { property: Property }) {
 
 // ── accordion row ───────────────────────────────────────────────────────────
 
-function PropertyRow({ property, isOpen, onToggle }: {
+function PropertyRow({ property, isOpen, onToggle, token, editKey }: {
   property: Property;
   isOpen: boolean;
   onToggle: () => void;
+  token: string;
+  editKey: string | undefined;
 }) {
   const occ = occupancySummary(property);
   const roster = property.room_roster ?? [];
@@ -558,9 +607,7 @@ function PropertyRow({ property, isOpen, onToggle }: {
   const flaggedRooms = roster.filter(r => r.flag || r.move_out_planned).length;
   const vacantRooms = occ.total - occ.occupied - occ.committed;
   const pct = occ.total > 0 ? Math.round((occ.occupied / occ.total) * 100) : null;
-  const latestNote = (property.status_updates ?? [])
-    .slice()
-    .sort((a, b) => b.at.localeCompare(a.at))[0];
+  const latestNote = (property.status_updates ?? []).slice().sort((a, b) => b.at.localeCompare(a.at))[0];
 
   const barColor = pct === 100 ? 'bg-green-500' : vacantRooms >= 2 ? 'bg-red-400' : 'bg-amber-400';
   const occColor = pct === 100 ? 'text-green-600' : vacantRooms >= 2 ? 'text-red-600' : 'text-amber-600';
@@ -572,66 +619,46 @@ function PropertyRow({ property, isOpen, onToggle }: {
         className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-zinc-50/80 transition-colors"
         aria-expanded={isOpen}
       >
-        <span className="text-[10px] text-zinc-300 shrink-0 w-3 text-center select-none">
-          {isOpen ? '▾' : '▸'}
-        </span>
-
+        <span className="text-[10px] text-zinc-300 shrink-0 w-3 text-center select-none">{isOpen ? '▾' : '▸'}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2 flex-wrap">
-            <span className={`text-[14px] font-semibold ${isOpen ? 'text-blue-600' : 'text-zinc-900'} transition-colors`}>
-              {property.name}
-            </span>
+            <span className={`text-[14px] font-semibold ${isOpen ? 'text-blue-600' : 'text-zinc-900'} transition-colors`}>{property.name}</span>
             <span className="text-[11px] text-zinc-400">{property.city}, {property.state}</span>
           </div>
         </div>
-
         <div className="flex items-center gap-2 shrink-0">
           {occ.total > 0 && (
             <>
               <div className="w-14 bg-zinc-100 rounded-full h-1 hidden sm:block">
                 <div className={`h-1 rounded-full ${barColor}`} style={{ width: `${pct ?? 0}%` }} />
               </div>
-              <span className={`text-[12px] font-semibold tabular-nums w-8 text-right ${occColor}`}>
-                {occ.occupied}/{occ.total}
-              </span>
+              <span className={`text-[12px] font-semibold tabular-nums w-8 text-right ${occColor}`}>{occ.occupied}/{occ.total}</span>
             </>
           )}
           {occ.committed > 0 && (
-            <span className="text-[10px] bg-purple-50 text-purple-700 border border-purple-100 rounded-full px-2 py-0.5">
-              {occ.committed} committed
-            </span>
+            <span className="text-[10px] bg-purple-50 text-purple-700 border border-purple-100 rounded-full px-2 py-0.5">{occ.committed} committed</span>
           )}
           {eviction > 0 && (
-            <span className="text-[10px] bg-red-100 text-red-700 border border-red-200 rounded-full px-2 py-0.5 font-medium">
-              {eviction} eviction
-            </span>
+            <span className="text-[10px] bg-red-100 text-red-700 border border-red-200 rounded-full px-2 py-0.5 font-medium">{eviction} eviction</span>
           )}
           {late > 0 && (
-            <span className="text-[10px] bg-red-50 text-red-600 border border-red-100 rounded-full px-2 py-0.5">
-              {late} late
-            </span>
+            <span className="text-[10px] bg-red-50 text-red-600 border border-red-100 rounded-full px-2 py-0.5">{late} late</span>
           )}
           {urgentNeeds.length > 0 && (
-            <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-100 rounded-full px-2 py-0.5">
-              {urgentNeeds.length} maint
-            </span>
+            <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-100 rounded-full px-2 py-0.5">{urgentNeeds.length} maint</span>
           )}
           {flaggedRooms > 0 && (
-            <span className="text-[10px] bg-orange-50 text-orange-700 border border-orange-100 rounded-full px-2 py-0.5">
-              ⚑ {flaggedRooms}
-            </span>
+            <span className="text-[10px] bg-orange-50 text-orange-700 border border-orange-100 rounded-full px-2 py-0.5">⚑ {flaggedRooms}</span>
           )}
           {latestNote && (
-            <span className="text-[10px] text-blue-400 hidden sm:inline-block">
-              ↳ note {relativeTime(latestNote.at)}
-            </span>
+            <span className="text-[10px] text-blue-400 hidden sm:inline-block">↳ note {relativeTime(latestNote.at)}</span>
           )}
         </div>
       </button>
 
       {isOpen && (
         <div className="border-t border-zinc-100 bg-zinc-50 px-4 py-3">
-          <PropertyDetail property={property} />
+          <PropertyDetail property={property} token={token} editKey={editKey} />
         </div>
       )}
     </div>
@@ -640,19 +667,18 @@ function PropertyRow({ property, isOpen, onToggle }: {
 
 // ── main export ─────────────────────────────────────────────────────────────
 
-export function PropertyAccordion({ properties }: { properties: Property[] }) {
+export function PropertyAccordion({ properties, token, editKey }: {
+  properties: Property[];
+  token: string;
+  editKey?: string;
+}) {
   const [openId, setOpenId] = useState<string | null>(null);
   const toggle = (id: string) => setOpenId(prev => prev === id ? null : id);
 
   return (
     <div className="bg-white rounded-xl border border-zinc-200 shadow-sm divide-y divide-zinc-100 overflow-hidden">
       {properties.map(p => (
-        <PropertyRow
-          key={p.id}
-          property={p}
-          isOpen={openId === p.id}
-          onToggle={() => toggle(p.id)}
-        />
+        <PropertyRow key={p.id} property={p} isOpen={openId === p.id} onToggle={() => toggle(p.id)} token={token} editKey={editKey} />
       ))}
     </div>
   );

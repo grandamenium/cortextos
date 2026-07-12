@@ -18,10 +18,24 @@ function paymentSummaryServer(roster: RoomRosterEntry[]) {
   };
 }
 
-export default async function ClientPortalPage({ params }: { params: Promise<{ token: string }> }) {
+export default async function ClientPortalPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ token: string }>;
+  searchParams: Promise<{ k?: string }>;
+}) {
   const { token } = await params;
+  const { k: editKey } = await searchParams;
+
   const properties = getPropertiesByClientToken(token);
   if (properties.length === 0) notFound();
+
+  // Validate editKey against property edit_keys — only pass through if it matches at least one
+  const validEditKey =
+    editKey && properties.some(p => (p as unknown as Record<string, unknown>).edit_key === editKey)
+      ? editKey
+      : undefined;
 
   const totalRooms = properties.reduce((s, p) => s + (p.room_roster?.length ?? p.units?.length ?? 0), 0);
   const totalOccupied = properties.reduce((s, p) => s + occupancySummaryServer(p).occupied, 0);
@@ -87,11 +101,11 @@ export default async function ClientPortalPage({ params }: { params: Promise<{ t
             <h2 className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-400">Properties</h2>
             <span className="text-[10px] text-zinc-400">{properties.length} total · click to expand</span>
           </div>
-          <PropertyAccordion properties={properties} />
+          <PropertyAccordion properties={properties} token={token} editKey={validEditKey} />
         </div>
 
         <p className="text-center text-[9px] text-zinc-300 pt-1">
-          Read-only · Data refreshed by management system
+          {validEditKey ? 'Edit mode · Click any Notes cell to update' : 'Read-only · Data refreshed by management system'}
         </p>
       </div>
     </div>

@@ -81,6 +81,7 @@ export async function middleware(request: NextRequest) {
     pathname === '/api/workflows/health' ||
     pathname.startsWith('/share/') ||
     pathname.startsWith('/api/properties/share/') ||
+    pathname.startsWith('/api/properties/client/') ||
     pathname.startsWith('/api/webhooks/imessage')
   ) {
     const response = NextResponse.next();
