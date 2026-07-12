@@ -185,16 +185,37 @@ export function stealLock(lockDir: string, pidFile: string): boolean {
     if (holderAlive(info)) return false;  // a live process holds it: leave it untouched
     if (info.pidUnreadable && info.ageMs < LOCK_STALE_MS) return false; // mid-acquire
 
-    // 3. Verified abandoned, and it cannot turn live under us. Move it aside with
-    //    rename — ATOMIC, so even under a pathological double-claim exactly one
-    //    process can be the mover and the loser gets ENOENT. We NEVER rmSync the
-    //    lock directly, so no path can force-delete a lock that someone holds.
+    // Remember WHICH object we judged. The claim is age-recoverable (it must be —
+    // a killed stealer would otherwise leak it forever and block all recovery),
+    // so two stealers CAN hold it at once. Then this can happen:
+    //
+    //   A: judges abandoned -> steals -> installs a FRESH LIVE lock
+    //   B: (verdict already recorded) renames lockDir aside — but lockDir is now
+    //      A's LIVE lock, a DIFFERENT OBJECT than the one B judged.
+    //
+    // A verdict may only authorise destroying the object it actually examined.
+    // The inode is that object's identity, and rename preserves it.
+    const judgedIno = statSync(lockDir).ino;
+
+    // 3. Move it aside with rename — ATOMIC, so exactly one process can be the
+    //    mover; the loser gets ENOENT and touches nothing.
     const dead = `${lockDir}.dead.${process.pid}.${Date.now()}`;
     try {
       renameSync(lockDir, dead);
     } catch {
       return false; // someone else moved it first — nothing of ours destroyed
     }
+
+    // IDENTITY CHECK: is what we captured the thing we judged?
+    let capturedIno: bigint | number | undefined;
+    try { capturedIno = statSync(dead).ino; } catch { capturedIno = undefined; }
+    if (capturedIno !== judgedIno) {
+      // We captured an object we never examined — it may be a live lock. Put it
+      // back. A stale verdict must not be able to destroy what it never saw.
+      try { renameSync(dead, lockDir); } catch { /* someone re-took the slot */ }
+      return false;
+    }
+
     try { rmSync(dead, { recursive: true, force: true }); } catch { /* inert */ }
 
     try {
