@@ -206,12 +206,11 @@ function PropertyDetail({ property }: { property: Property }) {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-zinc-100">
-                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[88px]">Room</th>
-                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3">Tenant / Prospect</th>
-                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Rent/mo</th>
-                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Last Pmt</th>
-                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-3 w-[58px]">Due</th>
-                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5">Notes</th>
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-2 w-[52px]">Room</th>
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-2 w-[118px]">Tenant / Prospect</th>
+                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-2 w-[46px]">Rent</th>
+                <th className="text-right text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 pr-2 w-[42px]">Due</th>
+                <th className="text-left text-[9px] uppercase tracking-[0.12em] text-zinc-400 font-medium pb-1.5 min-w-[180px]">Notes</th>
               </tr>
             </thead>
             <tbody>
@@ -297,7 +296,7 @@ function PropertyDetail({ property }: { property: Property }) {
                   <tr key={i} className={`border-b border-zinc-50 last:border-0 align-top ${rowBg}`}>
 
                     {/* Room + flag indicator */}
-                    <td className="py-2 pr-3">
+                    <td className="py-2 pr-2">
                       <div className="flex items-center gap-1 whitespace-nowrap">
                         <span className={`text-[8px] shrink-0 leading-none ${isCommitted ? 'text-purple-400' : dotCls}`}>●</span>
                         <span className={`text-[12px] font-semibold ${isFlagged ? 'text-orange-700' : isCommitted ? 'text-purple-700' : 'text-zinc-900'}`}>
@@ -311,7 +310,7 @@ function PropertyDetail({ property }: { property: Property }) {
                     </td>
 
                     {/* Tenant / Prospect + stage + move-in */}
-                    <td className="py-2 pr-3 max-w-[160px]">
+                    <td className="py-2 pr-2 max-w-[118px]">
                       {room.tenant && !isCommitted ? (
                         <div>
                           <span className="text-[11px] text-zinc-700 truncate block">{room.tenant}</span>
@@ -339,7 +338,7 @@ function PropertyDetail({ property }: { property: Property }) {
                     </td>
 
                     {/* Rent/mo */}
-                    <td className="py-2 pr-3 text-right align-top">
+                    <td className="py-2 pr-2 text-right align-top">
                       {monthlyRent != null ? (
                         <span className="text-[11px] text-zinc-600 tabular-nums">{fmt(monthlyRent)}</span>
                       ) : (
@@ -347,13 +346,8 @@ function PropertyDetail({ property }: { property: Property }) {
                       )}
                     </td>
 
-                    {/* Last Pmt */}
-                    <td className="py-2 pr-3 text-right align-top">
-                      <span className="text-[11px] text-zinc-300">—</span>
-                    </td>
-
                     {/* Amount Due */}
-                    <td className="py-2 pr-3 text-right align-top">
+                    <td className="py-2 pr-2 text-right align-top">
                       {!isVacant && !isCommitted ? (
                         room.amount_due != null && room.amount_due > 0 ? (
                           <span className="text-[11px] font-semibold text-red-600 tabular-nums">{fmt(room.amount_due)}</span>
