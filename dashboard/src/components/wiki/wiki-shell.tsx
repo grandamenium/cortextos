@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { WikiRenderer } from './wiki-renderer';
 import { FolderTree, type TreeNode } from './folder-tree';
+import type { VaultStatus } from '@/lib/vault';
 
 // Re-export TreeNode for upstream API typing convenience
 export type { TreeNode };
@@ -41,20 +42,20 @@ type NoteResponse = {
   sizeBytes: number;
 };
 
-type VaultStatus =
-  | { state: 'ready'; root: string }
-  | { state: 'not-configured' }
-  | { state: 'missing'; configuredPath: string };
-
 interface WikiShellProps {
   org?: string;
+  initialVaultStatus?: VaultStatus;
 }
 
-export function WikiShell({ org }: WikiShellProps) {
+export function WikiShell({ org, initialVaultStatus }: WikiShellProps) {
   const [tree, setTree] = useState<TreeNode[] | null>(null);
-  const [vaultRoot, setVaultRoot] = useState<string | null>(null);
+  const [vaultRoot, setVaultRoot] = useState<string | null>(
+    initialVaultStatus?.state === 'ready' ? initialVaultStatus.root : null,
+  );
   const [vaultError, setVaultError] = useState<string | null>(null);
-  const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
+  const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(
+    initialVaultStatus ?? null,
+  );
 
   const [selected, setSelected] = useState<string | null>(null);
   const [note, setNote] = useState<NoteResponse | null>(null);

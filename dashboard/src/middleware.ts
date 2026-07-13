@@ -88,6 +88,8 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/_next') ||
     pathname === '/sops' ||
     pathname.startsWith('/sops/') ||
+    pathname === '/wiki' ||
+    pathname.startsWith('/api/wiki/') ||
     pathname === '/favicon.ico' ||
     pathname === '/api/workflows/health'
   ) {

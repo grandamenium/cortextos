@@ -13,11 +13,13 @@ export default async function DashboardLayout({
   const requestHeaders = await headers();
   const pathname = requestHeaders.get('x-dashboard-pathname') ?? '';
   const isPublicSopRoute = pathname === '/sops' || pathname.startsWith('/sops/');
+  const isPublicWikiRoute = pathname === '/wiki';
+  const isPublicRoute = isPublicSopRoute || isPublicWikiRoute;
 
-  const session = isPublicSopRoute ? null : await auth();
-  if (!isPublicSopRoute && !session) redirect('/login');
+  const session = isPublicRoute ? null : await auth();
+  if (!isPublicRoute && !session) redirect('/login');
 
-  if (!isPublicSopRoute) {
+  if (!isPublicRoute) {
     // Sync filesystem state to SQLite on every page load
     // This ensures the dashboard always reflects the latest agent activity
     try {
