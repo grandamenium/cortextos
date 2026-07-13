@@ -1,0 +1,100 @@
+{
+  "slug": "turnover-make-ready",
+  "name": "Turnover Make-Ready",
+  "description": "Blue coordinates a unit turn from move-out facts through make-ready completion and leasing handoff.",
+  "subject_type": "unit_turn",
+  "default_start_stage_key": "intake",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "intake",
+      "name": "Turn Intake",
+      "description": "Normalize move-out, target, property, and make-ready scope.",
+      "steps": [
+        {
+          "task_key": "normalize-turn-facts",
+          "title": "Normalize turn facts",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "instructions": "Normalize move-out date, target ready date, property/unit, open work orders, and make-ready categories.",
+          "dispatch_title": "Normalize turnover facts",
+          "dispatch_body": "Normalize turn facts and identify missing dates, categories, or work order links.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "scope-review",
+          "title": "Review make-ready scope",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["normalize-turn-facts"],
+          "instructions": "Confirm the make-ready scope, target date, and priority before dispatch coordination begins.",
+          "human_prompt": "Review make-ready scope before vendor/tech coordination.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "coordinate",
+      "name": "Coordinate Work",
+      "description": "Coordinate vendors, techs, materials, photos, and blockers.",
+      "steps": [
+        {
+          "task_key": "coordinate-make-ready-work",
+          "title": "Coordinate make-ready work",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["scope-review"],
+          "instructions": "Coordinate open make-ready work, vendor assignments, materials, access, and blockers. Do not mark ready without evidence.",
+          "dispatch_title": "Coordinate make-ready work",
+          "dispatch_body": "Coordinate open make-ready work and surface blockers.",
+          "estimated_minutes": 30
+        },
+        {
+          "task_key": "blocker-gate",
+          "title": "Clear turn blockers",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["coordinate-make-ready-work"],
+          "instructions": "Clear or explicitly accept all blockers before leasing handoff.",
+          "human_prompt": "Clear make-ready blockers before leasing handoff.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "handoff",
+      "name": "Leasing Handoff",
+      "description": "Confirm readiness and hand the unit to leasing/listing workflow.",
+      "steps": [
+        {
+          "task_key": "verify-ready-evidence",
+          "title": "Verify ready evidence",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["blocker-gate"],
+          "instructions": "Verify completion evidence, photos, notes, and remaining exceptions before marking make-ready complete.",
+          "dispatch_title": "Verify make-ready evidence",
+          "dispatch_body": "Verify make-ready completion evidence and remaining exceptions.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "notify-leasing-ready",
+          "title": "Notify leasing ready",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["verify-ready-evidence"],
+          "instructions": "Notify leasing that the unit is ready, including any owner-visible caveats.",
+          "dispatch_title": "Notify leasing of ready unit",
+          "dispatch_body": "Notify leasing that make-ready is complete with evidence summary.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

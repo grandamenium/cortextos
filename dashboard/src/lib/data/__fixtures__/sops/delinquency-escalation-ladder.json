@@ -1,0 +1,181 @@
+{
+  "slug": "delinquency-escalation-ladder",
+  "name": "Delinquency Escalation Ladder",
+  "description": "Normalize a delinquency account, stage reminder and escalation artifacts, gate resident/legal/owner actions, and track resolution without external sends or AppFolio writes.",
+  "subject_type": "delinquency_account",
+  "default_start_stage_key": "normalize",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "normalize",
+      "name": "Normalize Delinquency Case",
+      "description": "Convert the Lane 0 delinquency trigger into a HubKey workflow case record.",
+      "steps": [
+        {
+          "task_key": "normalize-delinquency-account",
+          "title": "Normalize delinquency account",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "instructions": "Normalize receivable_external_id, tenant/property/unit refs, delinquent_rent_cents, amount_receivable_cents, as_of_date, and any payment plan or dispute flags into a delinquency account case. Do not write to AppFolio.",
+          "dispatch_title": "Normalize delinquency escalation account",
+          "dispatch_body": "Create an internal delinquency account case from the Lane 0 trigger fields. No external sends and no AppFolio writes.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "exceptions",
+      "name": "Review Exceptions",
+      "description": "Identify and resolve data, dispute, and payment-plan exceptions before outreach is drafted.",
+      "steps": [
+        {
+          "task_key": "review-delinquency-exceptions",
+          "title": "Review delinquency exceptions",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["normalize-delinquency-account"],
+          "instructions": "Review missing tenant/property/unit refs, disputed balances, active payment plans, duplicate receivables, or stale as_of_date values before escalation continues.",
+          "human_prompt": "Review delinquency account exceptions before resident-facing drafts are prepared.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "reminder-draft",
+      "name": "Draft Resident Reminder",
+      "description": "Prepare a neutral reminder draft for review only.",
+      "steps": [
+        {
+          "task_key": "draft-resident-reminder",
+          "title": "Draft resident reminder",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["review-delinquency-exceptions"],
+          "instructions": "Draft a resident reminder using normalized amount, rent-only delinquency context, due/as-of dates, and payment/dispute indicators. Keep it staged as an internal draft only; do not send externally.",
+          "dispatch_title": "Draft delinquency resident reminder",
+          "dispatch_body": "Draft the resident reminder for approval. Do not send or queue outbound delivery.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "approval",
+      "name": "Resident Approval Gate",
+      "description": "Require human approval before any resident-facing reminder can leave the system.",
+      "steps": [
+        {
+          "task_key": "approve-resident-reminder",
+          "title": "Approve resident reminder",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-resident-reminder"],
+          "instructions": "Approve, edit, hold, or reject the resident reminder draft. This SOP does not perform external sends.",
+          "human_prompt": "Approval required before any delinquency reminder is sent outside HubKey.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "notice-staging",
+      "name": "Stage Late Fee And Notice",
+      "description": "Prepare accounting and formal-notice artifacts for later gated action.",
+      "steps": [
+        {
+          "task_key": "stage-late-fee-and-formal-notice",
+          "title": "Stage late fee and formal notice",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["approve-resident-reminder"],
+          "instructions": "Stage late-fee eligibility notes, formal notice checklist, balance basis, and timing checkpoints for review. Do not post fees, generate legal service, send notices, or write to AppFolio.",
+          "dispatch_title": "Stage delinquency late fee and formal notice",
+          "dispatch_body": "Prepare internal late-fee and formal-notice staging notes only. No external sends and no AppFolio writes.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "owner-human-gate",
+      "name": "Owner And Human Gate",
+      "description": "Prepare owner status context when escalation requires it, then hold for human direction.",
+      "steps": [
+        {
+          "task_key": "prepare-owner-escalation-status",
+          "title": "Prepare owner escalation status",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-late-fee-and-formal-notice"],
+          "instructions": "Prepare owner-status context only when owner escalation is required: resident, property, balance, timeline, exception flags, proposed next step, and legal-risk notes. Do not contact the owner.",
+          "dispatch_title": "Prepare owner delinquency escalation status",
+          "dispatch_body": "Prepare owner escalation status context for human review. No outbound owner contact.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "owner-human-escalation-gate",
+          "title": "Owner and legal escalation gate",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["prepare-owner-escalation-status"],
+          "instructions": "Decide whether to hold, continue reminders, request owner direction, stage formal notice, or prepare eviction handoff. Legal escalation and owner contact remain human-gated.",
+          "human_prompt": "Human decision required before owner escalation, formal notice release, or eviction handoff.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "eviction-handoff",
+      "name": "Prepare Eviction Handoff Packet",
+      "description": "Assemble a legal handoff packet without filing, sending, or legal-action execution.",
+      "steps": [
+        {
+          "task_key": "assemble-eviction-handoff-packet",
+          "title": "Assemble eviction handoff packet",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["owner-human-escalation-gate"],
+          "instructions": "Assemble an internal handoff packet with ledger basis, receivable_external_id, resident/property/unit refs, notice timeline, payment plan/dispute flags, approval history, and open questions. Do not file, send, or write to AppFolio.",
+          "dispatch_title": "Assemble delinquency eviction handoff packet",
+          "dispatch_body": "Prepare internal eviction handoff packet only. No legal filing, external send, or AppFolio write.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "legal-handoff-gate",
+          "title": "Legal handoff gate",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["assemble-eviction-handoff-packet"],
+          "instructions": "Approve, hold, or reject the handoff packet before any legal escalation occurs. This SOP stops at internal handoff readiness.",
+          "human_prompt": "Human approval required before any eviction or legal handoff action.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "resolution",
+      "name": "Track Resolution",
+      "description": "Record the final delinquency state and next monitoring checkpoint.",
+      "steps": [
+        {
+          "task_key": "track-delinquency-resolution",
+          "title": "Track delinquency resolution",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["legal-handoff-gate"],
+          "instructions": "Track paid, payment-plan, dispute, notice-staged, legal-handoff-ready, or write-off/hold outcomes with source, timestamp, amount, and next checkpoint. Record workflow state only; do not write to AppFolio.",
+          "dispatch_title": "Track delinquency escalation resolution",
+          "dispatch_body": "Record the internal delinquency resolution state and next checkpoint. No external sends and no AppFolio writes.",
+          "estimated_minutes": 15
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "slug": "resident-scheduling-cadence",
+  "name": "Resident Scheduling Cadence",
+  "description": "Coordinate resident maintenance scheduling with guarded reminders, escalation thresholds, and internal-only handoff notes.",
+  "subject_type": "resident_work_order",
+  "default_start_stage_key": "intake",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "intake",
+      "name": "Confirm Scheduling Context",
+      "description": "Collect the constraints needed before any scheduling outreach is prepared.",
+      "steps": [
+        {
+          "task_key": "collect-scheduling-context",
+          "title": "Collect scheduling context",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "instructions": "Summarize access notes, urgency, trade, resident availability, vendor constraints, and any do-not-contact flags from the work-order record.",
+          "dispatch_title": "Collect resident scheduling context",
+          "dispatch_body": "Prepare internal scheduling context for maintenance coordination. Do not contact the resident.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "review-contact-guardrails",
+          "title": "Review contact guardrails",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["collect-scheduling-context"],
+          "instructions": "Confirm contact method, quiet hours, lockbox/access notes, and escalation owner before scheduling cadence starts.",
+          "human_prompt": "Review resident contact guardrails before scheduling outreach is released.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "cadence",
+      "name": "Run Scheduling Cadence",
+      "description": "Prepare reminder attempts and route any blocked scheduling state for review.",
+      "steps": [
+        {
+          "task_key": "draft-initial-scheduling-message",
+          "title": "Draft initial scheduling message",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["review-contact-guardrails"],
+          "instructions": "Draft the initial scheduling message with available windows, access requirements, and response options. Keep release gated to the approved outbound path.",
+          "dispatch_title": "Draft initial resident scheduling message",
+          "dispatch_body": "Draft resident scheduling outreach for review; do not send externally.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "stage-follow-up-cadence",
+          "title": "Stage follow-up cadence",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["draft-initial-scheduling-message"],
+          "instructions": "Stage follow-up attempts, response waiting periods, and escalation triggers for no-response or declined-window cases.",
+          "dispatch_title": "Stage resident scheduling follow-up cadence",
+          "dispatch_body": "Prepare internal follow-up schedule and escalation triggers; no outbound send.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "resolution",
+      "name": "Confirm Schedule Resolution",
+      "description": "Document confirmed scheduling state or escalate the blocker.",
+      "steps": [
+        {
+          "task_key": "confirm-appointment-details",
+          "title": "Confirm appointment details",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["stage-follow-up-cadence"],
+          "instructions": "Verify final appointment window, access plan, vendor assignment, and resident-facing notes before the work order moves forward.",
+          "human_prompt": "Confirm final appointment details or mark the scheduling blocker for escalation.",
+          "estimated_minutes": 10
+        },
+        {
+          "task_key": "record-scheduling-outcome",
+          "title": "Record scheduling outcome",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["confirm-appointment-details"],
+          "instructions": "Record the scheduling outcome, unresolved blockers, and next follow-up owner in the workflow audit trail.",
+          "dispatch_title": "Record resident scheduling outcome",
+          "dispatch_body": "Record scheduling outcome and next-owner notes.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

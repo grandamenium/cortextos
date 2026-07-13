@@ -1,0 +1,131 @@
+{
+  "slug": "move-out-inspection",
+  "name": "Move-Out Inspection",
+  "description": "Blue coordinates possession confirmation, move-out condition evidence, damage review, and deposit handoff with human approval before deductions, resident notices, vendor work, or PMS writes.",
+  "subject_type": "move_out_inspection",
+  "default_start_stage_key": "possession-check",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "possession-check",
+      "name": "Confirm Possession",
+      "description": "Confirm possession, key return, and inspection readiness before condition review.",
+      "steps": [
+        {
+          "task_key": "normalize-move-out-inspection-facts",
+          "title": "Normalize move-out inspection facts",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "instructions": "Normalize property, unit, resident, lease, move-out date, possession state, key return, utility state, forwarding contact, prior move-in baseline refs, and missing facts. Unknown possession or evidence fields must remain null with needs_verification.",
+          "dispatch_title": "Normalize move-out inspection facts",
+          "dispatch_body": "Normalize move-out inspection inputs and missing-data flags. No resident sends, vendor actions, or AppFolio writes.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "confirm-inspection-readiness",
+          "title": "Confirm inspection readiness",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["normalize-move-out-inspection-facts"],
+          "instructions": "Confirm possession is surrendered or flag needs_verification, identify any lockout/access issue, check whether a human or field inspector already owns the inspection, and surface conflicts before acting. Do not schedule, contact, dispatch, or write externally.",
+          "dispatch_title": "Confirm move-out inspection readiness",
+          "dispatch_body": "Confirm possession, access, and ownership before inspection work. No external sends or system writes.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "condition-evidence",
+      "name": "Assemble Condition Evidence",
+      "description": "Assemble move-out condition evidence and compare it to the baseline.",
+      "steps": [
+        {
+          "task_key": "assemble-move-out-condition-evidence",
+          "title": "Assemble move-out condition evidence",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["confirm-inspection-readiness"],
+          "instructions": "Assemble room-by-room photos, videos, key/remote status, abandoned-property notes if any, utility meter notes if available, cleanliness, damage observations, baseline comparison refs, and missing evidence flags. Do not infer chargeability; unsupported items stay needs_verification.",
+          "dispatch_title": "Assemble move-out condition evidence",
+          "dispatch_body": "Assemble condition evidence and baseline comparison flags. No external sends and no system writes.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "review-condition-evidence",
+          "title": "Review condition evidence",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["assemble-move-out-condition-evidence"],
+          "instructions": "Review move-out condition evidence for completeness, fair wear-and-tear concerns, abandoned-property sensitivity, and missing baseline comparison before any damage packet, vendor work, or deposit deduction draft is prepared.",
+          "human_prompt": "Review move-out condition evidence before damage, vendor, or deposit action.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "damage-review",
+      "name": "Damage Review Packet",
+      "description": "Draft damage and vendor scope packets without committing charges or work.",
+      "steps": [
+        {
+          "task_key": "draft-damage-review-packet",
+          "title": "Draft damage review packet",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["review-condition-evidence"],
+          "instructions": "Draft a damage review packet with evidence-backed observations, possible repair categories, baseline comparison, unresolved gaps, suggested vendor scope if needed, and deposit-disposition caveats. Draft-only; do not create deductions, dispatch vendors, notify residents, or write to systems.",
+          "dispatch_title": "Draft move-out damage review packet",
+          "dispatch_body": "Draft damage review and possible scope packet only. No deductions, dispatch, sends, or system writes.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "approve-damage-and-scope-packet",
+          "title": "Approve damage and scope packet",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-damage-review-packet"],
+          "instructions": "Approve, edit, or hold before any damage classification, vendor work order, resident notice, deposit deduction recommendation, owner update, AppFolio write, or PropertyMeld action.",
+          "human_prompt": "Approval required before damage, vendor, resident, owner, deposit, or system action.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "deposit-handoff",
+      "name": "Deposit Handoff",
+      "description": "Stage approved inspection evidence for deposit disposition and make-ready planning.",
+      "steps": [
+        {
+          "task_key": "stage-approved-inspection-handoff",
+          "title": "Stage approved inspection handoff",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["approve-damage-and-scope-packet"],
+          "instructions": "Stage approved inspection evidence, damage review packet, unresolved needs_verification flags, possible make-ready scope refs, and deposit-disposition handoff notes. Do not send notices, post charges, dispatch vendors, or write to external systems.",
+          "dispatch_title": "Stage approved move-out inspection handoff",
+          "dispatch_body": "Stage approved inspection handoff for deposit disposition and make-ready. No external sends or system writes.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "record-move-out-inspection-closeout",
+          "title": "Record move-out inspection closeout",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-approved-inspection-handoff"],
+          "instructions": "Record possession status, evidence refs, approval source, unresolved gaps, deposit handoff state, and next owner. Internal audit only; do not contact resident, owner, vendor, or write to PMS/maintenance systems.",
+          "dispatch_title": "Record move-out inspection closeout",
+          "dispatch_body": "Record internal move-out inspection closeout and next owner. No external sends or system writes.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

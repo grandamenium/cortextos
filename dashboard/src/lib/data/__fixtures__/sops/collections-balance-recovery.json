@@ -1,0 +1,131 @@
+{
+  "slug": "collections-balance-recovery",
+  "name": "Collections Balance Recovery",
+  "description": "Cash prepares post-move-out balance recovery packets with evidence, ledger support, demand drafts, and collections handoff controls, with human approval before legal, credit, agency, resident, owner, money, or system action.",
+  "subject_type": "post_move_out_balance",
+  "default_start_stage_key": "balance-intake",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "balance-intake",
+      "name": "Normalize Balance Intake",
+      "description": "Normalize final balance facts and missing recovery evidence.",
+      "steps": [
+        {
+          "task_key": "normalize-balance-recovery-facts",
+          "title": "Normalize balance recovery facts",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "instructions": "Normalize former resident, property, unit, move-out date, forwarding contact, final ledger balance, deposit disposition status, deduction evidence refs, lease refs, prior notices, dispute state, owner impact, and missing facts. Unknown balances, notice state, legal eligibility, or credit-reporting eligibility must remain null with needs_verification.",
+          "dispatch_title": "Normalize collections balance facts",
+          "dispatch_body": "Normalize post-move-out balance facts and missing-data flags. No resident sends, collection handoff, credit action, legal action, money movement, or AppFolio writes.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "check-prior-ownership-and-dispute",
+          "title": "Check prior ownership and dispute state",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["normalize-balance-recovery-facts"],
+          "instructions": "Check whether the balance recovery, resident dispute, owner decision, attorney review, or collection handoff is already owned or completed. If a human, attorney, or agency owns it, surface current state and do not stage duplicate action.",
+          "dispatch_title": "Check balance recovery ownership",
+          "dispatch_body": "Check dispute and ownership state before collections packet. No external sends or system writes.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "demand-packet",
+      "name": "Prepare Demand Packet",
+      "description": "Draft demand and support packets without sending or escalating.",
+      "steps": [
+        {
+          "task_key": "draft-balance-support-packet",
+          "title": "Draft balance support packet",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["check-prior-ownership-and-dispute"],
+          "instructions": "Draft support packet with final ledger summary, deposit disposition refs, evidence-backed charges, payments received, dispute caveats, owner impact, missing proof, and recommended recovery path. Draft-only; do not send demands, refer to collections, report credit, or write AppFolio.",
+          "dispatch_title": "Draft post-move-out balance support packet",
+          "dispatch_body": "Draft balance support packet and missing-proof flags. No resident sends, legal/agency/credit action, money movement, or system writes.",
+          "estimated_minutes": 30
+        },
+        {
+          "task_key": "review-balance-support-packet",
+          "title": "Review balance support packet",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-balance-support-packet"],
+          "instructions": "Review ledger support, evidence, dispute status, owner impact, legal sensitivity, and missing proof before any demand, settlement, write-off, collections, credit, or legal packet is prepared for approval.",
+          "human_prompt": "Review post-move-out balance support before demand, collection, credit, or legal action.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "collections-approval",
+      "name": "Approve Recovery Path",
+      "description": "Human approval gate before demand, settlement, write-off, collections, credit, or legal action.",
+      "steps": [
+        {
+          "task_key": "draft-recovery-action-packet",
+          "title": "Draft recovery action packet",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["review-balance-support-packet"],
+          "instructions": "Draft resident demand letter, payment-plan option, write-off recommendation if applicable, owner update draft, collections handoff draft, attorney-review flag, and credit-reporting caution notes. Draft-only; do not send, refer, report, post, settle, or write systems.",
+          "dispatch_title": "Draft collections recovery action packet",
+          "dispatch_body": "Draft demand, settlement, owner, collection, and legal-review packet only. No external sends or system writes.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "approve-recovery-action",
+          "title": "Approve recovery action",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-recovery-action-packet"],
+          "instructions": "Approve, edit, reject, or route to counsel before any resident demand, settlement offer, payment plan, write-off, collection agency referral, attorney handoff, credit reporting, owner notice, ledger action, money movement, or AppFolio write.",
+          "human_prompt": "Approval required before demand, settlement, write-off, collections, legal, credit, owner, money, or system action.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "tracking-closeout",
+      "name": "Track Recovery Closeout",
+      "description": "Stage approved recovery metadata and internal follow-up tasks.",
+      "steps": [
+        {
+          "task_key": "stage-approved-recovery-package",
+          "title": "Stage approved recovery package",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["approve-recovery-action"],
+          "instructions": "Stage approved demand, settlement, owner, collections, or legal-review packet metadata for operator release, including approval source, due dates, evidence refs, and unresolved needs_verification facts. Do not send, refer, report credit, post ledger entries, or write external systems.",
+          "dispatch_title": "Stage approved collections recovery package",
+          "dispatch_body": "Stage approved recovery package for human release. No external sends, legal/agency/credit action, money movement, or system writes.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "record-recovery-closeout",
+          "title": "Record recovery closeout",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-approved-recovery-package"],
+          "instructions": "Record approval source, recovery path, balance support status, unresolved proof gaps, next owner, and follow-up date. Internal audit only; do not contact residents, owners, agencies, attorneys, or write accounting systems.",
+          "dispatch_title": "Record collections recovery closeout",
+          "dispatch_body": "Record internal recovery closeout and next owner. No external sends or system writes.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

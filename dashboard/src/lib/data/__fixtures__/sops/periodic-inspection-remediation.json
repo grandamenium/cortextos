@@ -1,0 +1,130 @@
+{
+  "slug": "periodic-inspection-remediation",
+  "name": "Periodic Inspection And Remediation",
+  "description": "Blue and field ops coordinate periodic inspections, review findings, and stage remediation paths without contacting residents, vendors, or owners until human review clears the action.",
+  "subject_type": "property_inspection",
+  "default_start_stage_key": "inspection-scope",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "inspection-scope",
+      "name": "Scope Inspection",
+      "description": "Normalize inspection trigger facts and identify missing property, lease, access, and safety data.",
+      "steps": [
+        {
+          "task_key": "normalize-inspection-trigger",
+          "title": "Normalize inspection trigger",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "instructions": "Normalize property, unit, owner, tenant, occupancy, lease status, last inspection date, inspection cadence, open work orders, access notes, and safety caveats. Any unavailable data source must be recorded as null with needs_verification instead of inferred.",
+          "dispatch_title": "Normalize periodic inspection trigger",
+          "dispatch_body": "Normalize inspection trigger facts and missing-data flags. No resident, vendor, or owner sends.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "review-inspection-readiness",
+          "title": "Review inspection readiness",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["normalize-inspection-trigger"],
+          "instructions": "Confirm the inspection should proceed, access notes are safe to use, and any resident-facing notice path is approved outside this workflow.",
+          "human_prompt": "Review inspection readiness before any resident-facing notice or scheduling action.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "inspection-packet",
+      "name": "Prepare Inspection Packet",
+      "description": "Prepare the checklist, risk focus, and evidence requirements for the inspection.",
+      "steps": [
+        {
+          "task_key": "prepare-inspection-checklist",
+          "title": "Prepare inspection checklist",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["review-inspection-readiness"],
+          "instructions": "Prepare inspection checklist, photo requirements, known issues, lease-compliance checks, smoke and CO checks where applicable, access notes, and open-maintenance context. Do not send notices or create appointments.",
+          "dispatch_title": "Prepare periodic inspection checklist",
+          "dispatch_body": "Prepare internal inspection packet and evidence requirements. No external sends.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "field-inspection-evidence-upload",
+          "title": "Upload inspection evidence",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["prepare-inspection-checklist"],
+          "instructions": "Upload inspection photos, notes, access outcome, resident presence, safety concerns, lease-compliance findings, and any unavailable evidence as needs_verification.",
+          "human_prompt": "Upload inspection evidence and mark any missing evidence before remediation triage.",
+          "estimated_minutes": 30
+        }
+      ]
+    },
+    {
+      "stage_key": "findings-triage",
+      "name": "Triage Findings",
+      "description": "Classify findings into work-order, lease-compliance, owner-decision, or no-action paths.",
+      "steps": [
+        {
+          "task_key": "classify-inspection-findings",
+          "title": "Classify inspection findings",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["field-inspection-evidence-upload"],
+          "instructions": "Classify each finding as emergency maintenance, routine maintenance, lease-compliance issue, owner recommendation, monitor-only, or no action. Use null and needs_verification for unclear evidence. Do not create work orders, send notices, or contact anyone.",
+          "dispatch_title": "Classify inspection findings",
+          "dispatch_body": "Classify inspection findings and missing evidence. No external sends and no work-order creation.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "human-remediation-path-review",
+          "title": "Review remediation paths",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["classify-inspection-findings"],
+          "instructions": "Approve the remediation path for each finding before any work order, resident notice, vendor dispatch, owner recommendation, or lease-compliance action is staged.",
+          "human_prompt": "Approve remediation paths before any resident, vendor, owner, or work-order action.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "remediation-staging",
+      "name": "Stage Remediation",
+      "description": "Stage approved internal follow-up packets for downstream workflows.",
+      "steps": [
+        {
+          "task_key": "stage-work-order-and-violation-packets",
+          "title": "Stage work-order and violation packets",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["human-remediation-path-review"],
+          "instructions": "Stage internal packets for approved work orders, lease-compliance review, owner recommendations, and monitoring. This task only prepares downstream handoffs; it must not create live work orders, send resident notices, dispatch vendors, or contact owners.",
+          "dispatch_title": "Stage inspection remediation packets",
+          "dispatch_body": "Stage approved internal remediation packets. No external sends and no live work-order creation.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "record-inspection-outcome",
+          "title": "Record inspection outcome",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-work-order-and-violation-packets"],
+          "instructions": "Record inspection outcome, approved paths, missing evidence, downstream workflow refs, and next inspection cadence. Do not write to AppFolio or PropertyMeld.",
+          "dispatch_title": "Record periodic inspection outcome",
+          "dispatch_body": "Record inspection outcome and approved downstream handoff refs. No external sends.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

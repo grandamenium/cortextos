@@ -1,0 +1,100 @@
+{
+  "slug": "management-agreement",
+  "name": "Management Agreement",
+  "description": "Dane coordinates new-owner management agreement packets, signature readiness, onboarding handoff, renewal, and termination workflows with human approval before contract, owner, legal, money, or system action.",
+  "subject_type": "management_agreement",
+  "default_start_stage_key": "agreement-intake",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "agreement-intake",
+      "name": "Normalize Agreement Intake",
+      "description": "Normalize agreement type, owner, property, fee, and document facts.",
+      "steps": [
+        {
+          "task_key": "normalize-agreement-facts",
+          "title": "Normalize agreement facts",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "instructions": "Normalize owner, property list, agreement type, new/renewal/termination context, fee schedule, start date, termination date if any, required exhibits, bank/ACH status, insurance docs, signatures, and missing facts. Unknown legal terms, fee authority, signature authority, or termination obligations must remain null with needs_verification.",
+          "dispatch_title": "Normalize management agreement facts",
+          "dispatch_body": "Normalize management agreement facts and missing-data flags. No contract send, signature request, fee action, legal action, or system write.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "check-agreement-ownership",
+          "title": "Check agreement ownership",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["normalize-agreement-facts"],
+          "instructions": "Check whether a human, attorney, broker, owner, or onboarding workflow already owns the agreement; review current draft, signature state, prior versions, and onboarding dependencies. Do not send or modify agreements.",
+          "dispatch_title": "Check agreement ownership",
+          "dispatch_body": "Check agreement ownership, version, and dependency state. No external sends or system writes.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "agreement-packet",
+      "name": "Draft Agreement Packet",
+      "description": "Prepare draft agreement and handoff packets without sending or changing terms.",
+      "steps": [
+        {
+          "task_key": "draft-agreement-packet",
+          "title": "Draft agreement packet",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["check-agreement-ownership"],
+          "instructions": "Draft agreement-readiness packet with term checklist, missing exhibits, fee caveats, ACH/banking gaps, onboarding handoff, renewal or termination caveats, owner email draft, and legal-review flags. Draft-only; do not alter terms, send contracts, request signatures, or update systems.",
+          "dispatch_title": "Draft management agreement packet",
+          "dispatch_body": "Draft management agreement packet only. No contract sends, signature requests, fee actions, legal actions, or system writes.",
+          "estimated_minutes": 30
+        },
+        {
+          "task_key": "review-agreement-packet",
+          "title": "Review agreement packet",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-agreement-packet"],
+          "instructions": "Review terms, fee schedule, signature authority, legal sensitivity, onboarding dependencies, renewal/termination obligations, and missing documents before approval.",
+          "human_prompt": "Review management agreement packet before contract, owner, legal, fee, onboarding, or system action.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "approval-and-staging",
+      "name": "Approve And Stage Agreement",
+      "description": "Human approval gates all agreement, signature, fee, and system actions.",
+      "steps": [
+        {
+          "task_key": "approve-agreement-action",
+          "title": "Approve agreement action",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["review-agreement-packet"],
+          "instructions": "Approve, edit, reject, or route to counsel before any contract send, signature request, term change, fee schedule action, owner notice, renewal action, termination action, onboarding handoff, legal action, money action, or system write.",
+          "human_prompt": "Approval required before management-agreement contract, signature, fee, owner, legal, onboarding, money, or system action.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "stage-approved-agreement-package",
+          "title": "Stage approved agreement package",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["approve-agreement-action"],
+          "instructions": "Stage approved agreement packet, owner draft, signature request metadata, onboarding/renewal/termination handoff, approval source, unresolved needs_verification fields, and next owner for human release. Do not send contracts, request signatures, change terms, charge fees, or write systems.",
+          "dispatch_title": "Stage approved management agreement package",
+          "dispatch_body": "Stage approved management agreement package for human release. No contract sends, signature requests, fee actions, or system writes.",
+          "estimated_minutes": 15
+        }
+      ]
+    }
+  ]
+}

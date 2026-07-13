@@ -1,0 +1,100 @@
+{
+  "slug": "late-rent-copilot",
+  "name": "Late Rent Copilot",
+  "description": "Cash drafts late-rent reminders from delinquency data, with approval before any resident-facing send.",
+  "subject_type": "delinquency_batch",
+  "default_start_stage_key": "intake",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "intake",
+      "name": "Import Delinquency Data",
+      "description": "Load the current delinquency batch and normalize tenants, units, balances, and due dates.",
+      "steps": [
+        {
+          "task_key": "parse-delinquency-report",
+          "title": "Parse delinquency report",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "instructions": "Parse the delinquency report into tenant balance rows. Flag rows missing tenant, unit, balance, or contact data.",
+          "dispatch_title": "Parse delinquency report for late-rent workflow",
+          "dispatch_body": "Parse the current delinquency source into normalized rows. Return exceptions separately; do not send messages.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "review-data-exceptions",
+          "title": "Review data exceptions",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["parse-delinquency-report"],
+          "instructions": "Review any missing balances, bad phone/email values, or tenant identity conflicts before drafts are generated.",
+          "human_prompt": "Review late-rent data exceptions before Cash drafts reminders.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "draft",
+      "name": "Draft Reminder Queue",
+      "description": "Create draft reminders in copilot mode.",
+      "steps": [
+        {
+          "task_key": "draft-reminders",
+          "title": "Draft tenant reminders",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["review-data-exceptions"],
+          "instructions": "Draft one reminder per eligible tenant. Include amount, payment path, and a neutral tone. Do not send.",
+          "dispatch_title": "Draft late-rent reminder queue",
+          "dispatch_body": "Create draft reminders only. Every resident-facing send remains approval-gated.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "approval-gate",
+          "title": "Approve reminder queue",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-reminders"],
+          "instructions": "Approve, edit, or reject the reminder queue. No resident-facing sends before this gate is complete.",
+          "human_prompt": "Approve the late-rent reminder queue before any send.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "release",
+      "name": "Release And Track",
+      "description": "Queue approved outreach and monitor exceptions.",
+      "steps": [
+        {
+          "task_key": "queue-approved-reminders",
+          "title": "Queue approved reminders",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["approval-gate"],
+          "instructions": "Queue only approved reminders. Respect send-mode and approval controls.",
+          "dispatch_title": "Queue approved late-rent reminders",
+          "dispatch_body": "Queue approved late-rent reminders only; do not bypass send-mode or approval controls.",
+          "estimated_minutes": 10
+        },
+        {
+          "task_key": "track-responses",
+          "title": "Track resident responses",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["queue-approved-reminders"],
+          "instructions": "Track payment promises, disputes, wrong contacts, and no-response cases into the cockpit.",
+          "dispatch_title": "Track late-rent reminder responses",
+          "dispatch_body": "Summarize responses and exceptions from the approved reminder batch.",
+          "estimated_minutes": 20
+        }
+      ]
+    }
+  ]
+}

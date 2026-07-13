@@ -1,4 +1,5 @@
 import { auth } from '@/lib/auth';
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getOrgs } from '@/lib/config';
 import { DashboardShell } from '@/components/layout/dashboard-shell';
@@ -9,15 +10,21 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth();
-  if (!session) redirect('/login');
+  const requestHeaders = await headers();
+  const pathname = requestHeaders.get('x-dashboard-pathname') ?? '';
+  const isPublicSopRoute = pathname === '/sops' || pathname.startsWith('/sops/');
 
-  // Sync filesystem state to SQLite on every page load
-  // This ensures the dashboard always reflects the latest agent activity
-  try {
-    syncAll();
-  } catch (e) {
-    console.error('Sync failed:', e);
+  const session = isPublicSopRoute ? null : await auth();
+  if (!isPublicSopRoute && !session) redirect('/login');
+
+  if (!isPublicSopRoute) {
+    // Sync filesystem state to SQLite on every page load
+    // This ensures the dashboard always reflects the latest agent activity
+    try {
+      syncAll();
+    } catch (e) {
+      console.error('Sync failed:', e);
+    }
   }
 
   const orgs = getOrgs();

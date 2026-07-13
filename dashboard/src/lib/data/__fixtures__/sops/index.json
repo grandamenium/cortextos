@@ -1,0 +1,342 @@
+{
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "templates": [
+    {
+      "slug": "demo-gated-resident-notice",
+      "name": "DEMO: Gated Resident Notice",
+      "subject_type": "demo_fixture",
+      "stage_count": 3,
+      "task_count": 3
+    },
+    {
+      "slug": "demo-branching-approval-chain",
+      "name": "DEMO: Branching Dependency Chain",
+      "subject_type": "demo_fixture",
+      "stage_count": 3,
+      "task_count": 4,
+      "drift_detected": true
+    },
+    {
+      "slug": "late-rent-copilot",
+      "name": "Late Rent Copilot",
+      "subject_type": "delinquency_batch",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "delinquency-escalation-ladder",
+      "name": "Delinquency Escalation Ladder",
+      "subject_type": "delinquency_account",
+      "stage_count": 8,
+      "task_count": 10
+    },
+    {
+      "slug": "lease-renewal-prefill",
+      "name": "Lease Renewal Prefill",
+      "subject_type": "lease_renewal",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "application-screening-move-in",
+      "name": "Application Screening And Move-In",
+      "subject_type": "rental_application",
+      "stage_count": 4,
+      "task_count": 11
+    },
+    {
+      "slug": "vendor-coi-verification",
+      "name": "Vendor COI Verification",
+      "subject_type": "vendor",
+      "stage_count": 3,
+      "task_count": 5
+    },
+    {
+      "slug": "trust-accounting-monthly",
+      "name": "Trust Accounting Monthly",
+      "subject_type": "accounting_period",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "owner-decision-flow",
+      "name": "Owner Decision Flow",
+      "subject_type": "owner_decision",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "property-compliance-readiness",
+      "name": "Property Compliance Readiness",
+      "subject_type": "property",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "turnover-make-ready",
+      "name": "Turnover Make-Ready",
+      "subject_type": "unit_turn",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "move-out-deposit-disposition",
+      "name": "Move-Out Deposit Disposition",
+      "subject_type": "move_out",
+      "stage_count": 5,
+      "task_count": 10
+    },
+    {
+      "slug": "owner-status-update",
+      "name": "Owner Status Update",
+      "subject_type": "owner_portfolio",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "resident-scheduling-cadence",
+      "name": "Resident Scheduling Cadence",
+      "subject_type": "resident_work_order",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "pm-work-order-closeout",
+      "name": "PM Work-Order Closeout",
+      "subject_type": "work_order",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "appfolio-renewal-holdover",
+      "name": "AppFolio Renewal Holdover",
+      "subject_type": "lease_renewal_exception",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "vendor-dispatch-offer-lifecycle",
+      "name": "Vendor Dispatch Offer Lifecycle",
+      "subject_type": "vendor_dispatch",
+      "stage_count": 3,
+      "task_count": 7
+    },
+    {
+      "slug": "owner-maintenance-approval",
+      "name": "Owner Maintenance Approval",
+      "subject_type": "maintenance_approval",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "owner-onboarding",
+      "name": "Owner Onboarding",
+      "subject_type": "owner_onboarding",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "property-onboarding",
+      "name": "Property Onboarding",
+      "subject_type": "property_onboarding",
+      "stage_count": 4,
+      "task_count": 10
+    },
+    {
+      "slug": "periodic-inspection-remediation",
+      "name": "Periodic Inspection And Remediation",
+      "subject_type": "property_inspection",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "eviction-process",
+      "name": "Eviction Process",
+      "subject_type": "eviction_case",
+      "stage_count": 4,
+      "task_count": 10
+    },
+    {
+      "slug": "vendor-onboarding",
+      "name": "Vendor Onboarding",
+      "subject_type": "vendor_onboarding",
+      "stage_count": 4,
+      "task_count": 9
+    },
+    {
+      "slug": "monthly-owner-statements-qa",
+      "name": "Monthly Owner Statements QA",
+      "subject_type": "owner_statement_batch",
+      "stage_count": 4,
+      "task_count": 10
+    },
+    {
+      "slug": "property-marketing",
+      "name": "Property Marketing",
+      "subject_type": "leasing_listing",
+      "stage_count": 4,
+      "task_count": 9
+    },
+    {
+      "slug": "showing-coordination",
+      "name": "Showing Coordination",
+      "subject_type": "showing_request",
+      "stage_count": 4,
+      "task_count": 10
+    },
+    {
+      "slug": "ap-invoice-processing",
+      "name": "AP Invoice Processing",
+      "subject_type": "vendor_invoice",
+      "stage_count": 4,
+      "task_count": 9
+    },
+    {
+      "slug": "lease-drafting-execution",
+      "name": "Lease Drafting And Execution",
+      "subject_type": "lease_execution",
+      "stage_count": 4,
+      "task_count": 9
+    },
+    {
+      "slug": "rent-increase-notice-compliance",
+      "name": "Rent Increase Notice Compliance",
+      "subject_type": "rent_increase_notice",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "lease-violation-notice",
+      "name": "Lease Violation Notice",
+      "subject_type": "lease_violation",
+      "stage_count": 4,
+      "task_count": 9
+    },
+    {
+      "slug": "payment-plan-management",
+      "name": "Payment Plan Management",
+      "subject_type": "payment_plan",
+      "stage_count": 4,
+      "task_count": 9
+    },
+    {
+      "slug": "emergency-after-hours-maintenance",
+      "name": "Emergency After-Hours Maintenance",
+      "subject_type": "emergency_maintenance",
+      "stage_count": 4,
+      "task_count": 9
+    },
+    {
+      "slug": "habitability-code-violation-response",
+      "name": "Habitability Code Violation Response",
+      "subject_type": "habitability_case",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "move-in-inspection",
+      "name": "Move-In Inspection",
+      "subject_type": "move_in_inspection",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "move-out-inspection",
+      "name": "Move-Out Inspection",
+      "subject_type": "move_out_inspection",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "utility-vacancy-flip",
+      "name": "Utility Vacancy Flip",
+      "subject_type": "utility_flip",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "nsf-returned-payment-handling",
+      "name": "NSF Returned Payment Handling",
+      "subject_type": "returned_payment",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "collections-balance-recovery",
+      "name": "Collections Balance Recovery",
+      "subject_type": "post_move_out_balance",
+      "stage_count": 4,
+      "task_count": 8
+    },
+    {
+      "slug": "hoa-coordination",
+      "name": "HOA Coordination",
+      "subject_type": "hoa_case",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "pet-and-service-animal",
+      "name": "Pet And Service Animal",
+      "subject_type": "pet_accommodation",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "property-sale-support",
+      "name": "Property Sale Support",
+      "subject_type": "property_sale",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "insurance-claim",
+      "name": "Insurance Claim",
+      "subject_type": "insurance_claim",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "annual-1099",
+      "name": "Annual 1099",
+      "subject_type": "tax_reporting_period",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "owner-lead-nurture",
+      "name": "Owner Lead Nurture",
+      "subject_type": "owner_lead",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "management-agreement",
+      "name": "Management Agreement",
+      "subject_type": "management_agreement",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "vendor-performance",
+      "name": "Vendor Performance",
+      "subject_type": "vendor_performance",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "recurring-preventive-maintenance",
+      "name": "Recurring Preventive Maintenance",
+      "subject_type": "preventive_maintenance_cycle",
+      "stage_count": 3,
+      "task_count": 6
+    },
+    {
+      "slug": "appliance-repair-vs-replace",
+      "name": "Appliance Repair Vs Replace",
+      "subject_type": "appliance_decision",
+      "stage_count": 3,
+      "task_count": 6
+    }
+  ]
+}

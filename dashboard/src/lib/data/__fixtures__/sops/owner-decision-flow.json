@@ -1,0 +1,100 @@
+{
+  "slug": "owner-decision-flow",
+  "name": "Owner Decision Flow",
+  "description": "Lacey prepares an owner decision packet with idempotent approval tracking and required decline reasons.",
+  "subject_type": "owner_decision",
+  "default_start_stage_key": "prepare",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "prepare",
+      "name": "Prepare Decision Packet",
+      "description": "Assemble a concise decision packet with the facts an owner needs.",
+      "steps": [
+        {
+          "task_key": "assemble-owner-packet",
+          "title": "Assemble owner decision packet",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "instructions": "Assemble the owner decision packet with the recommendation, evidence, risk notes, and decision options.",
+          "dispatch_title": "Assemble owner decision packet",
+          "dispatch_body": "Prepare an owner decision packet. Do not send externally; this is a draft for approval.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "packet-quality-review",
+          "title": "Review packet quality",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["assemble-owner-packet"],
+          "instructions": "Confirm the packet is complete, neutral, and includes any compliance caveats before release.",
+          "human_prompt": "Review the owner decision packet before any owner-facing release.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "decision",
+      "name": "Capture Owner Decision",
+      "description": "Route the decision request and capture an idempotent response.",
+      "steps": [
+        {
+          "task_key": "stage-owner-request",
+          "title": "Stage owner decision request",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["packet-quality-review"],
+          "instructions": "Stage the owner request with approve/edit/decline options. Decline must require a reason. Do not bypass outbound approval.",
+          "dispatch_title": "Stage owner decision request",
+          "dispatch_body": "Stage owner decision request and idempotency metadata; no external send without approval.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "owner-response-gate",
+          "title": "Wait for owner response",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["stage-owner-request"],
+          "instructions": "Do not complete until the owner response is captured or the request is explicitly cancelled.",
+          "human_prompt": "Owner response required before this workflow can proceed.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "apply",
+      "name": "Apply Decision",
+      "description": "Apply the approved path and document the outcome.",
+      "steps": [
+        {
+          "task_key": "apply-owner-decision",
+          "title": "Apply owner decision",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["owner-response-gate"],
+          "instructions": "Apply the owner decision to the underlying process, preserving the response and decline reason if present.",
+          "dispatch_title": "Apply owner decision",
+          "dispatch_body": "Apply captured owner decision and record the outcome.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "decision-audit-note",
+          "title": "Record decision audit note",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["apply-owner-decision"],
+          "instructions": "Record the decision source, timestamp, actor, and next-state result in the audit trail.",
+          "dispatch_title": "Record owner decision audit note",
+          "dispatch_body": "Record owner decision evidence and next-state result.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

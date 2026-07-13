@@ -1,0 +1,131 @@
+{
+  "slug": "owner-onboarding",
+  "name": "Owner Onboarding",
+  "description": "Dane normalizes a new owner record, surfaces onboarding exceptions, stages owner setup, and hands child properties to property onboarding.",
+  "subject_type": "owner_onboarding",
+  "default_start_stage_key": "normalize",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "normalize",
+      "name": "Normalize Owner Profile",
+      "description": "Normalize owner identity, contact, entity, and portfolio intake facts before setup begins.",
+      "steps": [
+        {
+          "task_key": "normalize-owner-profile",
+          "title": "Normalize owner profile",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "instructions": "Normalize owner legal name, preferred name, entity, mailing address, email, phone, portal contact, portfolio links, and communication preferences. Flag unknowns explicitly.",
+          "dispatch_title": "Normalize owner onboarding profile",
+          "dispatch_body": "Normalize owner intake facts and identify missing profile data.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "audit-owner-setup-documents",
+          "title": "Audit owner setup documents",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["normalize-owner-profile"],
+          "instructions": "Review owner agreement, banking, W-9, entity record, payout preference, and signing authority status. Produce missing-item and exception lists without marking setup complete.",
+          "dispatch_title": "Audit owner setup documents",
+          "dispatch_body": "Audit agreement, banking, W-9, entity, and authority status for owner onboarding.",
+          "estimated_minutes": 25
+        }
+      ]
+    },
+    {
+      "stage_key": "exceptions",
+      "name": "Review Setup Exceptions",
+      "description": "Human review confirms whether missing documents or entity issues block onboarding.",
+      "steps": [
+        {
+          "task_key": "owner-exception-review",
+          "title": "Review owner setup exceptions",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["audit-owner-setup-documents"],
+          "instructions": "Review missing agreement, banking, W-9, entity, and signing authority exceptions. Decide whether each blocks setup, can proceed with caveat, or requires owner follow-up.",
+          "human_prompt": "Review owner onboarding exceptions before portal, welcome, or draw setup proceeds.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "stage-owner-followups",
+          "title": "Stage owner follow-ups",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["owner-exception-review"],
+          "instructions": "Stage owner-facing follow-up requests for approved missing items or clarifications. Do not send externally without the separate outbound approval path.",
+          "dispatch_title": "Stage owner onboarding follow-ups",
+          "dispatch_body": "Stage owner-facing follow-ups for reviewed onboarding exceptions.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "setup",
+      "name": "Stage Owner Setup",
+      "description": "Prepare owner portal, welcome, and draw setup artifacts for approval.",
+      "steps": [
+        {
+          "task_key": "prepare-owner-portal-welcome-draw",
+          "title": "Prepare owner portal, welcome, and draw setup",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-owner-followups"],
+          "instructions": "Prepare owner portal access checklist, welcome packet draft, owner status projection, draw setup checklist, payout notes, and remaining caveats. Do not create external accounts from this task.",
+          "dispatch_title": "Prepare owner setup package",
+          "dispatch_body": "Prepare portal, welcome, projection, and draw setup package for human approval.",
+          "estimated_minutes": 30
+        },
+        {
+          "task_key": "owner-setup-approval",
+          "title": "Approve owner setup",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["prepare-owner-portal-welcome-draw"],
+          "instructions": "Approve, reject, or request edits before owner onboarding can be marked complete or handed to property onboarding.",
+          "human_prompt": "Approve owner portal, welcome, draw setup, and caveats before completing owner onboarding.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "handoff",
+      "name": "Complete And Handoff",
+      "description": "Record owner onboarding completion and create child property-onboarding handoffs.",
+      "steps": [
+        {
+          "task_key": "record-owner-onboarding-complete",
+          "title": "Record owner onboarding completion",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["owner-setup-approval"],
+          "instructions": "Record owner onboarding outcome, setup approval source, remaining caveats, owner projection status, and next required property onboarding work.",
+          "dispatch_title": "Record owner onboarding completion",
+          "dispatch_body": "Record approved owner onboarding outcome and caveats.",
+          "estimated_minutes": 10
+        },
+        {
+          "task_key": "handoff-child-property-onboarding",
+          "title": "Handoff child property onboarding",
+          "kind": "system_handoff",
+          "assigned_role": "codie",
+          "is_automated": true,
+          "depends_on": ["record-owner-onboarding-complete"],
+          "instructions": "Create or stage child property-onboarding workflow handoffs for each linked property with owner context, approved caveats, and required property facts. Do not perform AppFolio writes.",
+          "dispatch_title": "Stage child property onboarding handoffs",
+          "dispatch_body": "Stage property-onboarding child workflow handoffs from completed owner onboarding.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}
