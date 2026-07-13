@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { NextRequest } from 'next/server';
-import { getVaultRoot, PARA_DIRS } from '@/lib/vault';
+import { getVaultStatus, PARA_DIRS } from '@/lib/vault';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,15 +18,21 @@ type TreeNode =
       mtimeMs: number;
     };
 
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const org = url.searchParams.get('org') ?? 'sondre-hq';
-
-  const vaultRoot = getVaultRoot(org);
-  if (!vaultRoot) {
-    return Response.json({ error: `Vault not found for org "${org}"` }, { status: 404 });
+export async function GET() {
+  const vaultStatus = getVaultStatus();
+  if (vaultStatus.state !== 'ready') {
+    return Response.json({
+      vaultRoot: null,
+      root: [],
+      vaultStatus,
+      error:
+        vaultStatus.state === 'not-configured'
+          ? 'Vault path is not configured'
+          : `Configured vault path does not exist: ${vaultStatus.configuredPath}`,
+    });
   }
 
+  const vaultRoot = vaultStatus.root;
   const root: TreeNode[] = [];
   for (const dir of PARA_DIRS) {
     const abs = path.join(vaultRoot, dir);
@@ -42,7 +47,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  return Response.json({ vaultRoot, root });
+  return Response.json({ vaultRoot, root, vaultStatus });
 }
 
 function walkDir(

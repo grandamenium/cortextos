@@ -1,26 +1,31 @@
 import fs from 'fs';
 import path from 'path';
-import { NextRequest } from 'next/server';
 import {
-  getVaultRoot,
+  getVaultStatus,
   parseFrontmatter,
   firstMeaningfulLine,
 } from '@/lib/vault';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const org = url.searchParams.get('org') ?? 'sondre-hq';
-
-  const vaultRoot = getVaultRoot(org);
-  if (!vaultRoot) {
-    return Response.json({ error: `Vault not found for org "${org}"` }, { status: 404 });
+export async function GET() {
+  const vaultStatus = getVaultStatus();
+  if (vaultStatus.state !== 'ready') {
+    return Response.json({
+      vaultRoot: null,
+      items: [],
+      vaultStatus,
+      error:
+        vaultStatus.state === 'not-configured'
+          ? 'Vault path is not configured'
+          : `Configured vault path does not exist: ${vaultStatus.configuredPath}`,
+    });
   }
 
+  const vaultRoot = vaultStatus.root;
   const inboxDir = path.join(vaultRoot, '00-inbox');
   if (!fs.existsSync(inboxDir)) {
-    return Response.json({ vaultRoot, items: [] });
+    return Response.json({ vaultRoot, items: [], vaultStatus });
   }
 
   const items = [];
@@ -55,5 +60,5 @@ export async function GET(req: NextRequest) {
 
   items.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-  return Response.json({ vaultRoot, items });
+  return Response.json({ vaultRoot, items, vaultStatus });
 }

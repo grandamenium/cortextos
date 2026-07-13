@@ -41,14 +41,20 @@ type NoteResponse = {
   sizeBytes: number;
 };
 
+type VaultStatus =
+  | { state: 'ready'; root: string }
+  | { state: 'not-configured' }
+  | { state: 'missing'; configuredPath: string };
+
 interface WikiShellProps {
-  org: string;
+  org?: string;
 }
 
 export function WikiShell({ org }: WikiShellProps) {
   const [tree, setTree] = useState<TreeNode[] | null>(null);
   const [vaultRoot, setVaultRoot] = useState<string | null>(null);
   const [vaultError, setVaultError] = useState<string | null>(null);
+  const [vaultStatus, setVaultStatus] = useState<VaultStatus | null>(null);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [note, setNote] = useState<NoteResponse | null>(null);
@@ -59,10 +65,19 @@ export function WikiShell({ org }: WikiShellProps) {
   const [results, setResults] = useState<SearchHit[] | null>(null);
   const [searching, setSearching] = useState(false);
   const searchAbort = useRef<AbortController | null>(null);
+  const wikiApiPath = useCallback(
+    (path: string, params: Record<string, string> = {}) => {
+      const qs = new URLSearchParams(params);
+      if (org) qs.set('org', org);
+      const queryString = qs.toString();
+      return queryString ? `${path}?${queryString}` : path;
+    },
+    [org],
+  );
 
   const loadTree = useCallback(async () => {
     try {
-      const res = await fetch(`/api/wiki/tree?org=${encodeURIComponent(org)}`);
+      const res = await fetch(wikiApiPath('/api/wiki/tree'));
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string };
         setVaultError(err.error ?? `Tree load failed (${res.status})`);
@@ -72,12 +87,13 @@ export function WikiShell({ org }: WikiShellProps) {
       const data = await res.json();
       setTree(data.root as TreeNode[]);
       setVaultRoot(data.vaultRoot ?? null);
-      setVaultError(null);
+      setVaultStatus((data.vaultStatus as VaultStatus | undefined) ?? null);
+      setVaultError(data.error ?? null);
     } catch (e) {
       setVaultError(String(e));
       setTree([]);
     }
-  }, [org]);
+  }, [wikiApiPath]);
 
   useEffect(() => {
     loadTree();
@@ -90,7 +106,7 @@ export function WikiShell({ org }: WikiShellProps) {
       setNoteError(null);
       try {
         const res = await fetch(
-          `/api/wiki/note?org=${encodeURIComponent(org)}&path=${encodeURIComponent(relPath)}`,
+          wikiApiPath('/api/wiki/note', { path: relPath }),
         );
         if (!res.ok) {
           const err = (await res.json().catch(() => ({}))) as { error?: string };
@@ -104,7 +120,7 @@ export function WikiShell({ org }: WikiShellProps) {
         setNoteLoading(false);
       }
     },
-    [org],
+    [wikiApiPath],
   );
 
   useEffect(() => {
@@ -114,6 +130,11 @@ export function WikiShell({ org }: WikiShellProps) {
 
   // Debounced search
   useEffect(() => {
+    if (vaultStatus && vaultStatus.state !== 'ready') {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
     if (query.trim().length < 2) {
       setResults(null);
       setSearching(false);
@@ -126,7 +147,7 @@ export function WikiShell({ org }: WikiShellProps) {
     const t = setTimeout(async () => {
       try {
         const res = await fetch(
-          `/api/wiki/search?org=${encodeURIComponent(org)}&q=${encodeURIComponent(query)}`,
+          wikiApiPath('/api/wiki/search', { q: query }),
           { signal: ctrl.signal },
         );
         if (!res.ok) {
@@ -145,14 +166,14 @@ export function WikiShell({ org }: WikiShellProps) {
       clearTimeout(t);
       ctrl.abort();
     };
-  }, [query, org]);
+  }, [query, vaultStatus, wikiApiPath]);
 
   const onWikilink = useCallback(
     async (slug: string) => {
       // Resolve via the search route (filename-first), pick the best filename match
       try {
         const res = await fetch(
-          `/api/wiki/search?org=${encodeURIComponent(org)}&q=${encodeURIComponent(slug)}`,
+          wikiApiPath('/api/wiki/search', { q: slug }),
         );
         if (!res.ok) return;
         const data = await res.json();
@@ -167,7 +188,7 @@ export function WikiShell({ org }: WikiShellProps) {
         /* swallow */
       }
     },
-    [org],
+    [wikiApiPath],
   );
 
   const paneContent = useMemo(() => {
@@ -215,6 +236,11 @@ export function WikiShell({ org }: WikiShellProps) {
         </div>
       </div>
 
+      {vaultStatus?.state === 'not-configured' ? (
+        <VaultConfigureState />
+      ) : vaultStatus?.state === 'missing' ? (
+        <VaultMissingState configuredPath={vaultStatus.configuredPath} />
+      ) : (
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(280px,360px)_1fr] gap-4 min-h-[60vh]">
         <div className="border rounded-xl bg-card overflow-hidden flex flex-col">
           <div className="p-3 border-b">
@@ -253,6 +279,7 @@ export function WikiShell({ org }: WikiShellProps) {
           ) : null}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -414,6 +441,59 @@ function EmptyState() {
         </p>
         <p className="text-xs text-muted-foreground mt-1">
           Inbox shows newest-first. Type to search across the full vault.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function VaultConfigureState() {
+  return (
+    <div className="border rounded-xl bg-card min-h-[60vh] grid place-items-center p-8">
+      <div className="max-w-xl text-center">
+        <h2 className="text-xl font-semibold">Configure your wiki vault</h2>
+        <p className="text-sm text-muted-foreground mt-2">
+          Set <code className="text-xs font-mono">CTX_VAULT_PATH</code> to the local
+          Obsidian vault directory you want this dashboard to read.
+        </p>
+        <Input
+          readOnly
+          value="CTX_VAULT_PATH=/path/to/your/vault"
+          className="mt-5 font-mono text-xs"
+          aria-label="Vault path configuration"
+        />
+        <div className="mt-5 rounded-lg border bg-muted/30 p-4 text-left">
+          <p className="text-xs text-muted-foreground">Expected structure</p>
+          <code className="mt-2 block text-xs font-mono whitespace-pre-wrap">
+            CTX_VAULT_PATH=/path/to/your/vault
+            {'\n'}00-inbox/
+            {'\n'}01-projects/
+            {'\n'}02-areas/
+            {'\n'}03-resources/
+          </code>
+        </div>
+        <p className="text-xs text-muted-foreground mt-4">
+          The wiki is read-only and only opens notes inside the PARA folders.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function VaultMissingState({ configuredPath }: { configuredPath: string }) {
+  return (
+    <div className="border rounded-xl bg-card min-h-[60vh] grid place-items-center p-8">
+      <div className="max-w-xl text-center">
+        <h2 className="text-xl font-semibold">Vault path needs attention</h2>
+        <p className="text-sm text-muted-foreground mt-2">
+          The configured vault path does not exist or is not a directory.
+        </p>
+        <code className="mt-4 block rounded-lg border bg-muted/30 px-3 py-2 text-xs font-mono break-all">
+          {configuredPath}
+        </code>
+        <p className="text-xs text-muted-foreground mt-4">
+          Reconfigure <code className="text-xs font-mono">CTX_VAULT_PATH</code> to an
+          existing vault directory, then restart or rebuild the dashboard process.
         </p>
       </div>
     </div>

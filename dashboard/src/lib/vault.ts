@@ -1,13 +1,12 @@
 /**
  * Vault helpers for the dashboard /wiki page.
  *
- * Resolves the org's Obsidian vault path, parses frontmatter, scopes file
+ * Resolves the configured Obsidian vault path, parses frontmatter, scopes file
  * reads to PARA-tree paths only (read-only — no writes from the dashboard).
  */
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { CTX_FRAMEWORK_ROOT } from './config';
 
 export const PARA_DIRS = [
   '00-inbox',
@@ -21,34 +20,37 @@ export const PARA_DIRS = [
 
 export type ParaDir = (typeof PARA_DIRS)[number];
 
-const VAULT_FALLBACK = process.env.CTX_VAULT_PATH
-  ?? path.join(os.homedir(), 'storage', 'Documents', 'Github', 'sondres-orchestrator', 'vault');
+export type VaultStatus =
+  | { state: 'ready'; root: string }
+  | { state: 'not-configured' }
+  | { state: 'missing'; configuredPath: string };
 
-export function getVaultRoot(org: string): string | null {
-  // 1. Try parsing orgs/<org>/knowledge.md for an "Obsidian vault" path entry
-  const knowledgePath = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'knowledge.md');
-  if (fs.existsSync(knowledgePath)) {
-    try {
-      const content = fs.readFileSync(knowledgePath, 'utf-8');
-      // Match a code path like `/root/.../vault/` after "Obsidian vault" mentions
-      const match = content.match(
-        /Obsidian vault[^\n]*?`([^`]+vault\/?)`/i,
-      );
-      if (match) {
-        const p = match[1].replace(/\/$/, '');
-        if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p;
-      }
-    } catch {
-      /* ignore */
-    }
+function expandTilde(p: string): string {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
+export function getConfiguredVaultPath(): string | null {
+  const configured = process.env.CTX_VAULT_PATH?.trim();
+  if (!configured) return null;
+  return path.resolve(expandTilde(configured));
+}
+
+export function getVaultStatus(): VaultStatus {
+  const configuredPath = getConfiguredVaultPath();
+  if (!configuredPath) return { state: 'not-configured' };
+
+  if (fs.existsSync(configuredPath) && fs.statSync(configuredPath).isDirectory()) {
+    return { state: 'ready', root: configuredPath };
   }
 
-  // 2. Fallback to the known sondre-hq vault location
-  if (fs.existsSync(VAULT_FALLBACK) && fs.statSync(VAULT_FALLBACK).isDirectory()) {
-    return VAULT_FALLBACK;
-  }
+  return { state: 'missing', configuredPath };
+}
 
-  return null;
+export function getVaultRoot(): string | null {
+  const status = getVaultStatus();
+  return status.state === 'ready' ? status.root : null;
 }
 
 export type Frontmatter = {
