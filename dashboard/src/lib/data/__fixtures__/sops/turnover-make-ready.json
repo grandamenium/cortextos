@@ -1,7 +1,7 @@
 {
   "slug": "turnover-make-ready",
   "name": "Turnover Make-Ready",
-  "description": "Blue coordinates a unit turn from move-out facts through make-ready completion and leasing handoff.",
+  "description": "Maintenance coordinates a unit turn from move-out facts through make-ready completion and leasing handoff.",
   "subject_type": "unit_turn",
   "default_start_stage_key": "intake",
   "captured_at": "2026-07-07T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-turn-facts",
           "title": "Normalize turn facts",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize move-out date, target ready date, property/unit, open work orders, and make-ready categories.",
           "dispatch_title": "Normalize turnover facts",
@@ -28,7 +28,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-turn-facts"],
+          "depends_on": [
+            "normalize-turn-facts"
+          ],
           "instructions": "Confirm the make-ready scope, target date, and priority before dispatch coordination begins.",
           "human_prompt": "Review make-ready scope before vendor/tech coordination.",
           "estimated_minutes": 10
@@ -44,9 +46,11 @@
           "task_key": "coordinate-make-ready-work",
           "title": "Coordinate make-ready work",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["scope-review"],
+          "depends_on": [
+            "scope-review"
+          ],
           "instructions": "Coordinate open make-ready work, vendor assignments, materials, access, and blockers. Do not mark ready without evidence.",
           "dispatch_title": "Coordinate make-ready work",
           "dispatch_body": "Coordinate open make-ready work and surface blockers.",
@@ -58,7 +62,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["coordinate-make-ready-work"],
+          "depends_on": [
+            "coordinate-make-ready-work"
+          ],
           "instructions": "Clear or explicitly accept all blockers before leasing handoff.",
           "human_prompt": "Clear make-ready blockers before leasing handoff.",
           "estimated_minutes": 15
@@ -74,9 +80,11 @@
           "task_key": "verify-ready-evidence",
           "title": "Verify ready evidence",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["blocker-gate"],
+          "depends_on": [
+            "blocker-gate"
+          ],
           "instructions": "Verify completion evidence, photos, notes, and remaining exceptions before marking make-ready complete.",
           "dispatch_title": "Verify make-ready evidence",
           "dispatch_body": "Verify make-ready completion evidence and remaining exceptions.",
@@ -86,9 +94,11 @@
           "task_key": "notify-leasing-ready",
           "title": "Notify leasing ready",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["verify-ready-evidence"],
+          "depends_on": [
+            "verify-ready-evidence"
+          ],
           "instructions": "Notify leasing that the unit is ready, including any owner-visible caveats.",
           "dispatch_title": "Notify leasing of ready unit",
           "dispatch_body": "Notify leasing that make-ready is complete with evidence summary.",

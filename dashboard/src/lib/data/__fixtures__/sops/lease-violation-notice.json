@@ -15,7 +15,7 @@
           "task_key": "normalize-violation-facts",
           "title": "Normalize violation facts",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize property, unit, tenant, reporter, allegation, lease clause if known, evidence, photos, dates, prior notices, open work orders, owner concerns, and source confidence. Missing lease, evidence, or AppFolio data must be null with needs_verification.",
           "dispatch_title": "Normalize lease violation facts",
@@ -28,7 +28,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-violation-facts"],
+          "depends_on": [
+            "normalize-violation-facts"
+          ],
           "instructions": "Review whether evidence is sufficient, whether more photos or documentation are needed, and whether the issue is maintenance, resident conduct, owner concern, or no-action.",
           "human_prompt": "Review lease violation evidence before cure path or notice drafting.",
           "estimated_minutes": 15
@@ -44,9 +46,11 @@
           "task_key": "draft-cure-path-recommendation",
           "title": "Draft cure path recommendation",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["evidence-sufficiency-review"],
+          "depends_on": [
+            "evidence-sufficiency-review"
+          ],
           "instructions": "Draft internal recommendation: request more evidence, maintenance follow-up, informal reminder, formal cure notice, owner decision, attorney review, monitor-only, or no action. Draft-only; do not contact anyone.",
           "dispatch_title": "Draft lease violation cure path",
           "dispatch_body": "Draft internal lease violation cure path. No resident, owner, vendor, or attorney sends.",
@@ -56,9 +60,11 @@
           "task_key": "draft-violation-notice",
           "title": "Draft violation notice",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["draft-cure-path-recommendation"],
+          "depends_on": [
+            "draft-cure-path-recommendation"
+          ],
           "instructions": "If formal notice is recommended, draft notice language and cure requirements for legal/human review only. Do not send, post, serve, or imply notice delivery.",
           "dispatch_title": "Draft lease violation notice",
           "dispatch_body": "Draft violation notice for review only. No resident send or service.",
@@ -70,7 +76,10 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-cure-path-recommendation", "draft-violation-notice"],
+          "depends_on": [
+            "draft-cure-path-recommendation",
+            "draft-violation-notice"
+          ],
           "instructions": "Approve, edit, hold, or reject cure path and notice language before any resident-facing action, owner update, attorney handoff, or enforcement step.",
           "human_prompt": "Human/legal approval required before any lease violation notice or enforcement action.",
           "estimated_minutes": 20
@@ -86,9 +95,11 @@
           "task_key": "stage-approved-violation-action",
           "title": "Stage approved violation action",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["legal-cure-path-review"],
+          "depends_on": [
+            "legal-cure-path-review"
+          ],
           "instructions": "Stage approved action metadata, notice draft, evidence packet, cure deadline, owner update draft, and delivery proof checklist for operator release. Do not send notices, contact owners, contact residents, serve documents, or write to AppFolio.",
           "dispatch_title": "Stage approved lease violation action",
           "dispatch_body": "Stage approved violation action metadata only. No external sends, service, or AppFolio writes.",
@@ -98,9 +109,11 @@
           "task_key": "prepare-cure-tracking-checklist",
           "title": "Prepare cure tracking checklist",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["stage-approved-violation-action"],
+          "depends_on": [
+            "stage-approved-violation-action"
+          ],
           "instructions": "Prepare cure tracking checklist, evidence follow-up fields, inspection/work-order refs, and deadline checkpoints. Do not create work orders or contact vendors/residents.",
           "dispatch_title": "Prepare violation cure tracking checklist",
           "dispatch_body": "Prepare cure tracking checklist. No work-order creation and no external sends.",
@@ -117,9 +130,11 @@
           "task_key": "track-cure-status",
           "title": "Track cure status",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["prepare-cure-tracking-checklist"],
+          "depends_on": [
+            "prepare-cure-tracking-checklist"
+          ],
           "instructions": "Track cured, not cured, needs inspection, needs maintenance, owner decision needed, attorney review needed, or needs_verification with source and timestamp. Do not escalate automatically.",
           "dispatch_title": "Track lease violation cure status",
           "dispatch_body": "Track cure status metadata. No external sends and no escalation action.",
@@ -129,9 +144,11 @@
           "task_key": "record-violation-closeout",
           "title": "Record violation closeout",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["track-cure-status"],
+          "depends_on": [
+            "track-cure-status"
+          ],
           "instructions": "Record final status, evidence refs, unresolved blockers, owner update needs, and any human-approved escalation handoff. Do not write to AppFolio.",
           "dispatch_title": "Record lease violation closeout",
           "dispatch_body": "Record internal lease violation closeout. No AppFolio write and no external send.",

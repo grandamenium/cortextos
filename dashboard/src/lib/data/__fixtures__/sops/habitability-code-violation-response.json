@@ -1,7 +1,7 @@
 {
   "slug": "habitability-code-violation-response",
   "name": "Habitability Code Violation Response",
-  "description": "Blue and Dane coordinate habitability claims and code notices with evidence capture, statutory-clock tracking, remediation staging, and human approval before any resident, owner, vendor, legal, or agency action.",
+  "description": "Maintenance and Operations coordinate habitability claims and code notices with evidence capture, statutory-clock tracking, remediation staging, and human approval before any resident, owner, vendor, legal, or agency action.",
   "subject_type": "habitability_case",
   "default_start_stage_key": "case-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-habitability-case",
           "title": "Normalize habitability case",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize property, unit, resident, owner, condition category, reported date, source, evidence refs, affected systems, current work orders, code notice refs, agency deadline if present, and missing facts. Unknown severity, deadlines, and agency claims must remain null with needs_verification; do not infer legal conclusions.",
           "dispatch_title": "Normalize habitability or code case",
@@ -26,9 +26,11 @@
           "task_key": "full-history-and-ownership-check",
           "title": "Check full history and owner",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["normalize-habitability-case"],
+          "depends_on": [
+            "normalize-habitability-case"
+          ],
           "instructions": "Review full resident thread, prior inspections, open work orders, vendor assignment, owner approvals, city/agency communications, and who already owns the case. If a human, attorney, inspector, vendor, or manager already owns it, surface the current state and do not act.",
           "dispatch_title": "Check habitability case ownership",
           "dispatch_body": "Check current ownership and full history before any outbound. Stop if another owner is already active.",
@@ -45,9 +47,11 @@
           "task_key": "draft-deadline-risk-packet",
           "title": "Draft deadline and risk packet",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["full-history-and-ownership-check"],
+          "depends_on": [
+            "full-history-and-ownership-check"
+          ],
           "instructions": "Draft a packet with known dates, evidence quality, active notices, possible response clocks, unresolved facts, and recommended next verification steps. Do not assert legal obligations; mark uncertain legal or code interpretations as needs_verification.",
           "dispatch_title": "Draft habitability deadline packet",
           "dispatch_body": "Draft deadline and risk packet for human review. No legal advice, external sends, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-deadline-risk-packet"],
+          "depends_on": [
+            "draft-deadline-risk-packet"
+          ],
           "instructions": "Review the deadline and risk packet before any resident, owner, vendor, attorney, city, agency, or inspection response is prepared. Confirm whether legal counsel or supervisor review is required.",
           "human_prompt": "Review habitability/code deadline packet before any external action.",
           "estimated_minutes": 15
@@ -75,9 +81,11 @@
           "task_key": "draft-remediation-plan",
           "title": "Draft remediation plan",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["review-deadline-risk-packet"],
+          "depends_on": [
+            "review-deadline-risk-packet"
+          ],
           "instructions": "Draft a remediation plan with evidence requested, vendor or inspection options, safe resident mitigation, owner update draft, resident acknowledgement draft, estimated cost range, and follow-up checkpoints. Draft-only; do not contact residents, vendors, owners, agencies, or attorneys.",
           "dispatch_title": "Draft habitability remediation plan",
           "dispatch_body": "Draft remediation plan and communication packets only. No sends, dispatch, spend, or system writes.",
@@ -89,7 +97,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-remediation-plan"],
+          "depends_on": [
+            "draft-remediation-plan"
+          ],
           "instructions": "Approve, edit, escalate to counsel, or hold before any resident response, owner notice, vendor dispatch, inspection scheduling, agency response, legal handoff, spend commitment, or PMS/maintenance-system write.",
           "human_prompt": "Approval required before habitability/code resident, owner, vendor, agency, legal, spend, or system action.",
           "estimated_minutes": 15
@@ -105,9 +115,11 @@
           "task_key": "stage-approved-remediation-package",
           "title": "Stage approved remediation package",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["approve-remediation-action"],
+          "depends_on": [
+            "approve-remediation-action"
+          ],
           "instructions": "Stage approved remediation metadata, evidence requests, owner/resident/vendor drafts, deadline checkpoints, and internal follow-up tasks for operator release. Do not send, dispatch, write to AppFolio or PropertyMeld, or commit spend.",
           "dispatch_title": "Stage approved habitability remediation package",
           "dispatch_body": "Stage approved habitability/code package for human release. No external sends, dispatch, spend, or system writes.",
@@ -117,9 +129,11 @@
           "task_key": "record-habitability-closeout",
           "title": "Record habitability closeout",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["stage-approved-remediation-package"],
+          "depends_on": [
+            "stage-approved-remediation-package"
+          ],
           "instructions": "Record evidence basis, approval source, unresolved needs_verification facts, deadline checkpoints, and next owner. This is an internal audit event only; do not send notices or write to external systems.",
           "dispatch_title": "Record habitability/code closeout",
           "dispatch_body": "Record internal closeout and audit notes only. No external sends or system writes.",

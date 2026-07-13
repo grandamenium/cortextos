@@ -1,7 +1,7 @@
 {
   "slug": "property-sale-support",
   "name": "Property Sale Support",
-  "description": "Dane coordinates owner-sale support for managed properties, including tenant-occupied sale facts, showings, notices, documents, and offboarding handoffs with human approval before resident, owner, buyer, broker, legal, money, or system action.",
+  "description": "Operations coordinates owner-sale support for managed properties, including tenant-occupied sale facts, showings, notices, documents, and offboarding handoffs with human approval before resident, owner, buyer, broker, legal, money, or system action.",
   "subject_type": "property_sale",
   "default_start_stage_key": "sale-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-sale-support-facts",
           "title": "Normalize sale support facts",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
           "instructions": "Normalize owner, property, unit mix, occupancy, lease end dates, tenant notice constraints, listing intent, broker contact if any, showing limitations, owner instructions, document requests, and missing facts. Unknown legal notice requirements, tenant rights, pricing, or broker authority must remain null with needs_verification.",
           "dispatch_title": "Normalize property sale support facts",
@@ -26,9 +26,11 @@
           "task_key": "check-sale-ownership-and-conflicts",
           "title": "Check sale ownership and conflicts",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["normalize-sale-support-facts"],
+          "depends_on": [
+            "normalize-sale-support-facts"
+          ],
           "instructions": "Check whether a broker, owner, attorney, or manager already owns the sale process; review tenant communications, active maintenance, leasing, or offboarding conflicts. If already owned, surface status and do not stage duplicate action.",
           "dispatch_title": "Check sale ownership and conflicts",
           "dispatch_body": "Check sale ownership and workflow conflicts. No external sends or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-sale-coordination-packet",
           "title": "Draft sale coordination packet",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["check-sale-ownership-and-conflicts"],
+          "depends_on": [
+            "check-sale-ownership-and-conflicts"
+          ],
           "instructions": "Draft owner update, tenant-occupied showing caveats, resident notice draft, document checklist, broker handoff draft, maintenance/disclosure caveats, and offboarding or transfer triggers. Draft-only; do not send, schedule showings, disclose records, or alter systems.",
           "dispatch_title": "Draft property sale coordination packet",
           "dispatch_body": "Draft sale support packet only. No external sends, showings, disclosures, money action, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-sale-coordination-packet"],
+          "depends_on": [
+            "draft-sale-coordination-packet"
+          ],
           "instructions": "Review owner instructions, resident rights sensitivity, broker authority, documents, maintenance disclosures, legal risk, and management/offboarding implications before approval.",
           "human_prompt": "Review property sale packet before resident, owner, broker, buyer, legal, money, or system action.",
           "estimated_minutes": 20
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-sale-packet"],
+          "depends_on": [
+            "review-sale-packet"
+          ],
           "instructions": "Approve, edit, reject, or route to counsel before any resident notice, showing coordination, broker/buyer communication, owner message, document release, disclosure, legal handoff, fee, offboarding step, or AppFolio write.",
           "human_prompt": "Approval required before property-sale resident, owner, broker, buyer, legal, money, document, or system action.",
           "estimated_minutes": 15
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-sale-package",
           "title": "Stage approved sale package",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["approve-sale-support-action"],
+          "depends_on": [
+            "approve-sale-support-action"
+          ],
           "instructions": "Stage approved owner/resident/broker drafts, document checklist, offboarding or transfer handoff, approval source, unresolved needs_verification fields, and next owner for human release. Do not send, schedule, disclose, charge, or write external systems.",
           "dispatch_title": "Stage approved sale support package",
           "dispatch_body": "Stage approved property sale support package for human release. No external sends, disclosures, money action, or system writes.",

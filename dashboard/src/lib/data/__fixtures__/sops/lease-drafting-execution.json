@@ -1,7 +1,7 @@
 {
   "slug": "lease-drafting-execution",
   "name": "Lease Drafting And Execution",
-  "description": "Lacey stages approved-applicant lease packets, deposit and first-month checklists, and signature tracking with human approval before any applicant-facing send, e-sign action, money collection, or AppFolio write.",
+  "description": "Leasing stages approved-applicant lease packets, deposit and first-month checklists, and signature tracking with human approval before any applicant-facing send, e-sign action, money collection, or AppFolio write.",
   "subject_type": "lease_execution",
   "default_start_stage_key": "approved-applicant-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-approved-applicant",
           "title": "Normalize approved applicant",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Normalize applicant identities, approved occupants, property, unit, lease start, term, rent, deposit, fees, pets, utilities, screening conditions, move-in target, and source confidence. Missing screening, pricing, lease, or AppFolio data must be null with needs_verification.",
           "dispatch_title": "Normalize lease execution facts",
@@ -28,7 +28,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-approved-applicant"],
+          "depends_on": [
+            "normalize-approved-applicant"
+          ],
           "instructions": "Review approved-applicant facts, screening conditions, rent/deposit terms, move-in date, and missing data before lease packet drafting.",
           "human_prompt": "Review lease readiness before a lease packet is drafted.",
           "estimated_minutes": 15
@@ -44,9 +46,11 @@
           "task_key": "draft-lease-packet-checklist",
           "title": "Draft lease packet checklist",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["lease-readiness-review"],
+          "depends_on": [
+            "lease-readiness-review"
+          ],
           "instructions": "Draft lease packet checklist with lease terms, occupants, fees, deposit, prorations, pet/ESA notes, utilities, move-in requirements, addenda, and unresolved items. Do not generate or send a legal lease document.",
           "dispatch_title": "Draft lease packet checklist",
           "dispatch_body": "Draft internal lease packet checklist only. No applicant send, e-sign action, collection, or AppFolio write.",
@@ -56,21 +60,25 @@
           "task_key": "draft-deposit-first-month-checklist",
           "title": "Draft deposit and first-month checklist",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["draft-lease-packet-checklist"],
+          "depends_on": [
+            "draft-lease-packet-checklist"
+          ],
           "instructions": "Draft deposit, first-month, prorated rent, fee, and payment timing checklist. Treat all amounts as draft until human approval. Do not request or collect money.",
           "dispatch_title": "Draft move-in money checklist",
           "dispatch_body": "Draft deposit and first-month checklist. No payment request, collection, or accounting write.",
           "estimated_minutes": 20
         },
         {
-          "task_key": "blue-unit-final-readiness-check",
+          "task_key": "maintenance-unit-final-readiness-check",
           "title": "Check unit final readiness",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["draft-lease-packet-checklist"],
+          "depends_on": [
+            "draft-lease-packet-checklist"
+          ],
           "instructions": "Check make-ready completion, open work orders, locks, keys, utilities, smoke/CO where applicable, safety blockers, and move-in caveats. Do not mark the unit ready in AppFolio.",
           "dispatch_title": "Check final unit readiness for lease execution",
           "dispatch_body": "Check unit readiness and blockers. No system writes.",
@@ -89,7 +97,10 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-deposit-first-month-checklist", "blue-unit-final-readiness-check"],
+          "depends_on": [
+            "draft-deposit-first-month-checklist",
+            "maintenance-unit-final-readiness-check"
+          ],
           "instructions": "Approve, edit, hold, or reject lease packet terms, addenda, move-in money checklist, and unit readiness before any applicant-facing send, e-sign packet, or collection action.",
           "human_prompt": "Human approval required before lease packet release, e-sign action, applicant send, or money collection.",
           "estimated_minutes": 20
@@ -98,9 +109,11 @@
           "task_key": "stage-approved-lease-release",
           "title": "Stage approved lease release",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["approve-lease-packet-release"],
+          "depends_on": [
+            "approve-lease-packet-release"
+          ],
           "instructions": "Stage approved lease packet metadata, signing checklist, applicant message draft, deposit/first-month checklist, and move-in caveats for operator release. Do not send, e-sign, collect money, or write to AppFolio.",
           "dispatch_title": "Stage approved lease release",
           "dispatch_body": "Stage approved lease release metadata only. No applicant send, e-sign, collection, or AppFolio write.",
@@ -117,9 +130,11 @@
           "task_key": "track-signature-and-payment-status",
           "title": "Track signature and payment status",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["stage-approved-lease-release"],
+          "depends_on": [
+            "stage-approved-lease-release"
+          ],
           "instructions": "Track signature status, deposit status, first-month status, missing items, applicant blockers, and move-in caveats from approved/operator-provided refs. Do not send reminders or collect money.",
           "dispatch_title": "Track lease execution status",
           "dispatch_body": "Track signature and payment status metadata. No applicant sends or collections.",
@@ -129,9 +144,11 @@
           "task_key": "handoff-move-in-completion",
           "title": "Handoff move-in completion",
           "kind": "system_handoff",
-          "assigned_role": "codie",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["track-signature-and-payment-status"],
+          "depends_on": [
+            "track-signature-and-payment-status"
+          ],
           "instructions": "Stage internal handoff facts for application-screening-move-in completion or move-in readiness: lease refs, signature status, payment status, unit readiness, blockers, and needs_verification flags. Do not create records or write to AppFolio.",
           "dispatch_title": "Stage move-in completion handoff",
           "dispatch_body": "Stage internal move-in handoff. No record creation, external sends, or AppFolio writes.",

@@ -17,7 +17,7 @@ function baseStep(overrides: Partial<SopStep>): SopStep {
     task_key: 'x',
     title: 'X',
     kind: 'agent_task',
-    assigned_role: 'dane',
+    assigned_role: 'operations',
     is_automated: true,
     instructions: 'do x',
     depends_on: [],
@@ -58,7 +58,7 @@ describe('isGatedActionType', () => {
 
 describe('isUnmappedRole', () => {
   it('recognizes known ROLE_AGENT_MAP roles', () => {
-    for (const role of ['blue', 'lacey', 'cash', 'dane', 'codie', 'aussie', 'collie', 'human', 'pm', 'owner']) {
+    for (const role of ['maintenance', 'leasing', 'accounting', 'operations', 'human', 'pm', 'owner']) {
       expect(isUnmappedRole(role)).toBe(false);
     }
   });
@@ -183,42 +183,32 @@ describe('findNearestGate', () => {
 });
 
 describe('getSopIndex (fixture-backed)', () => {
-  it('returns ready state with all 46 corpus SOPs plus the 2 demo fixtures', async () => {
+  it('returns ready state with the 46-SOP public corpus', async () => {
     const data = await getSopIndex();
     expect(data.state).toBe('ready');
     if (data.state !== 'ready') return;
     expect(data.source).toBe('fixtures');
-    expect(data.rows.length).toBe(48);
+    expect(data.rows.length).toBe(46);
     const slugs = data.rows.map((r) => r.slug);
     expect(slugs).toContain('delinquency-escalation-ladder');
-    expect(slugs).toContain('demo-gated-resident-notice');
-    expect(slugs).toContain('demo-branching-approval-chain');
+    expect(slugs).not.toContain('demo-gated-resident-notice');
+    expect(slugs).not.toContain('demo-branching-approval-chain');
   });
 
-  it('the real 46-SOP corpus has zero gated steps today (honest, not a bug)', async () => {
+  it('the 46-SOP public corpus has zero gated steps today (honest, not a bug)', async () => {
     const data = await getSopIndex();
     if (data.state !== 'ready') throw new Error('expected ready state');
-    const real = data.rows.filter((r) => !r.is_synthetic_demo);
-    expect(real.length).toBe(46);
-    for (const row of real) {
+    for (const row of data.rows) {
       expect(row.gated_step_count).toBe(0);
+      expect(row.is_synthetic_demo).toBe(false);
     }
   });
 
-  it('flags the synthetic gated fixture with exactly one gated step and no unmapped roles', async () => {
-    const data = await getSopIndex();
-    if (data.state !== 'ready') throw new Error('expected ready state');
-    const row = data.rows.find((r) => r.slug === 'demo-gated-resident-notice');
-    expect(row?.gated_step_count).toBe(1);
-    expect(row?.ungated_violation_count).toBe(0);
-    expect(row?.has_unmapped_role).toBe(false);
-  });
-
-  it('carries the synthetic drift flag on the demo branching fixture only', async () => {
+  it('ships no synthetic drift rows in the public corpus', async () => {
     const data = await getSopIndex();
     if (data.state !== 'ready') throw new Error('expected ready state');
     const drifted = data.rows.filter((r) => r.drift_detected);
-    expect(drifted.map((r) => r.slug)).toEqual(['demo-branching-approval-chain']);
+    expect(drifted).toEqual([]);
   });
 });
 
@@ -239,12 +229,13 @@ describe('getSop (fixture-backed)', () => {
     expect(data.version.updated_at).toBe(data.sop.captured_at);
   });
 
-  it('flags the branching demo fixture\'s multi-parent merge step as custom, not chain', async () => {
-    const data = await getSop('demo-branching-approval-chain');
+  it('flags a real fixture multi-parent dependency as custom, not chain', async () => {
+    const data = await getSop('lease-drafting-execution');
     expect(data.state).toBe('ready');
     if (data.state !== 'ready') return;
-    const mergeStageIndex = data.sop.stages.findIndex((s) => s.stage_key === 'merge');
-    const info = describeStep(data.sop, mergeStageIndex, 0);
+    const stageIndex = data.sop.stages.findIndex((s) => s.stage_key === 'approval-gates');
+    const stepIndex = data.sop.stages[stageIndex].steps.findIndex((s) => s.task_key === 'approve-lease-packet-release');
+    const info = describeStep(data.sop, stageIndex, stepIndex);
     expect(info.isChainStep).toBe(false);
   });
 });

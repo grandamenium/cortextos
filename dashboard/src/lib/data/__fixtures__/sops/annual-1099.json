@@ -1,7 +1,7 @@
 {
   "slug": "annual-1099",
   "name": "Annual 1099",
-  "description": "Cash prepares year-end owner and vendor 1099 review packets, TIN gaps, filing drafts, and correction tracking with human approval before any tax filing, recipient notice, payment classification, money, or system action.",
+  "description": "Accounting prepares year-end owner and vendor 1099 review packets, TIN gaps, filing drafts, and correction tracking with human approval before any tax filing, recipient notice, payment classification, money, or system action.",
   "subject_type": "tax_reporting_period",
   "default_start_stage_key": "tax-year-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-1099-inputs",
           "title": "Normalize 1099 inputs",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
           "instructions": "Normalize tax year, owners, vendors, paid amounts, reportable-category candidates, TIN/W-9 state, entity names, addresses, exemption flags, prior corrections, filing vendor state, and missing facts. Unknown reportability, TIN validity, exemption status, or tax conclusions must remain null with needs_verification.",
           "dispatch_title": "Normalize annual 1099 inputs",
@@ -26,9 +26,11 @@
           "task_key": "check-1099-duplicates-and-ownership",
           "title": "Check duplicates and ownership",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["normalize-1099-inputs"],
+          "depends_on": [
+            "normalize-1099-inputs"
+          ],
           "instructions": "Check whether accounting staff, CPA, filing provider, or another workflow already owns each recipient; identify duplicate recipients, missing W-9s, prior year corrections, and unresolved disputes. Do not contact recipients or update tax data.",
           "dispatch_title": "Check 1099 ownership and duplicates",
           "dispatch_body": "Check duplicate, W-9, CPA, and filing-provider state. No external sends, filings, or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-1099-qa-packet",
           "title": "Draft 1099 QA packet",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["check-1099-duplicates-and-ownership"],
+          "depends_on": [
+            "check-1099-duplicates-and-ownership"
+          ],
           "instructions": "Draft QA packet with recipient candidates, reportable amount caveats, missing TIN/W-9 list, address gaps, exemption needs_verification, owner/vendor split, filing timeline, correction risk, and CPA-review flags. Draft-only; do not file, classify as final, send notices, or write systems.",
           "dispatch_title": "Draft annual 1099 QA packet",
           "dispatch_body": "Draft 1099 QA and missing-data packet only. No filings, recipient sends, tax conclusions, money action, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-1099-qa-packet"],
+          "depends_on": [
+            "draft-1099-qa-packet"
+          ],
           "instructions": "Review reportability, recipient list, amounts, W-9/TIN gaps, CPA involvement, filing timeline, and correction risk before any recipient request, filing packet, or system update is approved.",
           "human_prompt": "Review annual 1099 QA packet before recipient, filing, tax, money, or system action.",
           "estimated_minutes": 30
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-1099-qa-packet"],
+          "depends_on": [
+            "review-1099-qa-packet"
+          ],
           "instructions": "Approve, edit, reject, or route to CPA before any recipient W-9 request, owner/vendor notice, filing submission, correction, reportability decision, amount finalization, accounting update, money action, or AppFolio write.",
           "human_prompt": "Approval required before 1099 recipient, filing, correction, tax, money, accounting, or system action.",
           "estimated_minutes": 30
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-1099-package",
           "title": "Stage approved 1099 package",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["approve-1099-action"],
+          "depends_on": [
+            "approve-1099-action"
+          ],
           "instructions": "Stage approved 1099 filing packet, recipient-request drafts, correction notes, CPA handoff, approval source, unresolved needs_verification fields, and next owner for human release. Do not file, send, correct, post, pay, or write systems.",
           "dispatch_title": "Stage approved annual 1099 package",
           "dispatch_body": "Stage approved 1099 package for human release. No filings, recipient sends, tax actions, money actions, or system writes.",

@@ -1,7 +1,7 @@
 {
   "slug": "property-compliance-readiness",
   "name": "Property Compliance Readiness",
-  "description": "Lacey and Blue produce a blocker/warning readiness score for a property before a compliance-sensitive action.",
+  "description": "Leasing and Maintenance produce a blocker/warning readiness score for a property before a compliance-sensitive action.",
   "subject_type": "property",
   "default_start_stage_key": "collect",
   "captured_at": "2026-07-07T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "collect-property-facts",
           "title": "Collect property compliance facts",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Collect lease, owner, occupancy, inspection, and license facts available for this property.",
           "dispatch_title": "Collect property compliance facts",
@@ -26,7 +26,7 @@
           "task_key": "collect-maintenance-risks",
           "title": "Collect maintenance blockers",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Collect open emergency, safety, habitability, inspection, and vendor-document blockers for this property.",
           "dispatch_title": "Collect maintenance compliance blockers",
@@ -44,9 +44,12 @@
           "task_key": "build-readiness-score",
           "title": "Build readiness score",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["collect-property-facts", "collect-maintenance-risks"],
+          "depends_on": [
+            "collect-property-facts",
+            "collect-maintenance-risks"
+          ],
           "instructions": "Build a 0-100 readiness score with explicit blockers and warnings. Do not hide unknown data.",
           "dispatch_title": "Build property readiness score",
           "dispatch_body": "Build blocker/warning readiness score from collected property inputs.",
@@ -58,7 +61,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["build-readiness-score"],
+          "depends_on": [
+            "build-readiness-score"
+          ],
           "instructions": "Review the readiness score, confirming blockers are real and unknowns are labeled honestly.",
           "human_prompt": "Review property readiness score before it is shown as a decision artifact.",
           "estimated_minutes": 10
@@ -74,9 +79,11 @@
           "task_key": "stage-readiness-artifact",
           "title": "Stage readiness artifact",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["readiness-review"],
+          "depends_on": [
+            "readiness-review"
+          ],
           "instructions": "Stage the approved readiness artifact for Pulse or the owner status projection.",
           "dispatch_title": "Stage property readiness artifact",
           "dispatch_body": "Stage approved property readiness artifact for cockpit consumption.",
@@ -86,9 +93,11 @@
           "task_key": "track-blocker-resolution",
           "title": "Track blocker resolution",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["stage-readiness-artifact"],
+          "depends_on": [
+            "stage-readiness-artifact"
+          ],
           "instructions": "Track open blockers until cleared or explicitly accepted.",
           "dispatch_title": "Track property readiness blockers",
           "dispatch_body": "Track readiness blockers and update the workflow when cleared.",

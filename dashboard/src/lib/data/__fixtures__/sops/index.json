@@ -2,21 +2,6 @@
   "captured_at": "2026-07-07T00:00:00.000Z",
   "templates": [
     {
-      "slug": "demo-gated-resident-notice",
-      "name": "DEMO: Gated Resident Notice",
-      "subject_type": "demo_fixture",
-      "stage_count": 3,
-      "task_count": 3
-    },
-    {
-      "slug": "demo-branching-approval-chain",
-      "name": "DEMO: Branching Dependency Chain",
-      "subject_type": "demo_fixture",
-      "stage_count": 3,
-      "task_count": 4,
-      "drift_detected": true
-    },
-    {
       "slug": "late-rent-copilot",
       "name": "Late Rent Copilot",
       "subject_type": "delinquency_batch",

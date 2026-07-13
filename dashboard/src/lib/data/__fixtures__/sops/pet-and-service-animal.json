@@ -1,7 +1,7 @@
 {
   "slug": "pet-and-service-animal",
   "name": "Pet And Service Animal",
-  "description": "Lacey coordinates pet screening, service animal or ESA accommodation review, pet agreement drafts, and fee or rent packets with human approval before resident, legal, money, lease, or PMS action.",
+  "description": "Leasing coordinates pet screening, service animal or ESA accommodation review, pet agreement drafts, and fee or rent packets with human approval before resident, legal, money, lease, or PMS action.",
   "subject_type": "pet_accommodation",
   "default_start_stage_key": "request-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-pet-request",
           "title": "Normalize pet request",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Normalize applicant or resident, property, unit, animal type, pet vs service animal vs ESA claim, animal count, breed/weight if provided, documentation refs, lease restrictions, assistance-animal sensitivity, existing approvals, fees, pet rent, and missing facts. Unknown accommodation eligibility, legal conclusions, fee eligibility, or animal details must remain null with needs_verification.",
           "dispatch_title": "Normalize pet or accommodation request",
@@ -26,9 +26,11 @@
           "task_key": "check-policy-and-history",
           "title": "Check policy and history",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["normalize-pet-request"],
+          "depends_on": [
+            "normalize-pet-request"
+          ],
           "instructions": "Check property pet policy, lease terms, prior approvals, screening state, fair-housing sensitivity, and whether a human or legal reviewer already owns the request. Do not approve, deny, request documents, or send messages.",
           "dispatch_title": "Check pet policy and request history",
           "dispatch_body": "Check policy, history, and fair-housing sensitivity. No external sends or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-pet-review-packet",
           "title": "Draft pet review packet",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["check-policy-and-history"],
+          "depends_on": [
+            "check-policy-and-history"
+          ],
           "instructions": "Draft review packet with policy match, screening refs, accommodation caveats, missing documentation request draft, pet agreement draft, fee/rent recommendation if allowed, and legal-review flag. Draft-only; do not approve, deny, request documents, charge fees, or alter leases.",
           "dispatch_title": "Draft pet or accommodation review packet",
           "dispatch_body": "Draft review packet only. No approval, denial, fees, resident sends, lease changes, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-pet-review-packet"],
+          "depends_on": [
+            "draft-pet-review-packet"
+          ],
           "instructions": "Review screening, accommodation sensitivity, missing documentation, fees, agreement language, and legal-review need before any resident-facing decision or system update is prepared for approval.",
           "human_prompt": "Review pet or accommodation packet before resident, legal, fee, lease, or PMS action.",
           "estimated_minutes": 15
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-pet-packet"],
+          "depends_on": [
+            "review-pet-packet"
+          ],
           "instructions": "Approve, edit, reject, or route to counsel before any accommodation decision, pet approval, denial, documentation request, fee, pet rent, agreement update, lease change, resident message, owner update, or AppFolio write.",
           "human_prompt": "Approval required before pet or accommodation decision, resident send, fee, lease, legal, owner, or system action.",
           "estimated_minutes": 15
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-pet-package",
           "title": "Stage approved pet package",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["approve-pet-action"],
+          "depends_on": [
+            "approve-pet-action"
+          ],
           "instructions": "Stage approved resident draft, agreement or accommodation packet, fee/rent metadata if approved, legal-review notes, unresolved needs_verification facts, and next owner for human release. Do not send, decide, charge, alter leases, or write systems.",
           "dispatch_title": "Stage approved pet or accommodation package",
           "dispatch_body": "Stage approved pet/accommodation package for human release. No external sends, fees, lease changes, or system writes.",

@@ -15,7 +15,7 @@
           "task_key": "extract-renewal-exception-facts",
           "title": "Extract renewal exception facts",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Extract lease end date, notice dates, renewal offer status, rent delta, resident response state, and any holdover or month-to-month indicators.",
           "dispatch_title": "Extract AppFolio renewal exception facts",
@@ -26,9 +26,11 @@
           "task_key": "classify-holdover-risk",
           "title": "Classify holdover risk",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["extract-renewal-exception-facts"],
+          "depends_on": [
+            "extract-renewal-exception-facts"
+          ],
           "instructions": "Classify the file as overdue renewal, possible holdover, confirmed holdover, or owner decision needed. Include confidence and missing-data notes.",
           "dispatch_title": "Classify renewal holdover risk",
           "dispatch_body": "Classify renewal exception risk and missing information.",
@@ -45,9 +47,11 @@
           "task_key": "draft-renewal-exception-packet",
           "title": "Draft renewal exception packet",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["classify-holdover-risk"],
+          "depends_on": [
+            "classify-holdover-risk"
+          ],
           "instructions": "Draft a concise packet with facts, options, recommended next step, legal/compliance caveats, and proposed internal follow-up dates.",
           "dispatch_title": "Draft renewal exception packet",
           "dispatch_body": "Draft internal owner/resident renewal exception packet; no outbound send.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-renewal-exception-packet"],
+          "depends_on": [
+            "draft-renewal-exception-packet"
+          ],
           "instructions": "Confirm the selected path and whether owner approval, legal review, or resident communication is required.",
           "human_prompt": "Review renewal exception path before follow-up is staged.",
           "estimated_minutes": 15
@@ -75,9 +81,11 @@
           "task_key": "stage-follow-up-actions",
           "title": "Stage follow-up actions",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["approval-path-review"],
+          "depends_on": [
+            "approval-path-review"
+          ],
           "instructions": "Stage follow-up reminders, owner decision gates, resident response checks, and escalation dates in the workflow only.",
           "dispatch_title": "Stage renewal exception follow-up",
           "dispatch_body": "Prepare internal follow-up sequence and checkpoints.",
@@ -87,9 +95,11 @@
           "task_key": "record-renewal-resolution",
           "title": "Record renewal resolution",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["stage-follow-up-actions"],
+          "depends_on": [
+            "stage-follow-up-actions"
+          ],
           "instructions": "Record the final outcome, decision source, unresolved risk, and whether the lease moved to renewed, non-renewed, holdover, or monitoring state.",
           "dispatch_title": "Record renewal exception resolution",
           "dispatch_body": "Record renewal exception outcome metadata.",

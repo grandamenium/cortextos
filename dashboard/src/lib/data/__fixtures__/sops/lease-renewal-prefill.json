@@ -1,7 +1,7 @@
 {
   "slug": "lease-renewal-prefill",
   "name": "Lease Renewal Prefill",
-  "description": "Lacey extracts current lease facts, drafts renewal packet details, and waits on owner approval before release.",
+  "description": "Leasing extracts current lease facts, drafts renewal packet details, and waits on owner approval before release.",
   "subject_type": "lease_renewal",
   "default_start_stage_key": "extract",
   "captured_at": "2026-07-07T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "extract-current-terms",
           "title": "Extract current lease terms",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Extract tenants, emails, property, current rent, expiry date, deposits, and renewal constraints. Include confidence fields.",
           "dispatch_title": "Extract lease renewal terms",
@@ -28,9 +28,11 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["extract-current-terms"],
+          "depends_on": [
+            "extract-current-terms"
+          ],
           "instructions": "Review low-confidence fields and correct anything needed before the renewal draft.",
-          "human_prompt": "Verify extracted renewal facts before Lacey drafts the packet.",
+          "human_prompt": "Verify extracted renewal facts before Leasing drafts the packet.",
           "estimated_minutes": 10
         }
       ]
@@ -44,9 +46,11 @@
           "task_key": "draft-renewal-summary",
           "title": "Draft renewal summary",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["verify-extraction"],
+          "depends_on": [
+            "verify-extraction"
+          ],
           "instructions": "Draft the renewal summary with proposed terms and explainable line items. No owner/resident send.",
           "dispatch_title": "Draft lease renewal summary",
           "dispatch_body": "Draft the renewal summary and document packet details; no outbound send.",
@@ -58,7 +62,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-renewal-summary"],
+          "depends_on": [
+            "draft-renewal-summary"
+          ],
           "instructions": "Do not complete until owner has replied with approve/edit/decline.",
           "human_prompt": "Owner approval required before renewal packet release.",
           "estimated_minutes": 15
@@ -74,9 +80,11 @@
           "task_key": "prepare-approved-packet",
           "title": "Prepare approved packet",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["owner-reply-gate"],
+          "depends_on": [
+            "owner-reply-gate"
+          ],
           "instructions": "Prepare the approved packet and signature checklist. Keep release gated to the configured document-send approval path.",
           "dispatch_title": "Prepare approved lease renewal packet",
           "dispatch_body": "Prepare approved renewal packet details and signature checklist; do not bypass send approval.",
@@ -86,9 +94,11 @@
           "task_key": "track-signature-status",
           "title": "Track signature status",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["prepare-approved-packet"],
+          "depends_on": [
+            "prepare-approved-packet"
+          ],
           "instructions": "Track signature status and blockers until renewal is fully executed or escalated.",
           "dispatch_title": "Track lease renewal signature status",
           "dispatch_body": "Track signatures and blockers for the approved renewal.",

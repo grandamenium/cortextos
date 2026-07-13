@@ -1,7 +1,7 @@
 {
   "slug": "property-marketing",
   "name": "Property Marketing",
-  "description": "Lacey prepares rent analysis, listing readiness, marketing assets, and syndication packets for vacant or upcoming units, with human approval before any public posting or owner/applicant-facing send.",
+  "description": "Leasing prepares rent analysis, listing readiness, marketing assets, and syndication packets for vacant or upcoming units, with human approval before any public posting or owner/applicant-facing send.",
   "subject_type": "leasing_listing",
   "default_start_stage_key": "listing-readiness",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-listing-trigger",
           "title": "Normalize listing trigger",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Normalize property, unit, owner, target availability, make-ready status, rent target, deposits, utilities, pet policy, photos, compliance blockers, listing source, and data confidence. Any unavailable AppFolio, make-ready, or owner data must be null with needs_verification.",
           "dispatch_title": "Normalize listing trigger facts",
@@ -28,7 +28,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-listing-trigger"],
+          "depends_on": [
+            "normalize-listing-trigger"
+          ],
           "instructions": "Review make-ready, compliance, photo, pricing, and owner constraints before rent analysis or listing copy proceeds.",
           "human_prompt": "Review listing readiness before marketing package preparation.",
           "estimated_minutes": 15
@@ -44,9 +46,11 @@
           "task_key": "draft-rent-analysis",
           "title": "Draft rent analysis",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["listing-readiness-review"],
+          "depends_on": [
+            "listing-readiness-review"
+          ],
           "instructions": "Draft rent analysis using available comparable, current rent, target rent, property condition, vacancy timing, and owner constraints. If comps or market feeds are unavailable, record null with needs_verification instead of fake values.",
           "dispatch_title": "Draft listing rent analysis",
           "dispatch_body": "Draft internal rent analysis with honest missing-data flags. No owner sends and no public posting.",
@@ -56,21 +60,25 @@
           "task_key": "prepare-listing-copy-and-assets",
           "title": "Prepare listing copy and assets",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["draft-rent-analysis"],
+          "depends_on": [
+            "draft-rent-analysis"
+          ],
           "instructions": "Prepare draft listing headline, description, amenity list, fee/deposit notes, pet policy, showing instructions, photo gap list, and compliance caveats. Draft-only; do not publish or syndicate.",
           "dispatch_title": "Prepare listing copy and assets",
           "dispatch_body": "Prepare internal listing copy and asset gap list. No public posting, syndication, or applicant sends.",
           "estimated_minutes": 30
         },
         {
-          "task_key": "blue-readiness-cross-check",
+          "task_key": "maintenance-readiness-cross-check",
           "title": "Cross-check unit readiness",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["prepare-listing-copy-and-assets"],
+          "depends_on": [
+            "prepare-listing-copy-and-assets"
+          ],
           "instructions": "Cross-check make-ready evidence, open work orders, safety blockers, photos, lockbox/access readiness, and any owner-approved caveats before listing approval. Do not mark ready in AppFolio or PropertyMeld.",
           "dispatch_title": "Cross-check unit readiness for marketing",
           "dispatch_body": "Cross-check unit readiness and blockers for listing approval. No system writes.",
@@ -89,7 +97,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-rent-analysis"],
+          "depends_on": [
+            "draft-rent-analysis"
+          ],
           "instructions": "Approve rent target, owner caveats, concessions, and listing timing before owner-facing or public listing action proceeds.",
           "human_prompt": "Owner/pricing approval required before listing release.",
           "estimated_minutes": 20
@@ -100,7 +110,10 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["blue-readiness-cross-check", "owner-pricing-approval"],
+          "depends_on": [
+            "maintenance-readiness-cross-check",
+            "owner-pricing-approval"
+          ],
           "instructions": "Approve listing copy, photos, fees, compliance caveats, showing instructions, and syndication plan before any public posting, syndication, or applicant-facing message.",
           "human_prompt": "Human approval required before public listing, syndication, or applicant-facing marketing send.",
           "estimated_minutes": 20
@@ -116,9 +129,11 @@
           "task_key": "stage-approved-listing-release",
           "title": "Stage approved listing release",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["listing-release-approval"],
+          "depends_on": [
+            "listing-release-approval"
+          ],
           "instructions": "Stage approved listing metadata, copy, photos checklist, syndication channels, showing instructions, and caveats for a human/operator release path. Do not publish, syndicate, email, text, or write to AppFolio.",
           "dispatch_title": "Stage approved listing release",
           "dispatch_body": "Stage approved listing release metadata only. No public posting, syndication, external sends, or AppFolio writes.",
@@ -128,9 +143,11 @@
           "task_key": "handoff-showing-coordination",
           "title": "Handoff showing coordination",
           "kind": "system_handoff",
-          "assigned_role": "codie",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["stage-approved-listing-release"],
+          "depends_on": [
+            "stage-approved-listing-release"
+          ],
           "instructions": "Stage internal handoff facts for showing-coordination: listing ref, property, unit, approved showing windows, access caveats, application link status, and needs_verification flags. Do not create live appointments or send applicant messages.",
           "dispatch_title": "Stage showing coordination handoff",
           "dispatch_body": "Stage internal handoff to showing-coordination. No appointments and no external sends.",

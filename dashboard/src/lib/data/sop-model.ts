@@ -44,10 +44,10 @@ export function isGatedActionType(actionType: SopDisplayActionType): boolean {
  * the engine blocks dispatch on it today ("No agent mapping").
  */
 const KNOWN_ROLES = new Set([
-  'blue', 'maintenance',
-  'lacey', 'leasing',
-  'cash', 'accounting',
-  'aussie', 'collie', 'codie', 'dane',
+  'maintenance',
+  'leasing',
+  'accounting',
+  'operations',
   'human', 'pm', 'owner',
 ]);
 

@@ -1,7 +1,7 @@
 {
   "slug": "move-out-deposit-disposition",
   "name": "Move-Out Deposit Disposition",
-  "description": "Blue coordinates move-out closeout and inspection evidence, Cash prepares the deposit disposition package, and humans approve any money or release step before handoff to make-ready.",
+  "description": "Maintenance coordinates move-out closeout and inspection evidence, Accounting prepares the deposit disposition package, and humans approve any money or release step before handoff to make-ready.",
   "subject_type": "move_out",
   "default_start_stage_key": "move_out_facts",
   "captured_at": "2026-07-07T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-move-out-facts",
           "title": "Normalize move-out facts",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize lease, unit, property, tenant, move_out_date, occupancy, delinquent/open balance, completion, key return, inspection evidence, and conflict-check inputs from the trigger candidate. Do not contact residents or write to AppFolio.",
           "dispatch_title": "Normalize move-out facts",
@@ -26,9 +26,11 @@
           "task_key": "confirm-closeout-prerequisites",
           "title": "Confirm closeout prerequisites",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["normalize-move-out-facts"],
+          "depends_on": [
+            "normalize-move-out-facts"
+          ],
           "instructions": "Confirm move-out completion, key return state, utility closeout state, forwarding/contact availability, and unresolved occupancy or possession conflicts. Do not contact residents or write to AppFolio.",
           "dispatch_title": "Confirm move-out closeout prerequisites",
           "dispatch_body": "Confirm resident, key, utility, possession, and conflict states for move-out closeout. No external sends and no AppFolio writes.",
@@ -45,9 +47,11 @@
           "task_key": "assemble-inspection-evidence",
           "title": "Assemble inspection evidence",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["confirm-closeout-prerequisites"],
+          "depends_on": [
+            "confirm-closeout-prerequisites"
+          ],
           "instructions": "Assemble move-out inspection photos, condition notes, work order references, key/utility evidence, and pre-existing condition caveats for deposit review. Do not contact vendors or residents.",
           "dispatch_title": "Assemble move-out inspection evidence",
           "dispatch_body": "Assemble evidence package for deposit deductions and make-ready planning. No external sends.",
@@ -59,8 +63,10 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["assemble-inspection-evidence"],
-          "instructions": "Review inspection evidence for completeness, fair wear-and-tear boundaries, and missing documentation before Cash prepares deductions.",
+          "depends_on": [
+            "assemble-inspection-evidence"
+          ],
+          "instructions": "Review inspection evidence for completeness, fair wear-and-tear boundaries, and missing documentation before Accounting prepares deductions.",
           "human_prompt": "Review move-out evidence before deposit deductions are drafted.",
           "estimated_minutes": 15
         }
@@ -75,9 +81,11 @@
           "task_key": "prepare-deposit-ledger",
           "title": "Prepare deposit ledger",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["evidence-review-gate"],
+          "depends_on": [
+            "evidence-review-gate"
+          ],
           "instructions": "Prepare deposit ledger inputs from security deposit held, open balances, prorations, unpaid rent, utilities, fees, and evidence-backed charges. Produce a proposed ledger only; do not post ledger entries or write to AppFolio.",
           "dispatch_title": "Prepare security deposit ledger",
           "dispatch_body": "Prepare proposed security deposit ledger and open-balance summary. No ledger posting and no AppFolio writes.",
@@ -87,9 +95,11 @@
           "task_key": "draft-deduction-support",
           "title": "Draft deduction support",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["prepare-deposit-ledger"],
+          "depends_on": [
+            "prepare-deposit-ledger"
+          ],
           "instructions": "Draft itemized deduction support tying each proposed charge to inspection evidence, lease/account facts, and conflict notes. Flag unsupported or approval-sensitive charges.",
           "dispatch_title": "Draft deposit deduction support",
           "dispatch_body": "Draft itemized deduction support from approved evidence and ledger facts. No external sends.",
@@ -100,7 +110,7 @@
     {
       "stage_key": "approval_and_action",
       "name": "Approval And Action Package",
-      "description": "Human approval gates money and release decisions before Cash prepares the final action package.",
+      "description": "Human approval gates money and release decisions before Accounting prepares the final action package.",
       "steps": [
         {
           "task_key": "approve-disposition-release",
@@ -108,7 +118,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-deduction-support"],
+          "depends_on": [
+            "draft-deduction-support"
+          ],
           "instructions": "Approve refund, balance due, release language, and any charge-off/escalation path before money movement, external notice, or ledger posting occurs.",
           "human_prompt": "Approval required before any deposit refund, balance due notice, release, charge-off, or ledger posting.",
           "estimated_minutes": 20
@@ -117,9 +129,11 @@
           "task_key": "prepare-approved-refund-balance-action",
           "title": "Prepare approved refund or balance action package",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["approve-disposition-release"],
+          "depends_on": [
+            "approve-disposition-release"
+          ],
           "instructions": "Prepare the approved refund or balance-due action package, including final ledger summary, approval evidence, and release notes. Do not send notices, initiate payments, or write to AppFolio.",
           "dispatch_title": "Prepare approved deposit action package",
           "dispatch_body": "Prepare approved refund/balance action package for human execution. No external sends, payments, or AppFolio writes.",
@@ -136,9 +150,11 @@
           "task_key": "prepare-make-ready-handoff",
           "title": "Prepare make-ready handoff",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["prepare-approved-refund-balance-action"],
+          "depends_on": [
+            "prepare-approved-refund-balance-action"
+          ],
           "instructions": "Prepare make-ready handoff facts for turnover-make-ready, including unit, property, move-out date, possession status, inspection findings, chargeable damage notes, open blockers, and target ready caveats.",
           "dispatch_title": "Prepare make-ready handoff",
           "dispatch_body": "Prepare handoff package for turnover-make-ready using approved move-out and inspection facts.",
@@ -148,9 +164,11 @@
           "task_key": "queue-turnover-make-ready-handoff",
           "title": "Queue turnover make-ready handoff",
           "kind": "system_handoff",
-          "assigned_role": "codie",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["prepare-make-ready-handoff"],
+          "depends_on": [
+            "prepare-make-ready-handoff"
+          ],
           "instructions": "Create the internal system handoff payload for the existing turnover-make-ready template using subject_type unit_turn when the downstream run is created. This is an internal workflow handoff only; do not deploy, merge, contact anyone, or run live AppFolio.",
           "dispatch_title": "Queue turnover-make-ready handoff",
           "dispatch_body": "Prepare internal workflow handoff to turnover-make-ready. No external sends and no AppFolio writes.",

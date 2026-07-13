@@ -1,7 +1,7 @@
 {
   "slug": "owner-lead-nurture",
   "name": "Owner Lead Nurture",
-  "description": "Dane coordinates prospective-owner intake, qualification, follow-up drafts, and conversion handoff with human approval before any prospect outreach, pricing, proposal, agreement, or system action.",
+  "description": "Operations coordinates prospective-owner intake, qualification, follow-up drafts, and conversion handoff with human approval before any prospect outreach, pricing, proposal, agreement, or system action.",
   "subject_type": "owner_lead",
   "default_start_stage_key": "lead-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-owner-lead",
           "title": "Normalize owner lead",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
           "instructions": "Normalize prospect name, contact refs, property count, property locations, occupancy, motivation, timing, source, requested services, current manager, known pain points, consent/source caveats, and missing facts. Unknown fit, pricing, promises, or legal/compliance constraints must remain null with needs_verification.",
           "dispatch_title": "Normalize owner lead",
@@ -26,9 +26,11 @@
           "task_key": "check-lead-ownership-and-history",
           "title": "Check lead ownership and history",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["normalize-owner-lead"],
+          "depends_on": [
+            "normalize-owner-lead"
+          ],
           "instructions": "Check whether a human already owns the lead, prior contact history, opt-out or consent state, duplicate lead records, and any active proposal. If already owned, surface status and do not stage duplicate outreach.",
           "dispatch_title": "Check owner lead ownership and history",
           "dispatch_body": "Check lead ownership, consent, and history. No outreach or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-lead-nurture-packet",
           "title": "Draft lead nurture packet",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["check-lead-ownership-and-history"],
+          "depends_on": [
+            "check-lead-ownership-and-history"
+          ],
           "instructions": "Draft qualification notes, follow-up email/text/call outline, discovery questions, property-management fit caveats, proposal-readiness flags, and management-agreement handoff trigger. Draft-only; do not contact the prospect, quote pricing, promise terms, or create CRM actions.",
           "dispatch_title": "Draft owner lead nurture packet",
           "dispatch_body": "Draft lead follow-up and qualification packet only. No external sends, pricing, proposals, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-lead-nurture-packet"],
+          "depends_on": [
+            "draft-lead-nurture-packet"
+          ],
           "instructions": "Review fit, consent, duplicate state, outreach tone, pricing risks, and proposal readiness before approval.",
           "human_prompt": "Review owner-lead packet before prospect outreach, pricing, proposal, or system action.",
           "estimated_minutes": 15
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-lead-nurture-packet"],
+          "depends_on": [
+            "review-lead-nurture-packet"
+          ],
           "instructions": "Approve, edit, reject, or assign before any prospect email, text, call, proposal, pricing statement, agreement handoff, meeting invite, owner-facing document, or CRM/system write.",
           "human_prompt": "Approval required before owner-lead outreach, pricing, proposal, agreement handoff, meeting, or system action.",
           "estimated_minutes": 15
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-lead-package",
           "title": "Stage approved lead package",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["approve-lead-nurture-action"],
+          "depends_on": [
+            "approve-lead-nurture-action"
+          ],
           "instructions": "Stage approved outreach drafts, discovery questions, meeting notes, proposal handoff metadata, approval source, unresolved needs_verification fields, and next owner for human release. Do not send, schedule, quote, propose, or write external systems.",
           "dispatch_title": "Stage approved owner lead package",
           "dispatch_body": "Stage approved lead nurture package for human release. No external sends, pricing, proposals, meetings, or system writes.",

@@ -66,8 +66,6 @@ import sop_appliance_repair_vs_replace from './__fixtures__/sops/appliance-repai
 import sop_application_screening_move_in from './__fixtures__/sops/application-screening-move-in.json';
 import sop_collections_balance_recovery from './__fixtures__/sops/collections-balance-recovery.json';
 import sop_delinquency_escalation_ladder from './__fixtures__/sops/delinquency-escalation-ladder.json';
-import sop_demo_branching_approval_chain from './__fixtures__/sops/demo-branching-approval-chain.json';
-import sop_demo_gated_resident_notice from './__fixtures__/sops/demo-gated-resident-notice.json';
 import sop_emergency_after_hours_maintenance from './__fixtures__/sops/emergency-after-hours-maintenance.json';
 import sop_eviction_process from './__fixtures__/sops/eviction-process.json';
 import sop_habitability_code_violation_response from './__fixtures__/sops/habitability-code-violation-response.json';
@@ -116,8 +114,6 @@ const FIXTURE_SOPS: Record<string, SopDocument> = {
   'application-screening-move-in': sop_application_screening_move_in as unknown as SopDocument,
   'collections-balance-recovery': sop_collections_balance_recovery as unknown as SopDocument,
   'delinquency-escalation-ladder': sop_delinquency_escalation_ladder as unknown as SopDocument,
-  'demo-branching-approval-chain': sop_demo_branching_approval_chain as unknown as SopDocument,
-  'demo-gated-resident-notice': sop_demo_gated_resident_notice as unknown as SopDocument,
   'emergency-after-hours-maintenance': sop_emergency_after_hours_maintenance as unknown as SopDocument,
   'eviction-process': sop_eviction_process as unknown as SopDocument,
   'habitability-code-violation-response': sop_habitability_code_violation_response as unknown as SopDocument,

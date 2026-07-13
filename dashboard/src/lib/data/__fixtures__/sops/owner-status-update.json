@@ -1,7 +1,7 @@
 {
   "slug": "owner-status-update",
   "name": "Owner Status Update",
-  "description": "Dane coordinates an owner-facing status snapshot from active run state, blockers, and needed decisions.",
+  "description": "Operations coordinates an owner-facing status snapshot from active run state, blockers, and needed decisions.",
   "subject_type": "owner_portfolio",
   "default_start_stage_key": "gather",
   "captured_at": "2026-07-07T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "gather-owner-runs",
           "title": "Gather owner run state",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
           "instructions": "Gather active runs, blockers, approvals, and recent completions for the owner portfolio slice.",
           "dispatch_title": "Gather owner workflow state",
@@ -26,7 +26,7 @@
           "task_key": "gather-lane-summaries",
           "title": "Gather lane summaries",
           "kind": "agent_task",
-          "assigned_role": "codie",
+          "assigned_role": "operations",
           "is_automated": true,
           "instructions": "Gather Pulse lane summaries relevant to the owner scope. Use honest unavailable states for missing data.",
           "dispatch_title": "Gather owner Pulse lane summaries",
@@ -44,9 +44,12 @@
           "task_key": "draft-owner-status",
           "title": "Draft owner status update",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["gather-owner-runs", "gather-lane-summaries"],
+          "depends_on": [
+            "gather-owner-runs",
+            "gather-lane-summaries"
+          ],
           "instructions": "Draft a concise status update: done, in progress, blocked, and needed from owner. No fabricated completion claims.",
           "dispatch_title": "Draft owner status update",
           "dispatch_body": "Draft owner-facing status update from workflow and Pulse state.",
@@ -58,7 +61,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-owner-status"],
+          "depends_on": [
+            "draft-owner-status"
+          ],
           "instructions": "Review the draft for accuracy, tone, and any sensitive details before release.",
           "human_prompt": "Review owner status update before any owner-facing release.",
           "estimated_minutes": 10
@@ -74,9 +79,11 @@
           "task_key": "stage-owner-projection",
           "title": "Stage owner projection",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["status-review"],
+          "depends_on": [
+            "status-review"
+          ],
           "instructions": "Stage the approved status update for the owner projection or tokenized status page.",
           "dispatch_title": "Stage owner status projection",
           "dispatch_body": "Stage approved owner status projection for cockpit review.",
@@ -86,9 +93,11 @@
           "task_key": "track-owner-followups",
           "title": "Track owner follow-ups",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["stage-owner-projection"],
+          "depends_on": [
+            "stage-owner-projection"
+          ],
           "instructions": "Track owner decisions, questions, and follow-up blockers created by the status update.",
           "dispatch_title": "Track owner status follow-ups",
           "dispatch_body": "Track owner follow-up actions from the staged status update.",

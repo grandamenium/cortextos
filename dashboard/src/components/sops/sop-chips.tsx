@@ -105,16 +105,10 @@ export function AutomationMarker({ isAutomated }: { isAutomated: boolean }) {
 }
 
 const ROLE_LABEL: Record<string, string> = {
-  blue: 'Blue',
   maintenance: 'Maintenance',
-  lacey: 'Lacey',
   leasing: 'Leasing',
-  cash: 'Cash',
   accounting: 'Accounting',
-  aussie: 'Aussie',
-  collie: 'Collie',
-  codie: 'Codie',
-  dane: 'Dane',
+  operations: 'Operations',
   human: 'Human',
   pm: 'PM',
   owner: 'Owner',

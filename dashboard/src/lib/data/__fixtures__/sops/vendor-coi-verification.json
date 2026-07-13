@@ -1,7 +1,7 @@
 {
   "slug": "vendor-coi-verification",
   "name": "Vendor COI Verification",
-  "description": "Blue verifies vendor insurance status, tracks expiry, and routes exceptions for PM review.",
+  "description": "Maintenance verifies vendor insurance status, tracks expiry, and routes exceptions for PM review.",
   "subject_type": "vendor",
   "default_start_stage_key": "collect",
   "captured_at": "2026-07-07T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "request-coi",
           "title": "Request COI from vendor",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Request current COI from the vendor using the approved vendor communication path.",
           "dispatch_title": "Request vendor COI",
@@ -28,7 +28,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["request-coi"],
+          "depends_on": [
+            "request-coi"
+          ],
           "instructions": "Attach the received COI or mark why it is unavailable.",
           "human_prompt": "Attach received COI or record why it is unavailable.",
           "estimated_minutes": 10
@@ -44,9 +46,11 @@
           "task_key": "verify-coverage",
           "title": "Verify COI coverage",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["upload-or-link-coi"],
+          "depends_on": [
+            "upload-or-link-coi"
+          ],
           "instructions": "Extract carrier, policy dates, liability limits, and insured party. Flag missing/expired/insufficient coverage.",
           "dispatch_title": "Verify vendor COI coverage",
           "dispatch_body": "Verify COI coverage and flag missing or expired requirements.",
@@ -58,7 +62,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["verify-coverage"],
+          "depends_on": [
+            "verify-coverage"
+          ],
           "instructions": "Review any missing, expired, or insufficient coverage before vendor is marked compliant.",
           "human_prompt": "Review COI exceptions before vendor is marked compliant.",
           "estimated_minutes": 10
@@ -74,9 +80,11 @@
           "task_key": "record-expiry-tracking",
           "title": "Record expiry tracking",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["pm-exception-review"],
+          "depends_on": [
+            "pm-exception-review"
+          ],
           "instructions": "Record expiry date and schedule follow-up before expiration.",
           "dispatch_title": "Record vendor COI expiry tracking",
           "dispatch_body": "Record COI expiry tracking and follow-up needs.",

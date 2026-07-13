@@ -1,7 +1,7 @@
 {
   "slug": "recurring-preventive-maintenance",
   "name": "Recurring Preventive Maintenance",
-  "description": "Blue coordinates seasonal and recurring preventive maintenance planning, vendor scope drafts, owner/resident notices, and scheduling packets with human approval before dispatch, outreach, spend, or system writes.",
+  "description": "Maintenance coordinates seasonal and recurring preventive maintenance planning, vendor scope drafts, owner/resident notices, and scheduling packets with human approval before dispatch, outreach, spend, or system writes.",
   "subject_type": "preventive_maintenance_cycle",
   "default_start_stage_key": "cycle-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-preventive-cycle",
           "title": "Normalize preventive cycle",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize cycle type, season, property list, units, asset refs, prior service dates, vendor preference, owner approval thresholds, resident access needs, budget assumptions, and missing facts. Unknown asset state, scope, cost, access, or owner approval requirements must remain null with needs_verification.",
           "dispatch_title": "Normalize preventive maintenance cycle",
@@ -26,9 +26,11 @@
           "task_key": "check-schedule-and-ownership",
           "title": "Check schedule and ownership",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["normalize-preventive-cycle"],
+          "depends_on": [
+            "normalize-preventive-cycle"
+          ],
           "instructions": "Check whether a human, vendor, or maintenance workflow already owns the cycle; identify duplicate work orders, active repairs, access blockers, and owner approval requirements. Do not create work orders or contact anyone.",
           "dispatch_title": "Check preventive maintenance schedule ownership",
           "dispatch_body": "Check duplicate cycle ownership and blockers. No dispatch, sends, spend, or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-preventive-scope-packet",
           "title": "Draft preventive scope packet",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["check-schedule-and-ownership"],
+          "depends_on": [
+            "check-schedule-and-ownership"
+          ],
           "instructions": "Draft preventive scope, property grouping, vendor options, resident access drafts, owner approval packet if needed, estimated cost caveats, schedule window, and follow-up checklist. Draft-only; do not dispatch vendors, schedule residents, commit spend, or write PropertyMeld/AppFolio.",
           "dispatch_title": "Draft preventive maintenance scope packet",
           "dispatch_body": "Draft preventive maintenance scope and schedule packet only. No sends, dispatch, spend, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-preventive-scope-packet"],
+          "depends_on": [
+            "draft-preventive-scope-packet"
+          ],
           "instructions": "Review scope, properties, access needs, vendor choice, owner approval needs, budget, and resident communication before approval.",
           "human_prompt": "Review preventive maintenance scope before resident, owner, vendor, spend, dispatch, or system action.",
           "estimated_minutes": 20
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-preventive-scope"],
+          "depends_on": [
+            "review-preventive-scope"
+          ],
           "instructions": "Approve, edit, reject, or assign before any vendor dispatch, resident notice, owner approval request, scheduling action, work-order creation, spend commitment, invoice action, PropertyMeld action, or AppFolio write.",
           "human_prompt": "Approval required before preventive maintenance vendor, resident, owner, dispatch, spend, invoice, or system action.",
           "estimated_minutes": 15
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-preventive-package",
           "title": "Stage approved preventive package",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["approve-preventive-action"],
+          "depends_on": [
+            "approve-preventive-action"
+          ],
           "instructions": "Stage approved preventive scope, vendor/resident/owner drafts, work-order metadata, schedule windows, approval source, unresolved needs_verification fields, and next owner for human release. Do not send, dispatch, schedule, spend, invoice, or write systems.",
           "dispatch_title": "Stage approved preventive maintenance package",
           "dispatch_body": "Stage approved preventive maintenance package for human release. No external sends, dispatch, spend, invoice, or system writes.",

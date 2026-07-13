@@ -1,7 +1,7 @@
 {
   "slug": "ap-invoice-processing",
   "name": "AP Invoice Processing",
-  "description": "Cash stages vendor invoice intake, work-order matching, coding review, and payment-run packets with approval gates before any payment, accounting write, or vendor-facing send.",
+  "description": "Accounting stages vendor invoice intake, work-order matching, coding review, and payment-run packets with approval gates before any payment, accounting write, or vendor-facing send.",
   "subject_type": "vendor_invoice",
   "default_start_stage_key": "invoice-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-invoice-facts",
           "title": "Normalize invoice facts",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
           "instructions": "Normalize vendor, invoice number, amount, date, due date, property, unit, work-order refs, line items, tax, attachments, duplicate-risk flags, and source confidence. Missing invoice, vendor, work-order, or ledger data must be null with needs_verification.",
           "dispatch_title": "Normalize AP invoice facts",
@@ -26,9 +26,11 @@
           "task_key": "duplicate-and-vendor-check",
           "title": "Check duplicate and vendor status",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["normalize-invoice-facts"],
+          "depends_on": [
+            "normalize-invoice-facts"
+          ],
           "instructions": "Check duplicate invoice risk, vendor compliance, W-9 status, COI status, payment hold, and dispatch eligibility. Record unknowns as needs_verification; do not approve payment.",
           "dispatch_title": "Check invoice duplicate and vendor status",
           "dispatch_body": "Check duplicate and vendor compliance status. No payment or accounting write.",
@@ -45,9 +47,11 @@
           "task_key": "match-invoice-to-work-order",
           "title": "Match invoice to work order",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["duplicate-and-vendor-check"],
+          "depends_on": [
+            "duplicate-and-vendor-check"
+          ],
           "instructions": "Match invoice to work order, completion evidence, vendor notes, NTE/approval records, resident/owner impact, and closeout status. Do not close work orders or approve payment.",
           "dispatch_title": "Match invoice to work order",
           "dispatch_body": "Match invoice to work-order evidence and approval records. No work-order closeout and no payment.",
@@ -57,9 +61,11 @@
           "task_key": "draft-coding-recommendation",
           "title": "Draft coding recommendation",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["match-invoice-to-work-order"],
+          "depends_on": [
+            "match-invoice-to-work-order"
+          ],
           "instructions": "Draft GL/property/unit coding, billable/non-billable classification, owner chargeback caveats, reserve impact, payment priority, and missing-evidence notes. Draft-only; do not post coding.",
           "dispatch_title": "Draft invoice coding recommendation",
           "dispatch_body": "Draft AP invoice coding recommendation. No accounting write and no payment.",
@@ -71,7 +77,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-coding-recommendation"],
+          "depends_on": [
+            "draft-coding-recommendation"
+          ],
           "instructions": "Review coding, ownership, work-order match, duplicate risk, NTE approval, missing evidence, and payment priority before payment packet staging.",
           "human_prompt": "Review AP coding and invoice evidence before any payment or accounting action.",
           "estimated_minutes": 15
@@ -87,9 +95,11 @@
           "task_key": "prepare-payment-packet",
           "title": "Prepare payment packet",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["coding-review"],
+          "depends_on": [
+            "coding-review"
+          ],
           "instructions": "Prepare draft payment packet with invoice, coding, work-order evidence, approval history, duplicate check, vendor compliance, and payment recommendation. Do not initiate payment or post bill.",
           "dispatch_title": "Prepare AP payment packet",
           "dispatch_body": "Prepare AP payment packet for approval. No payment, bill post, or external send.",
@@ -101,7 +111,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["prepare-payment-packet"],
+          "depends_on": [
+            "prepare-payment-packet"
+          ],
           "instructions": "Approve, hold, reject, or request edits before any bill posting, payment run, ACH/check action, owner chargeback, or vendor communication.",
           "human_prompt": "Human approval required before bill posting, payment, owner chargeback, or vendor communication.",
           "estimated_minutes": 15
@@ -117,9 +129,11 @@
           "task_key": "stage-approved-ap-actions",
           "title": "Stage approved AP actions",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["approve-bill-posting-and-payment"],
+          "depends_on": [
+            "approve-bill-posting-and-payment"
+          ],
           "instructions": "Stage approved bill-posting refs, payment-run refs, hold reasons, owner chargeback notes, and vendor follow-up drafts for an operator release path. Do not post bills, initiate payment, or contact vendors.",
           "dispatch_title": "Stage approved AP actions",
           "dispatch_body": "Stage approved AP metadata only. No payment, accounting write, or external send.",
@@ -129,9 +143,11 @@
           "task_key": "record-ap-invoice-outcome",
           "title": "Record AP invoice outcome",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["stage-approved-ap-actions"],
+          "depends_on": [
+            "stage-approved-ap-actions"
+          ],
           "instructions": "Record AP invoice outcome, approved holds, payment status metadata, missing-data follow-ups, and next checkpoint. Do not write to AppFolio or accounting systems.",
           "dispatch_title": "Record AP invoice outcome",
           "dispatch_body": "Record internal AP invoice outcome. No accounting write and no external send.",

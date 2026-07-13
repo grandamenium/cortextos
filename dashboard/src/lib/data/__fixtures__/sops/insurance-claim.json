@@ -1,7 +1,7 @@
 {
   "slug": "insurance-claim",
   "name": "Insurance Claim",
-  "description": "Blue and Dane coordinate property damage insurance claim intake, evidence, adjuster coordination drafts, and repair tie-ins with human approval before carrier, owner, resident, vendor, legal, money, or system action.",
+  "description": "Maintenance and Operations coordinate property damage insurance claim intake, evidence, adjuster coordination drafts, and repair tie-ins with human approval before carrier, owner, resident, vendor, legal, money, or system action.",
   "subject_type": "insurance_claim",
   "default_start_stage_key": "claim-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-insurance-claim",
           "title": "Normalize insurance claim",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize property, unit, owner, resident impact, loss date, damage type, photos, videos, emergency mitigation, vendor refs, policy or carrier refs if available, deductible if known, adjuster contact, and missing facts. Unknown coverage, liability, policy duties, deductible, or legal conclusions must remain null with needs_verification.",
           "dispatch_title": "Normalize insurance claim",
@@ -26,9 +26,11 @@
           "task_key": "check-mitigation-and-ownership",
           "title": "Check mitigation and ownership",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["normalize-insurance-claim"],
+          "depends_on": [
+            "normalize-insurance-claim"
+          ],
           "instructions": "Check emergency mitigation, open work orders, vendor assignments, owner involvement, attorney or adjuster ownership, resident displacement, and duplicate claim state. If already owned, surface state and do not stage duplicate action.",
           "dispatch_title": "Check claim mitigation and ownership",
           "dispatch_body": "Check mitigation, ownership, and duplicate claim state. No external sends or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-claim-support-packet",
           "title": "Draft claim support packet",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["check-mitigation-and-ownership"],
+          "depends_on": [
+            "check-mitigation-and-ownership"
+          ],
           "instructions": "Draft claim support packet with timeline, evidence refs, mitigation notes, repair tie-in, adjuster scheduling draft, owner update draft, resident impact draft, vendor scope caveats, deductible needs_verification, and legal-review flags. Draft-only; do not file claims, state coverage, schedule adjuster, dispatch vendors, or send notices.",
           "dispatch_title": "Draft insurance claim support packet",
           "dispatch_body": "Draft insurance claim packet only. No filing, coverage statement, adjuster scheduling, vendor dispatch, sends, money action, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-claim-support-packet"],
+          "depends_on": [
+            "draft-claim-support-packet"
+          ],
           "instructions": "Review claim evidence, mitigation duties, owner decision points, resident impact, repair tie-in, coverage uncertainty, legal sensitivity, and missing proof before approval.",
           "human_prompt": "Review insurance claim packet before carrier, owner, resident, vendor, legal, money, or system action.",
           "estimated_minutes": 20
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-claim-support-packet"],
+          "depends_on": [
+            "review-claim-support-packet"
+          ],
           "instructions": "Approve, edit, reject, or route to counsel before any carrier notice, claim filing, adjuster scheduling, owner update, resident notice, vendor dispatch, repair approval, deductible/payment action, legal step, or system write.",
           "human_prompt": "Approval required before insurance carrier, adjuster, owner, resident, vendor, legal, money, repair, or system action.",
           "estimated_minutes": 20
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-claim-package",
           "title": "Stage approved claim package",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["approve-claim-action"],
+          "depends_on": [
+            "approve-claim-action"
+          ],
           "instructions": "Stage approved claim packet, carrier/adjuster/owner/resident/vendor drafts, repair tie-in metadata, deductible caveats, approval source, unresolved needs_verification fields, and next owner for human release. Do not file, send, schedule, dispatch, pay, or write systems.",
           "dispatch_title": "Stage approved insurance claim package",
           "dispatch_body": "Stage approved insurance claim package for human release. No external sends, filings, scheduling, dispatch, money action, or system writes.",

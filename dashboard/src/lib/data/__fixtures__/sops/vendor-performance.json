@@ -1,7 +1,7 @@
 {
   "slug": "vendor-performance",
   "name": "Vendor Performance",
-  "description": "Blue coordinates vendor scorecards, incident review, probation/offboarding drafts, and roster recommendations with human approval before any vendor, owner, resident, dispatch-pool, money, or system action.",
+  "description": "Maintenance coordinates vendor scorecards, incident review, probation/offboarding drafts, and roster recommendations with human approval before any vendor, owner, resident, dispatch-pool, money, or system action.",
   "subject_type": "vendor_performance",
   "default_start_stage_key": "performance-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-vendor-performance",
           "title": "Normalize vendor performance",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize vendor, trade, service area, completed jobs, callbacks, resident complaints, owner complaints, response time, pricing flags, invoice disputes, COI/license state, incident refs, and missing facts. Unknown quality, liability, removal basis, or money impact must remain null with needs_verification.",
           "dispatch_title": "Normalize vendor performance",
@@ -26,9 +26,11 @@
           "task_key": "check-vendor-ownership-and-context",
           "title": "Check vendor ownership and context",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["normalize-vendor-performance"],
+          "depends_on": [
+            "normalize-vendor-performance"
+          ],
           "instructions": "Check whether a human already owns the vendor issue, active jobs that could be disrupted, open invoices, owner escalations, resident impacts, and prior probation/offboarding history. Do not contact vendor or change dispatch eligibility.",
           "dispatch_title": "Check vendor performance ownership",
           "dispatch_body": "Check vendor ownership, active work, invoice, and escalation context. No external sends or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-vendor-scorecard",
           "title": "Draft vendor scorecard",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["check-vendor-ownership-and-context"],
+          "depends_on": [
+            "check-vendor-ownership-and-context"
+          ],
           "instructions": "Draft scorecard with evidence-backed performance metrics, open concerns, invoice caveats, active-job risks, probation recommendation, offboarding recommendation if supported, and vendor/owner/resident communication drafts. Draft-only; do not notify anyone or change eligibility.",
           "dispatch_title": "Draft vendor performance scorecard",
           "dispatch_body": "Draft vendor scorecard and recommendation packet only. No external sends, roster changes, money action, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-vendor-scorecard"],
+          "depends_on": [
+            "draft-vendor-scorecard"
+          ],
           "instructions": "Review scorecard evidence, active-work impact, invoice/payment issues, vendor fairness, owner/resident communication, and dispatch continuity before approval.",
           "human_prompt": "Review vendor scorecard before vendor, owner, resident, roster, money, or system action.",
           "estimated_minutes": 20
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-vendor-scorecard"],
+          "depends_on": [
+            "review-vendor-scorecard"
+          ],
           "instructions": "Approve, edit, reject, or assign before any vendor notice, probation, offboarding, dispatch-pool change, owner update, resident update, invoice/payment action, contract action, PropertyMeld change, or AppFolio write.",
           "human_prompt": "Approval required before vendor performance notice, roster, owner, resident, money, contract, or system action.",
           "estimated_minutes": 15
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-vendor-performance-package",
           "title": "Stage approved vendor performance package",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["approve-vendor-performance-action"],
+          "depends_on": [
+            "approve-vendor-performance-action"
+          ],
           "instructions": "Stage approved scorecard, vendor/owner/resident drafts, roster-change metadata, invoice caveats, active-job transition notes, approval source, and unresolved needs_verification fields for human release. Do not send, offboard, change eligibility, pay, or write systems.",
           "dispatch_title": "Stage approved vendor performance package",
           "dispatch_body": "Stage approved vendor performance package for human release. No external sends, roster changes, money action, or system writes.",

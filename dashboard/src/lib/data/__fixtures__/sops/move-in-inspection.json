@@ -1,7 +1,7 @@
 {
   "slug": "move-in-inspection",
   "name": "Move-In Inspection",
-  "description": "Lacey coordinates the move-in condition baseline, resident review, and closeout handoff with photos, countersign evidence, and approval gates before any resident send or PMS write.",
+  "description": "Leasing coordinates the move-in condition baseline, resident review, and closeout handoff with photos, countersign evidence, and approval gates before any resident send or PMS write.",
   "subject_type": "move_in_inspection",
   "default_start_stage_key": "inspection-readiness",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-move-in-inspection-facts",
           "title": "Normalize move-in inspection facts",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Normalize applicant/resident, property, unit, lease start, move-in date, possession status, key handoff state, prior make-ready completion, pre-existing condition notes, photo packet availability, and missing facts. Unknown completion, possession, or evidence fields must remain null with needs_verification.",
           "dispatch_title": "Normalize move-in inspection facts",
@@ -26,9 +26,11 @@
           "task_key": "confirm-baseline-prerequisites",
           "title": "Confirm baseline prerequisites",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["normalize-move-in-inspection-facts"],
+          "depends_on": [
+            "normalize-move-in-inspection-facts"
+          ],
           "instructions": "Confirm make-ready signoff, key status, utility readiness if available, known pre-existing defects, and whether a field inspection or resident self-inspection packet is required. Do not schedule, message, or write to external systems.",
           "dispatch_title": "Confirm move-in baseline prerequisites",
           "dispatch_body": "Confirm baseline prerequisites for move-in inspection. No external sends and no system writes.",
@@ -45,9 +47,11 @@
           "task_key": "assemble-condition-baseline",
           "title": "Assemble condition baseline",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["confirm-baseline-prerequisites"],
+          "depends_on": [
+            "confirm-baseline-prerequisites"
+          ],
           "instructions": "Assemble room-by-room condition baseline, photos, videos, make-ready notes, appliance condition, keys/remotes inventory, meter/utility caveats if available, and pre-existing issue list. Do not fabricate condition data; missing photos or uncertain rooms remain needs_verification.",
           "dispatch_title": "Assemble move-in condition baseline",
           "dispatch_body": "Assemble condition baseline and evidence gaps. No resident sends and no AppFolio writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["assemble-condition-baseline"],
+          "depends_on": [
+            "assemble-condition-baseline"
+          ],
           "instructions": "Review the baseline evidence for completeness and fairness before any resident-facing inspection packet, countersign request, or PMS note is prepared.",
           "human_prompt": "Review move-in condition baseline before resident packet or PMS update.",
           "estimated_minutes": 15
@@ -75,9 +81,11 @@
           "task_key": "draft-resident-inspection-packet",
           "title": "Draft resident inspection packet",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["review-condition-baseline"],
+          "depends_on": [
+            "review-condition-baseline"
+          ],
           "instructions": "Draft the resident-facing move-in inspection packet, deadline, countersign instructions, missing-item request, and internal notes. Draft-only; do not send to resident, update portal, or write to AppFolio.",
           "dispatch_title": "Draft move-in resident inspection packet",
           "dispatch_body": "Draft resident inspection packet and countersign request only. No external sends or system writes.",
@@ -89,7 +97,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-resident-inspection-packet"],
+          "depends_on": [
+            "draft-resident-inspection-packet"
+          ],
           "instructions": "Approve, edit, or hold before any resident inspection packet, countersign request, reminder, portal update, or AppFolio note is sent or written.",
           "human_prompt": "Approval required before sending move-in inspection packet or writing inspection notes.",
           "estimated_minutes": 10
@@ -105,9 +115,11 @@
           "task_key": "stage-approved-baseline-package",
           "title": "Stage approved baseline package",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["approve-resident-inspection-send"],
+          "depends_on": [
+            "approve-resident-inspection-send"
+          ],
           "instructions": "Stage approved resident packet, countersign tracking fields, condition evidence refs, unresolved needs_verification items, and AppFolio note draft for operator release. Do not send, post, or write to external systems.",
           "dispatch_title": "Stage approved move-in baseline package",
           "dispatch_body": "Stage approved move-in inspection package for human release. No resident sends and no system writes.",
@@ -117,9 +129,11 @@
           "task_key": "record-move-in-inspection-closeout",
           "title": "Record move-in inspection closeout",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["stage-approved-baseline-package"],
+          "depends_on": [
+            "stage-approved-baseline-package"
+          ],
           "instructions": "Record baseline packet status, approval source, evidence refs, countersign due date if known, unresolved gaps, and next owner. Internal audit only; no resident sends and no PMS writes.",
           "dispatch_title": "Record move-in inspection closeout",
           "dispatch_body": "Record internal move-in inspection closeout and next owner. No external sends or system writes.",

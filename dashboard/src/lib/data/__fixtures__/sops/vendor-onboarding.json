@@ -1,7 +1,7 @@
 {
   "slug": "vendor-onboarding",
   "name": "Vendor Onboarding",
-  "description": "Blue stages vendor intake, document review, compliance readiness, and setup handoffs before any vendor is activated or made dispatch-eligible.",
+  "description": "Maintenance stages vendor intake, document review, compliance readiness, and setup handoffs before any vendor is activated or made dispatch-eligible.",
   "subject_type": "vendor_onboarding",
   "default_start_stage_key": "vendor-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-vendor-profile",
           "title": "Normalize vendor profile",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize business name, DBA, contacts, email, phone, trade categories, service area, license status, insurance status, W-9 status, agreement status, rate sheet, emergency availability, and source confidence. Missing facts must be null with needs_verification.",
           "dispatch_title": "Normalize vendor onboarding profile",
@@ -28,7 +28,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-vendor-profile"],
+          "depends_on": [
+            "normalize-vendor-profile"
+          ],
           "instructions": "Review whether the vendor should continue onboarding, be rejected, or stay in needs_verification before any vendor-facing request is staged.",
           "human_prompt": "Review vendor intake before requesting documents or staging setup.",
           "estimated_minutes": 10
@@ -44,9 +46,11 @@
           "task_key": "stage-vendor-document-request",
           "title": "Stage vendor document request",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["vendor-intake-review"],
+          "depends_on": [
+            "vendor-intake-review"
+          ],
           "instructions": "Stage a draft request for missing W-9, COI, license, agreement, rate sheet, trade scope, service area, and emergency availability details. Do not send externally.",
           "dispatch_title": "Stage vendor document request",
           "dispatch_body": "Draft vendor document request only. No external sends.",
@@ -58,7 +62,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["stage-vendor-document-request"],
+          "depends_on": [
+            "stage-vendor-document-request"
+          ],
           "instructions": "Attach received W-9, COI, license, agreement, rate sheet, and other setup evidence, or mark each missing item as needs_verification.",
           "human_prompt": "Attach vendor onboarding documents or mark missing items before compliance review.",
           "estimated_minutes": 20
@@ -74,9 +80,11 @@
           "task_key": "verify-vendor-compliance-package",
           "title": "Verify vendor compliance package",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["attach-vendor-documents"],
+          "depends_on": [
+            "attach-vendor-documents"
+          ],
           "instructions": "Verify W-9 completeness, COI dates and limits, license if required, agreement status, rate sheet, service-area fit, trade mapping, and dispatch restrictions. Do not mark compliant or dispatch-eligible.",
           "dispatch_title": "Verify vendor onboarding compliance",
           "dispatch_body": "Verify vendor onboarding compliance package. No activation and no external sends.",
@@ -88,7 +96,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["verify-vendor-compliance-package"],
+          "depends_on": [
+            "verify-vendor-compliance-package"
+          ],
           "instructions": "Approve, reject, or request corrections before any AppFolio, PropertyMeld, dispatch pool, or payment setup checklist is staged.",
           "human_prompt": "Approve vendor compliance before setup or dispatch eligibility is staged.",
           "estimated_minutes": 15
@@ -104,9 +114,11 @@
           "task_key": "prepare-vendor-system-setup-checklist",
           "title": "Prepare vendor system setup checklist",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["vendor-compliance-approval"],
+          "depends_on": [
+            "vendor-compliance-approval"
+          ],
           "instructions": "Prepare checklist-only setup fields for AppFolio, PropertyMeld, dispatch trades, service area, payment setup, W-9, COI expiry, and rate sheet. Do not write to AppFolio, PropertyMeld, payment systems, or dispatch pools.",
           "dispatch_title": "Prepare vendor setup checklist",
           "dispatch_body": "Prepare internal vendor setup checklist only. No system writes and no external sends.",
@@ -116,9 +128,11 @@
           "task_key": "queue-vendor-coi-tracking",
           "title": "Queue vendor COI tracking",
           "kind": "system_handoff",
-          "assigned_role": "codie",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["prepare-vendor-system-setup-checklist"],
+          "depends_on": [
+            "prepare-vendor-system-setup-checklist"
+          ],
           "instructions": "Stage internal handoff facts for the existing vendor-coi-verification workflow, including vendor refs, COI expiry, coverage status, and needs_verification flags. Do not create live crons or dispatch changes.",
           "dispatch_title": "Stage vendor COI tracking handoff",
           "dispatch_body": "Stage internal handoff to vendor-coi-verification. No live scheduling or system writes.",
@@ -128,9 +142,11 @@
           "task_key": "record-vendor-onboarding-outcome",
           "title": "Record vendor onboarding outcome",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["queue-vendor-coi-tracking"],
+          "depends_on": [
+            "queue-vendor-coi-tracking"
+          ],
           "instructions": "Record onboarding outcome, approved trade scope, restrictions, missing items, setup checklist refs, and activation decision source. Do not activate the vendor.",
           "dispatch_title": "Record vendor onboarding outcome",
           "dispatch_body": "Record internal vendor onboarding outcome. No activation and no external sends.",

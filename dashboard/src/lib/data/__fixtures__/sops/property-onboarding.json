@@ -1,7 +1,7 @@
 {
   "slug": "property-onboarding",
   "name": "Property Onboarding",
-  "description": "Lacey, Blue, and human gates collect property readiness facts, score onboarding readiness, and record activation without AppFolio writes.",
+  "description": "Leasing, Maintenance, and human gates collect property readiness facts, score onboarding readiness, and record activation without AppFolio writes.",
   "subject_type": "property_onboarding",
   "default_start_stage_key": "facts",
   "captured_at": "2026-07-07T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "collect-property-unit-facts",
           "title": "Collect property and unit facts",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Collect property address, owner link, management start date, unit mix, occupancy, rent-ready assumptions, leasing constraints, and missing data. Label unknowns explicitly.",
           "dispatch_title": "Collect property onboarding facts",
@@ -26,9 +26,11 @@
           "task_key": "collect-access-utilities-insurance",
           "title": "Collect access, utilities, and insurance facts",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["collect-property-unit-facts"],
+          "depends_on": [
+            "collect-property-unit-facts"
+          ],
           "instructions": "Collect keys, lockbox, gate, alarm, utility responsibility, provider transfer status, insurance evidence, and owner-provided operating notes.",
           "dispatch_title": "Collect property access and insurance facts",
           "dispatch_body": "Collect keys, utilities, insurance, and owner operating notes.",
@@ -38,9 +40,11 @@
           "task_key": "collect-maintenance-readiness-inputs",
           "title": "Collect maintenance readiness inputs",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["collect-property-unit-facts"],
+          "depends_on": [
+            "collect-property-unit-facts"
+          ],
           "instructions": "Collect inspection status, safety issues, habitability risks, required photos, open maintenance, vendor blockers, and urgent make-ready needs.",
           "dispatch_title": "Collect property maintenance readiness inputs",
           "dispatch_body": "Collect inspection, photo, maintenance, and safety readiness inputs for property onboarding.",
@@ -57,9 +61,12 @@
           "task_key": "build-property-readiness-score",
           "title": "Build property onboarding readiness score",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["collect-access-utilities-insurance", "collect-maintenance-readiness-inputs"],
+          "depends_on": [
+            "collect-access-utilities-insurance",
+            "collect-maintenance-readiness-inputs"
+          ],
           "instructions": "Build a 0-100 readiness score with blockers, warnings, missing facts, leasing readiness, maintenance readiness, and owner-visible caveats. Do not hide unknown data.",
           "dispatch_title": "Build property onboarding readiness score",
           "dispatch_body": "Build readiness score from property, leasing, access, insurance, inspection, photo, and maintenance inputs.",
@@ -71,7 +78,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["build-property-readiness-score"],
+          "depends_on": [
+            "build-property-readiness-score"
+          ],
           "instructions": "Review readiness score, blockers, AppFolio checklist assumptions, and whether the property can proceed to activation. No AppFolio writes are allowed.",
           "human_prompt": "Review property onboarding readiness before activation or AppFolio entry preparation. No AppFolio writes are allowed.",
           "estimated_minutes": 15
@@ -87,9 +96,11 @@
           "task_key": "prepare-appfolio-entry-checklist",
           "title": "Prepare AppFolio entry checklist",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["property-readiness-review"],
+          "depends_on": [
+            "property-readiness-review"
+          ],
           "instructions": "Prepare checklist-only AppFolio entry fields for property, units, owner link, rent settings, access notes, utilities, insurance, photos, inspection, and maintenance caveats. No AppFolio writes, API calls, imports, or live updates are allowed.",
           "dispatch_title": "Prepare checklist-only AppFolio property entry packet",
           "dispatch_body": "Prepare AppFolio entry checklist only; do not write to AppFolio.",
@@ -101,7 +112,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["prepare-appfolio-entry-checklist"],
+          "depends_on": [
+            "prepare-appfolio-entry-checklist"
+          ],
           "instructions": "Review checklist completeness and confirm no live AppFolio entry has been performed by this workflow.",
           "human_prompt": "Review AppFolio entry checklist. This workflow must not write to AppFolio.",
           "estimated_minutes": 10
@@ -119,7 +132,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["appfolio-checklist-review"],
+          "depends_on": [
+            "appfolio-checklist-review"
+          ],
           "instructions": "Approve activation, hold for blockers, or request edits. Confirm AppFolio entry remains outside this workflow. No AppFolio writes are allowed.",
           "human_prompt": "Approve property onboarding activation or hold for blockers.",
           "estimated_minutes": 15
@@ -128,9 +143,11 @@
           "task_key": "record-property-onboarding-outcome",
           "title": "Record property onboarding outcome",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["property-activation-approval"],
+          "depends_on": [
+            "property-activation-approval"
+          ],
           "instructions": "Record activation outcome, readiness score, approved caveats, remaining blockers, checklist location, and owner-facing summary notes.",
           "dispatch_title": "Record property onboarding outcome",
           "dispatch_body": "Record property onboarding activation outcome and caveats.",
@@ -140,9 +157,11 @@
           "task_key": "publish-property-onboarding-handoff",
           "title": "Publish property onboarding handoff",
           "kind": "system_handoff",
-          "assigned_role": "codie",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["record-property-onboarding-outcome"],
+          "depends_on": [
+            "record-property-onboarding-outcome"
+          ],
           "instructions": "Publish internal workflow handoff state for downstream leasing, maintenance, and owner projection consumers. No AppFolio writes are allowed.",
           "dispatch_title": "Publish property onboarding system handoff",
           "dispatch_body": "Publish internal property onboarding handoff state for downstream workflows.",

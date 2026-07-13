@@ -1,7 +1,7 @@
 {
   "slug": "hoa-coordination",
   "name": "HOA Coordination",
-  "description": "Dane coordinates HOA-governed property notices, dues, violations, approvals, and resident or owner packets with human approval before any HOA, owner, resident, legal, money, or system action.",
+  "description": "Operations coordinates HOA-governed property notices, dues, violations, approvals, and resident or owner packets with human approval before any HOA, owner, resident, legal, money, or system action.",
   "subject_type": "hoa_case",
   "default_start_stage_key": "hoa-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-hoa-case",
           "title": "Normalize HOA case",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
           "instructions": "Normalize property, HOA name if known, owner, resident, unit, notice type, due date, amount, violation category, approval request, governing-doc refs, photos, prior communications, and missing facts. Unknown dues, legal obligations, deadlines, or authority must remain null with needs_verification.",
           "dispatch_title": "Normalize HOA case",
@@ -26,9 +26,11 @@
           "task_key": "check-hoa-ownership-and-history",
           "title": "Check HOA ownership and history",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["normalize-hoa-case"],
+          "depends_on": [
+            "normalize-hoa-case"
+          ],
           "instructions": "Check whether a human, owner, attorney, vendor, or HOA contact already owns the item; review prior notices, dues, approvals, and cure history. If already owned, surface status and do not stage duplicate action.",
           "dispatch_title": "Check HOA ownership and history",
           "dispatch_body": "Check HOA case ownership and history before any action. No external sends or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-hoa-action-packet",
           "title": "Draft HOA action packet",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["check-hoa-ownership-and-history"],
+          "depends_on": [
+            "check-hoa-ownership-and-history"
+          ],
           "instructions": "Draft packet with notice summary, dues or fine caveats, violation evidence, owner/resident/vendor draft messages, approval request checklist, cure options, and legal-review flags. Draft-only; do not send, pay, dispute, approve, contact HOA, or write systems.",
           "dispatch_title": "Draft HOA action packet",
           "dispatch_body": "Draft HOA coordination packet only. No external sends, payments, approvals, disputes, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-hoa-action-packet"],
+          "depends_on": [
+            "draft-hoa-action-packet"
+          ],
           "instructions": "Review HOA obligations, payment or fine support, owner responsibility, resident cure language, and legal sensitivity before approval is requested.",
           "human_prompt": "Review HOA packet before any HOA, owner, resident, vendor, legal, money, or system action.",
           "estimated_minutes": 15
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-hoa-action-packet"],
+          "depends_on": [
+            "review-hoa-action-packet"
+          ],
           "instructions": "Approve, edit, reject, or route to counsel before any HOA contact, owner notice, resident notice, vendor dispatch, fine payment, dispute, approval request, legal step, ledger action, or system write.",
           "human_prompt": "Approval required before HOA, owner, resident, vendor, legal, money, or system action.",
           "estimated_minutes": 15
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-hoa-package",
           "title": "Stage approved HOA package",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["approve-hoa-action"],
+          "depends_on": [
+            "approve-hoa-action"
+          ],
           "instructions": "Stage approved HOA package, evidence refs, due dates, owner/resident/vendor drafts, approval source, unresolved needs_verification fields, and next owner for human release. Do not send, pay, dispute, approve, or write external systems.",
           "dispatch_title": "Stage approved HOA package",
           "dispatch_body": "Stage approved HOA package for human release. No external sends, payments, disputes, approvals, or system writes.",

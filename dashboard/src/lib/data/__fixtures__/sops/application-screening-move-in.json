@@ -1,7 +1,7 @@
 {
   "slug": "application-screening-move-in",
   "name": "Application Screening And Move-In",
-  "description": "Lacey stages application screening, approved applicant next steps, move-in readiness, and resident handoff while preserving human legal gates and Blue unit readiness checks.",
+  "description": "Leasing stages application screening, approved applicant next steps, move-in readiness, and resident handoff while preserving human legal gates and Maintenance unit readiness checks.",
   "subject_type": "rental_application",
   "default_start_stage_key": "application-intake",
   "captured_at": "2026-07-07T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-application-facts",
           "title": "Normalize application facts",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Normalize applicant names, contact channels, property, unit, application status, submitted timestamp, occupants, pets, vehicles, income/rent ratio, screening report links, missing documents, and source confidence. Do not contact the applicant and do not write to AppFolio.",
           "dispatch_title": "Normalize application screening facts",
@@ -28,18 +28,22 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-application-facts"],
+          "depends_on": [
+            "normalize-application-facts"
+          ],
           "instructions": "Review missing, low-confidence, adverse, conditional, duplicate, fraud, Fair Housing, source-of-income, occupancy, pet, and document exceptions before a decision packet is prepared.",
-          "human_prompt": "Review application screening exceptions before Lacey prepares the decision packet.",
+          "human_prompt": "Review application screening exceptions before Leasing prepares the decision packet.",
           "estimated_minutes": 15
         },
         {
           "task_key": "prepare-screening-decision-packet",
           "title": "Prepare screening decision packet",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["review-screening-exceptions"],
+          "depends_on": [
+            "review-screening-exceptions"
+          ],
           "instructions": "Prepare a neutral decision packet with normalized facts, screening criteria, exception summary, missing evidence, recommended decision options, required conditions, and adverse-action caveats. No applicant-facing send and no AppFolio writes.",
           "dispatch_title": "Prepare screening decision packet",
           "dispatch_body": "Prepare an internal screening decision packet with compliance caveats. Do not send externally.",
@@ -51,7 +55,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["prepare-screening-decision-packet"],
+          "depends_on": [
+            "prepare-screening-decision-packet"
+          ],
           "instructions": "Capture the human approval, denial, condition, or cancellation decision. If denied or conditional, confirm adverse-action/legal content is handled by the approved human process before continuing.",
           "human_prompt": "Human decision required before any applicant-facing or legal/adverse-action step.",
           "estimated_minutes": 20
@@ -67,9 +73,11 @@
           "task_key": "stage-approved-applicant-next-steps",
           "title": "Stage approved applicant next steps",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["human-decision-adverse-action-gate"],
+          "depends_on": [
+            "human-decision-adverse-action-gate"
+          ],
           "instructions": "If approved or conditionally approved, stage the internal next-step checklist: lease packet requirements, deposit quote, portal setup prerequisites, utility transfer requirements, move-in target date, identity/document conditions, and pending human sends. If denied or cancelled, stage closure notes only. No outbound send and no AppFolio writes.",
           "dispatch_title": "Stage approved applicant next steps",
           "dispatch_body": "Stage approved applicant next steps and pending prerequisites. No external sends or AppFolio writes.",
@@ -79,9 +87,11 @@
           "task_key": "normalize-move-in-facts",
           "title": "Normalize move-in facts",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["stage-approved-applicant-next-steps"],
+          "depends_on": [
+            "stage-approved-applicant-next-steps"
+          ],
           "instructions": "Normalize move-in date, lease start, property, unit, applicant-to-resident mapping, deposit amount, rent charges, prorations, portal status, utility requirements, keys/access needs, insurance requirements, and open blockers. Treat move-in trigger runs as authoritative for move-in dates. No AppFolio writes.",
           "dispatch_title": "Normalize move-in facts",
           "dispatch_body": "Normalize move-in facts and blockers for readiness review. No external sends and no AppFolio writes.",
@@ -100,7 +110,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-move-in-facts"],
+          "depends_on": [
+            "normalize-move-in-facts"
+          ],
           "instructions": "Confirm move-in may proceed, required legal/applicant-facing communication is handled by humans, and readiness blockers are explicit before checklists are staged.",
           "human_prompt": "Review move-in readiness and applicant-facing/legal gates before checklist staging.",
           "estimated_minutes": 15
@@ -109,21 +121,25 @@
           "task_key": "stage-lease-deposit-portal-utility-key-checklist",
           "title": "Stage lease, deposit, portal, utility, and key checklist",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["move-in-readiness-review"],
+          "depends_on": [
+            "move-in-readiness-review"
+          ],
           "instructions": "Stage internal checklist items for lease packet, signatures, deposit receipt evidence, renters insurance, access codes, keys, fobs, parking, mailbox, and welcome packet handoff. Do not send, invite, charge, post, or write to AppFolio; no AppFolio writes.",
           "dispatch_title": "Stage move-in checklist",
           "dispatch_body": "Stage lease/deposit/portal/utility/key checklist items. No external sends or AppFolio writes.",
           "estimated_minutes": 25
         },
         {
-          "task_key": "blue-unit-readiness-check",
-          "title": "Blue unit readiness check",
+          "task_key": "maintenance-unit-readiness-check",
+          "title": "Maintenance unit readiness check",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["stage-lease-deposit-portal-utility-key-checklist"],
+          "depends_on": [
+            "stage-lease-deposit-portal-utility-key-checklist"
+          ],
           "instructions": "Verify unit readiness evidence: make-ready state, open work orders, cleaning, locks, keys, access devices, utilities, smoke/CO where applicable, photos, and any owner/PM caveats. Surface blockers; do not mark ready in AppFolio.",
           "dispatch_title": "Verify unit readiness for move-in",
           "dispatch_body": "Verify unit readiness evidence and blockers. No external sends and no AppFolio writes.",
@@ -140,9 +156,11 @@
           "task_key": "stage-resident-handoff",
           "title": "Stage resident handoff",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["blue-unit-readiness-check"],
+          "depends_on": [
+            "maintenance-unit-readiness-check"
+          ],
           "instructions": "Stage the resident handoff packet for human release: move-in appointment details, access instructions, checklist completion status, remaining accepted caveats, emergency contacts, portal status, and first-day support notes. Do not send externally and no AppFolio writes.",
           "dispatch_title": "Stage resident move-in handoff",
           "dispatch_body": "Stage resident handoff packet for human release. Do not send externally.",
@@ -152,9 +170,11 @@
           "task_key": "record-move-in-completion",
           "title": "Record move-in completion",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["stage-resident-handoff"],
+          "depends_on": [
+            "stage-resident-handoff"
+          ],
           "instructions": "Record owner-visible completion summary, final checklist state, unresolved caveats, evidence links, human decision timestamps, and next monitoring checkpoint in the workflow audit trail. No owner send and no AppFolio writes.",
           "dispatch_title": "Record move-in completion summary",
           "dispatch_body": "Record owner-visible move-in completion summary and audit details. No external sends.",

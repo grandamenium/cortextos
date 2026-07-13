@@ -1,7 +1,7 @@
 {
   "slug": "monthly-owner-statements-qa",
   "name": "Monthly Owner Statements QA",
-  "description": "Cash stages owner statement QA, draw readiness, anomaly review, and release packets with human approval before any statement, draw, payment, or owner-facing send.",
+  "description": "Accounting stages owner statement QA, draw readiness, anomaly review, and release packets with human approval before any statement, draw, payment, or owner-facing send.",
   "subject_type": "owner_statement_batch",
   "default_start_stage_key": "month-close-facts",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-statement-batch",
           "title": "Normalize statement batch",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
           "instructions": "Normalize accounting period, owner set, property set, rent receipts, management fees, vendor bills, owner charges, reserve requirements, pending invoices, trust reconciliation status, and draw candidates. Any unavailable ledger, bank, or owner data must be null with needs_verification.",
           "dispatch_title": "Normalize owner statement batch",
@@ -26,9 +26,11 @@
           "task_key": "trust-reconciliation-check",
           "title": "Check trust reconciliation prerequisite",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["normalize-statement-batch"],
+          "depends_on": [
+            "normalize-statement-batch"
+          ],
           "instructions": "Check whether trust-accounting-monthly has completed for the period and whether bank, book, and liability evidence is present. Record missing data as needs_verification; do not mark reconciled if evidence is missing.",
           "dispatch_title": "Check trust reconciliation prerequisite",
           "dispatch_body": "Check trust reconciliation prerequisite for owner statements. No money movement or ledger writes.",
@@ -45,9 +47,11 @@
           "task_key": "flag-statement-anomalies",
           "title": "Flag statement anomalies",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["trust-reconciliation-check"],
+          "depends_on": [
+            "trust-reconciliation-check"
+          ],
           "instructions": "Flag unusual owner balances, negative cash, missing rent, duplicate bills, uncoded invoices, reserve shortfalls, unsupported draws, stale security-deposit items, and statement lines requiring explanation. Do not edit statements or post ledger entries.",
           "dispatch_title": "Flag owner statement anomalies",
           "dispatch_body": "Flag statement anomalies and missing evidence. No ledger writes, payments, or owner sends.",
@@ -57,9 +61,11 @@
           "task_key": "draft-owner-line-item-explanations",
           "title": "Draft owner line-item explanations",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["flag-statement-anomalies"],
+          "depends_on": [
+            "flag-statement-anomalies"
+          ],
           "instructions": "Draft internal explanation notes for owner-visible line items, anomalies, reserves, bills, and withheld draws. Drafts are for review only and must not be sent externally.",
           "dispatch_title": "Draft owner statement explanations",
           "dispatch_body": "Draft internal owner statement explanation notes. No external sends.",
@@ -71,7 +77,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-owner-line-item-explanations"],
+          "depends_on": [
+            "draft-owner-line-item-explanations"
+          ],
           "instructions": "Review anomalies, explanations, missing data, and statement readiness before any draw, statement release, or owner-facing message is staged.",
           "human_prompt": "Review owner statement QA before any draw or owner statement release is staged.",
           "estimated_minutes": 25
@@ -87,9 +95,11 @@
           "task_key": "prepare-draw-and-release-packet",
           "title": "Prepare draw and release packet",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["statement-qa-review"],
+          "depends_on": [
+            "statement-qa-review"
+          ],
           "instructions": "Prepare draft-only draw list, owner statement release list, holds, reserve adjustments, anomaly notes, and missing-data caveats. Do not initiate ACH, release statements, email owners, or write to accounting systems.",
           "dispatch_title": "Prepare owner draw and release packet",
           "dispatch_body": "Prepare draft draw and statement release packet. No money movement, no owner sends, no ledger writes.",
@@ -101,7 +111,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["prepare-draw-and-release-packet"],
+          "depends_on": [
+            "prepare-draw-and-release-packet"
+          ],
           "instructions": "Approve, hold, or edit owner draw candidates before any money movement or payment file is created.",
           "human_prompt": "Human approval required before any owner draw, ACH file, payment, or accounting write.",
           "estimated_minutes": 20
@@ -112,7 +124,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["prepare-draw-and-release-packet"],
+          "depends_on": [
+            "prepare-draw-and-release-packet"
+          ],
           "instructions": "Approve, hold, or edit owner statement release and owner-facing explanation language before any statement is released or sent.",
           "human_prompt": "Human approval required before any owner statement release or owner-facing message.",
           "estimated_minutes": 20
@@ -128,9 +142,12 @@
           "task_key": "stage-approved-release-actions",
           "title": "Stage approved release actions",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["approve-owner-draws", "approve-statement-release"],
+          "depends_on": [
+            "approve-owner-draws",
+            "approve-statement-release"
+          ],
           "instructions": "Stage approved statement release refs, draw refs, holds, owner explanation notes, and follow-up tasks. This task must not initiate ACH, release statements, email owners, or write to AppFolio/accounting systems.",
           "dispatch_title": "Stage approved owner statement release actions",
           "dispatch_body": "Stage approved release metadata only. No money movement, owner sends, or system writes.",
@@ -140,9 +157,11 @@
           "task_key": "record-owner-statement-closeout",
           "title": "Record owner statement closeout",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["stage-approved-release-actions"],
+          "depends_on": [
+            "stage-approved-release-actions"
+          ],
           "instructions": "Record closeout status, approved holds, missing-data follow-ups, owner questions to expect, and next month improvements. Do not contact owners.",
           "dispatch_title": "Record owner statement closeout",
           "dispatch_body": "Record owner statement closeout metadata. No external sends.",

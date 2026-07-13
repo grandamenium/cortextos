@@ -1,7 +1,7 @@
 {
   "slug": "showing-coordination",
   "name": "Showing Coordination",
-  "description": "Lacey coordinates listing inquiries, prequalification, showing readiness, follow-up drafts, and application handoff with approval gates before applicant-facing messages or appointments.",
+  "description": "Leasing coordinates listing inquiries, prequalification, showing readiness, follow-up drafts, and application handoff with approval gates before applicant-facing messages or appointments.",
   "subject_type": "showing_request",
   "default_start_stage_key": "inquiry-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-showing-inquiry",
           "title": "Normalize showing inquiry",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
           "instructions": "Normalize lead name, contact, inquiry channel, listing ref, property, unit, desired move date, pets, occupants, budget, prequal status, source timestamp, and data confidence. Any missing listing, application, or lead data must be null with needs_verification.",
           "dispatch_title": "Normalize showing inquiry",
@@ -28,7 +28,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-showing-inquiry"],
+          "depends_on": [
+            "normalize-showing-inquiry"
+          ],
           "instructions": "Review whether the inquiry is valid, spam, duplicate, waitlist, unavailable listing, or needs manual handling before applicant-facing response is staged.",
           "human_prompt": "Review inquiry routing before applicant-facing response or scheduling.",
           "estimated_minutes": 10
@@ -44,9 +46,11 @@
           "task_key": "draft-prequal-response",
           "title": "Draft prequalification response",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["review-inquiry-routing"],
+          "depends_on": [
+            "review-inquiry-routing"
+          ],
           "instructions": "Draft a prequalification response covering availability, basic criteria, application link status, showing requirements, pets, fees, and next-step questions. Draft-only; do not send.",
           "dispatch_title": "Draft showing prequalification response",
           "dispatch_body": "Draft applicant-facing prequalification response only. No external sends.",
@@ -56,21 +60,25 @@
           "task_key": "prepare-showing-options",
           "title": "Prepare showing options",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["draft-prequal-response"],
+          "depends_on": [
+            "draft-prequal-response"
+          ],
           "instructions": "Prepare candidate showing windows, access notes, lockbox caveats, occupied-unit restrictions, open make-ready blockers, and required confirmations. Do not create appointments or send scheduling links.",
           "dispatch_title": "Prepare showing options",
           "dispatch_body": "Prepare internal showing options and access caveats. No appointment creation and no applicant sends.",
           "estimated_minutes": 20
         },
         {
-          "task_key": "blue-access-readiness-check",
+          "task_key": "maintenance-access-readiness-check",
           "title": "Check access readiness",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["prepare-showing-options"],
+          "depends_on": [
+            "prepare-showing-options"
+          ],
           "instructions": "Check access readiness, occupied-unit restrictions, lockbox/key status, safety blockers, open work orders, and make-ready state. Do not update locks, create access, or contact residents.",
           "dispatch_title": "Check showing access readiness",
           "dispatch_body": "Check access readiness and blockers for showing coordination. No resident contact and no system writes.",
@@ -89,7 +97,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["blue-access-readiness-check"],
+          "depends_on": [
+            "maintenance-access-readiness-check"
+          ],
           "instructions": "Approve, edit, hold, or reject the applicant-facing prequalification response and showing options before any message, scheduling link, or appointment is created.",
           "human_prompt": "Human approval required before applicant-facing showing response or appointment creation.",
           "estimated_minutes": 15
@@ -98,9 +108,11 @@
           "task_key": "stage-approved-showing-response",
           "title": "Stage approved showing response",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["approve-prequal-and-scheduling-send"],
+          "depends_on": [
+            "approve-prequal-and-scheduling-send"
+          ],
           "instructions": "Stage approved applicant response, showing options, access caveats, and scheduling metadata for a human/operator release path. Do not send, create appointments, or write to AppFolio.",
           "dispatch_title": "Stage approved showing response",
           "dispatch_body": "Stage approved applicant response and showing options only. No external sends, appointments, or AppFolio writes.",
@@ -117,9 +129,11 @@
           "task_key": "record-showing-outcome",
           "title": "Record showing outcome",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["stage-approved-showing-response"],
+          "depends_on": [
+            "stage-approved-showing-response"
+          ],
           "instructions": "Record showing outcome as scheduled, completed, no-show, cancelled, duplicate, unavailable, application-started, or needs_verification, with source and timestamp. Do not contact the prospect.",
           "dispatch_title": "Record showing outcome",
           "dispatch_body": "Record internal showing outcome metadata. No applicant sends.",
@@ -129,9 +143,11 @@
           "task_key": "draft-post-showing-follow-up",
           "title": "Draft post-showing follow-up",
           "kind": "agent_task",
-          "assigned_role": "lacey",
+          "assigned_role": "leasing",
           "is_automated": true,
-          "depends_on": ["record-showing-outcome"],
+          "depends_on": [
+            "record-showing-outcome"
+          ],
           "instructions": "Draft post-showing follow-up or application next-step language based on the recorded outcome. Draft-only; do not send.",
           "dispatch_title": "Draft post-showing follow-up",
           "dispatch_body": "Draft post-showing follow-up only. No external sends.",
@@ -141,9 +157,11 @@
           "task_key": "handoff-application-screening",
           "title": "Handoff application screening",
           "kind": "system_handoff",
-          "assigned_role": "codie",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["draft-post-showing-follow-up"],
+          "depends_on": [
+            "draft-post-showing-follow-up"
+          ],
           "instructions": "If the prospect starts an application, stage internal handoff facts for application-screening-move-in: lead refs, property, unit, showing outcome, application link status, and needs_verification flags. Do not create application records or write to AppFolio.",
           "dispatch_title": "Stage application screening handoff",
           "dispatch_body": "Stage internal handoff to application-screening-move-in. No application creation and no AppFolio writes.",

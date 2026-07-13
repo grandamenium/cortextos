@@ -1,7 +1,7 @@
 {
   "slug": "payment-plan-management",
   "name": "Payment Plan Management",
-  "description": "Cash stages tenant hardship and payment-plan review packets, monitoring checkpoints, and missed-installment escalations with approval gates before resident-facing agreements or legal/accounting actions.",
+  "description": "Accounting stages tenant hardship and payment-plan review packets, monitoring checkpoints, and missed-installment escalations with approval gates before resident-facing agreements or legal/accounting actions.",
   "subject_type": "payment_plan",
   "default_start_stage_key": "hardship-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-payment-plan-request",
           "title": "Normalize payment plan request",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
           "instructions": "Normalize tenant, property, unit, delinquency_account, balance, current charges, prior promises, hardship reason if provided, requested terms, lease status, eviction status, and source confidence. Missing ledger, lease, tenant, or AppFolio data must be null with needs_verification.",
           "dispatch_title": "Normalize payment plan request",
@@ -28,7 +28,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["normalize-payment-plan-request"],
+          "depends_on": [
+            "normalize-payment-plan-request"
+          ],
           "instructions": "Review eligibility, eviction/legal status, owner constraints, repeat-default history, and whether a plan may be drafted.",
           "human_prompt": "Review payment plan eligibility before drafting resident-facing terms.",
           "estimated_minutes": 15
@@ -44,9 +46,11 @@
           "task_key": "draft-payment-plan-options",
           "title": "Draft payment plan options",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["review-plan-eligibility"],
+          "depends_on": [
+            "review-plan-eligibility"
+          ],
           "instructions": "Draft internal payment plan options, installment schedule, due dates, default triggers, late-fee caveats, resident obligations, owner/legal caveats, and missing-data notes. Draft-only; do not offer terms.",
           "dispatch_title": "Draft payment plan options",
           "dispatch_body": "Draft internal payment plan options only. No resident send and no agreement.",
@@ -58,7 +62,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-payment-plan-options"],
+          "depends_on": [
+            "draft-payment-plan-options"
+          ],
           "instructions": "Approve, edit, hold, or reject payment plan terms before resident-facing offer, owner update, legal hold, or accounting action.",
           "human_prompt": "Human approval required before payment plan terms are offered to a resident.",
           "estimated_minutes": 20
@@ -74,9 +80,11 @@
           "task_key": "stage-approved-payment-plan",
           "title": "Stage approved payment plan",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["owner-or-legal-plan-review"],
+          "depends_on": [
+            "owner-or-legal-plan-review"
+          ],
           "instructions": "Stage approved resident-facing agreement draft, installment schedule, payment instructions checklist, monitoring checkpoints, and default language for operator release. Do not send, request payment, collect money, or write to AppFolio.",
           "dispatch_title": "Stage approved payment plan",
           "dispatch_body": "Stage approved payment plan metadata only. No resident send, payment request, collection, or AppFolio write.",
@@ -88,7 +96,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["stage-approved-payment-plan"],
+          "depends_on": [
+            "stage-approved-payment-plan"
+          ],
           "instructions": "Record whether the resident accepted, rejected, countered, or did not respond, with source and timestamp. Do not infer acceptance from silence.",
           "human_prompt": "Record resident payment plan acceptance or rejection from a verified source.",
           "estimated_minutes": 10
@@ -104,9 +114,11 @@
           "task_key": "track-installment-status",
           "title": "Track installment status",
           "kind": "agent_task",
-          "assigned_role": "cash",
+          "assigned_role": "accounting",
           "is_automated": true,
-          "depends_on": ["record-plan-acceptance-source"],
+          "depends_on": [
+            "record-plan-acceptance-source"
+          ],
           "instructions": "Track installment due dates, received amounts, short payments, missed installments, cure status, and ledger proof. Missing payment data must be null with needs_verification; do not mark default without evidence.",
           "dispatch_title": "Track payment plan installments",
           "dispatch_body": "Track payment plan installment metadata. No resident sends and no accounting writes.",
@@ -118,7 +130,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["track-installment-status"],
+          "depends_on": [
+            "track-installment-status"
+          ],
           "instructions": "Approve hold, reminder draft, owner update, delinquency ladder continuation, or eviction-process handoff before any escalation occurs.",
           "human_prompt": "Human approval required before missed-payment reminder, owner update, legal escalation, or eviction handoff.",
           "estimated_minutes": 15
@@ -127,9 +141,11 @@
           "task_key": "record-payment-plan-outcome",
           "title": "Record payment plan outcome",
           "kind": "agent_task",
-          "assigned_role": "dane",
+          "assigned_role": "operations",
           "is_automated": true,
-          "depends_on": ["missed-installment-escalation-review"],
+          "depends_on": [
+            "missed-installment-escalation-review"
+          ],
           "instructions": "Record current plan status, proof refs, escalation decision, next checkpoint, and downstream workflow handoff needs. Do not send or write to AppFolio.",
           "dispatch_title": "Record payment plan outcome",
           "dispatch_body": "Record internal payment plan outcome. No external sends and no AppFolio writes.",

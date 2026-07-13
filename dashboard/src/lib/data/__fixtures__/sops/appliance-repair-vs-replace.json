@@ -1,7 +1,7 @@
 {
   "slug": "appliance-repair-vs-replace",
   "name": "Appliance Repair Vs Replace",
-  "description": "Blue prepares appliance repair-vs-replace decision packets with age, cost, warranty, resident-impact, and owner-choice drafts, with human approval before vendor, owner, resident, spend, purchase, or system action.",
+  "description": "Maintenance prepares appliance repair-vs-replace decision packets with age, cost, warranty, resident-impact, and owner-choice drafts, with human approval before vendor, owner, resident, spend, purchase, or system action.",
   "subject_type": "appliance_decision",
   "default_start_stage_key": "decision-intake",
   "captured_at": "2026-07-08T00:00:00.000Z",
@@ -15,7 +15,7 @@
           "task_key": "normalize-appliance-decision",
           "title": "Normalize appliance decision",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
           "instructions": "Normalize property, unit, appliance type, make/model/serial if known, age, warranty state, issue, resident impact, prior repairs, vendor estimate, replacement options, owner NTE, availability, and missing facts. Unknown age, warranty, repair cost, replacement cost, ROI, urgency, or resident-impact fields must remain null with needs_verification.",
           "dispatch_title": "Normalize appliance repair-vs-replace decision",
@@ -26,9 +26,11 @@
           "task_key": "check-existing-work-and-ownership",
           "title": "Check existing work and ownership",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["normalize-appliance-decision"],
+          "depends_on": [
+            "normalize-appliance-decision"
+          ],
           "instructions": "Check whether a human, vendor, or owner already owns the appliance issue; review active work order, warranty claim, prior approval, resident communications, and urgent habitability risk. Do not contact anyone or authorize repair/replacement.",
           "dispatch_title": "Check appliance work ownership",
           "dispatch_body": "Check active work, warranty, approval, and ownership context. No external sends or system writes.",
@@ -45,9 +47,11 @@
           "task_key": "draft-appliance-decision-packet",
           "title": "Draft appliance decision packet",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["check-existing-work-and-ownership"],
+          "depends_on": [
+            "check-existing-work-and-ownership"
+          ],
           "instructions": "Draft decision packet with repair estimate, replacement options, warranty caveats, availability, resident-impact mitigation, owner recommendation caveats, vendor/resident/owner drafts, and needs_verification gaps. Draft-only; do not approve repair, order replacement, dispatch vendor, or send messages.",
           "dispatch_title": "Draft appliance repair-vs-replace packet",
           "dispatch_body": "Draft appliance decision packet only. No owner/resident/vendor sends, spend, purchase, dispatch, or system writes.",
@@ -59,7 +63,9 @@
           "kind": "human_review",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["draft-appliance-decision-packet"],
+          "depends_on": [
+            "draft-appliance-decision-packet"
+          ],
           "instructions": "Review cost support, missing estimates, warranty state, owner approval requirement, resident-impact mitigation, and vendor availability before approval.",
           "human_prompt": "Review appliance repair-vs-replace packet before owner, resident, vendor, spend, purchase, or system action.",
           "estimated_minutes": 20
@@ -77,7 +83,9 @@
           "kind": "human_approval",
           "assigned_role": "human",
           "is_automated": false,
-          "depends_on": ["review-appliance-decision-packet"],
+          "depends_on": [
+            "review-appliance-decision-packet"
+          ],
           "instructions": "Approve, edit, reject, or request owner approval before any repair authorization, replacement purchase, vendor dispatch, owner decision request, resident update, warranty claim, spend commitment, invoice action, PropertyMeld action, or AppFolio write.",
           "human_prompt": "Approval required before appliance repair, replacement, purchase, owner, resident, vendor, warranty, spend, invoice, or system action.",
           "estimated_minutes": 15
@@ -86,9 +94,11 @@
           "task_key": "stage-approved-appliance-package",
           "title": "Stage approved appliance package",
           "kind": "agent_task",
-          "assigned_role": "blue",
+          "assigned_role": "maintenance",
           "is_automated": true,
-          "depends_on": ["approve-appliance-action"],
+          "depends_on": [
+            "approve-appliance-action"
+          ],
           "instructions": "Stage approved repair or replacement packet, owner/resident/vendor drafts, purchase or warranty metadata if approved, approval source, unresolved needs_verification fields, and next owner for human release. Do not send, purchase, dispatch, authorize spend, invoice, or write systems.",
           "dispatch_title": "Stage approved appliance decision package",
           "dispatch_body": "Stage approved appliance decision package for human release. No external sends, purchase, dispatch, spend, invoice, or system writes.",
