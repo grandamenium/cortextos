@@ -1,0 +1,131 @@
+{
+  "slug": "utility-vacancy-flip",
+  "name": "Utility Vacancy Flip",
+  "description": "Lacey and Blue coordinate vacancy and move-in utility transfer checklists with provider/account actions staged for human approval, preventing service gaps without autonomous utility changes.",
+  "subject_type": "utility_flip",
+  "default_start_stage_key": "trigger-intake",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "trigger-intake",
+      "name": "Normalize Utility Trigger",
+      "description": "Normalize vacancy or move-in utility facts and surface missing provider data.",
+      "steps": [
+        {
+          "task_key": "normalize-utility-flip-facts",
+          "title": "Normalize utility flip facts",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "instructions": "Normalize property, unit, owner, resident, move-out date, move-in date, occupancy state, utility providers, account refs if available, responsibility owner, cutoff risk, inspection/make-ready dependency, and missing facts. Unknown providers or account numbers must remain null with needs_verification.",
+          "dispatch_title": "Normalize utility flip facts",
+          "dispatch_body": "Normalize utility flip trigger facts and missing-data flags. No provider calls, resident sends, owner sends, or system writes.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "identify-service-risk",
+          "title": "Identify service risk",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["normalize-utility-flip-facts"],
+          "instructions": "Identify service-loss risk for power, water, gas, trash, internet, irrigation, HVAC protection, make-ready access, and freeze or leak risk if applicable. Mark unknown services as needs_verification; do not contact providers or residents.",
+          "dispatch_title": "Identify vacancy utility service risk",
+          "dispatch_body": "Identify utility service-loss risks and gaps. No external sends or account actions.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "provider-checklist",
+      "name": "Prepare Provider Checklist",
+      "description": "Draft provider and responsibility checklists without contacting providers.",
+      "steps": [
+        {
+          "task_key": "draft-provider-transfer-checklist",
+          "title": "Draft provider transfer checklist",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["identify-service-risk"],
+          "instructions": "Draft a provider-by-provider checklist for vacancy transfer to owner or PM account, move-in transfer to resident, service dates, account data needed, resident/owner instructions, and cutoff blockers. Draft-only; do not call providers, submit forms, send resident or owner messages, or write AppFolio.",
+          "dispatch_title": "Draft utility provider transfer checklist",
+          "dispatch_body": "Draft utility provider checklist and missing-data requests. No provider calls, sends, forms, or system writes.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "review-provider-checklist",
+          "title": "Review provider checklist",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-provider-transfer-checklist"],
+          "instructions": "Review the provider checklist, account ownership assumptions, service dates, and missing data before any account action, provider call, or resident/owner instruction is prepared for release.",
+          "human_prompt": "Review utility transfer checklist before provider, resident, owner, or PMS action.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "approval",
+      "name": "Approve Utility Actions",
+      "description": "Human approval gate before provider, account, resident, owner, or system action.",
+      "steps": [
+        {
+          "task_key": "draft-utility-action-packet",
+          "title": "Draft utility action packet",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["review-provider-checklist"],
+          "instructions": "Draft provider call scripts, resident/owner instruction drafts, AppFolio note draft, service-date reminders, and internal checklist updates. Draft-only; do not submit forms, call providers, send messages, or write systems.",
+          "dispatch_title": "Draft utility action packet",
+          "dispatch_body": "Draft utility action packet only. No provider calls, sends, forms, account changes, or system writes.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "approve-utility-action",
+          "title": "Approve utility action",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-utility-action-packet"],
+          "instructions": "Approve, edit, or hold before any provider call, utility account change, form submission, resident instruction, owner notice, AppFolio note, fee, deposit, or system write.",
+          "human_prompt": "Approval required before utility provider, account, resident, owner, money, or system action.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "tracking-closeout",
+      "name": "Track Utility Closeout",
+      "description": "Stage approved utility metadata and internal follow-up checkpoints.",
+      "steps": [
+        {
+          "task_key": "stage-approved-utility-package",
+          "title": "Stage approved utility package",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["approve-utility-action"],
+          "instructions": "Stage approved provider checklist, account-action metadata, service dates, resident/owner draft messages, reminders, and unresolved needs_verification facts for operator release. Do not contact providers or write systems.",
+          "dispatch_title": "Stage approved utility package",
+          "dispatch_body": "Stage approved utility package for human release. No external sends, account changes, forms, or system writes.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "record-utility-flip-closeout",
+          "title": "Record utility flip closeout",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-approved-utility-package"],
+          "instructions": "Record approval source, provider checklist state, service date reminders, unresolved gaps, and next owner. Internal audit only; do not call providers, message residents or owners, or write AppFolio.",
+          "dispatch_title": "Record utility flip closeout",
+          "dispatch_body": "Record internal utility flip closeout and next owner. No external sends or system writes.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

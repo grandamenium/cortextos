@@ -1,0 +1,131 @@
+{
+  "slug": "nsf-returned-payment-handling",
+  "name": "NSF Returned Payment Handling",
+  "description": "Cash reviews returned payments, ledger impact, fee eligibility, notice drafts, and repeat-risk tracking with human approval before any fee, ledger posting, resident notice, payment action, or AppFolio write.",
+  "subject_type": "returned_payment",
+  "default_start_stage_key": "return-intake",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "return-intake",
+      "name": "Normalize Returned Payment",
+      "description": "Normalize the returned payment event and missing accounting facts.",
+      "steps": [
+        {
+          "task_key": "normalize-returned-payment",
+          "title": "Normalize returned payment",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "instructions": "Normalize resident, tenant account, property, unit, payment id, return date, amount, reason code, payment method, rent period, open balance, fee policy source, prior returned-payment count, and missing facts. Unknown ledger amounts, reason codes, or fee eligibility must remain null with needs_verification.",
+          "dispatch_title": "Normalize returned payment",
+          "dispatch_body": "Normalize returned-payment facts and missing-data flags. No ledger posting, fees, resident sends, payment attempts, or AppFolio writes.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "check-duplicate-or-reversal-state",
+          "title": "Check duplicate and reversal state",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["normalize-returned-payment"],
+          "instructions": "Check whether the return, reversal, fee, notice, or repayment plan has already been handled by a human or system. If already owned or complete, surface current state and do not stage duplicate action.",
+          "dispatch_title": "Check returned-payment duplicate state",
+          "dispatch_body": "Check duplicate/reversal ownership before any action. No ledger posting, fees, sends, or payment attempts.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "ledger-review",
+      "name": "Ledger And Policy Review",
+      "description": "Draft the ledger impact and policy packet without changing accounting records.",
+      "steps": [
+        {
+          "task_key": "draft-ledger-impact-packet",
+          "title": "Draft ledger impact packet",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["check-duplicate-or-reversal-state"],
+          "instructions": "Draft ledger impact from returned amount, rent period, current balance, late-fee interaction, NSF fee policy, prior returns, owner impact, and repayment risk. Draft-only; never post a reversal, fee, charge, payment, or AppFolio note.",
+          "dispatch_title": "Draft returned-payment ledger impact",
+          "dispatch_body": "Draft returned-payment ledger impact and policy packet. No fees, ledger posting, payment action, resident sends, or AppFolio writes.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "review-ledger-impact-packet",
+          "title": "Review ledger impact packet",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-ledger-impact-packet"],
+          "instructions": "Review returned-payment ledger impact, policy support, fee eligibility, duplicate state, and missing data before any resident notice, fee, reversal, repayment, or escalation packet is drafted.",
+          "human_prompt": "Review returned-payment ledger and policy packet before fee, notice, or accounting action.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "notice-fee-approval",
+      "name": "Notice And Fee Approval",
+      "description": "Draft resident notice and fee action packets for approval.",
+      "steps": [
+        {
+          "task_key": "draft-returned-payment-action-packet",
+          "title": "Draft returned payment action packet",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["review-ledger-impact-packet"],
+          "instructions": "Draft resident notice, internal ledger action summary, fee recommendation if policy-supported, repayment option notes, repeat-risk flag, and escalation caveats. Draft-only; do not send to resident, post fees, reverse ledger entries, attempt payment, or write AppFolio.",
+          "dispatch_title": "Draft returned-payment action packet",
+          "dispatch_body": "Draft returned-payment notice and fee packet only. No sends, fees, ledger postings, payment attempts, or AppFolio writes.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "approve-returned-payment-action",
+          "title": "Approve returned payment action",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-returned-payment-action-packet"],
+          "instructions": "Approve, edit, or hold before any NSF fee, reversal, ledger adjustment, resident notice, repayment request, payment retry, delinquency escalation, owner update, or AppFolio write.",
+          "human_prompt": "Approval required before returned-payment fee, ledger, resident, owner, payment, escalation, or system action.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "tracking-closeout",
+      "name": "Track Returned Payment",
+      "description": "Stage approved action metadata and internal repeat-risk tracking.",
+      "steps": [
+        {
+          "task_key": "stage-approved-returned-payment-package",
+          "title": "Stage approved returned payment package",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["approve-returned-payment-action"],
+          "instructions": "Stage approved resident notice draft, ledger action notes, fee metadata, repeat-risk flag, repayment due date if approved, and escalation handoff data for operator release. Do not send, post, retry payment, or write systems.",
+          "dispatch_title": "Stage approved returned-payment package",
+          "dispatch_body": "Stage approved returned-payment package for human release. No sends, fees, ledger postings, payment attempts, or system writes.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "record-returned-payment-closeout",
+          "title": "Record returned payment closeout",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-approved-returned-payment-package"],
+          "instructions": "Record approval source, returned-payment state, repeat-risk flag, unresolved needs_verification fields, and next owner. Internal audit only; do not contact residents or write accounting systems.",
+          "dispatch_title": "Record returned-payment closeout",
+          "dispatch_body": "Record internal returned-payment closeout and next owner. No external sends or system writes.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

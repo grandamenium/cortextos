@@ -1,0 +1,131 @@
+{
+  "slug": "rent-increase-notice-compliance",
+  "name": "Rent Increase Notice Compliance",
+  "description": "Lacey stages rent-increase notice compliance packets and delivery tracking plans with human approval before any resident-facing notice, owner update, or AppFolio write.",
+  "subject_type": "rent_increase_notice",
+  "default_start_stage_key": "increase-facts",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "increase-facts",
+      "name": "Normalize Increase Facts",
+      "description": "Normalize approved rent increase, lease, resident, and notice facts.",
+      "steps": [
+        {
+          "task_key": "normalize-rent-increase-facts",
+          "title": "Normalize rent increase facts",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "instructions": "Normalize property, unit, tenant, current rent, proposed rent, effective date, lease term, renewal state, notice window, owner approval source, and confidence. Missing lease, owner, legal, or AppFolio data must be null with needs_verification.",
+          "dispatch_title": "Normalize rent increase notice facts",
+          "dispatch_body": "Normalize rent increase facts and missing-data flags. No resident notice, owner send, or AppFolio write.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "review-increase-authority",
+          "title": "Review increase authority",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["normalize-rent-increase-facts"],
+          "instructions": "Review owner approval, lease authority, timing, resident status, and any legal uncertainty before notice drafting.",
+          "human_prompt": "Review rent increase authority before drafting notice language.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "notice-drafting",
+      "name": "Draft Notice Packet",
+      "description": "Prepare draft notice and delivery plan without releasing it.",
+      "steps": [
+        {
+          "task_key": "draft-notice-compliance-packet",
+          "title": "Draft notice compliance packet",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["review-increase-authority"],
+          "instructions": "Draft notice packet with current rent, proposed rent, effective date, notice basis, delivery method options, deadline, caveats, and missing verification. Draft-only; do not send notice.",
+          "dispatch_title": "Draft rent increase notice packet",
+          "dispatch_body": "Draft internal rent increase notice packet only. No resident send and no AppFolio write.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "legal-notice-review",
+          "title": "Review notice compliance",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-notice-compliance-packet"],
+          "instructions": "Approve, edit, hold, or reject notice language, timing, and delivery method before any resident-facing notice or owner update is staged.",
+          "human_prompt": "Human/legal approval required before rent increase notice release.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "release-staging",
+      "name": "Stage Approved Notice",
+      "description": "Stage approved notice release metadata without sending.",
+      "steps": [
+        {
+          "task_key": "stage-approved-notice-release",
+          "title": "Stage approved notice release",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["legal-notice-review"],
+          "instructions": "Stage approved resident notice text, delivery method, deadline, owner update draft, and AppFolio checklist for an operator release path. Do not send, deliver, post, or write to AppFolio.",
+          "dispatch_title": "Stage approved rent increase notice",
+          "dispatch_body": "Stage approved notice metadata only. No resident send, delivery, owner send, or AppFolio write.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "delivery-proof-checklist",
+          "title": "Prepare delivery proof checklist",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-approved-notice-release"],
+          "instructions": "Prepare delivery proof checklist, timestamp fields, source refs, and follow-up checkpoint for operator-entered proof. Do not claim delivery occurred without human-entered proof.",
+          "dispatch_title": "Prepare rent increase delivery proof checklist",
+          "dispatch_body": "Prepare delivery proof checklist. No external sends and no false delivery status.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "tracking",
+      "name": "Track Notice Outcome",
+      "description": "Track delivery and resident response after approved action happens outside automation.",
+      "steps": [
+        {
+          "task_key": "track-notice-response",
+          "title": "Track notice response",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["delivery-proof-checklist"],
+          "instructions": "Track delivery proof status, resident response, renewal linkage, dispute flags, owner follow-up needs, and missing proof as needs_verification. Do not send reminders or update rent.",
+          "dispatch_title": "Track rent increase notice response",
+          "dispatch_body": "Track notice response metadata. No resident sends and no rent updates.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "record-rent-increase-closeout",
+          "title": "Record rent increase closeout",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["track-notice-response"],
+          "instructions": "Record closeout status, proof refs, resident response, AppFolio update checklist status, and next lease/renewal workflow handoff. Do not write to AppFolio.",
+          "dispatch_title": "Record rent increase notice closeout",
+          "dispatch_body": "Record internal rent increase notice closeout. No AppFolio write and no external send.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,142 @@
+{
+  "slug": "emergency-after-hours-maintenance",
+  "name": "Emergency After-Hours Maintenance",
+  "description": "Blue wraps the emergency maintenance path with trust-but-verify evidence, full-state ownership checks, safe zero-cost mitigation, and human approval before resident, vendor, owner, truck-roll, or fee actions.",
+  "subject_type": "emergency_maintenance",
+  "default_start_stage_key": "emergency-intake",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "emergency-intake",
+      "name": "Verify Emergency Intake",
+      "description": "Normalize the claim, require evidence, and check who already owns the work before any outbound.",
+      "steps": [
+        {
+          "task_key": "normalize-emergency-claim",
+          "title": "Normalize emergency claim",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "instructions": "Normalize resident, property, unit, reported issue, claimed severity, photos, videos, sensor proof, message thread, phone/email source, existing work-order refs, existing vendor assignment, human owner, and source confidence. A resident verbal claim alone is not enough for emergency spend; missing evidence must be null with needs_verification.",
+          "dispatch_title": "Normalize emergency maintenance claim",
+          "dispatch_body": "Normalize emergency claim, evidence, and missing-data flags. No resident, vendor, or owner sends.",
+          "estimated_minutes": 10
+        },
+        {
+          "task_key": "full-state-and-owner-check",
+          "title": "Check full state and current owner",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["normalize-emergency-claim"],
+          "instructions": "Read the full message thread, photos, existing assignment, vendor status, human notes, and who already owns the issue before any outbound. If a human, tech, or vendor is already actively handling it, stop and surface instead of acting.",
+          "dispatch_title": "Check full state and current owner",
+          "dispatch_body": "Check full work-order state and ownership before outbound. Stop if human/tech/vendor already owns it.",
+          "estimated_minutes": 10
+        },
+        {
+          "task_key": "evidence-sufficiency-gate",
+          "title": "Review emergency evidence",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["full-state-and-owner-check"],
+          "instructions": "Review whether photo, video, sensor, staff, or other evidence supports an emergency roll. Resident verbal-only claims stay needs_verification and must not trigger emergency spend.",
+          "human_prompt": "Review evidence before emergency truck roll, vendor fee, or owner notification.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "safe-mitigation",
+      "name": "Safe Zero-Cost Mitigation",
+      "description": "Prepare safe immediate mitigation guidance that does not commit spend or outbound action.",
+      "steps": [
+        {
+          "task_key": "draft-safe-mitigation-guidance",
+          "title": "Draft safe mitigation guidance",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["full-state-and-owner-check"],
+          "instructions": "Draft safe, zero-cost mitigation guidance appropriate to evidence, such as shutting off a valve, turning off a breaker, moving away from a hazard, or calling 911 for immediate life safety. This is draft guidance for approval unless standing policy explicitly allows the exact safety instruction.",
+          "dispatch_title": "Draft safe emergency mitigation guidance",
+          "dispatch_body": "Draft zero-cost mitigation guidance. No vendor dispatch, resident send, or owner send.",
+          "estimated_minutes": 10
+        },
+        {
+          "task_key": "approve-mitigation-send",
+          "title": "Approve mitigation send",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-safe-mitigation-guidance"],
+          "instructions": "Approve, edit, or hold any resident-facing mitigation guidance before it is sent, unless a separate standing policy authorizes this exact zero-cost safety instruction.",
+          "human_prompt": "Approve resident-facing zero-cost mitigation guidance before send.",
+          "estimated_minutes": 5
+        }
+      ]
+    },
+    {
+      "stage_key": "dispatch-decision",
+      "name": "Approve Emergency Dispatch",
+      "description": "Human approval gate before truck roll, vendor fee, owner notification, or resident/vendor contact.",
+      "steps": [
+        {
+          "task_key": "draft-emergency-dispatch-packet",
+          "title": "Draft emergency dispatch packet",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["evidence-sufficiency-gate"],
+          "instructions": "Draft dispatch packet with verified evidence, severity, safety mitigation, existing owner/assignment check, trade recommendation, vendor options, NTE/fee estimate, owner notification draft, and resident update draft. Draft-only; do not contact anyone or commit spend.",
+          "dispatch_title": "Draft emergency dispatch packet",
+          "dispatch_body": "Draft emergency dispatch packet only. No resident/vendor/owner sends and no truck roll or vendor fee.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "approve-emergency-roll",
+          "title": "Approve emergency roll",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-emergency-dispatch-packet"],
+          "instructions": "Approve, hold, downgrade, or reroute before any emergency truck roll, vendor fee, vendor contact, resident update, owner notice, or dispatch system action. Evidence plus full-state ownership check must be present before approval.",
+          "human_prompt": "Human approval required before emergency truck roll, vendor fee, vendor contact, resident update, or owner notice.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "approved-staging",
+      "name": "Stage Approved Emergency Action",
+      "description": "Stage approved metadata and follow-up packets without performing the external action.",
+      "steps": [
+        {
+          "task_key": "stage-approved-emergency-actions",
+          "title": "Stage approved emergency actions",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["approve-emergency-roll", "approve-mitigation-send"],
+          "instructions": "Stage approved vendor dispatch metadata, resident update draft, owner notification draft, evidence refs, spend cap, and follow-up checkpoints for operator release. Do not contact residents, vendors, or owners; do not dispatch; do not create fees.",
+          "dispatch_title": "Stage approved emergency maintenance actions",
+          "dispatch_body": "Stage approved emergency action metadata only. No external sends, dispatch, or fee creation.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "record-emergency-closeout",
+          "title": "Record emergency closeout",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["stage-approved-emergency-actions"],
+          "instructions": "Record evidence basis, approval source, owner/assignment check outcome, action staged, downgrade/hold reason, and next checkpoint. Do not write to PropertyMeld, AppFolio, or vendor systems.",
+          "dispatch_title": "Record emergency maintenance closeout",
+          "dispatch_body": "Record internal emergency maintenance closeout. No system writes and no external sends.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

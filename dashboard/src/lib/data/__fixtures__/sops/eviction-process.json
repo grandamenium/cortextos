@@ -1,0 +1,153 @@
+{
+  "slug": "eviction-process",
+  "name": "Eviction Process",
+  "description": "Ops, Cash, and human legal reviewers stage eviction-readiness facts, attorney handoff packets, and outcome tracking without autonomous notices, filings, lockouts, or resident contact.",
+  "subject_type": "eviction_case",
+  "default_start_stage_key": "case-readiness",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "case-readiness",
+      "name": "Confirm Case Readiness",
+      "description": "Normalize delinquency, lease, notice, payment, and dispute facts before legal review.",
+      "steps": [
+        {
+          "task_key": "normalize-eviction-trigger",
+          "title": "Normalize eviction trigger",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "instructions": "Normalize property, unit, tenant, lease, delinquency_account, balance basis, payment-plan status, dispute flags, prior notice history, owner approval history, and source confidence. Any missing AppFolio or attorney data must be recorded as null with needs_verification.",
+          "dispatch_title": "Normalize eviction trigger facts",
+          "dispatch_body": "Normalize internal eviction-readiness facts from delinquency workflow output. No resident, owner, attorney, court, or AppFolio action.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "review-eviction-prerequisites",
+          "title": "Review eviction prerequisites",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["normalize-eviction-trigger"],
+          "instructions": "Review whether the file is legally ready to continue, which facts are missing, and whether attorney review is required before any notice or filing path is drafted.",
+          "human_prompt": "Review eviction prerequisites before any legal packet or notice draft is staged.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "owner-attorney-gates",
+      "name": "Owner And Attorney Gates",
+      "description": "Capture owner and attorney direction before any legal action is prepared.",
+      "steps": [
+        {
+          "task_key": "stage-owner-eviction-decision-packet",
+          "title": "Stage owner eviction decision packet",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["review-eviction-prerequisites"],
+          "instructions": "Draft an internal owner decision packet with balance summary, timeline, payment-plan attempts, dispute status, estimated cost, alternatives, and attorney-review recommendation. This is draft-only and must not be sent externally.",
+          "dispatch_title": "Draft owner eviction decision packet",
+          "dispatch_body": "Draft internal owner eviction decision packet only. No external sends.",
+          "estimated_minutes": 30
+        },
+        {
+          "task_key": "owner-eviction-approval",
+          "title": "Owner eviction approval",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["stage-owner-eviction-decision-packet"],
+          "instructions": "Capture owner-approved path, hold, payment-plan continuation, or stop. Approval must include source, timestamp, and any spend cap. No legal action may proceed without this gate.",
+          "human_prompt": "Owner approval required before attorney handoff, notice release, court filing, or resident-facing escalation.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "attorney-readiness-review",
+          "title": "Attorney readiness review",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["owner-eviction-approval"],
+          "instructions": "Attorney or authorized legal reviewer confirms the next lawful step, required notices, filing readiness, and any corrected facts. This workflow does not replace legal advice.",
+          "human_prompt": "Attorney or authorized legal review required before any notice, filing, hearing, set-out, or resident legal communication.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "packet-staging",
+      "name": "Stage Legal Packets",
+      "description": "Prepare draft-only legal and operations packets after approvals.",
+      "steps": [
+        {
+          "task_key": "assemble-attorney-handoff-packet",
+          "title": "Assemble attorney handoff packet",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["attorney-readiness-review"],
+          "instructions": "Assemble a draft attorney handoff packet with ledger support, lease, resident contacts, notice history, payment-plan/dispute flags, owner approval, and missing-data notes. Do not send to attorney, resident, owner, court, or AppFolio.",
+          "dispatch_title": "Assemble eviction attorney handoff packet",
+          "dispatch_body": "Assemble draft attorney handoff packet only. No legal filing and no external sends.",
+          "estimated_minutes": 35
+        },
+        {
+          "task_key": "stage-resident-notice-draft",
+          "title": "Stage resident notice draft",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["attorney-readiness-review"],
+          "instructions": "If attorney review requires a notice draft, stage the draft content for human/legal review only. Do not send, serve, post, file, or imply delivery.",
+          "dispatch_title": "Stage eviction notice draft",
+          "dispatch_body": "Stage resident notice draft for legal review only. No external send, service, or filing.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "legal-release-gate",
+          "title": "Legal release gate",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["assemble-attorney-handoff-packet", "stage-resident-notice-draft"],
+          "instructions": "Human/legal approval required before any attorney send, resident notice, court filing, hearing schedule, set-out coordination, or owner update.",
+          "human_prompt": "Legal release approval required before any eviction-related external action.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "case-tracking",
+      "name": "Track Case Outcome",
+      "description": "Track legal status, payments, holds, and owner updates after human-approved action occurs outside automation.",
+      "steps": [
+        {
+          "task_key": "track-eviction-case-status",
+          "title": "Track eviction case status",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["legal-release-gate"],
+          "instructions": "Track case status, attorney refs, hearing dates if provided, resident payment or cure events, hold/stop decisions, owner update needs, and missing facts. Do not contact anyone or update legal systems.",
+          "dispatch_title": "Track eviction case status",
+          "dispatch_body": "Track eviction case status and owner update needs. No external sends and no legal-system writes.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "record-eviction-resolution",
+          "title": "Record eviction resolution",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["track-eviction-case-status"],
+          "instructions": "Record resolution as paid, payment plan, dismissed, possession, set-out, write-off, owner stop, or needs_verification, including source and timestamp. Do not post ledger changes or write to AppFolio.",
+          "dispatch_title": "Record eviction resolution",
+          "dispatch_body": "Record internal eviction resolution metadata. No ledger posting and no AppFolio writes.",
+          "estimated_minutes": 15
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "slug": "owner-maintenance-approval",
+  "name": "Owner Maintenance Approval",
+  "description": "Prepare owner approval packets for maintenance spend, capture decisions, and record approval audit details.",
+  "subject_type": "maintenance_approval",
+  "default_start_stage_key": "scope",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "scope",
+      "name": "Scope Approval Need",
+      "description": "Determine whether the maintenance item requires owner approval and what facts are needed.",
+      "steps": [
+        {
+          "task_key": "assess-approval-threshold",
+          "title": "Assess approval threshold",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "instructions": "Assess estimated cost, urgency, owner threshold, habitability impact, warranty status, and prior authorization to decide whether owner approval is required.",
+          "dispatch_title": "Assess owner maintenance approval threshold",
+          "dispatch_body": "Prepare internal approval-threshold assessment.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "collect-bid-and-evidence",
+          "title": "Collect bid and evidence",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["assess-approval-threshold"],
+          "instructions": "Collect vendor estimate, diagnostic notes, photos, resident impact, alternatives, and timing risk for the approval packet.",
+          "dispatch_title": "Collect maintenance approval evidence",
+          "dispatch_body": "Gather internal owner approval evidence.",
+          "estimated_minutes": 25
+        }
+      ]
+    },
+    {
+      "stage_key": "packet",
+      "name": "Prepare Owner Packet",
+      "description": "Draft and review the owner decision packet before release.",
+      "steps": [
+        {
+          "task_key": "draft-owner-maintenance-packet",
+          "title": "Draft owner maintenance packet",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": ["collect-bid-and-evidence"],
+          "instructions": "Draft the owner packet with recommendation, estimate, options, deadline, risks of delay, and decline-reason capture requirements.",
+          "dispatch_title": "Draft owner maintenance approval packet",
+          "dispatch_body": "Draft internal owner maintenance approval packet; no outbound send.",
+          "estimated_minutes": 25
+        },
+        {
+          "task_key": "packet-release-review",
+          "title": "Review approval packet",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-owner-maintenance-packet"],
+          "instructions": "Confirm the packet is accurate, neutral, compliant, and ready for owner-facing approval routing.",
+          "human_prompt": "Review owner maintenance approval packet before release.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "decision",
+      "name": "Capture Decision",
+      "description": "Wait for owner decision, then record and route the result.",
+      "steps": [
+        {
+          "task_key": "owner-approval-gate",
+          "title": "Owner approval gate",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["packet-release-review"],
+          "instructions": "Do not proceed until approve, edit, decline, or cancel is captured with source and timestamp. Declines require a reason.",
+          "human_prompt": "Owner approval decision required before maintenance spend is authorized.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "record-maintenance-approval-outcome",
+          "title": "Record maintenance approval outcome",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["owner-approval-gate"],
+          "instructions": "Record decision source, approval scope, spend cap, decline reason if present, and next workflow state.",
+          "dispatch_title": "Record owner maintenance approval outcome",
+          "dispatch_body": "Record owner maintenance approval decision metadata.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "slug": "trust-accounting-monthly",
+  "name": "Trust Accounting Monthly",
+  "description": "Cash coordinates month-end trust reconciliation with approval gates before any money movement or ledger correction.",
+  "subject_type": "accounting_period",
+  "default_start_stage_key": "collect",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "collect",
+      "name": "Collect Statements",
+      "description": "Gather bank, book, and liability source data.",
+      "steps": [
+        {
+          "task_key": "collect-bank-book-liability",
+          "title": "Collect bank, book, and liability balances",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "instructions": "Collect month-end bank statement, book ledger, and liability ledger balances. Do not adjust ledgers.",
+          "dispatch_title": "Collect trust reconciliation source data",
+          "dispatch_body": "Collect bank, book, and liability balances for month-end trust reconciliation. No ledger corrections.",
+          "estimated_minutes": 30
+        },
+        {
+          "task_key": "source-data-review",
+          "title": "Review source data completeness",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["collect-bank-book-liability"],
+          "instructions": "Confirm source data is complete before reconciliation begins.",
+          "human_prompt": "Confirm trust reconciliation source data is complete.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "reconcile",
+      "name": "Three-Way Reconciliation",
+      "description": "Compare bank equals book equals liability and explain variances.",
+      "steps": [
+        {
+          "task_key": "run-three-way-recon",
+          "title": "Run three-way reconciliation",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["source-data-review"],
+          "instructions": "Compare bank, book, and liability balances. Produce variance explanation and exception list.",
+          "dispatch_title": "Run trust three-way reconciliation",
+          "dispatch_body": "Run bank=book=liability reconciliation and produce variance exceptions. No money movement or ledger correction.",
+          "estimated_minutes": 45
+        },
+        {
+          "task_key": "variance-approval-gate",
+          "title": "Approve variance handling",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["run-three-way-recon"],
+          "instructions": "Approve variance handling before any correction, transfer, or owner draw.",
+          "human_prompt": "Approval required before any trust ledger correction or money movement.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "report",
+      "name": "Report And File",
+      "description": "Prepare owner-facing and audit-ready reports.",
+      "steps": [
+        {
+          "task_key": "draft-owner-statement-notes",
+          "title": "Draft owner statement notes",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["variance-approval-gate"],
+          "instructions": "Draft owner statement notes with explainable line items and approved variance handling.",
+          "dispatch_title": "Draft owner statement reconciliation notes",
+          "dispatch_body": "Draft owner statement notes from approved trust reconciliation outputs.",
+          "estimated_minutes": 30
+        },
+        {
+          "task_key": "archive-recon-package",
+          "title": "Archive reconciliation package",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-owner-statement-notes"],
+          "instructions": "Archive final statement, reconciliation report, and approval evidence.",
+          "human_prompt": "Archive the approved trust reconciliation package.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

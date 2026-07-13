@@ -19,6 +19,7 @@ import {
   IconTarget,
   IconMessages,
   IconNotes,
+  IconChecklist,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -49,6 +50,7 @@ const navItems: NavItem[] = [
   // Intelligence
   { label: 'Knowledge Base', href: '/knowledge-base', icon: IconBook2, section: 'intel' },
   { label: 'Wiki', href: '/wiki', icon: IconNotes, section: 'intel' },
+  { label: 'SOPs', href: '/sops', icon: IconChecklist, section: 'intel' },
   { label: 'Experiments', href: '/experiments', icon: IconFlask, section: 'intel' },
   { label: 'Skills', href: '/skills', icon: IconPuzzle, section: 'intel' },
 ];

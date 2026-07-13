@@ -1,0 +1,100 @@
+{
+  "slug": "pm-work-order-closeout",
+  "name": "PM Work-Order Closeout",
+  "description": "Validate maintenance completion evidence, resident communication state, invoice readiness, and PropertyMeld closeout notes before final close.",
+  "subject_type": "work_order",
+  "default_start_stage_key": "verify",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "verify",
+      "name": "Verify Completion Evidence",
+      "description": "Confirm the work order has enough evidence to support closeout.",
+      "steps": [
+        {
+          "task_key": "collect-completion-evidence",
+          "title": "Collect completion evidence",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "instructions": "Collect completion notes, technician/vendor updates, required photos, resident confirmation state, and any open parts or return-trip notes.",
+          "dispatch_title": "Collect work-order completion evidence",
+          "dispatch_body": "Gather internal closeout evidence for the work order. Do not close external systems.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "review-closeout-evidence",
+          "title": "Review closeout evidence",
+          "kind": "human_review",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["collect-completion-evidence"],
+          "instructions": "Confirm evidence is sufficient for closeout, or return the work order for missing proof.",
+          "human_prompt": "Review work-order completion evidence before closeout is staged.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "prepare",
+      "name": "Prepare Closeout",
+      "description": "Draft closeout notes and financial follow-up without changing live external state.",
+      "steps": [
+        {
+          "task_key": "draft-closeout-note",
+          "title": "Draft closeout note",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["review-closeout-evidence"],
+          "instructions": "Draft the PropertyMeld closeout note with completion summary, resident impact, vendor result, photos referenced, and unresolved caveats.",
+          "dispatch_title": "Draft PropertyMeld closeout note",
+          "dispatch_body": "Prepare internal closeout note text; do not update PropertyMeld.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "flag-invoice-readiness",
+          "title": "Flag invoice readiness",
+          "kind": "agent_task",
+          "assigned_role": "cash",
+          "is_automated": true,
+          "depends_on": ["draft-closeout-note"],
+          "instructions": "Check whether invoice review, owner billing approval, warranty coding, or vendor payment follow-up is needed before final closure.",
+          "dispatch_title": "Flag work-order invoice readiness",
+          "dispatch_body": "Prepare internal invoice readiness notes for closeout.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "close",
+      "name": "Approve Final Close",
+      "description": "Gate final closeout and record the result.",
+      "steps": [
+        {
+          "task_key": "closeout-approval-gate",
+          "title": "Closeout approval gate",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["flag-invoice-readiness"],
+          "instructions": "Approve final closeout only after completion evidence, resident state, and invoice readiness are acceptable.",
+          "human_prompt": "Approval required before final work-order closeout.",
+          "estimated_minutes": 10
+        },
+        {
+          "task_key": "record-closeout-audit",
+          "title": "Record closeout audit note",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["closeout-approval-gate"],
+          "instructions": "Record the approval source, closeout rationale, open exceptions, and next audit checkpoint in the workflow event trail.",
+          "dispatch_title": "Record work-order closeout audit note",
+          "dispatch_body": "Record final closeout decision metadata.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

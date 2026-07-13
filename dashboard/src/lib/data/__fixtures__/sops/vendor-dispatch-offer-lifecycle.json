@@ -1,0 +1,113 @@
+{
+  "slug": "vendor-dispatch-offer-lifecycle",
+  "name": "Vendor Dispatch Offer Lifecycle",
+  "description": "Prepare vendor eligibility, staged offer waves, response handling, and audit notes for maintenance dispatch.",
+  "subject_type": "vendor_dispatch",
+  "default_start_stage_key": "qualify",
+  "captured_at": "2026-07-07T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "qualify",
+      "name": "Qualify Vendor Pool",
+      "description": "Build an eligible vendor list before any offer is released.",
+      "steps": [
+        {
+          "task_key": "classify-dispatch-requirements",
+          "title": "Classify dispatch requirements",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "instructions": "Classify trade, urgency, location constraints, access needs, SLA target, required documents, and owner approval threshold.",
+          "dispatch_title": "Classify vendor dispatch requirements",
+          "dispatch_body": "Prepare internal dispatch requirements and constraints.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "build-eligible-vendor-pool",
+          "title": "Build eligible vendor pool",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["classify-dispatch-requirements"],
+          "instructions": "Build a ranked eligible vendor pool using trade fit, service area, compliance state, workload, recent performance, and exclusion flags.",
+          "dispatch_title": "Build eligible vendor pool",
+          "dispatch_body": "Prepare ranked vendor pool for dispatch offer staging.",
+          "estimated_minutes": 20
+        }
+      ]
+    },
+    {
+      "stage_key": "offer",
+      "name": "Stage Offer Lifecycle",
+      "description": "Prepare first-wave and fallback offer handling while preserving outbound approval gates.",
+      "steps": [
+        {
+          "task_key": "stage-first-offer-wave",
+          "title": "Stage first offer wave",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["build-eligible-vendor-pool"],
+          "instructions": "Stage first-wave offer text, expiration window, acceptance instructions, and idempotency key. Keep send gated to the configured outbound approval path.",
+          "dispatch_title": "Stage first vendor offer wave",
+          "dispatch_body": "Prepare first offer wave; do not send externally.",
+          "estimated_minutes": 20
+        },
+        {
+          "task_key": "offer-release-gate",
+          "title": "Offer release gate",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["stage-first-offer-wave"],
+          "instructions": "Approve the staged offer wave or return for edits before any vendor-facing release.",
+          "human_prompt": "Approval required before vendor offer release.",
+          "estimated_minutes": 10
+        },
+        {
+          "task_key": "stage-fallback-wave",
+          "title": "Stage fallback wave",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["offer-release-gate"],
+          "instructions": "Stage fallback offer rules for no response, decline, expired offer, or vendor disqualification cases.",
+          "dispatch_title": "Stage fallback vendor offer wave",
+          "dispatch_body": "Prepare fallback vendor offer rules and timing.",
+          "estimated_minutes": 15
+        }
+      ]
+    },
+    {
+      "stage_key": "award",
+      "name": "Award And Audit",
+      "description": "Capture accepted offer state and record the dispatch audit trail.",
+      "steps": [
+        {
+          "task_key": "capture-offer-outcome",
+          "title": "Capture offer outcome",
+          "kind": "agent_task",
+          "assigned_role": "blue",
+          "is_automated": true,
+          "depends_on": ["stage-fallback-wave"],
+          "instructions": "Capture accepted, declined, expired, or escalated offer state with timestamps, actor/source, and selected vendor details.",
+          "dispatch_title": "Capture vendor offer outcome",
+          "dispatch_body": "Record vendor offer outcome and dispatch state.",
+          "estimated_minutes": 15
+        },
+        {
+          "task_key": "record-dispatch-audit",
+          "title": "Record dispatch audit",
+          "kind": "agent_task",
+          "assigned_role": "dane",
+          "is_automated": true,
+          "depends_on": ["capture-offer-outcome"],
+          "instructions": "Record eligibility rationale, offer sequence, selected vendor, exceptions, and next monitoring checkpoint in the workflow event trail.",
+          "dispatch_title": "Record vendor dispatch audit",
+          "dispatch_body": "Record vendor offer lifecycle audit details.",
+          "estimated_minutes": 10
+        }
+      ]
+    }
+  ]
+}

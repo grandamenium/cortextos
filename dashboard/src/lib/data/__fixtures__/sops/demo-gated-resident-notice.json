@@ -1,0 +1,67 @@
+{
+  "slug": "demo-gated-resident-notice",
+  "name": "DEMO: Gated Resident Notice",
+  "description": "Synthetic fixture, not a real SOP. Proves the shield chip and gate-map: a resident notice classified external_comm sits behind a human_approval gate. Built to exercise shard U1 validation only; no real tenant data.",
+  "subject_type": "demo_fixture",
+  "default_start_stage_key": "prepare",
+  "captured_at": "2026-07-08T00:00:00.000Z",
+  "stages": [
+    {
+      "stage_key": "prepare",
+      "name": "Prepare Notice",
+      "description": "Draft the resident notice for review.",
+      "steps": [
+        {
+          "task_key": "draft-demo-resident-notice",
+          "title": "Draft resident notice",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "depends_on": [],
+          "instructions": "Draft a resident notice for human review before any send. Demo fixture only, no real tenant data.",
+          "dispatch_title": "Draft demo resident notice",
+          "dispatch_body": "Draft only. Demo fixture, not a real workflow.",
+          "estimated_minutes": 10
+        }
+      ]
+    },
+    {
+      "stage_key": "approval",
+      "name": "Approval Gate",
+      "description": "Human approval required before any send.",
+      "steps": [
+        {
+          "task_key": "approve-demo-resident-notice",
+          "title": "Approve resident notice",
+          "kind": "human_approval",
+          "assigned_role": "human",
+          "is_automated": false,
+          "depends_on": ["draft-demo-resident-notice"],
+          "instructions": "Approve, edit, hold, or reject the draft before it can be marked send-ready. Demo fixture only.",
+          "human_prompt": "Approve the demo resident notice before it is marked send-ready.",
+          "estimated_minutes": 5
+        }
+      ]
+    },
+    {
+      "stage_key": "release",
+      "name": "Release",
+      "description": "Send the approved resident notice.",
+      "steps": [
+        {
+          "task_key": "send-demo-resident-notice",
+          "title": "Send resident notice",
+          "kind": "agent_task",
+          "assigned_role": "lacey",
+          "is_automated": true,
+          "action_type": "external_comm",
+          "depends_on": ["approve-demo-resident-notice"],
+          "instructions": "Send the approved notice to the resident. Demo fixture only; gated by the human approval step above.",
+          "dispatch_title": "Send demo resident notice",
+          "dispatch_body": "Demo fixture only, not a real workflow.",
+          "estimated_minutes": 5
+        }
+      ]
+    }
+  ]
+}
