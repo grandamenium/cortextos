@@ -11,7 +11,10 @@
  *   never-fired  — cron has never produced an execution log entry (lastFire null)
  *                  AND it is not a future-scheduled one-shot in its grace window.
  *   failure      — most recent execution log entry is 'failed' with no later success.
- *   warning      — gap between now and lastFire > 2 × expectedIntervalMs.
+ *   warning      — EITHER the cron missed a scheduled fire (cron-expression schedules,
+ *                  detected within MISSED_FIRE_GRACE_MS of the slot — latency does NOT
+ *                  scale with the cron's period), OR gap > 2 × expectedIntervalMs
+ *                  (duration schedules, e.g. "4h").
  *   healthy      — everything else.
  *
  * One-shot crons (fire_at field set, no schedule interval)
@@ -22,6 +25,7 @@
  */
 
 import { parseDurationMs } from '../bus/cron-state.js';
+import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import type { CronSummaryRow, CronExecutionLogEntry } from '../types/index.js';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +88,56 @@ export interface FleetHealthResult {
 
 /** Multiplier: a cron is "warning" when gap > WARNING_MULTIPLIER × expectedIntervalMs */
 export const WARNING_MULTIPLIER = 2;
+
+/**
+ * Grace period after a scheduled slot before a missing fire is called a miss.
+ * Absorbs normal execution latency (the agent records the fire a beat after the
+ * scheduler triggers it) without letting a genuinely dead cron hide.
+ */
+export const MISSED_FIRE_GRACE_MS = 15 * 60_000;
+
+/** Iteration cap when walking a cron expression forward. Bounds a pathological expr. */
+const MAX_SLOT_WALK = 2_000;
+
+/**
+ * The most recent scheduled slot at or before `nowMs` for a 5-field cron expression.
+ * Returns null if the expression is unparseable or has no slot in the lookback window.
+ *
+ * WHY THIS EXISTS — the bug it fixes:
+ * expectedIntervalMs is derived via parseDurationMs(schedule), which returns NaN for a
+ * CRON EXPRESSION ("7 15 * * 1"). NaN || 0 => 0, and the staleness rule is gated on
+ * `expectedIntervalMs > 0` — so for every cron-expression cron THE WARNING BRANCH WAS
+ * NEVER ENTERED. Not "warned late": NEVER WARNED. A cron dead for 30 days reported
+ * HEALTHY. That was 13 of 24 fleet crons, including a weekly security sweep, a live-site
+ * uptime check, and — the sharp one — the stale-heartbeat-check that exists to catch dead
+ * agents and was itself unwatched.
+ *
+ * And the fix is NOT to teach parseDurationMs about cron expressions: that would arm the
+ * 2x-gap rule, whose blind window SCALES WITH THE PERIOD (a weekly cron would still be
+ * invisible for a fortnight). Gap-since-last-fire is the wrong primitive.
+ *
+ * The right question is not "how long since it last ran?" but "DID IT RUN WHEN IT SAID IT
+ * WOULD?" — and the schedule already tells us when that was. Detection latency then tracks
+ * the GRACE PERIOD, not the cron's cadence: a weekly sweep that skips its slot is caught in
+ * minutes, exactly like a 27-minute tick.
+ */
+export function previousSlotMs(schedule: string, nowMs: number): number | null {
+  // Look back far enough to contain at least one slot of any sane schedule (>1 week),
+  // but walk forward from the *smallest* window that yields one so a per-minute cron
+  // does not cost 10k iterations.
+  for (const windowMs of [2 * 3_600_000, 26 * 3_600_000, 9 * 86_400_000]) {
+    let cursor = nowMs - windowMs;
+    let last: number | null = null;
+    for (let i = 0; i < MAX_SLOT_WALK; i++) {
+      const next = nextFireFromCron(schedule, cursor);
+      if (Number.isNaN(next) || next > nowMs) break;
+      last = next;
+      cursor = next;
+    }
+    if (last !== null) return last;
+  }
+  return null;
+}
 
 /** Grace period for one-shot crons (ms): 10 minutes past fire_at before becoming warning */
 const ONCE_GRACE_MS = 10 * 60 * 1000;
@@ -152,6 +206,26 @@ export function computeHealth(
     return makeHealth(agent, org, cron.name, nextFire, 'failure',
       `most recent execution failed (${formatRelativeMs(gapMs!)} ago)`,
       lastFireMs, expectedIntervalMs, gapMs, successRate24h, firesLast24h);
+  }
+
+  // warning: MISSED AN EXPECTED FIRE.
+  //
+  // This is the rule that covers cron-expression schedules, for which expectedIntervalMs
+  // is 0 and the 2x-gap rule below is skipped entirely. It asks the right question — "did
+  // it run when it said it would?" — so its detection latency is the grace period, NOT the
+  // cron's period. A weekly cron is caught as fast as a 27-minute one.
+  if (expectedIntervalMs === 0) {
+    const slot = previousSlotMs(cron.schedule, nowMs);
+    if (slot !== null && nowMs > slot + MISSED_FIRE_GRACE_MS) {
+      // A fire recorded at/after the slot (minus a minute of clock slop) means it ran.
+      const ranForSlot = lastFireMs !== null && lastFireMs >= slot - 60_000;
+      if (!ranForSlot) {
+        return makeHealth(agent, org, cron.name, nextFire, 'warning',
+          `MISSED its scheduled fire at ${new Date(slot).toISOString()} ` +
+          `(last fire ${lastFireMs === null ? 'never' : formatRelativeMs(gapMs!) + ' ago'})`,
+          lastFireMs, expectedIntervalMs, gapMs, successRate24h, firesLast24h);
+      }
+    }
   }
 
   // warning: gap > 2x expected interval (only applies when interval is known)

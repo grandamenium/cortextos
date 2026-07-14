@@ -18,6 +18,8 @@ import {
   computeHealth,
   aggregateFleetHealth,
   WARNING_MULTIPLIER,
+  MISSED_FIRE_GRACE_MS,
+  previousSlotMs,
   type CronHealth,
   type HealthState,
 } from '../../../src/utils/cron-health';
@@ -183,16 +185,69 @@ describe('computeHealth — warning', () => {
     expect(result.state).toBe('warning');
   });
 
-  it('no warning for cron expression schedules (interval unknown — expectedIntervalMs 0)', () => {
-    // Cron expression: parseDurationMs returns NaN -> expectedIntervalMs = 0
-    // When expectedIntervalMs === 0, the warning check is skipped
-    const lastFire = new Date(NOW_MS - 100 * 3_600_000).toISOString(); // 100h ago — huge gap
+  it('cron expression, dead 100h -> WARNING (was a silent healthy)', () => {
+    // THIS TEST REPLACES A TAUTOLOGY. The previous version asserted
+    //     expect(['healthy', 'warning']).toContain(result.state)
+    // on a cron dead for 100 HOURS — an assertion that CANNOT FAIL, because it accepts
+    // the buggy answer and the correct one equally. Its own comment said "should be
+    // healthy (or warning if we add logic later)". So the gap was known, documented,
+    // and then guarded by a test that passes no matter what the code does.
+    // A TEST THAT CANNOT FAIL IS NOT A TEST — and this one sat on top of a health monitor
+    // that reported HEALTHY for a cron that had been dead for a month.
+    const lastFire = new Date(NOW_MS - 100 * 3_600_000).toISOString();
     const row = makeRow({ lastFire, lastStatus: 'fired', schedule: '0 9 * * *' });
     const result = computeHealth(row, [], NOW_MS);
-    // Can't compute warning for cron expr — should be healthy (or warning if we add logic later)
-    expect(['healthy', 'warning']).toContain(result.state);
-    // But specifically: expectedIntervalMs must be 0
-    expect(result.expectedIntervalMs).toBe(0);
+    expect(result.state).toBe('warning');            // <- asserts. Fails on the old code.
+    expect(result.reason).toMatch(/MISSED its scheduled fire/);
+    expect(result.expectedIntervalMs).toBe(0);       // still 0 — we did not fake an interval
+  });
+
+  // ── NEGATIVE CONTROLS ────────────────────────────────────────────────────────
+  // A liveness check that cannot be SHOWN TO FIRE is a vacuous gate, and a liveness
+  // check is the last place to ship one: its whole job is to fire when everything else
+  // looks fine. Each of these FAILS against the pre-fix code.
+
+  it('NEGATIVE CONTROL — weekly cron that skipped its slot is caught in MINUTES, not a fortnight', () => {
+    // The 2x-gap rule would need 14 DAYS to notice this (2 x 7d) — if it ran at all,
+    // which for a cron expression it did not. Missed-slot detection catches it at
+    // slot + grace, so latency tracks CONSEQUENCE, not the cron's cadence.
+    const schedule = '7 15 * * 1';                       // Mondays 15:07 — a security sweep
+    const slot = previousSlotMs(schedule, NOW_MS)!;
+    expect(slot).not.toBeNull();
+    const justPastGrace = slot + MISSED_FIRE_GRACE_MS + 60_000;   // ~16 minutes after the slot
+    const row = makeRow({
+      schedule,
+      lastFire: new Date(slot - 7 * 86_400_000).toISOString(),    // last ran a week ago; skipped today
+      lastStatus: 'fired',
+    });
+    const result = computeHealth(row, [], justPastGrace);
+    expect(result.state).toBe('warning');
+  });
+
+  it('NEGATIVE CONTROL — a cron that DID fire for its slot stays healthy (no false alarm)', () => {
+    const schedule = '7 15 * * 1';
+    const slot = previousSlotMs(schedule, NOW_MS)!;
+    const row = makeRow({
+      schedule,
+      lastFire: new Date(slot + 30_000).toISOString(),   // fired 30s after its slot
+      lastStatus: 'fired',
+    });
+    const result = computeHealth(row, [], slot + MISSED_FIRE_GRACE_MS + 60_000);
+    expect(result.state).toBe('healthy');
+  });
+
+  it('NEGATIVE CONTROL — inside the grace window we do NOT cry wolf', () => {
+    // Execution latency is real: the scheduler triggers, the agent records the fire a beat
+    // later. A monitor that fires on that beat is a monitor people learn to ignore.
+    const schedule = '*/27 * * * *';
+    const slot = previousSlotMs(schedule, NOW_MS)!;
+    const row = makeRow({
+      schedule,
+      lastFire: new Date(slot - 27 * 60_000).toISOString(),  // fired the PREVIOUS slot, not this one
+      lastStatus: 'fired',
+    });
+    const result = computeHealth(row, [], slot + MISSED_FIRE_GRACE_MS - 60_000);  // still in grace
+    expect(result.state).toBe('healthy');
   });
 
   it('30m schedule — warning after 1h 1ms', () => {
@@ -338,14 +393,22 @@ describe('computeHealth — successRate24h', () => {
 // ---------------------------------------------------------------------------
 
 describe('computeHealth — edge cases', () => {
-  it('handles daemon-was-down scenario: lastStatus fired but huge gap with cron expr', () => {
-    // Cron expression schedule, fired 3 days ago — expectedIntervalMs = 0, so no warning
+  it('daemon-was-down scenario: a daily cron silent for 3 days -> WARNING', () => {
+    // ★ THIS TEST USED TO ASSERT `healthy`. Read that again: it was NAMED
+    // "handles daemon-was-down scenario" and it asserted THE MONITOR REPORTS HEALTHY.
+    // The bug was not merely unnoticed — it was written down as a REQUIREMENT and
+    // pinned by an assertion. "expectedIntervalMs = 0, so warning threshold cannot be
+    // computed → healthy" describes the implementation's limitation and then blesses it
+    // as the expected result. Any future fix would break this test, and the fix would
+    // have looked like the regression.
+    //
+    // A daily cron that has not run in three days is not healthy. It is the loudest
+    // possible signal that something is wrong, and the health monitor said nothing.
     const lastFire = new Date(NOW_MS - 3 * 86_400_000).toISOString();
     const row = makeRow({ lastFire, lastStatus: 'fired', schedule: '0 9 * * *' });
     const result = computeHealth(row, [], NOW_MS);
-    // expectedIntervalMs = 0, so warning threshold cannot be computed → healthy
-    expect(result.expectedIntervalMs).toBe(0);
-    expect(result.state).toBe('healthy');
+    expect(result.expectedIntervalMs).toBe(0);   // unchanged: we did NOT fabricate an interval
+    expect(result.state).toBe('warning');        // the missed-slot rule sees it
   });
 
   it('handles clock skew: lastFire in the future produces gapMs < 0 but state healthy', () => {
