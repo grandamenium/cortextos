@@ -116,10 +116,10 @@ const ACCOUNTS = [
 const DEAL_KEYWORDS = /crawford|greg cole|keith mendosa|loi|letter of intent|offer|contract|closing|purchase agreement|earnest|junietha|shambee|rei chicago|oscar|polk|ted sanders|ted@americahomerestoration/i;
 
 // Senders/patterns to suppress silently (mark read, no Telegram alert)
-const SUPPRESS_SENDERS = /resnexus\.com|communications@resnexus|shutterstock\.com|emktng\.shutterstock|frommilitarytomillionaire\.com|iheart\.com|sofi\.com|gobrightline\.com|tymobeauty\.com|rodanandfields\.com|nuuly\.com|depop\.com|expedia\.com|tripadvisor\.com|turo\.com|benchmade\.com|jostens\.com|salliemae\.com|lendingclub\.com|shakeshack\.com|@e\.upgrade\.com|ebay\.com|alltrails\.com|aausports\.org|purefrequencies\.com|moneylion\.com|gainrepmail\.com|aurahealth\.io|youversion\.com|notarize\.com|@(email|close)\.close\.com|tasks\.clickup\.com|attio\.com|@attio\.|bluehorizon-realestate\.com|arturo@bluehorizon|newwestern\.com|@newwestern\.|@fyxer\.com|hostcamp\.com|@hostcamp\.|askforfunding\.com|@askforfunding\.|rocketlawyer\.com|@rocketlawyer\.|uber\.com|@uber\.|@h5\.hilton\.com|hilton\.com|zenbusiness\.com|@zenbusiness\.|capstoneconnectors\.com|@capstoneconnectors\.|remitly\.com|@remitly\.|info\.remitly|ablink\.info\.rem|invoice\+statements@make\.com|celonis\.com|taxact\.com|@taxact\.|360onlineprint\.com|@360onlineprint\.|constantcontact\.com|mailchimp\.com|klaviyo\.com|substack\.com|beehiiv\.com|convertkit\.com|mnatsakanian|toptiertc\.com|@toptiertc\.|top\.tier\.tc/i;
+const SUPPRESS_SENDERS = /resnexus\.com|communications@resnexus|shutterstock\.com|emktng\.shutterstock|frommilitarytomillionaire\.com|iheart\.com|sofi\.com|gobrightline\.com|tymobeauty\.com|rodanandfields\.com|nuuly\.com|depop\.com|expedia\.com|tripadvisor\.com|turo\.com|benchmade\.com|jostens\.com|salliemae\.com|lendingclub\.com|shakeshack\.com|@e\.upgrade\.com|ebay\.com|alltrails\.com|aausports\.org|purefrequencies\.com|moneylion\.com|gainrepmail\.com|aurahealth\.io|youversion\.com|notarize\.com|@(email|close)\.close\.com|tasks\.clickup\.com|attio\.com|@attio\.|bluehorizon-realestate\.com|arturo@bluehorizon|newwestern\.com|@newwestern\.|@fyxer\.com|hostcamp\.com|@hostcamp\.|askforfunding\.com|@askforfunding\.|rocketlawyer\.com|@rocketlawyer\.|uber\.com|@uber\.|@h5\.hilton\.com|hilton\.com|zenbusiness\.com|@zenbusiness\.|capstoneconnectors\.com|@capstoneconnectors\.|remitly\.com|@remitly\.|info\.remitly|ablink\.info\.rem|invoice\+statements@make\.com|celonis\.com|taxact\.com|@taxact\.|360onlineprint\.com|@360onlineprint\.|constantcontact\.com|mailchimp\.com|klaviyo\.com|substack\.com|beehiiv\.com|convertkit\.com|mnatsakanian|toptiertc\.com|@toptiertc\.|top\.tier\.tc|airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|cara\.lee@|caralee@/i;
 
 // Subject patterns that are always marketing/noise regardless of sender — suppress
-const SUPPRESS_SUBJECTS = /\bchallenge\b.*register|you.re not registered|don.t miss.*challenge|join.*challenge|all abilities challenge|on track for (next|your) (tax|season)|product (has )?shipped|your order (has )?shipped|your (package|shipment) (is |has )?shipped|built for solo.*agency.*scale|which one.s you|webinar.*register|register.*webinar|free training|free masterclass|free workshop|join us (live|online|virtually)|replay.*available|watch the replay|limited.*seats|seats.*limited|early.bird|special (offer|discount|price)|% off (today|now|this week)|flash sale|last chance|ends (tonight|tomorrow|soon)|deal of the day|promo code|coupon inside/i;
+const SUPPRESS_SUBJECTS = /\bchallenge\b.*register|you.re not registered|don.t miss.*challenge|join.*challenge|all abilities challenge|on track for (next|your) (tax|season)|product (has )?shipped|your order (has )?shipped|your (package|shipment) (is |has )?shipped|built for solo.*agency.*scale|which one.s you|webinar.*register|register.*webinar|free training|free masterclass|free workshop|join us (live|online|virtually)|replay.*available|watch the replay|limited.*seats|seats.*limited|early.bird|special (offer|discount|price)|% off (today|now|this week)|flash sale|last chance|ends (tonight|tomorrow|soon)|deal of the day|promo code|coupon inside|LIVE NOW:|live now:|bonus.*underwriting|underwriting.*bonus|market.*(shifted|favor)|shifted.*favor|collect rent without|close in \d+ (business )?(days?|weeks?)|dscr (from|as low as|at) \d|hard money (lender|loan|available|fast)|private (money|lender|lending) (available|offer|solution)|we('re)? (fund|lending)|can fund your (deal|flip|project|rehab)|asset.based lend|no income.*verif|quick (close|fund)|fast close|close fast|fix.?and.?flip loan|rental (loan|financing) offer|bridge (loan|lender|funding) (offer|available|fast)/i;
 
 // Jennifer's own email addresses — used to detect self-sent calendar invites
 const JENNIFER_EMAILS = /jennifer\.l\.breitbach@gmail|jennifer\.breitbach@total-investment|jennifer@jordanreyes|jennifer@americahome|jbreitbach1979@gmail/i;
@@ -129,6 +129,11 @@ const TRANSACTIONAL_KEYWORDS = /reservation|confirmation|booking|check.in|check.
 
 // Senders that always pass through regardless of other rules (operational platforms)
 const ALWAYS_ALERT_SENDERS = /turbotenant\.com/i;
+
+// Known real counterparties — always pass regardless of subject match.
+// A subject match from a whitelisted sender is NEVER suppressed (a real lender/attorney
+// can legitimately use phrases like "DSCR", "fund your deal", "close in 2 weeks").
+const SENDER_WHITELIST = /dahae|rok\.financial|rokfinancial|billingsrealtybrokers\.com|kathy@billings|initialrentals\.com|@sitewire\.|sitewire\.com|beartooth|tamara\.jensen|tammy\.jensen|gilbertresilientrealty|nancy.*hanson@|@doorloop\.|@turbotenant\.|rufus.*peace|integrity.*first|juneitha|shambee|@kultivate|@culturalrealty|mnatsakanian/i;
 
 // Senders to auto-forward to a specific address (pattern -> email)
 const FORWARD_RULES = [
@@ -160,8 +165,10 @@ function shouldAlert(from, subject, body) {
   // Always suppress known marketing/noise senders
   if (SUPPRESS_SENDERS.test(from)) return 'suppress';
 
-  // Suppress marketing noise by subject pattern (challenges, promos, shipping notices, webinars)
-  if (SUPPRESS_SUBJECTS.test(subject)) return 'suppress';
+  // Suppress marketing noise by subject pattern — but NEVER suppress a whitelisted sender.
+  // Real counterparties (lenders, attorneys, partners) can legitimately use phrases that
+  // match cold-blast patterns ("DSCR", "fund your deal", "close in 2 weeks").
+  if (!SENDER_WHITELIST.test(from) && SUPPRESS_SUBJECTS.test(subject)) return 'suppress';
 
   // Suppress promotional emails from these senders, but pass through real reservations/receipts
   if (SUPPRESS_UNLESS_TRANSACTIONAL.test(from)) {
