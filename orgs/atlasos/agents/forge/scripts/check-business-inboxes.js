@@ -517,6 +517,10 @@ async function checkAccount(account) {
     }
     busAtlas(msg.trim());
     appendToDigest(label, items);
+    // Mark all alerted items as sent so they don't re-surface next run
+    for (const it of items) {
+      if (it.messageId) { markAlertSent(it.messageId); _sentAlertsCache[it.messageId] = Date.now(); }
+    }
     console.log(`${label}: ${messages.messages.length} new email(s)`);
   } catch (e) {
     if (e.message?.includes('invalid_grant') || e.message?.includes('Token refresh failed')) {
