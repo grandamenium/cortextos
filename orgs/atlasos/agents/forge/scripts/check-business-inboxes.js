@@ -102,7 +102,7 @@ const BUSINESS_QUERY = 'is:unread -category:promotions -category:social -categor
 
 const ACCOUNTS = [
   { file: 'gmail_tokens.json',         label: 'Personal',         query: BUSINESS_QUERY, max: 5 },
-  { file: 'gmail_tis_tokens.json',     label: 'TIS',              query: 'is:unread newer_than:2d', max: 5 },
+  // gmail_tis_tokens.json = atlas@TIS alias — handled exclusively by check-atlas-inbox.js to prevent duplicate relays
   { file: 'gmail_tis4u_tokens.json',   label: 'TIS Business',     query: 'is:unread newer_than:2d', max: 5 },
   { file: 'gmail_ilp_tokens.json',     label: 'ILP',              query: 'is:unread -label:ForgeAlerted newer_than:2d', max: 5, alertLabel: 'ForgeAlerted' },
   { file: 'gmail_jb1979_tokens.json',  label: 'JB1979',           query: BUSINESS_QUERY, max: 5 },
