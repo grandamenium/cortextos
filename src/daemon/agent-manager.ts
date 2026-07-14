@@ -22,6 +22,9 @@ type LogFn = (msg: string) => void;
 /**
  * Manages all agents in a cortextOS instance.
  */
+import { reconcileAgentCrons } from '../utils/cron-registration.js';
+import { readCrons } from '../bus/crons.js';
+
 export class AgentManager {
   private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller; telegramRejectCount?: number; telegramLastRejectAlertAt?: number }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
@@ -111,6 +114,54 @@ export class AgentManager {
   /**
    * Discover and start all enabled agents.
    */
+  /**
+   * Reconcile every agent's DECLARED crons (config.json) against its LIVE registration
+   * (crons.json), and shout about any asymmetry.
+   *
+   * WHY THIS LIVES IN THE DAEMON AND NOT IN A CRON:
+   * A cron that watches crons can die the same silent death it exists to catch, and then
+   * everything looks healthy forever — a monitor monitoring monitors, monitored by nothing.
+   * The daemon is the correct floor because ITS OWN DEATH IS ALREADY LOUD: if the daemon is
+   * gone, no cron fires at all and the agent goes visibly STALE. It cannot fail quietly
+   * while the thing it watches keeps running. Put the guard where its own failure is
+   * impossible to miss.
+   */
+  checkCronRegistration(): void {
+    let examinedTotal = 0;
+    const allDrift: string[] = [];
+
+    for (const { name, config } of this.discoverAgents()) {
+      const declared = (config?.crons ?? []).map(c => ({ name: c.name }));
+      let registered: Array<{ name: string; enabled?: boolean }> = [];
+      try {
+        registered = readCrons(name).map(c => ({ name: c.name, enabled: c.enabled }));
+      } catch {
+        // Unreadable live crons for this agent — that is itself worth saying, not skipping.
+        console.warn(`[cron-registration] ${name}: live crons.json unreadable — cannot verify its crons exist`);
+        continue;
+      }
+      const { drift, examined } = reconcileAgentCrons(name, declared, registered);
+      examinedTotal += examined;
+      for (const d of drift) {
+        allDrift.push(`${d.agent}/${d.cron}: ${d.kind} — ${d.detail}`);
+      }
+    }
+
+    // ZERO COVERAGE IS NOT AN ALL-CLEAR. If we compared nothing, say so — an empty drift
+    // list over an empty comparison is a tick over nothing, which is the failure mode this
+    // whole check exists to prevent.
+    if (examinedTotal === 0) {
+      console.warn('[cron-registration] examined 0 crons — CANNOT confirm any cron is registered');
+      return;
+    }
+    if (allDrift.length === 0) {
+      console.log(`[cron-registration] ${examinedTotal} cron(s) reconciled, no drift`);
+      return;
+    }
+    console.warn(`[cron-registration] ★ DRIFT — ${allDrift.length} of ${examinedTotal} cron(s) disagree between config.json and crons.json:`);
+    for (const line of allDrift) console.warn(`[cron-registration]   ${line}`);
+  }
+
   async discoverAndStart(): Promise<void> {
     const agentDirs = this.discoverAgents();
 

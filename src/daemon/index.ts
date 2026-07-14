@@ -229,6 +229,8 @@ class Daemon {
     this.ctxRoot = join(homedir(), '.cortextos', this.instanceId);
   }
 
+  private cronRegistrationTimer?: NodeJS.Timeout;
+
   async start(): Promise<void> {
     // Force restrictive default permissions for everything the daemon writes:
     // 0700 dirs, 0600 files. Belt-and-suspenders for explicit chmod calls.
@@ -265,6 +267,19 @@ class Daemon {
 
     // Discover and start agents
     await this.agentManager.discoverAndStart();
+
+    // A cron that is NOT REGISTERED has no fire-gap to measure: it is not late, it is
+    // ABSENT, and every fire-based health check reports nothing wrong forever. Verify at
+    // startup and hourly that what config.json DECLARES is what crons.json actually holds.
+    this.agentManager.checkCronRegistration();
+    this.cronRegistrationTimer = setInterval(() => {
+      try {
+        this.agentManager?.checkCronRegistration();
+      } catch (err) {
+        console.error('[cron-registration] check threw:', err);
+      }
+    }, 60 * 60_000);
+    this.cronRegistrationTimer.unref?.();
 
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
