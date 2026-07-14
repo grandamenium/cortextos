@@ -156,7 +156,13 @@ export class FastChecker {
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
+    // TEMP DIAGNOSTIC (2026-07-14): unconditional, logs the captured value
+    // immediately, at registration time — see task_1783847243268_19095709.
+    this.log(`WATCHDOG DIAGNOSTIC: timer registered with agentName="${agentName}" (this.agent.name="${this.agent.name}", dir=${this.agent.getAgentDir()})`);
     this.heartbeatTimer = setInterval(() => {
+      // TEMP DIAGNOSTIC (2026-07-14): unconditional, every firing, not just
+      // on mismatch — see task_1783847243268_19095709.
+      this.log(`WATCHDOG DIAGNOSTIC: firing with agentName="${agentName}" (live this.agent.name="${this.agent.name}", dir=${this.agent.getAgentDir()})`);
       const ts = new Date().toISOString();
       // cwd MUST be this agent's own directory: execFile inherits the DAEMON's
       // cwd/env by default (this call runs inside the daemon process, not the
