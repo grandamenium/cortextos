@@ -239,15 +239,25 @@ describe('computeHealth — warning', () => {
   it('NEGATIVE CONTROL — inside the grace window we do NOT cry wolf', () => {
     // Execution latency is real: the scheduler triggers, the agent records the fire a beat
     // later. A monitor that fires on that beat is a monitor people learn to ignore.
+    //
+    // ★ THIS TEST WAS VACUOUS ON ITS FIRST WRITING AND A MUTANT CAUGHT IT.
+    // It anchored `now` to `slot + MISSED_FIRE_GRACE_MS - 60s`. Set the grace to 0 and that
+    // expression slides BEFORE the slot — so previousSlotMs picks the PRECEDING slot, which
+    // the cron did fire, and the test passes for a reason that has nothing to do with grace.
+    // It passed for EVERY value of MISSED_FIRE_GRACE_MS, i.e. it never tested grace at all.
+    // Anchoring `now` to a FIXED offset past the slot makes it fail when grace is 0 — which
+    // is the only thing that makes it a test of the grace window.
     const schedule = '*/27 * * * *';
     const slot = previousSlotMs(schedule, NOW_MS)!;
+    const oneMinuteAfterTheSlot = slot + 60_000;    // fixed: does NOT move with the constant
+    expect(MISSED_FIRE_GRACE_MS).toBeGreaterThan(60_000);   // the premise the test rests on
     const row = makeRow({
       schedule,
       lastFire: new Date(slot - 27 * 60_000).toISOString(),  // fired the PREVIOUS slot, not this one
       lastStatus: 'fired',
     });
-    const result = computeHealth(row, [], slot + MISSED_FIRE_GRACE_MS - 60_000);  // still in grace
-    expect(result.state).toBe('healthy');
+    const result = computeHealth(row, [], oneMinuteAfterTheSlot);
+    expect(result.state).toBe('healthy');   // one minute late is latency, not death
   });
 
   it('30m schedule — warning after 1h 1ms', () => {
