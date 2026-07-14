@@ -159,6 +159,26 @@ export class FastChecker {
     // TEMP DIAGNOSTIC (2026-07-14): unconditional, logs the captured value
     // immediately, at registration time — see task_1783847243268_19095709.
     this.log(`WATCHDOG DIAGNOSTIC: timer registered with agentName="${agentName}" (this.agent.name="${this.agent.name}", dir=${this.agent.getAgentDir()})`);
+    // EXPERIMENT (2026-07-14, task_1783847243268_19095709): every agent's
+    // watchdog timer registers within milliseconds of the others at daemon
+    // start, so all 5 fire in the same tight window every 50 minutes. The
+    // daemon-side code has been proven correct at both registration and
+    // firing time across many ticks, yet the persisted file still shows a
+    // cross-agent mismatch — pointing at something in the near-simultaneous
+    // execFile dispatch itself, not per-agent logic. Staggering each agent's
+    // FIRST tick by a small deterministic offset (derived from its own name,
+    // 0-4999ms) decouples the 5 agents' firing times from each other without
+    // changing the 50-min cadence itself. If this measurably reduces/
+    // eliminates the corruption, that's strong evidence for a concurrency
+    // issue in dispatching multiple near-simultaneous execFile calls with
+    // different cwd options. Small, revertible: only this initial-delay
+    // wrapper, the interval mechanics below are unchanged. Remove (or make
+    // permanent) once root-caused.
+    let hash = 0;
+    for (let i = 0; i < agentName.length; i++) hash = (hash * 31 + agentName.charCodeAt(i)) >>> 0;
+    const staggerMs = hash % 5000;
+    this.log(`WATCHDOG DIAGNOSTIC: staggering first tick by ${staggerMs}ms`);
+    setTimeout(() => {
     this.heartbeatTimer = setInterval(() => {
       // TEMP DIAGNOSTIC (2026-07-14): unconditional, every firing, not just
       // on mismatch — see task_1783847243268_19095709.
@@ -193,6 +213,7 @@ export class FastChecker {
         },
       );
     }, HEARTBEAT_INTERVAL_MS);
+    }, staggerMs);
 
     // Wake-latency (non-wake) stuck-session detector: catches an idle session
     // that received a dispatched cron/message but never processed it (a
