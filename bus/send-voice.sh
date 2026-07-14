@@ -42,7 +42,7 @@ HTTP_CODE=$(curl -s -w "%{http_code}" -o "$MP3_FILE" \
     -X POST "https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}" \
     -H "xi-api-key: ${ELEVENLABS_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "{\"text\":${ESCAPED_TEXT},\"model_id\":\"eleven_monolingual_v1\",\"voice_settings\":{\"stability\":0.5,\"similarity_boost\":0.75}}")
+    -d "{\"text\":${ESCAPED_TEXT},\"model_id\":\"eleven_v3\",\"voice_settings\":{\"stability\":0.5,\"similarity_boost\":0.75}}")
 
 if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
     echo "ElevenLabs API error (HTTP ${HTTP_CODE})" >&2
