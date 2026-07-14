@@ -60,12 +60,24 @@ function makeHook(overrides: Partial<HookEntry> = {}): HookEntry {
 }
 
 // Helper: read the meta JSON from the most recent execFile call.
+//
+// The dispatcher branches on process.env.CTX_FRAMEWORK_ROOT: when set it
+// invokes `process.execPath [cliPath, 'bus', 'log-event', 'action', <name>,
+// 'info', '--meta', <json>]` (name at a shifted index, because cliPath is
+// prepended); when unset it falls back to `execFile('cortextos', ['bus',
+// 'log-event', 'action', <name>, 'info', '--meta', <json>])` (name at index
+// 3). This test suite never pins CTX_FRAMEWORK_ROOT, so it silently
+// exercised whichever branch the ambient shell happened to leave set —
+// broke when run from inside a live agent's own shell (CTX_FRAMEWORK_ROOT
+// genuinely set), where the hardcoded index 3 landed on 'action' instead of
+// <name>. Locating <name> relative to 'info'/'--meta' (always 2 and 1
+// positions before it, respectively, in EITHER branch) makes this
+// deterministic regardless of which branch actually ran.
 function lastEmittedEvent(): { name: string; meta: Record<string, unknown> } | null {
   if (execFileCalls.length === 0) return null;
   const args = execFileCalls[execFileCalls.length - 1].args;
-  // shape: [bus, log-event, action, <name>, info, --meta, <json>]
-  const name = args[3];
   const metaIdx = args.indexOf('--meta');
+  const name = metaIdx >= 2 ? args[metaIdx - 2] : args[3];
   const meta = metaIdx >= 0 && metaIdx + 1 < args.length ? JSON.parse(args[metaIdx + 1]) : {};
   return { name, meta };
 }

@@ -52,8 +52,26 @@ describe('readMaxCrashesPerDay', () => {
 });
 
 describe('notifyAgents', () => {
+  // notifyAgents branches on process.env.CTX_FRAMEWORK_ROOT: when set, it invokes
+  // `process.execPath [cliPath, 'bus', 'send-message', target, 'high', body]`
+  // (body at args[5]); when unset, it falls back to `execFile('cortextos', ['bus',
+  // 'send-message', target, 'high', body])` (body at args[4]). These tests left
+  // CTX_FRAMEWORK_ROOT to whatever the ambient shell happened to have, so they
+  // silently exercised whichever branch matched the machine running them —
+  // passing for years until run somewhere with CTX_FRAMEWORK_ROOT genuinely set
+  // (this repo's own dev/CI environment), where the primary branch's shifted
+  // argv broke every hardcoded index. Pinning the env var explicitly per test
+  // makes the branch under test deterministic instead of environment-dependent.
+  const ORIGINAL_FRAMEWORK_ROOT = process.env.CTX_FRAMEWORK_ROOT;
+
   beforeEach(() => {
     execFileMock.mockReset();
+    process.env.CTX_FRAMEWORK_ROOT = '/fake/framework/root';
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_FRAMEWORK_ROOT === undefined) delete process.env.CTX_FRAMEWORK_ROOT;
+    else process.env.CTX_FRAMEWORK_ROOT = ORIGINAL_FRAMEWORK_ROOT;
   });
 
   it('sends one bus send-message per recipient', () => {
@@ -69,7 +87,25 @@ describe('notifyAgents', () => {
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
-  it('uses cortextos bus send-message with priority high', () => {
+  it('uses process.execPath + cli.js with priority high (CTX_FRAMEWORK_ROOT set)', () => {
+    notifyAgents({
+      agentName: 'dev',
+      endType: 'crash',
+      reason: 'r',
+      lastTask: 't',
+      crashCount: 1,
+      restartAttempted: true,
+      recipients: ['chief'],
+    });
+    const [cmd, args] = execFileMock.mock.calls[0];
+    expect(cmd).toBe(process.execPath);
+    expect(args.slice(0, 5)).toEqual([
+      '/fake/framework/root/dist/cli.js', 'bus', 'send-message', 'chief', 'high',
+    ]);
+  });
+
+  it('falls back to plain "cortextos" on PATH when CTX_FRAMEWORK_ROOT is unset', () => {
+    delete process.env.CTX_FRAMEWORK_ROOT;
     notifyAgents({
       agentName: 'dev',
       endType: 'crash',
@@ -82,6 +118,7 @@ describe('notifyAgents', () => {
     const [cmd, args] = execFileMock.mock.calls[0];
     expect(cmd).toBe('cortextos');
     expect(args.slice(0, 4)).toEqual(['bus', 'send-message', 'chief', 'high']);
+    expect(args[4]).toContain('agent=dev');
   });
 
   it('body includes all required fields', () => {
@@ -94,7 +131,7 @@ describe('notifyAgents', () => {
       restartAttempted: false,
       recipients: ['analyst'],
     });
-    const body: string = execFileMock.mock.calls[0][1][4];
+    const body: string = execFileMock.mock.calls[0][1][5];
     expect(body).toContain('agent=dev');
     expect(body).toContain('type=daemon-crashed');
     expect(body).toContain('reason: PTY null write');
@@ -113,7 +150,7 @@ describe('notifyAgents', () => {
       restartAttempted: true,
       recipients: ['chief'],
     });
-    expect(execFileMock.mock.calls[0][1][4]).toContain('restart attempted: yes');
+    expect(execFileMock.mock.calls[0][1][5]).toContain('restart attempted: yes');
   });
 
   it('uses fallback strings when reason and lastTask are empty', () => {
@@ -126,7 +163,7 @@ describe('notifyAgents', () => {
       restartAttempted: true,
       recipients: ['chief'],
     });
-    const body: string = execFileMock.mock.calls[0][1][4];
+    const body: string = execFileMock.mock.calls[0][1][5];
     expect(body).toContain('reason: none');
     expect(body).toContain('last status: unknown');
   });

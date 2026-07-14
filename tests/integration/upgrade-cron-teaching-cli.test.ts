@@ -44,10 +44,21 @@ function writeAgentFile(agent: string, rel: string, body: string): string {
 
 async function runCli(args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
   try {
+    // Spreading the parent process.env leaks CTX_AGENT_DIR/CTX_PROJECT_ROOT/
+    // CTX_ORG from whatever shell actually runs this suite (e.g. a live
+    // agent's own shell) — resolveEnv()'s sandbox-leak guard (issue #313)
+    // then correctly refuses to proceed, since the leaked CTX_AGENT_DIR
+    // doesn't live under this test's fresh frameworkRoot tempdir. Explicitly
+    // clearing them (not just overriding CTX_FRAMEWORK_ROOT/CTX_ROOT) makes
+    // the child process resolve a fresh agentDir from CTX_ORG + CTX_PROJECT_ROOT.
+    const childEnv = { ...process.env, CTX_FRAMEWORK_ROOT: frameworkRoot, CTX_ROOT: frameworkRoot,
+      CTX_PROJECT_ROOT: frameworkRoot, CTX_ORG: 'lifeos' };
+    delete childEnv.CTX_AGENT_DIR;
+    delete childEnv.CTX_AGENT_NAME;
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       [DIST_CLI, 'bus', 'upgrade-cron-teaching', ...args],
-      { env: { ...process.env, CTX_FRAMEWORK_ROOT: frameworkRoot, CTX_ROOT: frameworkRoot } },
+      { env: childEnv },
     );
     return { stdout, stderr, code: 0 };
   } catch (err) {
