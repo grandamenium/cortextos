@@ -1,5 +1,5 @@
-import { getPropertiesByClientToken } from '@/lib/data/properties';
-import type { RoomRosterEntry } from '@/lib/data/properties';
+import { getPropertiesByClientToken, getClientActionItems } from '@/lib/data/properties';
+import type { RoomRosterEntry, ClientActionItem } from '@/lib/data/properties';
 import { notFound } from 'next/navigation';
 import { PropertyAccordion } from './accordion';
 
@@ -30,6 +30,7 @@ export default async function ClientPortalPage({
 
   const properties = getPropertiesByClientToken(token);
   if (properties.length === 0) notFound();
+  const actionItems = getClientActionItems(token);
 
   // Validate editKey against property edit_keys — only pass through if it matches at least one
   const validEditKey =
@@ -94,6 +95,47 @@ export default async function ClientPortalPage({
             </div>
           </div>
         </div>
+
+        {/* Needed from Jordan */}
+        {actionItems.length > 0 && (
+          <div className="bg-white rounded-lg border border-zinc-200 shadow-sm">
+            <div className="px-4 py-3 border-b border-zinc-100">
+              <h2 className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-400">Needed from You</h2>
+            </div>
+            <div className="divide-y divide-zinc-100">
+              {actionItems.filter((item: ClientActionItem) => item.status !== 'done').map((item: ClientActionItem) => (
+                <div key={item.id} className="px-4 py-3 flex items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="text-sm font-medium text-zinc-800">{item.title}</span>
+                      {item.amount != null && (
+                        <span className="text-sm text-zinc-500 tabular-nums">${item.amount.toLocaleString()}</span>
+                      )}
+                    </div>
+                    {item.description && (
+                      <p className="text-[11px] text-zinc-500 leading-relaxed">{item.description}</p>
+                    )}
+                    {item.note && (
+                      <p className="text-[11px] text-amber-700 mt-0.5">{item.note}</p>
+                    )}
+                  </div>
+                  <div className="shrink-0">
+                    {item.status === 'owed' && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-red-50 text-red-700 border border-red-200">
+                        Action Required
+                      </span>
+                    )}
+                    {item.status === 'pending_auth' && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                        Pending Authorization
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Accordion property list */}
         <div>

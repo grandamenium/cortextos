@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { getPropertiesDir, getOrgs } from '@/lib/config';
+import { getPropertiesDir, getOrgs, CTX_ROOT } from '@/lib/config';
 
 export interface PropertyUnit {
   name: string;
@@ -235,6 +235,31 @@ export interface Property {
       };
     };
   };
+}
+
+export interface ClientActionItem {
+  id: string;
+  title: string;
+  amount?: number;
+  description?: string;
+  status: 'owed' | 'pending_auth' | 'done';
+  priority: 'high' | 'medium' | 'low';
+  note?: string;
+}
+
+export function getClientActionItems(token: string): ClientActionItem[] {
+  for (const org of getOrgs()) {
+    const filePath = path.join(CTX_ROOT, 'orgs', org, 'client-actions', `${token}.json`);
+    if (fs.existsSync(filePath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        return Array.isArray(data.items) ? data.items : [];
+      } catch {
+        return [];
+      }
+    }
+  }
+  return [];
 }
 
 function readPropertyFile(filePath: string): Property | null {

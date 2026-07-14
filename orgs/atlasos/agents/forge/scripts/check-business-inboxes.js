@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const { spawnSync } = require('child_process');
+const CORTEXTOS_CLI = path.resolve(__dirname, '../../../../../dist/cli.js');
 const gmail = require('./gmail-lib');
 const { classifyEmail } = require('./classify-email');
 
@@ -27,6 +28,29 @@ const CHAT_ID = process.env.CTX_TELEGRAM_CHAT_ID || '8993058901';
 const CTX_ROOT = process.env.CTX_ROOT || path.join(require('os').homedir(), '.cortextos', 'default');
 const DIGEST_FILE = path.join(CTX_ROOT, 'state', 'data', 'inbox-digest.json');
 const DIGEST_MAX = 50; // keep last 50 flagged emails
+
+// Sent-alerts dedup — tracks message IDs already routed to agents (24h TTL)
+const SENT_ALERTS_FILE = path.join(CTX_ROOT, 'state', 'data', 'inbox-sent-alerts.json');
+function loadSentAlerts() {
+  try {
+    const data = JSON.parse(fs.readFileSync(SENT_ALERTS_FILE, 'utf8'));
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    return Object.fromEntries(Object.entries(data).filter(([, ts]) => ts > cutoff));
+  } catch { return {}; }
+}
+function markAlertSent(messageId) {
+  const data = loadSentAlerts();
+  data[messageId] = Date.now();
+  try {
+    fs.mkdirSync(path.dirname(SENT_ALERTS_FILE), { recursive: true });
+    fs.writeFileSync(SENT_ALERTS_FILE, JSON.stringify(data));
+  } catch { /* non-fatal */ }
+}
+function wasAlertSent(messageId) {
+  if (!messageId) return false;
+  return !!loadSentAlerts()[messageId];
+}
+const _sentAlertsCache = loadSentAlerts(); // load once per process
 
 function loadDigest() {
   try { return JSON.parse(fs.readFileSync(DIGEST_FILE, 'utf8')); }
@@ -92,7 +116,10 @@ const ACCOUNTS = [
 const DEAL_KEYWORDS = /crawford|greg cole|keith mendosa|loi|letter of intent|offer|contract|closing|purchase agreement|earnest|junietha|shambee|rei chicago|oscar|polk|ted sanders|ted@americahomerestoration/i;
 
 // Senders/patterns to suppress silently (mark read, no Telegram alert)
-const SUPPRESS_SENDERS = /resnexus\.com|communications@resnexus|shutterstock\.com|emktng\.shutterstock|frommilitarytomillionaire\.com|iheart\.com|sofi\.com|gobrightline\.com|tymobeauty\.com|rodanandfields\.com|nuuly\.com|depop\.com|expedia\.com|tripadvisor\.com|turo\.com|benchmade\.com|jostens\.com|salliemae\.com|lendingclub\.com|shakeshack\.com|@e\.upgrade\.com|ebay\.com|alltrails\.com|aausports\.org|purefrequencies\.com|moneylion\.com|gainrepmail\.com|aurahealth\.io|youversion\.com|notarize\.com|@(email|close)\.close\.com|tasks\.clickup\.com|attio\.com|@attio\.|bluehorizon-realestate\.com|arturo@bluehorizon|newwestern\.com|@newwestern\.|@fyxer\.com|hostcamp\.com|@hostcamp\.|askforfunding\.com|@askforfunding\.|rocketlawyer\.com|@rocketlawyer\.|uber\.com|@uber\.|@h5\.hilton\.com|hilton\.com|zenbusiness\.com|@zenbusiness\.|capstoneconnectors\.com|@capstoneconnectors\.|remitly\.com|@remitly\.|info\.remitly|ablink\.info\.rem|invoice\+statements@make\.com|celonis\.com/i;
+const SUPPRESS_SENDERS = /resnexus\.com|communications@resnexus|shutterstock\.com|emktng\.shutterstock|frommilitarytomillionaire\.com|iheart\.com|sofi\.com|gobrightline\.com|tymobeauty\.com|rodanandfields\.com|nuuly\.com|depop\.com|expedia\.com|tripadvisor\.com|turo\.com|benchmade\.com|jostens\.com|salliemae\.com|lendingclub\.com|shakeshack\.com|@e\.upgrade\.com|ebay\.com|alltrails\.com|aausports\.org|purefrequencies\.com|moneylion\.com|gainrepmail\.com|aurahealth\.io|youversion\.com|notarize\.com|@(email|close)\.close\.com|tasks\.clickup\.com|attio\.com|@attio\.|bluehorizon-realestate\.com|arturo@bluehorizon|newwestern\.com|@newwestern\.|@fyxer\.com|hostcamp\.com|@hostcamp\.|askforfunding\.com|@askforfunding\.|rocketlawyer\.com|@rocketlawyer\.|uber\.com|@uber\.|@h5\.hilton\.com|hilton\.com|zenbusiness\.com|@zenbusiness\.|capstoneconnectors\.com|@capstoneconnectors\.|remitly\.com|@remitly\.|info\.remitly|ablink\.info\.rem|invoice\+statements@make\.com|celonis\.com|taxact\.com|@taxact\.|360onlineprint\.com|@360onlineprint\.|constantcontact\.com|mailchimp\.com|klaviyo\.com|substack\.com|beehiiv\.com|convertkit\.com|mnatsakanian|toptiertc\.com|@toptiertc\.|top\.tier\.tc/i;
+
+// Subject patterns that are always marketing/noise regardless of sender — suppress
+const SUPPRESS_SUBJECTS = /\bchallenge\b.*register|you.re not registered|don.t miss.*challenge|join.*challenge|all abilities challenge|on track for (next|your) (tax|season)|product (has )?shipped|your order (has )?shipped|your (package|shipment) (is |has )?shipped|built for solo.*agency.*scale|which one.s you|webinar.*register|register.*webinar|free training|free masterclass|free workshop|join us (live|online|virtually)|replay.*available|watch the replay|limited.*seats|seats.*limited|early.bird|special (offer|discount|price)|% off (today|now|this week)|flash sale|last chance|ends (tonight|tomorrow|soon)|deal of the day|promo code|coupon inside/i;
 
 // Jennifer's own email addresses — used to detect self-sent calendar invites
 const JENNIFER_EMAILS = /jennifer\.l\.breitbach@gmail|jennifer\.breitbach@total-investment|jennifer@jordanreyes|jennifer@americahome|jbreitbach1979@gmail/i;
@@ -130,8 +157,11 @@ function shouldAlert(from, subject, body) {
   // Suppress self-sent calendar invites for Jennifer's own recurring events
   if (/co-living office hours|coliving office hours/i.test(subject) && JENNIFER_EMAILS.test(from)) return 'suppress';
 
-  // Always suppress ResNexus reports
+  // Always suppress known marketing/noise senders
   if (SUPPRESS_SENDERS.test(from)) return 'suppress';
+
+  // Suppress marketing noise by subject pattern (challenges, promos, shipping notices, webinars)
+  if (SUPPRESS_SUBJECTS.test(subject)) return 'suppress';
 
   // Suppress promotional emails from these senders, but pass through real reservations/receipts
   if (SUPPRESS_UNLESS_TRANSACTIONAL.test(from)) {
@@ -144,7 +174,7 @@ function shouldAlert(from, subject, body) {
   // Suppress Zillow/Realtor algo recommendation emails — these are never deal leads
   // "A Butte home for you", "Homes you may like", "Based on your search" etc.
   if (/zillow\.com|realtor\.com/i.test(from) &&
-      /home[s]? for you|homes? you may like|based on your search|recommended for you|homes? we think you|you might like|similar home|homes? like this/i.test(subject)) {
+      /home[s]? for you|homes? you may like|based on your search|recommended for you|homes? we think you|rentals? we think you|you might like|similar home|homes? like this|\d+ rentals? (we|you|near|in)/i.test(subject)) {
     return 'suppress';
   }
 
@@ -192,20 +222,18 @@ const BOT_TOKEN = getBotToken();
 
 function sendTelegram(message) {
   if (!BOT_TOKEN) { console.error('No BOT_TOKEN'); return; }
-  const safe = message.slice(0, 4096).replace(/'/g, "\\'");
-  spawnSync(process.env.COMSPEC || 'cmd.exe', ['/c', `cortextos bus send-telegram ${CHAT_ID} '${safe}'`],
+  spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-telegram', CHAT_ID, message.slice(0, 4096)],
     { encoding: 'utf8', timeout: 15000 });
 }
 
 function notifyAgent(agent, priority, subject, from, account, category) {
   const msg = `[${category}] email in ${account}: From: ${from} | Subject: ${subject}`;
-  spawnSync(process.env.COMSPEC || 'cmd.exe', ['/c', `cortextos bus send-message ${agent} ${priority} "${msg.replace(/"/g, "'")}"`],
+  spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', agent, priority, msg.slice(0, 1200)],
     { encoding: 'utf8', timeout: 10000 });
 }
 
 function busAtlas(message) {
-  const safe = message.replace(/'/g, "\\'").slice(0, 1200);
-  spawnSync(process.env.COMSPEC || 'cmd.exe', ['/c', `cortextos bus send-message atlas normal '${safe}'`],
+  spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', 'atlas', 'normal', message.slice(0, 1200)],
     { encoding: 'utf8', timeout: 10000 });
 }
 
@@ -281,9 +309,8 @@ async function handleFyxerNote(file, messageId, full, accountLabel) {
   if (!text || text.length < 100) return false;
 
   const summary = text.slice(0, 2000);
-  const msg = `[Fyxer meeting note] ${subject} | ${summary.replace(/"/g, "'")}`;
-  spawnSync(process.env.COMSPEC || 'cmd.exe',
-    ['/c', `cortextos bus send-message atlas normal "${msg.replace(/\n/g, ' | ').slice(0, 800)}"`],
+  const msg = `[Fyxer meeting note] ${subject} | ${summary.replace(/\n/g, ' | ')}`;
+  spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', 'atlas', 'normal', msg.slice(0, 800)],
     { encoding: 'utf8', timeout: 10000 });
 
   await gmail.markRead(file, messageId).catch(() => {});
@@ -345,7 +372,7 @@ async function checkAccount(account) {
         && !LEDGER_RELAY_SKIP.test(subject);
       if (isLedgerEmail) {
         const msg = `Bank/statement email received (${label}): From: ${from} | Subject: ${subject} | Preview: ${snippet}`;
-        require('child_process').execSync(`cortextos bus send-message ledger normal ${JSON.stringify(msg)}`, { stdio: 'inherit' });
+        spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', 'ledger', 'normal', msg.slice(0, 1200)], { stdio: 'inherit' });
         if (alertLabel) {
           const alertLabelId = getLabelId(file, alertLabel);
           if (alertLabelId) await gmail.applyLabel(file, m.id, alertLabelId).catch(() => {});
@@ -402,18 +429,44 @@ async function checkAccount(account) {
           await gmail.archiveMessage(file, m.id).catch(() => {});
         }
 
-        // Route to agents based on category
+        // Route to agents based on category — skip if already sent (dedup guard)
         if (action === 'argus' || category === 'Property-Alerts') {
-          routeByCategory(category || 'Property-Alerts', subject, from, label);
+          if (!wasAlertSent(m.id) && !_sentAlertsCache[m.id]) {
+            routeByCategory(category || 'Property-Alerts', subject, from, label);
+            markAlertSent(m.id); _sentAlertsCache[m.id] = Date.now();
+          }
           console.log(`Labeled+archived (${label}): [${category}] ${subject}`);
-          if (!alertLabel) await gmail.markRead(file, m.id);
+          if (alertLabel) {
+            const alertLabelId = getLabelId(file, alertLabel);
+            if (alertLabelId) {
+              await gmail.applyLabel(file, m.id, alertLabelId).catch(() => {});
+            } else {
+              // alertLabel not yet created in Gmail — fall back to markRead to prevent re-alerting
+              await gmail.markRead(file, m.id).catch(() => {});
+            }
+          } else {
+            await gmail.markRead(file, m.id);
+          }
           continue;
         }
-        routeByCategory(category, subject, from, label);
+        if (!wasAlertSent(m.id) && !_sentAlertsCache[m.id]) {
+          routeByCategory(category, subject, from, label);
+          markAlertSent(m.id); _sentAlertsCache[m.id] = Date.now();
+        }
       } else if (action === 'argus') {
-        notifyArgus(subject, from, label + '/neighborhood-alert');
+        if (!wasAlertSent(m.id) && !_sentAlertsCache[m.id]) {
+          notifyArgus(subject, from, label + '/neighborhood-alert');
+          markAlertSent(m.id); _sentAlertsCache[m.id] = Date.now();
+        }
         console.log(`Labeled+archived (${label}): [neighborhood-alert] ${subject}`);
-        if (!alertLabel) {
+        if (alertLabel) {
+          const alertLabelId = getLabelId(file, alertLabel);
+          if (alertLabelId) {
+            await gmail.applyLabel(file, m.id, alertLabelId).catch(() => {});
+          } else {
+            await gmail.markRead(file, m.id).catch(() => {});
+          }
+        } else {
           await gmail.archiveMessage(file, m.id).catch(() => {});
           await gmail.markRead(file, m.id);
         }
@@ -421,8 +474,13 @@ async function checkAccount(account) {
       }
       // Unclassified emails stay in inbox for Jennifer's attention
 
-      if (isDeal && category !== 'Deals') notifyArgus(subject, from, label);
-      items.push({ from, subject, snippet, body, isDeal, category, messageId: m.id, threadId: full.threadId || m.id, tokenFile: file });
+      if (isDeal && category !== 'Deals' && !wasAlertSent(m.id) && !_sentAlertsCache[m.id]) {
+        notifyArgus(subject, from, label);
+        markAlertSent(m.id); _sentAlertsCache[m.id] = Date.now();
+      }
+      if (!wasAlertSent(m.id) && !_sentAlertsCache[m.id]) {
+        items.push({ from, subject, snippet, body, isDeal, category, messageId: m.id, threadId: full.threadId || m.id, tokenFile: file });
+      }
       if (alertLabel) {
         // Don't mark read — apply label so we know we've alerted (inbox owner manages read state)
         const alertLabelId = getLabelId(file, alertLabel);

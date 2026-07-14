@@ -10,6 +10,12 @@ const PROPERTIES_DIR = path.join(
   'orgs', process.env.CTX_ORG || 'atlasos', 'properties'
 );
 
+// Tasks confirmed resolved by Jennifer — permanently suppressed from dashboard
+// regardless of DoorLoop status. Add task IDs here; they will never regenerate.
+const USER_CONFIRMED_RESOLVED = {
+  '6948b02d8fc75c6b21732bba': 'Dryer Gas Hookup — Jennifer confirmed installed; DL task stale (confirmed ~50x)',
+};
+
 function loadKey() {
   if (process.env.DOORLOOP_API_KEY) return process.env.DOORLOOP_API_KEY;
   const keyFile = path.join(SECRETS_DIR, 'doorloop_api_key.txt');
@@ -178,6 +184,9 @@ async function main() {
       (prop.room_roster || []).map(r => [normRoom(r.room), r.notes ?? null])
     );
 
+    // Strip DL status prefixes like "retired | " from tenant names
+    const sanitizeTenant = n => n ? n.replace(/^[^|]+\|\s*/, '').trim() : n;
+
     // Build room_roster from units (each unit gets a row, occupied or vacant)
     const roster = propUnits.map(unit => {
       const lease = unitLeaseMap[unit.id];
@@ -185,7 +194,7 @@ async function main() {
       if (lease) {
         return {
           room: roomName,
-          tenant: lease.name || null,
+          tenant: sanitizeTenant(lease.name) || null,
           lease_expiration: lease.end || null,
           payment_status: derivePaymentStatus(lease),
           amount_due: lease.totalBalanceDue > 0 ? lease.totalBalanceDue : null,
@@ -214,7 +223,7 @@ async function main() {
           const roomName = unitNames[unitId] || unitId;
           roster.push({
             room: roomName,
-            tenant: lease.name || null,
+            tenant: sanitizeTenant(lease.name) || null,
             lease_expiration: lease.end || null,
             payment_status: derivePaymentStatus(lease),
             amount_due: lease.totalBalanceDue > 0 ? lease.totalBalanceDue : null,
@@ -248,7 +257,7 @@ async function main() {
       unit: null,
       vendor: null,
       cost: null,
-      status: localDoneOverrides[t.id] ?? mapTaskStatus(t.status),
+      status: USER_CONFIRMED_RESOLVED[t.id] ? 'resolved' : (localDoneOverrides[t.id] ?? mapTaskStatus(t.status)),
       priority: mapTaskPriority(t.priority),
       notes: null,
       doorloop_task_id: t.id,
