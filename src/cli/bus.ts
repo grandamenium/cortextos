@@ -22,6 +22,7 @@ import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/kn
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
+import { syncTaskToClickUp } from '../utils/clickup.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -189,6 +190,13 @@ busCommand
     // Print task ID on stdout (parseable by scripts), assignee on stderr (visible but non-breaking).
     console.log(taskId);
     process.stderr.write(`[create-task] Assigned to: ${effectiveAssignee}\n`);
+    // Mirror jennifer/human tasks to ClickUp (fire-and-forget; never blocks or throws)
+    syncTaskToClickUp(env.frameworkRoot, title, {
+      description: opts.desc,
+      project: opts.project,
+      priority: opts.priority,
+      assignee: effectiveAssignee,
+    });
     // Auto-notify assignee so the task is visible immediately (issue #78)
     if (effectiveAssignee !== env.agentName) {
       const assigneePaths = resolvePaths(effectiveAssignee, env.instanceId, env.org);
@@ -1059,13 +1067,15 @@ busCommand
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
   .option('--stdin', 'Read message from stdin instead of the positional argument. Prevents shell expansion of $ in double-quoted strings. Usage: printf \'%s\' "$msg" | cortextos bus send-telegram <chat-id> --stdin', false)
   .action(async (chatId: string, message: string | undefined, opts: { image?: string; file?: string; plainText?: boolean; stdin?: boolean }) => {
-    // --stdin: read message from fd 0 to prevent shell $ expansion stripping
-    if (opts.stdin) {
+    // --stdin or auto-detected pipe: read message from fd 0 to prevent shell $ expansion stripping.
+    // Auto-activates when no message arg is given and stdin is a pipe — so
+    // `printf '%s' "$msg" | cortextos bus send-telegram <id>` is safe without any flag.
+    if (opts.stdin || (!message && !process.stdin.isTTY)) {
       const { readFileSync } = require('fs');
       message = readFileSync(0, 'utf-8').trimEnd();
     }
     if (!message) {
-      console.error('Error: message argument is required (or use --stdin to pipe it).');
+      console.error('Error: message argument is required (or pipe message via stdin).');
       process.exit(1);
     }
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
