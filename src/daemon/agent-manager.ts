@@ -23,6 +23,7 @@ type LogFn = (msg: string) => void;
  * Manages all agents in a cortextOS instance.
  */
 import { reconcileAgentCrons } from '../utils/cron-registration.js';
+import { logEvent } from '../bus/event.js';
 import { readCrons } from '../bus/crons.js';
 
 export class AgentManager {
@@ -144,6 +145,27 @@ export class AgentManager {
       examinedTotal += examined;
       for (const d of drift) {
         allDrift.push(`${d.agent}/${d.cron}: ${d.kind} — ${d.detail}`);
+        // ★ THE GUARD MUST REACH THE DECIDER.
+        // console.warn() puts this in daemon stderr, which is a place nobody looks — a guard
+        // that fires into a void has not fired. The daemon's DEATH is loud (the agent goes
+        // STALE and a human sees it); a drift finding by a LIVE daemon is not loud at all.
+        // So it goes to the Activity feed, where humans actually read, alongside every other
+        // event the fleet emits. A monitor whose finding renders only in logs has traded one
+        // blindness for another.
+        try {
+          logEvent(
+            resolvePaths(name, this.instanceId, this.resolveAgentOrg(name)),
+            name,
+            this.resolveAgentOrg(name),
+            'error',
+            'cron_registration_drift',
+            'warning',
+            { cron: d.cron, kind: d.kind, detail: d.detail },
+          );
+        } catch (err) {
+          // An event write must never be able to break the check that produced it.
+          console.error(`[cron-registration] could not emit drift event for ${name}/${d.cron}:`, err);
+        }
       }
     }
 

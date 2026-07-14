@@ -16,6 +16,13 @@
  * CLAUDE.md already names it as the source of truth. No new registry to drift.
  *
  * Pure and I/O-free on purpose: the caller reads the two files, this decides.
+ *
+ * KNOWN LIMIT — deliberate, not an oversight: this reconciles BY NAME. A cron present in
+ * both files under the same name but with a DIFFERENT SCHEDULE is not flagged. That cron
+ * still fires — it may just fire at the wrong time — which is a different failure from the
+ * ABSENCE this function exists to catch, and the missed-slot rule in cron-health.ts covers
+ * the case where a wrong schedule means it stops firing when expected. Scope kept narrow on
+ * purpose; schedule-drift is a follow-up, not a silent gap.
  */
 
 /** One cron as DECLARED in config.json. */
