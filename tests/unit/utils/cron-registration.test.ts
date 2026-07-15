@@ -110,6 +110,20 @@ describe('reconcileLiveSchedule — the third surface (disk vs running scheduler
     expect(drift).toEqual([]);   // correctly silent — no false alarm
   });
 
+  it('★ NEGATIVE CONTROL — ORPHAN: removed from crons.json but the scheduler still fires it', () => {
+    // The inverse of the incident: a hand-removal that skipped the reload. The scheduler
+    // keeps firing a cron that no longer exists on disk. `examined` counts it, so without
+    // this direction the count would claim coverage over an unchecked case.
+    const { drift } = reconcileLiveSchedule(
+      'dev',
+      [],                                                 // disk: gone
+      [{ name: 'ghost', schedule: '0 3 * * *' }],         // scheduler: still firing it
+    );
+    expect(drift).toHaveLength(1);
+    expect(drift[0].kind).toBe('scheduler-orphan');
+    expect(drift[0].detail).toMatch(/removed without a reload/);
+  });
+
   it('ZERO COVERAGE reports examined:0, not all-clear', () => {
     const { drift, examined } = reconcileLiveSchedule('dev', [], []);
     expect(drift).toEqual([]);

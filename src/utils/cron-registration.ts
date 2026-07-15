@@ -46,7 +46,9 @@ export type DriftKind =
   /** Registered but explicitly disabled: present, and still never fires. */
   | 'registered-but-disabled'
   /** On disk one way, but the RUNNING scheduler holds a different schedule (never-reloaded edit). */
-  | 'schedule-stale';
+  | 'schedule-stale'
+  /** The RUNNING scheduler still fires a cron that was REMOVED from crons.json (never-reloaded removal). */
+  | 'scheduler-orphan';
 
 export interface CronDrift {
   agent: string;
@@ -112,6 +114,24 @@ export function reconcileLiveSchedule(
       });
     }
   }
+
+  // THE INVERSE DIRECTION — an ORPHAN. A cron REMOVED from crons.json that the scheduler
+  // STILL HOLDS keeps FIRING, because the removal skipped the reload signal. The file check
+  // is bidirectional; this must be too, or `examined` below counts the orphan while no drift
+  // is emitted for it — a count that reads "covered" over a case never checked, the exact
+  // failure this whole file exists to kill. Lower consequence than a silent monitor (an
+  // orphan over-fires rather than going dark) but the same drift, same trigger: a hand-edit
+  // that skipped the reload.
+  const declaredNames = new Set(declared.map(d => d.name));
+  for (const l of live) {
+    if (!declaredNames.has(l.name)) {
+      drift.push({
+        agent, cron: l.name, kind: 'scheduler-orphan',
+        detail: `the running scheduler is firing "${l.name}" ("${l.schedule}") but it is absent from crons.json — removed without a reload; it keeps firing`,
+      });
+    }
+  }
+
   const examined = new Set([...declared.map(d => d.name), ...liveByName.keys()]).size;
   return { drift, examined };
 }
