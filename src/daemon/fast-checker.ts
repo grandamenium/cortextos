@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, appendFileSync } from 'fs';
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -186,6 +186,27 @@ export class FastChecker {
     setTimeout(() => {
       this.heartbeatTimer = setInterval(() => {
         const ts = new Date().toISOString();
+        const targetDir = this.agent.getAgentDir();
+        const content = `${WATCHDOG_HEARTBEAT_PREFIX} ${agentName} alive — idle session ${ts}`;
+        // TEMP DIAGNOSTIC (2026-07-15, task_1783847243268_19095709): the bug
+        // has now recurred with THREE distinct agent names ending up in
+        // anam's heartbeat.json (cleo, athena, charlotte), surviving both a
+        // narrow (5s) and wide (20min) stagger — ruling out near-simultaneous
+        // dispatch timing as the mechanism. Open question: is this
+        // anam-exclusive, or does it happen to every agent and only stick on
+        // anam because anam has the fewest real writes between ticks to
+        // overwrite a bad one before anyone notices? A permanent,
+        // append-only record of every agent's watchdog write intent (source
+        // agent, target dir, exact content), independent of what the actual
+        // heartbeat.json ends up holding a moment later, settles this
+        // directly instead of inferring from spot checks. One shared file,
+        // every agent's watchdog appends to it. Remove once root-caused.
+        try {
+          appendFileSync(
+            join(this.paths.ctxRoot, 'watchdog-diagnostic.jsonl'),
+            JSON.stringify({ ts, sourceAgent: agentName, targetDir, content }) + '\n',
+          );
+        } catch { /* diagnostic-only, never block the real write */ }
         // cwd MUST be this agent's own directory: execFile inherits the DAEMON's
         // cwd/env by default (this call runs inside the daemon process, not the
         // agent's PTY), and resolveEnv() falls back to basename(cwd) for the
@@ -195,8 +216,8 @@ export class FastChecker {
         // "cortextos" pseudo-agent in read-all-heartbeats, never this agent's).
         execFile(
           'cortextos',
-          ['bus', 'update-heartbeat', `${WATCHDOG_HEARTBEAT_PREFIX} ${agentName} alive — idle session ${ts}`],
-          { cwd: this.agent.getAgentDir() },
+          ['bus', 'update-heartbeat', content],
+          { cwd: targetDir },
           (err) => {
             if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
           },
