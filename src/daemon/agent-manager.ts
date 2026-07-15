@@ -22,7 +22,7 @@ type LogFn = (msg: string) => void;
 /**
  * Manages all agents in a cortextOS instance.
  */
-import { reconcileAgentCrons } from '../utils/cron-registration.js';
+import { reconcileAgentCrons, reconcileLiveSchedule } from '../utils/cron-registration.js';
 import { logEvent } from '../bus/event.js';
 import { readCrons } from '../bus/crons.js';
 
@@ -127,44 +127,64 @@ export class AgentManager {
    * while the thing it watches keeps running. Put the guard where its own failure is
    * impossible to miss.
    */
+  /**
+   * Emit a cron drift finding to the Activity feed — the surface humans read.
+   * console.warn goes to daemon stderr, a void; a guard that fires where nobody looks has
+   * not fired. An event write must never break the check that produced it, so it is wrapped.
+   */
+  private emitCronDrift(agent: string, cron: string, kind: string, detail: string, eventName: string): void {
+    try {
+      logEvent(
+        resolvePaths(agent, this.instanceId, this.resolveAgentOrg(agent)),
+        agent,
+        this.resolveAgentOrg(agent),
+        'error',
+        eventName,
+        'warning',
+        { cron, kind, detail },
+      );
+    } catch (err) {
+      console.error(`[cron-drift] could not emit ${eventName} for ${agent}/${cron}:`, err);
+    }
+  }
+
   checkCronRegistration(): void {
     let examinedTotal = 0;
     const allDrift: string[] = [];
 
     for (const { name, config } of this.discoverAgents()) {
       const declared = (config?.crons ?? []).map(c => ({ name: c.name }));
-      let registered: Array<{ name: string; enabled?: boolean }> = [];
+      let registered: Array<{ name: string; schedule?: string; enabled?: boolean }> = [];
       try {
-        registered = readCrons(name).map(c => ({ name: c.name, enabled: c.enabled }));
+        registered = readCrons(name).map(c => ({ name: c.name, schedule: c.schedule, enabled: c.enabled }));
       } catch {
         // Unreadable live crons for this agent — that is itself worth saying, not skipping.
         console.warn(`[cron-registration] ${name}: live crons.json unreadable — cannot verify its crons exist`);
         continue;
       }
-      const { drift, examined } = reconcileAgentCrons(name, declared, registered);
-      examinedTotal += examined;
-      for (const d of drift) {
+      // Surface 1+2: config.json (declared) vs crons.json (registered) — two FILES.
+      const fileCheck = reconcileAgentCrons(name, declared, registered);
+      examinedTotal += fileCheck.examined;
+      for (const d of fileCheck.drift) {
         allDrift.push(`${d.agent}/${d.cron}: ${d.kind} — ${d.detail}`);
-        // ★ THE GUARD MUST REACH THE DECIDER.
-        // console.warn() puts this in daemon stderr, which is a place nobody looks — a guard
-        // that fires into a void has not fired. The daemon's DEATH is loud (the agent goes
-        // STALE and a human sees it); a drift finding by a LIVE daemon is not loud at all.
-        // So it goes to the Activity feed, where humans actually read, alongside every other
-        // event the fleet emits. A monitor whose finding renders only in logs has traded one
-        // blindness for another.
-        try {
-          logEvent(
-            resolvePaths(name, this.instanceId, this.resolveAgentOrg(name)),
-            name,
-            this.resolveAgentOrg(name),
-            'error',
-            'cron_registration_drift',
-            'warning',
-            { cron: d.cron, kind: d.kind, detail: d.detail },
-          );
-        } catch (err) {
-          // An event write must never be able to break the check that produced it.
-          console.error(`[cron-registration] could not emit drift event for ${name}/${d.cron}:`, err);
+        this.emitCronDrift(name, d.cron, d.kind, d.detail, 'cron_registration_drift');
+      }
+
+      // ★ Surface 3: crons.json (disk) vs the RUNNING scheduler (memory).
+      // A cron that agrees across both FILES can still fire on a stale schedule if the file
+      // was hand-edited and the daemon never reloaded — the scheduler holds its own copy and
+      // nothing on disk reflects it. This is the MOST COMMON drift and it is invisible to the
+      // file-vs-file check above and to every CLI. The scheduler is in THIS process, so the
+      // comparison is in-memory and free.
+      const scheduler = this.cronSchedulers.get(name);
+      if (scheduler) {
+        const onDisk = registered.map(c => ({ name: c.name, schedule: (c as { schedule?: string }).schedule ?? '', enabled: c.enabled }));
+        const live = scheduler.getLiveSchedules();
+        const liveCheck = reconcileLiveSchedule(name, onDisk, live);
+        examinedTotal += liveCheck.examined;
+        for (const d of liveCheck.drift) {
+          allDrift.push(`${d.agent}/${d.cron}: ${d.kind} — ${d.detail}`);
+          this.emitCronDrift(name, d.cron, d.kind, d.detail, 'cron_scheduler_stale');
         }
       }
     }

@@ -44,7 +44,9 @@ export type DriftKind =
   /** Registered live but absent from config.json: a rebuild-from-config DELETES it, silently. */
   | 'registered-not-declared'
   /** Registered but explicitly disabled: present, and still never fires. */
-  | 'registered-but-disabled';
+  | 'registered-but-disabled'
+  /** On disk one way, but the RUNNING scheduler holds a different schedule (never-reloaded edit). */
+  | 'schedule-stale';
 
 export interface CronDrift {
   agent: string;
@@ -62,6 +64,58 @@ export interface CronDrift {
  * empty lists and reported "no drift" would be the exact tick-over-nothing we have been
  * killing all week.
  */
+/** One cron as the RUNNING scheduler holds it in memory. */
+export interface LiveCron {
+  name: string;
+  schedule: string;
+}
+
+/**
+ * Compare the on-disk crons.json schedule against what the RUNNING scheduler holds.
+ *
+ * THE THIRD SURFACE. reconcileAgentCrons (below) compares two FILES — config.json and
+ * crons.json. But a cron that is in both files, agreeing, can STILL fire on a stale
+ * schedule if the file was hand-edited and the daemon never reloaded: the scheduler holds
+ * its own in-memory copy, and nothing in either file reflects it. That drift — the MOST
+ * COMMON one, a hand-edit that skipped the reload signal — is invisible to a file-vs-file
+ * check and to every CLI (list-crons recomputes next-fire from disk; it never queries the
+ * daemon). This compares crons.json (disk) against the scheduler (memory) and is the only
+ * thing that can see a never-reloaded edit.
+ *
+ * Pure and I/O-free: the daemon reads both (crons.json via readCrons, the live schedules via
+ * scheduler.getLiveSchedules()) and hands them here. Returns `examined` so a caller cannot
+ * read an empty result over an empty comparison as an all-clear.
+ */
+export function reconcileLiveSchedule(
+  agent: string,
+  declared: RegisteredCron[],   // from crons.json on disk
+  live: LiveCron[],             // from scheduler.getLiveSchedules() in memory
+): { drift: CronDrift[]; examined: number } {
+  const drift: CronDrift[] = [];
+  const liveByName = new Map(live.map(c => [c.name, c]));
+  for (const d of declared) {
+    if (d.enabled === false) continue;         // disabled crons are not scheduled; not stale
+    const l = liveByName.get(d.name);
+    if (!l) {
+      // On disk + enabled, but the scheduler doesn't hold it: it was added/enabled without a
+      // reload, so it is NOT actually firing yet.
+      drift.push({
+        agent, cron: d.name, kind: 'declared-not-registered',
+        detail: `on disk + enabled but the running scheduler has no entry — added/enabled without a reload; it is not firing`,
+      });
+      continue;
+    }
+    if ((d.schedule ?? '') !== l.schedule) {
+      drift.push({
+        agent, cron: d.name, kind: 'schedule-stale',
+        detail: `crons.json says "${d.schedule}" but the running scheduler is firing "${l.schedule}" — the file was edited without a reload signal`,
+      });
+    }
+  }
+  const examined = new Set([...declared.map(d => d.name), ...liveByName.keys()]).size;
+  return { drift, examined };
+}
+
 export function reconcileAgentCrons(
   agent: string,
   declared: DeclaredCron[],

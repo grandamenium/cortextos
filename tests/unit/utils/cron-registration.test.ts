@@ -6,7 +6,7 @@
  * because its entire job is to fire when everything else looks fine.
  */
 import { describe, it, expect } from 'vitest';
-import { reconcileAgentCrons } from '../../../src/utils/cron-registration';
+import { reconcileAgentCrons, reconcileLiveSchedule } from '../../../src/utils/cron-registration';
 
 describe('reconcileAgentCrons', () => {
   it('agrees -> no drift', () => {
@@ -62,5 +62,57 @@ describe('reconcileAgentCrons', () => {
     const { drift, examined } = reconcileAgentCrons('dev', [], []);
     expect(drift).toEqual([]);
     expect(examined).toBe(0);   // <- the caller's cue that it learned NOTHING
+  });
+});
+
+describe('reconcileLiveSchedule — the third surface (disk vs running scheduler)', () => {
+  it('disk and scheduler agree -> no drift', () => {
+    const { drift, examined } = reconcileLiveSchedule(
+      'dev',
+      [{ name: 'handoff', schedule: '13 14 * * *', enabled: true }],
+      [{ name: 'handoff', schedule: '13 14 * * *' }],
+    );
+    expect(drift).toEqual([]);
+    expect(examined).toBe(1);
+  });
+
+  it('★ NEGATIVE CONTROL — THE HAND-EDIT THAT NEVER RELOADED: disk changed, scheduler stale', () => {
+    // This is the exact 2026-07-15 incident: crons.json was edited to "13 14 * * *" but the
+    // running scheduler still holds "13 14,20,1 * * *" because the edit skipped the reload
+    // signal. Invisible to the file-vs-file check (both files agree) and to list-crons (reads
+    // disk). ONLY this catches it.
+    const { drift } = reconcileLiveSchedule(
+      'dev',
+      [{ name: 'handoff', schedule: '13 14 * * *', enabled: true }],       // disk: fixed
+      [{ name: 'handoff', schedule: '13 14,20,1 * * *' }],                 // scheduler: stale
+    );
+    expect(drift).toHaveLength(1);
+    expect(drift[0].kind).toBe('schedule-stale');
+    expect(drift[0].detail).toMatch(/without a reload/);
+  });
+
+  it('NEGATIVE CONTROL — enabled on disk but scheduler has no entry (added without reload)', () => {
+    const { drift } = reconcileLiveSchedule(
+      'dev',
+      [{ name: 'newcron', schedule: '0 9 * * *', enabled: true }],
+      [],  // scheduler never picked it up
+    );
+    expect(drift).toHaveLength(1);
+    expect(drift[0].kind).toBe('declared-not-registered');
+  });
+
+  it('a DISABLED cron absent from the scheduler is NOT drift (disabled crons are not scheduled)', () => {
+    const { drift } = reconcileLiveSchedule(
+      'dev',
+      [{ name: 'off', schedule: '0 9 * * *', enabled: false }],
+      [],
+    );
+    expect(drift).toEqual([]);   // correctly silent — no false alarm
+  });
+
+  it('ZERO COVERAGE reports examined:0, not all-clear', () => {
+    const { drift, examined } = reconcileLiveSchedule('dev', [], []);
+    expect(drift).toEqual([]);
+    expect(examined).toBe(0);
   });
 });
