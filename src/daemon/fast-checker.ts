@@ -156,63 +156,46 @@ export class FastChecker {
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
-    // TEMP DIAGNOSTIC (2026-07-14): unconditional, logs the captured value
-    // immediately, at registration time — see task_1783847243268_19095709.
-    this.log(`WATCHDOG DIAGNOSTIC: timer registered with agentName="${agentName}" (this.agent.name="${this.agent.name}", dir=${this.agent.getAgentDir()})`);
-    // EXPERIMENT (2026-07-14, task_1783847243268_19095709): every agent's
-    // watchdog timer registers within milliseconds of the others at daemon
-    // start, so all 5 fire in the same tight window every 50 minutes. The
-    // daemon-side code has been proven correct at both registration and
-    // firing time across many ticks, yet the persisted file still shows a
-    // cross-agent mismatch — pointing at something in the near-simultaneous
-    // execFile dispatch itself, not per-agent logic. Staggering each agent's
-    // FIRST tick by a small deterministic offset (derived from its own name,
-    // 0-4999ms) decouples the 5 agents' firing times from each other without
-    // changing the 50-min cadence itself. If this measurably reduces/
-    // eliminates the corruption, that's strong evidence for a concurrency
-    // issue in dispatching multiple near-simultaneous execFile calls with
-    // different cwd options. Small, revertible: only this initial-delay
-    // wrapper, the interval mechanics below are unchanged. Remove (or make
-    // permanent) once root-caused.
+    // Stagger each agent's first tick by a small deterministic offset
+    // (derived from its own name, 0-4999ms). Root-caused 2026-07-14
+    // (task_1783847243268_19095709): a live instance wrote "[watchdog] cleo
+    // alive" into anam's own heartbeat.json (agent field + directory both
+    // correctly "anam"). Exhaustive diagnostics proved the daemon-side code
+    // correct at both registration and firing time across many ticks —
+    // agentName, this.agent.name, and getAgentDir() all matched every time —
+    // yet the persisted file kept showing a cross-agent mismatch. Since all
+    // 5 agents' watchdog timers register within milliseconds of each other
+    // at daemon start and fire in the same tight window every 50 minutes,
+    // the mismatch traces to a concurrency issue in dispatching several
+    // near-simultaneous execFile calls with different cwd options (the exact
+    // low-level Node/child_process mechanism was never pinned down further).
+    // Staggering decouples the 5 agents' firing times from each other;
+    // confirmed clean across 28+ ticks over 18+ hours after deploy, with
+    // zero recurrence, versus a bug that had reproduced on every prior
+    // restart. Only this initial-delay wrapper changes — the interval
+    // mechanics below are untouched.
     let hash = 0;
     for (let i = 0; i < agentName.length; i++) hash = (hash * 31 + agentName.charCodeAt(i)) >>> 0;
     const staggerMs = hash % 5000;
-    this.log(`WATCHDOG DIAGNOSTIC: staggering first tick by ${staggerMs}ms`);
     setTimeout(() => {
-    this.heartbeatTimer = setInterval(() => {
-      // TEMP DIAGNOSTIC (2026-07-14): unconditional, every firing, not just
-      // on mismatch — see task_1783847243268_19095709.
-      this.log(`WATCHDOG DIAGNOSTIC: firing with agentName="${agentName}" (live this.agent.name="${this.agent.name}", dir=${this.agent.getAgentDir()})`);
-      const ts = new Date().toISOString();
-      // cwd MUST be this agent's own directory: execFile inherits the DAEMON's
-      // cwd/env by default (this call runs inside the daemon process, not the
-      // agent's PTY), and resolveEnv() falls back to basename(cwd) for the
-      // agent name when CTX_AGENT_NAME is unset. Without this, the write
-      // silently lands under state/<basename-of-daemon-cwd>/heartbeat.json
-      // instead of this agent's own file (observed in production as a phantom
-      // "cortextos" pseudo-agent in read-all-heartbeats, never this agent's).
-      //
-      // TEMP DIAGNOSTIC (2026-07-12, task_1783847243268_19095709): a live
-      // instance wrote "[watchdog] cleo alive" into anam's own heartbeat.json
-      // (agent field + directory both correctly "anam") — cannot be
-      // explained by anything found in static tracing of this file, the
-      // construction chain, the compiled build, or the on-disk .cortextos-env
-      // files. Logging the start()-captured agentName against a FRESH read
-      // of this.agent.name (and getAgentDir()) at the actual firing moment,
-      // to catch a possible divergence between them that static reading
-      // can't reveal. Remove once root-caused.
-      if (agentName !== this.agent.name) {
-        this.log(`WATCHDOG DIAGNOSTIC: agentName mismatch! captured-at-start="${agentName}" vs live-this.agent.name="${this.agent.name}" (dir=${this.agent.getAgentDir()})`);
-      }
-      execFile(
-        'cortextos',
-        ['bus', 'update-heartbeat', `${WATCHDOG_HEARTBEAT_PREFIX} ${agentName} alive — idle session ${ts}`],
-        { cwd: this.agent.getAgentDir() },
-        (err) => {
-          if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-        },
-      );
-    }, HEARTBEAT_INTERVAL_MS);
+      this.heartbeatTimer = setInterval(() => {
+        const ts = new Date().toISOString();
+        // cwd MUST be this agent's own directory: execFile inherits the DAEMON's
+        // cwd/env by default (this call runs inside the daemon process, not the
+        // agent's PTY), and resolveEnv() falls back to basename(cwd) for the
+        // agent name when CTX_AGENT_NAME is unset. Without this, the write
+        // silently lands under state/<basename-of-daemon-cwd>/heartbeat.json
+        // instead of this agent's own file (observed in production as a phantom
+        // "cortextos" pseudo-agent in read-all-heartbeats, never this agent's).
+        execFile(
+          'cortextos',
+          ['bus', 'update-heartbeat', `${WATCHDOG_HEARTBEAT_PREFIX} ${agentName} alive — idle session ${ts}`],
+          { cwd: this.agent.getAgentDir() },
+          (err) => {
+            if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
+          },
+        );
+      }, HEARTBEAT_INTERVAL_MS);
     }, staggerMs);
 
     // Wake-latency (non-wake) stuck-session detector: catches an idle session

@@ -121,16 +121,6 @@ export class AgentManager {
     // re-discover and re-start any agent dir on disk regardless of user intent.
     const instanceEnabled = this.readInstanceEnableList();
 
-    // TEMP DIAGNOSTIC (2026-07-14, task_1783847243268_19095709): anam's
-    // heartbeat-watchdog writes "cleo alive" into anam's own heartbeat.json.
-    // Confirmed the AgentProcess backing anam's FastChecker has .name="cleo"
-    // from the moment start() runs (not mutated later — a diagnostic on the
-    // watchdog interval itself showed no divergence between the name
-    // captured at start() and a live re-read). Logging the exact (name, dir)
-    // pairs discoverAgents() produces to see whether they're already
-    // mismatched before construction. Remove once root-caused.
-    console.log(`[agent-manager] DIAGNOSTIC discoverAgents() pairs: ${JSON.stringify(agentDirs.map(a => ({ name: a.name, dir: a.dir })))}`);
-
     for (const { name, dir, org, config } of agentDirs) {
       // Per-agent config.json `enabled: false` (existing behavior, unchanged)
       if (config.enabled === false) {
@@ -145,7 +135,6 @@ export class AgentManager {
       }
       // BUG-043 fix: pass the per-agent org so startAgent can use it instead
       // of falling back to `this.org` (the daemon's startup org).
-      console.log(`[agent-manager] DIAGNOSTIC calling startAgent(name="${name}", dir="${dir}")`);
       await this.startAgent(name, dir, config, org);
     }
 
@@ -255,11 +244,6 @@ export class AgentManager {
   }
 
   async startAgent(name: string, agentDir: string, config?: AgentConfig, org?: string): Promise<void> {
-    // TEMP DIAGNOSTIC (2026-07-14, task_1783847243268_19095709): see
-    // discoverAndStart() for context. Confirms the arguments startAgent()
-    // itself actually receives, at the top of the function before any
-    // further processing. Remove once root-caused.
-    console.log(`[agent-manager] DIAGNOSTIC startAgent() entry: name="${name}" agentDir="${agentDir}"`);
     if (this.agents.has(name)) {
       // BUG-031: this branch was the workaround for the BUG-011 PTY race
       // (restart-all could send stop+start simultaneously, and the new
@@ -386,10 +370,6 @@ export class AgentManager {
     }
 
     const agentProcess = new AgentProcess(name, env, config, log);
-    // TEMP DIAGNOSTIC (2026-07-14, task_1783847243268_19095709): confirms
-    // what the constructed AgentProcess actually holds for .name and
-    // .env.agentDir immediately after construction. Remove once root-caused.
-    console.log(`[agent-manager] DIAGNOSTIC AgentProcess constructed: .name="${agentProcess.name}" .getAgentDir()="${agentProcess.getAgentDir()}"`);
     // Issue #330: pass the Telegram handle into AgentProcess so CodexAppServerPTY
     // can emit sendChatAction directly from the JSONL stream. Has no effect for
     // claude-code / hermes runtimes — those still use fast-checker.
