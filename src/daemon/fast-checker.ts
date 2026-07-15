@@ -156,27 +156,33 @@ export class FastChecker {
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
-    // Stagger each agent's first tick by a small deterministic offset
-    // (derived from its own name, 0-4999ms). Root-caused 2026-07-14
-    // (task_1783847243268_19095709): a live instance wrote "[watchdog] cleo
-    // alive" into anam's own heartbeat.json (agent field + directory both
-    // correctly "anam"). Exhaustive diagnostics proved the daemon-side code
-    // correct at both registration and firing time across many ticks —
-    // agentName, this.agent.name, and getAgentDir() all matched every time —
+    // Stagger each agent's first tick by a deterministic offset (derived
+    // from its own name). Root-caused 2026-07-14 (task_1783847243268_19095709):
+    // a live instance wrote "[watchdog] cleo alive" into anam's own
+    // heartbeat.json (agent field + directory both correctly "anam").
+    // Exhaustive diagnostics proved the daemon-side code correct at both
+    // registration and firing time across many ticks — agentName, a live
+    // re-read of this.agent.name, and getAgentDir() all matched every time —
     // yet the persisted file kept showing a cross-agent mismatch. Since all
-    // 5 agents' watchdog timers register within milliseconds of each other
-    // at daemon start and fire in the same tight window every 50 minutes,
-    // the mismatch traces to a concurrency issue in dispatching several
-    // near-simultaneous execFile calls with different cwd options (the exact
-    // low-level Node/child_process mechanism was never pinned down further).
-    // Staggering decouples the 5 agents' firing times from each other;
-    // confirmed clean across 28+ ticks over 18+ hours after deploy, with
-    // zero recurrence, versus a bug that had reproduced on every prior
-    // restart. Only this initial-delay wrapper changes — the interval
-    // mechanics below are untouched.
+    // agents' watchdog timers register within milliseconds of each other at
+    // daemon start and fire in the same tight window every 50 minutes, the
+    // mismatch traces to a concurrency issue in dispatching several
+    // near-simultaneous execFile calls with different cwd options (the
+    // agent-agnostic nature confirms this — a different pairing, "athena"
+    // into anam's file, recurred 2026-07-15 — the exact low-level Node/
+    // child_process mechanism was never pinned down further).
+    //
+    // A first attempt staggered by only 0-4999ms, which reduced but did NOT
+    // eliminate the race (28 clean ticks over 18h, then recurred) — a
+    // multi-second window is still narrow enough for system jitter to
+    // collapse it back to near-simultaneous under some load. Widened to
+    // spread across a 20-minute window (comfortably inside the 50-min
+    // cycle), making any overlap implausible regardless of jitter rather
+    // than merely unlikely. Only this initial-delay wrapper changes — the
+    // interval mechanics below are untouched.
     let hash = 0;
     for (let i = 0; i < agentName.length; i++) hash = (hash * 31 + agentName.charCodeAt(i)) >>> 0;
-    const staggerMs = hash % 5000;
+    const staggerMs = hash % (20 * 60 * 1000);
     setTimeout(() => {
       this.heartbeatTimer = setInterval(() => {
         const ts = new Date().toISOString();
