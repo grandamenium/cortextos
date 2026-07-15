@@ -93,6 +93,16 @@ export function readMaxCrashesPerDay(agentDir: string | undefined): number | nul
   }
 }
 
+export function readCrashAlertToUser(agentDir: string | undefined): boolean {
+  if (!agentDir) return true;
+  try {
+    const cfg = JSON.parse(readFileSync(join(agentDir, 'config.json'), 'utf-8')) as Record<string, unknown>;
+    return cfg.crash_alert_to_user !== false;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Send a crash notification via `cortextos bus send-message` to the listed
  * recipient agents. Best-effort: failures are swallowed so an alert miss never
@@ -276,6 +286,10 @@ async function main(): Promise<void> {
   const chatId = process.env.CHAT_ID;
   if (!botToken || !chatId) return;
 
+  const agentDir = process.env.CTX_AGENT_DIR || process.cwd();
+  const crashAlertToUser = readCrashAlertToUser(agentDir);
+  if (!crashAlertToUser) return;
+
   let message = '';
   switch (endType) {
     case 'planned-restart':
@@ -315,9 +329,7 @@ async function main(): Promise<void> {
       message = `⏳ ${agentName} paused — Anthropic rate limit hit. Will resume when the window resets.`;
       break;
     case 'crash':
-      message = `🚨 CRASH: ${agentName} died unexpectedly.`;
-      if (crashCount > 0) message += ` Crashes today: ${crashCount}.`;
-      if (lastTask) message += `\nLast status: ${lastTask}`;
+      message = `🔄 ${agentName} is restarting — back in a moment.`;
       break;
   }
 
