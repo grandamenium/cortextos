@@ -15,13 +15,19 @@ const ATLAS_EMAIL = 'atlas@total-investment-solutions.com';
 const LABEL_NAME = 'AtlasOS-Inbox';
 
 // Known marketing/blast domains — suppress silently (same list as check-business-inboxes.js)
-const SUPPRESS_SENDERS = /airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|toptiertc\.com|@toptiertc\.|top\.tier\.tc|beehiiv\.com|convertkit\.com|mailchimp\.com|constantcontact\.com|klaviyo\.com|substack\.com|frommilitarytomillionaire\.com|newwestern\.com|@newwestern\.|capstoneconnectors\.com|@capstoneconnectors\.|askforfunding\.com|@askforfunding\.|bluehorizon-realestate\.com|arturo@bluehorizon/i;
+const SUPPRESS_SENDERS = /aa\.com|@aa\.com|americanairlines\.com|@americanairlines\.|@delta\.com|@united\.com|@southwest\.com|@jetblue\.com|@spirit\.com|@alaskaair\.com|@alerts\.aa\.com|@email\.aa\.com|@news\.aa\.com|airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|toptiertc\.com|@toptiertc\.|top\.tier\.tc|beehiiv\.com|convertkit\.com|mailchimp\.com|constantcontact\.com|klaviyo\.com|substack\.com|frommilitarytomillionaire\.com|newwestern\.com|@newwestern\.|capstoneconnectors\.com|@capstoneconnectors\.|askforfunding\.com|@askforfunding\.|bluehorizon-realestate\.com|arturo@bluehorizon/i;
 
 // Cold-blast subject patterns — only suppress for non-whitelisted senders
 const SUPPRESS_SUBJECTS = /\bLIVE NOW:|bonus.*underwriting|underwriting.*bonus|market.*(shifted|favor)|shifted.*favor|collect rent without|close in \d+ (business )?(days?|weeks?)|dscr (from|as low as|at) \d|hard money (lender|loan|available|fast)|private (money|lender|lending) (available|offer|solution)|we('re)? (fund|lending)|can fund your (deal|flip|project|rehab)|asset.based lend|no income.*verif|quick (close|fund)|fast close|close fast|fix.?and.?flip loan|rental (loan|financing) offer|bridge (loan|lender|funding) (offer|available|fast)|free training|free masterclass|free workshop|webinar.*register|register.*webinar|join us (live|online|virtually)|replay.*available|watch the replay/i;
 
+// Always alert for these senders regardless of subject
+const ALWAYS_ALERT_SENDERS = /turbotenant\.com|ashley\.deloney|@doorloop\.|@docusign\.|@hellosign\.|jess\.pacheco|jesspacheco/i;
+
+// Always alert for lease/signature/legal/money subject patterns
+const ALWAYS_ALERT_SUBJECTS = /signature requested|new lease agreement|please sign|docusign|e-sign|esign|sign and return|action required.*sign|lease.*sign|sign.*lease|countersign|invoice|payment received|payment due|payment failed|past due|balance due|amount due|wire transfer|ach transfer|rent paid|rent due|deposit received|earnest money|closing cost|funds received|commission|check enclosed|check attached|you.*paid|your.*payment|bill.*due|overdue|refund|reimburs/i;
+
 // Known real counterparties — always pass regardless of subject match
-const SENDER_WHITELIST = /dahae|rok\.financial|rokfinancial|billingsrealtybrokers\.com|kathy@billings|initialrentals\.com|@sitewire\.|sitewire\.com|beartooth|tamara\.jensen|tammy\.jensen|gilbertresilientrealty|nancy.*hanson@|@doorloop\.|@turbotenant\.|rufus.*peace|integrity.*first|juneitha|shambee|@kultivate/i;
+const SENDER_WHITELIST = /dahae|rok\.financial|rokfinancial|billingsrealtybrokers\.com|kathy@billings|initialrentals\.com|@sitewire\.|sitewire\.com|beartooth|tamara\.jensen|tammy\.jensen|gilbertresilientrealty|carlinresilientrealty|marchlarkin|marlo@serenity|marlo@tonyandmarlo|nancy.*hanson@|@doorloop\.|@turbotenant\.|rufus.*peace|integrity.*first|juneitha|shambee|@kultivate|ashley\.deloney|ashautoaz|jesspacheco|cathi@elitetax|sivartak|noreply@mail\.hellosign/i;
 const CHAT_ID = process.env.CTX_TELEGRAM_CHAT_ID || '8993058901';
 const CORTEXTOS_CLI = path.resolve(__dirname, '../../../../../dist/cli.js');
 const AUDIO_MIME_TYPES = ['audio/m4a', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'video/mp4', 'audio/mp4', 'audio/x-m4a'];

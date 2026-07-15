@@ -98,28 +98,28 @@ function appendToDigest(account, flaggedItems) {
 // gmail_tt23       → texastimber23@gmail.com
 // gmail_wti        → watchthis.illinois@gmail.com
 
-const BUSINESS_QUERY = 'is:unread -category:promotions -category:social -category:updates -category:forums newer_than:2d';
+const BUSINESS_QUERY = 'is:unread -in:sent -category:promotions -category:social -category:updates -category:forums newer_than:2d';
 
 const ACCOUNTS = [
   { file: 'gmail_tokens.json',         label: 'Personal',         query: BUSINESS_QUERY, max: 5 },
   // gmail_tis_tokens.json = atlas@TIS alias — handled exclusively by check-atlas-inbox.js to prevent duplicate relays
-  { file: 'gmail_tis4u_tokens.json',   label: 'TIS Business',     query: 'is:unread newer_than:2d', max: 5 },
+  { file: 'gmail_tis4u_tokens.json',   label: 'TIS Business',     query: 'is:unread -in:sent newer_than:2d', max: 5 },
   { file: 'gmail_ilp_tokens.json',     label: 'ILP',              query: 'is:unread -label:ForgeAlerted newer_than:2d', max: 5, alertLabel: 'ForgeAlerted' },
-  { file: 'gmail_jb1979_tokens.json',  label: 'JB1979',           query: BUSINESS_QUERY, max: 5 },
+  { file: 'gmail_jb1979_tokens.json',  label: 'JB1979',           query: 'is:unread -label:ForgeAlerted newer_than:2d', max: 5, alertLabel: 'ForgeAlerted' },
   { file: 'gmail_jordanreyes_tokens.json', label: 'Jordan Reyes', query: 'is:unread -label:ForgeAlerted newer_than:2d', max: 5, alertLabel: 'ForgeAlerted' },
-  { file: 'gmail_ahr_tokens.json',     label: 'AHR',              query: 'is:unread newer_than:7d', max: 5 },
-  { file: 'gmail_tt23_tokens.json',    label: 'Texas Timber',     query: 'is:unread newer_than:2d', max: 5 },
-  { file: 'gmail_wti_tokens.json',     label: 'WATCH THIS LLC',   query: 'is:unread newer_than:7d', max: 5 },
+  { file: 'gmail_ahr_tokens.json',     label: 'AHR',              query: 'is:unread -in:sent newer_than:7d', max: 5 },
+  { file: 'gmail_tt23_tokens.json',    label: 'Texas Timber',     query: 'is:unread -in:sent newer_than:2d', max: 5 },
+  { file: 'gmail_wti_tokens.json',     label: 'WATCH THIS LLC',   query: 'is:unread -in:sent newer_than:7d', max: 5 },
 ];
 
 // High-priority senders/subjects to always flag to Argus
 const DEAL_KEYWORDS = /crawford|greg cole|keith mendosa|loi|letter of intent|offer|contract|closing|purchase agreement|earnest|junietha|shambee|rei chicago|oscar|polk|ted sanders|ted@americahomerestoration/i;
 
 // Senders/patterns to suppress silently (mark read, no Telegram alert)
-const SUPPRESS_SENDERS = /resnexus\.com|communications@resnexus|shutterstock\.com|emktng\.shutterstock|frommilitarytomillionaire\.com|iheart\.com|sofi\.com|gobrightline\.com|tymobeauty\.com|rodanandfields\.com|nuuly\.com|depop\.com|expedia\.com|tripadvisor\.com|turo\.com|benchmade\.com|jostens\.com|salliemae\.com|lendingclub\.com|shakeshack\.com|@e\.upgrade\.com|ebay\.com|alltrails\.com|aausports\.org|purefrequencies\.com|moneylion\.com|gainrepmail\.com|aurahealth\.io|youversion\.com|notarize\.com|@(email|close)\.close\.com|tasks\.clickup\.com|attio\.com|@attio\.|bluehorizon-realestate\.com|arturo@bluehorizon|newwestern\.com|@newwestern\.|@fyxer\.com|hostcamp\.com|@hostcamp\.|askforfunding\.com|@askforfunding\.|rocketlawyer\.com|@rocketlawyer\.|uber\.com|@uber\.|@h5\.hilton\.com|hilton\.com|zenbusiness\.com|@zenbusiness\.|capstoneconnectors\.com|@capstoneconnectors\.|remitly\.com|@remitly\.|info\.remitly|ablink\.info\.rem|invoice\+statements@make\.com|celonis\.com|taxact\.com|@taxact\.|360onlineprint\.com|@360onlineprint\.|constantcontact\.com|mailchimp\.com|klaviyo\.com|substack\.com|beehiiv\.com|convertkit\.com|mnatsakanian|toptiertc\.com|@toptiertc\.|top\.tier\.tc|airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|cara\.lee@|caralee@/i;
+const SUPPRESS_SENDERS = /aa\.com|@aa\.com|americanairlines\.com|@americanairlines\.|@delta\.com|@united\.com|@southwest\.com|@jetblue\.com|@spirit\.com|@alaskaair\.com|@alerts\.aa\.com|@email\.aa\.com|@news\.aa\.com|resnexus\.com|communications@resnexus|shutterstock\.com|emktng\.shutterstock|frommilitarytomillionaire\.com|iheart\.com|sofi\.com|gobrightline\.com|tymobeauty\.com|rodanandfields\.com|nuuly\.com|depop\.com|expedia\.com|tripadvisor\.com|turo\.com|benchmade\.com|jostens\.com|salliemae\.com|lendingclub\.com|shakeshack\.com|@e\.upgrade\.com|ebay\.com|alltrails\.com|aausports\.org|purefrequencies\.com|moneylion\.com|gainrepmail\.com|aurahealth\.io|youversion\.com|notarize\.com|@(email|close)\.close\.com|tasks\.clickup\.com|attio\.com|@attio\.|bluehorizon-realestate\.com|arturo@bluehorizon|newwestern\.com|@newwestern\.|@fyxer\.com|hostcamp\.com|@hostcamp\.|askforfunding\.com|@askforfunding\.|rocketlawyer\.com|@rocketlawyer\.|uber\.com|@uber\.|@h5\.hilton\.com|hilton\.com|zenbusiness\.com|@zenbusiness\.|capstoneconnectors\.com|@capstoneconnectors\.|remitly\.com|@remitly\.|info\.remitly|ablink\.info\.rem|invoice\+statements@make\.com|celonis\.com|taxact\.com|@taxact\.|360onlineprint\.com|@360onlineprint\.|constantcontact\.com|mailchimp\.com|klaviyo\.com|substack\.com|beehiiv\.com|convertkit\.com|mnatsakanian|toptiertc\.com|@toptiertc\.|top\.tier\.tc|airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|cara\.lee@|caralee@|homecare.*coach|homecarecoach|chatarv\.com|@chatarv\.|jenn.*billat|jennbillat|billat.*legacy|owners.*club.*legacy|certaintyinc\.com|@certaintyinc\.|marshall.*sylver|sylver.*marshall|skool\.com|@skool\.|greatwithmoney@m\.relayfi\.com|greatwithmoney@/i;
 
 // Subject patterns that are always marketing/noise regardless of sender — suppress
-const SUPPRESS_SUBJECTS = /\bchallenge\b.*register|you.re not registered|don.t miss.*challenge|join.*challenge|all abilities challenge|on track for (next|your) (tax|season)|product (has )?shipped|your order (has )?shipped|your (package|shipment) (is |has )?shipped|built for solo.*agency.*scale|which one.s you|webinar.*register|register.*webinar|free training|free masterclass|free workshop|join us (live|online|virtually)|replay.*available|watch the replay|limited.*seats|seats.*limited|early.bird|special (offer|discount|price)|% off (today|now|this week)|flash sale|last chance|ends (tonight|tomorrow|soon)|deal of the day|promo code|coupon inside|LIVE NOW:|live now:|bonus.*underwriting|underwriting.*bonus|market.*(shifted|favor)|shifted.*favor|collect rent without|close in \d+ (business )?(days?|weeks?)|dscr (from|as low as|at) \d|hard money (lender|loan|available|fast)|private (money|lender|lending) (available|offer|solution)|we('re)? (fund|lending)|can fund your (deal|flip|project|rehab)|asset.based lend|no income.*verif|quick (close|fund)|fast close|close fast|fix.?and.?flip loan|rental (loan|financing) offer|bridge (loan|lender|funding) (offer|available|fast)/i;
+const SUPPRESS_SUBJECTS = /trending posts|trending near|trending in your area|trending around|best.*around butte|best.*around.*billings|\bchallenge\b.*register|you.re not registered|don.t miss.*challenge|join.*challenge|all abilities challenge|on track for (next|your) (tax|season)|product (has )?shipped|your order (has )?shipped|your (package|shipment) (is |has )?shipped|built for solo.*agency.*scale|which one.s you|webinar.*register|register.*webinar|free training|free masterclass|free workshop|join us (live|online|virtually)|replay.*available|watch the replay|limited.*seats|seats.*limited|early.bird|special (offer|discount|price)|% off (today|now|this week)|flash sale|last chance|ends (tonight|tomorrow|soon)|deal of the day|promo code|coupon inside|LIVE NOW:|live now:|bonus.*underwriting|underwriting.*bonus|market.*(shifted|favor)|shifted.*favor|collect rent without|close in \d+ (business )?(days?|weeks?)|dscr (from|as low as|at) \d|hard money (lender|loan|available|fast)|private (money|lender|lending) (available|offer|solution)|we('re)? (fund|lending)|can fund your (deal|flip|project|rehab)|asset.based lend|no income.*verif|quick (close|fund)|fast close|close fast|fix.?and.?flip loan|rental (loan|financing) offer|bridge (loan|lender|funding) (offer|available|fast)|daily deal|deals o.clock|o.clock deal|super promo|300\+ resources|reintroduc.*myself|build your legacy|build.*legacy.*coaching|owners club|big goals.*event|events? happening tomorrow|events? this week.*community|skool.*event|community.*event.*tomorrow/i;
 
 // Jennifer's own email addresses — used to detect self-sent calendar invites
 const JENNIFER_EMAILS = /jennifer\.l\.breitbach@gmail|jennifer\.breitbach@total-investment|jennifer@jordanreyes|jennifer@americahome|jbreitbach1979@gmail/i;
@@ -128,12 +128,15 @@ const SUPPRESS_UNLESS_TRANSACTIONAL = /hiltongrandvacations\.com|hgv@|make\.com|
 const TRANSACTIONAL_KEYWORDS = /reservation|confirmation|booking|check.in|check.out|receipt|invoice|itinerary|your stay|your trip|cancell|affiliate.*commission|affiliate.*payment|affiliate.*earning|affiliate.*program.*welcome|affiliate.*approved|domain.*expir|expir.*domain|renew.*domain|domain.*renew|expire/i;
 
 // Senders that always pass through regardless of other rules (operational platforms)
-const ALWAYS_ALERT_SENDERS = /turbotenant\.com/i;
+const ALWAYS_ALERT_SENDERS = /turbotenant\.com|ashley\.deloney|@doorloop\.|@docusign\.|@hellosign\.|jess\.pacheco|jesspacheco/i;
+
+// Subject patterns that always surface regardless of sender — legal/transactional/money signals
+const ALWAYS_ALERT_SUBJECTS = /signature requested|new lease agreement|please sign|docusign|e-sign|esign|sign and return|action required.*sign|lease.*sign|sign.*lease|countersign|invoice|payment received|payment due|payment failed|past due|balance due|amount due|wire transfer|ach transfer|rent paid|rent due|deposit received|earnest money|closing cost|funds received|commission|check enclosed|check attached|you.*paid|your.*payment|bill.*due|overdue|refund|reimburs/i;
 
 // Known real counterparties — always pass regardless of subject match.
 // A subject match from a whitelisted sender is NEVER suppressed (a real lender/attorney
 // can legitimately use phrases like "DSCR", "fund your deal", "close in 2 weeks").
-const SENDER_WHITELIST = /dahae|rok\.financial|rokfinancial|billingsrealtybrokers\.com|kathy@billings|initialrentals\.com|@sitewire\.|sitewire\.com|beartooth|tamara\.jensen|tammy\.jensen|gilbertresilientrealty|nancy.*hanson@|@doorloop\.|@turbotenant\.|rufus.*peace|integrity.*first|juneitha|shambee|@kultivate|@culturalrealty|mnatsakanian/i;
+const SENDER_WHITELIST = /dahae|rok\.financial|rokfinancial|billingsrealtybrokers\.com|kathy@billings|initialrentals\.com|@sitewire\.|sitewire\.com|beartooth|tamara\.jensen|tammy\.jensen|gilbertresilientrealty|carlinresilientrealty|marchlarkin|marlo@serenity|marlo@tonyandmarlo|nancy.*hanson@|@doorloop\.|@turbotenant\.|rufus.*peace|integrity.*first|juneitha|shambee|@kultivate|@culturalrealty|mnatsakanian|ashley\.deloney|ashautoaz|jesspacheco|cathi@elitetax|sivartak|noreply@mail\.hellosign/i;
 
 // Senders to auto-forward to a specific address (pattern -> email)
 const FORWARD_RULES = [
@@ -145,9 +148,10 @@ const LEDGER_ROUTE_PATTERNS = [
   /relay\.co|relayfi\.com|relay financial/i,        // Relay bank statements
   /statement.*meadowlark|meadowlark.*statement/i,   // Meadowlark statements
   /bank.*statement|account.*statement/i,             // General bank statements
+  /homedepot\.com|home.*depot/i,                    // Home Depot billing statements → Ledger (LEDGER_RELAY_SKIP excludes Pro Xtra perks emails)
 ];
-// Relay subjects that are marketing/feature emails — skip Ledger routing for these
-const LEDGER_RELAY_SKIP = /new feature|now available|introducing|we.ve added|product update|feature announcement|surcharging|invoices feature|premium.*feature|feature.*premium|marketing|newsletter|announcement|update.*plan|plan.*update|requesting your payment details|payment details|growth.loop|register.*payment|payment.*register/i;
+// Relay/Ledger subjects that are marketing/feature emails — skip Ledger routing for these
+const LEDGER_RELAY_SKIP = /new feature|now available|introducing|we.ve added|product update|feature announcement|surcharging|invoices feature|premium.*feature|feature.*premium|marketing|newsletter|announcement|update.*plan|plan.*update|requesting your payment details|payment details|growth.loop|register.*payment|payment.*register|daily deal|deals o.clock|o.clock deal|special offer|% off|promo|coupon|flash sale|pro xtra|perks.*savings|savings.*perks|view your perks/i;
 
 // Newsletter/automated senders — only alert if content is relevant
 const NEWSLETTER_SENDERS = /neighborhoodalerts\.com|zillow\.com|realtor\.com|loopnet|crexi|newsletter|noreply|no-reply|digest|weekly.*update|monthly.*update|nextdoor\.com|padsplit\.com|padsplit|alignable\.com|engage\.canva\.com/i;
@@ -155,9 +159,21 @@ const NEWSLETTER_SENDERS = /neighborhoodalerts\.com|zillow\.com|realtor\.com|loo
 // Topics relevant to Jennifer's current work (for newsletter relevance check)
 const RELEVANT_TOPICS = /coliving|co-living|rv park|mobile home|mhp|sober living|community housing|billings|montana|idaho|twin falls|butte|columbus|1031|subject.to|subto|creative finance|deal flow|buy box|acquisition|wholesale|dispo|real estate|housing|for rent|for sale|landlord|tenant|property|rental|foreclosure|eviction|rehab|investor|investment property/i;
 
-function shouldAlert(from, subject, body) {
-  // Always alert for operational property management platforms
+function shouldAlert(from, subject, body, headers) {
+  // Always alert for operational property management platforms + VIP senders
   if (ALWAYS_ALERT_SENDERS.test(from)) return 'alert';
+
+  // Always alert for legal/transactional subject patterns (e-sign, lease, signature requests)
+  if (ALWAYS_ALERT_SUBJECTS.test(subject)) return 'alert';
+
+  // Suppress bulk mailers detected via email headers (lender broadcasts, social digests, newsletters)
+  // List-Unsubscribe presence = bulk ESP. Precedence: bulk|list = mailing list.
+  // Exception: whitelisted senders (real counterparties) pass through regardless.
+  if (headers && !SENDER_WHITELIST.test(from) && !ALWAYS_ALERT_SENDERS.test(from)) {
+    const listUnsub = getHeader(headers, 'list-unsubscribe');
+    const precedence = getHeader(headers, 'precedence');
+    if (listUnsub || /\b(bulk|list)\b/i.test(precedence)) return 'suppress';
+  }
 
   // Suppress self-sent calendar invites for Jennifer's own recurring events
   if (/co-living office hours|coliving office hours/i.test(subject) && JENNIFER_EMAILS.test(from)) return 'suppress';
@@ -372,7 +388,7 @@ async function checkAccount(account) {
       const snippet = fullBody.slice(0, 150);
       const body = fullBody.slice(0, 8000);
       const isDeal = DEAL_KEYWORDS.test(from + ' ' + subject);
-      const action = shouldAlert(from, subject, snippet);
+      const action = shouldAlert(from, subject, snippet, headers);
 
       // Route bank/Relay statements to Ledger (skip marketing/feature announcement emails)
       const isLedgerEmail = LEDGER_ROUTE_PATTERNS.some(p => p.test(from) || p.test(subject))
