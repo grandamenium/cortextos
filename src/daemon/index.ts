@@ -236,6 +236,31 @@ class Daemon {
       process.umask(0o077);
     }
 
+    // Root-caused 2026-07-16 (task_1783847243268_19095709): CTX_AGENT_NAME
+    // and CTX_AGENT_DIR are per-AGENT identity vars, never part of the
+    // daemon's own intended environment (see ecosystem.config.js's `env`
+    // block for cortextos-daemon — neither is listed there). But a daemon
+    // restarted from inside a live agent's own shell (`pm2 restart
+    // cortextos-daemon` run from, e.g., anam's own PTY) can end up
+    // inheriting that shell's CTX_AGENT_NAME/CTX_AGENT_DIR into the daemon
+    // process's own process.env, where they then leak into every child
+    // process the daemon spawns via execFile — including the per-agent
+    // heartbeat watchdog (fast-checker.ts), which passes a correct `cwd`
+    // override but never overrides `env`. resolveEnv() prioritizes
+    // CTX_AGENT_NAME/CTX_AGENT_DIR over the cwd-based fallback, so a leaked
+    // identity silently overrides the correct cwd for every OTHER agent's
+    // watchdog write, landing their heartbeat.json content in the leaked
+    // agent's directory instead of their own. This produced exactly that
+    // symptom in production: cleo/athena/charlotte's watchdog writes each
+    // correctly targeted their own directory (confirmed via the diagnostic
+    // added the same day), yet landed in anam's heartbeat.json — because
+    // the daemon's own environment had inherited CTX_AGENT_NAME=anam from a
+    // restart issued inside anam's shell. Explicitly clearing both here,
+    // before anything else touches process.env, makes the daemon immune to
+    // whatever shell happened to restart it.
+    delete process.env.CTX_AGENT_NAME;
+    delete process.env.CTX_AGENT_DIR;
+
     console.log(`[daemon] Starting cortextOS daemon (instance: ${this.instanceId})`);
 
     const frameworkRoot = process.env.CTX_FRAMEWORK_ROOT || '';
