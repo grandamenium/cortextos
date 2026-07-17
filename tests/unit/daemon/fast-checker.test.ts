@@ -807,16 +807,6 @@ describe('FastChecker', () => {
   });
 
   describe('heartbeat watchdog', () => {
-    // The watchdog's first tick is staggered by a deterministic offset
-    // (derived from the agent's own name, spread across a 20-minute window)
-    // before the 50-min interval even registers, so every agent's watchdog
-    // doesn't fire in the same tight window (2026-07-14, widened 2026-07-15
-    // after a narrower few-second stagger reduced but did not eliminate the
-    // cross-agent race under jitter — task_1783847243268_19095709).
-    // Advancing by exactly 50min alone is no longer enough to guarantee the
-    // first tick has fired; add a safety margin comfortably past the max
-    // possible stagger.
-    const STAGGER_SAFETY_MARGIN_MS = 20 * 60 * 1000;
     beforeEach(() => { vi.useFakeTimers(); });
     afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 
@@ -825,7 +815,7 @@ describe('FastChecker', () => {
       const agent = createMockAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       checker.start();
-      await vi.advanceTimersByTimeAsync(50 * 60 * 1000 + STAGGER_SAFETY_MARGIN_MS);
+      await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
       expect(execFile).toHaveBeenCalledWith(
         'cortextos',
         expect.arrayContaining(['bus', 'update-heartbeat', expect.stringContaining('[watchdog] my-agent alive — idle session')]),
@@ -845,7 +835,7 @@ describe('FastChecker', () => {
       const agent = createMockAgent('my-agent');
       const checker = new FastChecker(agent, paths, '/tmp/framework');
       checker.start();
-      await vi.advanceTimersByTimeAsync(50 * 60 * 1000 + STAGGER_SAFETY_MARGIN_MS);
+      await vi.advanceTimersByTimeAsync(50 * 60 * 1000);
       const callsBefore = execMock.mock.calls.length;
       expect(callsBefore).toBeGreaterThan(0);
       checker.stop();

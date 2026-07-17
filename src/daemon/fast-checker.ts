@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync, appendFileSync } from 'fs';
+import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync } from 'fs';
 import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -156,74 +156,30 @@ export class FastChecker {
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
-    // Stagger each agent's first tick by a deterministic offset (derived
-    // from its own name). Root-caused 2026-07-14 (task_1783847243268_19095709):
-    // a live instance wrote "[watchdog] cleo alive" into anam's own
-    // heartbeat.json (agent field + directory both correctly "anam").
-    // Exhaustive diagnostics proved the daemon-side code correct at both
-    // registration and firing time across many ticks — agentName, a live
-    // re-read of this.agent.name, and getAgentDir() all matched every time —
-    // yet the persisted file kept showing a cross-agent mismatch. Since all
-    // agents' watchdog timers register within milliseconds of each other at
-    // daemon start and fire in the same tight window every 50 minutes, the
-    // mismatch traces to a concurrency issue in dispatching several
-    // near-simultaneous execFile calls with different cwd options (the
-    // agent-agnostic nature confirms this — a different pairing, "athena"
-    // into anam's file, recurred 2026-07-15 — the exact low-level Node/
-    // child_process mechanism was never pinned down further).
-    //
-    // A first attempt staggered by only 0-4999ms, which reduced but did NOT
-    // eliminate the race (28 clean ticks over 18h, then recurred) — a
-    // multi-second window is still narrow enough for system jitter to
-    // collapse it back to near-simultaneous under some load. Widened to
-    // spread across a 20-minute window (comfortably inside the 50-min
-    // cycle), making any overlap implausible regardless of jitter rather
-    // than merely unlikely. Only this initial-delay wrapper changes — the
-    // interval mechanics below are untouched.
-    let hash = 0;
-    for (let i = 0; i < agentName.length; i++) hash = (hash * 31 + agentName.charCodeAt(i)) >>> 0;
-    const staggerMs = hash % (20 * 60 * 1000);
-    setTimeout(() => {
-      this.heartbeatTimer = setInterval(() => {
-        const ts = new Date().toISOString();
-        const targetDir = this.agent.getAgentDir();
-        const content = `${WATCHDOG_HEARTBEAT_PREFIX} ${agentName} alive — idle session ${ts}`;
-        // TEMP DIAGNOSTIC (2026-07-15, task_1783847243268_19095709): the bug
-        // has now recurred with THREE distinct agent names ending up in
-        // anam's heartbeat.json (cleo, athena, charlotte), surviving both a
-        // narrow (5s) and wide (20min) stagger — ruling out near-simultaneous
-        // dispatch timing as the mechanism. Open question: is this
-        // anam-exclusive, or does it happen to every agent and only stick on
-        // anam because anam has the fewest real writes between ticks to
-        // overwrite a bad one before anyone notices? A permanent,
-        // append-only record of every agent's watchdog write intent (source
-        // agent, target dir, exact content), independent of what the actual
-        // heartbeat.json ends up holding a moment later, settles this
-        // directly instead of inferring from spot checks. One shared file,
-        // every agent's watchdog appends to it. Remove once root-caused.
-        try {
-          appendFileSync(
-            join(this.paths.ctxRoot, 'watchdog-diagnostic.jsonl'),
-            JSON.stringify({ ts, sourceAgent: agentName, targetDir, content }) + '\n',
-          );
-        } catch { /* diagnostic-only, never block the real write */ }
-        // cwd MUST be this agent's own directory: execFile inherits the DAEMON's
-        // cwd/env by default (this call runs inside the daemon process, not the
-        // agent's PTY), and resolveEnv() falls back to basename(cwd) for the
-        // agent name when CTX_AGENT_NAME is unset. Without this, the write
-        // silently lands under state/<basename-of-daemon-cwd>/heartbeat.json
-        // instead of this agent's own file (observed in production as a phantom
-        // "cortextos" pseudo-agent in read-all-heartbeats, never this agent's).
-        execFile(
-          'cortextos',
-          ['bus', 'update-heartbeat', content],
-          { cwd: targetDir },
-          (err) => {
-            if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-          },
-        );
-      }, HEARTBEAT_INTERVAL_MS);
-    }, staggerMs);
+    this.heartbeatTimer = setInterval(() => {
+      const ts = new Date().toISOString();
+      const targetDir = this.agent.getAgentDir();
+      const content = `${WATCHDOG_HEARTBEAT_PREFIX} ${agentName} alive — idle session ${ts}`;
+      // cwd MUST be this agent's own directory: execFile inherits the DAEMON's
+      // cwd/env by default (this call runs inside the daemon process, not the
+      // agent's PTY), and resolveEnv() falls back to basename(cwd) for the
+      // agent name when CTX_AGENT_NAME is unset. Root-caused 2026-07-16
+      // (task_1783847243268_19095709): the daemon's own process.env can
+      // inherit a stale CTX_AGENT_NAME/CTX_AGENT_DIR from whatever shell
+      // restarted it, which resolveEnv() prioritizes over this cwd override,
+      // silently redirecting every agent's watchdog write into the leaked
+      // agent's heartbeat.json instead of its own. Fixed at the source in
+      // daemon/index.ts (start() deletes both vars from its own env before
+      // anything else runs), confirmed clean for 46+ hours across 224 ticks.
+      execFile(
+        'cortextos',
+        ['bus', 'update-heartbeat', content],
+        { cwd: targetDir },
+        (err) => {
+          if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
+        },
+      );
+    }, HEARTBEAT_INTERVAL_MS);
 
     // Wake-latency (non-wake) stuck-session detector: catches an idle session
     // that received a dispatched cron/message but never processed it (a
