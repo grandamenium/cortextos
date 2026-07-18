@@ -149,6 +149,8 @@ const LEDGER_ROUTE_PATTERNS = [
   /statement.*meadowlark|meadowlark.*statement/i,   // Meadowlark statements
   /bank.*statement|account.*statement/i,             // General bank statements
   /homedepot\.com|home.*depot/i,                    // Home Depot billing statements → Ledger (LEDGER_RELAY_SKIP excludes Pro Xtra perks emails)
+  /madisontrust\.com/i,                              // Madison Trust IRA custodian — automated statements
+  /donotreply@.*trust|donotreply@.*custodian|donotreply@.*ira|noreply@.*trust|noreply@.*custodian/i, // Self-directed IRA/custodian donotreply notices
 ];
 // Relay/Ledger subjects that are marketing/feature emails — skip Ledger routing for these
 const LEDGER_RELAY_SKIP = /new feature|now available|introducing|we.ve added|product update|feature announcement|surcharging|invoices feature|premium.*feature|feature.*premium|marketing|newsletter|announcement|update.*plan|plan.*update|requesting your payment details|payment details|growth.loop|register.*payment|payment.*register|daily deal|deals o.clock|o.clock deal|special offer|% off|promo|coupon|flash sale|pro xtra|perks.*savings|savings.*perks|view your perks/i;

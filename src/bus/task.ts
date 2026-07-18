@@ -287,8 +287,8 @@ export function findTaskFile(paths: BusPaths, taskId: string): string | null {
 export function updateTask(
   paths: BusPaths,
   taskId: string,
-  status: TaskStatus,
-  options?: { assignee?: string },
+  status: TaskStatus | undefined,
+  options?: { assignee?: string; title?: string },
 ): void {
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
@@ -303,8 +303,9 @@ export function updateTask(
     const task: Task = JSON.parse(content);
     prevStatus = task.status;
     assignee = task.assigned_to;
-    task.status = status;
+    if (status !== undefined) task.status = status;
     if (options?.assignee) task.assigned_to = options.assignee;
+    if (options?.title) task.title = options.title;
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     atomicWriteSync(filePath, JSON.stringify(task));
   } catch (err) {

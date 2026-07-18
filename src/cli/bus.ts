@@ -209,12 +209,17 @@ busCommand
 busCommand
   .command('update-task')
   .argument('<id>', 'Task ID')
-  .argument('<status>', 'New status (pending, in_progress, completed, blocked, cancelled)')
+  .argument('[status]', 'New status (pending, in_progress, completed, blocked, cancelled) — omit when using --title only')
   .option('--assignee <agent>', 'Reassign task to a different agent')
-  .action((id: string, status: string, opts: { assignee?: string }) => {
+  .option('--title <title>', 'Update the task title')
+  .action((id: string, status: string | undefined, opts: { assignee?: string; title?: string }) => {
     const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
-    if (!validStatuses.includes(status as TaskStatus)) {
+    if (status !== undefined && !validStatuses.includes(status as TaskStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
+      process.exit(1);
+    }
+    if (status === undefined && !opts.assignee && !opts.title) {
+      console.error('update-task: provide a status, --assignee, or --title (nothing to update)');
       process.exit(1);
     }
     const env = resolveEnv();
@@ -231,9 +236,11 @@ busCommand
       }
     }
 
-    updateTask(paths, id, status as TaskStatus, opts.assignee ? { assignee: opts.assignee } : undefined);
+    updateTask(paths, id, status as TaskStatus | undefined, (opts.assignee || opts.title) ? { assignee: opts.assignee, title: opts.title } : undefined);
+    const statusStr = status ? ` -> ${status}` : '';
     const reassign = opts.assignee ? ` (reassigned to: ${opts.assignee})` : '';
-    console.log(`Updated ${id} -> ${status}${reassign}`);
+    const retitle = opts.title ? ` (title: ${opts.title})` : '';
+    console.log(`Updated ${id}${statusStr}${reassign}${retitle}`);
   });
 
 busCommand
