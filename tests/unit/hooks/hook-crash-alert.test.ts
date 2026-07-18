@@ -52,8 +52,20 @@ describe('readMaxCrashesPerDay', () => {
 });
 
 describe('notifyAgents', () => {
+  const savedFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+
   beforeEach(() => {
     execFileMock.mockReset();
+    // Clear CTX_FRAMEWORK_ROOT so the fallback branch (execFile('cortextos', ...)) runs.
+    // The primary branch (execFile(process.execPath, [cliPath, ...])) is tested separately below.
+    // Without this, the parent agent shell leaks CTX_FRAMEWORK_ROOT and selects the primary
+    // branch, shifting body from args[4] to args[5] and changing cmd from 'cortextos' to node.
+    delete process.env.CTX_FRAMEWORK_ROOT;
+  });
+
+  afterEach(() => {
+    if (savedFrameworkRoot !== undefined) process.env.CTX_FRAMEWORK_ROOT = savedFrameworkRoot;
+    else delete process.env.CTX_FRAMEWORK_ROOT;
   });
 
   it('sends one bus send-message per recipient', () => {
@@ -144,6 +156,30 @@ describe('notifyAgents', () => {
     })).not.toThrow();
     // Second recipient still attempted
     expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Explicit coverage for the primary execFile branch (CTX_FRAMEWORK_ROOT set).
+  // Commit a89cee2: when CTX_FRAMEWORK_ROOT is present, hook-crash-alert uses
+  // process.execPath + cliPath to avoid PATH-unreliable 'cortextos' on Windows.
+  describe('primary branch (CTX_FRAMEWORK_ROOT set)', () => {
+    beforeEach(() => {
+      process.env.CTX_FRAMEWORK_ROOT = '/some/fw/root';
+    });
+
+    it('uses process.execPath + cliPath when CTX_FRAMEWORK_ROOT is set', () => {
+      notifyAgents({
+        agentName: 'dev', endType: 'crash', reason: 'r', lastTask: 't',
+        crashCount: 1, restartAttempted: true, recipients: ['chief'],
+      });
+      const [cmd, args] = execFileMock.mock.calls[0];
+      expect(cmd).toBe(process.execPath);
+      // args: [cliPath, 'bus', 'send-message', target, 'high', body]
+      expect(args[1]).toBe('bus');
+      expect(args[2]).toBe('send-message');
+      expect(args[3]).toBe('chief');
+      expect(args[4]).toBe('high');
+      expect(args[5]).toContain('agent=dev');
+    });
   });
 });
 

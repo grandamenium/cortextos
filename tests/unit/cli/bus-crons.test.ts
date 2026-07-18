@@ -55,6 +55,8 @@ const originalCtxRoot = process.env.CTX_ROOT;
 const originalFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
 const originalAgentName = process.env.CTX_AGENT_NAME;
 const originalInstanceId = process.env.CTX_INSTANCE_ID;
+const originalAgentDir = process.env.CTX_AGENT_DIR;
+const originalProjectRoot = process.env.CTX_PROJECT_ROOT;
 
 /** The agent whose crons.json we write in the test setup */
 const TEST_AGENT = 'boris';
@@ -105,6 +107,12 @@ beforeEach(() => {
   process.env.CTX_FRAMEWORK_ROOT = frameworkRoot;
   process.env.CTX_AGENT_NAME = TEST_AGENT;
   process.env.CTX_INSTANCE_ID = 'default';
+  // Must also set CTX_AGENT_DIR and CTX_PROJECT_ROOT inside frameworkRoot — the env security
+  // check (src/utils/env.ts) rejects CTX_AGENT_DIR that isn't subordinate to CTX_FRAMEWORK_ROOT,
+  // and rejects CTX_PROJECT_ROOT that doesn't equal CTX_FRAMEWORK_ROOT. Without these, the
+  // real agent session's values leak from the parent shell and the check fires before any test.
+  process.env.CTX_AGENT_DIR = join(frameworkRoot, 'orgs', 'lifeos', 'agents', TEST_AGENT);
+  process.env.CTX_PROJECT_ROOT = frameworkRoot;
 });
 
 afterEach(() => {
@@ -120,6 +128,12 @@ afterEach(() => {
 
   if (originalInstanceId !== undefined) process.env.CTX_INSTANCE_ID = originalInstanceId;
   else delete process.env.CTX_INSTANCE_ID;
+
+  if (originalAgentDir !== undefined) process.env.CTX_AGENT_DIR = originalAgentDir;
+  else delete process.env.CTX_AGENT_DIR;
+
+  if (originalProjectRoot !== undefined) process.env.CTX_PROJECT_ROOT = originalProjectRoot;
+  else delete process.env.CTX_PROJECT_ROOT;
 
   try { rmSync(tmpRoot, { recursive: true }); } catch { /* ignore */ }
   try { rmSync(frameworkRoot, { recursive: true }); } catch { /* ignore */ }
@@ -618,5 +632,25 @@ describe('bus get-cron-log', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
     const errOut = errSpy.mock.calls.flat().join(' ');
     expect(errOut).toContain('--limit');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security: sandbox/live environment isolation check
+// ---------------------------------------------------------------------------
+
+describe('env isolation security check', () => {
+  it('throws when CTX_AGENT_DIR is outside CTX_FRAMEWORK_ROOT', async () => {
+    // Set CTX_AGENT_DIR to a path outside frameworkRoot — simulates the env-leak
+    // scenario where a live agent shell var leaks into a subprocess that only
+    // overrode CTX_FRAMEWORK_ROOT. env.ts throws directly (no process.exit).
+    process.env.CTX_AGENT_DIR = '/some/other/path/outside/framework';
+
+    await expect(
+      busCommand.parseAsync(['node', 'bus', 'list-crons', TEST_AGENT])
+    ).rejects.toThrow('CTX_FRAMEWORK_ROOT');
+
+    // Restore to the valid value so afterEach cleanup works normally
+    process.env.CTX_AGENT_DIR = join(frameworkRoot, 'orgs', 'lifeos', 'agents', TEST_AGENT);
   });
 });

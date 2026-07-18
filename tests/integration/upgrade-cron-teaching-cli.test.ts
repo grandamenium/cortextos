@@ -47,7 +47,18 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       [DIST_CLI, 'bus', 'upgrade-cron-teaching', ...args],
-      { env: { ...process.env, CTX_FRAMEWORK_ROOT: frameworkRoot, CTX_ROOT: frameworkRoot } },
+      {
+        env: {
+          ...process.env,
+          CTX_FRAMEWORK_ROOT: frameworkRoot,
+          CTX_ROOT: frameworkRoot,
+          // Clear agent-scoped env vars so the env isolation check (src/utils/env.ts)
+          // does not fire when CTX_AGENT_DIR or CTX_PROJECT_ROOT from the parent shell
+          // (e.g., a live agent session) is subordinate to a different framework root.
+          CTX_AGENT_DIR: '',
+          CTX_PROJECT_ROOT: frameworkRoot,
+        },
+      },
     );
     return { stdout, stderr, code: 0 };
   } catch (err) {

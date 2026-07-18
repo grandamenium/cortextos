@@ -60,14 +60,19 @@ function makeHook(overrides: Partial<HookEntry> = {}): HookEntry {
 }
 
 // Helper: read the meta JSON from the most recent execFile call.
-function lastEmittedEvent(): { name: string; meta: Record<string, unknown> } | null {
+// The execFile call shape changed in commit a89cee2 (fix: PATH-unaware execFile on Windows):
+// - fallback (no CTX_FRAMEWORK_ROOT): execFile('cortextos', ['bus', 'log-event', 'action', <name>, ...])
+// - primary  (CTX_FRAMEWORK_ROOT set): execFile(node, [cliPath, 'bus', 'log-event', 'action', <name>, ...])
+// We find 'log-event' in args and read name from logEventIdx+2, which is robust to both shapes.
+function lastEmittedEvent(): { name: string; meta: Record<string, unknown>; cmd: string } | null {
   if (execFileCalls.length === 0) return null;
-  const args = execFileCalls[execFileCalls.length - 1].args;
-  // shape: [bus, log-event, action, <name>, info, --meta, <json>]
-  const name = args[3];
+  const { cmd, args } = execFileCalls[execFileCalls.length - 1];
+  const logEventIdx = args.indexOf('log-event');
+  // name is 2 positions after 'log-event' in both shapes: [..., 'log-event', 'action', <name>, ...]
+  const name = logEventIdx >= 0 ? args[logEventIdx + 2] : args[3];
   const metaIdx = args.indexOf('--meta');
   const meta = metaIdx >= 0 && metaIdx + 1 < args.length ? JSON.parse(args[metaIdx + 1]) : {};
-  return { name, meta };
+  return { name, meta, cmd };
 }
 
 describe('src/bus/hooks — Day-2 per-handler wiring', () => {
@@ -282,6 +287,36 @@ describe('src/bus/hooks — Day-2 per-handler wiring', () => {
       clearHandlerRegistry();
       expect(_getRegisteredHandler('log_event')).toBeUndefined();
       expect(_getRegisteredHandler('bash')).toBeUndefined();
+    });
+  });
+
+  // Explicit coverage for both execFile branches in emitHookBusEvent.
+  // Commit a89cee2 changed the primary path to use process.execPath + cliPath
+  // when CTX_FRAMEWORK_ROOT is set, avoiding PATH-unreliable 'cortextos' on Windows.
+  // Both branches must be tested so a regression in either is caught regardless of
+  // whether the test runner inherits CTX_FRAMEWORK_ROOT from the shell.
+  describe('emitHookBusEvent exec branch coverage', () => {
+    const savedFrameworkRoot = process.env.CTX_FRAMEWORK_ROOT;
+
+    afterEach(() => {
+      if (savedFrameworkRoot !== undefined) process.env.CTX_FRAMEWORK_ROOT = savedFrameworkRoot;
+      else delete process.env.CTX_FRAMEWORK_ROOT;
+    });
+
+    it('fallback branch: uses cortextos on PATH when CTX_FRAMEWORK_ROOT is not set', async () => {
+      delete process.env.CTX_FRAMEWORK_ROOT;
+      await dispatchHook(makeHook(), makeEvent());
+      const e = lastEmittedEvent();
+      expect(e?.cmd).toBe('cortextos');
+      expect(e?.name).toBe('hook_fire'); // name still correctly resolved
+    });
+
+    it('primary branch: uses process.execPath + cliPath when CTX_FRAMEWORK_ROOT is set', async () => {
+      process.env.CTX_FRAMEWORK_ROOT = '/some/fw/root';
+      await dispatchHook(makeHook(), makeEvent());
+      const e = lastEmittedEvent();
+      expect(e?.cmd).toBe(process.execPath);
+      expect(e?.name).toBe('hook_fire'); // name still correctly resolved regardless of branch
     });
   });
 });

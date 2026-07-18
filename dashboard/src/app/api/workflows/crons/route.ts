@@ -75,28 +75,36 @@ function readAgentCrons(agentName: string): CronDefinition[] {
   }
 }
 
-function readLastExecution(
+// Read the agent's execution log once and return a map of cronName → last entry.
+// Called once per agent in the GET handler; the inner per-cron loop does a Map
+// lookup instead of a second file read. Avoids an N+1 pattern where N=crons_per_agent
+// reads of the same file were issued — on Windows sync I/O that was 5–20ms each.
+// For heavy logs (10k+ entries) this also changes complexity from O(crons × log_length)
+// to O(log_length) per agent, since one pass builds the full name→lastEntry map.
+function readLastExecutionsForAgent(
   agentName: string,
-  cronName: string,
-): CronExecutionLogEntry | null {
+): Map<string, CronExecutionLogEntry> {
   const logPath = path.join(CTX_ROOT, CRONS_DIR, agentName, 'cron-execution.log');
-  if (!fs.existsSync(logPath)) return null;
+  const result = new Map<string, CronExecutionLogEntry>();
+  if (!fs.existsSync(logPath)) return result;
   try {
     const raw = fs.readFileSync(logPath, 'utf-8');
-    const lines = raw.split('\n').filter(l => l.trim());
-    // Walk backwards to find last entry for this cron
-    for (let i = lines.length - 1; i >= 0; i--) {
+    const lines = raw.split('\n');
+    // Forward pass: later entries overwrite earlier ones, so the Map ends up
+    // holding the last (most-recent) entry for each cron name.
+    for (const line of lines) {
+      if (!line.trim()) continue;
       try {
-        const entry = JSON.parse(lines[i]) as CronExecutionLogEntry;
-        if (entry.cron === cronName) return entry;
+        const entry = JSON.parse(line) as CronExecutionLogEntry;
+        if (entry.cron) result.set(entry.cron, entry);
       } catch {
         // skip malformed line
       }
     }
-    return null;
   } catch {
-    return null;
+    // ignore unreadable log
   }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,10 +127,11 @@ export async function GET(request: NextRequest) {
 
     for (const agent of agents) {
       const crons = readAgentCrons(agent.name);
+      const lastExecutions = readLastExecutionsForAgent(agent.name);
       for (const cron of crons) {
         if (searchFilter && !cron.name.toLowerCase().includes(searchFilter)) continue;
 
-        const lastEntry = readLastExecution(agent.name, cron.name);
+        const lastEntry = lastExecutions.get(cron.name) ?? null;
 
         rows.push({
           agent: agent.name,
