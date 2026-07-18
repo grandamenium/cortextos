@@ -20,5 +20,15 @@ export default defineConfig({
       'tests/**/*.test.ts',
       'dashboard/src/**/__tests__/**/*.test.ts',
     ],
+    // Performance integration tests measure wall-clock timing and fail under
+    // test-runner load (1700+ concurrent tests competing for CPU). They are
+    // excluded from the default run so red means something in the default suite.
+    // Run deliberately on an idle machine: npm run test:perf
+    exclude: [
+      'node_modules/**',
+      'dist/**',
+      'tests/integration/phase4-performance.test.ts',
+      'tests/integration/phase5-performance.test.ts',
+    ],
   },
 });
