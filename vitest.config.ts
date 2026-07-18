@@ -21,9 +21,16 @@ export default defineConfig({
       'dashboard/src/**/__tests__/**/*.test.ts',
     ],
     // Performance integration tests measure wall-clock timing and fail under
-    // test-runner load (1700+ concurrent tests competing for CPU). They are
-    // excluded from the default run so red means something in the default suite.
-    // Run deliberately on an idle machine: npm run test:perf
+    // test-runner load (1700+ concurrent tests competing for CPU). Excluded
+    // from the default run so red means something in the default suite.
+    //
+    // HOW THEY GET RUN (not excluded-and-forgotten):
+    //   - CI: .github/workflows/ci.yml `perf` job — runs on every push/PR on
+    //     an isolated ubuntu-latest runner, plus weekly schedule (Sun 03:00 UTC).
+    //   - Manually: npm run test:perf  (requires idle machine — no other load)
+    //
+    // If you touch dashboard/src/app/api/workflows/crons/** or
+    // src/daemon/cron-execution-log.ts, the CI perf job is your gate.
     exclude: [
       'node_modules/**',
       'dist/**',
