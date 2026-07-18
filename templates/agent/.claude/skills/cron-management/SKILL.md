@@ -115,3 +115,12 @@ Each log entry: `ts`, `cron`, `status` (fired/retried/failed), `attempt`, `durat
 - If a reload produces an empty schedule (transient corruption), the daemon keeps the last-good
   schedule in memory (`lastGoodSchedule`). Crons keep firing. Repair `crons.json` and the
   scheduler recovers automatically on the next reload.
+
+---
+
+## Negated Patterns — Do Not Re-Add
+
+**midday-restart** — removed 2026-07-18 for all agents. Do not recreate.
+Midday-restart crons existed to force a fresh context window mid-day before automatic context handoff was built. Commit 99158f8 (Jul 1 2026) made context-handoff default-on at 60% of the model window — the daemon writes a resume-ready handoff document and reboots on actual context pressure. A scheduled mid-workday restart fires on a guess and interrupts active work with no signal that anything was wrong. The 71-hour auto-restart (--continue) covers session-age hygiene. If you observe an agent degrading late in the day, the correct response is to investigate context pressure (check context_status.json) — not to add a scheduled restart.
+
+**Expiry convention for time-bounded controls** — when pausing a cron or freezing a workflow, always include a review date or ending condition in the paused_reason/record. "paused until Jul 18 2026" is correct. "paused" without a when is a control that will never be reviewed. A control with an expired reason is worse than no control — it runs on invisibly after its purpose ends.

@@ -17,6 +17,7 @@ import { LiveActivity } from '@/components/overview/live-activity';
 import { SystemHealth } from '@/components/overview/system-health';
 import { MetricCards } from '@/components/overview/metric-cards';
 import { AgentStatusGrid } from '@/components/overview/agent-status-grid';
+import { NextUpMeetings } from '@/components/overview/next-up-meetings';
 
 export const dynamic = 'force-dynamic';
 
@@ -137,7 +138,7 @@ export default async function OverviewPage({
         </div>
       </div>
 
-      {/* Current Focus + Today's Progress */}
+      {/* Current Focus + Today's Progress + Next Up Meetings */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         <div className="lg:col-span-3">
           <CurrentFocus
@@ -146,7 +147,8 @@ export default async function OverviewPage({
             goals={goalsData.goals}
           />
         </div>
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 flex flex-col gap-6">
+          <NextUpMeetings />
           <TodaysProgress
             completedTasks={completedToday}
             milestones={milestones}

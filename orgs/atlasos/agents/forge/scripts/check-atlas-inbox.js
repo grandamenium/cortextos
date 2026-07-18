@@ -128,6 +128,16 @@ async function main() {
     }
     if (full.payload) findAudioParts(full.payload);
 
+    // Extract all attachments (general — surfaced on every message)
+    const attachments = [];
+    function findAllAttachments(p) {
+      if (p.filename && p.filename.length > 0 && p.body?.attachmentId) {
+        attachments.push({ filename: p.filename, mimeType: p.mimeType || 'application/octet-stream', sizeKb: Math.round((p.body.size || 0) / 1024) });
+      }
+      (p.parts || []).forEach(findAllAttachments);
+    }
+    if (full.payload) findAllAttachments(full.payload);
+
     // Suppress known marketing/blast emails before routing to Atlas
     const isMarketingSender = SUPPRESS_SENDERS.test(from);
     const isMarketingSubject = !SENDER_WHITELIST.test(from) && SUPPRESS_SUBJECTS.test(subject);
@@ -138,7 +148,7 @@ async function main() {
       continue;
     }
 
-    summaries.push({ id: m.id, from, subject, date, body, isImessage: IMESSAGE_SUBJECT_RE.test(subject), audioParts });
+    summaries.push({ id: m.id, from, subject, date, body, isImessage: IMESSAGE_SUBJECT_RE.test(subject), audioParts, attachments });
 
     // Apply AtlasOS-Inbox label + mark read so we don't re-process
     await applyLabel(TOKEN_FILE, m.id, label.id);
@@ -183,6 +193,10 @@ async function main() {
   for (const s of unrouted) {
     msg += `From: ${s.from} | Subject: ${s.subject}`;
     if (s.body) msg += ` | ${s.body.substring(0, 100)}`;
+    const attLine = s.attachments && s.attachments.length > 0
+      ? ` | Attachments: ${s.attachments.length} — ${s.attachments.map(a => `${a.filename} (${a.mimeType}, ${a.sizeKb}kb)`).join(', ')}`
+      : ' | Attachments: none';
+    msg += attLine;
     msg += ' || ';
   }
   msg = msg.replace(/ \|\| $/, '').trim();

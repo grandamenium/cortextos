@@ -218,6 +218,18 @@ function getHeader(headers, name) {
   return h ? h.value : '';
 }
 
+function extractAttachments(payload) {
+  const results = [];
+  function walk(p) {
+    if (p.filename && p.filename.length > 0 && p.body?.attachmentId) {
+      results.push({ filename: p.filename, mimeType: p.mimeType || 'application/octet-stream', sizeKb: Math.round((p.body.size || 0) / 1024) });
+    }
+    (p.parts || []).forEach(walk);
+  }
+  if (payload) walk(payload);
+  return results;
+}
+
 function decodeBody(payload) {
   function findPart(parts, mime) {
     if (!parts) return null;
@@ -389,6 +401,7 @@ async function checkAccount(account) {
       const fullBody = decodeBody(full.payload);
       const snippet = fullBody.slice(0, 150);
       const body = fullBody.slice(0, 8000);
+      const attachments = extractAttachments(full.payload);
       const isDeal = DEAL_KEYWORDS.test(from + ' ' + subject);
       const action = shouldAlert(from, subject, snippet, headers);
 
@@ -396,7 +409,10 @@ async function checkAccount(account) {
       const isLedgerEmail = LEDGER_ROUTE_PATTERNS.some(p => p.test(from) || p.test(subject))
         && !LEDGER_RELAY_SKIP.test(subject);
       if (isLedgerEmail) {
-        const msg = `Bank/statement email received (${label}): From: ${from} | Subject: ${subject} | Preview: ${snippet}`;
+        const attInfo = attachments.length > 0
+          ? ` | Attachments: ${attachments.length} — ${attachments.map(a => `${a.filename} (${a.mimeType}, ${a.sizeKb}kb)`).join(', ')}`
+          : ' | Attachments: none';
+        const msg = `Bank/statement email received (${label}): From: ${from} | Subject: ${subject} | Preview: ${snippet}${attInfo}`;
         spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', 'ledger', 'normal', msg.slice(0, 1200)], { stdio: 'inherit' });
         if (alertLabel) {
           const alertLabelId = getLabelId(file, alertLabel);
@@ -504,7 +520,7 @@ async function checkAccount(account) {
         markAlertSent(m.id); _sentAlertsCache[m.id] = Date.now();
       }
       if (!wasAlertSent(m.id) && !_sentAlertsCache[m.id]) {
-        items.push({ from, subject, snippet, body, isDeal, category, messageId: m.id, threadId: full.threadId || m.id, tokenFile: file });
+        items.push({ from, subject, snippet, body, isDeal, category, attachments, messageId: m.id, threadId: full.threadId || m.id, tokenFile: file });
       }
       if (alertLabel) {
         // Don't mark read — apply label so we know we've alerted (inbox owner manages read state)
@@ -529,6 +545,11 @@ async function checkAccount(account) {
       if (it.category) msg += ` _(${it.category})_`;
       if (it.isDeal) msg += ` ⚡`;
       msg += '\n';
+      // Attachment line — always present so absence is never ambiguous
+      const attLine = it.attachments && it.attachments.length > 0
+        ? `  📎 ${it.attachments.map(a => `${a.filename} (${a.mimeType}, ${a.sizeKb}kb)`).join(', ')}`
+        : '  📎 none';
+      msg += attLine + '\n';
       // Show snippet only for real business emails (not newsletters/marketing)
       if (it.snippet && !it.category) {
         const clean = it.snippet

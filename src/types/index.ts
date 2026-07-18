@@ -393,6 +393,16 @@ export interface CronDefinition {
   metadata?: Record<string, unknown>;
 
   /**
+   * Human-readable explanation of why this cron was disabled (`enabled: false`).
+   * Convention: must include a review date ("until YYYY-MM-DD" or "until Mon DD YYYY")
+   * so the zero-token heartbeat scanner can surface expired holds automatically.
+   *
+   * @example "usage-conserve until Jul 18 2026"
+   * @example "superseded by zero-token heartbeat script; removal pending confirmation the scheduled task fires reliably; do NOT re-enable"
+   */
+  paused_reason?: string;
+
+  /**
    * When true, the Test Fire button in the dashboard is disabled and the
    * IPC fire-cron handler refuses manual-trigger requests.
    *
