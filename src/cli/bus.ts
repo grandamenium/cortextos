@@ -813,7 +813,18 @@ busCommand
   .option('--cycle <name>', 'Cycle name')
   .action((action: string, agent: string, opts: { metric?: string; metricType?: string; surface?: string; direction?: string; window?: string; measurement?: string; loopInterval?: string; enabled?: string; cycle?: string }) => {
     const env = resolveEnv();
-    const agentDir = env.agentDir || process.cwd();
+    // BUG (found 2026-07-18, task_1784272089809_62319169 follow-up): this
+    // used to fall back to the CALLING agent's own dir (env.agentDir),
+    // ignoring the <agent> argument entirely — so `manage-cycle create cleo
+    // ...` run from anam's session wrote the cycle into anam's own
+    // experiments/config.json with an `agent: "cleo"` field, not into
+    // cleo's file. cleo's own autoresearch skill checks its OWN
+    // experiments/config.json (a relative path from its cwd), so the cycle
+    // was invisible to the agent actually supposed to run it. Same
+    // resolution pattern as gather-context/list-experiments --agent below.
+    const agentDir = agent && env.frameworkRoot
+      ? join(env.frameworkRoot, 'orgs', env.org, 'agents', agent)
+      : (env.agentDir || process.cwd());
     if (opts.direction && opts.direction !== 'higher' && opts.direction !== 'lower') {
       console.error(`Invalid --direction '${opts.direction}'. Must be 'higher' or 'lower'`);
       process.exit(1);
