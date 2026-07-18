@@ -686,6 +686,84 @@ describe('CronScheduler', () => {
   });
 
   // -------------------------------------------------------------------------
+  // BUG (found 2026-07-18, task task_1784272089809_62319169): a never-fired
+  // long-interval cron (no last_fired_at / last_fire_attempted_at / state
+  // fire) fell back to referenceMs = now in loadCrons. That's fine across an
+  // in-process reload() (existing entries are preserved by the changeKey
+  // check above), but a real DAEMON RESTART builds a brand-new CronScheduler
+  // with an empty in-memory map — every cron re-enters the "new or modified"
+  // branch and recomputes from "now" again. A 7-day interval cron that
+  // hasn't had its first fire yet gets its target pushed to "restart-time +
+  // 7d" on every restart; if restarts happen more often than the interval,
+  // the cron can be perpetually deferred and never actually fire. This is
+  // the confirmed root cause of the naps-freshness autoresearch cron's real
+  // 13-day silence. FIX: anchor to created_at instead of now when nothing
+  // has fired yet — created_at doesn't change across restarts, so the
+  // countdown stays fixed once set.
+  // -------------------------------------------------------------------------
+
+  it('a never-fired long-interval cron keeps the SAME target across a simulated daemon restart', async () => {
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 3_600_000).toISOString();
+    const diskCron = makeCron({
+      name: 'weekly-experiment',
+      schedule: '7d',
+      created_at: twoDaysAgo,
+      // No last_fired_at / last_fire_attempted_at — never fired yet.
+    });
+    mockReadCrons.mockReturnValue([diskCron]);
+
+    // "Before restart": first daemon process, first load.
+    const scheduler1 = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: () => {},
+      logger: (m) => logs.push(m),
+    });
+    scheduler1.start();
+    const before = scheduler1.getNextFireTimes().find(e => e.name === 'weekly-experiment');
+    expect(before).toBeDefined();
+    scheduler1.stop();
+
+    // Advance real-seeming wall-clock time so a "now"-anchored bug would be
+    // caught (a restart hours later would otherwise recompute a later target).
+    await vi.advanceTimersByTimeAsync(6 * 3_600_000); // +6h
+
+    // "After restart": brand-new scheduler instance, same disk state, empty
+    // in-memory map — exactly what a real daemon process restart does.
+    const scheduler2 = new CronScheduler({
+      agentName: 'test-agent',
+      onFire: () => {},
+      logger: (m) => logs.push(m),
+    });
+    scheduler2.start();
+    const after = scheduler2.getNextFireTimes().find(e => e.name === 'weekly-experiment');
+    expect(after).toBeDefined();
+
+    // FIXED BEHAVIOR: target stays anchored to created_at + 7d regardless of
+    // when the restart happened. BUG behavior would have shown `after` ~6h
+    // later than `before` (now-anchored at restart time).
+    expect(after!.nextFireAt).toBe(before!.nextFireAt);
+
+    scheduler2.stop();
+  });
+
+  it('a never-fired cron that is already overdue relative to created_at still catches up immediately', async () => {
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 3_600_000).toISOString();
+    mockReadCrons.mockReturnValue([
+      makeCron({
+        name: 'long-overdue-experiment',
+        schedule: '7d',
+        created_at: tenDaysAgo,
+        // Never fired — created_at + 7d is already in the past.
+      }),
+    ]);
+
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(TICK);
+
+    expect(fired.map(c => c.name)).toContain('long-overdue-experiment');
+  });
+
+  // -------------------------------------------------------------------------
   // Catch-up on start
   // -------------------------------------------------------------------------
 

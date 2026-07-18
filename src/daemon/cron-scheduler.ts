@@ -388,13 +388,24 @@ export class CronScheduler {
       // crons.json.last_fire_attempted_at (set pre-onFire to detect crash
       // mid-fire — iter 11), and cron-state.json.last_fire (either may be
       // more current depending on which write path recorded the fire).
-      // Fall back to now.
+      // Fall back to created_at, NOT now: a long-interval cron (e.g. a 7d
+      // autoresearch loop) that hasn't fired yet would otherwise have its
+      // countdown reset to "now + interval" on every daemon restart — since
+      // this loadCrons() runs from an empty in-memory map on a fresh daemon
+      // process, not just an agent-level reload — perpetually pushing the
+      // target out if restarts happen more often than the interval (root
+      // cause of the naps-freshness cron's real 13-day silence, task
+      // task_1784272089809_62319169, confirmed 2026-07-18). created_at is
+      // stable across restarts, so the countdown stays anchored once set.
       const stateFire = stateLastFireByName.get(def.name);
       const candidates: number[] = [];
       if (def.last_fired_at) candidates.push(new Date(def.last_fired_at).getTime());
       if (def.last_fire_attempted_at) candidates.push(new Date(def.last_fire_attempted_at).getTime());
       if (stateFire) candidates.push(new Date(stateFire).getTime());
-      const referenceMs = candidates.length > 0 ? Math.max(...candidates) : now;
+      const createdAtMs = def.created_at ? new Date(def.created_at).getTime() : NaN;
+      const referenceMs = candidates.length > 0
+        ? Math.max(...candidates)
+        : (!isNaN(createdAtMs) ? createdAtMs : now);
 
       let nextFireAt = computeNextFireAt(def, referenceMs);
 

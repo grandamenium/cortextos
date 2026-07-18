@@ -355,6 +355,30 @@ describe('bus list-crons', () => {
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed[0].name).toBe('heartbeat');
   });
+
+  // Bug found 2026-07-18 (task task_1784272089809_62319169): a never-fired
+  // cron's displayed "Next Fire" recomputed from "now" at query time instead
+  // of anchoring to created_at, so it silently shifted forward every time
+  // the command was run — masking the scheduler's real (stable) target.
+  it('never-fired long-interval cron: Next Fire anchors to created_at, not query time', async () => {
+    seedCrons([
+      makeCron('weekly-experiment', {
+        schedule: '7d',
+        created_at: '2026-04-01T00:00:00.000Z',
+        // No last_fired_at — never fired yet.
+      }),
+    ]);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await busCommand.parseAsync(['node', 'bus', 'list-crons', TEST_AGENT]);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    // created_at + 7d, computed once and fixed — NOT dependent on when this
+    // test happens to run (the bug would show whatever "now + 7d" is instead).
+    expect(output).toContain('2026-04-08 00:00 UTC');
+  });
 });
 
 // ---------------------------------------------------------------------------

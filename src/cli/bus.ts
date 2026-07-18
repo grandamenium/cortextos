@@ -2030,7 +2030,13 @@ busCommand
       let nextFire = '-';
       const dms = parseDurationMs(c.schedule);
       if (!isNaN(dms)) {
-        const refMs = lastFire ? new Date(lastFire).getTime() : now;
+        // Mirror the scheduler's own anchor (src/daemon/cron-scheduler.ts):
+        // a never-fired cron anchors to created_at, not "now" — otherwise
+        // this display recomputes a fresh "now + interval" on every call,
+        // masking the real (stable) scheduled target with a shifting one.
+        const refMs = lastFire
+          ? new Date(lastFire).getTime()
+          : (c.created_at ? new Date(c.created_at).getTime() : now);
         nextFire = fmtTs(new Date(refMs + dms).toISOString());
       } else {
         const nf = nextFireFromCron(c.schedule, now);
