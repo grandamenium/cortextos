@@ -181,7 +181,18 @@ busCommand
       );
     }
 
-    const resolvedDueDate = opts.dueDate ? (parseDueDate(opts.dueDate) ?? opts.dueDate) : undefined;
+    // Default due date from priority when not supplied — implements Jennifer's policy:
+    // urgent=EOD, high=48h, normal=7d, low=10.5d (1.5 weeks)
+    let resolvedDueDate: string | undefined;
+    if (opts.dueDate) {
+      resolvedDueDate = parseDueDate(opts.dueDate) ?? opts.dueDate;
+    } else {
+      const offsetDays: Record<string, number> = { urgent: 0, high: 2, normal: 7, low: 10 };
+      const days = offsetDays[opts.priority] ?? 7;
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      resolvedDueDate = d.toISOString().slice(0, 10);
+    }
     const taskId = createTask(paths, env.agentName, env.org, title, {
       description: opts.desc,
       assignee: effectiveAssignee,
@@ -222,14 +233,20 @@ busCommand
   .option('--assignee <agent>', 'Reassign task to a different agent')
   .option('--title <title>', 'Update the task title')
   .option('--due-date <date>', 'Set or update due date (YYYY-MM-DD). Pass empty string to clear.')
-  .action((id: string, status: string | undefined, opts: { assignee?: string; title?: string; dueDate?: string }) => {
+  .option('--priority <p>', 'Update priority (urgent, high, normal, low)')
+  .action((id: string, status: string | undefined, opts: { assignee?: string; title?: string; dueDate?: string; priority?: string }) => {
     const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
     if (status !== undefined && !validStatuses.includes(status as TaskStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
       process.exit(1);
     }
-    if (status === undefined && !opts.assignee && !opts.title && opts.dueDate === undefined) {
-      console.error('update-task: provide a status, --assignee, --title, or --due-date (nothing to update)');
+    const validPrioritiesU = ['urgent', 'high', 'normal', 'low'];
+    if (opts.priority && !validPrioritiesU.includes(opts.priority)) {
+      console.error(`Invalid priority '${opts.priority}'. Must be one of: ${validPrioritiesU.join(', ')}`);
+      process.exit(1);
+    }
+    if (status === undefined && !opts.assignee && !opts.title && opts.dueDate === undefined && !opts.priority) {
+      console.error('update-task: provide a status, --assignee, --title, --due-date, or --priority (nothing to update)');
       process.exit(1);
     }
     const env = resolveEnv();
@@ -246,18 +263,20 @@ busCommand
       }
     }
 
-    const patch: { assignee?: string; title?: string; dueDate?: string } = {};
+    const patch: { assignee?: string; title?: string; dueDate?: string; priority?: Priority } = {};
     if (opts.assignee) patch.assignee = opts.assignee;
     if (opts.title) patch.title = opts.title;
     if (opts.dueDate !== undefined) {
       patch.dueDate = opts.dueDate ? (parseDueDate(opts.dueDate) ?? opts.dueDate) : '';
     }
+    if (opts.priority) patch.priority = opts.priority as Priority;
     updateTask(paths, id, status as TaskStatus | undefined, Object.keys(patch).length ? patch : undefined);
     const statusStr = status ? ` -> ${status}` : '';
     const reassign = opts.assignee ? ` (reassigned to: ${opts.assignee})` : '';
     const retitle = opts.title ? ` (title: ${opts.title})` : '';
     const redate = opts.dueDate !== undefined ? ` (due-date: ${opts.dueDate || 'cleared'})` : '';
-    console.log(`Updated ${id}${statusStr}${reassign}${retitle}${redate}`);
+    const repri = opts.priority ? ` (priority: ${opts.priority})` : '';
+    console.log(`Updated ${id}${statusStr}${reassign}${retitle}${redate}${repri}`);
     // Auto-emit for task-blocked: a blocked task that never emits looks like an idle agent.
     if (status === 'blocked') {
       try {
