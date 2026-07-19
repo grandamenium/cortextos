@@ -200,6 +200,10 @@ busCommand
       project: opts.project,
       priority: opts.priority,
       assignee: effectiveAssignee,
+      // Must be the RESOLVED date, not opts.dueDate — ClickUp needs an instant,
+      // and "today" only means anything after parsing. Omitting this is why the
+      // first end-to-end test landed in ClickUp with due=null.
+      dueDate: resolvedDueDate,
     });
     // Auto-notify assignee so the task is visible immediately (issue #78)
     if (effectiveAssignee !== env.agentName) {
@@ -1301,18 +1305,21 @@ busCommand
   .command('update-approval')
   .description('Resolve an approval request')
   .argument('<id>', 'Approval ID')
-  .argument('<status>', 'Resolution: approved or denied')
+  .argument('<status>', 'Resolution: approved or rejected')
   .argument('[note]', 'Resolution note')
   .action((id: string, status: string, note?: string) => {
+    // Accept "denied" as an alias for "rejected" — the help text historically said
+    // "denied" and agents used it, causing silent failures when the validation rejected it.
+    const normalised = status === 'denied' ? 'rejected' : status;
     const validStatuses: ApprovalStatus[] = ['approved', 'rejected'];
-    if (!validStatuses.includes(status as ApprovalStatus)) {
+    if (!validStatuses.includes(normalised as ApprovalStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: approved, rejected`);
       process.exit(1);
     }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    updateApproval(paths, id, status as ApprovalStatus, note);
-    console.log(`Approval ${id} -> ${status}`);
+    updateApproval(paths, id, normalised as ApprovalStatus, note);
+    console.log(`Approval ${id} -> ${normalised}`);
   });
 
 // ---------------------------------------------------------------------------
