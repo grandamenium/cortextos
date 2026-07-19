@@ -27,7 +27,7 @@
 
 import { homedir } from 'os';
 import { join } from 'path';
-import { parseDurationMs, readCronState } from '../bus/cron-state.js';
+import { cronExpressionMinIntervalMs, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { readCronsWithStatus, updateCron } from '../bus/crons.js';
 import type { CronDefinition } from '../types/index.js';
 import { appendExecutionLog } from './cron-execution-log.js';
@@ -406,13 +406,32 @@ export class CronScheduler {
       }
 
       // CATCH-UP POLICY: if nextFireAt is in the past (daemon was stopped),
-      // fire once immediately for the missed window, then recompute from now.
-      // We do NOT flood-fire all missed windows — one catch-up is sufficient.
+      // apply a per-cron staleness bound before deciding whether to fire.
+      // If the miss is older than one full interval, the window has expired —
+      // drop it and advance to the next scheduled fire from now.
+      // If the miss is within one interval, fire immediately (normal catch-up).
       if (nextFireAt <= now) {
-        this.logger(
-          `[cron-scheduler] catch-up: cron "${def.name}" missed fire at ${new Date(nextFireAt).toISOString()} — scheduling immediate fire`
-        );
-        nextFireAt = now; // fire on the very next tick
+        const missAgeMs = now - nextFireAt;
+        const durationMs = parseDurationMs(def.schedule);
+        const ownIntervalMs = !isNaN(durationMs)
+          ? durationMs
+          : cronExpressionMinIntervalMs(def.schedule);
+
+        if (missAgeMs > ownIntervalMs) {
+          const nextFromNow = computeNextFireAt(def, now);
+          this.logger(
+            `[cron-scheduler] stale-miss: cron "${def.name}" missed fire at ` +
+            `${new Date(nextFireAt).toISOString()} ` +
+            `(${Math.round(missAgeMs / 60_000)}m ago, interval ${Math.round(ownIntervalMs / 60_000)}m) — ` +
+            `dropping catch-up, next fire at ${new Date(nextFromNow).toISOString()}`
+          );
+          nextFireAt = nextFromNow;
+        } else {
+          this.logger(
+            `[cron-scheduler] catch-up: cron "${def.name}" missed fire at ${new Date(nextFireAt).toISOString()} — scheduling immediate fire`
+          );
+          nextFireAt = now; // fire on the very next tick
+        }
       }
 
       nextScheduled.set(def.name, { definition: def, nextFireAt, changeKey: key });

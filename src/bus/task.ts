@@ -534,8 +534,9 @@ export function completeTask(
         task_id: taskId,
         ...(result ? { result } : {}),
       });
-    } catch {
-      // Never let observability break task completion.
+    } catch (e: unknown) {
+      // task_completed event must not be invisible — write to stderr so the omission is noticed.
+      process.stderr.write(`[completeTask] WARNING: task_completed event failed to log: ${e instanceof Error ? e.message : String(e)}\n`);
     }
   }
 }

@@ -143,15 +143,23 @@ const FORWARD_RULES = [
   { pattern: /businessprofile-noreply@google\.com|google.*business.*profile/i, to: 'jordan@jordanreyes.me', label: 'Google Business Profile' },
 ];
 
-// Senders/subjects to route to Ledger agent via cortextos bus send-message
-const LEDGER_ROUTE_PATTERNS = [
+// Senders/subjects to route to Ledger agent via cortextos bus send-message.
+// Split into specific (domain-anchored) and generic (keyword) patterns.
+// Generic patterns require LEDGER_FINANCIAL_SENDER to also match the from-field
+// so that e.g. Grace Fellowship "account statement" emails don't trigger Ledger routing.
+const LEDGER_SPECIFIC_PATTERNS = [
   /relay\.co|relayfi\.com|relay financial/i,        // Relay bank statements
   /statement.*meadowlark|meadowlark.*statement/i,   // Meadowlark statements
-  /bank.*statement|account.*statement/i,             // General bank statements
-  /homedepot\.com|home.*depot/i,                    // Home Depot billing statements → Ledger (LEDGER_RELAY_SKIP excludes Pro Xtra perks emails)
-  /madisontrust\.com/i,                              // Madison Trust IRA custodian — automated statements
-  /donotreply@.*trust|donotreply@.*custodian|donotreply@.*ira|noreply@.*trust|noreply@.*custodian/i, // Self-directed IRA/custodian donotreply notices
+  /homedepot\.com|home.*depot/i,                    // Home Depot billing statements
+  /madisontrust\.com/i,                              // Madison Trust IRA custodian
+  /donotreply@.*trust|donotreply@.*custodian|donotreply@.*ira|noreply@.*trust|noreply@.*custodian/i, // IRA/custodian notices
 ];
+// Generic keyword patterns — fail closed: only route when sender looks like a financial institution
+const LEDGER_GENERIC_PATTERNS = [
+  /bank.*statement|account.*statement/i,             // General bank statements
+];
+// Sender must match one of these to clear the fail-closed gate on generic patterns
+const LEDGER_FINANCIAL_SENDER = /\bbank\b|bancorp|credit.?union|firstinterstate|wellsfargo|us.?bank|stockman|threadbank|relayfi|@relay\.|homedepot|madisontrust|@trust\.|custodian/i;
 // Relay/Ledger subjects that are marketing/feature emails — skip Ledger routing for these
 const LEDGER_RELAY_SKIP = /new feature|now available|introducing|we.ve added|product update|feature announcement|surcharging|invoices feature|premium.*feature|feature.*premium|marketing|newsletter|announcement|update.*plan|plan.*update|requesting your payment details|payment details|growth.loop|register.*payment|payment.*register|daily deal|deals o.clock|o.clock deal|special offer|% off|promo|coupon|flash sale|pro xtra|perks.*savings|savings.*perks|view your perks/i;
 
@@ -258,8 +266,8 @@ function getBotToken() {
 const BOT_TOKEN = getBotToken();
 
 function sendTelegram(message) {
-  if (!BOT_TOKEN) { console.error('No BOT_TOKEN'); return; }
-  spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-telegram', CHAT_ID, message.slice(0, 4096)],
+  // Route to Atlas, not directly to Jennifer (No Direct Jennifer Telegram guardrail)
+  spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', 'atlas', 'normal', `[check-business-inboxes] ${message}`.slice(0, 1200)],
     { encoding: 'utf8', timeout: 15000 });
 }
 
@@ -405,8 +413,14 @@ async function checkAccount(account) {
       const isDeal = DEAL_KEYWORDS.test(from + ' ' + subject);
       const action = shouldAlert(from, subject, snippet, headers);
 
-      // Route bank/Relay statements to Ledger (skip marketing/feature announcement emails)
-      const isLedgerEmail = LEDGER_ROUTE_PATTERNS.some(p => p.test(from) || p.test(subject))
+      // Route bank/Relay statements to Ledger (skip marketing/feature announcement emails).
+      // Specific patterns (domain-anchored) match freely on from or subject.
+      // Generic patterns (keyword-only) require the sender to look like a financial institution
+      // so that e.g. Grace Fellowship "account statement" emails fail closed.
+      const specificLedgerMatch = LEDGER_SPECIFIC_PATTERNS.some(p => p.test(from) || p.test(subject));
+      const genericLedgerMatch = LEDGER_GENERIC_PATTERNS.some(p => p.test(from) || p.test(subject))
+        && LEDGER_FINANCIAL_SENDER.test(from);
+      const isLedgerEmail = (specificLedgerMatch || genericLedgerMatch)
         && !LEDGER_RELAY_SKIP.test(subject);
       if (isLedgerEmail) {
         const attInfo = attachments.length > 0

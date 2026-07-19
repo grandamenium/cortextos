@@ -23,8 +23,9 @@ Complete the following in order. Do not skip steps.
 
 1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
    ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Booting up... one moment"
+   cortextos bus send-message atlas normal 'Booting up... one moment'
    ```
+   Route to Atlas, NOT `send-telegram $CTX_TELEGRAM_CHAT_ID`. This step executes before GUARDRAILS.md is read at step 2. Always route to Atlas at boot — Atlas will forward to the human if needed. Never assume direct Telegram access is appropriate before your GUARDRAILS.md has been loaded.
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
    - TOOLS.md is a compact command index — load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)

@@ -241,6 +241,14 @@ busCommand
     const reassign = opts.assignee ? ` (reassigned to: ${opts.assignee})` : '';
     const retitle = opts.title ? ` (title: ${opts.title})` : '';
     console.log(`Updated ${id}${statusStr}${reassign}${retitle}`);
+    // Auto-emit for task-blocked: a blocked task that never emits looks like an idle agent.
+    if (status === 'blocked') {
+      try {
+        logEvent(paths, env.agentName, env.org, 'task', 'task_blocked', 'warning', JSON.stringify({ task_id: id, agent: env.agentName }));
+      } catch (e: unknown) {
+        process.stderr.write(`[update-task] WARNING: task_blocked event failed to log: ${e instanceof Error ? e.message : String(e)}\n`);
+      }
+    }
   });
 
 busCommand
@@ -1073,7 +1081,8 @@ busCommand
   .option('--file <path>', 'Send a document/file with caption (any file type)')
   .option('--plain-text', 'Skip Telegram Markdown parsing entirely. Use this when the message contains unescaped _, *, backtick, or [ that would otherwise trip the Markdown parser. Without this flag, sendMessage still retries once with parse_mode disabled on a parse-entity error — so it is purely an opt-in to save the retry roundtrip.', false)
   .option('--stdin', 'Read message from stdin instead of the positional argument. Prevents shell expansion of $ in double-quoted strings. Usage: printf \'%s\' "$msg" | cortextos bus send-telegram <chat-id> --stdin', false)
-  .action(async (chatId: string, message: string | undefined, opts: { image?: string; file?: string; plainText?: boolean; stdin?: boolean }) => {
+  .option('--dry-run', 'Resolve and print the message body to stdout WITHOUT sending. Proves argv/shell resolution only — not that the API transmits correctly. Use this for regression testing the Guards and body resolution offline.', false)
+  .action(async (chatId: string, message: string | undefined, opts: { image?: string; file?: string; plainText?: boolean; stdin?: boolean; dryRun?: boolean }) => {
     // --stdin or auto-detected pipe: read message from fd 0 to prevent shell $ expansion stripping.
     // Auto-activates when no message arg is given and stdin is a pipe — so
     // `printf '%s' "$msg" | cortextos bus send-telegram <id>` is safe without any flag.
@@ -1084,6 +1093,41 @@ busCommand
     if (!message) {
       console.error('Error: message argument is required (or pipe message via stdin).');
       process.exit(1);
+    }
+    // Guard 1 — swallowed flag (Bug B, confirmed Jul 19 2026):
+    // `send-telegram -- <chat_id> --stdin` causes the `--` separator to convert
+    // `--stdin` from a flag into the message positional. The body arrives as the
+    // literal string "--stdin" (or any other flag) and gets delivered verbatim.
+    // This selects for money messages because the Jul 11 guardrail pointed agents
+    // at --stdin specifically for dollar amounts. A message body that is exactly
+    // a bare flag token is NEVER intentional — fail loudly.
+    if (/^--[a-z][a-z0-9-]*\s*$/i.test(message)) {
+      console.error(
+        `Error: send-telegram: message body is a bare flag token ("${message.trim()}") — the -- separator swallowed it.\n` +
+        `The -- form is only safe with a positional string and no flags.\n` +
+        `\n` +
+        `CORRECT patterns:\n` +
+        `  With stdin (for $ amounts):  printf '%s' "$msg" | cortextos bus send-telegram <chat-id> --stdin\n` +
+        `  Positional string:            cortextos bus send-telegram <chat-id> 'your text'\n` +
+        `  With -- and positional:       cortextos bus send-telegram -- <chat-id> 'your text'\n` +
+        `\n` +
+        `DO NOT combine -- with --stdin: the -- swallows the flag.`
+      );
+      process.exit(1);
+    }
+    // Guard 2 — stripped $ (Bug A, confirmed Jun 3 – Jul 17 2026):
+    // A double-quoted shell body lets the shell strip $1, $msg etc before the CLI
+    // sees them. This guard cannot catch that (the damage happens in the shell before
+    // argv reaches us) but warns when the delivered body looks like a $ was eaten:
+    // a token boundary followed by .,NNN or similar at a word start.
+    // NOTE: this is belt-and-braces for bodies that slipped through; the correct
+    // prevention is single-quoted argv or --stdin, not this check.
+    // (No process.exit here — we warn and send what arrived rather than silently drop.)
+    if (/(^|[\s(\[])[.,][0-9]{2,3}\b/.test(message)) {
+      console.error(
+        `Warning: send-telegram: message body may have a stripped dollar sign (pattern .,NNN detected).\n` +
+        `If amounts look wrong, use: printf '%s' "$msg" | cortextos bus send-telegram <chat-id> --stdin`
+      );
     }
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
@@ -1110,9 +1154,18 @@ busCommand
       botToken = process.env.BOT_TOKEN || '';
     }
 
-    if (!botToken) {
+    if (!botToken && !opts.dryRun) {
       console.error('Error: BOT_TOKEN not configured. Set it in your agent .env file or as an environment variable to enable Telegram.');
       process.exit(1);
+    }
+
+    // --dry-run: resolution complete, all Guards have run, body is normalized.
+    // Branch here — immediately before the API call — so the test covers the
+    // exact same code path as a real send. Proves argv/shell resolution only.
+    if (opts.dryRun) {
+      process.stdout.write(`DRY-RUN resolved body (${message.length} chars):\n${message}\n`);
+      process.stdout.write(`[dry-run: no message sent — proves argv resolution only, not transmission]\n`);
+      return;
     }
 
     const api = new TelegramAPI(botToken);
@@ -2298,7 +2351,13 @@ busCommand
       patch.description = opts.desc;
     }
     if (opts.pausedReason !== undefined) {
-      patch.paused_reason = opts.pausedReason;
+      // Collapse repeated "until YYYY-MM-DD" clauses — agents sometimes append the new
+      // clause to the existing reason rather than replacing the whole string, producing
+      // "...until 2026-10-01 until 2026-10-01". Keep only the last occurrence.
+      patch.paused_reason = opts.pausedReason.replace(
+        /(\buntil \d{4}-\d{2}-\d{2})((?:\s+until \d{4}-\d{2}-\d{2})+)/gi,
+        (_m, _first, tail) => tail.trim()
+      );
     }
 
     const ok = updateCronDef(agent, name, patch);

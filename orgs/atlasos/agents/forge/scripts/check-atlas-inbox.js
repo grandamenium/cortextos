@@ -67,10 +67,11 @@ function decodeBody(payload) {
 }
 
 function sendTelegram(message) {
+  // Route to Atlas, not directly to Jennifer (No Direct Jennifer Telegram guardrail)
   try {
-    spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-telegram', CHAT_ID, message], { stdio: 'inherit' });
+    spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', 'atlas', 'normal', `[check-atlas-inbox] ${message}`.slice(0, 1200)], { stdio: 'inherit' });
   } catch (e) {
-    console.error('Telegram send failed:', e.message);
+    console.error('Atlas send failed:', e.message);
   }
 }
 
