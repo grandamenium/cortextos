@@ -24,6 +24,7 @@ import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, 
 import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { syncTaskToClickUp } from '../utils/clickup.js';
+import { pullFromClickUp } from '../utils/clickup-pull.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { logOutboundMessage, cacheLastSent } from '../telegram/logging.js';
@@ -739,6 +740,31 @@ busCommand
   });
 
 busCommand
+  .command('clickup-pull')
+  .description('Pull due dates and priorities Jennifer set in ClickUp back onto local tasks. ClickUp is the surface she edits by hand; this makes those edits visible to the fleet.')
+  .option('--dry-run', 'Report what would change without writing')
+  .action(async (opts: { dryRun?: boolean }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    try {
+      const r = await pullFromClickUp(env.frameworkRoot, paths.taskDir, opts.dryRun ?? false);
+      const verb = opts.dryRun ? 'would update' : 'updated';
+      console.log(`[clickup-pull] scanned ${r.scanned} ClickUp tasks, matched ${r.matched} local — ${verb} ${r.updatedDue} due date(s), ${r.updatedPriority} priority(ies)`);
+      for (const c of r.changes.slice(0, 40)) console.log(`  ${c}`);
+      if (r.changes.length > 40) console.log(`  ... and ${r.changes.length - 40} more`);
+      // Ambiguity is reported, never guessed at — two local tasks with the same
+      // title would otherwise silently take each other's due date.
+      if (r.ambiguous.length) {
+        console.error(`[clickup-pull] SKIPPED ${r.ambiguous.length} ambiguous title(s) (more than one ClickUp match):`);
+        for (const a of r.ambiguous.slice(0, 10)) console.error(`  - ${a.slice(0, 70)}`);
+      }
+    } catch (err) {
+      console.error(`[clickup-pull] FAILED: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
   .command('self-restart')
   .description('Immediately restart this agent via daemon IPC (same as soft-restart but targets self)')
   .option('--reason <why>', 'Reason for restart')
@@ -1137,19 +1163,31 @@ busCommand
       );
       process.exit(1);
     }
-    // Guard 2 — stripped $ (Bug A, confirmed Jun 3 – Jul 17 2026):
+    // Guard 2 — stripped $ (Bug A, confirmed Jun 3 – Jul 19 2026):
     // A double-quoted shell body lets the shell strip $1, $msg etc before the CLI
     // sees them. This guard cannot catch that (the damage happens in the shell before
-    // argv reaches us) but warns when the delivered body looks like a $ was eaten:
+    // argv reaches us) but exits when the delivered body looks like a $ was eaten:
     // a token boundary followed by .,NNN or similar at a word start.
-    // NOTE: this is belt-and-braces for bodies that slipped through; the correct
-    // prevention is single-quoted argv or --stdin, not this check.
-    // (No process.exit here — we warn and send what arrived rather than silently drop.)
+    // Exits rather than warns so corrupted messages never reach Jennifer silently.
+    // Use a heredoc to pass messages with $ amounts — works with apostrophes too:
+    //   cortextos bus send-telegram <chat-id> <<'EOF'
+    //   Message with $1,500 and it's fine
+    //   EOF
     if (/(^|[\s(\[])[.,][0-9]{2,3}\b/.test(message)) {
       console.error(
-        `Warning: send-telegram: message body may have a stripped dollar sign (pattern .,NNN detected).\n` +
-        `If amounts look wrong, use: printf '%s' "$msg" | cortextos bus send-telegram <chat-id> --stdin`
+        `Error: send-telegram: message body may have a stripped dollar sign (pattern .,NNN detected).\n` +
+        `Dollar signs are stripped when the message is double-quoted in bash.\n` +
+        `\n` +
+        `CORRECT patterns (both handle $ amounts and apostrophes):\n` +
+        `  Heredoc (recommended):\n` +
+        `    cortextos bus send-telegram <chat-id> <<'EOF'\n` +
+        `    Message with $1,500 and it's fine\n` +
+        `    EOF\n` +
+        `\n` +
+        `  Pipe:\n` +
+        `    printf '%s' "$msg" | cortextos bus send-telegram <chat-id> --stdin`
       );
+      process.exit(1);
     }
     // Codex agents emit literal '\n'/'\t' inside single-quoted bash where bash
     // does not expand escapes, so they arrive at argv as 2-char literals and
