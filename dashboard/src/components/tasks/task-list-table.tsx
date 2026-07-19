@@ -21,7 +21,7 @@ import { PriorityBadge, StatusBadge, OrgBadge, TimeAgo } from '@/components/shar
 import { IconArrowsSort, IconSortAscending, IconSortDescending } from '@tabler/icons-react';
 import type { Task, TaskStatus } from '@/lib/types';
 
-type SortField = 'title' | 'status' | 'priority' | 'assignee' | 'org' | 'project' | 'created_at';
+type SortField = 'title' | 'status' | 'priority' | 'assignee' | 'org' | 'project' | 'created_at' | 'due_date';
 type SortDir = 'asc' | 'desc';
 
 const PRIORITY_ORDER: Record<string, number> = { critical: 0, urgent: 0, high: 1, normal: 2, low: 3 };
@@ -147,6 +147,7 @@ export function TaskListTable({ tasks, onTaskClick, onStatusChange, onFieldUpdat
         case 'org':        cmp = a.org.localeCompare(b.org); break;
         case 'project':    cmp = (a.project ?? '').localeCompare(b.project ?? ''); break;
         case 'created_at': cmp = a.created_at.localeCompare(b.created_at); break;
+        case 'due_date':   cmp = (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'); break;
       }
       if (cmp !== 0) return sortDir === 'asc' ? cmp : -cmp;
       // Secondary sort: project field always groups by org (LLC), then status priority
@@ -184,7 +185,8 @@ export function TaskListTable({ tasks, onTaskClick, onStatusChange, onFieldUpdat
     { field: 'assignee',   label: 'Assignee',  hideBelow: 'md' },
     { field: 'project',    label: 'Project',   hideBelow: 'md' },
     { field: 'org',        label: 'Company',   hideBelow: 'lg' },
-    { field: 'created_at', label: 'Created',   hideBelow: 'lg' },
+    { field: 'due_date',   label: 'Due',       hideBelow: 'lg' },
+    { field: 'created_at', label: 'Created',   hideBelow: 'xl' },
   ];
 
   const hideClass: Record<string, string> = {
@@ -215,7 +217,7 @@ export function TaskListTable({ tasks, onTaskClick, onStatusChange, onFieldUpdat
       <TableBody>
         {sorted.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+            <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
               No tasks found
             </TableCell>
           </TableRow>
@@ -253,6 +255,21 @@ export function TaskListTable({ tasks, onTaskClick, onStatusChange, onFieldUpdat
                 <OrgBadge org={task.org} />
               </TableCell>
               <TableCell className="hidden lg:table-cell">
+                {task.due_date ? (
+                  (() => {
+                    const overdue = new Date(task.due_date).getTime() < Date.now()
+                      && task.status !== 'completed' && task.status !== 'cancelled';
+                    return (
+                      <span className={`text-xs font-medium ${overdue ? 'text-red-600 font-semibold' : 'text-muted-foreground'}`}>
+                        {overdue ? '⚠ ' : ''}{task.due_date}
+                      </span>
+                    );
+                  })()
+                ) : (
+                  <span className="text-xs text-muted-foreground/40 italic">—</span>
+                )}
+              </TableCell>
+              <TableCell className="hidden xl:table-cell">
                 <TimeAgo date={task.created_at} />
               </TableCell>
             </TableRow>

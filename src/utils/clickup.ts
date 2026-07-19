@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import https from 'https';
 
@@ -49,8 +49,16 @@ function getApiKey(frameworkRoot: string): string | null {
   try { return readFileSync(secretPath, 'utf-8').trim() || null; } catch { return null; }
 }
 
+/**
+ * POST one task to a ClickUp list.
+ *
+ * Rejects on transport error or non-2xx. It previously resolved unconditionally
+ * — including on 401 and 404 — which meant a revoked key or a stale list ID
+ * looked exactly like success and every mirrored task vanished silently. The
+ * caller catches and logs; nothing here propagates to task creation.
+ */
 function postTask(token: string, listId: string, body: object): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const req = https.request(
       {
@@ -62,10 +70,20 @@ function postTask(token: string, listId: string, body: object): Promise<void> {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(data),
         },
+        timeout: 10000,
       },
-      (res) => { res.resume(); res.on('end', resolve); },
+      (res) => {
+        let payload = '';
+        res.on('data', (chunk) => { if (payload.length < 400) payload += chunk; });
+        res.on('end', () => {
+          const status = res.statusCode ?? 0;
+          if (status >= 200 && status < 300) resolve();
+          else reject(new Error(`HTTP ${status} list=${listId} ${payload.slice(0, 160)}`));
+        });
+      },
     );
-    req.on('error', () => resolve()); // fire-and-forget: never throw
+    req.on('timeout', () => { req.destroy(new Error('timeout after 10s')); });
+    req.on('error', (err) => reject(err));
     req.write(data);
     req.end();
   });
@@ -74,9 +92,27 @@ function postTask(token: string, listId: string, body: object): Promise<void> {
 const PRIORITY_MAP: Record<string, number> = { urgent: 1, high: 2, normal: 3, low: 4 };
 
 /**
+ * Record a ClickUp sync failure where a human will actually see it.
+ *
+ * This used to be `.catch(() => {})`. A silent mirror is indistinguishable from
+ * a working one: a stale list ID or a revoked key would drop every task on the
+ * floor and nothing would ever say so. Still never throws — a failed mirror must
+ * not break task creation — but it now leaves a trail.
+ */
+function logSyncFailure(frameworkRoot: string, title: string, reason: string): void {
+  try {
+    const dir = join(frameworkRoot, 'logs');
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, 'clickup-sync-failures.log'), `${new Date().toISOString()}\t${reason}\t${title}\n`);
+  } catch { /* logging must never break the caller */ }
+  try { process.stderr.write(`[clickup-sync] FAILED (${reason}): ${title}\n`); } catch { /* ignore */ }
+}
+
+/**
  * Fire-and-forget ClickUp task mirror. Only runs for jennifer/human-assigned tasks.
- * ClickUp is a read/review surface — the cortextOS task JSON is the source of truth.
- * This function NEVER throws; failures are silently discarded.
+ * ClickUp is the durable, manually-manageable surface: it survives anything
+ * happening to the fleet, and she can reorder or re-date it by hand.
+ * This function NEVER throws; failures are logged, not swallowed.
  */
 export function syncTaskToClickUp(
   frameworkRoot: string,
@@ -86,18 +122,33 @@ export function syncTaskToClickUp(
     project?: string;
     priority?: string;
     assignee?: string;
+    /** ISO 8601 instant. Sent to ClickUp as epoch ms so it lands on her board. */
+    dueDate?: string | null;
   },
 ): void {
   if (opts.assignee !== 'jennifer' && opts.assignee !== 'human' && opts.assignee !== 'user') return;
   const token = getApiKey(frameworkRoot);
-  if (!token) return;
+  if (!token) { logSyncFailure(frameworkRoot, title, 'no-api-key'); return; }
   const listId = resolveClickUpListId(opts.project, title);
-  const body = {
+  const body: Record<string, unknown> = {
     name: title,
     description: opts.description ?? '',
     priority: PRIORITY_MAP[opts.priority ?? 'normal'] ?? 3,
     notify_all: false,
   };
+  if (opts.dueDate) {
+    const ms = new Date(opts.dueDate).getTime();
+    if (Number.isFinite(ms)) {
+      body.due_date = ms;
+      // Time-of-day is meaningful (end of her local day), so don't let ClickUp
+      // render it as an all-day task.
+      body.due_date_time = true;
+    }
+  }
   // Defer past the current tick so stdout (taskId) flushes first.
-  setImmediate(() => { postTask(token, listId, body).catch(() => {}); });
+  setImmediate(() => {
+    postTask(token, listId, body).catch((err: unknown) => {
+      logSyncFailure(frameworkRoot, title, String((err as Error)?.message ?? err).slice(0, 120));
+    });
+  });
 }

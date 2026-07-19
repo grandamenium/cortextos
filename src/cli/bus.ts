@@ -6,6 +6,7 @@ import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { stripBom } from '../utils/strip-bom.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks, findTaskFile } from '../bus/task.js';
+import { parseDueDate } from '../utils/duedate.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -151,9 +152,10 @@ busCommand
   .option('--priority <p>', 'Priority (urgent, high, normal, low)', 'normal')
   .option('--project <name>', 'Project name')
   .option('--needs-approval', 'Require human approval before execution')
+  .option('--due-date <date>', 'Due date in YYYY-MM-DD format. Surfaces in list-tasks and check-stale-tasks as overdue when past.')
   .option('--blocked-by <ids>', 'Comma-separated task IDs that must complete before this task can progress')
   .option('--blocks <ids>', 'Comma-separated task IDs that this new task will block (symmetric reverse edge)')
-  .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; needsApproval?: boolean; blockedBy?: string; blocks?: string }) => {
+  .action((title: string, opts: { desc?: string; assignee?: string; priority: string; project?: string; needsApproval?: boolean; dueDate?: string; blockedBy?: string; blocks?: string }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const parseList = (raw?: string) => (raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []);
@@ -178,12 +180,14 @@ busCommand
       );
     }
 
+    const resolvedDueDate = opts.dueDate ? (parseDueDate(opts.dueDate) ?? opts.dueDate) : undefined;
     const taskId = createTask(paths, env.agentName, env.org, title, {
       description: opts.desc,
       assignee: effectiveAssignee,
       priority: opts.priority as Priority,
       project: opts.project,
       needsApproval: opts.needsApproval ?? false,
+      dueDate: resolvedDueDate,
       blockedBy: parseList(opts.blockedBy),
       blocks: parseList(opts.blocks),
     });
@@ -212,14 +216,15 @@ busCommand
   .argument('[status]', 'New status (pending, in_progress, completed, blocked, cancelled) — omit when using --title only')
   .option('--assignee <agent>', 'Reassign task to a different agent')
   .option('--title <title>', 'Update the task title')
-  .action((id: string, status: string | undefined, opts: { assignee?: string; title?: string }) => {
+  .option('--due-date <date>', 'Set or update due date (YYYY-MM-DD). Pass empty string to clear.')
+  .action((id: string, status: string | undefined, opts: { assignee?: string; title?: string; dueDate?: string }) => {
     const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
     if (status !== undefined && !validStatuses.includes(status as TaskStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
       process.exit(1);
     }
-    if (status === undefined && !opts.assignee && !opts.title) {
-      console.error('update-task: provide a status, --assignee, or --title (nothing to update)');
+    if (status === undefined && !opts.assignee && !opts.title && opts.dueDate === undefined) {
+      console.error('update-task: provide a status, --assignee, --title, or --due-date (nothing to update)');
       process.exit(1);
     }
     const env = resolveEnv();
@@ -236,11 +241,18 @@ busCommand
       }
     }
 
-    updateTask(paths, id, status as TaskStatus | undefined, (opts.assignee || opts.title) ? { assignee: opts.assignee, title: opts.title } : undefined);
+    const patch: { assignee?: string; title?: string; dueDate?: string } = {};
+    if (opts.assignee) patch.assignee = opts.assignee;
+    if (opts.title) patch.title = opts.title;
+    if (opts.dueDate !== undefined) {
+      patch.dueDate = opts.dueDate ? (parseDueDate(opts.dueDate) ?? opts.dueDate) : '';
+    }
+    updateTask(paths, id, status as TaskStatus | undefined, Object.keys(patch).length ? patch : undefined);
     const statusStr = status ? ` -> ${status}` : '';
     const reassign = opts.assignee ? ` (reassigned to: ${opts.assignee})` : '';
     const retitle = opts.title ? ` (title: ${opts.title})` : '';
-    console.log(`Updated ${id}${statusStr}${reassign}${retitle}`);
+    const redate = opts.dueDate !== undefined ? ` (due-date: ${opts.dueDate || 'cleared'})` : '';
+    console.log(`Updated ${id}${statusStr}${reassign}${retitle}${redate}`);
     // Auto-emit for task-blocked: a blocked task that never emits looks like an idle agent.
     if (status === 'blocked') {
       try {
@@ -506,13 +518,19 @@ busCommand
     console.log(header);
     console.log(separator);
 
+    const nowMs = Date.now();
     for (const t of tasks) {
       const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
       const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
       const id = t.id.substring(0, 28).padEnd(28);
       const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
-      const title = t.title.substring(0, 50);
-      console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
+      const title = t.title.substring(0, 45);
+      let dueSuffix = '';
+      if (t.due_date) {
+        const dueMs = new Date(t.due_date).getTime();
+        dueSuffix = dueMs < nowMs ? ' [OVERDUE]' : ` [due:${t.due_date}]`;
+      }
+      console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}${dueSuffix}`);
     }
     console.log('');
   });

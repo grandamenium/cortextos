@@ -288,7 +288,7 @@ export function updateTask(
   paths: BusPaths,
   taskId: string,
   status: TaskStatus | undefined,
-  options?: { assignee?: string; title?: string },
+  options?: { assignee?: string; title?: string; dueDate?: string },
 ): void {
   const filePath = findTaskFile(paths, taskId);
   if (!filePath) {
@@ -306,6 +306,7 @@ export function updateTask(
     if (status !== undefined) task.status = status;
     if (options?.assignee) task.assigned_to = options.assignee;
     if (options?.title) task.title = options.title;
+    if (options?.dueDate !== undefined) task.due_date = options.dueDate || null;
     task.updated_at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     atomicWriteSync(filePath, JSON.stringify(task));
   } catch (err) {
@@ -648,6 +649,7 @@ export function checkStaleTasks(paths: BusPaths): StaleTaskReport {
     stale_pending: [],
     stale_human: [],
     overdue: [],
+    ungoverned: [],
   };
 
   const tasks = readAllTasks(paths.taskDir);
@@ -686,6 +688,12 @@ export function checkStaleTasks(paths: BusPaths): StaleTaskReport {
       if (dueEpoch > 0 && nowEpoch > dueEpoch) {
         report.overdue.push(task);
       }
+    }
+
+    // Ungoverned: active task (in_progress or pending) with no due_date.
+    // Distinct from overdue — these tasks have no expiry at all, not an expired one.
+    if (!task.due_date && (task.status === 'in_progress' || task.status === 'pending')) {
+      report.ungoverned.push(task);
     }
   }
 

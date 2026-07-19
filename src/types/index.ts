@@ -576,6 +576,7 @@ export interface StaleTaskReport {
   stale_pending: Task[];
   stale_human: Task[];
   overdue: Task[];
+  ungoverned: Task[];
 }
 
 export interface ArchiveReport {
