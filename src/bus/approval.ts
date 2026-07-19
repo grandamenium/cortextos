@@ -61,40 +61,15 @@ function postApprovalToActivityChannel(
   context: string | undefined,
   frameworkRoot: string | undefined,
 ): Promise<void> {
-  const root = frameworkRoot ?? process.env.CTX_FRAMEWORK_ROOT;
-  if (!root) {
-    console.warn(
-      `[approval] No frameworkRoot available for ${approvalId} — skipping activity-channel post. ` +
-      `Set CTX_FRAMEWORK_ROOT env var or pass frameworkRoot explicitly.`,
-    );
-    return Promise.resolve();
-  }
-
-  const orgDir = join(root, 'orgs', org);
-  const lines = [
-    `🔔 Approval request: ${title}`,
-    `Category: ${category}`,
-    `Requested by: ${agentName}`,
-  ];
-  if (context) {
-    lines.push('', context);
-  }
-  lines.push('', `id: ${approvalId}`);
-  const message = lines.join('\n');
-
-  return postActivity(orgDir, paths.ctxRoot, org, message, buildApprovalKeyboard(approvalId))
-    .then((posted) => {
-      if (!posted) {
-        // postActivity returns false when activity-channel.env is missing
-        // or cannot be parsed. Surface this visibly — the silent-false
-        // pattern is what hid tonight's path-resolution bug for hours.
-        console.warn(
-          `[approval] Activity-channel post failed for ${approvalId} — ` +
-          `check ${orgDir}/activity-channel.env (must define ACTIVITY_BOT_TOKEN + ACTIVITY_CHAT_ID).`,
-        );
-      }
-    })
-    .catch(() => undefined); // Thrown rejections still suppressed — activity-channel unreachable must not fail approval creation.
+  // DISABLED: operator-direct send removed. Approvals are stored in pending/
+  // and will be surfaced via rebuilt format + proper routing once both exist.
+  // Do not re-enable until (a) message format shows human-readable plain text
+  // (not raw implementation commands), and (b) routing target is confirmed.
+  console.log(
+    `[approval] Activity-channel send suppressed for ${approvalId} — rebuild in progress.`,
+  );
+  void paths; void org; void title; void category; void agentName; void context; void frameworkRoot;
+  return Promise.resolve();
 }
 
 /**
@@ -153,10 +128,12 @@ function pingAgentChatId(
   lines.push('', 'Approve via the orchestrator chat (Approve/Deny buttons) or the dashboard.');
   const message = lines.join('\n');
 
-  const api = new TelegramAPI(botToken);
-  return api.sendMessage(chatId, message, undefined, { parseMode: null })
-    .then(() => undefined)
-    .catch(() => undefined); // Telegram outage must not fail approval creation.
+  // DISABLED: agent-bot ping suppressed. See postApprovalToActivityChannel comment.
+  console.log(
+    `[approval] Agent-bot ping suppressed for ${approvalId} (${agentName}) — rebuild in progress.`,
+  );
+  void botToken; void chatId; void message;
+  return Promise.resolve();
 }
 
 /**
