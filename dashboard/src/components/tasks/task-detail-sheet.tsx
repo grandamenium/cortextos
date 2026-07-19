@@ -79,6 +79,8 @@ export function TaskDetailSheet({
   const [updating, setUpdating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmProceed, setConfirmProceed] = useState(false);
+  const [proceeding, setProceeding] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editDesc, setEditDesc] = useState('');
@@ -165,6 +167,26 @@ export function TaskDetailSheet({
     }
   }
 
+  async function handleProceed() {
+    if (!task) return;
+    setProceeding(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/proceed`, { method: 'POST' });
+      if (res.ok) {
+        setConfirmProceed(false);
+        onEdit?.(task.id);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Failed to proceed');
+      }
+    } catch {
+      setError('Network error');
+    } finally {
+      setProceeding(false);
+    }
+  }
+
   async function handleStatusChange(newStatus: TaskStatus) {
     if (!task) return;
     setUpdating(true);
@@ -181,7 +203,7 @@ export function TaskDetailSheet({
 
   return (
     <>
-    <Sheet open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setEditing(false); setConfirmDelete(false); setError(null); setPreviewOutput(null); } }}>
+    <Sheet open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setEditing(false); setConfirmDelete(false); setConfirmProceed(false); setError(null); setPreviewOutput(null); } }}>
       <SheetContent side="right" className="sm:max-w-lg overflow-y-auto">
         <SheetHeader>
           {editing ? (
@@ -326,6 +348,26 @@ export function TaskDetailSheet({
                 <div>
                   <p className="text-xs text-muted-foreground">Recommended action</p>
                   <p className="text-sm font-medium whitespace-pre-wrap">{task.brief.recommendation}</p>
+                </div>
+                {/* Proceed — tells the assignee agent the recommendation is
+                    approved and unblocks the task. Inline confirm so a stray
+                    click can't dispatch it. */}
+                <div>
+                  {confirmProceed ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground mr-1">Send to {task.assignee || 'agent'} and unblock?</span>
+                      <Button size="sm" onClick={handleProceed} disabled={proceeding}>
+                        {proceeding ? 'Proceeding…' : 'Confirm'}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setConfirmProceed(false)} disabled={proceeding}>
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button size="sm" onClick={() => setConfirmProceed(true)}>
+                      Proceed with recommended action
+                    </Button>
+                  )}
                 </div>
                 {task.brief.updated_at && (
                   <p className="text-[11px] text-muted-foreground">
