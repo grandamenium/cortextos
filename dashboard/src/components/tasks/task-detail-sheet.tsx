@@ -294,6 +294,48 @@ export function TaskDetailSheet({
             </div>
           ) : null}
 
+          {/* Decision brief — agent-authored guidance so a human can decide
+              what to do without reading the full Telegram thread. Field
+              labels adapt to the lane: a blocked task frames headline/reason
+              as the blocker + its impact; other lanes frame them as the next
+              step + why it matters. */}
+          {task.brief && (
+            <div className={`rounded-lg border p-3 ${task.status === 'blocked' ? 'border-destructive/40 bg-destructive/5' : 'border-primary/30 bg-primary/5'}`}>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                {task.status === 'blocked' ? 'Blocker — how to unblock' : 'Next step for you'}
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">{task.status === 'blocked' ? 'Blocker' : 'Next step'}</p>
+                  <p className="text-sm font-medium whitespace-pre-wrap">{task.brief.headline}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{task.status === 'blocked' ? 'Impact' : 'Why it matters'}</p>
+                  <p className="text-sm whitespace-pre-wrap">{task.brief.reason}</p>
+                </div>
+                {task.brief.options?.length > 0 && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Options</p>
+                    <ul className="list-disc pl-5 text-sm space-y-0.5">
+                      {task.brief.options.map((opt, i) => (
+                        <li key={i} className="whitespace-pre-wrap">{opt}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div>
+                  <p className="text-xs text-muted-foreground">Recommended action</p>
+                  <p className="text-sm font-medium whitespace-pre-wrap">{task.brief.recommendation}</p>
+                </div>
+                {task.brief.updated_at && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Brief updated <TimeAgo date={task.brief.updated_at} />
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Edit save/cancel */}
           {editing && (
             <div className="flex gap-2">

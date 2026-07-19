@@ -68,6 +68,30 @@ export interface Task {
    */
   blocks?: string[];
   blocked_by?: string[];
+  /**
+   * Agent-authored decision brief surfaced in the dashboard task detail
+   * panel so a human can decide what to do without reading the full
+   * Telegram thread. Optional so existing task files remain valid with
+   * the field absent. Semantics adapt to the task's lane: for a `blocked`
+   * task `headline` is the blocker and `reason` is its impact; for a
+   * `pending`/`in_progress` task `headline` is the next step and `reason`
+   * is why it matters. `options` are the paths forward; `recommendation`
+   * is the agent's single suggested action for the human to take.
+   */
+  brief?: TaskBrief;
+}
+
+export interface TaskBrief {
+  /** Blocker (blocked lane) or next step to push the task forward (other lanes). */
+  headline: string;
+  /** Impact of the block (blocked lane) or why this step matters (other lanes). */
+  reason: string;
+  /** Candidate paths forward for the human to choose between. */
+  options: string[];
+  /** The agent's single recommended action for the human. */
+  recommendation: string;
+  /** ISO 8601 timestamp of when the brief was last authored, for staleness cues. */
+  updated_at?: string;
 }
 
 // Event Types
