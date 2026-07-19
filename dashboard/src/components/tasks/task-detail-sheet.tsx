@@ -349,26 +349,37 @@ export function TaskDetailSheet({
                   <p className="text-xs text-muted-foreground">Recommended action</p>
                   <p className="text-sm font-medium whitespace-pre-wrap">{task.brief.recommendation}</p>
                 </div>
-                {/* Proceed — tells the assignee agent the recommendation is
-                    approved and unblocks the task. Inline confirm so a stray
-                    click can't dispatch it. */}
-                <div>
-                  {confirmProceed ? (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground mr-1">Send to {task.assignee || 'agent'} and unblock?</span>
-                      <Button size="sm" onClick={handleProceed} disabled={proceeding}>
-                        {proceeding ? 'Proceeding…' : 'Confirm'}
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => setConfirmProceed(false)} disabled={proceeding}>
-                        Cancel
-                      </Button>
+                {/* Action the recommendation. For an agent-owned task this
+                    approves the agent's plan (message + unblock); for a
+                    human-owned task the human is the actor, so it completes the
+                    task. Inline confirm so a stray click can't dispatch it. */}
+                {(() => {
+                  const humanOwned = !task.assignee || task.assignee === 'human' || task.assignee === 'user';
+                  const idleLabel = humanOwned ? 'Mark as done' : 'Proceed with recommended action';
+                  const confirmText = humanOwned
+                    ? 'Mark this task done?'
+                    : `Send to ${task.assignee} and unblock?`;
+                  const busyLabel = humanOwned ? 'Completing…' : 'Proceeding…';
+                  return (
+                    <div>
+                      {confirmProceed ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground mr-1">{confirmText}</span>
+                          <Button size="sm" onClick={handleProceed} disabled={proceeding}>
+                            {proceeding ? busyLabel : 'Confirm'}
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => setConfirmProceed(false)} disabled={proceeding}>
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button size="sm" onClick={() => setConfirmProceed(true)}>
+                          {idleLabel}
+                        </Button>
+                      )}
                     </div>
-                  ) : (
-                    <Button size="sm" onClick={() => setConfirmProceed(true)}>
-                      Proceed with recommended action
-                    </Button>
-                  )}
-                </div>
+                  );
+                })()}
                 {task.brief.updated_at && (
                   <p className="text-[11px] text-muted-foreground">
                     Brief updated <TimeAgo date={task.brief.updated_at} />
