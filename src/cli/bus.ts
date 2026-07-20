@@ -116,6 +116,29 @@ busCommand
       console.error(`Warning: agent '${to}' not found in project. Message will be queued but may never be read.`);
     }
 
+    // Guard 1 — swallowed flag (same class as send-telegram Bug B):
+    // A bare flag token as the text positional means argparse ate a flag.
+    if (/^--[a-z][a-z0-9-]*\s*$/i.test(text)) {
+      console.error(
+        `Error: send-message: message text is a bare flag token ("${text.trim()}") — check argument order.\n` +
+        `CORRECT: cortextos bus send-message <to> <priority> 'your text' [reply-to]`
+      );
+      process.exit(1);
+    }
+    // Guard 2 — stripped $ (same as send-telegram Bug A, confirmed Jun 3 – Jul 19 2026):
+    // Double-quoted text in bash strips $var references before the CLI sees them,
+    // leaving a token like ",500" where "$500" was intended. Exit rather than warn
+    // so corrupt dollar amounts never reach fleet agents silently.
+    // SAFE: use single quotes: cortextos bus send-message atlas normal '$1,500 is due'
+    if (/(^|[\s(\[])[.,][0-9]{2,3}\b/.test(text)) {
+      console.error(
+        `Error: send-message: message text may have a stripped dollar sign (pattern .,NNN detected).\n` +
+        `Dollar signs are stripped when the message text is double-quoted in bash.\n` +
+        `SAFE: use single quotes: cortextos bus send-message <to> <priority> '$1,500 is due'`
+      );
+      process.exit(1);
+    }
+
     const msgId = sendMessage(paths, env.agentName, to, priority as Priority, text, effectiveReplyTo);
     try {
       logEvent(paths, env.agentName, env.org, 'message', 'agent_message_sent', 'info', JSON.stringify({ to, priority, msg_id: msgId, reply_to: effectiveReplyTo ?? null }));
