@@ -51,6 +51,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortextos bus hook-qualifier-scan",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "SessionEnd": [
