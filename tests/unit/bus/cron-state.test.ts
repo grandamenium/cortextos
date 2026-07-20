@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { updateCronFire, readCronState, parseDurationMs } from '../../../src/bus/cron-state';
+import { updateCronFire, readCronState, parseDurationMs, cronExpressionMinIntervalMs } from '../../../src/bus/cron-state';
 
 let tmpDir: string;
 
@@ -108,5 +108,47 @@ describe('updateCronFire', () => {
     expect(inbox?.interval).toBe('2h');
     expect(hb?.interval).toBe('4h');
     cleanup();
+  });
+});
+
+describe('cronExpressionMinIntervalMs', () => {
+  const DAY_MS = 24 * 3_600_000;
+
+  it('returns per-minute interval for */N * * * *', () => {
+    expect(cronExpressionMinIntervalMs('*/5 * * * *')).toBe(5 * 60_000);
+    expect(cronExpressionMinIntervalMs('*/15 * * * *')).toBe(15 * 60_000);
+  });
+
+  it('returns per-hour interval for fixed-minute */N * * *', () => {
+    expect(cronExpressionMinIntervalMs('0 */4 * * *')).toBe(4 * 3_600_000);
+    expect(cronExpressionMinIntervalMs('30 */6 * * *')).toBe(6 * 3_600_000);
+  });
+
+  it('returns daily (24h) for fixed-hour daily expression', () => {
+    expect(cronExpressionMinIntervalMs('0 8 * * *')).toBe(DAY_MS);
+    expect(cronExpressionMinIntervalMs('30 6 * * *')).toBe(DAY_MS);
+  });
+
+  it('returns weekly (7d) for fixed-hour with specific weekday', () => {
+    expect(cronExpressionMinIntervalMs('0 9 * * 1')).toBe(7 * DAY_MS);
+    expect(cronExpressionMinIntervalMs('50 6 * * 1')).toBe(7 * DAY_MS);
+  });
+
+  it('returns monthly (30d) for fixed-hour with specific dom', () => {
+    expect(cronExpressionMinIntervalMs('0 9 1 * *')).toBe(30 * DAY_MS);
+    expect(cronExpressionMinIntervalMs('0 15 20 * *')).toBe(30 * DAY_MS);
+  });
+
+  it('returns yearly (365d) for fixed-hour with specific dom AND month — defect 2 regression', () => {
+    // "0 15 18 7 *" is denny-due-reminder: Jul 18 at 15:00 UTC. Previously
+    // returned 24h (wrong) causing any >24h miss to be dropped as stale.
+    expect(cronExpressionMinIntervalMs('0 15 18 7 *')).toBe(365 * DAY_MS);
+    expect(cronExpressionMinIntervalMs('15 6 16 6 *')).toBe(365 * DAY_MS); // osceola-reminder
+    expect(cronExpressionMinIntervalMs('0 15 1 1,7 *')).toBe(365 * DAY_MS);
+  });
+
+  it('returns 48h fallback for unrecognised patterns', () => {
+    expect(cronExpressionMinIntervalMs('')).toBe(48 * 3_600_000);
+    expect(cronExpressionMinIntervalMs('invalid')).toBe(48 * 3_600_000);
   });
 });

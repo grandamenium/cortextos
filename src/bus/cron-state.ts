@@ -96,14 +96,23 @@ export function parseDurationMs(interval: string): number {
 
 /**
  * Estimate the minimum expected firing interval for a 5-field cron expression.
- * Handles common patterns (every-N-minutes, every-N-hours, daily) without an
- * external library. Returns a conservative 48h fallback for anything else.
+ * Handles common patterns (every-N-minutes, every-N-hours, daily, weekly,
+ * monthly, yearly) without an external library.
+ * Returns a conservative 48h fallback for anything else.
+ *
+ * Defect 2 fix (2026-07-20): previously returned 24h for ANY fixed-hour
+ * expression, including yearly patterns like "0 15 18 7 *". This caused the
+ * catch-up staleness check to drop any miss older than 24h — meaning a cron
+ * scheduled for a specific calendar date would be silently skipped if the
+ * daemon was down for even 25 hours. Now inspects dom and month fields to
+ * return the correct interval.
  */
 export function cronExpressionMinIntervalMs(expr: string): number {
   const FALLBACK_MS = 48 * 3_600_000;
+  const DAY_MS     = 24 * 3_600_000;
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) return FALLBACK_MS;
-  const [minute, hour] = parts;
+  const [minute, hour, dom, month, dow] = parts;
 
   // Every N minutes: */N * * * *
   const everyMin = /^\*\/(\d+)$/.exec(minute);
@@ -113,8 +122,23 @@ export function cronExpressionMinIntervalMs(expr: string): number {
   const everyHour = /^\*\/(\d+)$/.exec(hour);
   if (everyHour) return parseInt(everyHour[1], 10) * 3_600_000;
 
-  // Fixed hour — fires daily (or on restricted days; 24h is the minimum gap)
-  if (/^\d+$/.test(hour)) return 24 * 3_600_000;
+  // A field is "fixed" (not wildcard) when it has no * or / — i.e. it names
+  // specific values only (single digit, comma-list, or range).
+  const isFixed = (f: string) => !f.includes('*') && !f.includes('/');
+
+  if (/^\d+$/.test(hour)) {
+    // Fixed month AND dom: fires once per year (e.g. "0 15 18 7 *", "0 15 1 1,7 *")
+    if (isFixed(month)) return 365 * DAY_MS;
+
+    // Fixed dom, wildcard month: fires once per month (e.g. "0 9 1 * *")
+    if (isFixed(dom)) return 30 * DAY_MS;
+
+    // Fixed day-of-week: fires once per week (e.g. "0 9 * * 1")
+    if (isFixed(dow)) return 7 * DAY_MS;
+
+    // Fixed hour only: fires daily
+    return DAY_MS;
+  }
 
   return FALLBACK_MS;
 }

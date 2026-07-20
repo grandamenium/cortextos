@@ -8,6 +8,7 @@ import { readCrons, getExecutionLog, getExecutionLogPage, addCron, updateCron, r
 import type { ExecutionLogStatusFilter } from '../bus/crons.js';
 import { nextFireFromCron } from './cron-scheduler.js';
 import { parseDurationMs } from '../bus/cron-state.js';
+import { appendExecutionLog } from './cron-execution-log.js';
 import { computeHealth, aggregateFleetHealth } from '../utils/cron-health.js';
 
 const WORKER_NAME_REGEX = /^[a-z0-9_-]+$/;
@@ -105,6 +106,23 @@ export function handleFireCron(
   // Record fire time for cooldown tracking
   const firedAt = nowMs;
   _manualFireLastFired.set(`${agent}::${cronName}`, firedAt);
+
+  // Write through same path as a scheduled fire: persist last_fired_at + fire_count
+  // and append to execution log. Without this, test-fire is invisible to audit and
+  // to the catch-up logic that reads last_fired_at to determine missed windows.
+  const nowIso = new Date(firedAt).toISOString();
+  updateCron(agent, cronName, {
+    last_fired_at: nowIso,
+    fire_count: (cron.fire_count ?? 0) + 1,
+  });
+  appendExecutionLog(agent, {
+    ts: nowIso,
+    cron: cronName,
+    status: 'fired',
+    attempt: 1,
+    duration_ms: 0,
+    error: null,
+  });
 
   return { ok: true, firedAt };
 }

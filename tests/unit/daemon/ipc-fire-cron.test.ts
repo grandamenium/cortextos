@@ -363,6 +363,84 @@ describe('handleFireCron — happy path', () => {
 });
 
 // ---------------------------------------------------------------------------
+// handleFireCron — write-through (Defect 3 regression)
+//
+// test-cron-fire must persist the same fields as a real scheduled fire:
+//   last_fired_at + fire_count in crons.json, and an entry in cron-execution.log.
+// Without this, test-fire is invisible to the catch-up logic and audit surface.
+// ---------------------------------------------------------------------------
+
+describe('handleFireCron — write-through to crons.json and execution log', () => {
+  it('sets last_fired_at in crons.json after successful fire', async () => {
+    writeCronsJson('boris', [makeCron()]);
+    const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
+    const { readCrons } = await import('../../../src/bus/crons.js');
+    const { fn } = makeInjectFn([true]);
+
+    const now = 1_700_000_000_000;
+    handleFireCron('boris', 'heartbeat', fn, now);
+
+    const crons = readCrons('boris');
+    expect(crons[0].last_fired_at).toBe(new Date(now).toISOString());
+  });
+
+  it('increments fire_count from 0 to 1 on first fire', async () => {
+    writeCronsJson('boris', [makeCron()]);
+    const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
+    const { readCrons } = await import('../../../src/bus/crons.js');
+    const { fn } = makeInjectFn([true]);
+
+    handleFireCron('boris', 'heartbeat', fn, 1_000_000);
+
+    const crons = readCrons('boris');
+    expect(crons[0].fire_count).toBe(1);
+  });
+
+  it('increments fire_count correctly when cron already has a count', async () => {
+    writeCronsJson('boris', [makeCron({ fire_count: 5 })]);
+    const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
+    const { readCrons } = await import('../../../src/bus/crons.js');
+    const { fn } = makeInjectFn([true]);
+
+    handleFireCron('boris', 'heartbeat', fn, 1_000_000);
+
+    const crons = readCrons('boris');
+    expect(crons[0].fire_count).toBe(6);
+  });
+
+  it('appends a fired entry to cron-execution.log', async () => {
+    writeCronsJson('boris', [makeCron()]);
+    const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
+    const { getExecutionLog } = await import('../../../src/bus/crons.js');
+    const { fn } = makeInjectFn([true]);
+
+    const now = 1_700_000_000_000;
+    handleFireCron('boris', 'heartbeat', fn, now);
+
+    const log = getExecutionLog('boris');
+    expect(log).toHaveLength(1);
+    expect(log[0].cron).toBe('heartbeat');
+    expect(log[0].status).toBe('fired');
+    expect(log[0].attempt).toBe(1);
+    expect(log[0].error).toBeNull();
+    expect(log[0].ts).toBe(new Date(now).toISOString());
+  });
+
+  it('does NOT write to crons.json when injection fails', async () => {
+    writeCronsJson('boris', [makeCron()]);
+    const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
+    const { readCrons } = await import('../../../src/bus/crons.js');
+    const { fn } = makeInjectFn([false]);
+
+    handleFireCron('boris', 'heartbeat', fn, 1_000_000);
+
+    const crons = readCrons('boris');
+    expect(crons[0].last_fired_at).toBeUndefined();
+    expect(crons[0].fire_count).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // handleAddCron — manualFireDisabled round-trip
 // ---------------------------------------------------------------------------
 
