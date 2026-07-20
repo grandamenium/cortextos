@@ -6,7 +6,7 @@ import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName } from '../utils/validate.js';
 import { stripBom } from '../utils/strip-bom.js';
 import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks, findTaskFile } from '../bus/task.js';
-import { parseDueDate } from '../utils/duedate.js';
+import { parseDueDate, describeDue } from '../utils/duedate.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -191,7 +191,8 @@ busCommand
       const days = offsetDays[opts.priority] ?? 7;
       const d = new Date();
       d.setDate(d.getDate() + days);
-      resolvedDueDate = d.toISOString().slice(0, 10);
+      const ymd = d.toISOString().slice(0, 10);
+      resolvedDueDate = parseDueDate(ymd) ?? ymd;
     }
     const taskId = createTask(paths, env.agentName, env.org, title, {
       description: opts.desc,
@@ -542,7 +543,6 @@ busCommand
     console.log(header);
     console.log(separator);
 
-    const nowMs = Date.now();
     for (const t of tasks) {
       const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
       const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
@@ -551,8 +551,7 @@ busCommand
       const title = t.title.substring(0, 45);
       let dueSuffix = '';
       if (t.due_date) {
-        const dueMs = new Date(t.due_date).getTime();
-        dueSuffix = dueMs < nowMs ? ' [OVERDUE]' : ` [due:${t.due_date}]`;
+        dueSuffix = ` [${describeDue(t.due_date)}]`;
       }
       console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}${dueSuffix}`);
     }
