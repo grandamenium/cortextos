@@ -61,26 +61,58 @@ const BANNED_PATTERNS: Array<{ word: string; regex: RegExp }> = [
 const SEND_COMMAND_RE = /cortextos\s+bus\s+send-(telegram|message)\b/;
 const CAT_SUBSTITUTION_RE = /\$\(\s*cat\s+"?([^")\s]+)"?\s*\)/;
 
-export function extractMessageText(command: string): string | null {
-  if (!SEND_COMMAND_RE.test(command)) return null;
+/**
+ * Return every chunk of text that could be the outgoing message body, for a
+ * command that invokes send-telegram/send-message. Returns [] if this is not
+ * a send command at all.
+ *
+ * Returns MULTIPLE candidates rather than one "best guess" because of a real
+ * gap found 2026-07-20, hours after this hook shipped: the dominant way long
+ * messages get composed is
+ *
+ *     cat > /tmp/draft.txt << 'EOF'
+ *     ...message text...
+ *     EOF
+ *     cortextos bus send-telegram <chat> "$(cat /tmp/draft.txt)"
+ *
+ * all inside ONE Bash call. PreToolUse fires BEFORE the command runs, so at
+ * inspection time /tmp/draft.txt does not exist yet (or still holds stale
+ * content from a previous run) — existsSync() failed, extraction returned
+ * null, and the hook silently allowed the message through unscanned. That is
+ * exactly backwards: the write-then-send-in-one-call pattern is used for the
+ * LONGEST and most carefully-worded messages, which are the ones most likely
+ * to contain this phrasing. Confirmed live: identical text blocked when the
+ * file pre-existed and passed unchecked when written in the same call.
+ *
+ * Fix: always scan the raw command string too. When the body is written via
+ * heredoc in the same call, the text is literally present in the command, so
+ * scanning the command catches what reading the not-yet-existent file cannot.
+ * A readable cat-referenced file is still read as well, for the case where
+ * the draft was written by an earlier call.
+ */
+export function extractMessageCandidates(command: string): string[] {
+  if (!SEND_COMMAND_RE.test(command)) return [];
 
+  const candidates: string[] = [];
+
+  // 1. The raw command itself — covers heredoc-in-same-call and direct quoted
+  //    args, and cannot be defeated by file-timing.
+  candidates.push(command);
+
+  // 2. A cat-referenced draft file, when it already exists at inspection time.
   const catMatch = command.match(CAT_SUBSTITUTION_RE);
   if (catMatch) {
     const path = catMatch[1];
-    if (!existsSync(path)) return null;
-    try {
-      return readFileSync(path, 'utf-8');
-    } catch {
-      return null;
+    if (existsSync(path)) {
+      try {
+        candidates.push(readFileSync(path, 'utf-8'));
+      } catch {
+        /* unreadable draft — the raw-command scan above still applies */
+      }
     }
   }
 
-  // Last quoted argument on the line is the message text (chat-id/agent-name
-  // /priority args come first and are never quoted with spaces inside).
-  const quoted = [...command.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g)];
-  if (quoted.length === 0) return null;
-  const last = quoted[quoted.length - 1];
-  return last[1] ?? last[2] ?? null;
+  return candidates;
 }
 
 export function findViolations(text: string): string[] {
@@ -114,13 +146,13 @@ export async function main(): Promise<void> {
   }
 
   const command = (tool_input as { command?: string })?.command || '';
-  const messageText = extractMessageText(command);
-  if (!messageText) {
+  const candidates = extractMessageCandidates(command);
+  if (candidates.length === 0) {
     process.exit(0);
     return;
   }
 
-  const violations = findViolations(messageText);
+  const violations = [...new Set(candidates.flatMap(findViolations))];
   if (violations.length > 0) {
     blockCall(violations);
     process.exit(0);

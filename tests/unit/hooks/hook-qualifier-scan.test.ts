@@ -3,27 +3,34 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { extractMessageText, findViolations } from '../../../src/hooks/hook-qualifier-scan';
+import { extractMessageCandidates, findViolations } from '../../../src/hooks/hook-qualifier-scan';
 
-describe('extractMessageText', () => {
-  it('extracts a direct quoted string argument from send-telegram', () => {
-    const cmd = 'cortextos bus send-telegram 8545268492 "Hello there"';
-    expect(extractMessageText(cmd)).toBe('Hello there');
+/** Convenience: does this command yield any violation across all candidates? */
+function scan(command: string): string[] {
+  return [...new Set(extractMessageCandidates(command).flatMap(findViolations))];
+}
+
+describe('extractMessageCandidates', () => {
+  it('covers a direct quoted string argument from send-telegram', () => {
+    const cmd = 'cortextos bus send-telegram 8545268492 "To be fair, hello there"';
+    expect(scan(cmd)).toContain('to be fair');
   });
 
-  it('extracts the last quoted argument from send-message (skips agent name/priority/msg-id)', () => {
-    const cmd = "cortextos bus send-message cleo normal 'Confirmed, sounds good' msg123";
-    expect(extractMessageText(cmd)).toBe('Confirmed, sounds good');
+  it('covers the message argument of send-message', () => {
+    const cmd = "cortextos bus send-message cleo normal 'Genuinely a good point' msg123";
+    expect(scan(cmd)).toContain('genuinely');
   });
 
-  it('returns null for an unrelated Bash command even if it contains banned words', () => {
-    const cmd = 'grep -n "fair" GUARDRAILS.md';
-    expect(extractMessageText(cmd)).toBeNull();
+  it('returns no candidates for an unrelated Bash command even if it contains banned words', () => {
+    const cmd = 'grep -n "to be fair" GUARDRAILS.md';
+    expect(extractMessageCandidates(cmd)).toEqual([]);
+    expect(scan(cmd)).toEqual([]);
   });
 
-  it('returns null for a Bash command that writes to GUARDRAILS.md via heredoc (not a send call)', () => {
-    const cmd = "cat >> GUARDRAILS.md << 'EOF'\nAbout to say fair/honest, STOP\nEOF";
-    expect(extractMessageText(cmd)).toBeNull();
+  it('returns no candidates for a Bash command that writes to GUARDRAILS.md via heredoc (not a send call)', () => {
+    const cmd = "cat >> GUARDRAILS.md << 'EOF'\nAbout to say to be fair / honestly, STOP\nEOF";
+    expect(extractMessageCandidates(cmd)).toEqual([]);
+    expect(scan(cmd)).toEqual([]);
   });
 
   describe('$(cat <path>) substitution', () => {
@@ -39,15 +46,31 @@ describe('extractMessageText', () => {
       rmSync(tmp, { recursive: true, force: true });
     });
 
-    it('reads the referenced file content, not the literal command string', () => {
+    it('reads a pre-existing referenced draft file', () => {
       writeFileSync(file, 'That is the honest limit of what infrastructure can catch here.', 'utf-8');
       const cmd = `cortextos bus send-telegram 8545268492 "$(cat ${file})"`;
-      expect(extractMessageText(cmd)).toContain('honest limit');
+      expect(scan(cmd)).toContain('honest truth/limit/answer/read');
     });
 
-    it('returns null if the referenced file does not exist', () => {
+    // REGRESSION (found live 2026-07-20, hours after this hook shipped): the
+    // write-then-send-in-one-Bash-call pattern meant the draft file did not
+    // exist yet when PreToolUse fired, extraction returned null, and the
+    // message went out entirely unscanned. This is the dominant pattern for
+    // long/careful messages, so the hook was silently ineffective for exactly
+    // the highest-risk cases. Scanning the raw command string closes it.
+    it('still catches a violation when the draft is written by a heredoc in the SAME call (file does not exist yet)', () => {
+      const missing = join(tmp, 'not-written-yet.txt');
+      const cmd =
+        `cat > ${missing} << 'MSGEOF'\n` +
+        `Honestly, this is the part that would have slipped through.\n` +
+        `MSGEOF\n` +
+        `cortextos bus send-telegram 8545268492 "$(cat ${missing})"`;
+      expect(scan(cmd)).toContain('honestly');
+    });
+
+    it('does not throw when the referenced file does not exist and the command is otherwise clean', () => {
       const cmd = `cortextos bus send-telegram 8545268492 "$(cat ${join(tmp, 'missing.txt')})"`;
-      expect(extractMessageText(cmd)).toBeNull();
+      expect(scan(cmd)).toEqual([]);
     });
   });
 });
