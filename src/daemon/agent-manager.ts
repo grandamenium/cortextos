@@ -7,6 +7,7 @@ import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
+import { runCommandCron } from './command-cron.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -1186,6 +1187,16 @@ export class AgentManager {
     }
 
     const onFire = async (cron: CronDefinition): Promise<void> => {
+      // Headless command crons run the command directly and only wake Claude
+      // on an escalation condition. runCommandCron owns retry, overlap, timeout,
+      // escalation, and its own rich execution logging.
+      if (cron.runtime === 'command') {
+        await runCommandCron(agentName, cron, {
+          inject: (msg: string) => this.injectAgent(agentName, msg),
+        });
+        return;
+      }
+
       const prompt = cron.prompt ?? `[cron] ${cron.name} fired`;
       // Salt with the fire timestamp so MessageDedup (which hashes the last 100
       // injects) does not reject identical cron prompts on subsequent fires.

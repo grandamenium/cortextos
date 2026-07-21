@@ -175,6 +175,32 @@ async function fireWithRetry(
   onFire: (c: CronDefinition) => Promise<void> | void,
   logger: (msg: string) => void,
 ): Promise<boolean> {
+  // Command-runtime crons manage their own execution, retry, escalation, and
+  // execution logging inside onFire → runCommandCron(). The scheduler must NOT
+  // apply its agent-oriented 4× retry or write a generic execution-log entry
+  // for them (that would double-log and wrongly re-run the command). onFire
+  // for a command cron only throws on an unexpected dispatch error.
+  if (cron.runtime === 'command') {
+    const start = Date.now();
+    try {
+      await Promise.resolve(onFire(cron));
+      return true;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger(`[cron-scheduler] command cron "${cron.name}" dispatch error: ${errMsg}`);
+      appendExecutionLog(agentName, {
+        ts: new Date().toISOString(),
+        cron: cron.name,
+        status: 'failed',
+        attempt: 1,
+        duration_ms: Date.now() - start,
+        error: errMsg,
+        runtime: 'command',
+      });
+      return false;
+    }
+  }
+
   const maxAttempts = RETRY_DELAYS_MS.length + 1; // 4 attempts total
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const start = Date.now();

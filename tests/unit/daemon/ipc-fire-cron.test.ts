@@ -547,3 +547,74 @@ describe('handleAddCron — manualFireDisabled round-trip', () => {
     expect(result.error).toContain('Manual fire disabled');
   });
 });
+
+// ---------------------------------------------------------------------------
+// handleFireCron — command runtime (must NOT inject the prompt into Claude)
+// ---------------------------------------------------------------------------
+
+describe('handleFireCron — command runtime', () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  function readCmdLog(agent: string): Record<string, unknown>[] {
+    const p = join(tmpRoot, CRONS_DIR, agent, 'cron-execution.log');
+    try {
+      return require('fs')
+        .readFileSync(p, 'utf-8')
+        .split('\n')
+        .filter((l: string) => l.trim())
+        .map((l: string) => JSON.parse(l));
+    } catch {
+      return [];
+    }
+  }
+
+  it('runs the command headlessly and does NOT inject a prompt on success', async () => {
+    const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
+    const { fn, calls } = makeInjectFn();
+    writeCronsJson('boris', [
+      makeCron({
+        name: 'cmd-ok',
+        prompt: '',
+        runtime: 'command',
+        command: 'node',
+        args: ['-e', 'process.stdout.write("ok")'],
+        timeout_seconds: 5,
+      }),
+    ]);
+
+    const result = handleFireCron('boris', 'cmd-ok', fn, 1_000_000);
+    expect(result.ok).toBe(true);
+    // No synchronous prompt injection.
+    expect(calls).toHaveLength(0);
+
+    await wait(600); // let the fire-and-forget command finish + log
+    // Still no Claude turn (successful "nothing to escalate" run).
+    expect(calls).toHaveLength(0);
+    const log = readCmdLog('boris');
+    expect(log.some((e) => e.runtime === 'command' && e.status === 'fired')).toBe(true);
+  });
+
+  it('escalates (injects) when the command fails', async () => {
+    const { handleFireCron } = await import('../../../src/daemon/ipc-server.js');
+    const { fn, calls } = makeInjectFn();
+    writeCronsJson('boris', [
+      makeCron({
+        name: 'cmd-fail',
+        prompt: '',
+        runtime: 'command',
+        command: 'node',
+        args: ['-e', 'process.exit(4)'],
+        timeout_seconds: 5,
+      }),
+    ]);
+
+    const result = handleFireCron('boris', 'cmd-fail', fn, 1_000_000);
+    expect(result.ok).toBe(true); // dispatch acked immediately
+
+    await wait(600);
+    expect(calls.length).toBeGreaterThan(0); // escalation reached the agent
+    expect(calls[0].text).toMatch(/COMMAND FAILURE/);
+    const log = readCmdLog('boris');
+    expect(log.some((e) => e.status === 'failed' && e.runtime === 'command')).toBe(true);
+  });
+});

@@ -412,6 +412,118 @@ export interface CronDefinition {
    * @default false (manual fire is allowed by default — opt-out model)
    */
   manualFireDisabled?: boolean;
+
+  // ------------------------------------------------------------------
+  // Headless command execution (Phase 2 — "command" runtime).
+  //
+  // BACKWARD COMPATIBILITY: a cron with no `runtime` field (every existing
+  // definition) is treated as `runtime: "agent"` and behaves exactly as
+  // before — the prompt is injected into the agent's Claude PTY. The fields
+  // below are ignored unless `runtime === "command"`.
+  // ------------------------------------------------------------------
+
+  /**
+   * Execution mode for this cron.
+   *
+   *   "agent"   — (default when absent) inject `prompt` into the agent's
+   *               Claude PTY as a full reasoning turn. Original behavior.
+   *   "command" — run `command`/`args` directly through the OS. A Claude turn
+   *               is invoked ONLY when an escalation condition is met (see the
+   *               escalate_* fields). A successful "nothing changed" result
+   *               never wakes Claude.
+   *
+   * @default "agent"
+   */
+  runtime?: 'agent' | 'command';
+
+  /**
+   * Executable to run for `runtime: "command"`. Resolved via PATH.
+   * As a convenience, the literal `"node"` is rewritten to the daemon's own
+   * Node binary (process.execPath) so it resolves regardless of PATH.
+   * Required when `runtime === "command"`.
+   *
+   * @example "node"
+   */
+  command?: string;
+
+  /**
+   * Argument vector for `command` (no shell parsing — each element is one arg).
+   *
+   * @example ["scripts/sync-doorloop-properties.js", "--quiet"]
+   */
+  args?: string[];
+
+  /**
+   * Working directory for the command, resolved relative to
+   * `CTX_PROJECT_ROOT` (falls back to `CTX_FRAMEWORK_ROOT`, then process.cwd()).
+   * Absolute paths are used as-is.
+   *
+   * @example "orgs/atlasos/agents/forge"
+   */
+  cwd?: string;
+
+  /**
+   * Hard timeout in seconds. The child is killed if it exceeds this. A timeout
+   * is treated as a failure (see escalate_on_error).
+   *
+   * @default 300
+   */
+  timeout_seconds?: number;
+
+  /**
+   * When true (default), a new fire is skipped if a previous execution of this
+   * same cron is still in flight. Logged with status "skipped".
+   *
+   * @default true
+   */
+  prevent_overlap?: boolean;
+
+  /**
+   * When true (default), a command failure (non-zero non-actionable exit,
+   * spawn error, or timeout) — after exhausting retries — escalates to a Claude
+   * turn so the failure is never silently swallowed.
+   *
+   * @default true
+   */
+  escalate_on_error?: boolean;
+
+  /**
+   * Optional JavaScript regular-expression source. When the command's combined
+   * stdout/stderr matches, the result is treated as actionable and escalated to
+   * Claude — even on a clean exit 0. Use this for "found a new item" signals.
+   *
+   * Independently, the daemon always honors a built-in convention: any stdout
+   * line beginning with `ESCALATE:` forces escalation and its text becomes the
+   * escalation summary ("the script requests human interpretation").
+   *
+   * @example "NEW_LEAD|action required|\\bDUE\\b"
+   */
+  escalate_on_output?: string;
+
+  /**
+   * Exit codes that signal a deliberate, actionable result (NOT a failure).
+   * A command exiting with one of these codes escalates to Claude and is not
+   * retried. Distinct from arbitrary non-zero exits, which are failures.
+   *
+   * @example [10, 20]
+   */
+  actionable_exit_codes?: number[];
+
+  /**
+   * Number of ADDITIONAL attempts after the first on failure. Retries happen
+   * only on failure (never on success or an actionable exit code), and only up
+   * to this count. 0 (default) means no retry.
+   *
+   * @default 0
+   */
+  retry_count?: number;
+
+  /**
+   * Delay in seconds between retry attempts.
+   *
+   * @default 5
+   */
+  retry_delay_seconds?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +541,8 @@ export interface CronDefinition {
  *   "fired"   — the fire attempt succeeded on this attempt.
  *   "retried" — this attempt failed but more retries remain (see `error`).
  *   "failed"  — final failure after exhausting all retries (see `error`).
+ *   "skipped" — a command cron fire was skipped because a prior execution of
+ *               the same cron was still in flight (prevent_overlap).
  */
 export interface CronExecutionLogEntry {
   /** ISO 8601 UTC timestamp of the fire attempt. */
@@ -436,13 +550,29 @@ export interface CronExecutionLogEntry {
   /** Cron name (matches CronDefinition.name). */
   cron: string;
   /** Outcome of this attempt. */
-  status: 'fired' | 'retried' | 'failed';
+  status: 'fired' | 'retried' | 'failed' | 'skipped';
   /** Attempt index (1-based). */
   attempt: number;
   /** Wall-clock duration of the fire attempt in milliseconds. */
   duration_ms: number;
   /** Error message if status is "retried" or "failed"; null otherwise. */
   error: string | null;
+
+  // --- Optional fields, populated only for `runtime: "command"` crons. ---
+  // All optional → existing agent-runtime log entries are unchanged.
+
+  /** Execution mode that produced this entry. Absent ⇒ "agent". */
+  runtime?: 'agent' | 'command';
+  /** Command process exit code (null if it was killed / never spawned). */
+  exit_code?: number | null;
+  /** Whether the command was killed for exceeding its timeout. */
+  timed_out?: boolean;
+  /** Whether this execution escalated a Claude turn. */
+  escalated?: boolean;
+  /** Trailing excerpt of stdout (bounded), for observability. */
+  stdout_excerpt?: string;
+  /** Trailing excerpt of stderr (bounded), for observability. */
+  stderr_excerpt?: string;
 }
 
 export interface OrgContext {
@@ -681,7 +811,7 @@ export interface CronSummaryRow {
    * Outcome of the most recent execution log entry.
    * Null when the cron has never fired.
    */
-  lastStatus: 'fired' | 'retried' | 'failed' | null;
+  lastStatus: 'fired' | 'retried' | 'failed' | 'skipped' | null;
   /**
    * ISO 8601 timestamp of the next scheduled fire.
    * Computed from the cron's schedule + last_fired_at (or now).
