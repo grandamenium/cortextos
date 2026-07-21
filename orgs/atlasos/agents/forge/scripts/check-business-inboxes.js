@@ -94,9 +94,9 @@ function appendToDigest(account, flaggedItems) {
 // gmail_tis4u      → tisolutions4you@gmail.com (TIS business Gmail)
 // gmail_jb1979     → jbreitbach1979@gmail.com
 // gmail_jordanreyes→ jennifer@jordanreyes.me
-// gmail_ahr        → jennifer@americahomerestoration.com
+// gmail_ahr        → watchthis.illinois@gmail.com (WTI — filename inverted)
 // gmail_tt23       → texastimber23@gmail.com
-// gmail_wti        → watchthis.illinois@gmail.com
+// gmail_wti        → jennifer@americahomerestoration.com (AHR — filename inverted)
 
 const BUSINESS_QUERY = 'is:unread -in:sent -category:promotions -category:social -category:updates -category:forums newer_than:2d';
 
@@ -107,9 +107,9 @@ const ACCOUNTS = [
   { file: 'gmail_ilp_tokens.json',     label: 'ILP',              query: 'is:unread -label:ForgeAlerted newer_than:2d', max: 5, alertLabel: 'ForgeAlerted' },
   { file: 'gmail_jb1979_tokens.json',  label: 'JB1979',           query: 'is:unread -label:ForgeAlerted newer_than:2d', max: 5, alertLabel: 'ForgeAlerted' },
   { file: 'gmail_jordanreyes_tokens.json', label: 'Jordan Reyes', query: 'is:unread -label:ForgeAlerted newer_than:2d', max: 5, alertLabel: 'ForgeAlerted' },
-  { file: 'gmail_ahr_tokens.json',     label: 'AHR',              query: 'is:unread -in:sent newer_than:7d', max: 5 },
+  { file: 'gmail_ahr_tokens.json',     label: 'WATCH THIS LLC',   query: 'is:unread -in:sent newer_than:7d', max: 5 },
   { file: 'gmail_tt23_tokens.json',    label: 'Texas Timber',     query: 'is:unread -in:sent newer_than:2d', max: 5 },
-  { file: 'gmail_wti_tokens.json',     label: 'WATCH THIS LLC',   query: 'is:unread -in:sent newer_than:7d', max: 5 },
+  { file: 'gmail_wti_tokens.json',     label: 'AHR',              query: 'is:unread -in:sent newer_than:7d', max: 5 },
 ];
 
 // High-priority senders/subjects to always flag to Argus
