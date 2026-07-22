@@ -8,6 +8,7 @@ import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTa
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
+import { isHeartbeatStale } from '../bus/heartbeat-staleness.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
@@ -461,10 +462,35 @@ busCommand
       }
     }
 
+    // Record the agent's heartbeat cadence so staleness is measured against ITS
+    // OWN interval, not a fleet-wide constant. When --interval isn't passed,
+    // derive it from the agent's config.json — the SHORTEST heartbeat-named cron
+    // (the tightest bound on how fresh the heartbeat should be). Best-effort: if
+    // config can't be read, leave it empty and the staleness helper falls back.
+    let loopInterval = opts.interval;
+    if (!loopInterval && frameworkRoot) {
+      for (const cfgPath of [
+        join(frameworkRoot, 'orgs', env.org, 'agents', env.agentName, 'config.json'),
+        join(frameworkRoot, 'agents', env.agentName, 'config.json'),
+      ]) {
+        if (!existsSync(cfgPath)) continue;
+        try {
+          const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+          const hb = (cfg.crons || [])
+            .filter((c: { name?: string }) => /heartbeat/i.test(c.name || ''))
+            .map((c: { interval?: string }) => ({ s: c.interval || '', ms: parseDurationMs(c.interval || '') }))
+            .filter((x: { ms: number }) => Number.isFinite(x.ms) && x.ms > 0)
+            .sort((a: { ms: number }, b: { ms: number }) => a.ms - b.ms);
+          if (hb.length) loopInterval = hb[0].s;
+        } catch { /* leave undefined — staleness helper uses its default */ }
+        break;
+      }
+    }
+
     updateHeartbeat(paths, env.agentName, status, {
       org: env.org,
       timezone: opts.timezone,
-      loopInterval: opts.interval,
+      loopInterval,
       currentTask: opts.task,
       displayName,
     });
@@ -499,10 +525,14 @@ busCommand
     }
 
     for (const hb of heartbeats) {
-      const stale = new Date(hb.last_heartbeat) < new Date(Date.now() - 2 * 60 * 60 * 1000);
-      const staleFlag = stale ? ' [STALE]' : '';
+      const stale = isHeartbeatStale(hb.last_heartbeat, hb.loop_interval);
       const label = hb.display_name ? `${hb.display_name} (${hb.agent})` : hb.agent;
-      console.log(`${label} (${hb.org}) — ${hb.status}${staleFlag} — last seen ${hb.last_heartbeat}`);
+      // Provenance: `status` is authored by the AGENT; the stale flag is emitted by
+      // the MONITOR. Keep them clearly separated — the flag goes after "last seen"
+      // and is explicitly namespaced — so a system-emitted STALE can never be read
+      // as agent-authored status text (that misattribution is what this fixes).
+      const staleFlag = stale ? '  ⟨monitor: heartbeat STALE⟩' : '';
+      console.log(`${label} (${hb.org}) — ${hb.status} — last seen ${hb.last_heartbeat}${staleFlag}`);
       if (hb.current_task) console.log(`  task: ${hb.current_task}`);
     }
   });
