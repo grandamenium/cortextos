@@ -325,6 +325,22 @@ export class CronScheduler {
     }));
   }
 
+  /**
+   * Return the schedule string the RUNNING scheduler currently holds for each cron.
+   *
+   * This is the IN-MEMORY truth — what the scheduler will actually fire on — which can
+   * differ from crons.json on disk if a hand-edit never triggered a reload. Nothing else
+   * exposes this: the CLI's list-crons recomputes from disk and never queries the daemon,
+   * so a never-reloaded edit is invisible to every tool. This is the observability the
+   * config↔live drift check needs.
+   */
+  getLiveSchedules(): Array<{ name: string; schedule: string }> {
+    return [...this.scheduled.values()].map(sc => ({
+      name: sc.definition.name,
+      schedule: sc.definition.schedule,
+    }));
+  }
+
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------

@@ -22,6 +22,10 @@ type LogFn = (msg: string) => void;
 /**
  * Manages all agents in a cortextOS instance.
  */
+import { reconcileAgentCrons, reconcileLiveSchedule } from '../utils/cron-registration.js';
+import { logEvent } from '../bus/event.js';
+import { readCrons } from '../bus/crons.js';
+
 export class AgentManager {
   private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller; telegramRejectCount?: number; telegramLastRejectAlertAt?: number }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
@@ -111,6 +115,95 @@ export class AgentManager {
   /**
    * Discover and start all enabled agents.
    */
+  /**
+   * Reconcile every agent's DECLARED crons (config.json) against its LIVE registration
+   * (crons.json), and shout about any asymmetry.
+   *
+   * WHY THIS LIVES IN THE DAEMON AND NOT IN A CRON:
+   * A cron that watches crons can die the same silent death it exists to catch, and then
+   * everything looks healthy forever — a monitor monitoring monitors, monitored by nothing.
+   * The daemon is the correct floor because ITS OWN DEATH IS ALREADY LOUD: if the daemon is
+   * gone, no cron fires at all and the agent goes visibly STALE. It cannot fail quietly
+   * while the thing it watches keeps running. Put the guard where its own failure is
+   * impossible to miss.
+   */
+  /**
+   * Emit a cron drift finding to the Activity feed — the surface humans read.
+   * console.warn goes to daemon stderr, a void; a guard that fires where nobody looks has
+   * not fired. An event write must never break the check that produced it, so it is wrapped.
+   */
+  private emitCronDrift(agent: string, cron: string, kind: string, detail: string, eventName: string): void {
+    try {
+      logEvent(
+        resolvePaths(agent, this.instanceId, this.resolveAgentOrg(agent)),
+        agent,
+        this.resolveAgentOrg(agent),
+        'error',
+        eventName,
+        'warning',
+        { cron, kind, detail },
+      );
+    } catch (err) {
+      console.error(`[cron-drift] could not emit ${eventName} for ${agent}/${cron}:`, err);
+    }
+  }
+
+  checkCronRegistration(): void {
+    let examinedTotal = 0;
+    const allDrift: string[] = [];
+
+    for (const { name, config } of this.discoverAgents()) {
+      const declared = (config?.crons ?? []).map(c => ({ name: c.name }));
+      let registered: Array<{ name: string; schedule?: string; enabled?: boolean }> = [];
+      try {
+        registered = readCrons(name).map(c => ({ name: c.name, schedule: c.schedule, enabled: c.enabled }));
+      } catch {
+        // Unreadable live crons for this agent — that is itself worth saying, not skipping.
+        console.warn(`[cron-registration] ${name}: live crons.json unreadable — cannot verify its crons exist`);
+        continue;
+      }
+      // Surface 1+2: config.json (declared) vs crons.json (registered) — two FILES.
+      const fileCheck = reconcileAgentCrons(name, declared, registered);
+      examinedTotal += fileCheck.examined;
+      for (const d of fileCheck.drift) {
+        allDrift.push(`${d.agent}/${d.cron}: ${d.kind} — ${d.detail}`);
+        this.emitCronDrift(name, d.cron, d.kind, d.detail, 'cron_registration_drift');
+      }
+
+      // ★ Surface 3: crons.json (disk) vs the RUNNING scheduler (memory).
+      // A cron that agrees across both FILES can still fire on a stale schedule if the file
+      // was hand-edited and the daemon never reloaded — the scheduler holds its own copy and
+      // nothing on disk reflects it. This is the MOST COMMON drift and it is invisible to the
+      // file-vs-file check above and to every CLI. The scheduler is in THIS process, so the
+      // comparison is in-memory and free.
+      const scheduler = this.cronSchedulers.get(name);
+      if (scheduler) {
+        const onDisk = registered.map(c => ({ name: c.name, schedule: (c as { schedule?: string }).schedule ?? '', enabled: c.enabled }));
+        const live = scheduler.getLiveSchedules();
+        const liveCheck = reconcileLiveSchedule(name, onDisk, live);
+        examinedTotal += liveCheck.examined;
+        for (const d of liveCheck.drift) {
+          allDrift.push(`${d.agent}/${d.cron}: ${d.kind} — ${d.detail}`);
+          this.emitCronDrift(name, d.cron, d.kind, d.detail, 'cron_scheduler_stale');
+        }
+      }
+    }
+
+    // ZERO COVERAGE IS NOT AN ALL-CLEAR. If we compared nothing, say so — an empty drift
+    // list over an empty comparison is a tick over nothing, which is the failure mode this
+    // whole check exists to prevent.
+    if (examinedTotal === 0) {
+      console.warn('[cron-registration] examined 0 crons — CANNOT confirm any cron is registered');
+      return;
+    }
+    if (allDrift.length === 0) {
+      console.log(`[cron-registration] ${examinedTotal} cron(s) reconciled, no drift`);
+      return;
+    }
+    console.warn(`[cron-registration] ★ DRIFT — ${allDrift.length} of ${examinedTotal} cron(s) disagree between config.json and crons.json:`);
+    for (const line of allDrift) console.warn(`[cron-registration]   ${line}`);
+  }
+
   async discoverAndStart(): Promise<void> {
     const agentDirs = this.discoverAgents();
 

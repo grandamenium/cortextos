@@ -1,5 +1,7 @@
 import { AgentManager } from './agent-manager.js';
-import { IPCServer } from './ipc-server.js';
+import { IPCServer, computeFleetHealth } from './ipc-server.js';
+import { logEvent } from '../bus/event.js';
+import { resolvePaths } from '../utils/paths.js';
 import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
@@ -229,6 +231,56 @@ class Daemon {
     this.ctxRoot = join(homedir(), '.cortextos', this.instanceId);
   }
 
+  private cronRegistrationTimer?: NodeJS.Timeout;
+
+  /**
+   * Push cron-health warnings to the Activity feed.
+   *
+   * ★ WHY THIS EXISTS — DETECTION IS NOT RENDERING.
+   * The missed-slot rule (cron-health.ts) correctly turns a dead cron into a 'warning'.
+   * But that state only travelled to /api/workflows/health — a dashboard PAGE. That is a
+   * PULL surface: it tells a human who goes and looks. Nobody goes and looks at a health
+   * page to discover that the thing which would have told them is dead. We would have fixed
+   * the DETECTION and kept the BLINDNESS.
+   *
+   * A guard is measured by WHERE IT RENDERS, not that it fires. So a cron that missed its
+   * slot is pushed into the Activity feed — the same surface every other fleet event lands
+   * on, the one humans already read — instead of waiting to be discovered.
+   */
+  private pushCronHealthWarnings(): void {
+    let result;
+    try {
+      result = computeFleetHealth();
+    } catch (err) {
+      console.error('[cron-health] could not compute fleet health:', err);
+      return;
+    }
+    const unhealthy = result.rows.filter(c => c.state !== 'healthy');
+
+    // Zero coverage is not an all-clear: examining no crons and reporting none unhealthy is
+    // a tick over nothing — the exact failure this whole change exists to remove.
+    if (result.rows.length === 0) {
+      console.warn('[cron-health] examined 0 crons — CANNOT confirm any cron is firing');
+      return;
+    }
+    for (const c of unhealthy) {
+      try {
+        logEvent(
+          resolvePaths(c.agent, this.instanceId, c.org),
+          c.agent,
+          c.org,
+          'error',
+          'cron_unhealthy',
+          c.state === 'healthy' ? 'info' : 'warning',
+          { cron: c.cronName, state: c.state, reason: c.reason },
+        );
+      } catch (err) {
+        console.error(`[cron-health] could not emit event for ${c.agent}/${c.cronName}:`, err);
+      }
+    }
+    console.log(`[cron-health] ${result.rows.length} cron(s) checked, ${unhealthy.length} not healthy`);
+  }
+
   async start(): Promise<void> {
     // Force restrictive default permissions for everything the daemon writes:
     // 0700 dirs, 0600 files. Belt-and-suspenders for explicit chmod calls.
@@ -265,6 +317,28 @@ class Daemon {
 
     // Discover and start agents
     await this.agentManager.discoverAndStart();
+
+    // A cron that is NOT REGISTERED has no fire-gap to measure: it is not late, it is
+    // ABSENT, and every fire-based health check reports nothing wrong forever. Verify at
+    // startup and hourly that what config.json DECLARES is what crons.json actually holds.
+    // Wrapped: A MONITORING CHECK MUST NEVER BE ABLE TO CRASH THE PROCESS IT MONITORS.
+    // The hourly timer below is already guarded; startup must be too, or the guard can take
+    // down the daemon whose liveness is the floor everything else stands on.
+    try {
+      this.agentManager.checkCronRegistration();
+      this.pushCronHealthWarnings();
+    } catch (err) {
+      console.error('[cron-guard] startup check threw (daemon continues):', err);
+    }
+    this.cronRegistrationTimer = setInterval(() => {
+      try {
+        this.agentManager?.checkCronRegistration();
+        this.pushCronHealthWarnings();
+      } catch (err) {
+        console.error('[cron-guard] check threw:', err);
+      }
+    }, 60 * 60_000);
+    this.cronRegistrationTimer.unref?.();
 
     console.log(`[daemon] Running (pid: ${process.pid})`);
 

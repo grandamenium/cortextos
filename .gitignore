@@ -67,3 +67,6 @@ WINDOWS_INSTALL_REPORT.md
 *INSTALL_REPORT.md
 /PHASE*-REPORT.md
 docs/phase-reports/
+
+# also ignore a symlink/file named node_modules (the dir pattern node_modules/ does NOT — that let PR #778 commit a build-machine symlink)
+node_modules
