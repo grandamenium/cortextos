@@ -46,6 +46,9 @@ tests/playwright/dashboard-ui.spec.ts
 # Local ops docs (personal, not for public repo)
 docs/
 
+# Droplet setup scripts contain hardcoded creds — keep local only
+scripts/setup-droplet-*.sh
+
 # Internal developer/planning notes (not for public repo)
 KNOWN-ISSUES.md
 WINDOWS-IMPLEMENTATION-PLAN.md
