@@ -223,3 +223,98 @@ describe('TelegramPoller — offset-after-handler', () => {
     }
   });
 });
+
+/**
+ * A getUpdates stub scripted by a queue of outcomes. Each outcome is either
+ * `{ throw: 'message' }` (getUpdates rejects with that Error) or
+ * `{ updates: [...] }` (getUpdates resolves — a clean poll). Once the queue
+ * is exhausted it resolves empty forever, so tests must ensure the loop
+ * self-dies before that point.
+ */
+function makeScriptedApi(
+  outcomes: Array<{ throw: string } | { updates: TelegramUpdate[] }>,
+): { api: TelegramAPI; callCount: () => number } {
+  let i = 0;
+  const api = {
+    getUpdates: vi.fn(async () => {
+      const outcome = outcomes[i++];
+      if (!outcome) return { result: [] };
+      if ('throw' in outcome) throw new Error(outcome.throw);
+      return { result: outcome.updates };
+    }),
+  } as unknown as TelegramAPI;
+  return { api, callCount: () => (api.getUpdates as any).mock.calls.length };
+}
+
+describe('TelegramPoller — self-heal on network failure (2026-07-22 regression)', () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), 'cortextos-poller-net-'));
+    // Silence the intentional console.error('[telegram-poller] Poll error') spam.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  const NET_ERR = 'Telegram API request failed: TypeError: fetch failed (ECONNRESET)';
+
+  it('self-dies after 5 consecutive network failures so the supervisor can rebuild the connection', async () => {
+    const { api, callCount } = makeScriptedApi(Array(5).fill({ throw: NET_ERR }));
+    const poller = new TelegramPoller(api, stateDir, 1);
+
+    await poller.start();
+
+    expect(poller.lastExitReason).toBe('network-self-die');
+    // Exactly the threshold — not one more, not one fewer.
+    expect(callCount()).toBe(5);
+  });
+
+  it('does NOT self-die on a network blip shorter than the threshold — a clean poll resets the budget', async () => {
+    // 4 failures, one clean poll (resets), then 5 failures → self-die on the 5th.
+    const { api, callCount } = makeScriptedApi([
+      { throw: NET_ERR }, { throw: NET_ERR }, { throw: NET_ERR }, { throw: NET_ERR },
+      { updates: [] }, // clean poll — resets consecutiveNetErrors to 0
+      { throw: NET_ERR }, { throw: NET_ERR }, { throw: NET_ERR }, { throw: NET_ERR }, { throw: NET_ERR },
+    ]);
+    const poller = new TelegramPoller(api, stateDir, 1);
+
+    await poller.start();
+
+    expect(poller.lastExitReason).toBe('network-self-die');
+    expect(callCount()).toBe(10); // proves the 4-failure run did not trip self-die
+  });
+
+  it('still self-dies immediately with conflict-self-die on a 409 Conflict (unchanged)', async () => {
+    const { api, callCount } = makeScriptedApi([
+      { throw: 'Telegram API error: Conflict: terminated by other getUpdates request' },
+    ]);
+    const poller = new TelegramPoller(api, stateDir, 1);
+
+    await poller.start();
+
+    expect(poller.lastExitReason).toBe('conflict-self-die');
+    expect(callCount()).toBe(1);
+  });
+
+  it('does NOT count non-network errors toward the network budget', async () => {
+    // A non-network application error should log-and-continue without ever
+    // reaching network-self-die. Interleave 6 app errors with a stop() so the
+    // loop terminates deterministically instead of running forever.
+    const appErr = 'Telegram API error: Bad Request: message text is empty';
+    const { api } = makeScriptedApi(Array(6).fill({ throw: appErr }));
+    const poller = new TelegramPoller(api, stateDir, 1);
+
+    // Stop the loop after a short window; if non-network errors wrongly
+    // triggered self-die we'd instead see lastExitReason === 'network-self-die'.
+    const runP = poller.start();
+    await new Promise((r) => setTimeout(r, 50));
+    poller.stop();
+    await runP;
+
+    expect(poller.lastExitReason).toBe('stopped-externally');
+  });
+});

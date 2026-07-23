@@ -660,6 +660,20 @@ export class AgentManager {
           const runDuration = Date.now() - runStart;
           if (poller.lastExitReason === 'stopped-externally') return;
           if (!this.agents.has(name)) return;
+
+          // Network-self-die: the poller bailed after a run of network-layer
+          // failures so a fresh connection can be established. This is NOT a
+          // Conflict and must NOT count toward the 5-min give-up budget — a
+          // network outage can outlast 5min, and giving up would recreate the
+          // "Telegram stuck for days" failure. Sleep 30s to let the wedged
+          // idle socket close, then retry indefinitely.
+          if (poller.lastExitReason === 'network-self-die') {
+            consecutiveConflictStart = null;
+            log(`Telegram poller for ${name} exited (network-self-die: persistent fetch/network failure). Sleeping 30s to drop the wedged connection, then restarting.`);
+            await new Promise(r => setTimeout(r, 30_000));
+            continue;
+          }
+
           // A poll session that ran for >LONG_RUN_RESET_MS proves the
           // Conflict lock is no longer chronic — reset the retry budget.
           if (runDuration > LONG_RUN_RESET_MS) consecutiveConflictStart = null;

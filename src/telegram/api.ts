@@ -323,7 +323,13 @@ export class TelegramAPI {
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
         throw new Error(`Telegram API request timed out after 60s: sendPhoto`);
       }
-      throw new Error(`Telegram API request failed: ${err}`);
+      // Preserve the underlying reason: undici puts the real problem
+      // (ECONNRESET / ENOTFOUND / socket errors) on err.cause, which `${err}`
+      // drops — the 2026-07-22 outage logged 2 days of bare "fetch failed"
+      // with no diagnosable code. Surface the code and chain via { cause }.
+      const cause = (err as any)?.cause;
+      const code = cause?.code ? ` (${cause.code})` : '';
+      throw new Error(`Telegram API request failed: ${err}${code}`, { cause: err });
     }
   }
 
@@ -374,7 +380,13 @@ export class TelegramAPI {
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
         throw new Error(`Telegram API request timed out after 60s: sendDocument`);
       }
-      throw new Error(`Telegram API request failed: ${err}`);
+      // Preserve the underlying reason: undici puts the real problem
+      // (ECONNRESET / ENOTFOUND / socket errors) on err.cause, which `${err}`
+      // drops — the 2026-07-22 outage logged 2 days of bare "fetch failed"
+      // with no diagnosable code. Surface the code and chain via { cause }.
+      const cause = (err as any)?.cause;
+      const code = cause?.code ? ` (${cause.code})` : '';
+      throw new Error(`Telegram API request failed: ${err}${code}`, { cause: err });
     }
   }
 
@@ -651,7 +663,13 @@ export class TelegramAPI {
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
         throw new Error(`Telegram API request timed out after 15s: ${method}`);
       }
-      throw new Error(`Telegram API request failed: ${err}`);
+      // Preserve the underlying reason: undici puts the real problem
+      // (ECONNRESET / ENOTFOUND / socket errors) on err.cause, which `${err}`
+      // drops — the 2026-07-22 outage logged 2 days of bare "fetch failed"
+      // with no diagnosable code. Surface the code and chain via { cause }.
+      const cause = (err as any)?.cause;
+      const code = cause?.code ? ` (${cause.code})` : '';
+      throw new Error(`Telegram API request failed: ${err}${code}`, { cause: err });
     }
   }
 

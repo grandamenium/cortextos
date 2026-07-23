@@ -30,9 +30,32 @@ export class TelegramPoller {
    *     holder owns the lock, e.g. a not-yet-released connection after a
    *     daemon crash) — the loop exits so the supervisor can sleep 30s and
    *     retake the lock instead of hot-looping on Conflict.
+   *   - 'network-self-die': a run of consecutive network-layer failures
+   *     (undici "fetch failed", DNS, socket resets, 15s timeouts). Looping in
+   *     place reuses a wedged keep-alive socket forever (the 2026-07-22
+   *     "Telegram stuck for 2 days" incident), so the loop exits and the
+   *     supervisor sleeps ~30s — long enough for the idle socket to close —
+   *     then restarts with a fresh connection. Retried indefinitely (an
+   *     outage must never become permanent silence), unlike Conflict.
    *   - '' : loop still running / never exited.
    */
   lastExitReason: string = '';
+
+  /**
+   * Consecutive network-layer failures seen since the last clean poll. Reset
+   * to 0 on any successful pollOnce. When it reaches
+   * NETWORK_SELF_DIE_THRESHOLD the loop exits with 'network-self-die' so the
+   * supervisor can rebuild the connection (see lastExitReason).
+   */
+  private consecutiveNetErrors: number = 0;
+
+  /**
+   * How many consecutive network failures to tolerate before self-dying. At
+   * the default 1s poll interval this is ~5s of hard failure before restart —
+   * long enough to ride out a one-off blip, short enough that a wedged socket
+   * pool cannot strand inbound Telegram for hours.
+   */
+  private static readonly NETWORK_SELF_DIE_THRESHOLD = 5;
 
   /**
    * @param api Telegram API client scoped to a single bot token.
@@ -88,9 +111,13 @@ export class TelegramPoller {
   async start(): Promise<void> {
     this.running = true;
     this.lastExitReason = '';
+    this.consecutiveNetErrors = 0;
     while (this.running) {
       try {
         await this.pollOnce();
+        // A clean poll proves the network path is healthy — reset the budget
+        // so an earlier transient blip cannot accumulate toward self-die.
+        this.consecutiveNetErrors = 0;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // A 409 Conflict means another getUpdates connection holds the lock
@@ -102,11 +129,38 @@ export class TelegramPoller {
           this.running = false;
           return;
         }
-        // Other errors are transient — log and continue polling.
         console.error('[telegram-poller] Poll error:', err);
+        // Persistent network-layer failures do NOT self-heal by looping in
+        // place — a wedged keep-alive socket in the process-global fetch pool
+        // keeps throwing until the connection is torn down (the 2026-07-22
+        // 2-day outage). After NETWORK_SELF_DIE_THRESHOLD consecutive network
+        // failures, exit so the supervisor sleeps ~30s (idle socket closes)
+        // and restarts on a fresh connection. Application errors (bad token,
+        // malformed request) restart won't fix, so they don't count here.
+        if (this.isNetworkError(msg)) {
+          if (++this.consecutiveNetErrors >= TelegramPoller.NETWORK_SELF_DIE_THRESHOLD) {
+            this.lastExitReason = 'network-self-die';
+            this.running = false;
+            return;
+          }
+        } else {
+          this.consecutiveNetErrors = 0;
+        }
       }
       await sleep(this.pollInterval);
     }
+  }
+
+  /**
+   * Classify an error message as a transient network-layer failure that a
+   * fresh connection would likely clear — as opposed to a Telegram
+   * application error (bad token, malformed request) that a restart won't
+   * fix. Matches the two wrappers emitted by TelegramAPI.post ("request
+   * failed", "request timed out") plus raw socket/DNS codes in case they
+   * ever surface unwrapped.
+   */
+  private isNetworkError(msg: string): boolean {
+    return /request failed|request timed out|fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|socket hang up|other side closed|UND_ERR/i.test(msg);
   }
 
   /**
