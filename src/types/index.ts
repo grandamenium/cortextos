@@ -202,6 +202,17 @@ export interface AgentConfig {
    */
   telegram_polling?: boolean;
   /**
+   * Per-agent MCP scoping. When `strict` is true and `config_file` is set,
+   * the spawner passes `--strict-mcp-config` + `--mcp-config <config_file>`,
+   * ignoring all user-scope MCP configurations. Cuts session-start tool-name
+   * enumeration for agents that only need a subset of the fleet's MCP servers.
+   * config_file path is resolved relative to the agent's cwd.
+   */
+  mcp?: {
+    strict?: boolean;
+    config_file?: string;
+  };
+  /**
    * Documentation-only list of skill names the agent uses. Actual filtering
    * is done via `skillOverrides` in the agent's .claude/settings.json (each
    * non-allowlisted skill set to "off"). This field is a source-of-truth

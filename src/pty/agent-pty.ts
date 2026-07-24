@@ -234,6 +234,11 @@ export class AgentPTY {
       args.push('--model', this.config.model);
     }
 
+    if (this.config.mcp?.strict && this.config.mcp?.config_file) {
+      args.push('--strict-mcp-config');
+      args.push('--mcp-config', this.config.mcp.config_file);
+    }
+
     // Local override pattern (feat #20): concatenate {agentDir}/local/*.md files
     // and append as system prompt. The local/ dir is gitignored so users can customize
     // agent behavior without merge conflicts on framework updates.
