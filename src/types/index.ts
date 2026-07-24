@@ -201,6 +201,14 @@ export interface AgentConfig {
    * poller will be skipped regardless.
    */
   telegram_polling?: boolean;
+  /**
+   * Documentation-only list of skill names the agent uses. Actual filtering
+   * is done via `skillOverrides` in the agent's .claude/settings.json (each
+   * non-allowlisted skill set to "off"). This field is a source-of-truth
+   * pointer so operators can regenerate the overrides when the fleet's skill
+   * inventory changes.
+   */
+  skill_allowlist?: string[];
 }
 
 export interface CronEntry {
