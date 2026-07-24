@@ -308,6 +308,40 @@ class Daemon {
     process.on('SIGINT', handleSignal);
     process.on('SIGTERM', handleSignal);
 
+    // LOCAL PATCH (Ops Command A0, 2026-07-22) - re-apply on upstream sync.
+    // Self-terminate at the next machine-local window boundary. The hard
+    // deadline starts before graceful teardown so a wedged PTY cannot keep the
+    // daemon alive indefinitely.
+    const parseEnvInt = (name: string, fallback: number, min: number, max: number): number => {
+      const value = Number.parseInt(process.env[name] ?? '', 10);
+      return Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+    };
+    const windowStopHour = parseEnvInt('CTX_WINDOW_STOP_HH', 9, 0, 23);
+    const windowStopMinute = parseEnvInt('CTX_WINDOW_STOP_MM', 0, 0, 59);
+    const windowStopDeadlineMs = parseEnvInt('CTX_WINDOW_STOP_DEADLINE_MS', 120_000, 1, 2_147_483_647);
+    const boundaryLabel = `${String(windowStopHour).padStart(2, '0')}:${String(windowStopMinute).padStart(2, '0')}`;
+    const now = new Date();
+    const nextBoundary = new Date(now);
+    nextBoundary.setHours(windowStopHour, windowStopMinute, 0, 0);
+    if (nextBoundary.getTime() <= now.getTime()) {
+      nextBoundary.setDate(nextBoundary.getDate() + 1);
+    }
+    const msUntilBoundary = nextBoundary.getTime() - now.getTime();
+    const initiateWindowShutdown = () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`[window] boundary ${boundaryLabel} reached — self-terminating`);
+      setTimeout(() => {
+        console.error(`[window] graceful teardown exceeded ${windowStopDeadlineMs / 1000}s — forcing exit`);
+        process.exit(0);
+      }, windowStopDeadlineMs);
+      shutdown().catch((err) => {
+        console.error('[daemon] Fatal window shutdown error:', err);
+        process.exit(1);
+      });
+    };
+    setTimeout(initiateWindowShutdown, msUntilBoundary);
+
     // Global fatal-error handlers. uncaughtException exits for PM2 respawn.
     // unhandledRejection logs + records but does not exit (rejected promises
     // shouldn't be fatal by default; matches Node 15+ behavior without

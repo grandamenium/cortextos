@@ -915,6 +915,18 @@ export class AgentManager {
   async stopAll(): Promise<void> {
     const names = [...this.agents.keys()];
 
+    // LOCAL PATCH (Ops Command A0, 2026-07-22) - re-apply on upstream sync.
+    // Stop ingress and scheduled work before waiting on any PTY teardown.
+    for (const [, entry] of this.agents) {
+      if (entry.poller) entry.poller.stop();
+      if (entry.activityPoller) entry.activityPoller.stop();
+      entry.checker.stop();
+    }
+    for (const scheduler of this.cronSchedulers.values()) {
+      scheduler.stop();
+    }
+    this.cronSchedulers.clear();
+
     for (const name of names) {
       try {
         const stateDir = join(this.ctxRoot, 'state', name);
@@ -925,6 +937,15 @@ export class AgentManager {
         // gets a false crash alarm (the bug we're fixing), best case they get
         // the correct daemon-stop notification.
         console.error(`[agent-manager] Failed to write .daemon-stop marker for ${name}: ${err}`);
+      }
+    }
+
+    const workerNames = [...this.workers.keys()];
+    for (const name of workerNames) {
+      try {
+        await this.terminateWorker(name);
+      } catch (err) {
+        console.error(`[agent-manager] Error terminating worker ${name}:`, err);
       }
     }
 
