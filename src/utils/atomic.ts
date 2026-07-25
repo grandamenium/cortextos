@@ -82,12 +82,16 @@ export function atomicAppendLineSync(filePath: string, line: string): void {
     }
   }
 
+  if (!acquired) {
+    throw new Error(
+      `atomicAppendLineSync: could not acquire lock on ${lockPath} after ${MAX_RETRIES} retries (${MAX_RETRIES * RETRY_INTERVAL_MS}ms)`
+    );
+  }
+
   try {
     appendFileSync(filePath, line + '\n', 'utf-8');
   } finally {
-    if (acquired) {
-      try { unlinkSync(lockPath); } catch { /* ignore */ }
-    }
+    try { unlinkSync(lockPath); } catch { /* ignore */ }
   }
 }
 

@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Known Failure Mode — cmdcron-phase2 Routine Migration (2026-07-24)
+
+**Incident**: Fleet-wide cron outage 2026-07-24T13:47 UTC → 2026-07-25T07:00 UTC (~17h).
+
+**Root cause**: A migration test renamed every agent's `crons.json` to
+`crons.json.disabled-for-routine-test`, expecting the `routine` agent to take
+over all fleet schedules. The `routine` agent was only provisioned with its own
+heartbeat (1 cron); the 22 fleet schedules were never loaded into it. Result:
+the daemon loaded no crons for any of the 8 affected agents on the next boot.
+
+**Origin**: Unknown — no commit was found adding the rename step to any script.
+Flag for whoever owns the routine-migration code path.
+
+**Recovery**: Restored each agent's `crons.json` from the
+`.disabled-for-routine-test` backup. Daemon picked up the files dynamically
+without requiring agent restarts. Morning-review and all critical daily crons
+confirmed with future next-fire times before the 09:00 MT deadline.
+
+**Prevention rule**: Do NOT disable or rename per-agent `crons.json` files
+during a routine-migration test until the `routine` scheduler demonstrably and
+verifiably fires the complete fleet schedule list (all 22 crons) under the new
+path. The old path must remain active as a fallback until verification is
+complete. Use a canary agent (not the full fleet) for initial testing.
+
 ### Hook Framework — Loop Detection (B1)
 
 - **`hook-loop-detector`**: new PreToolUse hook that detects and blocks repeated Claude tool-call loops. Two patterns are detected: (a) the same tool invoked with identical arguments 15+ times within the last 30 calls, and (b) two tools ping-ponging (24+ alternations within a 12-call dominant-pair window). Blocked calls are NOT recorded into history, so the wedge cannot self-perpetuate. History is time-windowed (60s) so a stale prior-session tail does not block the first call of a new session. After 30 minutes of continuous block, exactly one tool call is allowed through ("emergency escape") so the agent can issue a Telegram alert before re-entering the blocked window.

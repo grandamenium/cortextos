@@ -1207,17 +1207,33 @@ busCommand
     // Guard 2 — stripped $ (Bug A, confirmed Jun 3 – Jul 19 2026):
     // A double-quoted shell body lets the shell strip $1, $msg etc before the CLI
     // sees them. This guard cannot catch that (the damage happens in the shell before
-    // argv reaches us) but exits when the delivered body looks like a $ was eaten:
-    // a token boundary followed by .,NNN or similar at a word start.
-    // Exits rather than warns so corrupted messages never reach Jennifer silently.
-    // Use a heredoc to pass messages with $ amounts — works with apostrophes too:
+    // argv reaches us) but exits when the delivered body looks like a $ was eaten.
+    //
+    // Two patterns indicate a stripped dollar sign:
+    //   Pattern A — leading decimal: `.,NNN` at a word start (e.g. "$1,234" → ",234";
+    //               "$2.87" where $2 is stripped → ".87").
+    //   Pattern B — positional param strip: bash expands `$1`–`$9` inside double-quotes.
+    //               `"$283.87"` → `$2`="" + `"83.87"`, so the CLI sees `83.87`.
+    //               Detected as: digits{1–3} + `.` + exactly two digits at a word
+    //               boundary, adjacent to a financial keyword (rent, payment, balance,
+    //               amount, fee, deposit, charge, owe, paid, total, cost, due, refund).
+    //               Requiring a keyword prevents false positives on "2.30 PM" or "3.14".
+    //
+    // Exits rather than warns so corrupted messages never reach tenants silently.
+    // Use a heredoc — works with $ amounts AND apostrophes:
     //   cortextos bus send-telegram <chat-id> <<'EOF'
     //   Message with $1,500 and it's fine
     //   EOF
-    if (/(^|[\s(\[])[.,][0-9]{2,3}\b/.test(message)) {
+    const STRIPPED_DOLLAR_A = /(^|[\s(\[])[.,][0-9]{2,3}\b/;
+    const STRIPPED_DOLLAR_B = /\b(?:rent|payment|balance|amount|fee|deposit|charge|owe[sd]?|paid|total|cost|due|refund|invoice|bill|transfer)\b[\s\S]{0,80}?(?:^|[\s(\[])[0-9]{1,3}\.[0-9]{2}(?:[^0-9]|$)/im;
+    if (STRIPPED_DOLLAR_A.test(message) || STRIPPED_DOLLAR_B.test(message)) {
+      const patternLabel = STRIPPED_DOLLAR_A.test(message)
+        ? 'pattern .,NNN (leading decimal — dollar sign stripped)'
+        : 'pattern NNN.NN after financial keyword (positional param $N stripped by bash)';
       console.error(
-        `Error: send-telegram: message body may have a stripped dollar sign (pattern .,NNN detected).\n` +
+        `Error: send-telegram: message body may have a stripped dollar sign (${patternLabel}).\n` +
         `Dollar signs are stripped when the message is double-quoted in bash.\n` +
+        `Example: "Your rent is $283.87" → bash strips $2 → CLI sees "Your rent is 83.87".\n` +
         `\n` +
         `CORRECT patterns (both handle $ amounts and apostrophes):\n` +
         `  Heredoc (recommended):\n` +
