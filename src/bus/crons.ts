@@ -14,7 +14,7 @@
  * Write always goes through atomicWriteSync (mkdir + tmp rename).
  */
 
-import { existsSync, readFileSync, mkdirSync, readdirSync, copyFileSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, mkdirSync, readdirSync, copyFileSync, unlinkSync, statSync } from 'fs';
 import { join, dirname, basename } from 'path';
 import type { CronDefinition, CronExecutionLogEntry } from '../types/index.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME, cronExecutionLogPathFor } from './crons-schema.js';
@@ -150,8 +150,18 @@ function tryRescueFromSuspendedBackup(agentName: string, filePath: string): Cron
   const base = basename(filePath);
   const candidates = entries
     .filter(f => f.startsWith(base + '.paused-') || f.startsWith(base + '.disabled-'))
-    .sort((a, b) => b.localeCompare(a)) // newest-first by date/name suffix
-    .map(f => join(dir, f));
+    .map(f => join(dir, f))
+    .sort((a, b) => {
+      // Primary: newest mtime first — filename suffix is unreliable across mixed
+      // prefixes (.paused-YYYY-MM-DD vs .disabled-for-reason).
+      // Tiebreaker: lexicographic descending so equal-mtime files (e.g. test fixtures
+      // created in the same millisecond) still get a deterministic "newest" winner.
+      try {
+        const mtimeDiff = statSync(b).mtimeMs - statSync(a).mtimeMs;
+        if (mtimeDiff !== 0) return mtimeDiff;
+      } catch { /* fall through to tiebreaker */ }
+      return basename(b).localeCompare(basename(a));
+    });
 
   // No backups at all → legitimately empty state; caller returns empty non-corrupt.
   if (candidates.length === 0) return null;
@@ -366,6 +376,20 @@ function pauseLockFilePath(agentName: string): string {
   return join(ctxRoot, CRONS_DIRECTORY, agentName, CRONS_PAUSE_LOCK_FILENAME);
 }
 
+/**
+ * Fleet-wide lock directory for pauseAgentCrons.
+ * All agents share this single lock so the quota check + lock-write
+ * are atomic across parallel callers — a per-agent lock is insufficient
+ * because two parallel pauses on DIFFERENT agents can both pass the check
+ * before either writes its lock file (TOCTOU).
+ */
+function fleetCronsPauseDir(): string {
+  const ctxRoot = process.env['CTX_ROOT'] ?? process.cwd();
+  const dir = join(ctxRoot, CRONS_DIRECTORY);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 function findPausedAgentNames(): string[] {
   const ctxRoot = process.env['CTX_ROOT'] ?? process.cwd();
   const stateDir = join(ctxRoot, CRONS_DIRECTORY);
@@ -394,35 +418,40 @@ export function pauseAgentCrons(
   agentName: string,
   opts: { reason: string; pausedBy?: string },
 ): { paused: number } {
-  const alreadyPaused = findPausedAgentNames().filter(a => a !== agentName);
-  if (alreadyPaused.length > 0) {
-    throw new Error(
-      `Cron pause quota exceeded: "${alreadyPaused[0]}" is already paused. ` +
-      `Resume it first with:\n  cortextos bus resume-agent-crons ${alreadyPaused[0]}`
-    );
-  }
-
   let pausedCount = 0;
-  withFileLockSync(lockDirFor(agentName), () => {
-    const current = readCrons(agentName);
-    const updated = current.map(c => {
-      if (c.enabled !== false) {
-        pausedCount++;
-        return { ...c, enabled: false };
-      }
-      return c;
-    });
-    writeCrons(agentName, updated);
-  });
 
-  const lock: CronsPauseLock = {
-    agent: agentName,
-    paused_at: new Date().toISOString(),
-    paused_by: opts.pausedBy ?? process.env['CTX_AGENT_NAME'] ?? 'system',
-    reason: opts.reason,
-    cron_count: pausedCount,
-  };
-  atomicWriteSync(pauseLockFilePath(agentName), JSON.stringify(lock, null, 2));
+  // Fleet-wide lock: quota check + pause-lock write are atomic so two parallel
+  // calls on DIFFERENT agents cannot both pass the max-1 check (TOCTOU fix).
+  withFileLockSync(fleetCronsPauseDir(), () => {
+    const alreadyPaused = findPausedAgentNames().filter(a => a !== agentName);
+    if (alreadyPaused.length > 0) {
+      throw new Error(
+        `Cron pause quota exceeded: "${alreadyPaused[0]}" is already paused. ` +
+        `Resume it first with:\n  cortextos bus resume-agent-crons ${alreadyPaused[0]}`
+      );
+    }
+
+    withFileLockSync(lockDirFor(agentName), () => {
+      const current = readCrons(agentName);
+      const updated = current.map(c => {
+        if (c.enabled !== false) {
+          pausedCount++;
+          return { ...c, enabled: false };
+        }
+        return c;
+      });
+      writeCrons(agentName, updated);
+    });
+
+    const lock: CronsPauseLock = {
+      agent: agentName,
+      paused_at: new Date().toISOString(),
+      paused_by: opts.pausedBy ?? process.env['CTX_AGENT_NAME'] ?? 'system',
+      reason: opts.reason,
+      cron_count: pausedCount,
+    };
+    atomicWriteSync(pauseLockFilePath(agentName), JSON.stringify(lock, null, 2));
+  });
 
   return { paused: pausedCount };
 }

@@ -114,7 +114,7 @@ describe('readCronsWithStatus — auto-restore from suspended backup', () => {
     const { readCronsWithStatus } = await importCrons();
     const result = readCronsWithStatus('atlas');
 
-    // Should pick -07-25 (later date, sorts last lexicographically, first after reverse)
+    // -07-25 is written second so it has a newer mtime — mtime sort picks it first.
     expect(result.crons[0].name).toBe('new-cron');
   });
 
@@ -164,13 +164,13 @@ describe('readCronsWithStatus — auto-restore from suspended backup', () => {
   it('skips empty/corrupt backups and restores from the next valid one', async () => {
     const dir = agentDir('mixed');
     mkdirSync(dir, { recursive: true });
-    // Newest: parseable but empty
-    writeFileSync(join(dir, 'crons.json.paused-2026-07-25'), makeValidCronsJson([]));
-    // Older: valid with crons
+    // Written first (older mtime): valid with crons.
     writeFileSync(
       join(dir, 'crons.json.paused-2026-07-24'),
       makeValidCronsJson([{ ...SAMPLE_CRON, name: 'older-cron' }]),
     );
+    // Written second (newer mtime): parseable but empty — should be skipped.
+    writeFileSync(join(dir, 'crons.json.paused-2026-07-25'), makeValidCronsJson([]));
 
     const { readCronsWithStatus } = await importCrons();
     const result = readCronsWithStatus('mixed');
