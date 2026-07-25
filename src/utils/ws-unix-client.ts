@@ -51,7 +51,13 @@ export class WsUnixJsonRpcClient {
   async connect(): Promise<void> {
     if (this.socket) return;
 
-    const socket = createConnection(this.socketPath);
+    const tcpMatch = this.socketPath.match(/^ws:\/\/([^:/]+):(\d+)$/);
+    const tcpHost = tcpMatch?.[1] ?? 'localhost';
+    const tcpPort = Number(tcpMatch?.[2] ?? 0);
+    const hostHeader = tcpMatch ? `${tcpHost}:${tcpPort}` : 'localhost';
+    const socket = tcpMatch
+      ? createConnection({ host: tcpHost, port: tcpPort })
+      : createConnection(this.socketPath);
     await new Promise<void>((resolve, reject) => {
       socket.once('connect', resolve);
       socket.once('error', reject);
@@ -60,7 +66,7 @@ export class WsUnixJsonRpcClient {
     const key = randomBytes(16).toString('base64');
     socket.write([
       'GET / HTTP/1.1',
-      'Host: localhost',
+      `Host: ${hostHeader}`,
       'Upgrade: websocket',
       'Connection: Upgrade',
       `Sec-WebSocket-Key: ${key}`,

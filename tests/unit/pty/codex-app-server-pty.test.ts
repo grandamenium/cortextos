@@ -28,6 +28,11 @@ vi.mock('../../../src/utils/atomic.js', () => ({
   atomicWriteSync: atomicWriteSyncMock,
 }));
 
+vi.mock('os', async () => {
+  const actual = await vi.importActual<typeof import('os')>('os');
+  return { ...actual, platform: () => 'linux' };
+});
+
 vi.mock('node-pty', () => ({
   spawn: vi.fn().mockReturnValue({
     pid: 88,

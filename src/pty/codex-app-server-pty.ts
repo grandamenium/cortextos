@@ -1,7 +1,8 @@
 import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, platform } from 'os';
 import { randomBytes } from 'crypto';
+import { createConnection } from 'net';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -416,7 +417,7 @@ export class CodexAppServerPTY {
       }
 
       const spawnFn = this._spawnFn!;
-      const pty = spawnFn('codex', [
+      const pty = spawnFn(this.resolveCodexBinary(), [
         'app-server',
         '--enable', 'goals',
         '--listen', this._socketListenArg,
@@ -429,13 +430,25 @@ export class CodexAppServerPTY {
       });
 
       this._appServerPty = pty;
+      let appServerReady = false;
+      const startupTimer = setTimeout(() => {
+        if (!appServerReady) {
+          reject(new Error(`Timed out waiting for app-server startup: ${this._socketListenArg}`));
+        }
+      }, 15000);
       pty.onData((data) => {
         this._outputBuffer.push(data);
+        if (!appServerReady && data.includes('listening on:')) {
+          appServerReady = true;
+          clearTimeout(startupTimer);
+          resolve();
+        }
         if (data.includes('Error:')) {
           reject(new Error(data.trim()));
         }
       });
       pty.onExit(({ exitCode, signal }) => {
+        clearTimeout(startupTimer);
         if (this._appServerPty !== pty) return;
         this._appServerPty = null;
         this._alive = false;
@@ -443,12 +456,47 @@ export class CodexAppServerPTY {
         this._onExitHandler?.(exitCode, signal);
       });
 
-      this.waitForSocket().then(resolve, reject);
+
     });
   }
 
   private async waitForSocket(timeoutMs = 10000): Promise<void> {
     const start = Date.now();
+
+    if (this._socketPath.startsWith('ws://')) {
+      const endpoint = new URL(this._socketPath);
+      const host = endpoint.hostname;
+      const port = Number(endpoint.port);
+
+      let endpointErrorLogged = false;
+      while (Date.now() - start < timeoutMs) {
+        const ready = await new Promise<boolean>((resolve) => {
+          const socket = createConnection({ host, port });
+          socket.setTimeout(250);
+          socket.once('connect', () => {
+            socket.destroy();
+            resolve(true);
+          });
+          socket.once('error', (err) => {
+            if (!endpointErrorLogged) {
+              endpointErrorLogged = true;
+              this._outputBuffer.push(`[codex-app-server] endpoint probe failed: ${err.message}\n`);
+            }
+            socket.destroy();
+            resolve(false);
+          });
+          socket.once('timeout', () => {
+            socket.destroy();
+            resolve(false);
+          });
+        });
+        if (ready) return;
+        await sleep(100);
+      }
+
+      throw new Error(`Timed out waiting for app-server endpoint: ${this._socketPath}`);
+    }
+
     while (Date.now() - start < timeoutMs) {
       if (existsSync(this._socketPath)) return;
       await sleep(100);
@@ -457,9 +505,32 @@ export class CodexAppServerPTY {
   }
 
   private async connectRpc(): Promise<void> {
-    this._rpc = new WsUnixJsonRpcClient(this._socketPath);
-    this._rpc.onMessage((message) => this.handleRpcMessage(message));
-    await this._rpc.connect();
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      const rpc = new WsUnixJsonRpcClient(this._socketPath);
+      rpc.onMessage((message) => this.handleRpcMessage(message));
+
+      try {
+        await rpc.connect();
+        this._rpc = rpc;
+        return;
+      } catch (err) {
+        lastError = err;
+        rpc.close();
+
+        if (attempt < 10) {
+          this._outputBuffer.push(
+            `[codex-app-server] RPC connection attempt ${attempt} failed; retrying in 1s: ${err}\n`,
+          );
+          await sleep(1000);
+        }
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`Unable to connect to app-server endpoint: ${this._socketPath}`);
   }
 
   private async initializeRpc(): Promise<void> {
@@ -870,7 +941,29 @@ export class CodexAppServerPTY {
     }
   }
 
+  private resolveCodexBinary(): string {
+    if (platform() !== 'win32') return 'codex';
+    // On Windows, npm installs a .cmd shim; node-pty works better with the native
+    // .exe. Resolve it from the npm global prefix (APPDATA\npm\node_modules).
+    // The path inside the package is deterministic; only the prefix is machine-specific.
+    const appData = process.env['APPDATA'];
+    if (appData) {
+      const candidate = join(
+        appData, 'npm', 'node_modules', '@openai', 'codex',
+        'node_modules', '@openai', 'codex-win32-x64',
+        'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe',
+      );
+      if (existsSync(candidate)) return candidate;
+    }
+    return 'codex';
+  }
+
   private resolveSocketPath(): { path: string; listenArg: string; cwd: string } {
+    if (platform() === 'win32') {
+      const port = 20000 + (randomBytes(2).readUInt16BE(0) % 20000);
+      const endpoint = `ws://127.0.0.1:${port}`;
+      return { path: endpoint, listenArg: endpoint, cwd: this._stateDir };
+    }
     const defaultPath = join(this._stateDir, SOCKET_BASENAME);
     if (Buffer.byteLength(defaultPath) < SOCKET_PATH_WARN_BYTES) {
       return { path: defaultPath, listenArg: `unix://./${SOCKET_BASENAME}`, cwd: this._stateDir };
@@ -933,7 +1026,7 @@ export class CodexAppServerPTY {
   private buildEnv(): Record<string, string> {
     const env: Record<string, string> = {};
 
-    const keepVars = ['PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL', 'TMPDIR'];
+    const keepVars = ['PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL', 'TMPDIR', 'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'PROGRAMDATA'];
     for (const key of keepVars) {
       if (process.env[key]) env[key] = process.env[key]!;
     }
