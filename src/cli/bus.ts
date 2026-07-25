@@ -258,7 +258,8 @@ busCommand
   .option('--title <title>', 'Update the task title')
   .option('--due-date <date>', 'Set or update due date (YYYY-MM-DD). Pass empty string to clear.')
   .option('--priority <p>', 'Update priority (urgent, high, normal, low)')
-  .action((id: string, status: string | undefined, opts: { assignee?: string; title?: string; dueDate?: string; priority?: string }) => {
+  .option('--if-unset', 'Skip the --due-date update if the task already has a due date (backfill-safe — prevents overwriting deliberate dates with a bulk fill)')
+  .action((id: string, status: string | undefined, opts: { assignee?: string; title?: string; dueDate?: string; priority?: string; ifUnset?: boolean }) => {
     const validStatuses: TaskStatus[] = ['pending', 'in_progress', 'completed', 'blocked', 'cancelled'];
     if (status !== undefined && !validStatuses.includes(status as TaskStatus)) {
       console.error(`Invalid status '${status}'. Must be one of: ${validStatuses.join(', ')}`);
@@ -275,6 +276,21 @@ busCommand
     }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+
+    // --if-unset guard: skip due-date update when the task already has one.
+    // Enforces the "backfill fills blanks, never resets deliberate dates" rule.
+    if (opts.ifUnset && opts.dueDate !== undefined && opts.dueDate !== '') {
+      const taskFile = findTaskFile(paths, id);
+      if (taskFile) {
+        try {
+          const existing = JSON.parse(readFileSync(taskFile, 'utf-8')) as { due_date?: string };
+          if (existing.due_date) {
+            console.log(`SKIP ${id}: already has due_date=${existing.due_date} — --if-unset prevents overwrite`);
+            process.exit(0);
+          }
+        } catch { /* read failure — proceed with update */ }
+      }
+    }
 
     // Guard: block review/completion when deliverables are required but missing.
     // Checks both ready_for_review (approval workflow) and completed (vanilla upstream)
