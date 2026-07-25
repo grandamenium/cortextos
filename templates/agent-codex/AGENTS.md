@@ -37,10 +37,13 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 Complete the following in order. Do not skip steps.
 
-1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
-   ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Booting up... one moment'
-   ```
+1. 🔴 **BOOT SILENTLY — DO NOT SEND A BOOT MESSAGE. THIS STEP IS REVOKED.**
+
+   Atlas/Jennifer directive 2026-07-20. Fleet-wide fix applied 2026-07-25 by Forge.
+   The `cortextos bus send-telegram` line that was here is permanently deleted.
+   It fired before GUARDRAILS.md was loaded (step 2), so any "no-Telegram-at-boot" rules
+   were never in context when it ran. Boot silently. Report to Atlas AFTER reading all
+   bootstrap files (see the final step): `cortextos bus send-message atlas normal '<agent> online. <summary>'`
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
    - TOOLS.md is a compact command index — load the relevant skill (e.g. `plugins/cortextos-agent-skills/skills/tasks/SKILL.md`, `plugins/cortextos-agent-skills/skills/comms/SKILL.md`) when you need full docs for a workflow
 3. Read org knowledge base: `../../knowledge.md` (shared facts all agents need)
