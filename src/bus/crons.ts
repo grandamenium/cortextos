@@ -14,8 +14,8 @@
  * Write always goes through atomicWriteSync (mkdir + tmp rename).
  */
 
-import { existsSync, readFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync, readFileSync, mkdirSync, readdirSync, copyFileSync, unlinkSync } from 'fs';
+import { join, dirname, basename } from 'path';
 import type { CronDefinition, CronExecutionLogEntry } from '../types/index.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME, cronExecutionLogPathFor } from './crons-schema.js';
 import { atomicWriteSync } from '../utils/atomic.js';
@@ -127,9 +127,78 @@ export interface CronsReadResult {
  * distinguish "legitimately empty" from "catastrophic corruption" (see
  * {@link CronsReadResult}).
  */
+/**
+ * When crons.json is absent, scan for backup files left by a cron-pause
+ * operation (crons.json.paused-YYYY-MM-DD, crons.json.disabled-for-*).
+ * If found, auto-restore crons.json from the most recent valid backup.
+ *
+ * This guards against the Jul-24-2026 outage pattern: a migration script
+ * renamed each agent's crons.json away without an auto-restore step, leaving
+ * the daemon with no crons to schedule.
+ */
+function tryRescueFromSuspendedBackup(agentName: string, filePath: string): CronsReadResult | null {
+  const dir = dirname(filePath);
+  if (!existsSync(dir)) return null;
+
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return null;
+  }
+
+  const base = basename(filePath);
+  const candidates = entries
+    .filter(f => f.startsWith(base + '.paused-') || f.startsWith(base + '.disabled-'))
+    .sort((a, b) => b.localeCompare(a)) // newest-first by date/name suffix
+    .map(f => join(dir, f));
+
+  // No backups at all → legitimately empty state; caller returns empty non-corrupt.
+  if (candidates.length === 0) return null;
+
+  // Walk candidates newest-first. Prefer the first one that parses to a
+  // NON-EMPTY crons array. Empty-array backups (parseable but 0 crons) are
+  // not sufficient — a file whose name asserts a state is not proof it holds
+  // the RIGHT crons. An empty backup could be a partial write or a stale
+  // backup from before any crons were registered.
+  for (const backupPath of candidates) {
+    try {
+      const raw = readFileSync(backupPath, 'utf-8');
+      const crons = parseCronsRaw(raw, agentName, basename(backupPath));
+      if (crons !== null && crons.length > 0) {
+        process.stderr.write(
+          `[crons] GUARD: crons.json missing for agent "${agentName}" — found suspended ` +
+          `backup "${basename(backupPath)}" (${crons.length} cron(s)); auto-restoring.\n`
+        );
+        copyFileSync(backupPath, filePath);
+        process.stderr.write(
+          `[crons] GUARD: Restored crons.json for agent "${agentName}". ` +
+          `Backup preserved at "${basename(backupPath)}".\n`
+        );
+        return { crons, corrupt: false };
+      }
+    } catch { /* try next candidate */ }
+  }
+
+  // Backup files exist but none produced a valid non-empty crons array.
+  // Fail loud: return corrupt:true so the scheduler retains its last-good
+  // in-memory schedule instead of silently zeroing out. Operator must inspect
+  // and manually restore.
+  const names = candidates.map(p => basename(p)).join(', ');
+  process.stderr.write(
+    `[crons] GUARD ERROR: crons.json missing for agent "${agentName}" and ` +
+    `${candidates.length} backup(s) found (${names}) but none produced a valid ` +
+    `non-empty crons array. Manual intervention required — inspect backups and ` +
+    `restore manually, or run: cortextos bus resume-agent-crons ${agentName}\n`
+  );
+  return { crons: [], corrupt: true };
+}
+
 export function readCronsWithStatus(agentName: string): CronsReadResult {
   const filePath = cronsFilePath(agentName);
   if (!existsSync(filePath)) {
+    const rescued = tryRescueFromSuspendedBackup(agentName, filePath);
+    if (rescued !== null) return rescued;
     return { crons: [], corrupt: false };
   }
   try {
@@ -276,6 +345,114 @@ export function getCronByName(
   name: string
 ): CronDefinition | undefined {
   return readCrons(agentName).find(c => c.name === name);
+}
+
+// ---------------------------------------------------------------------------
+// Cron-guard: safe pause / resume (cron-guard task, Jul-2026)
+// ---------------------------------------------------------------------------
+
+const CRONS_PAUSE_LOCK_FILENAME = 'crons-paused.json';
+
+interface CronsPauseLock {
+  agent: string;
+  paused_at: string;
+  paused_by: string;
+  reason: string;
+  cron_count: number;
+}
+
+function pauseLockFilePath(agentName: string): string {
+  const ctxRoot = process.env['CTX_ROOT'] ?? process.cwd();
+  return join(ctxRoot, CRONS_DIRECTORY, agentName, CRONS_PAUSE_LOCK_FILENAME);
+}
+
+function findPausedAgentNames(): string[] {
+  const ctxRoot = process.env['CTX_ROOT'] ?? process.cwd();
+  const stateDir = join(ctxRoot, CRONS_DIRECTORY);
+  if (!existsSync(stateDir)) return [];
+  try {
+    return readdirSync(stateDir).filter(agentName => {
+      return existsSync(join(stateDir, agentName, CRONS_PAUSE_LOCK_FILENAME));
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pause all crons for an agent by setting enabled:false on each one.
+ * Does NOT rename crons.json — in-file disable only.
+ *
+ * Enforces: at most one agent may be paused at a time.
+ * Writes a pause-lock record so the pause is visible to operators and
+ * auto-resume tools.
+ *
+ * @returns count of crons that transitioned to enabled:false
+ * @throws if any other agent is already paused
+ */
+export function pauseAgentCrons(
+  agentName: string,
+  opts: { reason: string; pausedBy?: string },
+): { paused: number } {
+  const alreadyPaused = findPausedAgentNames().filter(a => a !== agentName);
+  if (alreadyPaused.length > 0) {
+    throw new Error(
+      `Cron pause quota exceeded: "${alreadyPaused[0]}" is already paused. ` +
+      `Resume it first with:\n  cortextos bus resume-agent-crons ${alreadyPaused[0]}`
+    );
+  }
+
+  let pausedCount = 0;
+  withFileLockSync(lockDirFor(agentName), () => {
+    const current = readCrons(agentName);
+    const updated = current.map(c => {
+      if (c.enabled !== false) {
+        pausedCount++;
+        return { ...c, enabled: false };
+      }
+      return c;
+    });
+    writeCrons(agentName, updated);
+  });
+
+  const lock: CronsPauseLock = {
+    agent: agentName,
+    paused_at: new Date().toISOString(),
+    paused_by: opts.pausedBy ?? process.env['CTX_AGENT_NAME'] ?? 'system',
+    reason: opts.reason,
+    cron_count: pausedCount,
+  };
+  atomicWriteSync(pauseLockFilePath(agentName), JSON.stringify(lock, null, 2));
+
+  return { paused: pausedCount };
+}
+
+/**
+ * Resume all crons for an agent (set enabled:true on each) and remove the
+ * pause-lock record.  Idempotent — safe to call when the agent is not paused.
+ *
+ * @returns count of crons that transitioned from enabled:false to enabled:true
+ */
+export function resumeAgentCrons(agentName: string): { resumed: number } {
+  let resumedCount = 0;
+  withFileLockSync(lockDirFor(agentName), () => {
+    const current = readCrons(agentName);
+    const updated = current.map(c => {
+      if (c.enabled === false) {
+        resumedCount++;
+        return { ...c, enabled: true };
+      }
+      return c;
+    });
+    if (resumedCount > 0) writeCrons(agentName, updated);
+  });
+
+  const lockPath = pauseLockFilePath(agentName);
+  if (existsSync(lockPath)) {
+    try { unlinkSync(lockPath); } catch { /* ignore */ }
+  }
+
+  return { resumed: resumedCount };
 }
 
 // ---------------------------------------------------------------------------

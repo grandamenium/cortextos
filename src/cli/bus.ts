@@ -17,7 +17,7 @@ import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collec
 import { createApproval, updateApproval } from '../bus/approval.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
-import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
+import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog, pauseAgentCrons, resumeAgentCrons } from '../bus/crons.js';
 import { nextFireFromCron } from '../daemon/cron-scheduler.js';
 import { queryKnowledgeBase, ingestKnowledgeBase, ensureKBDirs } from '../bus/knowledge-base.js';
 import { checkUsageApi, refreshOAuthToken, rotateOAuth, loadAccounts, ALERT_5H, ALERT_7D } from '../bus/oauth.js';
@@ -2489,6 +2489,48 @@ busCommand
     const env = resolveEnv();
     await signalCronReload(agent, env.instanceId);
     console.log(`Updated cron '${name}' for ${agent}`);
+  });
+
+busCommand
+  .command('pause-agent-crons')
+  .description(
+    'Pause ALL crons for an agent (in-place enabled:false — no file rename). ' +
+    'At most one agent may be paused at a time (cron-guard rule). ' +
+    'Use resume-agent-crons to re-enable.'
+  )
+  .argument('<agent>', 'Agent whose crons to pause')
+  .requiredOption('--reason <r>', 'Why these crons are being paused (include expected resume date)')
+  .action(async (agent: string, opts: { reason: string }) => {
+    try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
+    try {
+      const { paused } = pauseAgentCrons(agent, {
+        reason: opts.reason,
+        pausedBy: process.env['CTX_AGENT_NAME'],
+      });
+      const env = resolveEnv();
+      await signalCronReload(agent, env.instanceId);
+      console.log(`Paused ${paused} cron(s) for ${agent}. Resume with: cortextos bus resume-agent-crons ${agent}`);
+    } catch (err) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('resume-agent-crons')
+  .description('Resume all crons for an agent (set enabled:true) and clear the pause-lock.')
+  .argument('<agent>', 'Agent whose crons to resume')
+  .action(async (agent: string) => {
+    try { validateAgentName(agent); } catch (err) { console.error(String(err)); process.exit(1); }
+    try {
+      const { resumed } = resumeAgentCrons(agent);
+      const env = resolveEnv();
+      await signalCronReload(agent, env.instanceId);
+      console.log(`Resumed ${resumed} cron(s) for ${agent}.`);
+    } catch (err) {
+      console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
   });
 
 busCommand
