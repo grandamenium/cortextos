@@ -1,7 +1,7 @@
 ---
 name: cron-management
 description: "Manage scheduled tasks (crons). Crons are daemon-managed and stored in crons.json — they survive restarts automatically. Use when: verifying crons on session start, creating new recurring tasks, updating or removing crons, troubleshooting scheduled tasks, or using the dashboard test-fire button."
-triggers: ["remind me", "every day", "every hour", "every week", "schedule", "recurring", "daily", "weekly", "cron", "loop", "check regularly", "monitor", "keep an eye on", "set up a reminder", "repeat every", "run every", "automate", "schedule task", "restore crons", "crons missing", "cron not firing", "session start crons", "persist cron"]
+triggers: ["remind me", "every day", "every hour", "every week", "schedule", "recurring", "daily", "weekly", "cron", "loop", "check regularly", "monitor", "keep an eye on", "set up a reminder", "repeat every", "run every", "automate", "schedule task", "restore crons", "crons missing", "cron not firing", "session start crons", "persist cron", "timezone", "double fire", "skipped fire"]
 ---
 
 # Cron Management
@@ -28,6 +28,43 @@ If a cron is missing from the list, add it:
 ```bash
 cortextos bus add-cron $CTX_AGENT_NAME <name> <interval|cron-expr> "<prompt>"
 ```
+
+---
+
+## Timezone Semantics + `last_fired_at` check
+
+**IMPORTANT.** Read this before you ever manually pre-fire a cron.
+
+### The daemon interprets schedules in the ORG'S local TZ
+
+Cron schedule strings like `0 9 * * *` are interpreted in the org's local timezone
+(from `${CTX_FRAMEWORK_ROOT}/orgs/$CTX_ORG/context.json` → `timezone`), NOT in UTC.
+For an org set to `America/New_York`, `0 9 * * *` fires at 09:00 ET, which is 13:00 UTC
+during EDT (14:00 UTC during EST).
+
+### `list-crons` "Next Fire" column has a display bug
+
+The text output of `cortextos bus list-crons <agent>` labels its "Next Fire" column
+`UTC`, but the timestamp shown is not offset-adjusted for the ET→UTC conversion. Reading
+it literally has caused, in production:
+
+- A false-positive "daemon skipped scheduled fire" diagnosis (analyst cycle #60, 2026-07-22).
+- A premature manual pre-fire that produced a double-fire event the next morning.
+
+Do NOT decide whether to manually re-fire a cron based on the `list-crons` display alone.
+
+### Ground truth: `crons.json.last_fired_at`
+
+The authoritative record of whether a cron has already fired is the `last_fired_at` field
+in `${CTX_ROOT}/state/$CTX_AGENT_NAME/crons.json`. That field is a real UTC timestamp and
+is not subject to the display bug. Before manually pre-firing, always:
+
+1. Read `crons.json.last_fired_at` for that cron.
+2. Compare against the current UTC time and the cron's expected interval.
+3. If `last_fired_at` is within one scheduled interval of now, the cron already fired — do not double-fire.
+
+> Remove this section only when the `list-crons` display is fixed AND the fix has
+> propagated to the version of cortextos every agent in the fleet is running.
 
 ---
 
