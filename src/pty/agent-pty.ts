@@ -236,7 +236,11 @@ export class AgentPTY {
 
     if (this.config.mcp?.strict && this.config.mcp?.config_file) {
       args.push('--strict-mcp-config');
-      args.push('--mcp-config', this.config.mcp.config_file);
+      // Use --mcp-config=<path> single-token syntax. The claude CLI treats
+      // --mcp-config as variadic and will otherwise absorb the trailing
+      // positional prompt as an additional config path (ENAMETOOLONG on
+      // resume, whose prompt payload can be tens of KB).
+      args.push(`--mcp-config=${this.config.mcp.config_file}`);
     }
 
     // Local override pattern (feat #20): concatenate {agentDir}/local/*.md files
