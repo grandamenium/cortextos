@@ -10,6 +10,7 @@ import { loadEnvFileInto } from '../utils/env.js';
 import { resolvePaths } from '../utils/paths.js';
 import { logEvent } from '../bus/event.js';
 import { WsUnixJsonRpcClient, type JsonRpcResponse } from '../utils/ws-unix-client.js';
+import { hostSpawn } from './pty-host-client.js';
 
 interface IPty {
   pid: number;
@@ -27,7 +28,9 @@ interface IPtySpawnOptions {
   env?: Record<string, string>;
 }
 
-type SpawnFn = (file: string, args: string[], options: IPtySpawnOptions) => IPty;
+// hostSpawn returns Promise<IPty> (forked child pty-host, zero ptmx fds in this
+// process); test mocks return IPty synchronously. Callers tolerate both.
+type SpawnFn = (file: string, args: string[], options: IPtySpawnOptions) => IPty | Promise<IPty>;
 type PtyDisposable = { dispose(): void };
 
 interface ThreadState {
@@ -467,13 +470,17 @@ export class CodexAppServerPTY {
 
   private startAppServer(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
+      // Allocate the codex app-server PTY in a forked child (pty-host) so this
+      // process holds zero /dev/ptmx fds. Do NOT reintroduce an in-process
+      // node-pty load — that is the ptmx leak that exhausts kern.tty.ptmx_max.
       if (!this._spawnFn) {
-        const nodePty = require('node-pty');
-        this._spawnFn = nodePty.spawn;
+        this._spawnFn = hostSpawn;
       }
 
       const spawnFn = this._spawnFn!;
-      const pty = spawnFn('codex', [
+      // Promise.resolve tolerates both the async hostSpawn and a synchronous
+      // test-injected mock without changing the surrounding ready-detection flow.
+      Promise.resolve(spawnFn('codex', [
         'app-server',
         '--listen', this._socketListenArg,
       ], {
@@ -482,25 +489,25 @@ export class CodexAppServerPTY {
         rows: 50,
         cwd: this._socketCwd,
         env: this.buildEnv(),
-      });
+      })).then((pty) => {
+        this._appServerPty = pty;
+        this._onDataDisposable = pty.onData((data) => {
+          this._outputBuffer.push(data);
+          if (data.includes('Error:')) {
+            reject(new Error(data.trim()));
+          }
+        });
+        this._onExitDisposable = pty.onExit(({ exitCode, signal }) => {
+          if (this._appServerPty !== pty) return;
+          this._appServerPty = null;
+          this._alive = false;
+          this.disposePtyListeners();
+          this.rejectTurnCompletion(new Error('Codex app-server exited'));
+          this._onExitHandler?.(exitCode, signal);
+        });
 
-      this._appServerPty = pty;
-      this._onDataDisposable = pty.onData((data) => {
-        this._outputBuffer.push(data);
-        if (data.includes('Error:')) {
-          reject(new Error(data.trim()));
-        }
-      });
-      this._onExitDisposable = pty.onExit(({ exitCode, signal }) => {
-        if (this._appServerPty !== pty) return;
-        this._appServerPty = null;
-        this._alive = false;
-        this.disposePtyListeners();
-        this.rejectTurnCompletion(new Error('Codex app-server exited'));
-        this._onExitHandler?.(exitCode, signal);
-      });
-
-      this.waitForSocket().then(resolve, reject);
+        this.waitForSocket().then(resolve, reject);
+      }, reject);
     });
   }
 

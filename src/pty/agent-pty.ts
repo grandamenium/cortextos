@@ -5,6 +5,7 @@ import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import { injectMessage as injectMessageIntoPty } from './inject.js';
 import { loadEnvFileInto } from '../utils/env.js';
+import { hostSpawn } from './pty-host-client.js';
 
 // node-pty types
 interface IPty {
@@ -25,7 +26,10 @@ interface IPtySpawnOptions {
   env?: Record<string, string>;
 }
 
-type SpawnFn = (file: string, args: string[], options: IPtySpawnOptions) => IPty;
+// Returns IPty synchronously (test-injected mocks) or a Promise<IPty> (the real
+// hostSpawn, which forks a child pty-host). Callers must `await` the result;
+// awaiting a synchronous IPty is a no-op, so the test seam is preserved.
+type SpawnFn = (file: string, args: string[], options: IPtySpawnOptions) => IPty | Promise<IPty>;
 type PtyDisposable = { dispose(): void };
 
 /**
@@ -60,10 +64,14 @@ export class AgentPTY {
       throw new Error('PTY already spawned. Kill first.');
     }
 
-    // Lazy-load node-pty (native addon)
+    // Allocate the PTY in a forked child (pty-host) so the daemon process holds
+    // ZERO /dev/ptmx fds: the child exits when the pty exits and the kernel
+    // reclaims the device. The previous in-process `require('node-pty')` leaked
+    // a ptmx master fd per spawn on macOS until kern.tty.ptmx_max=511 was hit,
+    // causing fleet-wide spawn failures + MCP stdio flap. Do NOT reintroduce an
+    // in-process node-pty load on this path.
     if (!this.spawnFn) {
-      const nodePty = require('node-pty');
-      this.spawnFn = nodePty.spawn;
+      this.spawnFn = hostSpawn;
     }
 
     const cwd = this.config.working_directory || this.env.agentDir || process.cwd();
@@ -134,7 +142,7 @@ export class AgentPTY {
     const claudeArgs = this.buildClaudeArgs(mode, prompt);
     const claudeCmd = this.getBinaryName();
 
-    this.pty = this.spawnFn!(claudeCmd, claudeArgs, {
+    this.pty = await this.spawnFn!(claudeCmd, claudeArgs, {
       name: 'xterm-256color',
       cols: 200,
       rows: 50,
