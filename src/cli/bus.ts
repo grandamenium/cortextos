@@ -2419,6 +2419,9 @@ busCommand
         if (!isNaN(nf)) nextFire = fmtTs(new Date(nf).toISOString());
       }
       const promptPreview = c.prompt.length > 60 ? c.prompt.slice(0, 57) + '...' : c.prompt;
+      const pr = c.paused_reason && c.paused_reason.length > 80
+        ? c.paused_reason.slice(0, 77) + '...'
+        : c.paused_reason;
       return {
         name: c.name,
         schedule: c.schedule,
@@ -2426,6 +2429,7 @@ busCommand
         last_fire: fmtTs(lastFire),
         next_fire: nextFire,
         prompt: promptPreview,
+        paused_reason: !c.enabled ? (pr ?? '') : '',
       };
     });
 
@@ -2444,6 +2448,9 @@ busCommand
     console.log(`  ${sep}`);
     for (const r of rows) {
       console.log(`  ${pad(r.name, nameW)}  ${pad(r.schedule, schedW)}  ${pad(r.enabled, enW)}  ${pad(r.last_fire, lastW)}  ${pad(r.next_fire, nextW)}  ${r.prompt}`);
+      if (r.paused_reason) {
+        console.log(`  ${' '.repeat(nameW)}  ${' '.repeat(schedW)}  ${' '.repeat(enW)}  ${' '.repeat(lastW)}  ${' '.repeat(nextW)}  (paused: ${r.paused_reason})`);
+      }
     }
     console.log('');
   });
