@@ -64,7 +64,7 @@ Full reference: `plugins/cortextos-agent-skills/skills/memory/SKILL.md`
 
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
-LOCAL_TIME=$(date +'%-I:%M %p %Z' 2>/dev/null || date)
+LOCAL_TIME=$(powershell.exe -NoProfile -Command "[System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Date), 'Mountain Standard Time').ToString('h:mm tt') + ' MT'" 2>/dev/null || date -u +"%H:%M UTC")
 MEMORY_DIR="$(pwd)/memory"
 mkdir -p "$MEMORY_DIR"
 cat >> "$MEMORY_DIR/$TODAY.md" << MEMORY
