@@ -15,7 +15,7 @@ const ATLAS_EMAIL = 'atlas@total-investment-solutions.com';
 const LABEL_NAME = 'AtlasOS-Inbox';
 
 // Known marketing/blast domains — suppress silently (same list as check-business-inboxes.js)
-const SUPPRESS_SENDERS = /aa\.com|@aa\.com|americanairlines\.com|@americanairlines\.|@delta\.com|@united\.com|@southwest\.com|@jetblue\.com|@spirit\.com|@alaskaair\.com|@alerts\.aa\.com|@email\.aa\.com|@news\.aa\.com|airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|toptiertc\.com|@toptiertc\.|top\.tier\.tc|beehiiv\.com|convertkit\.com|mailchimp\.com|constantcontact\.com|klaviyo\.com|substack\.com|frommilitarytomillionaire\.com|newwestern\.com|@newwestern\.|capstoneconnectors\.com|@capstoneconnectors\.|askforfunding\.com|@askforfunding\.|bluehorizon-realestate\.com|arturo@bluehorizon/i;
+const SUPPRESS_SENDERS = /aa\.com|@aa\.com|americanairlines\.com|@americanairlines\.|@delta\.com|@united\.com|@southwest\.com|@jetblue\.com|@spirit\.com|@alaskaair\.com|@alerts\.aa\.com|@email\.aa\.com|@news\.aa\.com|airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|toptiertc\.com|@toptiertc\.|top\.tier\.tc|beehiiv\.com|convertkit\.com|mailchimp\.com|constantcontact\.com|klaviyo\.com|substack\.com|frommilitarytomillionaire\.com|newwestern\.com|@newwestern\.|capstoneconnectors\.com|@capstoneconnectors\.|askforfunding\.com|@askforfunding\.|bluehorizon-realestate\.com|arturo@bluehorizon|heathereholland73@gmail\.com/i;
 
 // Cold-blast subject patterns — only suppress for non-whitelisted senders
 const SUPPRESS_SUBJECTS = /\bLIVE NOW:|bonus.*underwriting|underwriting.*bonus|market.*(shifted|favor)|shifted.*favor|collect rent without|close in \d+ (business )?(days?|weeks?)|dscr (from|as low as|at) \d|hard money (lender|loan|available|fast)|private (money|lender|lending) (available|offer|solution)|we('re)? (fund|lending)|can fund your (deal|flip|project|rehab)|asset.based lend|no income.*verif|quick (close|fund)|fast close|close fast|fix.?and.?flip loan|rental (loan|financing) offer|bridge (loan|lender|funding) (offer|available|fast)|free training|free masterclass|free workshop|webinar.*register|register.*webinar|join us (live|online|virtually)|replay.*available|watch the replay/i;
@@ -78,8 +78,7 @@ function sendTelegram(message) {
 // Route summaries/alerts through Atlas per comms model
 function busAtlas(message) {
   try {
-    const safe = message.replace(/'/g, "\\'").slice(0, 1200);
-    execSync(`cortextos bus send-message atlas normal '${safe}'`, { stdio: 'inherit' });
+    spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', 'atlas', 'normal', message.slice(0, 1200)], { stdio: 'inherit' });
   } catch (e) {
     console.error('Bus send to Atlas failed:', e.message);
   }
@@ -94,7 +93,7 @@ async function applyLabel(tokenFile, messageId, labelId) {
       path: `/gmail/v1/users/me/messages/${messageId}/modify`,
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-    }, res => { let out=''; res.on('data', d=>out+=d); res.on('end', () => resolve(JSON.parse(out))); });
+    }, res => { const chunks = []; res.on('data', d => chunks.push(d)); res.on('end', () => { const out = Buffer.concat(chunks).toString('utf-8'); resolve(JSON.parse(out)); }); });
     req.on('error', reject); req.write(body); req.end();
   });
 }

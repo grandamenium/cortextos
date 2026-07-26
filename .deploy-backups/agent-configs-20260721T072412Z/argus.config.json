@@ -1,0 +1,69 @@
+{
+  "agent_name": "argus",
+  "enabled": true,
+  "runtime": "claude-code",
+  "model": "claude-sonnet-4-6",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "America/Denver",
+  "day_mode_start": "06:00",
+  "day_mode_end": "18:00",
+  "communication_style": "professional",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  },
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+    },
+    {
+      "name": "nightly-metrics",
+      "type": "recurring",
+      "interval": "24h",
+      "prompt": "Run nightly metrics collection: cortextos bus collect-metrics. Review the output and report any anomalies via Telegram to the orchestrator."
+    },
+    {
+      "name": "auto-commit",
+      "type": "recurring",
+      "interval": "24h",
+      "prompt": "Read .claude/skills/local-version-control/SKILL.md and execute the daily version control workflow. Stage, review, and commit changes."
+    },
+    {
+      "name": "check-upstream",
+      "type": "recurring",
+      "interval": "24h",
+      "prompt": "Read .claude/skills/upstream-sync/SKILL.md and execute the upstream sync workflow. Check for framework updates and report to the orchestrator."
+    },
+    {
+      "name": "catalog-browse",
+      "type": "recurring",
+      "interval": "7d",
+      "prompt": "Read .claude/skills/catalog-browse/SKILL.md and execute the catalog browse workflow. Check for new community skills and recommend useful ones."
+    }
+  ],
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    },
+    "upstream_sync": {
+      "enabled": true
+    },
+    "catalog_browse": {
+      "enabled": true
+    },
+    "community_publish": {
+      "enabled": false
+    }
+  }
+}

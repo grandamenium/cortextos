@@ -116,7 +116,7 @@ const ACCOUNTS = [
 const DEAL_KEYWORDS = /crawford|greg cole|keith mendosa|loi|letter of intent|offer|contract|closing|purchase agreement|earnest|junietha|shambee|rei chicago|oscar|polk|ted sanders|ted@americahomerestoration/i;
 
 // Senders/patterns to suppress silently (mark read, no Telegram alert)
-const SUPPRESS_SENDERS = /@mg\.homedepot\.com|homedepotpro@|aa\.com|@aa\.com|americanairlines\.com|@americanairlines\.|@delta\.com|@united\.com|@southwest\.com|@jetblue\.com|@spirit\.com|@alaskaair\.com|@alerts\.aa\.com|@email\.aa\.com|@news\.aa\.com|resnexus\.com|communications@resnexus|shutterstock\.com|emktng\.shutterstock|frommilitarytomillionaire\.com|iheart\.com|sofi\.com|gobrightline\.com|tymobeauty\.com|rodanandfields\.com|nuuly\.com|depop\.com|expedia\.com|tripadvisor\.com|turo\.com|benchmade\.com|jostens\.com|salliemae\.com|lendingclub\.com|shakeshack\.com|@e\.upgrade\.com|ebay\.com|alltrails\.com|aausports\.org|purefrequencies\.com|moneylion\.com|gainrepmail\.com|aurahealth\.io|youversion\.com|notarize\.com|@(email|close)\.close\.com|tasks\.clickup\.com|attio\.com|@attio\.|bluehorizon-realestate\.com|arturo@bluehorizon|newwestern\.com|@newwestern\.|@fyxer\.com|hostcamp\.com|@hostcamp\.|askforfunding\.com|@askforfunding\.|rocketlawyer\.com|@rocketlawyer\.|uber\.com|@uber\.|@h5\.hilton\.com|hilton\.com|zenbusiness\.com|@zenbusiness\.|capstoneconnectors\.com|@capstoneconnectors\.|remitly\.com|@remitly\.|info\.remitly|ablink\.info\.rem|invoice\+statements@make\.com|celonis\.com|taxact\.com|@taxact\.|360onlineprint\.com|@360onlineprint\.|constantcontact\.com|mailchimp\.com|klaviyo\.com|substack\.com|beehiiv\.com|convertkit\.com|mnatsakanian|toptiertc\.com|@toptiertc\.|top\.tier\.tc|airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|cara\.lee@|caralee@|homecare.*coach|homecarecoach|chatarv\.com|@chatarv\.|jenn.*billat|jennbillat|billat.*legacy|owners.*club.*legacy|certaintyinc\.com|@certaintyinc\.|marshall.*sylver|sylver.*marshall|skool\.com|@skool\.|greatwithmoney@m\.relayfi\.com|greatwithmoney@/i;
+const SUPPRESS_SENDERS = /@mg\.homedepot\.com|homedepotpro@|aa\.com|@aa\.com|americanairlines\.com|@americanairlines\.|@delta\.com|@united\.com|@southwest\.com|@jetblue\.com|@spirit\.com|@alaskaair\.com|@alerts\.aa\.com|@email\.aa\.com|@news\.aa\.com|resnexus\.com|communications@resnexus|shutterstock\.com|emktng\.shutterstock|frommilitarytomillionaire\.com|iheart\.com|sofi\.com|gobrightline\.com|tymobeauty\.com|rodanandfields\.com|nuuly\.com|depop\.com|expedia\.com|tripadvisor\.com|turo\.com|benchmade\.com|jostens\.com|salliemae\.com|lendingclub\.com|shakeshack\.com|@e\.upgrade\.com|ebay\.com|alltrails\.com|aausports\.org|purefrequencies\.com|moneylion\.com|gainrepmail\.com|aurahealth\.io|youversion\.com|notarize\.com|@(email|close)\.close\.com|tasks\.clickup\.com|attio\.com|@attio\.|bluehorizon-realestate\.com|arturo@bluehorizon|newwestern\.com|@newwestern\.|@fyxer\.com|hostcamp\.com|@hostcamp\.|askforfunding\.com|@askforfunding\.|rocketlawyer\.com|@rocketlawyer\.|uber\.com|@uber\.|@h5\.hilton\.com|hilton\.com|zenbusiness\.com|@zenbusiness\.|capstoneconnectors\.com|@capstoneconnectors\.|remitly\.com|@remitly\.|info\.remitly|ablink\.info\.rem|invoice\+statements@make\.com|celonis\.com|taxact\.com|@taxact\.|360onlineprint\.com|@360onlineprint\.|constantcontact\.com|mailchimp\.com|klaviyo\.com|substack\.com|beehiiv\.com|convertkit\.com|mnatsakanian|toptiertc\.com|@toptiertc\.|top\.tier\.tc|airdna\.co|@airdna\.|kajabimail\.net|kajabi\.com|rentperfect\.com|@rentperfect\.|rehablend\.com|@rehablend\.|cara\.lee@|caralee@|homecare.*coach|homecarecoach|chatarv\.com|@chatarv\.|jenn.*billat|jennbillat|billat.*legacy|owners.*club.*legacy|certaintyinc\.com|@certaintyinc\.|marshall.*sylver|sylver.*marshall|skool\.com|@skool\.|greatwithmoney@m\.relayfi\.com|greatwithmoney@|heathereholland73@gmail\.com/i;
 
 // Subject patterns that are always marketing/noise regardless of sender — suppress
 const SUPPRESS_SUBJECTS = /trending posts|trending near|trending in your area|trending around|best.*around butte|best.*around.*billings|\bchallenge\b.*register|you.re not registered|don.t miss.*challenge|join.*challenge|all abilities challenge|on track for (next|your) (tax|season)|product (has )?shipped|your order (has )?shipped|your (package|shipment) (is |has )?shipped|built for solo.*agency.*scale|which one.s you|webinar.*register|register.*webinar|free training|free masterclass|free workshop|join us (live|online|virtually)|replay.*available|watch the replay|limited.*seats|seats.*limited|early.bird|special (offer|discount|price)|% off (today|now|this week)|flash sale|last chance|ends (tonight|tomorrow|soon)|deal of the day|promo code|coupon inside|LIVE NOW:|live now:|bonus.*underwriting|underwriting.*bonus|market.*(shifted|favor)|shifted.*favor|collect rent without|close in \d+ (business )?(days?|weeks?)|dscr (from|as low as|at) \d|hard money (lender|loan|available|fast)|private (money|lender|lending) (available|offer|solution)|we('re)? (fund|lending)|can fund your (deal|flip|project|rehab)|asset.based lend|no income.*verif|quick (close|fund)|fast close|close fast|fix.?and.?flip loan|rental (loan|financing) offer|bridge (loan|lender|funding) (offer|available|fast)|daily deal|deals o.clock|o.clock deal|super promo|300\+ resources|reintroduc.*myself|build your legacy|build.*legacy.*coaching|owners club|big goals.*event|events? happening tomorrow|events? this week.*community|skool.*event|community.*event.*tomorrow/i;
@@ -394,11 +394,53 @@ async function handleBlinqNotification(file, messageId, full) {
   return true;
 }
 
+// Direct-API verify for accounts known to false-zero via gmail-lib.js getAccessToken path.
+// Uses stored access_token directly (no refresh logic) to detect the discrepancy.
+// LIMITATION: access_tokens expire ~1hr. If the root cause is a broken REFRESH path,
+// both gmail-lib AND this verify will false-zero once the stored token expires.
+// Jul 28 audit must: (1) force a refresh for jordanreyes and re-run 0-vs-N test,
+// (2) if refresh is broken, add own refresh here before the direct call.
+// Remove this function once the false-zero root cause is fixed (task_1784503534636_59996782).
+async function verifyZeroDirect(tokenFile, query) {
+  const secretsDir = path.join(__dirname, '../../../secrets');
+  try {
+    const stored = JSON.parse(fs.readFileSync(path.join(secretsDir, tokenFile), 'utf8'));
+    const token = stored.access_token;
+    if (!token) return null;
+    const q = encodeURIComponent(query);
+    return await new Promise(resolve => {
+      const req = https.get({
+        hostname: 'gmail.googleapis.com',
+        path: `/gmail/v1/users/me/messages?q=${q}&maxResults=5`,
+        headers: { Authorization: `Bearer ${token}` }
+      }, r => {
+        const chunks = [];
+        r.on('data', c => chunks.push(c));
+        r.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); } catch { resolve(null); } });
+      });
+      req.on('error', () => resolve(null));
+    });
+  } catch { return null; }
+}
+
+const FALSE_ZERO_ACCOUNTS = new Set(['gmail_jordanreyes_tokens.json']);
+
 async function checkAccount(account) {
   const { file, label, query, max, alertLabel } = account;
   try {
     const messages = await gmail.listMessages(file, query, max);
-    if (!messages.messages || messages.messages.length === 0) return;
+    if (!messages.messages || messages.messages.length === 0) {
+      if (FALSE_ZERO_ACCOUNTS.has(file)) {
+        const direct = await verifyZeroDirect(file, query);
+        if (direct && direct.messages && direct.messages.length > 0) {
+          console.warn(`[FALSE-ZERO DETECTED] ${label}: gmail-lib returned 0, direct API found ${direct.messages.length} — alerting Atlas`);
+          spawnSync(process.execPath, [CORTEXTOS_CLI, 'bus', 'send-message', 'atlas', 'high',
+            `[FALSE-ZERO] ${label} inbox: gmail-lib.js returned 0 but direct API found ${direct.messages.length} unread message(s). Known bug (task_1784503534636_59996782) — manual check needed.`
+          ], { stdio: 'inherit' });
+        }
+      }
+      return;
+    }
 
     const items = [];
     for (const m of messages.messages.slice(0, 3)) {
@@ -421,7 +463,8 @@ async function checkAccount(account) {
       const genericLedgerMatch = LEDGER_GENERIC_PATTERNS.some(p => p.test(from) || p.test(subject))
         && LEDGER_FINANCIAL_SENDER.test(from);
       const isLedgerEmail = (specificLedgerMatch || genericLedgerMatch)
-        && !LEDGER_RELAY_SKIP.test(subject);
+        && !LEDGER_RELAY_SKIP.test(subject)
+        && action !== 'suppress';  // never route suppressed marketing to Ledger
       if (isLedgerEmail) {
         const attInfo = attachments.length > 0
           ? ` | Attachments: ${attachments.length} — ${attachments.map(a => `${a.filename} (${a.mimeType}, ${a.sizeKb}kb)`).join(', ')}`

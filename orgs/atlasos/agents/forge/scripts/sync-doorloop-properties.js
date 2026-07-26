@@ -30,9 +30,10 @@ function doorloopGet(apiKey, endpoint) {
       path: '/api/' + endpoint,
       headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' }
     }, r => {
-      let d = '';
-      r.on('data', c => d += c);
+      const chunks = [];
+      r.on('data', c => chunks.push(c));
       r.on('end', () => {
+        const d = Buffer.concat(chunks).toString('utf-8');
         try { resolve(JSON.parse(d)); }
         catch (e) { reject(new Error('Parse error for ' + endpoint + ': ' + d.slice(0, 100))); }
       });

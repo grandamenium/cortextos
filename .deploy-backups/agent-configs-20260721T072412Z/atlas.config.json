@@ -1,0 +1,60 @@
+{
+  "agent_name": "atlas",
+  "enabled": true,
+  "runtime": "claude-code",
+  "model": "claude-opus-4-8",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "America/Denver",
+  "day_mode_start": "06:00",
+  "day_mode_end": "18:00",
+  "communication_style": "professional",
+  "approval_rules": {
+    "always_ask": [
+      "external-comms",
+      "financial",
+      "deployment",
+      "data-deletion"
+    ],
+    "never_ask": []
+  },
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, review agent health via cortextos bus read-all-heartbeats, and work on coordination tasks."
+    },
+    {
+      "name": "check-approvals",
+      "type": "recurring",
+      "interval": "1h",
+      "prompt": "Per WF-011 (Approval Reminder Cadence, guardrails/04-agent-coordination-scope.md): this check runs every 1h. (1) cortextos bus list-approvals --format json -- for any pending approval, notify the user via Telegram the FIRST time it crosses 2h pending, then repeat the reminder every 2h thereafter until resolved (approved/rejected) -- check daily memory for the last reminder timestamp on that approval_id to avoid over-notifying between the 1h checks. (2) cortextos bus list-tasks --status pending --all-orgs -- scan ALL pending tasks and identify any whose title starts with [HUMAN]; for any [HUMAN] task pending >4h, send user a Telegram reminder with the task title and what's blocked. Do NOT use --project human-tasks (that filter does not persist reliably); use title-prefix matching instead. ACK any approval/human-task inbox messages. Write each reminder sent to daily memory with a timestamp."
+    },
+    {
+      "name": "morning-review",
+      "type": "recurring",
+      "cron": "0 8 * * *",
+      "prompt": "Read .claude/skills/morning-review/SKILL.md and execute the full morning review workflow. Include goal cascade from .claude/skills/goal-management/SKILL.md."
+    },
+    {
+      "name": "evening-review",
+      "type": "recurring",
+      "cron": "0 18 * * *",
+      "prompt": "Read .claude/skills/evening-review/SKILL.md and execute the full evening review workflow. Summarize the day, propose overnight tasks, queue nighttime work."
+    },
+    {
+      "name": "weekly-review",
+      "type": "recurring",
+      "cron": "0 8 * * 0",
+      "prompt": "Read .claude/skills/weekly-review/SKILL.md and run the full weekly review. Review all agent outputs, evaluate performance, plan next week."
+    }
+  ],
+  "ecosystem": {
+    "local_version_control": {
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,298 @@
+{
+  "updated_at": "2026-07-21T06:25:20.600Z",
+  "crons": [
+    {
+      "name": "daily-health",
+      "prompt": "Run daily system health check: verify AtlasOS services are healthy, agents are running and current, integrations are functioning, system logs for errors, open implementation tasks and blockers. REQUIRED FILE WRITE: save full findings to knowledge/daily-health-$(date +%Y-%m-%d).md. If write fails, immediately alert Atlas: cortextos bus send-message atlas normal \"CRON ALERT: daily-health failed to write file -- check forge logs\". REQUIRED ROUTING: send Atlas a message with the top finding or status (headline in body, not just a file pointer), then the file path. Route to Atlas only — do NOT send directly to Jennifer.",
+      "schedule": "0 15 * * *",
+      "enabled": true,
+      "created_at": "2026-06-03T19:20:12.135Z",
+      "last_fire_attempted_at": "2026-07-20T21:00:10.616Z",
+      "last_fired_at": "2026-07-20T21:00:10.616Z",
+      "fire_count": 42,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "weekly-review",
+      "prompt": "Run weekly technical review: assess automation opportunities, integration health and reliability, technical debt, repetitive manual work that could be eliminated. REQUIRED FILE WRITE: save full findings to knowledge/weekly-review-$(date +%Y-%m-%d).md. If write fails, immediately alert Atlas: cortextos bus send-message atlas normal \"CRON ALERT: weekly-review failed to write file -- check forge logs\". REQUIRED ROUTING: send Atlas a message with the top 2-3 findings or recommendations in the body (not just a file pointer) + the file path. Route to Atlas only — do NOT send directly to Jennifer.",
+      "schedule": "0 15 * * 1",
+      "enabled": true,
+      "created_at": "2026-06-03T19:20:18.101Z",
+      "last_fire_attempted_at": "2026-07-20T21:00:10.616Z",
+      "last_fired_at": "2026-07-20T21:00:10.616Z",
+      "fire_count": 7,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "monthly-review",
+      "prompt": "Run monthly infrastructure review: assess system architecture, security posture, backup and recovery readiness, agent performance patterns, scaling constraints. REQUIRED FILE WRITE: save full findings to knowledge/monthly-review-$(date +%Y-%m).md. If write fails, immediately alert Atlas: cortextos bus send-message atlas normal \"CRON ALERT: monthly-review failed to write file -- check forge logs\". REQUIRED ROUTING: send Atlas a message with the top 2-3 findings or risks in the body (not just a file pointer) + the file path. Route to Atlas only — do NOT send directly to Jennifer.",
+      "schedule": "0 15 1 * *",
+      "enabled": true,
+      "created_at": "2026-06-03T19:20:19.770Z",
+      "last_fire_attempted_at": "2026-07-01T21:00:29.604Z",
+      "last_fired_at": "2026-07-01T21:00:29.604Z",
+      "fire_count": 1,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "check-atlas-inbox",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/check-atlas-inbox.js. Report any new emails to atlas@total-investment-solutions.com via Telegram.",
+      "schedule": "1h",
+      "enabled": true,
+      "created_at": "2026-06-03T19:36:46.994Z",
+      "last_fire_attempted_at": "2026-07-21T05:45:50.019Z",
+      "last_fired_at": "2026-07-21T05:45:50.019Z",
+      "fire_count": 1028,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "refresh-gmail-tokens",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/refresh-gmail-tokens.js to proactively refresh all Gmail OAuth tokens before they expire.",
+      "schedule": "0 12 * * *",
+      "enabled": true,
+      "created_at": "2026-06-03T19:36:47.351Z",
+      "last_fire_attempted_at": "2026-07-20T18:00:08.887Z",
+      "last_fired_at": "2026-07-20T18:00:08.887Z",
+      "fire_count": 40,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "extract-imessages",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/extract-imessages.js to extract new iMessages from iMazing backup and route to Telegram.",
+      "schedule": "1h",
+      "enabled": true,
+      "created_at": "2026-06-04T13:26:21.504Z",
+      "last_fire_attempted_at": "2026-07-21T05:45:50.019Z",
+      "last_fired_at": "2026-07-21T05:45:50.019Z",
+      "fire_count": 1018,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "check-business-inboxes",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/check-business-inboxes.js to monitor all business Gmail accounts for new emails. Flag deal/priority emails to argus immediately.",
+      "schedule": "1h",
+      "enabled": true,
+      "created_at": "2026-06-04T18:42:06.668Z",
+      "last_fire_attempted_at": "2026-07-21T05:45:50.019Z",
+      "last_fired_at": "2026-07-21T05:45:50.019Z",
+      "fire_count": 1007,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "morning-digest",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/morning-digest.js",
+      "schedule": "30 13 * * *",
+      "enabled": true,
+      "created_at": "2026-06-10T01:07:30.385Z",
+      "last_fire_attempted_at": "2026-07-20T19:30:09.822Z",
+      "last_fired_at": "2026-07-20T19:30:09.822Z",
+      "fire_count": 35,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "update-ilp-deal-sheet",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/update-ilp-deal-sheet.js to check for new Arturo Zertuche deals and append them to the ILP Google Sheet.",
+      "schedule": "1h",
+      "enabled": true,
+      "created_at": "2026-06-11T04:41:48.616Z",
+      "last_fire_attempted_at": "2026-07-21T05:45:50.019Z",
+      "last_fired_at": "2026-07-21T05:45:50.019Z",
+      "fire_count": 812,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "experiment-build-completion",
+      "prompt": "Read .claude/skills/autoresearch/SKILL.md and execute the weekly experiment build-completion research cycle. After completing the run, write a brief outcome note (at minimum one line) to today's daily memory file (memory/YYYY-MM-DD.md) before ending the session.",
+      "schedule": "0 14 * * 0",
+      "enabled": false,
+      "created_at": "2026-06-16T02:09:37.096Z",
+      "last_fire_attempted_at": "2026-07-13T04:54:39.351Z",
+      "last_fired_at": "2026-07-13T04:54:39.351Z",
+      "fire_count": 4,
+      "paused_reason": "consumerless — writes to daily memory only, no routing to Atlas or any actionable sink; same class as autoresearch loops suspended Jul 2026; suspend until consumer defined; until 2026-10-01"
+    },
+    {
+      "name": "screen-ilp-deals",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/ilp-underwriter.js",
+      "schedule": "1h",
+      "enabled": true,
+      "created_at": "2026-06-17T03:32:43.851Z",
+      "last_fire_attempted_at": "2026-07-21T05:45:50.019Z",
+      "last_fired_at": "2026-07-21T05:45:50.019Z",
+      "fire_count": 607,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "ghl-convo-monitor",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/ghl-conversation-monitor.js to monitor GHL conversations on Timberline account and route new messages to Timber agent for review.",
+      "schedule": "1h",
+      "enabled": true,
+      "created_at": "2026-06-17T18:36:41.061Z",
+      "last_fire_attempted_at": "2026-07-21T05:45:50.019Z",
+      "last_fired_at": "2026-07-21T05:45:50.019Z",
+      "fire_count": 577,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "ghl-call-transcriber",
+      "prompt": "cd orgs/atlasos/agents/forge && node scripts/ghl-call-transcriber.js to transcribe new GHL call recordings and route summaries to Timber.",
+      "schedule": "1h",
+      "enabled": true,
+      "created_at": "2026-06-17T19:34:56.494Z",
+      "last_fire_attempted_at": "2026-07-21T05:45:50.019Z",
+      "last_fired_at": "2026-07-21T05:45:50.019Z",
+      "fire_count": 576,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "sync-master-sheet",
+      "prompt": "Run node scripts/sync-master-sheet.js to sync Master Data Sheet into dashboard deal files",
+      "schedule": "0 6 * * *",
+      "enabled": true,
+      "created_at": "2026-06-22T02:04:34.075Z",
+      "last_fire_attempted_at": "2026-07-20T13:46:05.906Z",
+      "last_fired_at": "2026-07-20T13:46:05.906Z",
+      "fire_count": 22,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "check-token-health",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node scripts/check-token-health.js --quiet to test all 9 Gmail OAuth tokens. Alert Atlas immediately if any fail. Update daily memory with results.",
+      "schedule": "30 19 * * *",
+      "enabled": true,
+      "created_at": "2026-06-24T18:20:10.466Z",
+      "last_fire_attempted_at": "2026-07-21T01:30:13.450Z",
+      "last_fired_at": "2026-07-21T01:30:13.450Z",
+      "fire_count": 21,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "sync-doorloop",
+      "prompt": "cd orgs/atlasos/agents/forge && node scripts/sync-doorloop-properties.js to pull live DoorLoop tenant/lease/payment data into property JSON files for the dashboard",
+      "schedule": "30m",
+      "enabled": true,
+      "created_at": "2026-06-25T20:10:41.554Z",
+      "last_fire_attempted_at": "2026-07-21T06:15:50.452Z",
+      "last_fired_at": "2026-07-21T06:15:50.452Z",
+      "fire_count": 746,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "sync-obsidian-kb",
+      "prompt": "cd orgs/atlasos/agents/forge && node scripts/sync-obsidian-kb.js",
+      "schedule": "0 2 * * *",
+      "enabled": true,
+      "created_at": "2026-06-26T21:25:17.854Z",
+      "last_fire_attempted_at": "2026-07-20T13:46:05.906Z",
+      "last_fired_at": "2026-07-20T13:46:05.906Z",
+      "fire_count": 17,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "plaid-sync",
+      "prompt": "cd orgs/atlasos/agents/forge && node scripts/plaid-sync.js && node scripts/plaid-alerts.js",
+      "schedule": "0 14 * * *",
+      "enabled": true,
+      "created_at": "2026-06-27T15:28:41.987Z",
+      "last_fire_attempted_at": "2026-07-20T20:00:09.994Z",
+      "last_fired_at": "2026-07-20T20:00:09.994Z",
+      "fire_count": 18,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "plaid-alerts",
+      "prompt": "cd orgs/atlasos/agents/forge && node scripts/plaid-alerts.js",
+      "schedule": "0 */4 * * *",
+      "enabled": true,
+      "created_at": "2026-06-27T15:28:42.330Z",
+      "last_fire_attempted_at": "2026-07-21T06:00:20.279Z",
+      "last_fired_at": "2026-07-21T06:00:20.279Z",
+      "fire_count": 91,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "token-health-check",
+      "prompt": "cd orgs/atlasos/agents/forge && node scripts/token-health-check.js",
+      "schedule": "0 12 * * *",
+      "enabled": true,
+      "created_at": "2026-07-01T00:07:03.260Z",
+      "last_fire_attempted_at": "2026-07-20T18:00:08.887Z",
+      "last_fired_at": "2026-07-20T18:00:08.887Z",
+      "fire_count": 13,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "zarelda-request-handler",
+      "prompt": "Run node scripts/handle-zarelda-requests.js to auto-process any queued SHEET_WRITE or SHEET_READ commands from zarelda inbox",
+      "schedule": "*/5 * * * *",
+      "enabled": true,
+      "created_at": "2026-07-02T19:49:34.610Z",
+      "last_fire_attempted_at": "2026-07-21T06:25:20.569Z",
+      "last_fired_at": "2026-07-21T06:25:20.569Z",
+      "fire_count": 2581,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "tether-restart-check",
+      "prompt": "Run node scripts/conditional-daemon-restart.js to check if iPhone tether (172.20.x.x) is still active. Script logs the outcome and restarts the daemon if tether is still present. After it completes, remove this cron: cortextos bus remove-cron forge tether-restart-check",
+      "schedule": "0 4 4 7 *",
+      "enabled": false,
+      "created_at": "2026-07-03T23:11:44.918Z",
+      "paused_reason": "paused Jul 15 2026 in the fleet usage-conserve pause; reason never updated at the time; pending Atlas triage of consumer and duplication; review by Jul 21 2026; do not re-enable without that triage"
+    },
+    {
+      "name": "recent-outreach-sync",
+      "prompt": "cd orgs/atlasos/agents/forge && node scripts/sync-recent-outreach.js",
+      "schedule": "*/30 * * * *",
+      "enabled": true,
+      "created_at": "2026-07-11T20:37:00.509Z",
+      "last_fire_attempted_at": "2026-07-21T06:00:20.279Z",
+      "last_fired_at": "2026-07-21T06:00:20.279Z",
+      "fire_count": 277,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "daily-doorloop-sync",
+      "prompt": "cd orgs/atlasos/agents/forge && node scripts/sync-doorloop-properties.js",
+      "schedule": "0 13 * * *",
+      "enabled": true,
+      "created_at": "2026-07-12T00:24:54.003Z",
+      "last_fire_attempted_at": "2026-07-20T19:00:09.470Z",
+      "last_fired_at": "2026-07-20T19:00:09.470Z",
+      "fire_count": 7,
+      "paused_reason": "usage-conserve Jul 15"
+    },
+    {
+      "name": "imessage-alert-jennifer",
+      "prompt": "Run node scripts/imessage-alert-jennifer.js to check for important iMessages (getting-paid, deadlines, partner/lender/attorney/tenant/VA) and alert Jennifer directly",
+      "schedule": "*/5 * * * *",
+      "enabled": true,
+      "created_at": "2026-07-13T16:47:57.017Z",
+      "last_fire_attempted_at": "2026-07-21T06:25:20.569Z",
+      "last_fired_at": "2026-07-21T06:25:20.569Z",
+      "fire_count": 1253,
+      "paused_reason": "usage-conserve until Jul 18 2026"
+    },
+    {
+      "name": "heartbeat",
+      "prompt": "Run: cd orgs/atlasos/agents/forge && node \"C:/Users/jenni/AppData/Roaming/npm/node_modules/cortextos/dist/cli.js\" bus update-heartbeat 'forge operational'",
+      "schedule": "30m",
+      "enabled": true,
+      "created_at": "2026-07-18T18:00:56.388Z",
+      "last_fire_attempted_at": "2026-07-21T06:15:50.452Z",
+      "last_fired_at": "2026-07-21T06:15:50.452Z",
+      "fire_count": 107
+    },
+    {
+      "name": "clickup-pull",
+      "prompt": "Run: cortextos bus clickup-pull — pulls due dates and priorities Jennifer set by hand in ClickUp back onto local tasks so the fleet sees her edits. Report ONLY if something changed or it failed; if 0 items updated, stay silent.",
+      "schedule": "1h",
+      "enabled": true,
+      "created_at": "2026-07-19T19:01:22.090Z",
+      "description": "Pull Jennifer'\\''s manual ClickUp edits back into the local task store",
+      "last_fire_attempted_at": "2026-07-21T05:45:50.019Z",
+      "last_fired_at": "2026-07-21T05:45:50.019Z",
+      "fire_count": 27
+    }
+  ]
+}
