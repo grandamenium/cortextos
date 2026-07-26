@@ -4328,6 +4328,11 @@ busCommand
   .action(() => runHook('hook-context-status'));
 
 busCommand
+  .command('hook-retrieval-enforcer')
+  .description('UserPromptSubmit hook: selective/cached documented-past retrieval injection')
+  .action(() => runHook('hook-retrieval-enforcer'));
+
+busCommand
   .command('hook-ask-telegram')
   .description('PreToolUse hook: forward AskUserQuestion to Telegram (cross-platform)')
   .action(() => runHook('hook-ask-telegram'));

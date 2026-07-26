@@ -19,6 +19,7 @@ export default defineConfig({
     'hooks/hook-context-status': 'src/hooks/hook-context-status.ts',
     'hooks/hook-tool-result-router': 'src/hooks/hook-tool-result-router.ts',
     'hooks/hook-loop-detector': 'src/hooks/hook-loop-detector.ts',
+    'hooks/hook-retrieval-enforcer': 'src/hooks/hook-retrieval-enforcer.ts',
     'pty/pty-host-entry': 'src/pty/pty-host-entry.ts',
   },
   format: ['cjs'],
