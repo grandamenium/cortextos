@@ -14,99 +14,10 @@ import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
 import { atomicWriteSync } from '../utils/atomic.js';
 import { stripControlChars, sanitizeForPtyInjection, wrapFenceSafe } from '../utils/validate.js';
-import { loadBuffer } from './conversation-buffer.js';
 import { agentHoldsContextHandoffLease, releaseContextHandoffLease, requestContextHandoffLease } from './context-handoff-lease.js';
+import { ensureMissionAnchorFromBuffer, findFreshRecentHandoffDoc } from './restart-context.js';
 
 type LogFn = (msg: string) => void;
-
-const MAX_MISSION_CHARS = 600;
-
-function truncateMissionText(text: string, maxChars: number = MAX_MISSION_CHARS): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
-}
-
-export function deriveMissionFromTrailingInbound(
-  entries: ConversationBufferEntry[],
-  agentName: string,
-  maxChars: number = MAX_MISSION_CHARS,
-): string {
-  const trailingInbound: string[] = [];
-
-  for (let idx = entries.length - 1; idx >= 0; idx -= 1) {
-    const entry = entries[idx];
-    const isInboundTelegram = entry.sender !== agentName && entry.via === 'telegram';
-    if (!isInboundTelegram) {
-      break;
-    }
-
-    const trimmedContent = entry.content.trim();
-    if (trimmedContent) {
-      trailingInbound.push(trimmedContent);
-    }
-  }
-
-  if (trailingInbound.length === 0) {
-    return '';
-  }
-
-  return truncateMissionText(trailingInbound.reverse().join('\n\n'), maxChars);
-}
-
-function ensureMissionAnchorFromBuffer(agentDir: string, ctxRoot: string, agentName: string): void {
-  try {
-    const missionPath = join(agentDir, 'state', 'current-mission.txt');
-    if (existsSync(missionPath)) {
-      return;
-    }
-
-    const mission = deriveMissionFromTrailingInbound(loadBuffer(ctxRoot, agentName), agentName);
-    if (!mission) {
-      return;
-    }
-
-    mkdirSync(join(agentDir, 'state'), { recursive: true });
-    writeFileSync(missionPath, mission, 'utf-8');
-  } catch {
-    // Buffer/mission recovery is best-effort and must never block restart handling.
-  }
-}
-
-function findFreshRecentHandoffDoc(
-  handoffsDir: string,
-  cutoffMs: number,
-  ctxHandoffFiredAt: number,
-): string | null {
-  if (!existsSync(handoffsDir)) {
-    return null;
-  }
-
-  const recent = readdirSync(handoffsDir)
-    .filter((fileName) => fileName.startsWith('handoff-') && fileName.endsWith('.md'))
-    .map((fileName) => {
-      const fullPath = join(handoffsDir, fileName);
-      return {
-        fullPath,
-        mtimeMs: statSync(fullPath).mtimeMs,
-      };
-    })
-    .filter(({ mtimeMs }) => {
-      if (mtimeMs < cutoffMs) {
-        return false;
-      }
-      if (ctxHandoffFiredAt > 0 && mtimeMs < ctxHandoffFiredAt) {
-        return false;
-      }
-      return true;
-    })
-    .sort((left, right) => right.mtimeMs - left.mtimeMs);
-
-  return recent[0]?.fullPath ?? null;
-}
 
 /**
  * Post-boot grace window (ms) during which soft context-handoff actions are
@@ -1251,18 +1162,16 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return;
     }
 
+    // Detection is warn-only. We deliberately do NOT sessionRefresh on an overdue
+    // cron: force-restarting an agent does not make a cron fire, upstream has no
+    // such escalation, and it created a self-reinforcing churn loop (a busy agent
+    // misses a cron -> liveness restarts it -> it misses more -> restarts again).
+    // Missed fires are already recovered by the cron-scheduler catch-up policy on
+    // the next reload. Log persistent overdue for visibility, rate-limited to 15min.
     this.cronLivenessOverdueStreak += 1;
-    if (this.cronLivenessOverdueStreak === 1) {
-      // First detection: soft log only (self-heal expected via mtime tick / reload).
-      this.log('Cron liveness: overdue detected — waiting one more cycle before restart escalation');
-      return;
-    }
-
-    // Second consecutive: escalate via existing sessionRefresh + circuit
     if (now - this.cronLivenessLastEscalationAt < 15 * 60_000) return;
     this.cronLivenessLastEscalationAt = now;
-    this.log('Cron liveness: escalating via sessionRefresh');
-    this.agent.sessionRefresh().catch((err) => this.log(`Cron liveness restart failed: ${err}`));
+    this.log('Cron liveness: cron(s) persistently overdue — catch-up handles missed fires, not restarting');
   }
 
   /**

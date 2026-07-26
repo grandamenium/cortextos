@@ -5,7 +5,7 @@
 
 import { parseDurationMs } from '../bus/cron-state.js';
 import type { CronDefinition } from '../types/index.js';
-import { CronScheduler } from './cron-scheduler.js';
+import { CronScheduler, nextFireFromCron } from './cron-scheduler.js';
 
 export interface CronLivenessInput {
   cron: CronDefinition;
@@ -59,31 +59,52 @@ export function evaluateCronLiveness(input: CronLivenessInput): CronLivenessResu
     return { overdue: false, wakeSkip: true };
   }
 
-  const interval = scheduleIntervalMs(cron, nowMs);
-  if (interval === null) return { overdue: false };
-
   const candidates = [
     parseIsoMs(cron.last_fired_at),
     parseIsoMs(cron.last_fire_attempted_at),
     parseIsoMs(stateLastFire),
   ].filter((n): n is number => n !== null);
+  const baseline: number | null = candidates.length
+    ? Math.max(...candidates)
+    : parseIsoMs(cron.created_at);
+  if (baseline === null) return { overdue: false };
 
-  let baseline: number;
-  if (candidates.length === 0) {
-    const created = parseIsoMs(cron.created_at);
-    if (created === null) return { overdue: false };
-    baseline = created;
-    // brand-new cron: only overdue if past first expected interval + grace
-  } else {
-    baseline = Math.max(...candidates);
+  const s = (cron.schedule || '').trim();
+
+  // Interval schedules ("6h", "30m"): a fixed period elapses between fires, so
+  // overdue = the interval + grace has passed since the last fire.
+  if (/^\d+[smhdw]$/i.test(s)) {
+    const interval = scheduleIntervalMs(cron, nowMs);
+    if (interval === null) return { overdue: false };
+    if (nowMs - baseline > interval + GRACE_MS) {
+      return {
+        overdue: true,
+        reason: `cron '${cron.name}' overdue by ${Math.round((nowMs - baseline - interval) / 60000)}m`,
+      };
+    }
+    return { overdue: false };
   }
 
-  const limit = interval + GRACE_MS;
-  if (nowMs - baseline > limit) {
-    return {
-      overdue: true,
-      reason: `cron '${cron.name}' overdue by ${Math.round((nowMs - baseline - interval) / 60000)}m`,
-    };
+  // 5-field cron expressions: a cron is overdue ONLY if it missed its most recent
+  // SCHEDULED slot — not merely "hasn't fired in 24h". The old flat-24h interval
+  // flagged every cron firing less often than daily (weekly/monthly) as perpetually
+  // overdue, which drove a false-positive restart storm. Derive the previous
+  // scheduled slot from the schedule itself and check the last fire covered it.
+  if (s.split(/\s+/).length === 5) {
+    const next = nextFireFromCron(s, nowMs);
+    if (!Number.isFinite(next)) return { overdue: false };
+    const following = nextFireFromCron(s, next + 60_000);
+    const period = Number.isFinite(following) ? following - next : 24 * 60 * 60_000;
+    const prevSlot = next - period; // most recent scheduled fire time <= now (approx for irregular schedules)
+    // Double grace absorbs schedule-boundary jitter so an on-time cron is never flagged.
+    if (nowMs > prevSlot + GRACE_MS && baseline < prevSlot - GRACE_MS) {
+      return {
+        overdue: true,
+        reason: `cron '${cron.name}' missed scheduled fire at ${new Date(prevSlot).toISOString()}`,
+      };
+    }
+    return { overdue: false };
   }
+
   return { overdue: false };
 }
