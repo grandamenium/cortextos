@@ -12,6 +12,7 @@
 
 import { fork, type ChildProcess } from 'child_process';
 import { join } from 'path';
+import { existsSync } from 'fs';
 import type { PtyClientMsg, PtyHostMsg, PtySpawnMsg } from './pty-ipc.js';
 
 interface IPtySpawnOptions {
@@ -42,12 +43,21 @@ export interface IPty {
 
 /**
  * Resolve the path to the compiled host entry point.
- * tsup emits it to dist/pty/pty-host-entry.js.
+ * tsup emits it to dist/pty/pty-host-entry.js, but pty-host-client is BUNDLED
+ * into dist/daemon.js and dist/cli.js — so at runtime __dirname is dist/, not
+ * dist/pty/. Try both layouts and pick the one that exists, so the resolution
+ * is correct whether this module runs bundled (dist/) or standalone (dist/pty/).
  */
 function resolveHostEntry(): string {
-  // __dirname in the compiled CJS output is dist/pty/
-  // Walk up to dist/ then back to pty/pty-host-entry.js
-  return join(__dirname, 'pty-host-entry.js');
+  const candidates = [
+    join(__dirname, 'pty', 'pty-host-entry.js'), // bundled: __dirname = dist/
+    join(__dirname, 'pty-host-entry.js'),        // standalone: __dirname = dist/pty/
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  // Fall back to the bundled layout so the error message names a real expected path.
+  return candidates[0];
 }
 
 class PtyHostProxy implements IPty {
