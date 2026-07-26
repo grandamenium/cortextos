@@ -70,20 +70,73 @@ function getReportsDir(org: string): string {
 export function getLatestSnapshot(org: string): LatestSnapshot | null {
   const file = path.join(getReportsDir(org), 'latest.json');
   if (!fs.existsSync(file)) return null;
+  let data: Record<string, unknown>;
   try {
-    const raw = fs.readFileSync(file, 'utf-8');
-    const data = JSON.parse(raw);
-    return {
-      date: data.date ?? '',
-      generatedAt: data.generated_at ?? '',
-      health: data.health ?? {},
-      productivity: data.productivity ?? {},
-      cost: data.cost ?? {},
-      alignment: data.alignment ?? {},
-    };
+    data = JSON.parse(fs.readFileSync(file, 'utf-8'));
   } catch {
     return null;
   }
+
+  // The nightly metrics writer (src/bus/metrics.ts collectMetrics) emits a
+  // flat schema: {timestamp, agents, system}. This reader was originally
+  // designed for a phase-based schema (date, generated_at, health,
+  // productivity, cost, alignment) that no writer ever produced. Normalize
+  // the flat schema into the phase shape so downstream widgets render real
+  // data instead of silently falling back to empty {} defaults.
+  const isFlatSchema =
+    typeof data.timestamp === 'string' &&
+    data.agents !== undefined &&
+    data.system !== undefined;
+  const isPhaseSchema =
+    data.date !== undefined ||
+    data.generated_at !== undefined ||
+    data.health !== undefined;
+
+  if (isFlatSchema) {
+    const healthAgents: Record<string, unknown> = {};
+    const flatAgents = (data.agents as Record<string, Record<string, unknown>>) ?? {};
+    for (const [name, m] of Object.entries(flatAgents)) {
+      healthAgents[name] = {
+        agent: name,
+        // heartbeat_age_min is re-read live from heartbeat.json in getFleetHealth;
+        // this stub value is only used if the live read fails.
+        heartbeat_age_min: m.heartbeat_stale ? 9999 : 0,
+        is_stale: Boolean(m.heartbeat_stale),
+        events: 0, // not present in flat schema
+        real_errors: Number(m.errors_today ?? 0),
+        crashes: 0, // not present in flat schema
+        heartbeats: 1, // not present in flat schema
+      };
+    }
+    const ts = typeof data.timestamp === 'string' ? data.timestamp : '';
+    return {
+      date: ts.split('T')[0] ?? '',
+      generatedAt: ts,
+      health: { agents: healthAgents },
+      productivity: {},
+      cost: {},
+      alignment: {},
+    };
+  }
+
+  if (isPhaseSchema) {
+    return {
+      date: (data.date as string) ?? '',
+      generatedAt: (data.generated_at as string) ?? '',
+      health: (data.health as Record<string, unknown>) ?? {},
+      productivity: (data.productivity as Record<string, unknown>) ?? {},
+      cost: (data.cost as Record<string, unknown>) ?? {},
+      alignment: (data.alignment as Record<string, unknown>) ?? {},
+    };
+  }
+
+  // Fail loud: neither known schema matched. Returning null triggers the
+  // fallback path in getFleetHealth. Console.error surfaces the mismatch in
+  // dashboard logs so schema drift shows up instead of rendering fake data.
+  console.error(
+    `[reports] Unrecognized schema in ${file}. Expected flat {timestamp, agents, system} or phase-based {date, health, ...}. Got keys: ${Object.keys(data).join(', ')}`,
+  );
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,8 +145,11 @@ export function getLatestSnapshot(org: string): LatestSnapshot | null {
 
 export function getFleetHealth(org: string): FleetHealth | null {
   const snapshot = getLatestSnapshot(org);
-  if (!snapshot?.health) {
-    // Fallback: build fleet health from live heartbeat files
+  // The `?? {}` in getLatestSnapshot (before the schema-normalization fix)
+  // made `snapshot.health` always truthy even when empty, so this guard
+  // never fired. Check for an empty object too so the live-heartbeat
+  // fallback actually runs when there's no real health data.
+  if (!snapshot?.health || Object.keys(snapshot.health).length === 0) {
     return getFleetHealthFromHeartbeats(org);
   }
 
@@ -118,8 +174,14 @@ export function getFleetHealth(org: string): FleetHealth | null {
   if (healthData.agents) {
     for (const [name, data] of Object.entries(healthData.agents)) {
       const hb = data.heartbeats || 1;
-      // Stability based on real errors, not total restarts (which include planned restarts)
-      const stability = Math.round(((hb - data.real_errors) / hb) * 100);
+      // Stability based on real errors, not total restarts (which include planned restarts).
+      // Clamped to [0, 100]: when the source schema is the flat metrics writer,
+      // per-agent lifetime heartbeat count is not emitted and defaults to 1 in the
+      // reader, so real_errors > 1 would otherwise produce a nonsensical negative.
+      const stability = Math.max(
+        0,
+        Math.min(100, Math.round(((hb - data.real_errors) / hb) * 100)),
+      );
       if (data.is_stale) staleCount++;
       errorCount += data.real_errors;
       totalStability += stability;
