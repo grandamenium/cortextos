@@ -1071,6 +1071,12 @@ export class AgentProcess {
     const reminderBlock = this.buildReminderBlock();
     const deliverablesBlock = this.buildDeliverablesBlock();
     const { missionBlock, liveTailBlock } = this.buildResumeContextBlocks();
+    // F3: deterministic re-read signal. Fix 2 tells --continue restarts NOT to
+    // re-read bootstrap — but if a bootstrap file was edited just before this
+    // restart, the agent DOES need to re-read that one. Stat the key files and
+    // name only the ones modified in the last 15min, so staleness is a daemon
+    // check, not a model judgment call.
+    const staleReadBlock = this.buildChangedBootstrapNote();
     // Session refresh (--continue) is never a handoff restart.
     this.lastSpawnWasHandoff = false;
     const shouldPromptTelegram = this.shouldPromptTelegramOnlineMessage();
@@ -1087,7 +1093,31 @@ export class AgentProcess {
     const onlineMessage = emitOnlineMessage
       ? ' After checking inbox, send a Telegram message to the user saying you are back online.'
       : '';
-    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved — AGENTS.md, bootstrap files, your skill list and tool registry are ALREADY in context. Do NOT re-read AGENTS.md or bootstrap files, and do NOT re-run list-skills or list-agents, unless you have specific reason to believe they changed since the last restart (re-reading them every restart is a top cause of context bloat). External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${reminderBlock}${deliverablesBlock}${missionBlock}${liveTailBlock} Check inbox. Resume normal operations.${onlineMessage}`;
+    return `SESSION CONTINUATION: Your CLI process was restarted with --continue to reload configs. Current UTC time: ${nowUtc}. Your full conversation history is preserved — AGENTS.md, bootstrap files, your skill list and tool registry are ALREADY in context. Do NOT re-read AGENTS.md or bootstrap files, and do NOT re-run list-skills or list-agents, unless you have specific reason to believe they changed since the last restart (re-reading them every restart is a top cause of context bloat). External crons are auto-loaded by the daemon — do NOT call CronCreate or CronList for cron restoration.${staleReadBlock}${reminderBlock}${deliverablesBlock}${missionBlock}${liveTailBlock} Check inbox. Resume normal operations.${onlineMessage}`;
+  }
+
+  /**
+   * F3: return a note naming bootstrap files modified in the last 15 minutes, so
+   * a --continue restart that follows a config edit re-reads ONLY the changed
+   * files (deterministic, not a model guess). Empty string when nothing changed.
+   */
+  private buildChangedBootstrapNote(): string {
+    try {
+      const dir = this.env.agentDir;
+      const candidates = ['AGENTS.md', 'CLAUDE.md', 'OPERATIONS.md'];
+      const cutoff = Date.now() - 15 * 60_000;
+      const changed: string[] = [];
+      for (const f of candidates) {
+        const p = join(dir, f);
+        try {
+          if (existsSync(p) && statSync(p).mtimeMs > cutoff) changed.push(f);
+        } catch { /* unreadable — skip */ }
+      }
+      if (!changed.length) return '';
+      return ` NOTE: ${changed.join(', ')} changed since your last restart — re-read ONLY ${changed.length === 1 ? 'that file' : 'those files'} now (they are the exception to the do-not-re-read rule above).`;
+    } catch {
+      return '';
+    }
   }
 
   private buildResumeContextBlocks(): { missionBlock: string; liveTailBlock: string } {
