@@ -55,7 +55,7 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
    TODAY=$(date -u +%Y-%m-%d)
    cat >> "memory/$TODAY.md" << MEMEOF
 
-## Session End - $(date -u +%H:%M:%S UTC)
+## Session End - $(date -u +'%H:%M:%S UTC')
 - Status: [done/interrupted/context-full]
 - Current state: [where things stand — specific enough that the next session can resume cold]
 - Active threads: [anything in progress or mid-task with current state]
@@ -266,7 +266,7 @@ Each entry should answer: **"if my context was wiped right now, what would I nee
 
 **Mid-work inline notes — write immediately, don't wait for heartbeat:**
 ```bash
-echo "NOTE $(date -u +%H:%M UTC): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
+echo "NOTE $(date -u +'%H:%M UTC'): <key decision / discovery / user preference / non-obvious thing>" >> "memory/$TODAY.md"
 ```
 Use this when: you make a significant decision, learn something about the user, hit a non-obvious situation, or encounter anything you would want the next session to know. One line is enough. The heartbeat is for structured summaries — inline notes capture the moment.
 
@@ -275,7 +275,7 @@ TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
 cat >> "memory/$TODAY.md" << MEMEOF
 
-## Session Start - $(date -u +%H:%M:%S UTC)
+## Session Start - $(date -u +'%H:%M:%S UTC')
 - Status: online
 - Crons active: <list from `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">

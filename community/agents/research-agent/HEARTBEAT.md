@@ -69,7 +69,7 @@ MEMORY_DIR="$(pwd)/memory"
 mkdir -p "$MEMORY_DIR"
 cat >> "$MEMORY_DIR/$TODAY.md" << MEMORY
 
-## Heartbeat Update - $(date -u +%H:%M UTC) / $LOCAL_TIME
+## Heartbeat Update - $(date -u +'%H:%M UTC') / $LOCAL_TIME
 - WORKING ON: <task_id or "none">
 - Status: <healthy/working/blocked>
 - Inbox: <N messages processed>
