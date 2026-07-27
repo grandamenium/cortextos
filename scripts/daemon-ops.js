@@ -34,13 +34,33 @@ const daemonOutLog = path.join(logDir, 'daemon-out.log');
 const daemonPidFile = path.join(ctxRoot, 'daemon.pid');       // daemon writes its own process.pid
 const launcherPidFile = path.join(ctxRoot, 'ops-daemon.pid'); // we write child.pid at spawn
 const BOOT_MARKER = 'Bootstrap complete';
-const EXPECTED_AGENTS = 3;
 const HEALTH_TIMEOUT_S = 150;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function ensureLogDir() { try { fs.mkdirSync(logDir, { recursive: true }); } catch (_) {} }
 function readPidFrom(f) { try { const p = parseInt(fs.readFileSync(f, 'utf8').trim(), 10); return Number.isFinite(p) ? p : null; } catch (_) { return null; } }
 function isAlive(pid) { if (!pid) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
+
+// LOCAL PATCH (Ops Command Part B, 2026-07-24) - re-apply on upstream sync.
+// Count enabled agent configs for the active org; a positive override wins.
+function expectedAgentCount(env, frameworkRoot) {
+  const override = Number(env.CTX_EXPECTED_AGENTS);
+  if (Number.isInteger(override) && override > 0) return override;
+  const org = env.CTX_ORG;
+  if (!org || !frameworkRoot) return 1;
+  const agentsDir = path.join(frameworkRoot, 'orgs', org, 'agents');
+  try {
+    const enabled = fs.readdirSync(agentsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) => {
+        try {
+          const config = JSON.parse(fs.readFileSync(path.join(agentsDir, entry.name, 'config.json'), 'utf8'));
+          return config.enabled !== false;
+        } catch (_) { return false; }
+      }).length;
+    return Math.max(1, enabled);
+  } catch (_) { return 1; }
+}
 
 // Identity: the command line of a pid (or null). Used to refuse killing a
 // PID-reused, unrelated process.
@@ -92,6 +112,8 @@ async function doStart(ecosystemPath) {
   const args = String(app.args || '').split(/\s+/).filter(Boolean);
   const env = Object.assign({}, process.env, app.env || {});
   const cwd = app.cwd || path.dirname(path.dirname(app.script));
+  const frameworkRoot = env.CTX_FRAMEWORK_ROOT || cwd;
+  const expectedAgents = expectedAgentCount(env, frameworkRoot);
 
   // Record where the log ends now, so the health gate only counts THIS run's
   // bootstrap markers (the log is append-mode across runs).
@@ -120,16 +142,16 @@ async function doStart(ecosystemPath) {
       const buf = fs.readFileSync(daemonOutLog, 'utf8').slice(logStartOffset);
       booted = (buf.match(new RegExp(BOOT_MARKER, 'g')) || []).length;
     } catch (_) {}
-    if (booted >= EXPECTED_AGENTS) { console.log(`[daemon-ops] healthy: ${booted}/${EXPECTED_AGENTS} agents bootstrapped (pid ${child.pid}).`); process.exit(0); }
+    if (booted >= expectedAgents) { console.log(`[daemon-ops] healthy: ${booted}/${expectedAgents} agents bootstrapped (pid ${child.pid}).`); process.exit(0); }
   }
   // Timeout: partial is acceptable-but-warned; zero is a failure.
   let finalBooted = 0;
   try { finalBooted = ((fs.readFileSync(daemonOutLog, 'utf8').slice(logStartOffset)).match(new RegExp(BOOT_MARKER, 'g')) || []).length; } catch (_) {}
   if (finalBooted >= 1 && isAlive(child.pid)) {
-    console.log(`[daemon-ops] WARNING: only ${finalBooted}/${EXPECTED_AGENTS} agents bootstrapped in ${HEALTH_TIMEOUT_S}s; daemon alive (pid ${child.pid}). Proceeding - review logs.`);
+    console.log(`[daemon-ops] WARNING: only ${finalBooted}/${expectedAgents} agents bootstrapped in ${HEALTH_TIMEOUT_S}s; daemon alive (pid ${child.pid}). Proceeding - review logs.`);
     process.exit(0);
   }
-  console.error(`[daemon-ops] UNHEALTHY: ${finalBooted}/${EXPECTED_AGENTS} agents bootstrapped in ${HEALTH_TIMEOUT_S}s. Investigate daemon-err.log / per-agent logs.`);
+  console.error(`[daemon-ops] UNHEALTHY: ${finalBooted}/${expectedAgents} agents bootstrapped in ${HEALTH_TIMEOUT_S}s. Investigate daemon-err.log / per-agent logs.`);
   process.exit(5);
 }
 

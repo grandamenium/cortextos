@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 let capturedOnExit: ((code: number) => void) | null = null;
 let capturedPtyConfig: unknown = null;
 const mockPty = {
-  spawn: vi.fn().mockResolvedValue(undefined),
+  spawnOneShot: vi.fn().mockResolvedValue(undefined),
   kill: vi.fn(),
   write: vi.fn(),
   getPid: vi.fn().mockReturnValue(12345),
@@ -45,7 +45,7 @@ const mockEnv = {
 beforeEach(() => {
   capturedOnExit = null;
   capturedPtyConfig = null;
-  mockPty.spawn.mockClear();
+  mockPty.spawnOneShot.mockClear();
   mockPty.kill.mockClear();
   mockPty.write.mockClear();
   mockInjectMessage.mockClear();
@@ -81,6 +81,7 @@ describe('WorkerProcess', () => {
     it('returns running after spawn', async () => {
       const w = new WorkerProcess('w4', '/tmp/proj', undefined);
       await w.spawn(mockEnv, 'do the task');
+      expect(mockPty.spawnOneShot).toHaveBeenCalledWith('do the task');
       expect(w.getStatus().status).toBe('running');
       expect(w.getStatus().pid).toBe(12345);
     });
@@ -164,12 +165,13 @@ describe('WorkerProcess', () => {
   });
 
   describe('terminate', () => {
-    it('kills the PTY and marks completed', async () => {
+    it('kills the PTY and marks failed when externally terminated', async () => {
       const w = new WorkerProcess('w13', '/tmp/proj', undefined);
       await w.spawn(mockEnv, 'task');
       await w.terminate();
       expect(mockPty.kill).toHaveBeenCalled();
-      expect(w.getStatus().status).toBe('completed');
+      expect(w.getStatus().status).toBe('failed');
+      expect(w.getStatus().exitCode).toBe(143);
     });
 
     it('is a no-op if not running', async () => {

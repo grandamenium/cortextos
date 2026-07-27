@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync } from 'fs';
-import { execFile } from 'child_process';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
+import { updateHeartbeat } from '../bus/heartbeat.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
@@ -125,13 +125,18 @@ export class FastChecker {
     this.log('Bootstrap complete. Beginning poll loop.');
 
     // Idle-session heartbeat watchdog: fires every 50 min regardless of REPL state
+    // LOCAL PATCH (Ops Command Part B, 2026-07-24) - re-apply on upstream sync.
     const HEARTBEAT_INTERVAL_MS = 50 * 60 * 1000;
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
-        if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-      });
+      const msg = `[watchdog] ${agentName} alive — idle session ${ts}`;
+      try {
+        // updateHeartbeat atomically writes state/<agent>/heartbeat.json.
+        updateHeartbeat(this.paths, agentName, msg);
+      } catch (err) {
+        this.log(`Heartbeat watchdog error: ${err}`);
+      }
     }, HEARTBEAT_INTERVAL_MS);
 
     while (this.running) {

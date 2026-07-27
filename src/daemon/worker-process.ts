@@ -26,6 +26,8 @@ export class WorkerProcess {
   private exitCode: number | undefined;
   private onDoneCallback: ((name: string, exitCode: number) => void) | null = null;
   private log: (msg: string) => void;
+  private maxRuntimeTimer: NodeJS.Timeout | null = null;
+  private finished = false;
 
   constructor(
     name: string,
@@ -54,19 +56,29 @@ export class WorkerProcess {
     const logPath = join(env.ctxRoot, 'logs', this.name, 'stdout.log');
     this.pty = new AgentPTY(env, config, logPath);
 
-    this.pty.onExit((code) => {
-      this.exitCode = code;
-      this.status = code === 0 ? 'completed' : 'failed';
-      this.log(`Exited with code ${code} → ${this.status}`);
-      if (this.onDoneCallback) {
-        this.onDoneCallback(this.name, code);
-      }
-      this.pty = null;
-    });
-
-    await this.pty.spawn('fresh', prompt);
     this.status = 'running';
-    this.log(`Running (pid: ${this.pty.getPid()}, dir: ${this.dir})`);
+    this.pty.onExit((code) => this.finish(code));
+
+    const maxSeconds = parseMaxRuntimeSeconds(process.env.CTX_WORKER_MAX_SECONDS);
+    this.maxRuntimeTimer = setTimeout(() => {
+      if (this.finished) return;
+      this.log(`Hard timeout after ${maxSeconds}s; force-terminating PTY`);
+      const pty = this.pty;
+      this.finish(124);
+      try { pty?.kill(); } catch { /* already exited */ }
+    }, maxSeconds * 1000);
+    this.maxRuntimeTimer.unref();
+
+    // LOCAL PATCH (Ops Command Part B, 2026-07-24) - re-apply on upstream sync.
+    // Native --print is a reliable completion boundary; unlike TUI output
+    // detection it preserves CLI success/failure exit codes and stdout logging.
+    try {
+      await this.pty.spawnOneShot(prompt);
+      this.log(`Running one-shot (pid: ${this.pty?.getPid()}, dir: ${this.dir}, max: ${maxSeconds}s)`);
+    } catch (err) {
+      this.finish(1);
+      throw err;
+    }
   }
 
   /**
@@ -75,13 +87,13 @@ export class WorkerProcess {
   async terminate(): Promise<void> {
     if (!this.pty) return;
     this.log('Terminating...');
+    const pty = this.pty;
     try {
-      this.pty.write('\x03'); // Ctrl-C
+      pty.write('\x03'); // Ctrl-C
       await sleep(500);
-      this.pty.kill();
+      pty.kill();
     } catch { /* ignore */ }
-    this.status = 'completed';
-    this.pty = null;
+    this.finish(143);
   }
 
   /**
@@ -119,6 +131,26 @@ export class WorkerProcess {
   onDone(cb: (name: string, exitCode: number) => void): void {
     this.onDoneCallback = cb;
   }
+
+  private finish(code: number): void {
+    if (this.finished) return;
+    this.finished = true;
+    if (this.maxRuntimeTimer) {
+      clearTimeout(this.maxRuntimeTimer);
+      this.maxRuntimeTimer = null;
+    }
+    this.exitCode = code;
+    this.status = code === 0 ? 'completed' : 'failed';
+    this.pty = null;
+    this.log(`Exited with code ${code} → ${this.status}`);
+    this.onDoneCallback?.(this.name, code);
+  }
+}
+
+export function parseMaxRuntimeSeconds(raw: string | undefined): number {
+  if (!raw) return 1800;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : 1800;
 }
 
 function sleep(ms: number): Promise<void> {

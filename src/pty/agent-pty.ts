@@ -51,6 +51,20 @@ export class AgentPTY {
    * @param prompt The startup or continue prompt to pass to Claude
    */
   async spawn(mode: 'fresh' | 'continue', prompt: string): Promise<void> {
+    await this.spawnInternal(mode, prompt, false);
+  }
+
+  // LOCAL PATCH (Ops Command Part B, 2026-07-24) - re-apply on upstream sync.
+  /** Spawn a single-turn process while preserving normal agent context. */
+  async spawnOneShot(prompt: string): Promise<void> {
+    await this.spawnInternal('fresh', prompt, true);
+  }
+
+  private async spawnInternal(
+    mode: 'fresh' | 'continue',
+    prompt: string,
+    oneShot: boolean,
+  ): Promise<void> {
     if (this.pty) {
       throw new Error('PTY already spawned. Kill first.');
     }
@@ -143,7 +157,7 @@ export class AgentPTY {
     // env is passed natively via node-pty options; no bash export commands required.
     // On Windows, npm global installs create .cmd wrappers, not .exe binaries.
     // node-pty's CreateProcess requires the exact wrapper name to resolve correctly.
-    const claudeArgs = this.buildClaudeArgs(mode, prompt);
+    const claudeArgs = this.buildClaudeArgs(mode, prompt, oneShot);
     const claudeCmd = this.getBinaryName();
 
     this.pty = this.spawnFn!(claudeCmd, claudeArgs, {
@@ -252,8 +266,12 @@ export class AgentPTY {
    * Returns args suitable for passing directly to node-pty spawn (no shell escaping needed).
    * Protected so HermesPTY can override this for its own spawn args.
    */
-  protected buildClaudeArgs(mode: 'fresh' | 'continue', prompt: string): string[] {
+  protected buildClaudeArgs(mode: 'fresh' | 'continue', prompt: string, oneShot: boolean = false): string[] {
     const args: string[] = [];
+
+    if (oneShot) {
+      args.push('--print');
+    }
 
     if (mode === 'continue') {
       args.push('--continue');

@@ -1,6 +1,6 @@
 import { createServer, Server, Socket } from 'net';
 import { existsSync, unlinkSync, chmodSync, readFileSync } from 'fs';
-import { join, resolve as pathResolve } from 'path';
+import { isAbsolute, join, relative, resolve as pathResolve, sep as pathSep } from 'path';
 import type { IPCRequest, IPCResponse, CronSummaryRow, CronDefinition } from '../types/index.js';
 import { AgentManager } from './agent-manager.js';
 import { getIpcPath } from '../utils/paths.js';
@@ -672,8 +672,17 @@ export class IPCServer {
             const resolvedDir = pathResolve(d.dir);
             const ctxRoot = process.env.CTX_ROOT ? pathResolve(process.env.CTX_ROOT) : '';
             const cwd = pathResolve(process.cwd());
-            const underCtxRoot = ctxRoot && (resolvedDir === ctxRoot || resolvedDir.startsWith(ctxRoot + '/'));
-            const underCwd = resolvedDir === cwd || resolvedDir.startsWith(cwd + '/');
+            // LOCAL PATCH (Ops Command Part B, 2026-07-24) - re-apply on upstream sync.
+            // path.relative is separator-correct and rejects sibling prefix tricks.
+            const isContained = (root: string): boolean => {
+              if (!root) return false;
+              const rel = relative(root, resolvedDir);
+              return rel === '' || (
+                !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${pathSep}`)
+              );
+            };
+            const underCtxRoot = isContained(ctxRoot);
+            const underCwd = isContained(cwd);
             if (!underCtxRoot && !underCwd) {
               response = { success: false, error: 'Invalid worker dir' };
             } else {
