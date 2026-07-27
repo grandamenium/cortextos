@@ -94,21 +94,61 @@ describe('checkUsageApi', () => {
     writeStore();
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ five_hour_utilization: 0.42, seven_day_utilization: 0.18 }),
+      json: async () => ({ five_hour_utilization: 42, seven_day_utilization: 18 }),
     });
 
     const result = await checkUsageApi(tmpDir);
-    expect(result.five_hour_utilization).toBe(0.42);
-    expect(result.seven_day_utilization).toBe(0.18);
+    expect(result.five_hour_utilization).toBeCloseTo(0.42);
+    expect(result.seven_day_utilization).toBeCloseTo(0.18);
     expect(result.cached).toBe(false);
     expect(mockFetch).toHaveBeenCalledOnce();
   });
 
-  it('normalizes 0-100 values to 0.0-1.0', async () => {
+  it('converts percentage points to a fraction', async () => {
     writeStore();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ five_hour_utilization: 42, seven_day_utilization: 18 }),
+    });
+
+    const result = await checkUsageApi(tmpDir, { force: true });
+    expect(result.five_hour_utilization).toBeCloseTo(0.42);
+    expect(result.seven_day_utilization).toBeCloseTo(0.18);
+  });
+
+  // Regression: normalize() used to be `v > 1 ? v / 100 : v`, so the whole
+  // 0–1% band was inflated 100x. A real 1% arrived as 1.0 (= 100%), which is
+  // both a false CODE RED and — because the value is persisted to
+  // accounts.json — enough to trip rotateOAuth's 0.85 threshold on an
+  // almost-idle account. Values above 1% were unaffected, which is why this
+  // survived: it only misfires when usage is low.
+  it('does not inflate sub-1% utilization (regression)', async () => {
+    writeStore();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        five_hour: { utilization: 1 },
+        seven_day: { utilization: 4 },
+      }),
+    });
+
+    const result = await checkUsageApi(tmpDir, { force: true });
+    expect(result.five_hour_utilization).toBeCloseTo(0.01);
+    expect(result.seven_day_utilization).toBeCloseTo(0.04);
+    // Must stay well clear of THRESHOLD_5H (0.85) — the rotation trigger.
+    expect(result.five_hour_utilization).toBeLessThan(0.85);
+  });
+
+  // The live API returns the NESTED shape; every other test here feeds the flat
+  // fallback, so without this the real response shape goes unexercised.
+  it('reads the nested five_hour/seven_day shape the live API returns', async () => {
+    writeStore();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        five_hour: { utilization: 42, resets_at: '2026-07-27T23:00:00Z' },
+        seven_day: { utilization: 18, resets_at: '2026-08-01T00:00:00Z' },
+      }),
     });
 
     const result = await checkUsageApi(tmpDir, { force: true });

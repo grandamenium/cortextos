@@ -232,10 +232,18 @@ export async function checkUsageApi(
     sevenDayUtilization?: number;
   };
 
-  // Normalize 0–100 → 0.0–1.0 if needed
+  // Convert percentage points → fraction. The usage API reports utilization on a
+  // 0–100 scale, ALWAYS — `seven_day.utilization: 4.0` means 4%, not 400%.
+  //
+  // This was previously `v > 1 ? v / 100 : v`, which assumed any value <= 1 was
+  // already a fraction. That inflated the entire 0–1% band by 100x: a real 1%
+  // came through as 1.0 (= 100%). Consequences were not cosmetic — the value is
+  // persisted to accounts.json below, where rotateOAuth reads it against
+  // THRESHOLD_5H (0.85), so an almost-idle account could trigger a rotation, and
+  // the watchdog fired CODE RED alerts on ~1% real usage.
   const normalize = (v: number | undefined) => {
     if (v === undefined) return 0;
-    return v > 1 ? v / 100 : v;
+    return v / 100;
   };
 
   const fiveHour = normalize(
