@@ -1,4 +1,7 @@
-node_modules/
+# No trailing slash: `node_modules/` matches only real directories, so a
+# SYMLINKED node_modules (common in worktree checkouts) evades it and can be
+# committed — which once took down every agent sharing this checkout's bus.
+node_modules
 .claude/
 !.claude/commands/
 !.claude/commands/**
