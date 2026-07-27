@@ -171,9 +171,40 @@ export async function processMediaMessage(
     const fileName = msg.video.file_name
       ? sanitizeFilename(msg.video.file_name)
       : defaultName;
+
+    // Telegram Bot API cannot serve files >20 MB via getFile.
+    // Surface metadata so the agent sees the message instead of silently dropping it.
+    const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
+    const fileSize = msg.video.file_size || 0;
+    if (fileSize > MAX_DOWNLOAD_BYTES) {
+      const sizeMB = (fileSize / (1024 * 1024)).toFixed(1);
+      return {
+        type: 'video',
+        chat_id: chatId,
+        from,
+        text: caption || `[video ${sizeMB} MB — too large to auto-download; save from Telegram manually]`,
+        date,
+        file_path: '',
+        file_name: fileName,
+        duration: msg.video.duration,
+      };
+    }
+
     const fileResponse = await api.getFile(msg.video.file_id);
     const filePath = fileResponse?.result?.file_path;
-    if (!filePath) return null;
+    if (!filePath) {
+      // getFile failed (file may exceed 20 MB limit even without file_size set)
+      return {
+        type: 'video',
+        chat_id: chatId,
+        from,
+        text: caption || '[video — could not retrieve download path; may exceed 20 MB limit]',
+        date,
+        file_path: '',
+        file_name: fileName,
+        duration: msg.video.duration,
+      };
+    }
 
     const localFile = path.join(downloadDir, fileName);
     const data = await api.downloadFile(filePath);
@@ -193,10 +224,36 @@ export async function processMediaMessage(
 
   // Video Note (round video)
   if (msg.video_note) {
+    const fileSize = msg.video_note.file_size || 0;
+    const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
     const fileName = `videonote_${date}.mp4`;
+
+    if (fileSize > MAX_DOWNLOAD_BYTES) {
+      const sizeMB = (fileSize / (1024 * 1024)).toFixed(1);
+      return {
+        type: 'video_note',
+        chat_id: chatId,
+        from,
+        text: `[video note ${sizeMB} MB — too large to auto-download]`,
+        date,
+        file_path: '',
+        duration: msg.video_note.duration,
+      };
+    }
+
     const fileResponse = await api.getFile(msg.video_note.file_id);
     const filePath = fileResponse?.result?.file_path;
-    if (!filePath) return null;
+    if (!filePath) {
+      return {
+        type: 'video_note',
+        chat_id: chatId,
+        from,
+        text: '[video note — could not retrieve download path; may exceed 20 MB limit]',
+        date,
+        file_path: '',
+        duration: msg.video_note.duration,
+      };
+    }
 
     const localFile = path.join(downloadDir, fileName);
     const data = await api.downloadFile(filePath);
