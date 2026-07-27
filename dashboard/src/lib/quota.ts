@@ -102,9 +102,20 @@ async function fetchFresh(): Promise<QuotaSnapshot | null> {
     sevenDayUtilization?: number;
   };
 
+  // Convert percentage points → fraction. The usage API reports utilization on
+  // a 0–100 scale, ALWAYS — `seven_day.utilization: 4.0` means 4%, not 400%.
+  //
+  // This was previously `v > 1 ? v / 100 : v`, which assumed any value <= 1 was
+  // already a fraction and so inflated the whole 0–1% band by 100x. Here that
+  // surfaced as the remaining-quota readout: 1% real usage normalized to 1.0,
+  // and (1 - 1.0) * 100 renders as "0% remaining" — the dashboard claiming the
+  // account is exhausted when it has barely been touched.
+  //
+  // Kept deliberately identical to normalize() in src/bus/oauth.ts. These are
+  // two independent parsers of the same endpoint; when one changes, change both.
   const normalize = (v: number | undefined): number => {
     if (v === undefined || v === null) return 0;
-    return v > 1 ? v / 100 : v;
+    return v / 100;
   };
 
   const fiveH = normalize(
