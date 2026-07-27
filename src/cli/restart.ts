@@ -17,26 +17,22 @@ export const restartCommand = new Command('restart')
 
     console.log(`Restarting agent: ${agent}`);
 
-    // Stop phase mirrors `cortextos stop <agent>` — write the .user-stop marker
-    // before the IPC stop so the SessionEnd crash-alert hook does not fire a
-    // false 🚨 CRASH alarm during the brief stop window. (BUG-036 pattern.)
+    // BUG-011 fix: use a single restart-agent IPC instead of separate stop-agent
+    // + start-agent. The two-shot approach raced: stop-agent IPC returned
+    // immediately ("Stopping") while stopAgent() was still async, so the
+    // subsequent start-agent hit inspectAgentOp's DEDUPED guard (agent still
+    // in registry) and the CLI reported failure — even though pendingRestarts
+    // would have recovered silently. restart-agent dispatches restartAgent()
+    // which does await stopAgent() → await startAgent() in proper sequence.
+    //
+    // Write the .user-stop marker before the IPC call so the SessionEnd
+    // crash-alert hook does not fire a false 🚨 CRASH alarm. (BUG-036 pattern.)
     writeStopMarker(options.instance, agent, 'stopped via cortextos restart');
-    const stopResponse = await ipc.send({ type: 'stop-agent', agent, source: 'cortextos restart' });
-    if (!stopResponse.success) {
-      console.error(`  Stop failed: ${stopResponse.error}`);
+    const restartResponse = await ipc.send({ type: 'restart-agent', agent, source: 'cortextos restart' });
+    if (!restartResponse.success) {
+      console.error(`  Restart failed: ${restartResponse.error}`);
+      console.error(`  Agent may be in an unknown state. Check: cortextos status`);
       process.exit(1);
     }
-    console.log(`  ${stopResponse.data}`);
-
-    // Start phase — daemon's start-agent handler re-reads config.json + .env
-    // and spawns a fresh PTY. Same code path as `cortextos start <agent>`
-    // when the daemon is already running, so env reload / config re-read /
-    // PTY respawn semantics match exactly.
-    const startResponse = await ipc.send({ type: 'start-agent', agent, source: 'cortextos restart' });
-    if (!startResponse.success) {
-      console.error(`  Start failed: ${startResponse.error}`);
-      console.error(`  Agent is now stopped. Recover with: cortextos start ${agent}`);
-      process.exit(1);
-    }
-    console.log(`  ${startResponse.data}`);
+    console.log(`  ${restartResponse.data}`);
   });
