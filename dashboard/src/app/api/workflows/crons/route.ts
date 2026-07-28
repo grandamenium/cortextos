@@ -4,9 +4,9 @@
  * Returns a flat array of CronSummaryRow objects — one per cron across all
  * enabled agents.  Used by the Workflows dashboard page (read-only, Subtask 4.1).
  *
- * Data is read directly from disk (crons.json + cron-execution.log) — no daemon
- * IPC required.  This matches the pattern used by /api/agents/[name]/crons which
- * also reads config files directly from the server-side Next.js process.
+ * Data is read directly from disk (crons.json + cron-execution.log) from the
+ * server-side Next.js process — no daemon IPC required for the read path.
+ * Mutations do go through IPC, so the daemon owns the write and the reload.
  *
  * Optional query params:
  *   ?agent=<name>   — filter to a single agent

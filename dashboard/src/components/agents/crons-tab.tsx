@@ -7,9 +7,9 @@
  * mutates it through IPC (the daemon owns the write, the lock, and the
  * scheduler reload).
  *
- * This tab previously talked to /api/agents/[name]/crons, which reads and
- * writes config.json.  The daemon migrates config.json crons to crons.json
- * exactly once (guarded by a .crons-migrated marker) and never reads
+ * This tab previously talked to a now-deleted /api/agents/[name]/crons route,
+ * which read and wrote config.json.  The daemon migrates config.json crons to
+ * crons.json exactly once (guarded by a .crons-migrated marker) and never reads
  * config.json again — so that endpoint showed a stale fossil and silently
  * discarded every edit.
  *
