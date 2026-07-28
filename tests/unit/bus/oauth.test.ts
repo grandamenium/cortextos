@@ -1,11 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 // Mock fetch globally
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
+
+// Spy on the persistence boundary so the refresh-durability tests below can
+// observe WHEN the write happens and simulate it failing. The default
+// implementation is the real one, so every other test here is unaffected.
+vi.mock('../../../src/utils/atomic.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/utils/atomic.js')>();
+  return { ...actual, atomicWriteSync: vi.fn(actual.atomicWriteSync) };
+});
+
+const actualAtomic = await vi.importActual<typeof import('../../../src/utils/atomic.js')>(
+  '../../../src/utils/atomic.js',
+);
+const { atomicWriteSync } = await import('../../../src/utils/atomic.js');
+const mockAtomicWrite = vi.mocked(atomicWriteSync);
 
 const {
   loadAccounts,
@@ -47,16 +61,27 @@ const SAMPLE_STORE = {
 
 let tmpDir: string;
 
+function oauthDirPath() {
+  return join(tmpDir, 'state', 'oauth');
+}
+
+function accountsFile() {
+  return join(oauthDirPath(), 'accounts.json');
+}
+
 function writeStore(store = SAMPLE_STORE) {
   const { mkdirSync, writeFileSync } = require('fs');
-  const oauthDir = join(tmpDir, 'state', 'oauth');
-  mkdirSync(oauthDir, { recursive: true });
-  writeFileSync(join(oauthDir, 'accounts.json'), JSON.stringify(store, null, 2));
+  mkdirSync(oauthDirPath(), { recursive: true });
+  writeFileSync(accountsFile(), JSON.stringify(store, null, 2));
 }
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'cortextos-oauth-test-'));
   mockFetch.mockReset();
+  // Full reset, then reinstall the real implementation — mockClear() would
+  // leave a mockImplementationOnce queued by a failed test to leak forward.
+  mockAtomicWrite.mockReset();
+  mockAtomicWrite.mockImplementation(actualAtomic.atomicWriteSync);
 });
 
 afterEach(() => {
@@ -220,6 +245,111 @@ describe('refreshOAuthToken', () => {
     });
 
     await expect(refreshOAuthToken(tmpDir)).rejects.toThrow('400');
+  });
+
+  // Refresh tokens are ONE-TIME USE. The moment the token endpoint returns 200
+  // the old refresh_token is spent server-side, so the new one existing only in
+  // memory is an account that can never be refreshed again — unrecoverable by
+  // retry, though interactive reauthorization would still restore it. That
+  // makes persistence the highest-consequence step in this file, and it is
+  // exactly what the tests above do not pin down: they
+  // reload accounts.json only after the call has returned, so they would still
+  // pass if the write were deferred behind another fallible operation, or if
+  // saveAccounts quietly stopped writing atomically.
+  describe('one-time-token durability', () => {
+    function mockSuccessfulRefresh() {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          access_token: 'new_access_tok',
+          refresh_token: 'new_refresh_tok',
+          expires_in: 3600,
+        }),
+      });
+    }
+
+    it('completes the write before any consumer of the returned promise runs', async () => {
+      writeStore();
+      mockSuccessfulRefresh();
+
+      const order: string[] = [];
+      mockAtomicWrite.mockImplementation((path: string, data: string, keepBak?: boolean) => {
+        if (path === accountsFile()) order.push('write');
+        actualAtomic.atomicWriteSync(path, data, keepBak);
+      });
+
+      const pending = refreshOAuthToken(tmpDir);
+      // Queued before the test's own await, so it is the first fulfillment
+      // reaction to run. Precisely what this pins down: the write lands before
+      // any consumer of the promise gets to act on the success — NOT before the
+      // promise itself fulfills, which is a weaker moment and one this cannot
+      // observe. Verified by mutation: it catches a write pushed onto the
+      // macrotask queue (setTimeout, an fs callback, anything after the
+      // return). It does NOT catch a write detached onto a microtask — the
+      // FIFO job queue still runs that one first — and what that shape really
+      // breaks is error propagation, which the two rejection tests below cover.
+      const observed = pending.then(() => { order.push('resolve'); });
+      await pending;
+      await observed;
+
+      expect(order).toEqual(['write', 'resolve']);
+    });
+
+    it('routes the write through atomicWriteSync with the new tokens already in the payload', async () => {
+      writeStore();
+      mockSuccessfulRefresh();
+
+      await refreshOAuthToken(tmpDir);
+
+      const write = mockAtomicWrite.mock.calls.find(([path]) => path === accountsFile());
+      // Fails if saveAccounts is ever switched to a plain writeFileSync, which
+      // would reintroduce the torn-file window atomic rename exists to close.
+      expect(write, 'accounts.json was not written via atomicWriteSync').toBeDefined();
+
+      // Asserted against the bytes handed to the boundary, not the file after
+      // the fact, so a later second write cannot paper over a wrong first one.
+      const payload = JSON.parse(write![1] as string);
+      expect(payload.accounts.primary.access_token).toBe('new_access_tok');
+      expect(payload.accounts.primary.refresh_token).toBe('new_refresh_tok');
+    });
+
+    it('rejects when the write fails instead of reporting success', async () => {
+      writeStore();
+      mockSuccessfulRefresh();
+      mockAtomicWrite.mockImplementationOnce(() => {
+        throw new Error('ENOSPC: no space left on device');
+      });
+
+      // The spent refresh token is unrecoverable either way; what this pins is
+      // that the caller is TOLD, rather than handed a success it cannot trust.
+      // Deliberately no on-disk assertion here — the stub throws before any
+      // real write runs, so "the file is unchanged" would be asserting the
+      // mock. The real-filesystem test below covers that for real.
+      await expect(refreshOAuthToken(tmpDir)).rejects.toThrow('ENOSPC');
+    });
+
+    // Real filesystem, and the real atomicWriteSync implementation reached
+    // through the default delegating spy — the failure is genuine, not stubbed.
+    // The test above proves refreshOAuthToken propagates a throw; this proves
+    // the write actually throws when the disk says no, which is what catches
+    // the boundary being changed to swallow its own errors. Skipped as root,
+    // where the permission bits would not bite; a non-root process holding
+    // CAP_DAC_OVERRIDE would also slip through.
+    const notRoot = typeof process.getuid === 'function' && process.getuid() !== 0;
+    it.skipIf(!notRoot)('rejects when the real filesystem write fails', async () => {
+      writeStore();
+      mockSuccessfulRefresh();
+
+      chmodSync(oauthDirPath(), 0o500); // r-x: temp-file write inside atomicWriteSync fails
+      try {
+        await expect(refreshOAuthToken(tmpDir)).rejects.toThrow(/EACCES|EPERM/);
+      } finally {
+        chmodSync(oauthDirPath(), 0o700); // restore so afterEach can clean up
+      }
+
+      const store = loadAccounts(tmpDir)!;
+      expect(store.accounts.primary.refresh_token).toBe('rtok_primary_xyz');
+    });
   });
 });
 
