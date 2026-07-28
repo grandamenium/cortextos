@@ -4,7 +4,12 @@ vi.mock('child_process', () => ({ execFile: vi.fn() }));
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { FastChecker } from '../../../src/daemon/fast-checker';
+import {
+  FastChecker,
+  INBOX_LOCK_CIRCUIT_THRESHOLD,
+  INBOX_LOCK_CIRCUIT_BACKOFF_MS,
+  INBOX_LOCK_EVENT_INTERVAL_MS,
+} from '../../../src/daemon/fast-checker';
 import type { BusPaths, TelegramCallbackQuery } from '../../../src/types';
 
 // Minimal mock for AgentProcess
@@ -1020,5 +1025,289 @@ describe('FastChecker', () => {
       expect(handoffPrompts.length).toBe(2); // 3rd fire tripped the breaker instead of handing off
       expect((checker as any).ctxCircuitBrokenAt).not.toBeNull();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Inbox-lock failure handling.
+  //
+  // pollCycle shifts queued Telegram messages off this.telegramMessages into
+  // messageBlock BEFORE checkInbox runs. checkInbox now throws when the inbox
+  // lock is wedged, so if that throw escaped to the poll loop's catch,
+  // messageBlock would be discarded with those messages already dequeued —
+  // permanently lost. The local catch exists to prevent exactly that, and this
+  // is the test that holds it in place.
+  //
+  // Note what is NOT asserted here: "pollCycle does not throw". That check is
+  // vacuous — it passes just as happily against an implementation that drops
+  // the Telegram message on the floor. The assertion that matters is that the
+  // dequeued text reaches injectMessage.
+  // -------------------------------------------------------------------------
+  const inboxLockDir = () => join(paths.inbox, '.lock.d');
+
+  /**
+   * Hold the inbox lock with a PID that is alive by construction.
+   * acquireLock's staleness check is process.kill(pid, 0), and a self-signal
+   * succeeds, so this lands on the genuine "held by a live process" branch
+   * rather than the stale-steal path (which would let checkInbox succeed and
+   * quietly make these tests vacuous).
+   */
+  const holdInboxLock = () => {
+    mkdirSync(inboxLockDir(), { recursive: true });
+    writeFileSync(join(inboxLockDir(), 'pid'), String(process.pid));
+  };
+
+  const releaseInboxLock = () => {
+    rmSync(inboxLockDir(), { recursive: true, force: true });
+  };
+
+  const readEvents = (agentName: string): any[] => {
+    const today = new Date().toISOString().split('T')[0];
+    const f = join(paths.analyticsDir, 'events', agentName, `${today}.jsonl`);
+    if (!existsSync(f)) return [];
+    return readFileSync(f, 'utf-8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  };
+
+  describe('inbox lock wedged — queued Telegram messages must survive', () => {
+    it('injects the queued Telegram message anyway, and logs an error-category event', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org' });
+
+      checker.queueTelegramMessage('=== TELEGRAM from ryan (chat_id:1) ===\nship it\n');
+      holdInboxLock();
+
+      await (checker as any).pollCycle();
+
+      // Premise of the regression: the message really was dequeued before
+      // checkInbox ran, so it existed only inside messageBlock at throw time.
+      expect((checker as any).telegramMessages).toHaveLength(0);
+
+      // The regression itself: it was still delivered.
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+      expect(agent.injectMessage.mock.calls[0][0]).toContain('ship it');
+
+      // And the inbox gap was announced rather than silently swallowed.
+      // This assertion doubles as the control: it is the proof that checkInbox
+      // actually failed. Without it, a lock that was never really held would
+      // let the injection assertion above pass for the wrong reason.
+      const ev = readEvents(agent.name).find(e => e.event === 'inbox_lock_unavailable');
+      expect(ev).toBeDefined();
+      expect(ev.category).toBe('error');
+      expect(ev.severity).toBe('error');
+      expect(ev.metadata.consecutive_failures).toBe(1);
+    }, 30_000);
+
+    it('does not log an inbox-lock event when the lock is free', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org' });
+
+      checker.queueTelegramMessage('=== TELEGRAM from ryan (chat_id:1) ===\nno contention\n');
+      await (checker as any).pollCycle();
+
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+      // A recovery event must never appear without a failure event, and a
+      // healthy cycle must stay silent — otherwise the feed teaches operators
+      // to ignore these.
+      const names = readEvents(agent.name).map(e => e.event);
+      expect(names).not.toContain('inbox_lock_unavailable');
+      expect(names).not.toContain('inbox_lock_recovered');
+    }, 30_000);
+  });
+
+  // -------------------------------------------------------------------------
+  // The outage bookkeeping must not itself become a way to lose a message.
+  //
+  // `this.log` is an injected LogFn and logEvent touches the filesystem, so
+  // neither is guaranteed not to throw. The handlers run at the point in
+  // pollCycle where the Telegram messages are already dequeued into
+  // messageBlock, so a throw from the accounting discards exactly the messages
+  // the surrounding catch exists to protect: the guard written to hold the
+  // invariant could violate it.
+  // -------------------------------------------------------------------------
+  describe('inbox-lock bookkeeping must never cost a message', () => {
+    it('delivers the queued Telegram message even when the outage logger throws', async () => {
+      const agent = createMockAgent();
+      // Throw only on the inbox-lock lines. A logger that throws on everything
+      // would also blow up the post-injection "Injected N bytes" line, so the
+      // test would no longer isolate the handler as the throw site.
+      const log = vi.fn((msg: string) => {
+        if (msg.includes('Inbox lock')) throw new Error('log sink is down');
+      });
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org', log });
+
+      checker.queueTelegramMessage('=== TELEGRAM from ryan (chat_id:1) ===\nship it\n');
+      holdInboxLock();
+
+      await (checker as any).pollCycle();
+
+      // Premise: the message was dequeued before the throwing handler ran, so
+      // it existed only inside messageBlock at that moment.
+      expect((checker as any).telegramMessages).toHaveLength(0);
+      // The regression: it was still delivered.
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+      expect(agent.injectMessage.mock.calls[0][0]).toContain('ship it');
+
+      // Control. Without this the test passes for the wrong reason: if the lock
+      // were never really held, the handler would never run, nothing would
+      // throw, and "the message got through" would prove nothing at all.
+      expect(log.mock.calls.some(c => String(c[0]).includes('Inbox lock unavailable'))).toBe(true);
+    }, 30_000);
+
+    it('does not invent a phantom outage when the recovery logger throws', async () => {
+      const agent = createMockAgent();
+      const log = vi.fn((msg: string) => {
+        if (msg.includes('Inbox lock recovered')) throw new Error('log sink is down');
+      });
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org', log });
+
+      holdInboxLock();
+      await (checker as any).pollCycle();
+      expect((checker as any).inboxLockFailures).toBe(1); // premise: a real outage
+
+      releaseInboxLock();
+      await (checker as any).pollCycle();
+
+      // handleInboxLockSuccess throws after it has already cleared state. If it
+      // ran inside checkInbox's own try, that throw would land in the catch
+      // meant for the lock and be misread as a failure — a recovery recorded as
+      // an outage, which also walks the circuit breaker toward opening.
+      expect((checker as any).inboxLockFailures).toBe(0);
+      expect(log.mock.calls.some(c => String(c[0]).includes('Inbox lock recovered'))).toBe(true);
+    }, 30_000);
+  });
+
+  // -------------------------------------------------------------------------
+  // Throttle accounting. An outage that begins AND ends inside one event window
+  // emits neither an unavailable nor a recovery event; if the suppressed count
+  // were cleared on the way out, a lock flapping faster than the window could
+  // stay permanently invisible in the activity feed — the exact silence this
+  // whole change exists to remove.
+  // -------------------------------------------------------------------------
+  describe('inbox-lock event throttle', () => {
+    it('carries a fully-suppressed outage forward instead of discarding it', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org' });
+
+      // An event went out moments ago, so everything below falls inside one
+      // throttle window and is never announced.
+      (checker as any).inboxLockLastEventAt = Date.now();
+      (checker as any).inboxLockOutageAnnounced = false;
+
+      holdInboxLock();
+      await (checker as any).pollCycle();
+      expect((checker as any).inboxLockSuppressedEvents).toBe(1); // premise
+
+      releaseInboxLock();
+      await (checker as any).pollCycle();
+
+      // The fix: recovery from an unannounced outage must not erase the
+      // evidence that the outage happened.
+      expect((checker as any).inboxLockSuppressedEvents).toBe(1);
+
+      // And the evidence actually reaches the feed on the next event that goes
+      // out — carrying it forward is only worth anything if it surfaces.
+      (checker as any).inboxLockLastEventAt = Date.now() - INBOX_LOCK_EVENT_INTERVAL_MS - 1;
+      holdInboxLock();
+      await (checker as any).pollCycle();
+
+      const ev = readEvents(agent.name).find(e => e.event === 'inbox_lock_unavailable');
+      expect(ev).toBeDefined();
+      expect(ev.metadata.suppressed_since_last_event).toBe(1);
+    }, 30_000);
+  });
+
+  // -------------------------------------------------------------------------
+  // Circuit breaker. checkInbox blocks this thread while it retries and every
+  // agent's poll loop shares one event loop, so a persistent wedge must stop
+  // costing a blocking retry every cycle — without ever becoming permanent.
+  // -------------------------------------------------------------------------
+  describe('inbox-lock circuit breaker', () => {
+    let clock = 0;
+    let nowSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      // Anchor on the real clock so event files still land on today's date;
+      // only the offsets are synthetic. withFileLockSync times out on
+      // process.hrtime, not Date.now, so stubbing this cannot wedge its retry.
+      clock = Date.now();
+      nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    });
+
+    afterEach(() => {
+      nowSpy.mockRestore();
+    });
+
+    const advance = (ms: number) => { clock += ms; };
+
+    const driveToOpenBreaker = async (checker: any) => {
+      holdInboxLock();
+      for (let i = 0; i < INBOX_LOCK_CIRCUIT_THRESHOLD; i++) {
+        await checker.pollCycle();
+      }
+    };
+
+    it('stays closed below the threshold and opens on the Nth consecutive failure', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org' });
+      holdInboxLock();
+
+      for (let i = 1; i < INBOX_LOCK_CIRCUIT_THRESHOLD; i++) {
+        await (checker as any).pollCycle();
+        expect((checker as any).inboxLockFailures).toBe(i);
+        expect((checker as any).inboxLockNextAttemptAt).toBe(0); // still closed
+      }
+
+      await (checker as any).pollCycle();
+      expect((checker as any).inboxLockFailures).toBe(INBOX_LOCK_CIRCUIT_THRESHOLD);
+      expect((checker as any).inboxLockNextAttemptAt).toBe(clock + INBOX_LOCK_CIRCUIT_BACKOFF_MS);
+    }, 30_000);
+
+    it('skips the blocking inbox read while open, but still delivers Telegram', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org' });
+      await driveToOpenBreaker(checker);
+      const deadline = (checker as any).inboxLockNextAttemptAt;
+
+      advance(INBOX_LOCK_CIRCUIT_BACKOFF_MS - 1);
+      checker.queueTelegramMessage('=== TELEGRAM from ryan (chat_id:1) ===\nstill listening\n');
+      await (checker as any).pollCycle();
+
+      // No attempt was made: another attempt would have failed and incremented.
+      expect((checker as any).inboxLockFailures).toBe(INBOX_LOCK_CIRCUIT_THRESHOLD);
+      // And a skipped cycle must not push the retry further out — that would
+      // turn a bounded backoff into a wedge that never probes again.
+      expect((checker as any).inboxLockNextAttemptAt).toBe(deadline);
+      // An open breaker suppresses the inbox read, nothing else.
+      expect(agent.injectMessage).toHaveBeenCalledTimes(1);
+      expect(agent.injectMessage.mock.calls[0][0]).toContain('still listening');
+    }, 30_000);
+
+    it('probes again once the backoff elapses', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org' });
+      await driveToOpenBreaker(checker);
+
+      advance(INBOX_LOCK_CIRCUIT_BACKOFF_MS);
+      await (checker as any).pollCycle();
+
+      // The breaker is a delay, not a decision. A next-attempt time that is
+      // never reachable (Infinity, or one pushed out on every skipped cycle)
+      // wedges this agent's inbox for the life of the process, and every other
+      // assertion about the breaker would still pass.
+      expect((checker as any).inboxLockFailures).toBe(INBOX_LOCK_CIRCUIT_THRESHOLD + 1);
+    }, 30_000);
+
+    it('closes and resets once the inbox is readable again', async () => {
+      const agent = createMockAgent();
+      const checker = new FastChecker(agent, paths, '/tmp/framework', { org: 'test-org' });
+      await driveToOpenBreaker(checker);
+
+      releaseInboxLock();
+      advance(INBOX_LOCK_CIRCUIT_BACKOFF_MS);
+      await (checker as any).pollCycle();
+
+      expect((checker as any).inboxLockFailures).toBe(0);
+      expect((checker as any).inboxLockNextAttemptAt).toBe(0);
+      expect(readEvents(agent.name).map(e => e.event)).toContain('inbox_lock_recovered');
+    }, 30_000);
   });
 });

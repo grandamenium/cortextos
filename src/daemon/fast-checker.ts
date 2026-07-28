@@ -5,6 +5,7 @@ import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
+import { logEvent } from '../bus/event.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -26,6 +27,33 @@ export function handoffGraceMs(runtime: string | undefined): number {
   if (runtime === 'codex-app-server' || runtime === 'opencode') return 600_000;
   return 120_000;
 }
+
+/**
+ * How long checkInbox may block this thread retrying for the inbox lock.
+ * Deliberately under the default 1000ms poll interval: withFileLockSync
+ * blocks synchronously, and one daemon process runs every agent's poll loop
+ * on a single event loop, so this cost is paid fleet-wide, not per agent.
+ */
+export const INBOX_LOCK_TIMEOUT_MS = 750;
+
+/** Consecutive wedged cycles before the breaker opens. */
+export const INBOX_LOCK_CIRCUIT_THRESHOLD = 5;
+
+/**
+ * Retry spacing once the breaker is open. A wedged lock is not always
+ * recoverable — releaseLock swallows rmSync failures, and a leaked lock
+ * holding a live PID can never be stale-detected — so without this the
+ * daemon would block INBOX_LOCK_TIMEOUT_MS every cycle indefinitely.
+ */
+export const INBOX_LOCK_CIRCUIT_BACKOFF_MS = 30_000;
+
+/**
+ * Minimum spacing between inbox-lock events. A wedge at a 1s poll interval
+ * would otherwise emit ~1 event/sec forever, and a *flapping* lock would emit
+ * an unavailable/recovered pair per flap. A flooded activity feed hides the
+ * signal as effectively as the silence this whole fix exists to remove.
+ */
+export const INBOX_LOCK_EVENT_INTERVAL_MS = 60_000;
 
 /**
  * Fast message checker for a single agent.
@@ -59,6 +87,19 @@ export class FastChecker {
   // SIGUSR1 wake: resolve to immediately wake from sleep
   private wakeResolve: (() => void) | null = null;
 
+  // Org name, needed to attribute inbox-lock events. Not on BusPaths, and
+  // AgentProcess keeps its env private, so the manager passes it in.
+  private org: string;
+
+  // Inbox-lock outage tracking. See handleInboxLockFailure for why each
+  // piece exists.
+  private inboxLockFailures: number = 0;
+  private inboxLockFirstFailureAt: number = 0;
+  private inboxLockLastEventAt: number = 0;
+  private inboxLockOutageAnnounced: boolean = false;
+  private inboxLockSuppressedEvents: number = 0;
+  private inboxLockNextAttemptAt: number = 0;
+
   // Idle-session heartbeat watchdog
   private heartbeatTimer: NodeJS.Timeout | null = null;
 
@@ -81,10 +122,11 @@ export class FastChecker {
     agent: AgentProcess,
     paths: BusPaths,
     frameworkRoot: string,
-    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number } = {},
+    options: { pollInterval?: number; log?: LogFn; telegramApi?: TelegramAPI; chatId?: string; allowedUserId?: number; org?: string } = {},
   ) {
     this.agent = agent;
     this.paths = paths;
+    this.org = options.org || 'default';
     this.frameworkRoot = frameworkRoot;
     this.pollInterval = options.pollInterval || 1000;
     this.log = options.log || ((msg) => console.log(`[fast-checker/${agent.name}] ${msg}`));
@@ -195,8 +237,58 @@ export class FastChecker {
       hasTelegramMessage = true;
     }
 
-    // Check agent inbox
-    const inboxMessages = checkInbox(this.paths);
+    // Check agent inbox.
+    //
+    // This catch must be HERE, not left to the poll loop's catch. The queued
+    // Telegram messages above have already been shifted off this.telegramMessages
+    // into messageBlock; if a throw escaped to the loop's handler, messageBlock
+    // would be discarded with them still dequeued — permanently lost, never
+    // injected. Letting the throw escape would trade a silent inbox gap for
+    // silent Telegram message loss, which is strictly worse.
+    //
+    // The circuit breaker skips the attempt entirely while a wedge persists.
+    // checkInbox blocks the thread while it retries, and every agent's poll
+    // loop shares one event loop, so paying that on every cycle forever would
+    // degrade the whole fleet — see handleInboxLockFailure.
+    let inboxMessages: InboxMessage[] = [];
+    if (Date.now() >= this.inboxLockNextAttemptAt) {
+      let lockError: unknown = null;
+      let acquired = false;
+      try {
+        inboxMessages = checkInbox(this.paths, { timeoutMs: INBOX_LOCK_TIMEOUT_MS });
+        acquired = true;
+      } catch (err) {
+        lockError = err;
+      }
+
+      // The outage bookkeeping is deliberately OUTSIDE the try above, and
+      // guarded separately. Two distinct reasons, both load-bearing:
+      //
+      //   1. Inside that try, a throw from handleInboxLockSuccess would be
+      //      caught by the catch meant for checkInbox and misreported as a
+      //      lock failure — a phantom outage, and one that also advances the
+      //      circuit breaker toward opening.
+      //
+      //   2. A throw from EITHER handler must never escape pollCycle. `this.log`
+      //      is an injected LogFn and logEvent touches the filesystem; neither
+      //      is guaranteed not to throw. The Telegram messages are already
+      //      dequeued into messageBlock at this point, so letting accounting
+      //      throw would discard exactly the messages this catch exists to
+      //      protect. Bookkeeping must never cost a message.
+      try {
+        if (acquired) {
+          this.handleInboxLockSuccess();
+        } else {
+          this.handleInboxLockFailure(lockError);
+        }
+      } catch (e) {
+        // Last resort. The logger is the most likely thing to have thrown, so
+        // even this is guarded — there is nothing left to fall back to.
+        try {
+          this.log(`Inbox lock bookkeeping failed: ${e}`);
+        } catch { /* swallow: losing a log line beats losing a message */ }
+      }
+    }
     for (const msg of inboxMessages) {
       messageBlock += this.formatInboxMessage(msg);
       ackIds.push(msg.id);
@@ -229,6 +321,124 @@ export class FastChecker {
 
     // Context monitor: check usage thresholds and fire warnings/handoffs
     await this.checkContextStatus();
+  }
+
+  /**
+   * The inbox lock could not be acquired, so the inbox was NOT read.
+   *
+   * Announce it and carry on as "no messages". Never rethrow: a crashing
+   * fast-checker is strictly worse than the gap it replaces.
+   *
+   * Loud, but bounded. The event is emitted on entry into the outage and then
+   * at most once per INBOX_LOCK_EVENT_INTERVAL_MS — and that same window gates
+   * entry events too, so a lock that flaps between held and free cannot emit a
+   * pair per flap. Suppressed occurrences are counted and reported in the next
+   * event that does go out, so the throttle never makes an outage look smaller
+   * than it was. The log line is written every time; the log file is cheap and
+   * the activity feed is not.
+   */
+  private handleInboxLockFailure(err: unknown): void {
+    const now = Date.now();
+    this.inboxLockFailures++;
+    if (this.inboxLockFailures === 1) {
+      this.inboxLockFirstFailureAt = now;
+    }
+
+    const message = err instanceof Error ? err.message : String(err);
+    this.log(`Inbox lock unavailable (${this.inboxLockFailures} consecutive): ${message}`);
+
+    // Open the breaker: stop paying the blocking retry every cycle.
+    const circuitOpen = this.inboxLockFailures >= INBOX_LOCK_CIRCUIT_THRESHOLD;
+    if (circuitOpen) {
+      this.inboxLockNextAttemptAt = now + INBOX_LOCK_CIRCUIT_BACKOFF_MS;
+    }
+
+    const firstEver = this.inboxLockLastEventAt === 0;
+    const windowElapsed = now - this.inboxLockLastEventAt >= INBOX_LOCK_EVENT_INTERVAL_MS;
+    if (!firstEver && !windowElapsed) {
+      this.inboxLockSuppressedEvents++;
+      return;
+    }
+
+    this.emitInboxLockEvent('error', 'inbox_lock_unavailable', {
+      error: message,
+      consecutive_failures: this.inboxLockFailures,
+      outage_ms: now - this.inboxLockFirstFailureAt,
+      suppressed_since_last_event: this.inboxLockSuppressedEvents,
+      circuit_open: circuitOpen,
+      next_attempt_in_ms: circuitOpen ? INBOX_LOCK_CIRCUIT_BACKOFF_MS : 0,
+    });
+    this.inboxLockLastEventAt = now;
+    this.inboxLockSuppressedEvents = 0;
+    this.inboxLockOutageAnnounced = true;
+  }
+
+  /**
+   * The inbox was read successfully. Closes out any announced outage and
+   * resets the breaker. Only emits when an outage was actually announced, so
+   * a recovery event never appears without its matching failure event.
+   */
+  private handleInboxLockSuccess(): void {
+    if (this.inboxLockFailures === 0) return;
+
+    const now = Date.now();
+    const failures = this.inboxLockFailures;
+    const outageMs = now - this.inboxLockFirstFailureAt;
+
+    this.inboxLockFailures = 0;
+    this.inboxLockFirstFailureAt = 0;
+    this.inboxLockNextAttemptAt = 0;
+
+    this.log(`Inbox lock recovered after ${failures} failed cycle(s), ${outageMs}ms`);
+
+    if (!this.inboxLockOutageAnnounced) {
+      // This outage was never announced — every one of its failures fell inside
+      // the throttle window left behind by a PREVIOUS event. Do NOT clear the
+      // suppressed counter here.
+      //
+      // Clearing it was a real defect: an outage that begins and ends inside
+      // one 60s window would emit no unavailable event, no recovery event, and
+      // then discard the evidence that it happened at all — a lock flapping on
+      // a ~30s period could stay permanently invisible in the activity feed,
+      // which is the exact silence this whole change exists to remove. Carrying
+      // the count forward means the next event that does go out reports the
+      // true total instead of understating it.
+      return;
+    }
+    this.emitInboxLockEvent('info', 'inbox_lock_recovered', {
+      failed_cycles: failures,
+      outage_ms: outageMs,
+      suppressed_since_last_event: this.inboxLockSuppressedEvents,
+    });
+    this.inboxLockLastEventAt = now;
+    this.inboxLockSuppressedEvents = 0;
+    this.inboxLockOutageAnnounced = false;
+  }
+
+  /**
+   * Write an inbox-lock event to the activity feed. Console output alone is
+   * not sufficient for these — the whole point is dashboard visibility.
+   *
+   * Both the failure and the recovery go under the 'error' category so one
+   * feed filter shows a complete outage, open and close together; severity is
+   * what separates them.
+   *
+   * Failures here are swallowed: an event write must never escalate into the
+   * daemon crash this handling exists to prevent.
+   */
+  private emitInboxLockEvent(
+    severity: 'error' | 'info',
+    eventName: string,
+    meta: Record<string, unknown>,
+  ): void {
+    try {
+      logEvent(this.paths, this.agent.name, this.org, 'error', eventName, severity, {
+        agent: this.agent.name,
+        ...meta,
+      });
+    } catch (e) {
+      this.log(`Failed to log ${eventName} event: ${e}`);
+    }
   }
 
   /**

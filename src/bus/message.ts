@@ -4,7 +4,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import type { InboxMessage, Priority, BusPaths } from '../types/index.js';
 import { PRIORITY_MAP } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
-import { acquireLock, releaseLock } from '../utils/lock.js';
+import { withFileLockSync, type FileLockOptions } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
 
@@ -91,19 +91,37 @@ export function sendMessage(
  * Check inbox for pending messages.
  * Reads inbox directory, moves messages to inflight, returns sorted array.
  * Recovers stale inflight messages (>5 minutes old).
- * Identical to bash check-inbox.sh behavior.
+ *
+ * An empty array means ONE thing: the inbox was read and held no messages.
+ * It previously also meant "the lock was busy so the inbox was never read at
+ * all" — two states the caller had no way to tell apart, so a wedged lock
+ * looked exactly like a quiet inbox and messages sat unnoticed. `acquireLock`
+ * is single-shot and non-blocking (see utils/lock.ts), and it declines on
+ * ordinary transient contention — including the benign mid-acquire window —
+ * on the assumption that the caller retries. This one never did.
+ *
+ * Routing through `withFileLockSync` supplies that retry: transient contention
+ * now resolves by backing off, and a genuinely wedged lock throws instead of
+ * masquerading as an empty inbox. Callers must handle that throw; the two call
+ * sites deliberately handle it differently (the daemon announces and carries
+ * on, the CLI exits non-zero).
+ *
+ * @param lockOpts Lock-acquisition tuning. The default 5s timeout suits a
+ *   one-shot CLI process. The daemon passes something well under its poll
+ *   interval, because `withFileLockSync` blocks the calling thread while it
+ *   retries and every agent's poll loop shares one event loop.
+ * @throws if the inbox lock cannot be acquired within the timeout.
  */
-export function checkInbox(paths: BusPaths): InboxMessage[] {
+export function checkInbox(paths: BusPaths, lockOpts?: FileLockOptions): InboxMessage[] {
   const { inbox, inflight } = paths;
+  // Both must exist BEFORE the lock is attempted: the lock is a .lock.d
+  // directory created inside `inbox`, and mkdir into a nonexistent parent
+  // fails ENOENT, which acquireLock rethrows as a hard error rather than
+  // treating as contention.
   ensureDir(inbox);
   ensureDir(inflight);
 
-  // Acquire lock
-  if (!acquireLock(inbox)) {
-    return [];
-  }
-
-  try {
+  return withFileLockSync(inbox, () => {
     // Recover stale inflight messages (>5 min old)
     recoverStaleInflight(inflight, inbox, 300);
 
@@ -112,6 +130,7 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
       .filter(f => f.endsWith('.json') && !f.startsWith('.'))
       .sort();
 
+    // The one legitimate empty result: the inbox was read and held nothing.
     if (files.length === 0) {
       return [];
     }
@@ -158,9 +177,9 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
     }
 
     return messages;
-  } finally {
-    releaseLock(inbox);
-  }
+    // withFileLockSync's own finally releases the lock, including when the
+    // body throws — this function must not release it a second time.
+  }, lockOpts);
 }
 
 /**

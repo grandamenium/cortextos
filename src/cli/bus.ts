@@ -127,8 +127,18 @@ busCommand
   .action(() => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const messages = checkInbox(paths);
-    console.log(JSON.stringify(messages));
+    // Deliberately asymmetric with the daemon, which announces the failure and
+    // carries on. A CLI that printed `[]` when it never managed to read the
+    // inbox would hand every shell caller the same silent outage one level up,
+    // so on failure nothing goes to stdout and the exit status is non-zero.
+    try {
+      const messages = checkInbox(paths);
+      console.log(JSON.stringify(messages));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`check-inbox: inbox could not be read — ${message}`);
+      process.exitCode = 1;
+    }
   });
 
 busCommand
