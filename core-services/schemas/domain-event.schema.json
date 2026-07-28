@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CortexOS Domain Event",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "workspace_id",
+    "occurred_at",
+    "actor",
+    "summary"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string"
+    },
+    "workspace_id": {
+      "type": "string"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "actor": {
+      "type": "object",
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "human",
+            "agent",
+            "system"
+          ]
+        }
+      }
+    },
+    "summary": {
+      "type": "string"
+    },
+    "data": {
+      "type": "object"
+    },
+    "visibility": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "correlation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+name: clickup-sync
+status: proposed
+phase: 1
+runtime_enabled: false
+purpose: >-
+  Create and update work items in ClickUp with owners, priorities, due dates, and dependencies.
+inputs:
+  - task_write_request
+  - workspace_id
+outputs:
+  - task_created
+  - task_updated
+  - task_rejected
+must_not:
+  - Create duplicate tasks
+  - Invent owners or due dates

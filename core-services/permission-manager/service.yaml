@@ -1,0 +1,15 @@
+name: permission-manager
+status: proposed
+phase: 2
+runtime_enabled: false
+purpose: >-
+  Enforce workspace, role, system, record, and action-level access controls.
+inputs:
+  - authorization_request
+outputs:
+  - allow
+  - deny
+  - reason
+must_not:
+  - Default to broad access
+  - Allow inherited access without an auditable rule

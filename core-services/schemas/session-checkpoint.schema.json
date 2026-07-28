@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Chronicle Session Checkpoint",
+  "type": "object",
+  "required": [
+    "session_id",
+    "workspace_id",
+    "checkpoint_at",
+    "purpose",
+    "current_topic",
+    "resume_point"
+  ],
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "workspace_id": {
+      "type": "string"
+    },
+    "checkpoint_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "current_topic": {
+      "type": "string"
+    },
+    "facts_established": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "task_candidates": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "files_referenced": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "resume_point": {
+      "type": "string"
+    }
+  }
+}

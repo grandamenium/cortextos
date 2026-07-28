@@ -1,0 +1,14 @@
+name: domain-event-bus
+status: proposed
+phase: 2
+runtime_enabled: false
+purpose: >-
+  Publish structured events so Atlas, the Command Center, and authorized services receive bounded updates.
+inputs:
+  - domain_event
+outputs:
+  - subscriber_delivery
+  - audit_record
+must_not:
+  - Forward entire conversations
+  - Expose events outside authorized workspaces

@@ -1,0 +1,14 @@
+name: notification-service
+status: proposed
+phase: 2
+runtime_enabled: false
+purpose: >-
+  Route relevant alerts and summaries to authorized humans and agents.
+inputs:
+  - notification_request
+outputs:
+  - notification_sent
+  - notification_suppressed
+must_not:
+  - Notify without permission
+  - Duplicate low-value alerts

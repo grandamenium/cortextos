@@ -1,0 +1,16 @@
+name: obsidian-writer
+status: proposed
+phase: 1
+runtime_enabled: false
+purpose: >-
+  Create or update governed human-readable knowledge in the Obsidian vault.
+inputs:
+  - knowledge_write_request
+  - workspace_id
+outputs:
+  - note_created
+  - note_updated
+  - write_rejected
+must_not:
+  - Create duplicate notes without checking
+  - Overwrite approved content silently

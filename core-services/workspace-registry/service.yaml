@@ -1,0 +1,15 @@
+name: workspace-registry
+status: proposed
+phase: 1
+runtime_enabled: false
+purpose: >-
+  Define workspaces, members, systems, capabilities, visibility, and data boundaries.
+inputs:
+  - workspace_definition
+  - membership_change
+outputs:
+  - workspace_context
+  - authorization_decision
+must_not:
+  - Grant implicit cross-workspace access
+  - Treat agent identity as authorization

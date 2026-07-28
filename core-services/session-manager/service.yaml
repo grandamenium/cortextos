@@ -1,0 +1,15 @@
+name: session-manager
+status: proposed
+phase: 2
+runtime_enabled: false
+purpose: >-
+  Create, resume, close, and recover active work sessions using Chronicle checkpoints.
+inputs:
+  - session_start
+  - session_resume
+  - session_close
+outputs:
+  - session_state
+  - resume_packet
+must_not:
+  - Use chat history as the sole recovery source

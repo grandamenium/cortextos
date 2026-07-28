@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CortexOS Workspace",
+  "type": "object",
+  "required": [
+    "workspace_id",
+    "name",
+    "workspace_type",
+    "members",
+    "systems",
+    "visibility"
+  ],
+  "properties": {
+    "workspace_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "workspace_type": {
+      "enum": [
+        "organization",
+        "business_unit",
+        "project",
+        "property",
+        "initiative"
+      ]
+    },
+    "visibility": {
+      "enum": [
+        "private",
+        "restricted",
+        "internal",
+        "external_collaboration"
+      ]
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "member_id",
+          "member_type",
+          "role"
+        ],
+        "properties": {
+          "member_id": {
+            "type": "string"
+          },
+          "member_type": {
+            "enum": [
+              "human",
+              "agent",
+              "contractor",
+              "partner",
+              "external"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "systems": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "parent_workspace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "obsidian_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "clickup_location": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

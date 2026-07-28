@@ -1,0 +1,19 @@
+name: chronicle
+status: proposed
+phase: 1
+runtime_enabled: false
+purpose: >-
+  Maintain a structured live notebook and recovery checkpoints for long-running conversations.
+inputs:
+  - conversation_event
+  - workspace_id
+  - session_id
+outputs:
+  - session_checkpoint
+  - durable_knowledge_candidate
+  - task_candidate
+  - resume_state
+must_not:
+  - Store only raw transcripts
+  - Modify model prompts
+  - Write across workspace boundaries
