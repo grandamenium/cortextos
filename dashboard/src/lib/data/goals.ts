@@ -53,8 +53,23 @@ export function getGoals(org: string): GoalsData {
   }
 }
 
+// The fields getGoals() reconstructs, and therefore the only ones writeGoals()
+// is entitled to overwrite. Everything else in the file belongs to another
+// writer (the CLI, the agents) and is passed through untouched.
+const MODELLED_KEYS = [
+  'bottleneck',
+  'goals',
+  'daily_focus',
+  'daily_focus_set_at',
+] as const;
+
 /**
  * Atomic write of goals.json for an org (write to tmp, then rename).
+ *
+ * Merges onto the current file rather than replacing it: getGoals() returns
+ * only the modelled fields, so serializing that object over the whole file
+ * would silently drop every key the dashboard does not model — north_star and
+ * updated_at among them.
  */
 export function writeGoals(org: string, data: GoalsData): void {
   const filePath = getGoalsPath(org);
@@ -62,8 +77,30 @@ export function writeGoals(org: string, data: GoalsData): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+
+  let merged: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      merged = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Missing or malformed file — fall back to writing just the modelled fields.
+  }
+
+  const incoming = data as unknown as Record<string, unknown>;
+  for (const key of MODELLED_KEYS) {
+    // An absent modelled field is a deliberate clear, not "leave it alone" —
+    // so it must be removed rather than inherited back from the old file.
+    if (incoming[key] === undefined) {
+      delete merged[key];
+    } else {
+      merged[key] = incoming[key];
+    }
+  }
+
   const tmp = path.join(os.tmpdir(), `goals-${org}-${Date.now()}.json`);
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+  fs.writeFileSync(tmp, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
   fs.renameSync(tmp, filePath);
 }
 
