@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
 import fs from 'fs/promises';
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { getFrameworkRoot, getCTXRoot } from '@/lib/config';
 import { IPCClient } from '@/lib/ipc-client';
+import { withFileLockSync } from '@/lib/file-lock';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,6 +14,56 @@ export const dynamic = 'force-dynamic';
 
 function isValidName(name: string): boolean {
   return /^[a-z0-9_-]+$/.test(name);
+}
+
+// The framework's lock blocks the thread via Atomics.wait.  In a route handler
+// that stalls every other request this worker is serving, so we wait far less
+// than the library's 5s default: the critical section is two small synchronous
+// fs calls, so real contention clears in single-digit milliseconds.  Anything
+// slower is a stuck holder, and failing fast beats freezing the dashboard.
+const REGISTRY_LOCK_TIMEOUT_MS = 250;
+
+/**
+ * Read-modify-write `enabled-agents.json` while holding the framework's
+ * inter-process lock on its directory.
+ *
+ * `mutate` MUST stay synchronous, and so must every fs call inside it.
+ * `withFileLockSync` releases the lock in a `finally` the moment the callback
+ * RETURNS — an `async` callback returns a pending Promise immediately, so the
+ * lock would be dropped before the write ever ran.  That failure is silent:
+ * the code still looks locked and protects nothing.  Hence `readFileSync` /
+ * `writeFileSync` here rather than the `fs/promises` used elsewhere in this file.
+ *
+ * The read happens INSIDE the lock, so callers must not pass state they read
+ * earlier — `mutate` receives the freshly-read registry.
+ *
+ * Locking here excludes other dashboard requests and the agent processes that
+ * take this same lock.  It does NOT exclude the CLI writers of this file
+ * (`enable-agent.ts`, `start.ts`, `import-agent.ts`, `install.ts`), which
+ * currently take no lock at all — that half is tracked separately.
+ */
+function mutateEnabledAgents(mutate: (agents: Record<string, any>) => void): void {
+  const dir = path.join(getCTXRoot(), 'config');
+  const file = path.join(dir, 'enabled-agents.json');
+  mkdirSync(dir, { recursive: true });
+
+  withFileLockSync(dir, () => {
+    let raw: string;
+    try {
+      raw = readFileSync(file, 'utf-8');
+    } catch (err) {
+      // Only "not there yet" is recoverable.  A permissions or I/O error must
+      // propagate rather than be treated as an empty registry.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      raw = '{}';
+    }
+    // Deliberately NOT caught: a malformed registry means we cannot know what
+    // the other entries were, and writing our mutation on top of `{}` would
+    // deregister every other agent.  Fail loudly and leave the file intact.
+    const agents: Record<string, any> = JSON.parse(raw);
+    mutate(agents);
+    writeFileSync(file, JSON.stringify(agents, null, 2) + '\n', 'utf-8');
+  }, { timeoutMs: REGISTRY_LOCK_TIMEOUT_MS });
 }
 
 const VALID_ACTIONS = ['enable', 'disable', 'restart', 'start', 'stop', 'restart_continue', 'restart_fresh'];
@@ -88,22 +140,15 @@ export async function POST(
 
     switch (action) {
       case 'enable': {
-        const ctxRoot = getCTXRoot();
-        const enabledAgentsPath = path.join(ctxRoot, 'config', 'enabled-agents.json');
-        let enabledAgents: Record<string, unknown> = {};
-        try {
-          const raw = await fs.readFile(enabledAgentsPath, 'utf-8');
-          enabledAgents = JSON.parse(raw);
-        } catch { /* file may not exist yet */ }
-        enabledAgents[decoded] = {
-          ...(typeof enabledAgents[decoded] === 'object' && enabledAgents[decoded] !== null
-            ? (enabledAgents[decoded] as object)
-            : {}),
-          enabled: true,
-          ...(safeOrg ? { org: safeOrg } : {}),
-        };
-        await fs.mkdir(path.dirname(enabledAgentsPath), { recursive: true });
-        await fs.writeFile(enabledAgentsPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
+        mutateEnabledAgents((enabledAgents) => {
+          enabledAgents[decoded] = {
+            ...(typeof enabledAgents[decoded] === 'object' && enabledAgents[decoded] !== null
+              ? (enabledAgents[decoded] as object)
+              : {}),
+            enabled: true,
+            ...(safeOrg ? { org: safeOrg } : {}),
+          };
+        });
         registryMessage = 'enabled in registry';
         ipcResult = await ipc.send({ type: 'start-agent', agent: decoded });
         break;
@@ -111,15 +156,12 @@ export async function POST(
 
       case 'disable': {
         ipcResult = await ipc.send({ type: 'stop-agent', agent: decoded });
-        const ctxRoot = getCTXRoot();
-        const enabledAgentsPath = path.join(ctxRoot, 'config', 'enabled-agents.json');
         try {
-          const raw = await fs.readFile(enabledAgentsPath, 'utf-8');
-          const enabledAgents = JSON.parse(raw) as Record<string, unknown>;
-          if (enabledAgents[decoded] && typeof enabledAgents[decoded] === 'object') {
-            (enabledAgents[decoded] as Record<string, unknown>).enabled = false;
-          }
-          await fs.writeFile(enabledAgentsPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
+          mutateEnabledAgents((enabledAgents) => {
+            if (enabledAgents[decoded] && typeof enabledAgents[decoded] === 'object') {
+              (enabledAgents[decoded] as Record<string, unknown>).enabled = false;
+            }
+          });
           registryMessage = 'disabled in registry';
         } catch {
           registryMessage = 'registry update failed (non-fatal)';
@@ -222,14 +264,16 @@ export async function DELETE(
     }
   }
 
-  // 2. Remove from enabled-agents.json
+  // 2. Remove from enabled-agents.json.
+  //
+  // The read above (for the org lookup) is deliberately NOT reused here: an IPC
+  // round-trip has happened since, so that snapshot is stale, and writing it
+  // back would silently revert anything the CLI or another request changed in
+  // the meantime.  `mutateEnabledAgents` re-reads inside the lock.
   try {
-    delete enabledAgents[decoded];
-    await fs.writeFile(
-      enabledAgentsPath,
-      JSON.stringify(enabledAgents, null, 2) + '\n',
-      'utf-8',
-    );
+    mutateEnabledAgents((agents) => {
+      delete agents[decoded];
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[api/agents/${decoded}/lifecycle] failed to update enabled-agents.json:`, message);
