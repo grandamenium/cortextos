@@ -1,10 +1,9 @@
 import { NextRequest } from 'next/server';
 import fs from 'fs/promises';
-import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { getFrameworkRoot, getCTXRoot } from '@/lib/config';
 import { IPCClient } from '@/lib/ipc-client';
-import { withFileLockSync } from '@/lib/file-lock';
+import { mutateEnabledAgents } from '@/lib/enabled-agents';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,57 +15,7 @@ function isValidName(name: string): boolean {
   return /^[a-z0-9_-]+$/.test(name);
 }
 
-// The framework's lock blocks the thread via Atomics.wait.  In a route handler
-// that stalls every other request this worker is serving, so we wait far less
-// than the library's 5s default: the critical section is two small synchronous
-// fs calls, so real contention clears in single-digit milliseconds.  Anything
-// slower is a stuck holder, and failing fast beats freezing the dashboard.
-const REGISTRY_LOCK_TIMEOUT_MS = 250;
-
-/**
- * Read-modify-write `enabled-agents.json` while holding the framework's
- * inter-process lock on its directory.
- *
- * `mutate` MUST stay synchronous, and so must every fs call inside it.
- * `withFileLockSync` releases the lock in a `finally` the moment the callback
- * RETURNS — an `async` callback returns a pending Promise immediately, so the
- * lock would be dropped before the write ever ran.  That failure is silent:
- * the code still looks locked and protects nothing.  Hence `readFileSync` /
- * `writeFileSync` here rather than the `fs/promises` used elsewhere in this file.
- *
- * The read happens INSIDE the lock, so callers must not pass state they read
- * earlier — `mutate` receives the freshly-read registry.
- *
- * Locking here excludes other dashboard requests and the agent processes that
- * take this same lock.  It does NOT exclude the CLI writers of this file
- * (`enable-agent.ts`, `start.ts`, `import-agent.ts`, `install.ts`), which
- * currently take no lock at all — that half is tracked separately.
- */
-function mutateEnabledAgents(mutate: (agents: Record<string, any>) => void): void {
-  const dir = path.join(getCTXRoot(), 'config');
-  const file = path.join(dir, 'enabled-agents.json');
-  mkdirSync(dir, { recursive: true });
-
-  withFileLockSync(dir, () => {
-    let raw: string;
-    try {
-      raw = readFileSync(file, 'utf-8');
-    } catch (err) {
-      // Only "not there yet" is recoverable.  A permissions or I/O error must
-      // propagate rather than be treated as an empty registry.
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      raw = '{}';
-    }
-    // Deliberately NOT caught: a malformed registry means we cannot know what
-    // the other entries were, and writing our mutation on top of `{}` would
-    // deregister every other agent.  Fail loudly and leave the file intact.
-    const agents: Record<string, any> = JSON.parse(raw);
-    mutate(agents);
-    writeFileSync(file, JSON.stringify(agents, null, 2) + '\n', 'utf-8');
-  }, { timeoutMs: REGISTRY_LOCK_TIMEOUT_MS });
-}
-
-const VALID_ACTIONS = ['enable', 'disable', 'restart', 'start', 'stop', 'restart_continue', 'restart_fresh'];
+const VALID_ACTIONS =['enable', 'disable', 'restart', 'start', 'stop', 'restart_continue', 'restart_fresh'];
 
 // Security (C4): Validate org and name against allowlist before use in shell commands or path.join.
 function validateIdentifier(value: string | null | undefined, field: string): string {
