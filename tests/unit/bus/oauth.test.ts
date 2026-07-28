@@ -540,6 +540,132 @@ describe('rotateOAuth', () => {
   });
 });
 
+describe('rotateOAuth — active account moved during preflight', () => {
+  // rotateOAuth snapshots `active` (currentName) and the candidate list, then
+  // awaits the network for the refresh and the preflight. A competing rotation
+  // that lands inside that window leaves this call holding a decision whose
+  // premise — "active is still currentName" — is no longer true.
+
+  function deferredFetch() {
+    let resolve!: (v: unknown) => void;
+    const promise = new Promise((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  const usageResponse = (five: number, seven: number) => ({
+    ok: true,
+    json: async () => ({ five_hour_utilization: five, seven_day_utilization: seven }),
+  });
+
+  // primary is over threshold so rotation targets `secondary` (lowest 5h util).
+  // `tertiary` exists only as the destination a COMPETING rotation picks, so the
+  // superseding value is distinguishable from this call's own choice.
+  const THREE_ACCOUNT_STORE = {
+    active: 'primary',
+    accounts: {
+      ...SAMPLE_STORE.accounts,
+      primary: { ...SAMPLE_STORE.accounts.primary, five_hour_utilization: 0.90 },
+      tertiary: {
+        label: 'Tertiary Account',
+        access_token: 'tok_tertiary_ghi',
+        refresh_token: 'rtok_tertiary_rst',
+        expires_at: Date.now() + FOUR_HOURS_MS,
+        last_refreshed: '2026-04-05T00:00:00Z',
+        five_hour_utilization: 0.2,
+        seven_day_utilization: 0.1,
+      },
+    },
+    rotation_log: [],
+  };
+
+  function overwriteStore(mutate: (s: ReturnType<typeof loadAccounts>) => void) {
+    const store = loadAccounts(tmpDir)!;
+    mutate(store);
+    const { writeFileSync } = require('fs');
+    writeFileSync(
+      join(tmpDir, 'state', 'oauth', 'accounts.json'),
+      JSON.stringify(store, null, 2),
+    );
+  }
+
+  it('aborts instead of overwriting a newer active chosen during preflight', async () => {
+    writeStore(THREE_ACCOUNT_STORE);
+    const preflight = deferredFetch();
+    mockFetch.mockImplementationOnce(() => preflight.promise);
+
+    const call = rotateOAuth(tmpDir, '/tmp/fw', 'acme');
+
+    // A competing rotation commits primary -> tertiary while our preflight is
+    // still in flight. Ours still believes it is rotating away from primary.
+    overwriteStore((s) => { s!.active = 'tertiary'; });
+
+    preflight.resolve(usageResponse(0.1, 0.05));
+    const result = await call;
+
+    expect(result.rotated).toBe(false);
+    expect(result.reason).toMatch(/superseded/i);
+    expect(result.reason).toContain('tertiary');
+
+    const store = loadAccounts(tmpDir)!;
+    // Unguarded this is 'secondary': the newer, already-preflighted selection
+    // silently demoted by a decision taken before it existed.
+    expect(store.active).toBe('tertiary');
+    // ...and no fictional primary -> secondary entry in the audit log.
+    expect(store.rotation_log).toHaveLength(0);
+  });
+
+  it('does not push the superseded account token into agent .env files', async () => {
+    // The user-visible harm. Phase 2 writes the destination's access_token to
+    // every agent .env; if phase 1 aborted, running agents must keep the token
+    // belonging to whoever actually won the rotation.
+    const { mkdirSync, writeFileSync } = require('fs');
+    const fwRoot = mkdtempSync(join(tmpdir(), 'cortextos-fw-'));
+    const envPath = join(fwRoot, 'orgs', 'acme', 'agents', 'rally-builder', '.env');
+    mkdirSync(join(fwRoot, 'orgs', 'acme', 'agents', 'rally-builder'), { recursive: true });
+    writeFileSync(envPath, 'CLAUDE_CODE_OAUTH_TOKEN=tok_primary_abc\n');
+
+    try {
+      writeStore(THREE_ACCOUNT_STORE);
+      const preflight = deferredFetch();
+      mockFetch.mockImplementationOnce(() => preflight.promise);
+
+      const call = rotateOAuth(tmpDir, fwRoot, 'acme');
+      overwriteStore((s) => { s!.active = 'tertiary'; });
+      preflight.resolve(usageResponse(0.1, 0.05));
+
+      expect((await call).rotated).toBe(false);
+      // Unguarded, phase 2 runs and this file holds secondary's token.
+      expect(readFileSync(envPath, 'utf-8')).not.toContain('tok_secondary_def');
+      expect(readFileSync(envPath, 'utf-8')).toContain('tok_primary_abc');
+    } finally {
+      rmSync(fwRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a vanished destination distinctly from a superseded rotation', async () => {
+    // Both failures come back through the same `!committed` branch. Collapsing
+    // them into one message would turn a benign race into what reads as store
+    // corruption, so the two paths are pinned apart.
+    writeStore(THREE_ACCOUNT_STORE);
+    const preflight = deferredFetch();
+    mockFetch.mockImplementationOnce(() => preflight.promise);
+
+    const call = rotateOAuth(tmpDir, '/tmp/fw', 'acme');
+
+    // active is left ALONE; the destination disappears instead.
+    overwriteStore((s) => {
+      delete (s!.accounts as Record<string, unknown>).secondary;
+    });
+
+    preflight.resolve(usageResponse(0.1, 0.05));
+    const result = await call;
+
+    expect(result.rotated).toBe(false);
+    expect(result.reason).toContain('disappeared');
+    expect(result.reason).not.toMatch(/superseded/i);
+  });
+});
+
 describe('alert thresholds', () => {
   it('ALERT_5H is 0.80', () => {
     expect(ALERT_5H).toBe(0.80);

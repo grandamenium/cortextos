@@ -458,7 +458,24 @@ export async function rotateOAuth(
     seven_day_util: current.seven_day_utilization,
   };
 
+  // Everything decided above — rotate AWAY from `currentName`, TO `nextName` —
+  // rests on a snapshot read before the refresh and preflight awaits. If another
+  // rotation (or an admin edit) moved `active` during those awaits, that premise
+  // is void: someone else has already rotated, to a destination THEY preflighted.
+  // Committing here would demote a verified newer selection to a staler one and
+  // append a from->to entry describing a transition that never happened.
+  //
+  // Abort rather than recompute. Recomputing the destination inside the lock
+  // would pick an account this call never refreshed and never preflighted, so a
+  // race that had already resolved correctly would be traded for an unverified
+  // token written to every agent's .env — the one invariant rotation exists to
+  // protect.
+  let supersededBy: string | undefined;
   const committed = withAccountsLock(ctxRoot, (reloaded) => {
+    if (reloaded.active !== currentName) {
+      supersededBy = reloaded.active;
+      return false;
+    }
     const next = reloaded.accounts[nextName];
     if (!next) return false;
     reloaded.active = nextName;
@@ -469,9 +486,14 @@ export async function rotateOAuth(
   });
 
   if (!committed) {
+    // Distinguish a lost race from a corrupted store — they need different
+    // responses, and the generic message reads as data loss for a benign race.
     return {
       rotated: false,
-      reason: `Account "${nextName}" disappeared from accounts.json before the rotation could be committed`,
+      reason: supersededBy !== undefined
+        ? `Rotation superseded: active account changed from "${currentName}" to "${supersededBy}" `
+          + `while this rotation was preflighting "${nextName}"; not overwriting the newer selection`
+        : `Account "${nextName}" disappeared from accounts.json before the rotation could be committed`,
     };
   }
 
