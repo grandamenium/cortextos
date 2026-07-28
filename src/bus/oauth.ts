@@ -16,6 +16,7 @@ import { existsSync, readFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
+import { withFileLockSync } from '../utils/lock.js';
 
 // --- Types ---
 
@@ -125,6 +126,41 @@ function saveAccounts(ctxRoot: string, store: AccountsStore): void {
   const path = accountsPath(ctxRoot);
   atomicWriteSync(path, JSON.stringify(store, null, 2));
   try { chmodSync(path, 0o600); } catch { /* ignore */ }
+}
+
+/**
+ * Run a read-modify-write against accounts.json under an inter-process mutex.
+ *
+ * The atomic rename inside `saveAccounts` makes each individual WRITE safe. It
+ * does nothing for the load → mutate → save *sequence* around it: two processes
+ * that both load before either saves will each write a whole-store snapshot,
+ * and the later writer silently reverts the earlier one's account. For an
+ * account that just refreshed, the reverted value is an already-spent
+ * refresh_token, so the next refresh fails and the account is stranded.
+ *
+ * The store is re-loaded INSIDE the lock — callers must apply their change to
+ * the store handed to `mutate`, never to a copy read before the lock.
+ *
+ * `mutate` MUST be synchronous. `withFileLockSync` is a synchronous mutex, so
+ * anything deferred past its return (an await, a callback) runs UNLOCKED. Do
+ * network work before calling this and apply only the result in here.
+ *
+ * Returns false without writing when accounts.json is missing or `mutate`
+ * returns false; callers decide whether that is benign or an error.
+ */
+function withAccountsLock(
+  ctxRoot: string,
+  mutate: (store: AccountsStore) => boolean,
+): boolean {
+  const dir = oauthDir(ctxRoot);
+  ensureDir(dir);
+  return withFileLockSync(dir, () => {
+    const store = loadAccounts(ctxRoot);
+    if (!store) return false;
+    if (!mutate(store)) return false;
+    saveAccounts(ctxRoot, store);
+    return true;
+  });
 }
 
 export function getActiveAccount(ctxRoot: string): { name: string; account: OAuthAccount } | null {
@@ -256,12 +292,16 @@ export async function checkUsageApi(
   // Update cache and accounts.json utilization fields
   saveCache(ctxRoot, snapshot);
 
-  const store = loadAccounts(ctxRoot);
-  if (store && store.accounts[accountName]) {
-    store.accounts[accountName].five_hour_utilization = fiveHour;
-    store.accounts[accountName].seven_day_utilization = sevenDay;
-    saveAccounts(ctxRoot, store);
-  }
+  // Same read-modify-write shape as the refresh path: the whole store is
+  // rewritten, so it must re-read under the lock. A missing store or account is
+  // benign here (utilization is a cache), hence the ignored return.
+  withAccountsLock(ctxRoot, (store) => {
+    const account = store.accounts[accountName];
+    if (!account) return false;
+    account.five_hour_utilization = fiveHour;
+    account.seven_day_utilization = sevenDay;
+    return true;
+  });
 
   return { ...snapshot, cached: false };
 }
@@ -310,15 +350,34 @@ export async function refreshOAuthToken(
 
   const expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
 
-  // ATOMIC WRITE — must happen before any further use of the new tokens
-  store.accounts[name] = {
-    ...account,
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token,
-    expires_at: expiresAt,
-    last_refreshed: new Date().toISOString(),
-  };
-  saveAccounts(ctxRoot, store);
+  // ATOMIC WRITE — must happen before any further use of the new tokens.
+  // Locked read-modify-write: `store` above was loaded BEFORE the await and is
+  // now potentially stale, so the new tokens are applied to a copy re-read
+  // inside the lock. Writing `store` back here would revert any account another
+  // process refreshed while this fetch was in flight.
+  const persisted = withAccountsLock(ctxRoot, (fresh) => {
+    const current = fresh.accounts[name];
+    if (!current) return false;
+    fresh.accounts[name] = {
+      ...current,
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_at: expiresAt,
+      last_refreshed: new Date().toISOString(),
+    };
+    return true;
+  });
+
+  if (!persisted) {
+    // The refresh already succeeded, so the OLD refresh_token is spent. Failing
+    // loudly is the only honest option — swallowing this loses the only copy of
+    // the new one and strands the account on a token the server has revoked.
+    throw new Error(
+      `Refreshed account "${name}" but could not persist the new tokens: ` +
+      `accounts.json or the account entry disappeared mid-refresh. ` +
+      `The previous refresh_token is now spent.`,
+    );
+  }
 
   return { account: name, expires_at: expiresAt };
 }
@@ -389,11 +448,7 @@ export async function rotateOAuth(
   }
 
   // PHASE 1: Update accounts.json (active + rotation_log)
-  const reloaded = loadAccounts(ctxRoot)!;
-  reloaded.active = nextName;
-  reloaded.accounts[nextName].five_hour_utilization = preflight.five_hour_utilization;
-  reloaded.accounts[nextName].seven_day_utilization = preflight.seven_day_utilization;
-
+  // Locked: the preflight above is awaited, so anything read before it is stale.
   const logEntry: RotationLogEntry = {
     timestamp: new Date().toISOString(),
     from: currentName,
@@ -402,8 +457,23 @@ export async function rotateOAuth(
     five_hour_util: current.five_hour_utilization,
     seven_day_util: current.seven_day_utilization,
   };
-  reloaded.rotation_log = [logEntry, ...reloaded.rotation_log].slice(0, ROTATION_LOG_MAX);
-  saveAccounts(ctxRoot, reloaded);
+
+  const committed = withAccountsLock(ctxRoot, (reloaded) => {
+    const next = reloaded.accounts[nextName];
+    if (!next) return false;
+    reloaded.active = nextName;
+    next.five_hour_utilization = preflight.five_hour_utilization;
+    next.seven_day_utilization = preflight.seven_day_utilization;
+    reloaded.rotation_log = [logEntry, ...reloaded.rotation_log].slice(0, ROTATION_LOG_MAX);
+    return true;
+  });
+
+  if (!committed) {
+    return {
+      rotated: false,
+      reason: `Account "${nextName}" disappeared from accounts.json before the rotation could be committed`,
+    };
+  }
 
   // PHASE 2: Write bare access token to agent .env files
   const finalStore = loadAccounts(ctxRoot)!;

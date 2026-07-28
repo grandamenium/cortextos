@@ -7,6 +7,49 @@ import { tmpdir } from 'os';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+// Delegating spy on the lock boundary: records which directory each
+// read-modify-write locked, while still running the REAL lock so behaviour is
+// unchanged. Lets a single-process test assert the lock is actually applied.
+// `lockedSections` additionally records what each locked critical section did to
+// `active`, so a test can attribute a lock to the specific write it cares about
+// rather than to a total count of acquisitions (which couples unrelated call
+// sites together and misreports which one regressed).
+const { lockedDirs, lockedSections } = vi.hoisted(() => ({
+  lockedDirs: [] as string[],
+  lockedSections: [] as { dir: string; activeBefore?: string; activeAfter?: string }[],
+}));
+vi.mock('../../../src/utils/lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/utils/lock.js')>();
+  return {
+    ...actual,
+    withFileLockSync: <T,>(dir: string, fn: () => T, opts?: unknown): T => {
+      lockedDirs.push(dir);
+      const { readFileSync } = require('fs') as typeof import('fs');
+      const { join: pjoin } = require('path') as typeof import('path');
+      const readActive = (): string | undefined => {
+        try {
+          return JSON.parse(readFileSync(pjoin(dir, 'accounts.json'), 'utf-8')).active;
+        } catch {
+          return undefined;
+        }
+      };
+      // Read INSIDE the delegating wrapper but OUTSIDE the real lock body is not
+      // possible without racing, so both reads happen within the real critical
+      // section by wrapping `fn` itself.
+      return actual.withFileLockSync(
+        dir,
+        () => {
+          const activeBefore = readActive();
+          const result = fn();
+          lockedSections.push({ dir, activeBefore, activeAfter: readActive() });
+          return result;
+        },
+        opts as never,
+      );
+    },
+  };
+});
+
 const {
   loadAccounts,
   getActiveAccount,
@@ -165,6 +208,29 @@ describe('checkUsageApi', () => {
     expect(call[1].headers.Authorization).toBe('Bearer tok_primary_abc');
     expect(call[1].headers['anthropic-beta']).toBe('oauth-2025-04-20');
   });
+
+  it('performs the utilization write under the inter-process lock', async () => {
+    // checkUsageApi awaits the usage API and then rewrites the WHOLE store, so
+    // it has the same read-modify-write exposure as the refresh path. In one
+    // process the re-read alone makes behaviour correct, so the lock cannot be
+    // observed behaviourally — its ACQUISITION is asserted instead. This proves
+    // the lock is applied, NOT that cross-process exclusion works.
+    //
+    // This test exists so that deleting the lock from checkUsageApi is caught by
+    // a test NAMED for checkUsageApi. Previously the only thing that went red was
+    // the rotateOAuth lock-count test, which attributed the failure to the wrong
+    // function.
+    writeStore();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ five_hour_utilization: 0.1, seven_day_utilization: 0.05 }),
+    });
+
+    lockedDirs.length = 0;
+    await checkUsageApi(tmpDir, { force: true });
+
+    expect(lockedDirs).toEqual([join(tmpDir, 'state', 'oauth')]);
+  });
 });
 
 describe('refreshOAuthToken', () => {
@@ -223,6 +289,123 @@ describe('refreshOAuthToken', () => {
   });
 });
 
+describe('refreshOAuthToken — concurrent refresh of a different account', () => {
+  // Race 1: refreshOAuthToken loads the WHOLE store, awaits the network, then
+  // writes the WHOLE store back. Two refreshes for different accounts overlap
+  // on that await, so the second writer's snapshot — taken before the first
+  // writer's save — reverts the first account to its already-spent
+  // refresh_token. The next refresh of that account then fails: stranded.
+  function deferredFetch() {
+    let resolve!: (v: unknown) => void;
+    const promise = new Promise((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  function tokenResponse(access: string, refresh: string) {
+    return {
+      ok: true,
+      json: async () => ({ access_token: access, refresh_token: refresh, expires_in: 3600 }),
+    };
+  }
+
+  it('does not revert a field another writer changed on the SAME account mid-refresh', async () => {
+    // Kills the mutation `...current` -> `...account`: spreading the pre-fetch
+    // snapshot of this account would revert non-token fields written while the
+    // refresh was in flight, even though the re-read store is used elsewhere.
+    writeStore();
+    const a = deferredFetch();
+    mockFetch.mockImplementationOnce(() => a.promise);
+
+    const call = refreshOAuthToken(tmpDir, 'primary');
+
+    // Another process updates primary's utilization while the fetch is pending.
+    const mid = loadAccounts(tmpDir)!;
+    mid.accounts.primary.five_hour_utilization = 0.99;
+    const { writeFileSync } = require('fs');
+    writeFileSync(
+      join(tmpDir, 'state', 'oauth', 'accounts.json'),
+      JSON.stringify(mid, null, 2),
+    );
+
+    a.resolve(tokenResponse('tok_primary_NEW', 'rtok_primary_NEW'));
+    await call;
+
+    const store = loadAccounts(tmpDir)!;
+    expect(store.accounts.primary.refresh_token).toBe('rtok_primary_NEW');
+    expect(store.accounts.primary.five_hour_utilization).toBe(0.99);
+  });
+
+  it('performs the accounts.json read-modify-write under the inter-process lock', async () => {
+    // The two tests above run in ONE process, where the re-read alone is enough
+    // to make them pass — they cannot observe the lock at all. The lock is what
+    // makes the sequence safe against OTHER processes, so it is pinned here
+    // directly. Without this, deleting withFileLockSync leaves the suite green.
+    writeStore();
+    lockedDirs.length = 0;
+    mockFetch.mockResolvedValueOnce(tokenResponse('tok_x', 'rtok_x'));
+
+    await refreshOAuthToken(tmpDir, 'primary');
+
+    expect(lockedDirs).toContain(join(tmpDir, 'state', 'oauth'));
+  });
+
+  it('does not revert the other account to its spent refresh_token', async () => {
+    writeStore();
+    const a = deferredFetch();
+    const b = deferredFetch();
+    mockFetch
+      .mockImplementationOnce(() => a.promise)
+      .mockImplementationOnce(() => b.promise);
+
+    // Both calls run synchronously up to their `await fetch(...)`, so both
+    // hold the same pre-refresh snapshot of accounts.json.
+    const callA = refreshOAuthToken(tmpDir, 'primary');
+    const callB = refreshOAuthToken(tmpDir, 'secondary');
+
+    // A completes and saves first; B then saves its older snapshot.
+    a.resolve(tokenResponse('tok_primary_NEW', 'rtok_primary_NEW'));
+    await callA;
+    b.resolve(tokenResponse('tok_secondary_NEW', 'rtok_secondary_NEW'));
+    await callB;
+
+    const store = loadAccounts(tmpDir)!;
+    // The later writer's own account must land — this passes even unfixed.
+    expect(store.accounts.secondary.refresh_token).toBe('rtok_secondary_NEW');
+    // The earlier writer's account must survive the later write. Unfixed, this
+    // is 'rtok_primary_xyz' — the token the server has already invalidated.
+    expect(store.accounts.primary.refresh_token).toBe('rtok_primary_NEW');
+    expect(store.accounts.primary.access_token).toBe('tok_primary_NEW');
+  });
+
+  it('throws instead of reporting success when the refreshed account vanishes mid-refresh', async () => {
+    // The refresh itself SUCCEEDED, so the old refresh_token is now spent and the
+    // response holds the only copy of the new one. If the account is gone by the
+    // time we take the lock there is nowhere to persist it. Returning success
+    // would strand the account on a token the server has already revoked, and
+    // report that as a win. Failing loudly is the only honest option.
+    writeStore();
+    const a = deferredFetch();
+    mockFetch.mockImplementationOnce(() => a.promise);
+
+    const call = refreshOAuthToken(tmpDir, 'primary');
+
+    // Another process removes the account while the token fetch is in flight.
+    const mid = loadAccounts(tmpDir)!;
+    delete (mid.accounts as Record<string, unknown>).primary;
+    const { writeFileSync } = require('fs');
+    writeFileSync(
+      join(tmpDir, 'state', 'oauth', 'accounts.json'),
+      JSON.stringify(mid, null, 2),
+    );
+
+    a.resolve(tokenResponse('tok_primary_NEW', 'rtok_primary_NEW'));
+
+    await expect(call).rejects.toThrow(/could not persist the new tokens/);
+    // And it must not have resurrected the deleted account as a side effect.
+    expect(loadAccounts(tmpDir)!.accounts.primary).toBeUndefined();
+  });
+});
+
 describe('rotateOAuth', () => {
   const frameworkRoot = '/tmp/fw';
 
@@ -231,6 +414,44 @@ describe('rotateOAuth', () => {
     const result = await rotateOAuth(tmpDir, frameworkRoot, 'acme');
     expect(result.rotated).toBe(false);
     expect(result.reason).toContain('within limits');
+  });
+
+  it('commits the phase-1 accounts.json write under the inter-process lock', async () => {
+    // rotateOAuth awaits the preflight, so its phase-1 write has the same
+    // read-modify-write exposure as the refresh path. In one process the
+    // re-read alone makes rotation behave correctly, so behaviour cannot
+    // distinguish locked from unlocked — the acquisition is asserted instead.
+    // Attribution matters: asserting a total lock COUNT here would also go red
+    // if checkUsageApi's lock were removed, blaming rotateOAuth for someone
+    // else's regression. So this asserts that exactly one LOCKED critical
+    // section is the one that flipped `active` primary -> secondary. Unlocked,
+    // the phase-1 write happens outside any critical section and no locked
+    // section shows that transition.
+    const highUtilStore = {
+      ...SAMPLE_STORE,
+      accounts: {
+        ...SAMPLE_STORE.accounts,
+        primary: { ...SAMPLE_STORE.accounts.primary, five_hour_utilization: 0.90 },
+      },
+    };
+    writeStore(highUtilStore);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ five_hour_utilization: 0.1, seven_day_utilization: 0.05 }),
+    });
+
+    lockedDirs.length = 0;
+    lockedSections.length = 0;
+    const result = await rotateOAuth(tmpDir, frameworkRoot, 'acme');
+    expect(result.rotated).toBe(true);
+
+    const oauthStateDir = join(tmpDir, 'state', 'oauth');
+    const activated = lockedSections.filter(
+      (s) => s.dir === oauthStateDir
+        && s.activeBefore === 'primary'
+        && s.activeAfter === 'secondary',
+    );
+    expect(activated).toHaveLength(1);
   });
 
   it('rotates when 5h utilization exceeds threshold', async () => {
