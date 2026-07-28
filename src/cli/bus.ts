@@ -137,7 +137,15 @@ busCommand
   .action((id: string) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    ackInbox(paths, id);
+    const acked = ackInbox(paths, id);
+    if (!acked) {
+      // No inflight message with this id — almost always a typo'd or stale id.
+      // Reporting success here would hide the fact that the real message is
+      // still inflight and will redeliver.
+      console.error(`No inflight message with id ${id} — nothing ACK'd`);
+      process.exitCode = 1;
+      return;
+    }
     try {
       logEvent(paths, env.agentName, env.org, 'message', 'inbox_ack', 'info', JSON.stringify({ msg_id: id }));
     } catch { /* non-fatal */ }

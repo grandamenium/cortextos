@@ -130,13 +130,33 @@ describe('Message Bus', () => {
       const msgId = sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'test');
       checkInbox(receiverPaths); // moves to inflight
 
-      ackInbox(receiverPaths, msgId);
+      const acked = ackInbox(receiverPaths, msgId);
 
       const inflightFiles = readdirSync(receiverPaths.inflight).filter(f => f.endsWith('.json'));
       const processedFiles = readdirSync(receiverPaths.processed).filter(f => f.endsWith('.json'));
 
+      expect(acked).toBe(true);
       expect(inflightFiles.length).toBe(0);
       expect(processedFiles.length).toBe(1);
+    });
+
+    it('reports failure for an unknown id and leaves the real message inflight', () => {
+      sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'test');
+      checkInbox(receiverPaths); // moves to inflight
+
+      const acked = ackInbox(receiverPaths, 'not-a-real-message-id');
+
+      const inflightFiles = readdirSync(receiverPaths.inflight).filter(f => f.endsWith('.json'));
+      const processedFiles = readdirSync(receiverPaths.processed).filter(f => f.endsWith('.json'));
+
+      // A false confirmation here would hide that the message still redelivers.
+      expect(acked).toBe(false);
+      expect(inflightFiles.length).toBe(1);
+      expect(processedFiles.length).toBe(0);
+    });
+
+    it('reports failure when there is no inflight directory at all', () => {
+      expect(ackInbox(receiverPaths, 'anything')).toBe(false);
     });
   });
 });

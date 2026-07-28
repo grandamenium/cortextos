@@ -166,8 +166,12 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
 /**
  * Acknowledge a message by moving it from inflight to processed.
  * Identical to bash ack-inbox.sh behavior.
+ *
+ * Returns true if a matching inflight message was found and acknowledged,
+ * false otherwise. Callers must not report success without checking: an
+ * unmatched id means the message is still inflight and will redeliver.
  */
-export function ackInbox(paths: BusPaths, messageId: string): void {
+export function ackInbox(paths: BusPaths, messageId: string): boolean {
   const { inflight, processed } = paths;
   ensureDir(processed);
 
@@ -176,7 +180,7 @@ export function ackInbox(paths: BusPaths, messageId: string): void {
   try {
     files = readdirSync(inflight).filter(f => f.endsWith('.json'));
   } catch {
-    return;
+    return false;
   }
 
   for (const file of files) {
@@ -186,12 +190,14 @@ export function ackInbox(paths: BusPaths, messageId: string): void {
       const msg = JSON.parse(content);
       if (msg.id === messageId) {
         renameSync(filePath, join(processed, file));
-        return;
+        return true;
       }
     } catch {
       // Skip corrupt files
     }
   }
+
+  return false;
 }
 
 /**
