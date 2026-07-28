@@ -2,7 +2,7 @@
 name: source-collection
 description: "Collect configured research sources, normalize signals, upsert them into SQLite, and log source health."
 triggers: ["collect research sources", "refresh research signals", "run source collection"]
-external_calls: ["configured RSS and custom URLs", "www.youtube.com", "www.reddit.com", "reddit.com", "api.github.com", "hacker-news.firebaseio.com", "news.ycombinator.com", "export.arxiv.org", "api.apify.com"]
+external_calls: ["configured RSS and custom URLs", "www.youtube.com", "www.reddit.com", "reddit.com", "api.github.com", "hacker-news.firebaseio.com", "news.ycombinator.com", "export.arxiv.org", "api.apify.com", "apify.com"]
 ---
 
 # Source Collection
@@ -437,15 +437,40 @@ def fetch_apify_actor(actor_id, input_payload):
         raise ValueError("APIFY_TOKEN not set")
     try:
         result = subprocess.run(
-            ["apify", "call", actor_id, "--json", "--no-open-browser"],
+            [
+                "apify", "call", actor_id, "--json", "--no-open-browser",
+                "--timeout", "30"
+            ],
             input=json.dumps(input_payload),
             capture_output=True, text=True,
             env={**os.environ, "APIFY_TOKEN": token},
-            timeout=300
+            timeout=30
         )
-        return json.loads(result.stdout) if result.returncode == 0 else []
-    except (subprocess.TimeoutExpired, json.JSONDecodeError):
-        return []
+        if result.returncode != 0:
+            return {
+                "items": [],
+                "failure": {
+                    "type": "actor_error",
+                    "message": result.stderr.strip()[:500]
+                }
+            }
+        return {"items": json.loads(result.stdout), "failure": None}
+    except subprocess.TimeoutExpired:
+        return {
+            "items": [],
+            "failure": {
+                "type": "timeout",
+                "message": "Apify source exceeded 30 seconds"
+            }
+        }
+    except json.JSONDecodeError as error:
+        return {
+            "items": [],
+            "failure": {
+                "type": "parse_error",
+                "message": str(error)
+            }
+        }
 ```
 
 Actor IDs come from `sources.json`. Preserve the existing
@@ -456,7 +481,9 @@ Read `references/xquik-apify-actors.md` before using either Xquik Actor. It
 defines the supported modes, relations, output controls, bounded inputs, and
 paid-run gate.
 
-Map each actor's output fields to the common signal format before upserting.
+Read `items` from the result and map each Actor's output fields to the common
+signal format before upserting. Log any `failure` and increment the run's
+failure count. Do not treat a failed run as a valid zero-item response.
 
 ---
 
