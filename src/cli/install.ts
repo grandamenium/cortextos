@@ -1,9 +1,13 @@
 import { Command } from 'commander';
-import { existsSync, mkdirSync, writeFileSync, chmodSync, readFileSync, readdirSync, statSync } from 'fs';
+import { existsSync, mkdirSync, chmodSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform, arch } from 'os';
 import { execSync, spawnSync } from 'child_process';
 import { randomBytes } from 'crypto';
+
+import { atomicWriteSync } from '../utils/atomic.js';
+import { dashboardEnvPath, mutateDashboardEnv } from '../utils/dashboard-env.js';
+import { withFileLockSync } from '../utils/lock.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const IS_MAC = platform() === 'darwin';
@@ -359,68 +363,67 @@ export const installCommand = new Command('install')
     }
     console.log(`  Created ${dirs.length} directories at ${ctxRoot}`);
 
-    // enabled-agents.json
-    const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
-    if (!existsSync(enabledPath)) {
-      writeFileSync(enabledPath, '{}', 'utf-8');
-      console.log('  Created enabled-agents.json');
-    }
+    // enabled-agents.json and the bus signing key both live in <ctxRoot>/config,
+    // so one lock on that directory covers both. Re-checking `existsSync` INSIDE
+    // the lock is the point: the bare check-then-write these replaced could see
+    // "absent", lose the CPU, and clobber a file another process created in the
+    // gap. For enabled-agents.json that clobber is not cosmetic — a missing
+    // entry means ENABLED (`src/bus/agents.ts:90-91`, matching the daemon's
+    // default-on discovery), so overwriting a populated roster with `{}` drops
+    // every explicit `enabled:false` and silently restarts disabled agents.
+    const configDir = join(ctxRoot, 'config');
+    const enabledPath = join(configDir, 'enabled-agents.json');
+    const signingKeyPath = join(configDir, 'bus-signing-key');
+
+    withFileLockSync(configDir, () => {
+      if (!existsSync(enabledPath)) {
+        atomicWriteSync(enabledPath, '{}');
+        console.log('  Created enabled-agents.json');
+      }
+
+      if (!existsSync(signingKeyPath)) {
+        // `atomicWriteSync` renames the key into place instead of truncating and
+        // rewriting, so a concurrent reader can never observe a half-written
+        // key. That matters here because `loadSigningKey`
+        // (`src/bus/message.ts:19-27`) returns `readFileSync(...).trim()` and so
+        // would hand back `''` — a truthy-enough wrong key that produces bad
+        // signatures — rather than falling back to `null` on a torn read.
+        atomicWriteSync(signingKeyPath, randomBytes(32).toString('hex'));
+        console.log('  Generated bus-signing-key (HMAC-SHA256)');
+      }
+    });
 
     // Instance .env
     const envPath = join(ctxRoot, '.env');
-    if (!existsSync(envPath)) {
-      writeFileSync(envPath, [
-        `CTX_INSTANCE_ID=${instanceId}`,
-        `CTX_ROOT=${ctxRoot}`,
-        '',
-      ].join('\n'), 'utf-8');
-      try { chmodSync(envPath, 0o600); } catch { /* ignore on Windows */ }
-      console.log('  Created .env');
-    }
-
-    // Bus signing key
-    const signingKeyPath = join(ctxRoot, 'config', 'bus-signing-key');
-    if (!existsSync(signingKeyPath)) {
-      const signingKey = randomBytes(32).toString('hex');
-      writeFileSync(signingKeyPath, signingKey, 'utf-8');
-      try { chmodSync(signingKeyPath, 0o600); } catch { /* ignore on Windows */ }
-      console.log('  Generated bus-signing-key (HMAC-SHA256)');
-    }
+    withFileLockSync(ctxRoot, () => {
+      if (!existsSync(envPath)) {
+        atomicWriteSync(envPath, [
+          `CTX_INSTANCE_ID=${instanceId}`,
+          `CTX_ROOT=${ctxRoot}`,
+        ].join('\n'));
+        console.log('  Created .env');
+      }
+    });
 
     // ─── Dashboard credentials ────────────────────────────────────────────────
 
-    const dashEnvPath = join(ctxRoot, 'dashboard.env');
-    let authSecret: string;
-    let adminPassword: string;
+    const dashEnvPath = dashboardEnvPath(ctxRoot);
 
-    if (existsSync(dashEnvPath)) {
-      // Read existing values so we don't overwrite them
-      const existing = readFileSync(dashEnvPath, 'utf-8');
-      const lines = Object.fromEntries(
-        existing.split('\n')
-          .filter(l => l.includes('='))
-          .map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)])
-      );
-      authSecret = lines['AUTH_SECRET'] || randomBytes(32).toString('hex');
-      adminPassword = lines['ADMIN_PASSWORD'] || randomBytes(12).toString('hex');
-    } else {
-      authSecret = randomBytes(32).toString('hex');
-      adminPassword = randomBytes(12).toString('hex');
-    }
-
-    writeFileSync(
-      dashEnvPath,
-      [
-        `AUTH_SECRET=${authSecret}`,
-        `ADMIN_USERNAME=admin`,
-        `ADMIN_PASSWORD=${adminPassword}`,
-        `CTX_ROOT=${ctxRoot}`,
-        `CTX_FRAMEWORK_ROOT=${process.cwd()}`,
-        '',
-      ].join('\n'),
-      'utf-8',
-    );
-    try { chmodSync(dashEnvPath, 0o600); } catch { /* ignore on Windows */ }
+    // Merge-preserving and locked. Previously this read the file, kept only
+    // AUTH_SECRET and ADMIN_PASSWORD, and rewrote a fixed five-key list — so any
+    // other key in dashboard.env was silently dropped on every install, with no
+    // concurrency required. `mutateDashboardEnv` hands back the whole map and
+    // writes the whole map, so keys this command does not own survive; the lock
+    // additionally keeps `cortextos dashboard` (the other writer, which
+    // generates its own credentials when the file lacks them) from interleaving
+    // and leaving the two processes disagreeing about the admin password.
+    mutateDashboardEnv(ctxRoot, creds => {
+      creds['AUTH_SECRET'] ||= randomBytes(32).toString('hex');
+      creds['ADMIN_USERNAME'] ||= 'admin';
+      creds['ADMIN_PASSWORD'] ||= randomBytes(12).toString('hex');
+      creds['CTX_ROOT'] = ctxRoot;
+      creds['CTX_FRAMEWORK_ROOT'] = process.cwd();
+    });
     console.log(`  Generated dashboard credentials at ${dashEnvPath}`);
 
     // Register cortextos CLI globally so agent PTY sessions can find it

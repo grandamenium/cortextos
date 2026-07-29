@@ -1,29 +1,12 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, chmodSync, mkdirSync, openSync } from 'fs';
+import { existsSync, writeFileSync, chmodSync, mkdirSync, openSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
 import { randomBytes } from 'crypto';
 
-const IS_WINDOWS = platform() === 'win32';
+import { dashboardEnvPath, mutateDashboardEnv } from '../utils/dashboard-env.js';
 
-function parseEnvFile(filePath: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  try {
-    for (const line of readFileSync(filePath, 'utf-8').split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const idx = trimmed.indexOf('=');
-      if (idx > 0) {
-        let val = trimmed.slice(idx + 1);
-        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-          val = val.slice(1, -1);
-        }
-        result[trimmed.slice(0, idx)] = val;
-      }
-    }
-  } catch { /* ignore */ }
-  return result;
-}
+const IS_WINDOWS = platform() === 'win32';
 
 export const dashboardCommand = new Command('dashboard')
   .option('--port <port>', 'Port to run dashboard on', '3000')
@@ -44,30 +27,48 @@ export const dashboardCommand = new Command('dashboard')
     // ─── Load / generate dashboard credentials ────────────────────────────────
 
     const ctxRoot = join(homedir(), '.cortextos', options.instance);
-    const dashEnvPath = join(ctxRoot, 'dashboard.env');
+    const dashEnvPath = dashboardEnvPath(ctxRoot);
 
+    // Read-and-maybe-generate under the file lock. `cortextos install` writes
+    // this same file; when both run with the file absent or missing AUTH_SECRET,
+    // an unlocked read-modify-write let each generate its own credentials. The
+    // last writer won the file while this process kept its own values in memory
+    // and printed them — so the admin password shown to the user was not the one
+    // stored, and AUTH_SECRET changed under the running dashboard.
+    const envAuthSecret = process.env.AUTH_SECRET;
     let dashCreds: Record<string, string> = {};
-    if (existsSync(dashEnvPath)) {
-      dashCreds = parseEnvFile(dashEnvPath);
-    }
+    let generatedSecret = false;
+    let generatedPassword = false;
 
-    // Auth secret: env > dashboard.env > auto-generate
-    let authSecret = process.env.AUTH_SECRET || dashCreds['AUTH_SECRET'];
-    if (!authSecret) {
-      authSecret = randomBytes(32).toString('hex');
+    mutateDashboardEnv(ctxRoot, creds => {
+      dashCreds = creds;
+      // Precedence is unchanged: env > dashboard.env > generate. An AUTH_SECRET
+      // from the environment is deliberately NOT persisted, and an existing one
+      // needs no write — returning false keeps merely starting the dashboard
+      // from churning the file.
+      if (envAuthSecret || creds['AUTH_SECRET']) return false;
+
+      creds['AUTH_SECRET'] = randomBytes(32).toString('hex');
+      creds['ADMIN_USERNAME'] ||= 'admin';
+      generatedSecret = true;
+      if (!creds['ADMIN_PASSWORD']) {
+        creds['ADMIN_PASSWORD'] = randomBytes(12).toString('hex');
+        generatedPassword = true;
+      }
+    });
+
+    // Logging stays outside the callback so writing to a slow TTY cannot hold
+    // the lock — other writers block on it, and the dashboard's own wait is
+    // short.
+    if (generatedSecret) {
       console.log('\n  AUTH_SECRET not set — generating one automatically.');
-      // Persist it so future runs don't regenerate
-      dashCreds['AUTH_SECRET'] = authSecret;
-      dashCreds['ADMIN_USERNAME'] = dashCreds['ADMIN_USERNAME'] || 'admin';
-      if (!dashCreds['ADMIN_PASSWORD']) {
-        dashCreds['ADMIN_PASSWORD'] = randomBytes(12).toString('hex');
+      if (generatedPassword) {
         console.log(`  Generated admin credentials saved to: ${dashEnvPath}`);
         console.log(`  (View password with: cat ${dashEnvPath})`);
       }
-      const content = Object.entries(dashCreds).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
-      writeFileSync(dashEnvPath, content, 'utf-8');
-      try { chmodSync(dashEnvPath, 0o600); } catch { /* ignore on Windows */ }
     }
+
+    const authSecret = envAuthSecret || dashCreds['AUTH_SECRET'];
 
     // Admin password: env > dashboard.env > hard fail
     const adminPassword = process.env.ADMIN_PASSWORD || dashCreds['ADMIN_PASSWORD'];

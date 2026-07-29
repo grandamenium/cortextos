@@ -199,41 +199,76 @@ export function writeCortextosEnv(agentDir: string, env: CtxEnv): void {
  * Lines with no `=` are skipped.
  */
 export function parseEnvFile(filePath: string): Record<string, string> {
-  const result: Record<string, string> = {};
   try {
-    // stripBom + CRLF-aware split: Windows tooling (PowerShell Out-File,
-    // Notepad) writes .env files with a UTF-8 BOM at position 0 AND CRLF
-    // line endings. Without stripBom the first KEY line never matches
-    // because position 0 is the BOM byte; without the regex split, each
-    // value gets a trailing \r that breaks downstream validators.
-    const content = stripBom(readFileSync(filePath, 'utf-8'));
-    for (const line of content.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const eqIdx = trimmed.indexOf('=');
-      if (eqIdx <= 0) continue; // no '=' or empty key
-
-      const key = trimmed.slice(0, eqIdx).trim();
-      let value = trimmed.slice(eqIdx + 1).trim();
-
-      if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-        value = value.slice(1, -1);
-      } else if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
-        value = value.slice(1, -1);
-      } else {
-        // Unquoted: strip inline comments starting with ' #'
-        const hashIdx = value.indexOf(' #');
-        if (hashIdx >= 0) {
-          value = value.slice(0, hashIdx).trim();
-        }
-      }
-
-      result[key] = value;
-    }
+    return parseEnvContent(readFileSync(filePath, 'utf-8'));
   } catch {
     // Ignore read errors
+    return {};
+  }
+}
+
+/**
+ * Parse already-read env-file text. Split out from `parseEnvFile` so callers
+ * that must do their own read — e.g. a read-modify-write under a file lock,
+ * which has to tell "file absent" apart from "file unreadable" instead of
+ * collapsing both to `{}` — get identical parsing semantics rather than
+ * hand-rolling a fourth variant.
+ */
+export function parseEnvContent(raw: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  // stripBom + CRLF-aware split: Windows tooling (PowerShell Out-File,
+  // Notepad) writes .env files with a UTF-8 BOM at position 0 AND CRLF
+  // line endings. Without stripBom the first KEY line never matches
+  // because position 0 is the BOM byte; without the regex split, each
+  // value gets a trailing \r that breaks downstream validators.
+  const content = stripBom(raw);
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx <= 0) continue; // no '=' or empty key
+
+    const key = trimmed.slice(0, eqIdx).trim();
+    let value = trimmed.slice(eqIdx + 1).trim();
+
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1);
+    } else if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
+      value = value.slice(1, -1);
+    } else {
+      // Unquoted: strip inline comments starting with ' #'
+      const hashIdx = value.indexOf(' #');
+      if (hashIdx >= 0) {
+        value = value.slice(0, hashIdx).trim();
+      }
+    }
+
+    result[key] = value;
   }
   return result;
+}
+
+/**
+ * Serialize a KEY=VALUE map back to env-file text (no trailing newline —
+ * `atomicWriteSync` appends it).
+ *
+ * Values are quoted only when the bare form would not survive a round-trip
+ * through `parseEnvContent`: that parser trims each value and strips inline
+ * ` #` comments, so a preserved third-party value containing either would come
+ * back altered. This matters because the dashboard-credential writers now
+ * round-trip keys they do not own.
+ */
+export function serializeEnvContent(vars: Record<string, string>): string {
+  return Object.entries(vars)
+    .map(([key, value]) => {
+      const looksQuoted =
+        value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'")));
+      const needsQuoting = value !== value.trim() || value.includes(' #') || looksQuoted;
+      return `${key}=${needsQuoting ? `"${value}"` : value}`;
+    })
+    .join('\n');
 }
 
 /**
