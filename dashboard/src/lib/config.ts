@@ -105,16 +105,32 @@ export function getLogDir(agent: string): string {
 
 // -- Agent dir within org (IDENTITY.md, SOUL.md, MEMORY.md, .env) --
 
+/**
+ * Resolves an agent's directory. Framework root ALWAYS — never the state dir.
+ *
+ * This deliberately does NOT probe the filesystem. The previous version fell
+ * back to `<CTX_ROOT>/orgs/<org>/agents/<name>` when the framework path did not
+ * yet exist, which made resolution *timing-dependent*: the same logical agent
+ * resolved to two different directories depending on when you asked. That is
+ * exactly wrong for a path we intend to lock on — a directory-granular lock
+ * excludes nothing during the creation window, when creation races actually
+ * live. Being existsSync-free is the point, not an optimisation.
+ *
+ * The CLI is the writer and it never looks under CTX_ROOT for agent files:
+ * `resolveEnv` builds every agentDir from projectRoot (src/utils/env.ts:66-70)
+ * and *enforces* projectRoot === frameworkRoot (:108-110). Nothing in
+ * production ever creates `<CTX_ROOT>/orgs/<org>/agents/<name>`. Returning the
+ * framework path unconditionally makes the dashboard agree with the CLI.
+ *
+ * Note the deliberate asymmetry with `getAgentsForOrg` below, which still
+ * unions both directories. That is DISCOVERY (harmless listing); this is
+ * RESOLUTION (single-valued by construction). Do not "unify" them.
+ */
 export function getAgentDir(name: string, org?: string): string {
-  // Check project root first (where agent markdown files live), then state dir
   if (org) {
-    const projectPath = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', name);
-    if (fs.existsSync(projectPath)) return projectPath;
-    return path.join(CTX_ROOT, 'orgs', org, 'agents', name);
+    return path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'agents', name);
   }
-  const projectPath = path.join(CTX_FRAMEWORK_ROOT, 'agents', name);
-  if (fs.existsSync(projectPath)) return projectPath;
-  return path.join(CTX_ROOT, 'agents', name);
+  return path.join(CTX_FRAMEWORK_ROOT, 'agents', name);
 }
 
 // -- Discovery functions --
