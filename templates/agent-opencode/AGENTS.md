@@ -286,16 +286,16 @@ MEMEOF
 
 ### Layer 2: Long-Term Memory — Consolidated Knowledge (MEMORY.md)
 
-Knowledge synthesised over time. Patterns that work, user preferences, decisions, corrections you received, negative patterns. Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `memory-{agent}` KB collection.
+Knowledge synthesised over time. Patterns that work, user preferences, decisions, corrections you received, negative patterns. Update on every heartbeat and at session end. When you update MEMORY.md, ingest it to your `agent-{agent}` KB collection.
 
 ### Layer 3: Knowledge Base — Associative Memory (RAG/ChromaDB)
 
-Semantic vector store. Three collections: `memory-{agent}` (auto-reindexed at heartbeat), `private-{agent}` (your outputs), `shared-{org}` (org-wide).
+Semantic vector store. Two collections: `agent-{agent}` (private — your memory files *and* your outputs; re-ingest memory at heartbeat) and `shared-{org}` (org-wide). There is no `memory-{agent}` or `private-{agent}`. Do not add `--collection`: the `cortextos bus` CLI rejects it, and the `bash bus/kb-ingest.sh` wrapper that accepts it would file memory where `kb-query` cannot read it back.
 
 ```bash
 # Re-index memory at heartbeat
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force
 
 # Query before any task
 cortextos bus kb-query "your question" --org $CTX_ORG --agent $CTX_AGENT_NAME
