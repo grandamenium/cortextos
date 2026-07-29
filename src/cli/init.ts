@@ -6,6 +6,7 @@ import { homedir } from 'os';
 import { ensureDir } from '../utils/atomic.js';
 import { validateOrgName } from '../utils/validate.js';
 import { stripBom } from '../utils/strip-bom.js';
+import { mutateOrgContext, CorruptOrgContextError } from '../utils/org-context.js';
 import type { OrgContext } from '../types/index.js';
 
 export const initCommand = new Command('init')
@@ -70,38 +71,55 @@ export const initCommand = new Command('init')
       console.log('  Copied org template files');
     }
 
-    // Create org context.json (if not already from template)
-    const contextPath = join(orgDir, 'context.json');
-    if (!existsSync(contextPath)) {
-      writeFileSync(contextPath, JSON.stringify({
-        name: orgName,
-        description: '',
-        industry: '',
-        icp: '',
-        value_prop: '',
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        orchestrator: '',
-        day_mode_start: '08:00',
-        day_mode_end: '00:00',
-        default_approval_categories: ['external-comms', 'financial', 'deployment', 'data-deletion'],
-        communication_style: 'direct and casual',
-      }, null, 2) + '\n', 'utf-8');
-      console.log('  Created org context.json');
-    } else {
-      // Fill in any missing fields (handles upgrades from older context.json without new fields)
-      try {
-        // stripBom: see src/utils/strip-bom.ts. Skipping this would make
-        // every re-run of `cortextos init` silently fall through to the
-        // catch block, leaving context.json un-upgraded.
-        const ctx = JSON.parse(stripBom(readFileSync(contextPath, 'utf-8')));
-        if (!ctx.timezone) ctx.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    // Create-or-upgrade the org context.json (it may already exist from the template).
+    //
+    // This used to be an `existsSync` check followed by either a full write or a
+    // separate read/mutate/write. That is a TOCTOU against a concurrent
+    // `add-agent --template orchestrator`, which does its own read-modify-write on
+    // this same file: both could read, both mutate, and the later write wins
+    // wholesale. Collapsing the two branches into ONE locked transaction closes
+    // the window; `existed` now only picks the console message.
+    //
+    // Every field is filled with `if (!ctx.x)` semantics, including the five the
+    // old upgrade branch never touched (description, industry, icp, value_prop,
+    // orchestrator). The old create branch wrote them, so leaving them out here
+    // would silently drop them from a fresh org.
+    let contextCreated = false;
+    try {
+      mutateOrgContext(projectRoot, orgName, (ctx, existed) => {
+        contextCreated = !existed;
+        const before = JSON.stringify(ctx);
         if (!ctx.name) ctx.name = orgName;
+        if (!ctx.description) ctx.description = '';
+        if (!ctx.industry) ctx.industry = '';
+        if (!ctx.icp) ctx.icp = '';
+        if (!ctx.value_prop) ctx.value_prop = '';
+        if (!ctx.timezone) ctx.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (!ctx.orchestrator) ctx.orchestrator = '';
         if (!ctx.day_mode_start) ctx.day_mode_start = '08:00';
         if (!ctx.day_mode_end) ctx.day_mode_end = '00:00';
         if (!ctx.default_approval_categories) ctx.default_approval_categories = ['external-comms', 'financial', 'deployment', 'data-deletion'];
         if (!ctx.communication_style) ctx.communication_style = 'direct and casual';
-        writeFileSync(contextPath, JSON.stringify(ctx, null, 2) + '\n', 'utf-8');
-      } catch { /* ignore */ }
+        // Nothing missing: decline the write rather than rewrite identical bytes
+        // and churn the mtime the dashboard's file watcher keys on.
+        return JSON.stringify(ctx) !== before;
+      });
+      if (contextCreated) console.log('  Created org context.json');
+    } catch (err) {
+      // A corrupt context.json is left untouched on disk (the helper backs it up
+      // and refuses to overwrite) — the old code's blanket `catch { /* ignore */ }`
+      // had the same effect but gave the user no signal at all that their org
+      // context was unreadable and would never be upgraded. Warn and carry on:
+      // the rest of init's work is still valid, and failing here would abort a
+      // command whose other output is already on disk.
+      //
+      // Anything else — lock timeout, EACCES, a failed write — propagates. The
+      // old create branch had no catch and already crashed on exactly those, so
+      // this makes the two paths consistent rather than introducing new
+      // behaviour; and silently skipping the upgrade would have init report
+      // success having done nothing.
+      if (!(err instanceof CorruptOrgContextError)) throw err;
+      console.warn(`  Warning: ${(err as Error).message}`);
     }
 
     // Create goals.json if not from template

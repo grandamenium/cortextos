@@ -4,6 +4,7 @@ import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName, validateOrgName } from '../utils/validate';
+import { mutateOrgContext } from '../utils/org-context';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server', 'opencode'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -302,17 +303,30 @@ export const addAgentCommand = new Command('add-agent')
       }
     }
 
-    // Update org context.json if this is the orchestrator
+    // Update org context.json if this is the orchestrator.
+    //
+    // Previously a read-modify-write with no lock, racing `cortextos init`'s own
+    // mutation of this file. Now one locked transaction.
+    //
+    // The old `existsSync(contextPath)` guard is deliberately gone. It meant a
+    // missing context.json silently dropped the orchestrator on the floor; the
+    // helper creates the file instead, and init's upgrade pass now fills in every
+    // other field, so the stub heals on the next `cortextos init` rather than
+    // persisting as a half-formed org context.
     if (options.template === 'orchestrator') {
-      const contextPath = join(projectRoot, 'orgs', org, 'context.json');
-      if (existsSync(contextPath)) {
-        try {
-          const context = JSON.parse(readFileSync(contextPath, 'utf-8'));
-          if (!context.orchestrator) {
-            context.orchestrator = name;
-            writeFileSync(contextPath, JSON.stringify(context, null, 2) + '\n', 'utf-8');
-          }
-        } catch { /* ignore */ }
+      try {
+        mutateOrgContext(projectRoot, org, (ctx) => {
+          // Already claimed: decline the write rather than churn the mtime.
+          if (ctx.orchestrator) return false;
+          ctx.orchestrator = name;
+        });
+      } catch (err) {
+        // Non-fatal on purpose, and for a reason specific to this call site: the
+        // agent directory has already been created by the time we get here, so
+        // throwing would leave a fully-created agent behind a non-zero exit. The
+        // old code swallowed this silently; warn instead, since the symptom
+        // otherwise is an org that never learns who its orchestrator is.
+        console.warn(`  Warning: could not record orchestrator in context.json — ${(err as Error).message}`);
       }
     }
 
