@@ -145,7 +145,20 @@ const heldRecords = new Map<string, string>();
  * RENAME_NOREPLACE, so there is no atomic "restore only if absent" available.
  * Both outcomes now log — see `declined` below.
  */
-type Custody = 'removed' | 'declined' | 'lost';
+/**
+ * `lost` is split because the two failures mean OPPOSITE things about whether we
+ * still hold the lock, and `releaseLock` has to act differently on each.
+ *
+ *   - `vanished` (ENOENT): the directory is not there.  We no longer hold it,
+ *     and the path is free for anyone — including us — to acquire again.
+ *   - `stuck` (any other errno): the directory is still sitting there, still
+ *     carrying our record.  We DO still hold it, and nothing but this process
+ *     can free it: every future acquirer will judge the holder alive.
+ *
+ * Collapsing these into one outcome is what makes "just forget the record on a
+ * failed release" wrong — see `releaseLock`.
+ */
+type Custody = 'removed' | 'declined' | 'vanished' | 'stuck';
 
 function removeWithCustody(
   lockDir: string,
@@ -173,7 +186,7 @@ function removeWithCustody(
           `The lock directory is still present and this process is still alive, so ` +
           `every future acquirer will judge it 'alive' and block indefinitely. Investigate.`,
     );
-    return 'lost';
+    return code === 'ENOENT' ? 'vanished' : 'stuck';
   }
 
   let actual: string | null;
@@ -501,8 +514,20 @@ export function acquireLock(dir: string): boolean {
 export function releaseLock(dir: string): void {
   const lockDir = join(dir, '.lock.d');
 
-  // The record we WROTE, not one recomputed now — see `heldRecords`.
-  const mine = heldRecords.get(lockDir) ?? ownerRecord();
+  // The record we WROTE, not one recomputed now — see `heldRecords`.  No entry
+  // means we do not hold this lock, and the only correct action on a lock we do
+  // not hold is NOTHING.  The previous `?? ownerRecord()` fallback made a stray
+  // release take custody of a healthy foreign lock — renaming it aside, reading
+  // it, and renaming it back — which enters the restore window documented on
+  // `removeWithCustody` (where it can destroy a third acquirer's fresh claim)
+  // and logs "our lock was stolen ... data may be torn. Investigate", sending
+  // someone after an incident that never happened.  Recomputing was never even
+  // sound as identity: `readStartTime` can fail transiently, so the recomputed
+  // record can differ from the one we wrote.
+  const mine = heldRecords.get(lockDir);
+  if (mine === undefined) {
+    return;
+  }
 
   const result = removeWithCustody(
     lockDir,
@@ -513,7 +538,23 @@ export function releaseLock(dir: string): void {
       `guarded by it may be torn`,
   );
 
-  if (result === 'removed') {
+  // The entry must mean "we hold this ACQUISITION", but the record identifies a
+  // PROCESS — there is no generation nonce, and adding one is a format migration
+  // (the record is parsed by a fixed regex further down).  So a surviving entry
+  // is not inert: this process can re-acquire the same path later and write a
+  // byte-identical record, and a delayed or duplicated release would then match
+  // on it and remove an acquisition it never owned.  Classic ABA.  Clearing the
+  // entry the moment the acquisition ends is what keeps that unreachable
+  // without the migration.
+  //
+  // `stuck` is the one outcome that must KEEP it: there the directory is still
+  // present and still ours, so we are still the holder, and the entry is the
+  // only surviving copy of the record needed to release it.  Dropping it would
+  // turn every later release attempt into the no-op above and wedge the lock
+  // permanently — the exact outcome the entry exists to prevent.  There is no
+  // ABA risk in that state either: nobody, including us, can re-acquire a path
+  // whose live holder is this process.
+  if (result !== 'stuck') {
     heldRecords.delete(lockDir);
   }
 }
