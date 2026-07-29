@@ -24,6 +24,9 @@ module.exports = {
         CTX_FRAMEWORK_ROOT: FRAMEWORK_ROOT,
         CTX_PROJECT_ROOT: PROJECT_ROOT,
         CTX_ORG: CTX_ORG,
+        CTX_WHISPER_BIN: process.env.CTX_WHISPER_BIN || '/usr/local/bin/whisper-cli',
+        CTX_FFMPEG_BIN: process.env.CTX_FFMPEG_BIN || '/usr/bin/ffmpeg',
+        CTX_WHISPER_MODEL: process.env.CTX_WHISPER_MODEL || path.join(os.homedir(), '.cortextos', 'models', 'ggml-tiny.en.bin'),
         // Debug-only: set to '1' to enable SIGUSR2 signal → controlled
         // uncaughtException for testing the crash-visibility path
         // (.daemon-crashed markers + crash-loop operator Telegram alert).
