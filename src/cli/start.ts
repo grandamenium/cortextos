@@ -1,9 +1,10 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
 import { execSync, spawn, spawnSync } from 'child_process';
 import { IPCClient } from '../daemon/ipc-server.js';
+import { mutateEnabledAgents } from '../utils/enabled-agents.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const SAFE_CMD = /^[@a-z0-9._/-]+$/i;
@@ -163,26 +164,29 @@ export const startCommand = new Command('start')
 
     // Daemon already running
     if (agent) {
-      // Auto-register in enabled-agents.json if not already present
+      // Auto-register in enabled-agents.json if not already present. Under the
+      // registry lock: `add-agent`, `enable` and the dashboard mutate this same
+      // file, and an unlocked read-modify-write loses whichever entry lands second.
       const ctxRoot = join(homedir(), '.cortextos', options.instance);
-      const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
-      let enabledAgents: Record<string, any> = {};
-      try {
-        if (existsSync(enabledPath)) {
-          enabledAgents = JSON.parse(readFileSync(enabledPath, 'utf-8'));
-        }
-      } catch { /* ignore */ }
 
-      if (!enabledAgents[agent]) {
-        // Try to detect org from existing entries or project structure
-        const existingOrg = Object.values(enabledAgents as Record<string, any>).find((e: any) => e.org)?.org;
-        enabledAgents[agent] = {
-          enabled: true,
-          status: 'configured',
-          ...(existingOrg ? { org: existingOrg } : {}),
-        };
-        mkdirSync(join(ctxRoot, 'config'), { recursive: true });
-        writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
+      let registered = false;
+      try {
+        registered = mutateEnabledAgents(ctxRoot, (enabledAgents) => {
+          if (enabledAgents[agent]) return false; // already registered
+          // Try to detect org from existing entries or project structure
+          const existingOrg = Object.values(enabledAgents).find((e: any) => e.org)?.org;
+          enabledAgents[agent] = {
+            enabled: true,
+            status: 'configured',
+            ...(existingOrg ? { org: existingOrg } : {}),
+          };
+        });
+      } catch (err) {
+        console.error(`Error: could not register "${agent}" in the agent registry.`);
+        console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+      if (registered) {
         console.log(`  Registered ${agent} in enabled-agents.json`);
       }
 

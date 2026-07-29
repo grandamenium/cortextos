@@ -6,6 +6,7 @@ import { spawnSync } from 'child_process';
 import { validateAgentName } from '../utils/validate.js';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { resolvePaths } from '../utils/paths.js';
+import { mutateEnabledAgents } from '../utils/enabled-agents.js';
 
 interface ExportManifest {
   version: string;
@@ -154,18 +155,21 @@ export const importAgentCommand = new Command('import-agent')
       }
     }
 
-    // Register in enabled-agents.json
+    // Register in enabled-agents.json under the registry lock — `add-agent`,
+    // `start`, `enable` and the dashboard mutate this same file, and an unlocked
+    // read-modify-write loses whichever entry lands second.
     const ctxRoot = join(homedir(), '.cortextos', options.instance);
-    const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
-    let enabledAgents: Record<string, any> = {};
+
     try {
-      if (existsSync(enabledPath)) {
-        enabledAgents = JSON.parse(readFileSync(enabledPath, 'utf-8'));
-      }
-    } catch { /* start fresh */ }
-    enabledAgents[agentName] = { enabled: true, status: 'configured', org };
-    mkdirSync(join(ctxRoot, 'config'), { recursive: true });
-    writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
+      mutateEnabledAgents(ctxRoot, (enabledAgents) => {
+        enabledAgents[agentName] = { enabled: true, status: 'configured', org };
+      });
+    } catch (err) {
+      console.error(`Error: could not register "${agentName}" in the agent registry.`);
+      console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`  The agent files were imported — re-run once the registry is writable.`);
+      process.exit(1);
+    }
     console.log(`  Registered in enabled-agents.json`);
 
     cleanup(tmpDir);

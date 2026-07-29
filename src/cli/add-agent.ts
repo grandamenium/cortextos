@@ -4,6 +4,7 @@ import { join, resolve } from 'path';
 import { homedir } from 'os';
 import { OrgContext } from '../types';
 import { validateAgentName, validateOrgName } from '../utils/validate';
+import { mutateEnabledAgents } from '../utils/enabled-agents.js';
 
 const VALID_RUNTIMES = ['claude-code', 'hermes', 'codex-app-server', 'opencode'] as const;
 type RuntimeKind = typeof VALID_RUNTIMES[number];
@@ -316,27 +317,29 @@ export const addAgentCommand = new Command('add-agent')
       }
     }
 
-    // Register in enabled-agents.json
+    // Register in enabled-agents.json under the registry lock — `cortextos
+    // start`, `enable`, `import-agent` and the dashboard mutate this same file,
+    // and an unlocked read-modify-write here loses whichever entry lands second.
     const instanceId = options.instance;
     const ctxRoot = join(homedir(), '.cortextos', instanceId);
-    const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
-    const configDir = join(ctxRoot, 'config');
-    mkdirSync(configDir, { recursive: true });
 
-    let enabledAgents: Record<string, any> = {};
+    let registered = false;
     try {
-      if (existsSync(enabledPath)) {
-        enabledAgents = JSON.parse(readFileSync(enabledPath, 'utf-8'));
-      }
-    } catch { /* start fresh */ }
-
-    if (!enabledAgents[name]) {
-      enabledAgents[name] = {
-        enabled: true,
-        status: 'configured',
-        ...(org ? { org } : {}),
-      };
-      writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
+      registered = mutateEnabledAgents(ctxRoot, (enabledAgents) => {
+        if (enabledAgents[name]) return false; // already registered — leave it as-is
+        enabledAgents[name] = {
+          enabled: true,
+          status: 'configured',
+          ...(org ? { org } : {}),
+        };
+      });
+    } catch (err) {
+      console.error(`Error: could not register "${name}" in the agent registry.`);
+      console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`  The agent files were created — re-run once the registry is writable.`);
+      process.exit(1);
+    }
+    if (registered) {
       console.log(`  Registered in enabled-agents.json`);
     }
 

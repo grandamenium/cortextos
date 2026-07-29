@@ -4,6 +4,7 @@ import { join } from 'path';
 import { homedir, platform, arch } from 'os';
 import { execSync, spawnSync } from 'child_process';
 import { randomBytes } from 'crypto';
+import { enabledAgentsPath, mutateEnabledAgents } from '../utils/enabled-agents.js';
 
 const IS_WINDOWS = platform() === 'win32';
 const IS_MAC = platform() === 'darwin';
@@ -359,11 +360,26 @@ export const installCommand = new Command('install')
     }
     console.log(`  Created ${dirs.length} directories at ${ctxRoot}`);
 
-    // enabled-agents.json
-    const enabledPath = join(ctxRoot, 'config', 'enabled-agents.json');
-    if (!existsSync(enabledPath)) {
-      writeFileSync(enabledPath, '{}', 'utf-8');
-      console.log('  Created enabled-agents.json');
+    // enabled-agents.json — create it if absent, never touch it if it exists.
+    //
+    // The bare `existsSync` -> `writeFileSync('{}')` this replaced was a TOCTOU,
+    // and not a harmless one: install re-runs over an existing instance on
+    // upgrade/reinstall, so a concurrent `cortextos add-agent`/`enable` landing
+    // between the two calls got clobbered back to an empty registry. Losing the
+    // registry does not deregister agents — it drops their `enabled: false`
+    // flags, and the daemon's next discovery pass starts every agent the user
+    // deliberately disabled. Both checks now happen under the registry lock.
+    const enabledPath = enabledAgentsPath(ctxRoot);
+    try {
+      // `mutate` runs holding the lock, so this existsSync is no longer a race.
+      // Returning false means "already there, don't rewrite it".
+      const created = mutateEnabledAgents(ctxRoot, () => !existsSync(enabledPath));
+      if (created) console.log('  Created enabled-agents.json');
+    } catch (err) {
+      // A corrupt registry must not abort the whole install — the rest of it is
+      // still worth doing, and the file has been backed up by now. Warn loudly
+      // and leave it alone rather than overwriting it.
+      console.warn(`  WARNING: could not initialize enabled-agents.json: ${(err as Error).message}`);
     }
 
     // Instance .env

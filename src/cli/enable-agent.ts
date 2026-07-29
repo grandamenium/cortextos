@@ -4,6 +4,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { IPCClient } from '../daemon/ipc-server.js';
 import { TelegramAPI, formatValidateError } from '../telegram/api.js';
+import { mutateEnabledAgents } from '../utils/enabled-agents.js';
 
 /**
  * BUG-035 fix: discover the cortextOS framework root without depending on
@@ -46,55 +47,37 @@ function parseEnvFile(path: string): Record<string, string> {
   return vars;
 }
 
-function getEnabledAgentsPath(instanceId: string): string {
-  return join(homedir(), '.cortextos', instanceId, 'config', 'enabled-agents.json');
+function ctxRootFor(instanceId: string): string {
+  return join(homedir(), '.cortextos', instanceId);
 }
 
 /**
- * BUG-013 fix: validate enabled-agents.json on read instead of silently
- * returning {} on any error. The original implementation hid two real failure
- * modes from the user:
- *   1. Corrupt JSON (file exists but won't parse) → silently empty, then
- *      writeEnabledAgents() overwrites the corrupt file with {}, destroying
- *      the user's enable state with no warning.
- *   2. Wrong shape (file exists, parses to an array/null/string) → same
- *      silent destruction.
+ * Apply `mutate` to the instance registry under the registry lock, and turn any
+ * failure into a clean CLI error instead of a raw stack through commander.
  *
- * The fix backs the bad file up as `enabled-agents.json.broken-<timestamp>`,
- * logs a clear warning to stderr, and returns {} only after preserving the
- * original. Users can recover from a backup, and they know WHY their agents
- * disappeared.
+ * Replaces the old unlocked `readEnabledAgents()` / `writeEnabledAgents()`
+ * pair. BUG-013 gave that pair the right instinct — never destroy a corrupt
+ * registry silently, back it up and warn — but it still continued with `{}`
+ * and wrote that back, so it was an atomic wipe with a receipt. The shared
+ * helper keeps the backup and the warning and then refuses to write at all.
+ * That matters more than it looks: a lost registry does not deregister agents
+ * (`AgentManager.readInstanceEnableList` treats a missing entry as enabled), it
+ * drops the `enabled: false` flags — so the next daemon discovery pass starts
+ * every agent the user deliberately disabled.
  */
-export function readEnabledAgents(instanceId: string): Record<string, any> {
-  const path = getEnabledAgentsPath(instanceId);
-  if (!existsSync(path)) return {}; // legit: no file = empty state, not an error
-
-  let raw: string;
+function updateRegistry(
+  instanceId: string,
+  agent: string,
+  verb: string,
+  mutate: (agents: Record<string, any>) => boolean | void,
+): void {
   try {
-    raw = readFileSync(path, 'utf-8');
+    mutateEnabledAgents(ctxRootFor(instanceId), mutate);
   } catch (err) {
-    console.error(`[enable] Failed to read ${path}: ${err}`);
-    return {};
+    console.error(`Error: could not ${verb} "${agent}" — the agent registry could not be updated.`);
+    console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
   }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    const backup = `${path}.broken-${Date.now()}`;
-    try { writeFileSync(backup, raw); } catch { /* ignore backup failure */ }
-    console.error(`[enable] WARNING: ${path} contains invalid JSON. Backed up to ${backup}. Treating as empty.`);
-    return {};
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    const backup = `${path}.broken-${Date.now()}`;
-    try { writeFileSync(backup, raw); } catch { /* ignore backup failure */ }
-    console.error(`[enable] WARNING: ${path} is not a JSON object (got ${parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed}). Backed up to ${backup}. Treating as empty.`);
-    return {};
-  }
-
-  return parsed as Record<string, any>;
 }
 
 /**
@@ -110,13 +93,6 @@ export function writeDisableMarker(instanceId: string, agent: string, reason: st
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(join(stateDir, '.user-disable'), reason);
   } catch { /* don't block disable on marker-write failure */ }
-}
-
-function writeEnabledAgents(instanceId: string, agents: Record<string, any>): void {
-  const path = getEnabledAgentsPath(instanceId);
-  const dir = join(homedir(), '.cortextos', instanceId, 'config');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(agents, null, 2) + '\n', 'utf-8');
 }
 
 export const enableAgentCommand = new Command('enable')
@@ -220,16 +196,16 @@ export const enableAgentCommand = new Command('enable')
       console.error('  Continuing enable. Investigate the validator if this recurs.');
     }
 
-    const agents = readEnabledAgents(options.instance);
-    agents[agent] = {
-      enabled: true,
-      status: 'configured',
-      ...(options.org ? { org: options.org } : {}),
-    };
-    writeEnabledAgents(options.instance, agents);
+    updateRegistry(options.instance, agent, 'enable', (agents) => {
+      agents[agent] = {
+        enabled: true,
+        status: 'configured',
+        ...(options.org ? { org: options.org } : {}),
+      };
+    });
 
     // Create per-agent state directories
-    const ctxRoot = join(homedir(), '.cortextos', options.instance);
+    const ctxRoot = ctxRootFor(options.instance);
     const agentDirs = [
       join(ctxRoot, 'inbox', agent),
       join(ctxRoot, 'inflight', agent),
@@ -262,11 +238,11 @@ export const disableAgentCommand = new Command('disable')
   .option('--instance <id>', 'Instance ID', 'default')
   .description('Disable an agent (stop and deregister)')
   .action(async (agent: string, options: { instance: string }) => {
-    const agents = readEnabledAgents(options.instance);
-    if (agents[agent]) {
-      agents[agent].enabled = false;
-    }
-    writeEnabledAgents(options.instance, agents);
+    updateRegistry(options.instance, agent, 'disable', (agents) => {
+      if (agents[agent]) {
+        agents[agent].enabled = false;
+      }
+    });
 
     // Try to stop via daemon IPC
     const ipc = new IPCClient(options.instance);
