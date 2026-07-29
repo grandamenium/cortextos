@@ -1,7 +1,8 @@
 import { NextRequest } from 'next/server';
-import { existsSync, readFileSync, writeFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { getFrameworkRoot, getAllAgents, getAgentDir } from '@/lib/config';
+import { atomicWriteSync } from '@/lib/atomic-write';
 import { spawnSync } from 'child_process';
 
 export const dynamic = 'force-dynamic';
@@ -125,7 +126,14 @@ export async function PATCH(
     for (const key of allowed) {
       if (body[key] !== undefined) config[key] = body[key];
     }
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    // `writeFileSync` truncated this file and then refilled it, so a concurrent
+    // reader could observe it half-written — and every reader of config.json
+    // parses inside a try/catch that falls back to defaults, so a torn read
+    // surfaces as an agent silently running with DEFAULT settings rather than as
+    // an error.  `atomicWriteSync` renames a complete temp file over the target
+    // instead, so a reader sees either the whole old file or the whole new one.
+    // It supplies its own trailing newline, hence none here.
+    atomicWriteSync(configPath, JSON.stringify(config, null, 2));
 
     // Notify agent immediately (non-fatal if offline)
     try {
