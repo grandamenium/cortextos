@@ -6,6 +6,7 @@ import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
+import { updateCronFire } from '../bus/cron-state.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -1149,6 +1150,16 @@ export class AgentManager {
       const injected = this.injectAgent(agentName, injection);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
+      }
+      // Record the fire daemon-side (best-effort) so the agent no longer has to
+      // spend an LLM turn running `cortextos bus update-cron-fire`. Writes the same
+      // cron-state.json record (upsert by name), so daemon + any residual agent-side
+      // write converge. Failures here must NEVER break cron dispatch — swallow and log.
+      try {
+        const stateDir = join(this.ctxRoot, 'state', agentName);
+        updateCronFire(stateDir, cron.name, cron.schedule);
+      } catch (err) {
+        console.error(`[daemon] Failed to record cron fire for "${agentName}/${cron.name}" (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
       }
     };
 
