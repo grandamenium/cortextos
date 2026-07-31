@@ -252,18 +252,35 @@ export function isClaudeDirOperation(
   // Canonicalize the agent dir first (resolves legitimate symlinks on the install
   // path, e.g. /tmp -> /private/tmp), so the .claude subtree below it is the only
   // thing left to vet.
-  const canonAgentDir = canonicalizePath(resolve(base));
+  const origBase = resolve(base);
+  const canonAgentDir = canonicalizePath(origBase);
   const claudeRoot = join(canonAgentDir, '.claude');
-  const target = resolve(canonAgentDir, filePath);
 
-  // Lexical containment within the agent's own .claude/.
+  // Canonicalize the TARGET the same way as the base before comparing. Without
+  // this, a symlink anywhere on the install path defeats the check: on macOS
+  // the agent dir canonicalizes to /private/var/... while an absolute
+  // file_path keeps its /var/... prefix, so containment failed for legitimate
+  // writes and every .claude operation fell through to the human gate.
+  const lexicalTarget = resolve(origBase, filePath);
+  const target = canonicalizePath(lexicalTarget);
+
+  // Containment within the agent's own .claude/.
   if (target !== claudeRoot && !target.startsWith(claudeRoot + sep)) return false;
 
   // Reject if any component at or below .claude is a symlink — live OR dangling.
   // A planted symlink could otherwise redirect an "inside .claude" write out of
   // the tree. We lstat each component because realpathSync can't observe a
-  // *dangling* symlink (it throws, and canonicalize would fall back to lexical).
-  return !hasSymlinkComponent(canonAgentDir, target);
+  // *dangling* symlink (it throws, and canonicalize would fall back to lexical),
+  // so the containment check above cannot catch that case on its own.
+  //
+  // Both arguments must come from the same (unresolved) namespace. The previous
+  // code mixed them — canonical root, lexical target — and hasSymlinkComponent
+  // bails out immediately when the target does not sit under the root. On any
+  // host where the install path contains a symlink (macOS: /var -> /private/var)
+  // that mismatch made this check unreachable. It was not exploitable, because
+  // the same mismatch also made the containment check above reject everything,
+  // but the guard was dead code rather than defense in depth.
+  return !hasSymlinkComponent(origBase, lexicalTarget);
 }
 
 /**
