@@ -1,7 +1,7 @@
 local/
 .env
 .cortextos-env
-memory/
+memory/*.tmp
 !plugins/cortextos-agent-skills/skills/memory/
 *.log
 .cache/
