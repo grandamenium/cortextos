@@ -5,6 +5,18 @@ import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import { injectMessage as injectMessageIntoPty } from './inject.js';
 
+const CLAUDE_OAUTH_OVERRIDE_KEYS = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'] as const;
+
+export function assertNoClaudeOAuthOverride(env: Record<string, string>, agentName: string): void {
+  const overrideKey = CLAUDE_OAUTH_OVERRIDE_KEYS.find(key => env[key] !== undefined && env[key] !== '');
+  if (!overrideKey) return;
+
+  throw new Error(
+    `Refusing to spawn ${agentName}: ${overrideKey} overrides CLAUDE_CODE_OAUTH_TOKEN; ` +
+    'remove it from agent .env or parent process env',
+  );
+}
+
 // node-pty types
 interface IPty {
   pid: number;
@@ -138,6 +150,7 @@ export class AgentPTY {
     }
 
     this.customizeEnv(ptyEnv);
+    assertNoClaudeOAuthOverride(ptyEnv, this.env.agentName);
 
     // Spawn the agent binary directly (no shell wrapper) — cross-platform, no shell escaping needed.
     // env is passed natively via node-pty options; no bash export commands required.
@@ -390,7 +403,7 @@ export class AgentPTY {
     // Copy essential env vars
     const keepVars = [
       'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
-      'TMPDIR', 'TEMP', 'TMP', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY',
+      'TMPDIR', 'TEMP', 'TMP',
       'NODE_PATH', 'COMSPEC', 'USERPROFILE',
       // Windows path-expansion essentials. Stripping these causes phantom
       // %SystemDrive% directories from inherited Search Indexer processes

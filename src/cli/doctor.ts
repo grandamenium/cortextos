@@ -11,6 +11,68 @@ interface Check {
   fix?: string;
 }
 
+const CLAUDE_OAUTH_OVERRIDE_KEYS = ['ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_KEY'] as const;
+
+function envFileHasKey(content: string, key: string): boolean {
+  return content.split(/\r?\n/).some((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return false;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx <= 0) return false;
+    return trimmed.slice(0, eqIdx).trim() === key && trimmed.slice(eqIdx + 1).trim().length > 0;
+  });
+}
+
+export function findClaudeOAuthOverrideChecks(
+  frameworkRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Check[] {
+  const checks: Check[] = [];
+
+  for (const key of CLAUDE_OAUTH_OVERRIDE_KEYS) {
+    if (env[key]) {
+      checks.push({
+        name: `Claude OAuth override: process env ${key}`,
+        status: 'fail',
+        message: `${key} is set in the current process environment and overrides CLAUDE_CODE_OAUTH_TOKEN`,
+        fix: `Unset ${key}; persistent agents should use CLAUDE_CODE_OAUTH_TOKEN only.`,
+      });
+    }
+  }
+
+  const orgsDir = join(frameworkRoot, 'orgs');
+  if (!existsSync(orgsDir)) return checks;
+
+  try {
+    for (const org of readdirSync(orgsDir)) {
+      const agentsRoot = join(orgsDir, org, 'agents');
+      if (!existsSync(agentsRoot)) continue;
+      for (const agent of readdirSync(agentsRoot)) {
+        const envPath = join(agentsRoot, agent, '.env');
+        if (!existsSync(envPath)) continue;
+        let content = '';
+        try {
+          content = readFileSync(envPath, 'utf-8');
+        } catch {
+          continue;
+        }
+        const keys = CLAUDE_OAUTH_OVERRIDE_KEYS.filter(key => envFileHasKey(content, key));
+        if (keys.length === 0) continue;
+        checks.push({
+          name: `Claude OAuth override: ${org}/${agent}`,
+          status: 'fail',
+          message: `.env contains ${keys.join(', ')}; these override CLAUDE_CODE_OAUTH_TOKEN and can silently redirect billing`,
+          fix: `Remove ${keys.join(' and ')} from orgs/${org}/agents/${agent}/.env, then restart the agent.`,
+        });
+      }
+    }
+  } catch {
+    // Doctor is best-effort; other checks can still run.
+  }
+
+  return checks;
+}
+
 export const doctorCommand = new Command('doctor')
   .option('--instance <id>', 'Instance ID', 'default')
   .description('Diagnose common issues')
@@ -168,6 +230,8 @@ export const doctorCommand = new Command('doctor')
         fix: 'Run: claude login',
       });
     }
+
+    checks.push(...findClaudeOAuthOverrideChecks(process.cwd()));
 
     // ── Tunnel checks (macOS only) ──────────────────────────────────────
     if (process.platform === 'darwin') {
