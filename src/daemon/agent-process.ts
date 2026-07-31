@@ -35,6 +35,7 @@ export class AgentProcess {
   private crashWindowMax: number = 0;
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
+  private haltReason: AgentStatus['haltReason'];
   private stopping: boolean = false;
   // BUG-040 fix: persists across stop() return until handleExit clears it.
   // Required because BUG-032's CRLF + 5s wait can cause graceful shutdown to
@@ -93,6 +94,25 @@ export class AgentProcess {
       this.log('Already running');
       return;
     }
+
+    // codex-app-server runs with elevated local access. Require a deliberate
+    // per-agent opt-in before any startup side effects or PTY construction.
+    // Halt instead of throwing so one legacy config cannot abort daemon boot
+    // for every other agent.
+    if (this.config.runtime === 'codex-app-server' && this.config.allow_codex_app_server !== true) {
+      this.log(
+        `REFUSED to start: runtime 'codex-app-server' requires explicit opt-in. ` +
+        `After reviewing CODEX_APP_SERVER_OPT_IN.md, set ` +
+        `"allow_codex_app_server": true in this agent's config.json or run ` +
+        `cortextos doctor for migration guidance.`,
+      );
+      this.haltReason = 'codex_opt_in_required';
+      this.status = 'halted';
+      this.notifyStatusChange();
+      return;
+    }
+
+    this.haltReason = undefined;
 
     // Apply startup delay
     const delay = this.config.startup_delay || 0;
@@ -286,6 +306,7 @@ export class AgentProcess {
     // cleared by handleExit when the intentional exit fires (or by start()
     // when a new lifecycle begins). See BUG-040 fix in handleExit().
     this.status = 'stopped';
+    this.haltReason = undefined;
     this.notifyStatusChange();
     this.log('Stopped');
   }
@@ -382,6 +403,7 @@ export class AgentProcess {
       sessionStart: this.sessionStart?.toISOString(),
       crashCount: this.crashCount,
       model: this.config.model,
+      haltReason: this.haltReason,
     };
   }
 
@@ -609,6 +631,7 @@ export class AgentProcess {
           `CRASH_LOOP: ${this.crashTimestamps.length} crashes in ${this.crashWindowMs / 1000}s window — auto-pausing`,
         );
         this.appendCrashToRestartsLog(exitCode, 0, 'CRASH_LOOP');
+        this.haltReason = 'crash_loop';
         this.status = 'halted';
         this.notifyStatusChange();
         return;
@@ -624,6 +647,7 @@ export class AgentProcess {
     if (this.crashCount >= this.maxCrashesPerDay) {
       this.log(`HALTED: exceeded ${this.maxCrashesPerDay} crashes today`);
       this.appendCrashToRestartsLog(exitCode, 0, 'HALTED');
+      this.haltReason = 'crash_limit';
       this.status = 'halted';
       this.notifyStatusChange();
       return;

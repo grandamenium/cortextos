@@ -2,6 +2,7 @@
   "agent_name": "{{agent_name}}",
   "enabled": true,
   "runtime": "codex-app-server",
+  "allow_codex_app_server": true,
   "model": "gpt-5-codex",
   "startup_delay": 0,
   "max_session_seconds": 255600,

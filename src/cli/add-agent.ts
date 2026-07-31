@@ -22,7 +22,20 @@ export const addAgentCommand = new Command('add-agent')
   .option('--instance <id>', 'Instance ID', 'default')
   .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }, command: Command) => {
+    // The runtime flag and the runtime-specific template are both deliberate
+    // selections. Treat either one as the user's opt-in, while rejecting an
+    // explicitly contradictory runtime/template pair.
+    if (options.template === 'agent-codex') {
+      const runtimeSource = command.getOptionValueSource('runtime');
+      if (runtimeSource === 'default') {
+        options.runtime = 'codex-app-server';
+      } else if (options.runtime !== 'codex-app-server') {
+        console.error(`Error: --template agent-codex requires --runtime codex-app-server.`);
+        process.exit(1);
+      }
+    }
+
     if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
       console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
       process.exit(1);
@@ -183,13 +196,15 @@ export const addAgentCommand = new Command('add-agent')
     }
 
     // Persist non-default runtime into config.json regardless of whether the
-    // file came from a template or was created above. The template-supplied
-    // config.json wins file existence, so we read-merge-write to inject the
-    // runtime field that agent-process.ts branches on.
+    // file came from a template or was created above. An explicit codex
+    // selection also records the daemon's required opt-in. Doing this in the
+    // CLI (in addition to the template default) keeps older/custom template
+    // copies forward-compatible.
     if (options.runtime !== 'claude-code' && existsSync(configPath)) {
       try {
         const existingCfg = JSON.parse(readFileSync(configPath, 'utf-8'));
         existingCfg.runtime = options.runtime;
+        if (isCodexAppServer) existingCfg.allow_codex_app_server = true;
         writeFileSync(configPath, JSON.stringify(existingCfg, null, 2) + '\n', 'utf-8');
       } catch (err) {
         console.error(`Warning: failed to set runtime field in config.json: ${(err as Error).message}`);

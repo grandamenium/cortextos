@@ -95,7 +95,7 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     expect(existsSync(join(agentDir, 'CLAUDE.md'))).toBe(false);
   });
 
-  it('writes runtime=codex-app-server and model=gpt-5-codex into config.json', async () => {
+  it('writes runtime, model, and explicit opt-in into config.json', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -108,7 +108,27 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
     expect(cfg.runtime).toBe('codex-app-server');
     expect(cfg.model).toBe('gpt-5-codex');
+    expect(cfg.allow_codex_app_server).toBe(true);
     expect(cfg.agent_name).toBe('codex-cfg');
+  });
+
+  it('treats --template agent-codex as an explicit runtime opt-in', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await addAgentCommand.parseAsync([
+      'node', 'cli', 'codex-template', '--template', 'agent-codex',
+      '--org', 'testorg', '--instance', 'pr02-test',
+    ]);
+
+    const agentDir = join(tempRoot, 'orgs', 'testorg', 'agents', 'codex-template');
+    const cfg = JSON.parse(readFileSync(join(agentDir, 'config.json'), 'utf-8'));
+    expect(cfg.runtime).toBe('codex-app-server');
+    expect(cfg.allow_codex_app_server).toBe(true);
+    expect(existsSync(join(agentDir, '.claude', 'skills'))).toBe(false);
+
+    const codexSkillsDir = join(tempHome, '.codex', 'skills');
+    expect(readdirSync(codexSkillsDir).some(name => name.startsWith('codex-template__'))).toBe(true);
   });
 
   it('copies the 23 codex skills into plugins/cortextos-agent-skills/skills', async () => {
@@ -210,6 +230,7 @@ describe('PR-02: add-agent --runtime codex-app-server', () => {
     // requiring knowledge of the implicit default.
     const cfg = JSON.parse(readFileSync(join(agentDir, 'config.json'), 'utf-8'));
     expect(cfg.runtime).toBe('claude-code');
+    expect(cfg.allow_codex_app_server).toBeUndefined();
   });
 
   it('scaffolds runtime=opencode with the OpenCode-native template and local skill links', async () => {
@@ -332,4 +353,16 @@ describe('PR-10: add-agent rejects codex+claude-only-template combos', () => {
       expect(existsSync(agentDir)).toBe(false);
     });
   }
+
+  it('rejects a contradictory agent-codex template and non-codex runtime', async () => {
+    await expect(addAgentCommand.parseAsync([
+      'node', 'cli', 'contradictory-codex',
+      '--template', 'agent-codex',
+      '--runtime', 'opencode',
+      '--org', 'testorg', '--instance', 'pr10-test',
+    ])).rejects.toThrow(/process\.exit\(1\)/);
+
+    expect(errorSpy.mock.calls.flat().join('\n')).toMatch(/agent-codex requires --runtime codex-app-server/);
+    expect(existsSync(join(tempRoot, 'orgs', 'testorg', 'agents', 'contradictory-codex'))).toBe(false);
+  });
 });

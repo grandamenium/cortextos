@@ -395,7 +395,7 @@ export class AgentManager {
           const crashNum = status.crashCount ?? '?';
           tgApi.sendMessage(tgChatId, `Agent ${name} crashed (crash #${crashNum}) — auto-restarting`).catch(() => {});
         } else if (status.status === 'halted') {
-          tgApi.sendMessage(tgChatId, `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`).catch(() => {});
+          tgApi.sendMessage(tgChatId, buildHaltedNotification(name, status)).catch(() => {});
         } else if (status.status === 'running' && prevStatus === 'crashed') {
           tgApi.sendMessage(tgChatId, `Agent ${name} recovered and is back online`).catch(() => {});
         }
@@ -1303,4 +1303,11 @@ export function buildReplyContext(
 
   if (parts.length > 0) return parts.join('\n');
   return undefined;
+}
+
+export function buildHaltedNotification(name: string, status: AgentStatus): string {
+  if (status.haltReason === 'codex_opt_in_required') {
+    return `Agent ${name} HALTED — codex-app-server requires explicit opt-in. Run cortextos doctor, review the agent config, then set "allow_codex_app_server": true to authorize it.`;
+  }
+  return `Agent ${name} HALTED — exceeded crash limit. Restart manually with: cortextos start ${name}`;
 }

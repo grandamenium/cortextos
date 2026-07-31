@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { buildReplyContext } from '../../../src/daemon/agent-manager.js';
+import { buildHaltedNotification, buildReplyContext } from '../../../src/daemon/agent-manager.js';
 
 // Mock the PTY layer so we don't load native bindings or spawn real processes.
 // AgentManager → AgentProcess → AgentPTY → node-pty. We mock at AgentProcess.
@@ -45,6 +45,32 @@ vi.mock('../../../src/telegram/poller.js', () => ({
 }));
 
 const { AgentManager } = await import('../../../src/daemon/agent-manager.js');
+
+describe('AgentManager halted notifications', () => {
+  it('explains codex opt-in refusal instead of blaming the crash limit', () => {
+    const message = buildHaltedNotification('worker', {
+      name: 'worker',
+      status: 'halted',
+      haltReason: 'codex_opt_in_required',
+    });
+
+    expect(message).toContain('allow_codex_app_server');
+    expect(message).toContain('cortextos doctor');
+    expect(message).not.toContain('crash limit');
+    expect(message).not.toContain('Restart manually');
+  });
+
+  it('preserves the crash-limit notification for ordinary halts', () => {
+    const message = buildHaltedNotification('worker', {
+      name: 'worker',
+      status: 'halted',
+      haltReason: 'crash_limit',
+    });
+
+    expect(message).toContain('exceeded crash limit');
+    expect(message).toContain('cortextos start worker');
+  });
+});
 
 describe('AgentManager.discoverAndStart - BUG-028 fix', () => {
   let testDir: string;

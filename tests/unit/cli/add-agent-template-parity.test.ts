@@ -13,11 +13,12 @@
  * template, by directory name.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
 const CLAUDE_SKILLS = join(__dirname, '..', '..', '..', 'templates', 'agent', '.claude', 'skills');
 const TEMPLATE_ROOT = join(__dirname, '..', '..', '..', 'templates');
+const REPO_ROOT = join(__dirname, '..', '..', '..');
 const CODEX_SKILLS = join(
   __dirname,
   '..',
@@ -38,6 +39,21 @@ function listSkillDirs(root: string): string[] {
 }
 
 describe('agent template skill-tree parity', () => {
+  it('ships the public codex opt-in guide in the npm package', () => {
+    const guide = 'CODEX_APP_SERVER_OPT_IN.md';
+    const packageJson = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf-8'));
+
+    expect(existsSync(join(REPO_ROOT, guide))).toBe(true);
+    expect(packageJson.files).toContain(guide);
+  });
+
+  it('codex template carries the explicit daemon opt-in', () => {
+    const config = JSON.parse(readFileSync(join(TEMPLATE_ROOT, 'agent-codex', 'config.json'), 'utf-8'));
+
+    expect(config.runtime).toBe('codex-app-server');
+    expect(config.allow_codex_app_server).toBe(true);
+  });
+
   it('codex template ships every skill that the claude template ships', () => {
     const claudeSkills = listSkillDirs(CLAUDE_SKILLS);
     const codexSkills = listSkillDirs(CODEX_SKILLS);

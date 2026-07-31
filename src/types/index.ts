@@ -210,6 +210,13 @@ export interface AgentConfig {
    */
   runtime?: 'claude-code' | 'hermes' | 'codex-app-server' | 'opencode';
   /**
+   * Explicit opt-in required for the codex-app-server runtime. The daemon
+   * halts codex agents when this is absent or false. Runtime-aware CLI and
+   * template scaffolding set it automatically; hand-edited configs must opt
+   * in deliberately.
+   */
+  allow_codex_app_server?: boolean;
+  /**
    * Optional OpenCode agent name to pass as `opencode --agent <name>`.
    * Only applies to runtime: 'opencode'.
    */
@@ -808,4 +815,5 @@ export interface AgentStatus {
   sessionStart?: string;
   crashCount?: number;
   model?: string;
+  haltReason?: 'crash_limit' | 'crash_loop' | 'codex_opt_in_required';
 }

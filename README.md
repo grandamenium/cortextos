@@ -127,6 +127,12 @@ cortextos add-agent reindexer --runtime codex-app-server --org myorg
 
 Codex agents share the same bus, crons, and dashboard surfaces as claude agents — they only differ in which model handles each turn.
 
+Both commands above are explicit selections, so the scaffolder writes
+`"allow_codex_app_server": true` automatically. A hand-edited
+`"runtime": "codex-app-server"` is denied by default unless the same config
+also contains that boolean opt-in. This prevents a copied or mistyped runtime
+field from silently enabling a higher-access runtime.
+
 ### The `runtime` field
 
 Every agent's `config.json` carries an explicit `runtime` field that the daemon dispatches on. Valid values:
@@ -138,7 +144,14 @@ Every agent's `config.json` carries an explicit `runtime` field that the daemon 
 | `opencode` | `OpencodePTY` | `openai/gpt-4.1-nano` (set in `config.json`) | `plugins/cortextos-agent-skills/skills/<skill>/SKILL.md` (linked into `.opencode/skills/<skill>`) |
 | `hermes` | `HermesPTY` (experimental) | model per `config.json` | hermes-specific |
 
-Pass `--runtime <kind>` on `add-agent` to set it at scaffold time, or edit the field in `config.json` and restart the agent. The default is `claude-code`. Today only `--template agent` (and the alias `--template agent-codex`) supports `--runtime codex-app-server` — pairing the codex runtime with `--template orchestrator`/`analyst`/`m2c1-worker`/`hermes` errors with a clean message until codex variants of those templates ship.
+Pass `--runtime <kind>` on `add-agent` to set it at scaffold time. The default is `claude-code`. Today only `--template agent` (and the alias `--template agent-codex`) supports `--runtime codex-app-server` — pairing the codex runtime with `--template orchestrator`/`analyst`/`m2c1-worker`/`hermes` errors with a clean message until codex variants of those templates ship.
+
+When upgrading an existing codex agent, run `cortextos doctor`. It identifies
+legacy configs that need an explicit decision. Review the runtime, then add
+`"allow_codex_app_server": true` to that agent's `config.json` and restart it,
+or set the field to `false` to keep it disabled. See
+[Codex app-server opt-in](CODEX_APP_SERVER_OPT_IN.md) for the complete
+migration and hand-editing contract.
 
 `opencode` agents run OpenCode's terminal UI as a persistent PTY and are provider-agnostic — set any `provider/model` in `config.json` (default `openai/gpt-4.1-nano`). Scaffold with `--template agent --runtime opencode` (auto-maps to the `agent-opencode` bootstrap) or `--template agent-opencode` directly. OpenCode agents also ship the **context-handoff lifecycle**: the daemon watches each session's context-window usage and, at a configurable threshold (`ctx_handoff_threshold`, default 60%), prompts the agent to write a handoff document under `memory/handoffs/` and hard-restart into a fresh session that resumes from that doc — so long-running agents never lose state to a context overflow. Tune it with `ctx_warning_threshold` (default 30%) and `ctx_handoff_threshold` in `config.json`.
 

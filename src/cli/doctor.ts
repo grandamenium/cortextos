@@ -11,6 +11,58 @@ interface Check {
   fix?: string;
 }
 
+export interface CodexOptInIssue {
+  org: string;
+  agent: string;
+  configPath: string;
+}
+
+export function resolveDoctorFrameworkRoot(
+  cwd: string = process.cwd(),
+  env: { CTX_FRAMEWORK_ROOT?: string; CTX_PROJECT_ROOT?: string } = process.env,
+): string {
+  return env.CTX_FRAMEWORK_ROOT || env.CTX_PROJECT_ROOT || cwd;
+}
+
+/**
+ * Find legacy codex configs that predate the explicit opt-in field. An
+ * explicit false is intentional and safe, so doctor only guides configs where
+ * the field is absent or is not a boolean.
+ */
+export function findCodexOptInIssues(frameworkRoot: string): CodexOptInIssue[] {
+  const orgsDir = join(frameworkRoot, 'orgs');
+  if (!existsSync(orgsDir)) return [];
+
+  const issues: CodexOptInIssue[] = [];
+  try {
+    for (const orgEntry of readdirSync(orgsDir, { withFileTypes: true })) {
+      if (!orgEntry.isDirectory()) continue;
+      const agentsDir = join(orgsDir, orgEntry.name, 'agents');
+      if (!existsSync(agentsDir)) continue;
+
+      for (const agentEntry of readdirSync(agentsDir, { withFileTypes: true })) {
+        if (!agentEntry.isDirectory()) continue;
+        const configPath = join(agentsDir, agentEntry.name, 'config.json');
+        if (!existsSync(configPath)) continue;
+        try {
+          const config = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+          const optIn = config.allow_codex_app_server;
+          if (config.runtime === 'codex-app-server' && optIn !== true && optIn !== false) {
+            issues.push({ org: orgEntry.name, agent: agentEntry.name, configPath });
+          }
+        } catch {
+          // Other doctor surfaces handle malformed project state; this check
+          // only reports configs it can classify safely.
+        }
+      }
+    }
+  } catch {
+    return issues;
+  }
+
+  return issues.sort((a, b) => a.configPath.localeCompare(b.configPath));
+}
+
 export const doctorCommand = new Command('doctor')
   .option('--instance <id>', 'Instance ID', 'default')
   .description('Diagnose common issues')
@@ -253,7 +305,7 @@ export const doctorCommand = new Command('doctor')
     }
 
     // Check upstream git remote (needed for check-upstream and community --contribute)
-    const frameworkRoot = process.cwd();
+    const frameworkRoot = resolveDoctorFrameworkRoot();
     if (existsSync(join(frameworkRoot, '.git'))) {
       try {
         execSync('git remote get-url upstream', { encoding: 'utf-8', stdio: 'pipe', cwd: frameworkRoot });
@@ -279,6 +331,15 @@ export const doctorCommand = new Command('doctor')
 
     // Check GEMINI_API_KEY for Knowledge Base (semantic search / RAG)
     const orgsDir = join(frameworkRoot, 'orgs');
+    for (const issue of findCodexOptInIssues(frameworkRoot)) {
+      checks.push({
+        name: `Codex runtime opt-in: ${issue.org}/${issue.agent}`,
+        status: 'warn',
+        message: 'Legacy codex-app-server config is missing a boolean allow_codex_app_server',
+        fix: `Review CODEX_APP_SERVER_OPT_IN.md, then add "allow_codex_app_server": true to ${issue.configPath}`,
+      });
+    }
+
     let geminiConfigured = false;
     let geminiOrgFound = false;
     if (existsSync(orgsDir)) {
