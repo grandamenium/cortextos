@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -19,6 +19,41 @@ type LogFn = (msg: string) => void;
  * Manages a single agent's lifecycle.
  * Replaces agent-wrapper.sh for one agent.
  */
+/**
+ * Resolve the Claude Code conversation-history directory for a launch path.
+ *
+ * Claude Code derives the directory name from the launch cwd by replacing both
+ * path separators AND dots with dashes, e.g.
+ *   /Users/foo/agents/boss    -> -Users-foo-agents-boss
+ *   /Users/foo/.ctx/w/domain  -> -Users-foo--ctx-w-domain
+ *
+ * Two details this must get right, because getting either wrong makes
+ * shouldContinue() return false and the daemon silently start a FRESH session
+ * — losing the agent's conversation with no error logged anywhere:
+ *
+ *  1. RESOLVE SYMLINKS. Claude Code keys history by the resolved path. If an
+ *     agent directory is reached through a symlink (a relocated orgs/ tree,
+ *     for instance) the unresolved spelling names a directory that does not
+ *     exist, readdirSync throws, and every restart starts over.
+ *
+ *  2. REPLACE DOTS. Separator-only mangling produces the wrong name for any
+ *     path with a dotted component, which includes agents launched under
+ *     ~/.cortextos/<instance>/... such as the orchestrator's worker sessions.
+ *
+ * realpathSync is best-effort: a launch dir that does not exist yet keeps its
+ * literal spelling, matching the previous behaviour for that case.
+ */
+export function claudeProjectDir(launchDir: string): string {
+  let resolved = launchDir;
+  try {
+    resolved = realpathSync(launchDir);
+  } catch { /* not on disk yet — fall back to the literal path */ }
+
+  const mangled = resolved.split(sep).join('-').split('.').join('-');
+  // Use homedir() for cross-platform compatibility (HOME is not set on Windows).
+  return join(homedir(), '.claude', 'projects', mangled);
+}
+
 export class AgentProcess {
   readonly name: string;
   private env: CtxEnv;
@@ -693,15 +728,7 @@ export class AgentProcess {
     const launchDir = this.config.working_directory || this.env.agentDir;
     if (!launchDir) return false;
 
-    // Claude projects dir uses the absolute path with all separators replaced by dashes
-    // e.g. /Users/foo/agents/boss -> -Users-foo-agents-boss (leading sep becomes -)
-    // Use homedir() for cross-platform compatibility (HOME is not set on Windows).
-    const convDir = join(
-      homedir(),
-      '.claude',
-      'projects',
-      launchDir.split(sep).join('-'),
-    );
+    const convDir = claudeProjectDir(launchDir);
 
     try {
       const files = require('fs').readdirSync(convDir);
