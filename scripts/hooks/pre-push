@@ -13,8 +13,37 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Run build and tests in CI's environment, not the caller's.
+#
+# Two families of ambient env vars leak into vitest subprocesses and cause
+# failures CI never reproduces, aborting pushes over green code:
+#
+#   CTX_*  A live cortextOS agent session exports CTX_AGENT_DIR,
+#          CTX_PROJECT_ROOT and CTX_FRAMEWORK_ROOT. The sandbox/live isolation
+#          guard in src/utils/env.ts (issue #313) then sees a CTX_FRAMEWORK_ROOT
+#          the test overrode alongside a CTX_AGENT_DIR it did not, and throws.
+#
+#   GIT_*  git itself exports GIT_DIR, GIT_INDEX_FILE and friends when it
+#          invokes a hook. Tests that shell out to git in a temp repo inherit
+#          them and operate on THIS repo's gitdir and index instead of their own
+#          fixture. This one only reproduces under `git push` — running the hook
+#          by hand leaves GIT_* unset and looks green.
+#
+# Both are the same defect class: ambient env inherited by a subprocess that
+# assumed a clean one. CI has neither, so strip both and match it. Enumerated by
+# prefix rather than by name so a var added later is covered without editing
+# this file. The scrub applies only to build/test — the `git rev-parse` above
+# deliberately still sees GIT_DIR so it resolves the right worktree.
+env_scrub=()
+for _v in ${!CTX_@} ${!GIT_@}; do env_scrub+=(-u "$_v"); done
+run_clean() { env ${env_scrub[@]+"${env_scrub[@]}"} "$@"; }
+
+if [[ ${#env_scrub[@]} -gt 0 ]]; then
+  echo "[pre-push] Scrubbing ${#env_scrub[@]} ambient CTX_*/GIT_* var(s) from the build/test environment."
+fi
+
 echo "[pre-push] Running build..."
-if ! npm run build --silent; then
+if ! run_clean npm run build --silent; then
   echo ""
   echo "[pre-push] Build failed. Fix the error before pushing." >&2
   echo "[pre-push] Push aborted." >&2
@@ -22,7 +51,7 @@ if ! npm run build --silent; then
 fi
 
 echo "[pre-push] Running tests..."
-if ! npm test --silent; then
+if ! run_clean npm test --silent; then
   echo ""
   echo "[pre-push] Tests failed. Fix the failing tests before pushing." >&2
   echo "[pre-push] Push aborted." >&2
