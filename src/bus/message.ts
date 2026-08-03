@@ -8,6 +8,11 @@ import { acquireLock, releaseLock } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
 
+// SharedArrayBuffer + Atomics.wait gives a CPU-cheap sleep from sync code,
+// matching the pattern in utils/lock.ts. Never written to; every wait times out.
+const LOCK_SLEEP_SAB  = new SharedArrayBuffer(4);
+const LOCK_SLEEP_VIEW = new Int32Array(LOCK_SLEEP_SAB);
+
 // ---------------------------------------------------------------------------
 // Security (H10): HMAC-SHA256 message signing
 // ---------------------------------------------------------------------------
@@ -88,19 +93,54 @@ export function sendMessage(
 }
 
 /**
+ * Thrown when the inbox lock cannot be acquired.
+ *
+ * This exists because the previous behaviour — returning `[]` on a failed
+ * acquire — made "I could not read the inbox" indistinguishable from "you have
+ * no mail". A wedged lock therefore presented as a permanently quiet inbox and
+ * silently swallowed 87 agent messages across two agents before it was found.
+ * An empty result must mean empty; failure must be loud.
+ */
+export class InboxLockError extends Error {
+  constructor(public readonly inboxDir: string, public readonly waitedMs: number) {
+    super(
+      `checkInbox: could not acquire the inbox lock on "${inboxDir}" after ${waitedMs}ms. ` +
+      `This is NOT an empty inbox — messages may be queued and undelivered. ` +
+      `If it persists, inspect "${join(inboxDir, '.lock.d')}": an empty lock directory ` +
+      `with no pid file inside is an abandoned lock and can be removed.`,
+    );
+    this.name = 'InboxLockError';
+  }
+}
+
+/** Total time checkInbox will wait for the inbox lock before throwing. */
+const INBOX_LOCK_TIMEOUT_MS = 2_000;
+
+/**
  * Check inbox for pending messages.
  * Reads inbox directory, moves messages to inflight, returns sorted array.
  * Recovers stale inflight messages (>5 minutes old).
  * Identical to bash check-inbox.sh behavior.
+ *
+ * @throws {InboxLockError} if the inbox lock cannot be acquired. An empty array
+ *   from this function now always means the inbox was genuinely empty.
  */
 export function checkInbox(paths: BusPaths): InboxMessage[] {
   const { inbox, inflight } = paths;
   ensureDir(inbox);
   ensureDir(inflight);
 
-  // Acquire lock
-  if (!acquireLock(inbox)) {
-    return [];
+  // Retry briefly: normal contention clears in milliseconds. If it does not
+  // clear, that is a real fault and the caller must hear about it rather than
+  // receiving a plausible-looking empty list.
+  const startedAt = Date.now();
+  let acquired = acquireLock(inbox);
+  while (!acquired && Date.now() - startedAt < INBOX_LOCK_TIMEOUT_MS) {
+    Atomics.wait(LOCK_SLEEP_VIEW, 0, 0, 25);
+    acquired = acquireLock(inbox);
+  }
+  if (!acquired) {
+    throw new InboxLockError(inbox, Date.now() - startedAt);
   }
 
   try {

@@ -200,8 +200,15 @@ export class FastChecker {
       hasTelegramMessage = true;
     }
 
-    // Check agent inbox
-    const inboxMessages = checkInbox(this.paths);
+    // Check agent inbox. A lock failure is a real fault, not an empty inbox —
+    // log it loudly and continue this cycle rather than killing the daemon
+    // loop. Silence here is exactly what hid a six-week inbox outage.
+    let inboxMessages: InboxMessage[] = [];
+    try {
+      inboxMessages = checkInbox(this.paths);
+    } catch (err) {
+      this.log(`INBOX UNREADABLE: ${(err as Error).message}`);
+    }
     for (const msg of inboxMessages) {
       messageBlock += this.formatInboxMessage(msg);
       ackIds.push(msg.id);

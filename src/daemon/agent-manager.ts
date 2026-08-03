@@ -13,6 +13,7 @@ import { resolvePaths } from '../utils/paths.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
+import { logEvent } from '../bus/event.js';
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 import { stripBom } from '../utils/strip-bom.js';
@@ -1029,7 +1030,39 @@ export class AgentManager {
 
     this.workers.set(name, worker);
 
-    worker.onDone((workerName) => {
+    worker.onDone((workerName, exitCode) => {
+      // A non-zero worker exit is the ONLY signal that scheduled work failed,
+      // and it used to die right here — this callback received `exitCode` and
+      // discarded it. The daemon logged the failure to daemon-out.log, which
+      // nothing in src/ or dashboard/ reads, so six force-killed workers went
+      // unreported for days.
+      //
+      // Emit the failure as an error event against the PARENT agent, because
+      // collect-metrics builds its roster from the named agents and never
+      // iterates workers — an event filed under the worker's own name would be
+      // just as invisible as the log line was.
+      if (exitCode !== 0) {
+        try {
+          const reason =
+            exitCode === 124 ? 'hard_timeout'   // killed at the 1800s ceiling
+          : exitCode === 143 ? 'terminated'      // SIGTERM, e.g. parent restarted
+          : exitCode === 1   ? 'startup_failure' // incl. usage/session limit
+          : 'nonzero_exit';
+          const owner = parent ?? workerName;
+          logEvent(
+            resolvePaths(owner, this.instanceId, this.org),
+            owner,
+            this.org,
+            'error',
+            'worker_failed',
+            'error',
+            { worker: workerName, exit_code: exitCode, reason, dir },
+          );
+        } catch {
+          // Telemetry must never break worker cleanup.
+        }
+      }
+
       // Auto-remove finished workers after a short delay so list-workers
       // can still show the final status briefly before cleanup
       setTimeout(() => {

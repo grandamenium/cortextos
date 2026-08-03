@@ -1,12 +1,54 @@
-import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
+import { mkdirSync, rmdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
+
+/**
+ * How long a lock directory may exist WITHOUT a readable PID file before it is
+ * treated as abandoned.
+ *
+ * The legitimate window between `mkdirSync` and `writeFileSync` below is
+ * sub-millisecond. A lock directory that has sat pid-less for 30 seconds is not
+ * a holder mid-acquire — it is a process that died in that gap. Without this
+ * bound such a directory blocks its channel FOREVER, and because
+ * `checkInbox` historically reported a failed acquire as an empty inbox, the
+ * symptom was silent: an orchestrator inbox wedged on 2026-06-22 swallowed 65
+ * agent messages over six weeks before anyone noticed.
+ *
+ * Keep this comfortably larger than any plausible mkdir→write scheduling delay
+ * and comfortably smaller than a human noticing a wedged queue.
+ */
+const PID_WRITE_GRACE_MS = 30_000;
+
+/** Age of the lock directory in ms, or 0 if it cannot be stat'd (treat as fresh). */
+function lockAgeMs(lockDir: string): number {
+  try {
+    return Date.now() - statSync(lockDir).mtimeMs;
+  } catch {
+    // Vanished between our mkdir attempt and now — another process is actively
+    // churning it. Report "fresh" so the caller retries rather than steals.
+    return 0;
+  }
+}
+
+/** Remove an abandoned lock directory and take it over. */
+function stealLock(lockDir: string, pidFile: string): boolean {
+  try {
+    rmSync(lockDir, { recursive: true, force: true });
+    mkdirSync(lockDir);
+    writeFileSync(pidFile, String(process.pid));
+    return true;
+  } catch {
+    // Another process beat us to the steal — let the caller retry.
+    return false;
+  }
+}
 
 /**
  * Acquire a mutex lock using mkdir (atomic on all filesystems).
  * Matches the bash pattern: mkdir .lock.d with PID tracking.
  *
  * Returns true if lock acquired, false if another process holds it.
- * Automatically recovers stale locks (dead process).
+ * Automatically recovers stale locks — both the dead-PID case and the
+ * pid-less case where a process died mid-acquire (see PID_WRITE_GRACE_MS).
  */
 export function acquireLock(dir: string): boolean {
   const lockDir = join(dir, '.lock.d');
@@ -34,16 +76,25 @@ export function acquireLock(dir: string): boolean {
     try {
       storedPidRaw = readFileSync(pidFile, 'utf-8').trim();
     } catch {
-      // PID file not yet written.  Holder is between mkdir and writeFileSync.
-      // Refuse the lock — the caller's retry loop will try again.
+      // PID file not yet written. Either the holder is between mkdir and
+      // writeFileSync (sub-millisecond), or it DIED in that gap and left an
+      // empty lock directory that would otherwise block this channel forever.
+      // Age is what distinguishes the two — refusing unconditionally, as this
+      // did before, is what wedged the agent inbox for six weeks.
+      if (lockAgeMs(lockDir) > PID_WRITE_GRACE_MS) {
+        return stealLock(lockDir, pidFile);
+      }
+      // Genuinely mid-acquire — the caller's retry loop will try again.
       return false;
     }
 
     const storedPid = parseInt(storedPidRaw, 10);
     if (isNaN(storedPid) || storedPidRaw === '') {
-      // Corrupt PID file.  Don't steal — let caller retry; if it persists
-      // the holder is broken and a future stale-detection pass (process.kill
-      // check below, after the PID is written cleanly) will recover.
+      // Corrupt PID file. Same reasoning as above: retry while it is young,
+      // but never let a permanently corrupt file wedge the lock forever.
+      if (lockAgeMs(lockDir) > PID_WRITE_GRACE_MS) {
+        return stealLock(lockDir, pidFile);
+      }
       return false;
     }
 
@@ -54,15 +105,7 @@ export function acquireLock(dir: string): boolean {
       return false;
     } catch {
       // Process is dead - stale lock, remove and re-acquire atomically.
-      try {
-        rmSync(lockDir, { recursive: true, force: true });
-        mkdirSync(lockDir);
-        writeFileSync(pidFile, String(process.pid));
-        return true;
-      } catch {
-        // Another process beat us to the steal — let caller retry.
-        return false;
-      }
+      return stealLock(lockDir, pidFile);
     }
   }
 }

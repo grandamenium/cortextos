@@ -72,12 +72,52 @@ busCommand
   .command('send-message')
   .argument('<to>', 'Target agent')
   .argument('<priority>', 'Message priority (urgent, high, normal, low)')
-  .argument('<text>', 'Message text')
+  .argument('[text]', 'Message text (omit if using --body-file or --stdin)')
   .argument('[reply-to]', 'Reply to message ID (optional positional form)')
   .option('--reply-to <id>', 'Reply to message ID')
-  .action((to: string, priority: string, text: string, replyToArg: string | undefined, opts: { replyTo?: string }) => {
+  .option('--body-file <path>', 'Read message text from this file instead of the <text> argument -- use this for any text that did not originate as a literal you typed yourself (scanned/scraped/external content, multi-paragraph synthesis, anything with quotes or special characters), so the shell never has to parse it as a command-line argument')
+  .option('--stdin', 'Read message text from stdin instead of the <text> argument -- same purpose as --body-file, for callers that already have the content in a pipe')
+  .action((to: string, priority: string, textArg: string | undefined, replyToArg: string | undefined, opts: { replyTo?: string; bodyFile?: string; stdin?: boolean }) => {
     // Accept reply-to as either positional arg or --reply-to flag (P2 fix #9)
     const effectiveReplyTo = opts.replyTo ?? replyToArg;
+
+    // --body-file / --stdin: the whole point is the message body never gets built into
+    // a shell command string by the caller. Added 2026-08-02 as the local equivalent of
+    // upstream PR #679 (not yet landed in this build) -- see WORK-LEDGER A6/A7 and the
+    // #679 disabled_reason notes across atlas/analyst crons.json for the vulnerability
+    // this closes: untrusted external text interpolated into a send-message shell
+    // argument can break out via unescaped quotes/backticks/$(). Reading the body from
+    // a file or stdin means that text is never parsed as shell syntax at all -- it's a
+    // plain fs.readFileSync/stdin read, regardless of what characters it contains.
+    let text: string;
+    const sourceCount = [textArg !== undefined, !!opts.bodyFile, !!opts.stdin].filter(Boolean).length;
+    if (sourceCount === 0) {
+      console.error('Must provide message text via <text>, --body-file, or --stdin.');
+      process.exit(1);
+    }
+    if (sourceCount > 1) {
+      console.error('Provide message text via only ONE of <text>, --body-file, or --stdin -- not more than one.');
+      process.exit(1);
+    }
+    if (opts.bodyFile) {
+      try {
+        text = readFileSync(opts.bodyFile, 'utf-8');
+      } catch (err) {
+        console.error(`Could not read --body-file '${opts.bodyFile}': ${err}`);
+        process.exit(1);
+      }
+    } else if (opts.stdin) {
+      const { readFileSync: readFs } = require('fs');
+      try {
+        text = readFs(0, 'utf-8'); // fd 0 = stdin
+      } catch (err) {
+        console.error(`Could not read from stdin: ${err}`);
+        process.exit(1);
+      }
+    } else {
+      text = textArg as string;
+    }
+
     const validPriorities: Priority[] = ['urgent', 'high', 'normal', 'low'];
     if (!validPriorities.includes(priority as Priority)) {
       console.error(`Invalid priority '${priority}'. Must be one of: ${validPriorities.join(', ')}`);
@@ -127,8 +167,15 @@ busCommand
   .action(() => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    const messages = checkInbox(paths);
-    console.log(JSON.stringify(messages));
+    try {
+      const messages = checkInbox(paths);
+      console.log(JSON.stringify(messages));
+    } catch (err) {
+      // A lock failure must NOT print "[]" — that is the bug this guards.
+      // Exit non-zero so scripts and agents can tell the two apart.
+      console.error(`ERROR: ${(err as Error).message}`);
+      process.exit(1);
+    }
   });
 
 busCommand

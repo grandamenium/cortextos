@@ -285,12 +285,22 @@ export async function refreshOAuthToken(
   if (!account) throw new Error(`Account "${name}" not found in accounts.json`);
   if (!account.refresh_token) throw new Error(`Account "${name}" has no refresh_token`);
 
+  // CLIENT_ID is Claude Code's own OAuth client_id at the IdP -- required on every
+  // token request or Anthropic rejects it with 400 "Invalid request format" (no
+  // useful detail beyond that). Extracted 2026-08-01 from the literal CLIENT_ID
+  // constant embedded in the real claude.exe binary (verified via binary string
+  // search, not guessed) after refresh-oauth-token was found silently failing this
+  // way in production -- the daemon's OAuth token had gone stale for 5+ weeks
+  // because this was the only thing standing between it and a working self-refresh.
+  const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+
   const response = await fetch('https://console.anthropic.com/v1/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       grant_type: 'refresh_token',
       refresh_token: account.refresh_token,
+      client_id: CLIENT_ID,
     }),
   });
 
