@@ -60,3 +60,22 @@ describe('AgentPTY --dangerously-skip-permissions toggle', () => {
     }
   });
 });
+
+describe('AgentPTY auto-updater pinning (shared-binary race)', () => {
+  // Every agent gets its own CLAUDE_CONFIG_DIR, so each Claude Code instance
+  // believes it is a standalone install and independently schedules updates —
+  // but all agents share ONE binary (~/.local/bin/claude -> versions/<v>).
+  // Two updaters firing 250ms apart both reported install_failed and left the
+  // symlink dangling at a deleted version for ~12min; every agent that
+  // respawned in that window exec'd a symlink to nothing (pid assigned, then
+  // exit 1 with zero output) and the daemon read it as an agent crash.
+  function baseEnvFor(config: any): Record<string, string> {
+    const pty = new AgentPTY(mockEnv, config);
+    return (pty as unknown as { getBaseEnv(): Record<string, string> }).getBaseEnv();
+  }
+
+  it('sets DISABLE_AUTOUPDATER=1 so agents never race on the shared binary', () => {
+    expect(baseEnvFor({})['DISABLE_AUTOUPDATER']).toBe('1');
+  });
+});
+

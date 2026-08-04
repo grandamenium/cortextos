@@ -1,9 +1,40 @@
 import { join } from 'path';
-import { existsSync, readFileSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, accessSync, constants } from 'fs';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
 import { injectMessage as injectMessageIntoPty } from './inject.js';
+
+/**
+ * Is `binary` resolvable on PATH and executable RIGHT NOW?
+ *
+ * Used by AgentProcess.handleExit() to tell "the agent crashed" apart from
+ * "the runtime was yanked out from under it mid-restart". A missing or
+ * half-installed binary is an environmental condition, not an agent fault, and
+ * must not burn the agent's daily crash budget.
+ *
+ * existsSync FOLLOWS symlinks, which is exactly the property this needs: a
+ * dangling `~/.local/bin/claude -> versions/<deleted-version>` reports false.
+ * A present-but-not-yet-chmod'd binary (partially written by an in-flight
+ * installer) fails the X_OK check and is likewise reported missing.
+ */
+export function isBinaryAvailable(binary: string): boolean {
+  const sep = platform() === 'win32' ? ';' : ':';
+  const pathDirs = (process.env.PATH || '').split(sep).filter(Boolean);
+  for (const dir of pathDirs) {
+    const candidate = join(dir, binary);
+    if (!existsSync(candidate)) continue;
+    try {
+      accessSync(candidate, constants.X_OK);
+      return true;
+    } catch {
+      // Present but not executable — an installer may still be writing it.
+      // Keep scanning; a later PATH entry may hold a usable copy.
+    }
+  }
+  return false;
+}
+
 
 // node-pty types
 interface IPty {
@@ -405,6 +436,29 @@ export class AgentPTY {
         env[key] = process.env[key]!;
       }
     }
+
+
+    // Pin the agent runtime's auto-updater OFF.
+    //
+    // Each agent runs under its own CLAUDE_CONFIG_DIR, so each Claude Code
+    // instance believes it is a standalone install and independently schedules
+    // its own update — but every agent shares ONE binary
+    // (~/.local/bin/claude -> versions/<version>). N private updaters, one
+    // shared file, no lock.
+    //
+    // When two race, the loser leaves the install torn down. Observed on a
+    // 9-agent fleet: two updaters fired 250ms apart, both reported
+    // install_failed, and the symlink pointed at an already-deleted version for
+    // ~12 minutes. Any agent that respawned in that window exec'd a dangling
+    // symlink — node-pty hands back a pid, then the child exits 1 having
+    // written zero bytes, which the daemon cannot distinguish from an agent
+    // crash. It charged the daily crash budget and halted agents at the cap.
+    //
+    // Updating the runtime is an operator action taken when the fleet is quiet,
+    // not something N unsupervised agents should each attempt against one
+    // shared file. handleExit()'s binary-unavailable exemption is the
+    // resilience companion to this.
+    env['DISABLE_AUTOUPDATER'] = '1';
 
     // Windows: ensure UTF-8 locale so emoji and Unicode pass through the PTY
     if (platform() === 'win32') {

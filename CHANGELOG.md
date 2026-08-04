@@ -2,6 +2,56 @@
 
 ## [Unreleased]
 
+### Fixed — a missing agent binary was counted as an agent crash, halting agents
+
+Every agent runs under its own `CLAUDE_CONFIG_DIR`, so each Claude Code instance
+believes it is a standalone install and independently schedules its own
+auto-update — but all agents share ONE binary
+(`~/.local/bin/claude -> versions/<version>`). N private updaters, one shared
+file, no lock.
+
+Observed on a 9-agent fleet: two updaters fired 250ms apart, both reported
+`install_failed`, and left the symlink dangling at an already-deleted version
+for ~12 minutes. node-pty hands back a pid for a dangling symlink, and the child
+then exits 1 having written zero bytes — verified directly against one:
+
+```
+pid assigned: 69035
+exitCode: 1  signal: 0
+output bytes: 0 ""
+```
+
+The daemon could not distinguish that from an agent crash, so it charged the
+daily crash budget with exponential backoff. Two agents walked to
+`max_crashes_per_day` and HALTED — for a condition no restart could fix, which
+healed on its own the moment the binary reappeared. Only agents that RESTARTED
+during the window were affected, so the fleet looked half-healthy and the
+failure masqueraded as agent-specific.
+
+- **`src/pty/agent-pty.ts`** — `getBaseEnv()` now sets `DISABLE_AUTOUPDATER=1`
+  for every agent PTY. Updating the runtime is an operator action taken when the
+  fleet is quiet, not something N unsupervised agents each attempt against one
+  shared file. *(Prevention.)*
+- **`src/pty/agent-pty.ts`** — new exported `isBinaryAvailable(binary)`:
+  resolves against `PATH` and checks `X_OK`. `existsSync` follows symlinks, so a
+  dangling symlink and a partially-written binary both report unavailable.
+- **`src/daemon/agent-process.ts`** — `handleExit()` gained a
+  binary-unavailable exemption alongside the existing image-poison block: an
+  exit that is code 1 AND accompanied by a runtime that is not executable on
+  `PATH` right now is retried WITHOUT charging `max_crashes_per_day`, logged as
+  `BINARY_UNAVAILABLE_RECOVERY`. If the binary is not executable, a restart
+  cannot succeed regardless of why the process exited — charging the budget only
+  guarantees a permanent HALT instead of recovery. *(Resilience — also covers
+  any other cause of a vanished runtime: botched upgrade, unmounted volume, bad
+  `PATH`.)*
+- **Retry cadence** is two-tier, keyed on how long the binary has been gone: 30s
+  for the first 15 minutes (a real install window is minutes, and a failed exec
+  costs ~1ms so polling is free), then 5min — an outage that long is a broken
+  runtime needing a human, and the slower tier bounds `restarts.log` growth
+  without ever giving up, since nothing else would bring the agent back. Outage
+  age is derived from timestamps rather than an attempt counter, so no reset has
+  to stay in sync with `start()`.
+
 ### Hook Framework — Loop Detection (B1)
 
 - **`hook-loop-detector`**: new PreToolUse hook that detects and blocks repeated Claude tool-call loops. Two patterns are detected: (a) the same tool invoked with identical arguments 15+ times within the last 30 calls, and (b) two tools ping-ponging (24+ alternations within a 12-call dominant-pair window). Blocked calls are NOT recorded into history, so the wedge cannot self-perpetuate. History is time-windowed (60s) so a stale prior-session tail does not block the first call of a new session. After 30 minutes of continuous block, exactly one tool call is allowed through ("emergency escape") so the agent can issue a Telegram alert before re-entering the blocked window.

@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFi
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
-import { AgentPTY } from '../pty/agent-pty.js';
+import { AgentPTY, isBinaryAvailable } from '../pty/agent-pty.js';
 import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { OpencodePTY, opencodeSessionExists } from '../pty/opencode-pty.js';
@@ -14,6 +14,13 @@ import { getOverdueReminders } from '../bus/reminders.js';
 import { resolvePaths } from '../utils/paths.js';
 
 type LogFn = (msg: string) => void;
+
+// Binary-unavailable retry tiers. See binaryUnavailableRetryDelayMs().
+// The fast tier covers an in-flight install (an observed outage was ~12min);
+// the slow tier is for a runtime that is broken rather than mid-update.
+const BINARY_UNAVAILABLE_FAST_MS = 30_000;
+const BINARY_UNAVAILABLE_FAST_WINDOW_MS = 15 * 60_000;
+const BINARY_UNAVAILABLE_SLOW_MS = 5 * 60_000;
 
 /**
  * Manages a single agent's lifecycle.
@@ -33,6 +40,11 @@ export class AgentProcess {
   private crashTimestamps: number[] = [];
   private crashWindowMs: number = 0;
   private crashWindowMax: number = 0;
+  // Binary-unavailable outage tracking (see binaryUnavailableRetryDelayMs).
+  // Timestamps, not an attempt counter, so no reset has to stay in sync with
+  // start() — a long enough gap is itself the signal that the outage ended.
+  private binaryUnavailableSince: number = 0;
+  private lastBinaryUnavailableAt: number = 0;
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
@@ -506,6 +518,52 @@ export class AgentProcess {
     }
   }
 
+  /**
+   * The binary this agent's PTY execs, mirroring the runtime switch in start().
+   * Kept in sync with that ternary — the two are the only places a runtime maps
+   * to a concrete executable.
+   */
+  private agentBinaryName(): string {
+    if (this.config.runtime === 'hermes') return 'hermes';
+    if (this.config.runtime === 'opencode') return 'opencode';
+    if (this.config.runtime === 'codex-app-server') return 'codex';
+    return 'claude';
+  }
+
+  /**
+   * How long to wait before re-spawning an agent whose binary is missing.
+   *
+   * This retry does NOT count against max_crashes_per_day, so the loop is the
+   * agent's only route back to life — the delay is an availability trade-off,
+   * not a tuning constant. Too short and the daemon spins against a torn-down
+   * install; too long and the agent stays dark after the installer already
+   * finished, missing cron fires and inbox messages.
+   *
+   * Two tiers, keyed on how long the binary has been gone:
+   *   - First BINARY_UNAVAILABLE_FAST_WINDOW_MS: poll every 30s. A real install
+   *     window is minutes, so this is the case that actually happens, and a
+   *     failed exec costs ~1ms — the polling itself is free.
+   *   - After that: 5min. An outage this long is a broken runtime needing a
+   *     human, not an in-flight install. Slowing down bounds restarts.log
+   *     growth without ever giving up, since nothing else would bring the
+   *     agent back if we did.
+   *
+   * Outage age comes from timestamps rather than an attempt counter so there is
+   * no reset to keep in sync with start(): a gap longer than the slow tier means
+   * the previous outage ended and recovery already happened, so the next failure
+   * starts fresh at the fast tier.
+   */
+  private binaryUnavailableRetryDelayMs(): number {
+    const now = Date.now();
+    if (now - this.lastBinaryUnavailableAt > BINARY_UNAVAILABLE_SLOW_MS * 2) {
+      this.binaryUnavailableSince = now;
+    }
+    this.lastBinaryUnavailableAt = now;
+    return now - this.binaryUnavailableSince < BINARY_UNAVAILABLE_FAST_WINDOW_MS
+      ? BINARY_UNAVAILABLE_FAST_MS
+      : BINARY_UNAVAILABLE_SLOW_MS;
+  }
+
   private handleExit(exitCode: number): void {
     // Capture last 16KB of the agent's stdout BEFORE nulling pty.
     // Used by the image-poison auto-recovery check below — reads the log
@@ -589,6 +647,39 @@ export class AgentProcess {
           this.start().catch(err => this.log(`Image-poison restart failed: ${err}`));
         }
       }, 5000);
+      return;
+    }
+
+    // Binary-unavailable exemption. Companion to the image-poison block above:
+    // both are "upstream condition, not agent malfunction".
+    //
+    // node-pty returns a pid for a binary that cannot actually be exec'd (a
+    // dangling symlink, a half-written install, a bad PATH), and the child then
+    // exits 1 having produced no output. That is indistinguishable from a crash
+    // at this layer, so the daemon charged the daily budget with exponential
+    // backoff and eventually HALTED agents — for a condition no restart could
+    // have fixed and that resolves itself the moment the binary reappears.
+    //
+    // Both conditions are required. exitCode 1 is the exec-failure shape, and
+    // the binary check is decisive: if the runtime is not executable right now,
+    // a restart cannot succeed regardless of why the process exited, so
+    // charging the crash budget only guarantees the agent halts permanently
+    // instead of recovering when the binary returns.
+    if (exitCode === 1 && !isBinaryAvailable(this.agentBinaryName())) {
+      const retryMs = this.binaryUnavailableRetryDelayMs();
+      this.log(
+        `Agent binary "${this.agentBinaryName()}" is not executable on PATH — runtime is missing or ` +
+        `mid-install, not an agent fault. Retrying in ${retryMs / 1000}s without counting against ` +
+        `max_crashes_per_day.`,
+      );
+      this.appendCrashToRestartsLog(exitCode, retryMs, 'BINARY_UNAVAILABLE_RECOVERY');
+      this.status = 'crashed';
+      this.notifyStatusChange();
+      setTimeout(() => {
+        if (this.status === 'crashed') {
+          this.start().catch(err => this.log(`Binary-unavailable restart failed: ${err}`));
+        }
+      }, retryMs);
       return;
     }
 
@@ -976,7 +1067,8 @@ export class AgentProcess {
   private appendCrashToRestartsLog(
     exitCode: number,
     backoffMs: number,
-    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY',
+    kind: 'CRASH' | 'HALTED' | 'CRASH_LOOP' | 'IMAGE_POISON_RECOVERY'
+      | 'BINARY_UNAVAILABLE_RECOVERY',
   ): void {
     try {
       const logDir = join(this.env.ctxRoot, 'logs', this.name);
@@ -985,7 +1077,7 @@ export class AgentProcess {
       const details =
         kind === 'HALTED'
           ? `exit_code=${exitCode} crash_count=${this.crashCount} max_crashes=${this.maxCrashesPerDay}`
-          : kind === 'IMAGE_POISON_RECOVERY'
+          : (kind === 'IMAGE_POISON_RECOVERY' || kind === 'BINARY_UNAVAILABLE_RECOVERY')
             ? `exit_code=${exitCode} backoff_s=${backoffMs / 1000} (not counted toward max_crashes)`
             : `exit_code=${exitCode} crash_count=${this.crashCount} backoff_s=${backoffMs / 1000}`;
       const logLine = `[${timestamp}] ${kind}: ${details}\n`;
