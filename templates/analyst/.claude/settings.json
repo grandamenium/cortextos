@@ -91,6 +91,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cortextos bus hook-prompt-flag",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }
