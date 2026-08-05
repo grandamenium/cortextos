@@ -94,6 +94,26 @@ export class AgentProcess {
       return;
     }
 
+    // Security guard: the codex-app-server runtime loads orgs/<org>/secrets.env
+    // and the agent .env into the codex child unscrubbed (see
+    // codex-app-server-pty.ts buildEnv) and runs sandbox 'danger-full-access'
+    // with approvals 'never' — a full-write-access session holding every org
+    // secret. Require a deliberate per-agent opt-in. Halt (dashboard-visible)
+    // instead of throwing: discoverAndStart() awaits start() with no per-agent
+    // catch, so a boot-time throw would kill the whole daemon over one
+    // misconfigured agent.
+    if (this.config.runtime === 'codex-app-server' && this.config.allow_codex_app_server !== true) {
+      this.log(
+        `REFUSED to start: runtime 'codex-app-server' is blocked by default — it hands the ` +
+        `unscrubbed org/agent secrets env to a codex session running sandbox ` +
+        `'danger-full-access' with approvals 'never'. Set "allow_codex_app_server": true in ` +
+        `this agent's config.json to opt in deliberately.`,
+      );
+      this.status = 'halted';
+      this.notifyStatusChange();
+      return;
+    }
+
     // Apply startup delay
     const delay = this.config.startup_delay || 0;
     if (delay > 0) {
