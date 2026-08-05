@@ -50,6 +50,10 @@ import type { CronDefinition, CronExecutionLogEntry } from '../../src/types/inde
 const TICK_MS = 30_000; // CronScheduler.TICK_INTERVAL_MS
 const ONE_MIN = 60_000;
 const ONE_HOUR = 3_600_000;
+// Matches CronScheduler.INJECTION_STAGGER_MS — the additive per-cron gap the
+// scheduler inserts between consecutive same-agent injections so their PTY paste
+// sequences don't collide.  N crons due in one tick fire at TICK_MS + i * STAGGER_MS.
+const STAGGER_MS = 1_500;
 const SIM_72H = 72 * ONE_HOUR;
 
 // ---------------------------------------------------------------------------
@@ -600,9 +604,11 @@ describe('Scenario 5: Concurrent cron fires', () => {
     const s = buildScheduler(agent, onFire, logs);
     s.start();
 
-    // First tick: all 5 crons have nextFireAt = now (catch-up), so all 5 fire
-    // sequentially within the single tick() iteration.
-    await vi.advanceTimersByTimeAsync(TICK_MS + 1_000);
+    // First tick: all 5 crons have nextFireAt = now (catch-up).  They dispatch
+    // non-blocking, staggered by STAGGER_MS each (cron i fires at
+    // TICK_MS + i * STAGGER_MS) so their PTY injections don't collide.  Advance
+    // past the 5th before stopping.
+    await vi.advanceTimersByTimeAsync(TICK_MS + 5 * STAGGER_MS + 1_000);
 
     s.stop();
 

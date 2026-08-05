@@ -52,6 +52,10 @@ import type { CronDefinition, CronExecutionLogEntry } from '../../src/types/inde
 const TICK_MS      = 30_000;   // CronScheduler.TICK_INTERVAL_MS
 const ONE_MIN      = 60_000;
 const ONE_HOUR     = 3_600_000;
+// Matches CronScheduler.INJECTION_STAGGER_MS — the additive per-cron gap the
+// scheduler inserts between consecutive same-agent injections so their PTY paste
+// sequences don't collide.  N crons due in one tick fire at TICK_MS + i * STAGGER_MS.
+const STAGGER_MS   = 1_500;
 const SIM_24H      = 24 * ONE_HOUR;
 const SIM_6H       = 6 * ONE_HOUR;
 const SIM_12H      = 12 * ONE_HOUR;
@@ -835,8 +839,10 @@ describe('Scenario 5: PTY degradation — slow injection, intermittent failure, 
     const s = buildScheduler(agent, slowFire, logs);
     s.start();
 
-    // Advance TICK_MS + extra to let all 3 slow fires complete
-    await vi.advanceTimersByTimeAsync(TICK_MS + 1_000);
+    // The 3 crons catch-up on the first tick but are staggered by STAGGER_MS each
+    // (cron i fires at TICK_MS + i * STAGGER_MS) so PTY injections don't collide.
+    // Advance past the 3rd cron + its 200ms delay.
+    await vi.advanceTimersByTimeAsync(TICK_MS + 3 * STAGGER_MS + 3 * 200 + 1_000);
 
     s.stop();
 
@@ -1043,9 +1049,10 @@ describe('Scenario 6: Concurrent stress — 10 crons fire simultaneously, no rac
     // Start all schedulers — they all process their first tick concurrently
     schedulers.forEach(s => s.start());
 
-    // Single tick: all 10 crons should fire within this tick
-    // The scheduler processes all due crons in one tick() call
-    await vi.advanceTimersByTimeAsync(TICK_MS + 1_000);
+    // All 10 crons catch-up on the first tick.  Each scheduler staggers its own
+    // crons by STAGGER_MS (cron i at TICK_MS + i * STAGGER_MS); the busiest agent
+    // has 4 crons, so advance past its 4th.  Agents stagger independently.
+    await vi.advanceTimersByTimeAsync(TICK_MS + 4 * STAGGER_MS + 1_000);
 
     schedulers.forEach(s => s.stop());
 
@@ -1114,8 +1121,9 @@ describe('Scenario 6: Concurrent stress — 10 crons fire simultaneously, no rac
     sA.start();
     sB.start();
 
-    // First burst: all 10 fire on tick 1
-    await vi.advanceTimersByTimeAsync(TICK_MS + 1_000);
+    // First burst: all 10 catch-up on tick 1, staggered per agent (5 crons each,
+    // so the 5th fires at TICK_MS + 4 * STAGGER_MS).  Advance past it.
+    await vi.advanceTimersByTimeAsync(TICK_MS + 5 * STAGGER_MS + 1_000);
     expect(totalFired).toHaveLength(10);
 
     // Advance 1h — all 10 should fire again in next tick
@@ -1275,6 +1283,12 @@ describe('Scenario 7: Dashboard polling accuracy throughout simulation', () => {
 
     // Final 4h to complete 24h
     await advanceSim(4 * ONE_HOUR);
+    // The 24h daily crons fire for the first time on the T=24h tick, which also
+    // catches the hourly/6h/12h crons — so their injections are staggered a few
+    // seconds past the tick.  Drain that stagger window before the final poll so
+    // the "all crons fired at least once in 24h" assertion sees them (each agent
+    // has 5 crons → max stagger offset 4 × STAGGER_MS).
+    await vi.advanceTimersByTimeAsync(5 * STAGGER_MS);
     await poll(24);
 
     schedulers.forEach(s => s.stop());

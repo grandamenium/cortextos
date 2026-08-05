@@ -6,6 +6,8 @@ import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
+import { getDecision, resolveDecision } from '../bus/decision.js';
+import { logEvent } from '../bus/event.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { KEYS } from '../pty/inject.js';
@@ -243,9 +245,11 @@ export class FastChecker {
     // fence the body cannot close, with the body left byte-exact so pasted code
     // blocks stay readable. The inline `from` is collapse-sanitized (it sits in
     // the header line, not a fence).
-    const safeFrom = sanitizeForPtyInjection(msg.from);
+    const safeFrom = sanitizeForPtyInjection(msg.from ?? '(unknown)');
+    // msg.text is typed string but legacy senders (e.g. taskmaster-poller) may use 'body' key
+    const msgText = msg.text ?? (msg as unknown as Record<string, unknown>).body as string ?? '';
     return `=== AGENT MESSAGE from ${safeFrom}${replyNote} [msg_id: ${msg.id}] ===
-${wrapFenceSafe(msg.text)}
+${wrapFenceSafe(msgText)}
 Reply using: cortextos bus send-message ${safeFrom} normal '<your reply>' ${msg.id}
 
 `;
@@ -584,6 +588,69 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
         this.log(`SECURITY: callback from unauthorized user ${fromUserId} - rejecting`);
         return;
       }
+    }
+
+    // Decision callbacks: decision_{decisionId}_{optionIndex}
+    // Tappable decisions sent via `cortextos bus send-decision`. State
+    // file lives at {ctxRoot}/state/pending-decisions.json. The branch
+    // sits ABOVE the approval branch so the longer prefix matches first
+    // (decision_ vs appr_ — disjoint today, but ordering is intentional
+    // per spec so future overlap can't cause cross-routing).
+    const decisionMatch = data.match(/^decision_(decision_\d+_[a-zA-Z0-9]+)_(\d+)$/);
+    if (decisionMatch) {
+      const decisionId = decisionMatch[1];
+      const optionIdx = parseInt(decisionMatch[2], 10);
+      const existing = getDecision(this.paths, decisionId);
+      if (!existing || existing.status === 'resolved') {
+        if (this.telegramApi) {
+          try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Already resolved'); } catch { /* ignore */ }
+        }
+        this.log(`Decision callback: ${decisionId} not found or already resolved`);
+        return;
+      }
+      const chosen = existing.options[optionIdx];
+      if (chosen === undefined) {
+        if (this.telegramApi) {
+          try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Invalid option'); } catch { /* ignore */ }
+        }
+        this.log(`Decision callback: option index ${optionIdx} out of range for ${decisionId}`);
+        return;
+      }
+      try {
+        resolveDecision(this.paths, decisionId, chosen);
+      } catch (err) {
+        this.log(`Decision callback: resolveDecision failed for ${decisionId}: ${err}`);
+        if (this.telegramApi) {
+          try { await this.telegramApi.answerCallbackQuery(callbackQueryId, 'Resolve failed'); } catch { /* ignore */ }
+        }
+        return;
+      }
+      if (this.telegramApi) {
+        try { await this.telegramApi.answerCallbackQuery(callbackQueryId, `Recorded: ${chosen}`); } catch { /* ignore */ }
+        if (chatId && messageId) {
+          const newText = `${existing.title}\n\n${existing.context}\n\n✓ Chose: ${chosen}`;
+          // Empty inline_keyboard removes the buttons after pick — same
+          // shape used by the approval branch's editMessageText (label
+          // string, no markup). We pass an explicit empty keyboard so
+          // any prior button row is cleared.
+          try { await this.telegramApi.editMessageText(chatId, messageId, newText, { inline_keyboard: [] }); } catch { /* ignore */ }
+        }
+      }
+      // Log to activity channel via event log so dashboard surfaces it.
+      try {
+        const org = process.env.CTX_ORG || 'unknown';
+        logEvent(
+          this.paths,
+          this.agent.name,
+          org,
+          'message',
+          'decision_resolved',
+          'info',
+          JSON.stringify({ decision_id: decisionId, chosen, agent: existing.agent }),
+        );
+      } catch { /* non-fatal */ }
+      this.log(`Decision callback: ${decisionId} -> ${chosen}`);
+      return;
     }
 
     // Approval callbacks: appr_(allow|deny)_{approvalId}

@@ -13,6 +13,7 @@ import { createExperiment, runExperiment, evaluateExperiment, listExperiments, g
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { createApproval, updateApproval } from '../bus/approval.js';
+import { createDecision, listDecisions } from '../bus/decision.js';
 import { createReminder, listReminders, ackReminder, pruneReminders } from '../bus/reminders.js';
 import { updateCronFire, parseDurationMs, readCronState } from '../bus/cron-state.js';
 import { addCron, removeCron, readCrons, updateCron as updateCronDef, getCronByName, getExecutionLog } from '../bus/crons.js';
@@ -376,7 +377,10 @@ busCommand
     const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
 
     console.log(`\n  Tasks (${tasks.length})\n`);
-    const header = '  Status  Pri  ID                        Assignee         Title';
+    // ID is placed LAST and never truncated so the full task id (including
+    // the `_<random>` suffix) is always copy-pasteable — agents need it verbatim
+    // for complete-task/update-task.
+    const header = '  Status  Pri  Assignee         Title                                               ID';
     const separator = '  ' + '-'.repeat(header.length - 2);
     console.log(header);
     console.log(separator);
@@ -384,10 +388,9 @@ busCommand
     for (const t of tasks) {
       const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
       const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
-      const id = t.id.substring(0, 26).padEnd(26);
       const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
-      const title = t.title.substring(0, 50);
-      console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
+      const title = t.title.substring(0, 50).padEnd(52);
+      console.log(`  ${statusIcon}${priIcon}${assignee}${title}${t.id}`);
     }
     console.log('');
   });
@@ -1133,6 +1136,84 @@ busCommand
   });
 
 // ---------------------------------------------------------------------------
+// Decision commands — single tappable Telegram message per decision
+// (YES/NO/HOLD or custom). Replaces wall-of-text "decisions queue" pattern.
+// Callbacks resolve via fast-checker (decision_<id>_<optionIndex> prefix).
+// ---------------------------------------------------------------------------
+
+busCommand
+  .command('send-decision')
+  .description('Send a tappable decision request to a Telegram chat')
+  .argument('<chat-id>', 'Telegram chat ID')
+  .argument('<title>', 'Short decision title (one line)')
+  .argument('<context>', 'Context / details for the decision')
+  .option('--options <csv>', 'Comma-separated options', 'YES,NO,HOLD')
+  .option('--agent <name>', 'Requesting agent name (defaults to CTX_AGENT_NAME)')
+  .action(async (chatId: string, title: string, context: string, opts: { options?: string; agent?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const options = (opts.options || 'YES,NO,HOLD')
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (options.length === 0) {
+      console.error('Error: --options must contain at least one option');
+      process.exit(1);
+    }
+    const agent = opts.agent || env.agentName || 'unknown';
+    try {
+      const { id, message_id } = await createDecision(paths, {
+        title,
+        context,
+        options,
+        chat_id: chatId,
+        agent,
+        agentDir: env.agentDir,
+      });
+      console.log(`id=${id} message_id=${message_id}`);
+    } catch (err: any) {
+      console.error(`Failed to send decision: ${err.message || err}`);
+      process.exit(1);
+    }
+  });
+
+busCommand
+  .command('list-decisions')
+  .description('List decision requests')
+  .option('--status <s>', 'Filter: pending or resolved')
+  .option('--limit <n>', 'Max rows to show', '20')
+  .action((opts: { status?: string; limit?: string }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    const status = opts.status as 'pending' | 'resolved' | undefined;
+    if (status && status !== 'pending' && status !== 'resolved') {
+      console.error("Invalid --status: must be 'pending' or 'resolved'");
+      process.exit(1);
+    }
+    const limit = parseInt(opts.limit || '20', 10);
+    const rows = listDecisions(paths, status).slice(0, limit);
+    if (rows.length === 0) {
+      console.log('(no decisions)');
+      return;
+    }
+    const now = Date.now();
+    console.log(['ID', 'AGE', 'STATUS', 'CHOSEN', 'TITLE'].join('\t'));
+    for (const d of rows) {
+      const ageSec = Math.max(0, Math.floor((now - new Date(d.created_at).getTime()) / 1000));
+      const age = ageSec < 60
+        ? `${ageSec}s`
+        : ageSec < 3600
+          ? `${Math.floor(ageSec / 60)}m`
+          : ageSec < 86400
+            ? `${Math.floor(ageSec / 3600)}h`
+            : `${Math.floor(ageSec / 86400)}d`;
+      const chosen = d.chosen ?? '-';
+      const titleShort = d.title.length > 60 ? d.title.slice(0, 57) + '...' : d.title;
+      console.log([d.id, age, d.status, chosen, titleShort].join('\t'));
+    }
+  });
+
+// ---------------------------------------------------------------------------
 // Knowledge Base commands
 // ---------------------------------------------------------------------------
 
@@ -1154,19 +1235,28 @@ busCommand
       process.exit(1);
     }
 
-    const result = queryKnowledgeBase(
-      resolvePaths(env.agentName, env.instanceId, org),
-      question,
-      {
-        org,
-        agent: opts.agent || env.agentName,
-        scope: (opts.scope as 'shared' | 'private' | 'all') || 'all',
-        topK: parseInt(opts.topK || '5', 10),
-        threshold: parseFloat(opts.threshold || '0.5'),
-        frameworkRoot: env.frameworkRoot || process.cwd(),
-        instanceId: env.instanceId,
-      },
-    );
+    // A degraded KB must exit non-zero with a one-line reason, not dump a Node
+    // stack trace and not quietly print "No results found". Callers (agents,
+    // health checks) key off the exit code.
+    let result;
+    try {
+      result = queryKnowledgeBase(
+        resolvePaths(env.agentName, env.instanceId, org),
+        question,
+        {
+          org,
+          agent: opts.agent || env.agentName,
+          scope: (opts.scope as 'shared' | 'private' | 'all') || 'all',
+          topK: parseInt(opts.topK || '5', 10),
+          threshold: parseFloat(opts.threshold || '0.5'),
+          frameworkRoot: env.frameworkRoot || process.cwd(),
+          instanceId: env.instanceId,
+        },
+      );
+    } catch (err) {
+      console.error(`ERROR: ${(err as Error).message}`);
+      process.exit(1);
+    }
 
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));

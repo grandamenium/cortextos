@@ -2,6 +2,7 @@ import { join } from 'path';
 import { mkdirSync } from 'fs';
 import type { CtxEnv, WorkerStatus, WorkerStatusValue } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
+import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { injectMessage } from '../pty/inject.js';
 
 /**
@@ -20,7 +21,8 @@ export class WorkerProcess {
   readonly dir: string;
   readonly parent: string | undefined;
 
-  private pty: AgentPTY | null = null;
+  private pty: AgentPTY | CodexAppServerPTY | null = null;
+  private runtime: string | undefined;
   private status: WorkerStatusValue = 'starting';
   private spawnedAt: string;
   private exitCode: number | undefined;
@@ -32,10 +34,12 @@ export class WorkerProcess {
     dir: string,
     parent: string | undefined,
     log?: (msg: string) => void,
+    runtime?: string,
   ) {
     this.name = name;
     this.dir = dir;
     this.parent = parent;
+    this.runtime = runtime;
     this.spawnedAt = new Date().toISOString();
     this.log = log || ((msg) => console.log(`[worker:${name}] ${msg}`));
   }
@@ -52,7 +56,13 @@ export class WorkerProcess {
     } catch { /* ignore */ }
 
     const logPath = join(env.ctxRoot, 'logs', this.name, 'stdout.log');
-    this.pty = new AgentPTY(env, config, logPath);
+    const resolvedConfig = config.model ? config : (this.runtime === 'codex' ? { model: 'gpt-5.6-sol' } : {});
+
+    if (this.runtime === 'codex') {
+      this.pty = new CodexAppServerPTY(env, resolvedConfig, logPath);
+    } else {
+      this.pty = new AgentPTY(env, resolvedConfig, logPath);
+    }
 
     this.pty.onExit((code) => {
       this.exitCode = code;

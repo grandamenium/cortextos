@@ -104,11 +104,11 @@ export function nextFireFromCron(expr: string, fromMs: number): number {
 
   for (let i = 0; i < MAX_MINUTES; i++) {
     const d = new Date(candidate);
-    const m  = d.getMinutes();
-    const h  = d.getHours();
-    const dy = d.getDate();
-    const mo = d.getMonth() + 1; // 1-12
-    const dw = d.getDay();       // 0-6
+    const m  = d.getUTCMinutes();
+    const h  = d.getUTCHours();
+    const dy = d.getUTCDate();
+    const mo = d.getUTCMonth() + 1; // 1-12
+    const dw = d.getUTCDay();       // 0-6
 
     if (
       months.includes(mo) &&
@@ -266,6 +266,19 @@ export class CronScheduler {
 
   /** Epoch ms of the tick interval, exposed so tests can override. */
   static readonly TICK_INTERVAL_MS = 30_000;
+
+  /**
+   * Stagger (ms) inserted between consecutive cron injections for the SAME
+   * agent within a single tick.  injectMessage() writes a PASTE_START/END
+   * block to the PTY and schedules ENTER on a short setTimeout; two fires in
+   * the same tick would otherwise land in the PTY buffer within milliseconds
+   * and be interpreted as one mangled input, silently dropping the second
+   * message.  The gap is applied per-fire (cron 0 = 0ms, cron 1 = 1500ms,
+   * cron 2 = 3000ms, …) via a Promise-based delay so the tick stays
+   * non-blocking.  Every cron on this scheduler belongs to one agent, so all
+   * same-tick fires are same-agent by construction.
+   */
+  static readonly INJECTION_STAGGER_MS = 1_500;
 
   constructor(opts: CronSchedulerOptions) {
     this.agentName = opts.agentName;
@@ -452,8 +465,13 @@ export class CronScheduler {
     }
   }
 
-  private async tick(): Promise<void> {
+  private tick(): void {
     const now = Date.now();
+
+    // Count of injections dispatched so far in THIS tick.  Consecutive fires
+    // for the same agent are staggered by an additive INJECTION_STAGGER_MS so
+    // their PTY paste sequences don't collide (see INJECTION_STAGGER_MS docs).
+    let firedThisTick = 0;
 
     for (const [name, sc] of this.scheduled) {
       if (sc.nextFireAt > now) {
@@ -466,9 +484,45 @@ export class CronScheduler {
         continue;
       }
 
+      // Claim the fire synchronously so the re-entry guard holds even though the
+      // actual dispatch is deferred (staggered) below and may span several ticks.
       sc.firing = true;
-      const cron = sc.definition;
-      this.logger(`[cron-scheduler] firing cron "${name}" (was due ${new Date(sc.nextFireAt).toISOString()})`);
+
+      // STAGGER: cron 0 fires now, cron 1 at +1500ms, cron 2 at +3000ms, …
+      // Dispatch is fire-and-forget (void) so tick() returns immediately and the
+      // master setInterval keeps ticking — the loop never blocks on the stagger.
+      const staggerMs = firedThisTick * CronScheduler.INJECTION_STAGGER_MS;
+      firedThisTick++;
+      void this.dispatchFire(name, sc, now, staggerMs);
+    }
+  }
+
+  /**
+   * Fire a single cron (with retries) and advance its schedule, after an
+   * optional stagger delay.  Runs detached from tick() so consecutive same-agent
+   * injections are spaced out without blocking the tick loop.  `sc.firing` is
+   * assumed already set by the caller and is cleared here when the fire settles.
+   */
+  private async dispatchFire(
+    name: string,
+    sc: ScheduledCron,
+    now: number,
+    staggerMs: number,
+  ): Promise<void> {
+    if (staggerMs > 0) {
+      await sleep(staggerMs);
+
+      // The stagger delay may span a stop() (or a reload that dropped this cron).
+      // A stopped scheduler must not fire or write to disk — bail if we're no
+      // longer running or this cron is no longer scheduled.
+      if (this.tickHandle === null || this.scheduled.get(name) !== sc) {
+        sc.firing = false;
+        return;
+      }
+    }
+
+    const cron = sc.definition;
+    this.logger(`[cron-scheduler] firing cron "${name}" (was due ${new Date(sc.nextFireAt).toISOString()})`);
 
       // Persist last_fire_attempted_at to disk BEFORE awaiting the dispatch.
       // If the daemon crashes between this point and the post-success
@@ -518,7 +572,7 @@ export class CronScheduler {
           // Unrecognised schedule after fire — remove from schedule to avoid infinite loops
           this.scheduled.delete(name);
           this.logger(`[cron-scheduler] WARNING: removed "${name}" from schedule after fire — schedule unparseable`);
-          continue; // sc is gone, skip clearing firing flag
+          return; // sc is gone, skip clearing firing flag
         }
       } else {
         // Dispatch failed (all retries exhausted). Advance nextFireAt anyway so
@@ -535,10 +589,9 @@ export class CronScheduler {
         } else {
           this.scheduled.delete(name);
           this.logger(`[cron-scheduler] WARNING: removed "${name}" from schedule after failure — schedule unparseable`);
-          continue;
+          return;
         }
       }
       sc.firing = false;
-    }
   }
 }

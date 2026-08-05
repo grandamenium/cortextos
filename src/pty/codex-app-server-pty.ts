@@ -421,11 +421,11 @@ export class CodexAppServerPTY {
       }
 
       const spawnFn = this._spawnFn!;
-      const pty = spawnFn('codex', [
-        'app-server',
-        '--enable', 'goals',
-        '--listen', this._socketListenArg,
-      ], {
+      const appServerArgs = ['app-server', '--enable', 'goals', '--listen', this._socketListenArg];
+      if (this._config.model) {
+        appServerArgs.push('-c', `model="${this._config.model}"`);
+      }
+      const pty = spawnFn('codex', appServerArgs, {
         name: 'xterm-256color',
         cols: 200,
         rows: 50,
@@ -895,7 +895,7 @@ export class CodexAppServerPTY {
 
     const entry = {
       timestamp: new Date().toISOString(),
-      model: this._config.model || 'gpt-5-codex',
+      model: this._config.model || 'gpt-5.6-sol',
       input_tokens: typeof total.inputTokens === 'number' ? total.inputTokens : 0,
       output_tokens: typeof total.outputTokens === 'number' ? total.outputTokens : 0,
       cache_read_tokens: typeof total.cachedInputTokens === 'number' ? total.cachedInputTokens : 0,
