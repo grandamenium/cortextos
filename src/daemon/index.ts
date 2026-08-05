@@ -1,4 +1,5 @@
 import { AgentManager } from './agent-manager.js';
+import { installTimestampedConsole } from './log-timestamps.js';
 import { IPCServer } from './ipc-server.js';
 import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'fs';
 import { spawnSync } from 'child_process';
@@ -230,6 +231,7 @@ class Daemon {
   }
 
   async start(): Promise<void> {
+    installTimestampedConsole();
     // Force restrictive default permissions for everything the daemon writes:
     // 0700 dirs, 0600 files. Belt-and-suspenders for explicit chmod calls.
     if (process.platform !== 'win32') {
