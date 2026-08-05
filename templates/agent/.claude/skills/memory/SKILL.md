@@ -100,12 +100,30 @@ Update at every heartbeat and session end. Ingest to KB after updating.
 
 ---
 
-## Layer 3: Knowledge Base (RAG/ChromaDB)
+## Layer 3: People Memory (memory/people/{name}.md)
+
+Per-person interaction memory. See `.claude/skills/people-memory/SKILL.md` for full reference.
+
+- Load the person's file when they message you (before responding)
+- Update after meaningful interactions
+- Don't load all people files at session start
+
+---
+
+## Layer 4: Knowledge Base (RAG/ChromaDB)
 
 Re-ingest MEMORY.md and today's daily memory on every heartbeat so they stay semantically searchable:
 ```bash
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
   --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+```
+
+Also ingest people memory for cross-agent discoverability:
+```bash
+if ls memory/people/*.md 1>/dev/null 2>&1; then
+  cortextos bus kb-ingest memory/people/*.md \
+    --org $CTX_ORG --agent $CTX_AGENT_NAME --scope shared --collection people --force
+fi
 ```
 
 ---
@@ -115,3 +133,4 @@ cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
 - Session start, every heartbeat, session end — minimum 3 entries
 - Each entry captures context state, not just activity
 - Update MEMORY.md at least once per week with durable learnings
+- Update people files after meaningful interactions (not every message)
