@@ -474,6 +474,11 @@ export interface OrgContext {
    *  save-output. The instruction is injected into the boot prompt
    *  dynamically — no agent markdown files are modified. */
   require_deliverables?: boolean;
+  /** Absolute path to this org's Obsidian vault, rendered read-only by the
+   *  dashboard /wiki page. Preferred over parsing the "Obsidian vault" prose
+   *  line in knowledge.md (which stays as a fallback for orgs without this
+   *  field). Optional — unset orgs fall through to the knowledge.md regex. */
+  vaultPath?: string;
 }
 
 // Telegram Types
