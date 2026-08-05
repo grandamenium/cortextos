@@ -7,6 +7,7 @@ import { existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, m
 import { join, basename, dirname } from 'path';
 import { execSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
+import { isHeartbeatStale } from './heartbeat-staleness.js';
 
 // --- Types ---
 
@@ -177,19 +178,17 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       }
     }
 
-    // Check heartbeat staleness (stale if >5 hours old)
+    // Heartbeat staleness via the SHARED helper — same verdict as the CLI display
+    // (src/cli/bus.ts), derived from the agent's own configured interval. These
+    // used to be two hardcoded thresholds (5h here, 2h there) that disagreed.
     let heartbeatStale = true;
     const hbFile = join(ctxRoot, 'state', agent, 'heartbeat.json');
     if (existsSync(hbFile)) {
       try {
         const hb = JSON.parse(readFileSync(hbFile, 'utf-8'));
-        if (hb.last_heartbeat) {
-          const hbTime = new Date(hb.last_heartbeat).getTime();
-          const age = Date.now() - hbTime;
-          if (age < 5 * 60 * 60 * 1000) {
-            heartbeatStale = false;
-            agentsHealthy++;
-          }
+        if (!isHeartbeatStale(hb.last_heartbeat, hb.loop_interval)) {
+          heartbeatStale = false;
+          agentsHealthy++;
         }
       } catch { /* stale by default */ }
     }
