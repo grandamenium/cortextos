@@ -5,6 +5,8 @@ import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
 import { checkInbox, ackInbox } from '../bus/message.js';
+import { getOverdueReminders } from '../bus/reminders.js';
+import type { Reminder } from '../bus/reminders.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -25,6 +27,28 @@ type LogFn = (msg: string) => void;
 export function handoffGraceMs(runtime: string | undefined): number {
   if (runtime === 'codex-app-server' || runtime === 'opencode') return 600_000;
   return 120_000;
+}
+
+/**
+ * Re-injection window for due persistent reminders. The poll loop runs every
+ * ~1s, but an un-acked reminder must not be re-injected each cycle — mirror
+ * the inbox redelivery cadence instead.
+ */
+export const REMINDER_REINJECT_MS = 5 * 60 * 1000;
+
+/**
+ * Pick which overdue reminders to inject this cycle: those never injected, or
+ * whose last injection is older than the re-inject window. Pure — the caller
+ * records injection timestamps only after a successful inject, so a failed
+ * inject retries on the next cycle.
+ */
+export function selectDueReminders(
+  overdue: Reminder[],
+  lastInjectedAt: Map<string, number>,
+  nowMs: number,
+  reinjectMs: number = REMINDER_REINJECT_MS,
+): Reminder[] {
+  return overdue.filter(r => nowMs - (lastInjectedAt.get(r.id) || 0) >= reinjectMs);
 }
 
 /**
@@ -55,6 +79,9 @@ export class FastChecker {
   // Persistent dedup: message hashes to prevent duplicate delivery
   private seenHashes: Set<string> = new Set();
   private dedupFilePath: string = '';
+
+  // Due-reminder delivery: last successful injection per reminder id
+  private reminderInjectedAt: Map<string, number> = new Map();
 
   // SIGUSR1 wake: resolve to immediately wake from sleep
   private wakeResolve: (() => void) | null = null;
@@ -202,6 +229,21 @@ export class FastChecker {
       ackIds.push(msg.id);
     }
 
+    // Due persistent reminders — live-session delivery. Reminders were
+    // previously surfaced ONLY in the daemon boot prompt (bus/reminders.ts
+    // header), so long-lived sessions never saw them fire. NOT auto-acked:
+    // the agent acks after handling (same lifecycle as boot-prompt delivery);
+    // the throttle prevents per-poll-cycle spam until then.
+    const overdueReminders = getOverdueReminders(this.paths);
+    const dueIds = new Set(overdueReminders.map(r => r.id));
+    for (const id of this.reminderInjectedAt.keys()) {
+      if (!dueIds.has(id)) this.reminderInjectedAt.delete(id); // acked/pruned
+    }
+    const remindersToInject = selectDueReminders(overdueReminders, this.reminderInjectedAt, Date.now());
+    for (const r of remindersToInject) {
+      messageBlock += this.formatReminder(r);
+    }
+
     // Inject if there's anything
     if (messageBlock) {
       const injected = this.agent.injectMessage(messageBlock);
@@ -209,6 +251,10 @@ export class FastChecker {
         // ACK inbox messages
         for (const id of ackIds) {
           ackInbox(this.paths, id);
+        }
+        // Record reminder injections so the throttle window starts now
+        for (const r of remindersToInject) {
+          this.reminderInjectedAt.set(r.id, Date.now());
         }
         this.log(`Injected ${messageBlock.length} bytes`);
         // Only update typing timestamp for Telegram messages, not inbox/cron.
@@ -235,6 +281,19 @@ export class FastChecker {
    * Format an inbox message for injection.
    * Matches bash fast-checker.sh format exactly.
    */
+  /**
+   * Format a due persistent reminder for injection. Prompt body is
+   * fence-wrapped like inbox bodies (agent-authored, but a prompt can carry
+   * its own fence/header markers).
+   */
+  private formatReminder(r: Reminder): string {
+    return `=== REMINDER (due ${r.fire_at}) [id: ${r.id}] ===
+${wrapFenceSafe(r.prompt)}
+Handle it, then run: cortextos bus ack-reminder ${r.id}
+
+`;
+  }
+
   private formatInboxMessage(msg: InboxMessage): string {
     const replyNote = msg.reply_to ? ` [reply_to: ${msg.reply_to}]` : '';
     // msg.text/from are externally influenced (a body can carry its own
