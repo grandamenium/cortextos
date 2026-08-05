@@ -2471,6 +2471,11 @@ busCommand
   .action(() => runHook('hook-idle-flag'));
 
 busCommand
+  .command('hook-prompt-flag')
+  .description('UserPromptSubmit hook: writes last_prompt.flag timestamp so the daemon delivery-confirmation loop knows a turn started')
+  .action(() => runHook('hook-prompt-flag'));
+
+busCommand
   .command('hook-loop-detector')
   .description('PreToolUse hook: detects and blocks repeated tool loops (same-args repetition + ping-pong alternation)')
   .action(() => runHook('hook-loop-detector'));

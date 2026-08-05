@@ -21,6 +21,8 @@ type LogFn = (msg: string) => void;
  */
 export class AgentProcess {
   readonly name: string;
+  /** Agent's org (read-only view of env.org) — used by fast-checker heartbeat writes. */
+  get org(): string { return this.env.org; }
   private env: CtxEnv;
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;
@@ -176,7 +178,9 @@ export class AgentProcess {
     });
 
     try {
+      const spawnedAtMs = Date.now(); // before spawn: the boot prompt may submit while spawn() awaits bootstrap
       await this.pty.spawn(mode, prompt);
+      this.startBootDeliveryCheck(spawnedAtMs);
       // Codex exec-per-turn race: the new PTY's onExit can fire BEFORE this
       // line if `codex exec` completes its prompt quickly (CodexAppServerPTY's spawn
       // resolves once exec is launched, but the process may exit moments
@@ -366,6 +370,127 @@ export class AgentProcess {
    */
   injectMessage(content: string): boolean {
     return this.injectMessageDetailed(content).ok;
+  }
+
+  private promptFlagPath(): string {
+    return join(this.env.ctxRoot, 'state', this.name, 'last_prompt.flag');
+  }
+
+  /** mtime of last_prompt.flag in ms epoch; 0 when it has never been written. */
+  promptFlagMtimeMs(): number {
+    try {
+      return statSync(this.promptFlagPath()).mtimeMs;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Inject with delivery confirmation (2026-07-09 dropped-Enter stall class).
+   *
+   * confirmed values:
+   *   true  — turn-start signal observed (UserPromptSubmit hook fired)
+   *   false — Enter retries exhausted with no turn-start: DELIVERY FAILED,
+   *           content likely sitting in the input box; caller must NOT ack
+   *   null  — no confirmation channel for this agent (hook never seen for
+   *           this agent, or runtime opts out): legacy fire-and-forget path
+   */
+  async injectMessageConfirmedDetailed(
+    content: string,
+  ): Promise<
+    | { ok: true; confirmed: boolean | null; enterAttempts: number }
+    | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED'; message: string }
+  > {
+    if (!this.pty || this.status !== 'running') {
+      return { ok: false, code: 'NOT_RUNNING', message: `agent "${this.name}" is registered but not running (status: ${this.status})` };
+    }
+    if (this.dedup.isDuplicate(content)) {
+      this.log('Dedup: skipping duplicate message');
+      return { ok: false, code: 'DEDUPED', message: `inject for "${this.name}" deduped — content matches MessageDedup hash window` };
+    }
+
+    // The confirmation channel is the UserPromptSubmit hook's flag. If it has
+    // never been written for this agent, the session predates the hook (or
+    // the settings lack it) — requiring confirmation would deadlock acks, so
+    // fall back to the legacy path.
+    const hookSeen = this.promptFlagMtimeMs() > 0;
+    const confirmable =
+      hookSeen &&
+      'injectMessageConfirmed' in this.pty &&
+      typeof (this.pty as { injectMessageConfirmed?: unknown }).injectMessageConfirmed === 'function';
+
+    if (!confirmable) {
+      if ('injectMessage' in this.pty && typeof this.pty.injectMessage === 'function') {
+        this.pty.injectMessage(content);
+      } else {
+        injectMessageIntoPty((data) => this.pty?.write(data), content);
+      }
+      return { ok: true, confirmed: null, enterAttempts: 1 };
+    }
+
+    const injectedAt = Date.now();
+    const pty = this.pty as unknown as {
+      injectMessageConfirmed: (
+        c: string,
+        o: { isConfirmed: () => boolean; log?: (m: string) => void },
+      ) => Promise<{ confirmed: boolean; enterAttempts: number }> | null;
+      injectMessage: (c: string) => void;
+    };
+    const loop = pty.injectMessageConfirmed(content, {
+      isConfirmed: () => this.promptFlagMtimeMs() > injectedAt,
+      log: (m) => this.log(m),
+    });
+    if (loop === null) {
+      // Runtime opted out (OpenCode) — use its own paste path.
+      pty.injectMessage(content);
+      return { ok: true, confirmed: null, enterAttempts: 1 };
+    }
+    const res = await loop;
+    if (!res.confirmed) {
+      this.log(`DELIVERY_FAILED: no turn-start after ${res.enterAttempts} Enter attempts — content may be stuck in the input box`);
+      // The un-ACKed message will redeliver with identical content; drop the
+      // dedup hash so the retry is not silently swallowed as a duplicate.
+      this.dedup.forget(content);
+    }
+    return { ok: true, ...res };
+  }
+
+  /**
+   * Boot-prompt delivery check. The startup/continue prompt is passed as a
+   * CLI argument, but its submission can still be lost to the same
+   * turn-boundary race as injected messages (observed: mccoy boot stall
+   * 2026-07-10 06:05-08:08Z). After bootstrap, verify a turn actually
+   * started (last_prompt.flag advanced past spawn time); if not, re-send
+   * Enter up to 3 times, then log DELIVERY_FAILED loudly.
+   */
+  private startBootDeliveryCheck(spawnedAtMs: number): void {
+    if (this.promptFlagMtimeMs() === 0) return; // hook never seen — no signal to check
+    const pty = this.pty as unknown as { sendEnter?: () => void } | null;
+    if (!pty || typeof pty.sendEnter !== 'function') return;
+
+    const INITIAL_GRACE_MS = 30_000;
+    const RETRY_INTERVAL_MS = 10_000;
+    const MAX_RETRIES = 3;
+    let retries = 0;
+
+    const check = () => {
+      if (!this.pty || this.status !== 'running') return;
+      if (this.promptFlagMtimeMs() > spawnedAtMs) return; // boot prompt submitted
+      if (retries >= MAX_RETRIES) {
+        this.log('DELIVERY_FAILED: boot prompt never started a turn after Enter retries');
+        return;
+      }
+      retries++;
+      this.log(`Boot-prompt delivery check: no turn-start yet — sending Enter (retry ${retries}/${MAX_RETRIES})`);
+      try {
+        (this.pty as unknown as { sendEnter: () => void }).sendEnter();
+      } catch { /* pty torn down */ }
+      const timer = setTimeout(check, RETRY_INTERVAL_MS);
+      timer.unref?.();
+    };
+
+    const timer = setTimeout(check, INITIAL_GRACE_MS);
+    timer.unref?.();
   }
 
   /**
