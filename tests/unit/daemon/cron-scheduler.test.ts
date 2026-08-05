@@ -8,6 +8,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 // ---------------------------------------------------------------------------
 // Mock crons.ts I/O BEFORE importing CronScheduler so the module resolution
@@ -51,6 +54,32 @@ function makeCron(overrides: Partial<CronDefinition> = {}): CronDefinition {
 }
 
 const TICK = CronScheduler.TICK_INTERVAL_MS; // 30_000 ms
+
+// ---------------------------------------------------------------------------
+// State-root isolation. The fire path appends to
+// $CTX_ROOT/.cortextOS/state/agents/{agent}/cron-execution.log via
+// appendExecutionLog — which is NOT part of the crons.js mock above. Without
+// CTX_ROOT that resolution falls back to process.cwd() and litters the repo
+// root with .cortextOS/ junk on every run, so each test gets a throwaway
+// tmpdir root instead.
+// ---------------------------------------------------------------------------
+
+let stateRoot: string;
+const originalCtxRoot = process.env.CTX_ROOT;
+
+beforeEach(() => {
+  stateRoot = mkdtempSync(join(tmpdir(), 'cron-sched-state-'));
+  process.env.CTX_ROOT = stateRoot;
+});
+
+afterEach(() => {
+  if (originalCtxRoot !== undefined) {
+    process.env.CTX_ROOT = originalCtxRoot;
+  } else {
+    delete process.env.CTX_ROOT;
+  }
+  rmSync(stateRoot, { recursive: true, force: true });
+});
 
 // ---------------------------------------------------------------------------
 // nextFireFromCron — unit tests for the cron expression parser
