@@ -344,11 +344,11 @@ export function syncCostsLazy(): void {
       const { syncCosts } = require('./cost-parser');
       const costResult = syncCosts();
       (globalThis as unknown as Record<string, number>).__lastCostSync = now;
-      if (costResult.inserted > 0) {
-        console.log(`[sync] Cost sync: ${costResult.scanned} scanned, ${costResult.inserted} inserted`);
+      if (costResult.changed > 0) {
+        console.log(`[sync] Cost sync: ${costResult.scanned} scanned, ${costResult.changed} changed`);
       }
-    } catch {
-      // Cost sync is best-effort
+    } catch (error) {
+      console.warn('[sync] Cost sync failed; analytics may be stale:', error);
     }
   }
 }
