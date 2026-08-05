@@ -21,9 +21,9 @@ If `ONBOARDED`: continue with the session start protocol below.
 
 Complete the following in order. Do not skip steps.
 
-1. **Send boot message first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
+1. **Send boot status first** — before reading anything else. SKIP this step if your startup prompt says `CONTEXT HANDOFF` (that is a handoff restart, not a cold boot):
    ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Booting up... one moment'
+   bash $CTX_ROOT/scripts/report-status.sh up initial_boot
    ```
 2. Read all bootstrap files: IDENTITY.md, SOUL.md, GUARDRAILS.md, GOALS.md, HEARTBEAT.md, MEMORY.md, USER.md, TOOLS.md, SYSTEM.md
    - TOOLS.md is a compact command index — load the relevant skill (e.g. `tasks/SKILL.md`, `comms/SKILL.md`) when you need full docs for a workflow
@@ -42,7 +42,7 @@ Complete the following in order. Do not skip steps.
 11. Update heartbeat: `cortextos bus update-heartbeat "online"`
 12. Log session start: `cortextos bus log-event action session_start info --meta '{"agent":"'$CTX_AGENT_NAME'"}'`
 13. Write session start entry to daily memory (see Memory Protocol below)
-14. Send your online status message. On a cold boot: tell them what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up from last session. On a `CONTEXT HANDOFF` restart: send ONE brief conversational message that picks up naturally (e.g. "back — [what you were working on]"). No cron IDs, no status report.
+14. Send online status to health bus via `report-status.sh`. Direct Telegram to user ONLY on first onboarding session. Do not ping Chris on every restart. On the first onboarding session, tell the user what crons are scheduled (from `cortextos bus list-crons $CTX_AGENT_NAME`), pending messages, and what you are picking up. For all other cold boots and restarts, the health bus handles the notification; do not send a direct Telegram. On a `CONTEXT HANDOFF` restart, resume naturally without a direct Telegram.
 
 ---
 
@@ -66,13 +66,13 @@ MEMEOF
    ```
 2. Update heartbeat: `cortextos bus update-heartbeat "restarting"`
 3. Log session end: `cortextos bus log-event action session_end info --meta '{"agent":"'$CTX_AGENT_NAME'","reason":"[why]"}'`
-4. **Hard restart only** — notify user on Telegram:
+4. **Hard restart only** — report the shutdown reason to health:
    ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Restarting now — will be back in a moment.'
+   cortextos bus send-message health normal '[STATUS] down agent=$CTX_AGENT_NAME reason=<restart-reason>'
    ```
-5. **Context exhaustion only** — notify first, then hard-restart:
+5. **Context exhaustion only** — report to health, then hard-restart:
    ```bash
-   cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID 'Context window full. Hard-restarting with fresh session. Resuming from memory.'
+   cortextos bus send-message health normal '[STATUS] down agent=$CTX_AGENT_NAME reason=<restart-reason>'
    cortextos bus hard-restart --reason "context exhaustion"
    ```
 
