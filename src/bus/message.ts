@@ -4,9 +4,34 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import type { InboxMessage, Priority, BusPaths } from '../types/index.js';
 import { PRIORITY_MAP } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
-import { acquireLock, releaseLock } from '../utils/lock.js';
+import { acquireLock, releaseLock, inspectLock, type LockHeldInfo } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
+
+/**
+ * Thrown when the inbox lock cannot be taken, so the inbox could not be READ.
+ *
+ * Distinct from an empty inbox on purpose: callers must not be able to mistake
+ * "I could not look" for "there was nothing there". See checkInbox.
+ */
+export class InboxLockedError extends Error {
+  readonly inbox: string;
+  readonly lock: LockHeldInfo | null;
+
+  constructor(inbox: string, lock: LockHeldInfo | null) {
+    const held = lock
+      ? `held ${Math.round(lock.ageMs / 1000)}s` +
+        (lock.pidUnreadable ? ' by an unreadable PID (holder likely died mid-acquire)' : ` by pid ${lock.pid}`)
+      : 'lock released during inspection';
+    super(
+      `Inbox "${inbox}" is LOCKED and was NOT read (${held}). ` +
+      `Messages may be queued and undelivered — this is NOT an empty inbox.`,
+    );
+    this.name = 'InboxLockedError';
+    this.inbox = inbox;
+    this.lock = lock;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Security (H10): HMAC-SHA256 message signing
@@ -98,9 +123,17 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
   ensureDir(inbox);
   ensureDir(inflight);
 
-  // Acquire lock
+  // Acquire lock.
+  //
+  // This MUST NOT return [] on failure. An empty array here is indistinguishable
+  // from "the inbox is empty", and every caller reads it as the latter — so a
+  // lock we cannot take silently becomes "no messages", forever, with no tell.
+  // That is not hypothetical: a hard shutdown left an abandoned lock on one
+  // agent's inbox and it reported a clean empty inbox for three days while 26
+  // messages queued behind it. Failing to read is a DIFFERENT outcome from
+  // having nothing to read, and it has to be loud.
   if (!acquireLock(inbox)) {
-    return [];
+    throw new InboxLockedError(inbox, inspectLock(inbox));
   }
 
   try {
