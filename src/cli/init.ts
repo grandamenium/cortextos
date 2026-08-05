@@ -7,6 +7,7 @@ import { ensureDir } from '../utils/atomic.js';
 import { validateOrgName } from '../utils/validate.js';
 import { stripBom } from '../utils/strip-bom.js';
 import type { OrgContext } from '../types/index.js';
+import { interpretHookInstallerOutput } from '../../scripts/hook-status.mjs';
 
 export const initCommand = new Command('init')
   .argument('<org-name>', 'Organization name')
@@ -215,15 +216,19 @@ export const initCommand = new Command('init')
     }
 
     // Best-effort: install the tracked git pre-push hook (build + test gate) so
-    // this clone gets the gate without a manual step. Non-fatal — only runs when
-    // the project is a git repo AND ships the installer; setup-hooks.sh is
-    // non-clobbering, so this is safe to run on every init.
+    // this clone gets the gate without a manual step. Non-fatal — the installer
+    // owns repository detection and is non-clobbering, so this is safe to run
+    // on every init.
     if (process.platform !== 'win32' &&
-        existsSync(join(projectRoot, '.git')) &&
-        existsSync(join(projectRoot, 'scripts', 'setup-hooks.sh'))) {
+      existsSync(join(projectRoot, 'scripts', 'setup-hooks.sh'))) {
       try {
-        execSync('bash scripts/setup-hooks.sh', { cwd: projectRoot, stdio: 'ignore' });
-        console.log('  Installed git pre-push hook (build + test gate)');
+        const hookOutput = execSync('bash scripts/setup-hooks.sh', {
+          cwd: projectRoot,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const hookResult = interpretHookInstallerOutput(hookOutput);
+        console.log(`  ${hookResult.message}`);
       } catch {
         console.log('  Skipped git pre-push hook install (run: bash scripts/setup-hooks.sh)');
       }

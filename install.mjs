@@ -11,6 +11,7 @@ import { execSync, spawnSync } from 'child_process';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, statSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir, platform } from 'os';
+import { pathToFileURL } from 'url';
 
 const REPO_URL = process.env.CORTEXTOS_REPO || 'https://github.com/grandamenium/cortextos.git';
 const INSTALL_DIR = process.env.CORTEXTOS_DIR || join(homedir(), 'cortextos');
@@ -475,8 +476,12 @@ ok('Build complete');
 
 if (!IS_WINDOWS && existsSync(join(INSTALL_DIR, 'scripts', 'setup-hooks.sh'))) {
   try {
-    run('bash scripts/setup-hooks.sh', { cwd: INSTALL_DIR });
-    ok('Installed git pre-push hook (build + test gate)');
+    const hookOutput = run('bash scripts/setup-hooks.sh', { cwd: INSTALL_DIR });
+    const hookStatusModule = pathToFileURL(join(INSTALL_DIR, 'scripts', 'hook-status.mjs')).href;
+    const { interpretHookInstallerOutput } = await import(hookStatusModule);
+    const hookResult = interpretHookInstallerOutput(hookOutput);
+    if (hookResult.level === 'success') ok(hookResult.message);
+    else warn(hookResult.message);
   } catch {
     warn('Could not install git pre-push hook — run manually: bash scripts/setup-hooks.sh');
   }
