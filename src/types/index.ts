@@ -253,6 +253,16 @@ export interface CronEntry {
 //
 // Example records
 // ---------------
+// WARNING: these are crons.json (CronDefinition) examples, not config.json.
+// The `enabled` field shown below belongs to CronDefinition ONLY — CronEntry
+// (config.json, above) has no `enabled` field. Setting `enabled: false` on a
+// config.json cron entry does nothing; it migrates as an enabled live cron
+// regardless. To disable a config.json cron, set `type: "disabled"` instead.
+//
+// Migration REPLACES crons.json, it does not merge: runMigrationCore() (see
+// src/daemon/cron-migration.ts) writes the full crons.json envelope from
+// config.json's crons array alone. A live cron with no config.json
+// counterpart is not preserved — it is deleted on the next migration run.
 //
 // Heartbeat — every 6 hours (interval shorthand):
 // {

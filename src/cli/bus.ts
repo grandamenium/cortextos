@@ -2280,9 +2280,17 @@ busCommand
         case 'migrated':
           console.log(
             `Migrated ${agentArg}: ${result.cronsMigrated} cron(s) migrated` +
-            (result.cronsSkipped?.length ? `, ${result.cronsSkipped.length} skipped (${result.cronsSkipped.join(', ')})` : '')
+            (result.cronsSkipped?.length ? `, ${result.cronsSkipped.length} skipped (${result.cronsSkipped.join(', ')})` : '') +
+            (result.cronsRefused?.length ? `, ${result.cronsRefused.length} REFUSED (${result.cronsRefused.join(', ')})` : '')
           );
           break;
+      }
+
+      // An unknown key/type must gate, not just print — checkable by exit
+      // code, not by reading log text.
+      if (result.cronsRefused?.length) {
+        console.error(`migrate-crons: ${result.cronsRefused.length} entr${result.cronsRefused.length === 1 ? 'y' : 'ies'} refused for "${agentArg}" — see REFUSED lines above.`);
+        process.exitCode = 1;
       }
     } else {
       // All-agents migration
@@ -2292,6 +2300,8 @@ busCommand
       const skippedAlready = summary.results.filter(r => r.status === 'skipped-already-migrated').length;
       const noConfig = summary.results.filter(r => r.status === 'no-config').length;
       const noCrons = summary.results.filter(r => r.status === 'no-crons').length;
+      const totalRefused = summary.results.reduce((sum, r) => sum + (r.cronsRefused?.length ?? 0), 0);
+      const agentsWithRefusals = summary.results.filter(r => (r.cronsRefused?.length ?? 0) > 0);
 
       console.log(`\nMigration summary:`);
       console.log(`  Agents processed    : ${summary.processed}`);
@@ -2299,6 +2309,15 @@ busCommand
       console.log(`  Already migrated    : ${skippedAlready}`);
       console.log(`  No config.json      : ${noConfig}`);
       console.log(`  No crons in config  : ${noCrons}`);
+      console.log(`  Entries refused     : ${totalRefused}`);
+
+      if (totalRefused > 0) {
+        console.error(
+          `migrate-crons: ${totalRefused} entr${totalRefused === 1 ? 'y' : 'ies'} refused across ${agentsWithRefusals.length} agent(s) ` +
+          `(${agentsWithRefusals.map(r => r.agentName).join(', ')}) — see REFUSED lines above.`
+        );
+        process.exitCode = 1;
+      }
     }
   });
 
