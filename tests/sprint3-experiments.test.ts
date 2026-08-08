@@ -9,6 +9,7 @@ import {
   listExperiments,
   gatherContext,
   manageCycle,
+  suggestBaselineFromSurface,
 } from '../src/bus/experiment.js';
 
 describe('Sprint 3: Experiment Framework', () => {
@@ -320,6 +321,88 @@ describe('Sprint 3: Experiment Framework', () => {
       const r = flat(s, 0); // baseline now 5, value 0 → discard, but streak reset
       expect(r.decision).toBe('discard');
       expect(r.guardrail_note ?? null).toBeNull();
+    });
+  });
+
+  describe('G3 baseline drift', () => {
+    it('createExperiment honours an explicit baseline', () => {
+      const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+        surface: 'surfaces/g3.md',
+        baseline: 7,
+      });
+      const exp = JSON.parse(
+        readFileSync(join(testDir, 'experiments', 'history', `${id}.json`), 'utf-8').trim(),
+      );
+      expect(exp.baseline_value).toBe(7);
+    });
+
+    it('suggestBaselineFromSurface returns median of recent results (null when none)', () => {
+      const s = 'surfaces/g3-suggest.md';
+      expect(suggestBaselineFromSurface(testDir, s)).toBeNull();
+
+      // Produce completed results 4, 6, 8 on the surface (baseline 0, higher).
+      for (const v of [4, 6, 8]) {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+          surface: s,
+          direction: 'higher',
+        });
+        runExperiment(testDir, id);
+        evaluateExperiment(testDir, id, v);
+      }
+      // Median of [4,6,8] = 6.
+      expect(suggestBaselineFromSurface(testDir, s)).toBe(6);
+    });
+
+    it('warns when results cluster within ±1 of baseline for 5+ windows', () => {
+      const s = 'surfaces/g3-drift.md';
+      // Fixed baseline 7 via explicit baseline; direction lower so results at
+      // 7 (== baseline) discard without moving the baseline, keeping it pegged.
+      let last: ReturnType<typeof evaluateExperiment> | null = null;
+      for (let i = 0; i < 5; i++) {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+          surface: s,
+          direction: 'lower',
+          baseline: 7,
+        });
+        runExperiment(testDir, id);
+        last = evaluateExperiment(testDir, id, 7); // |7-7|=0 ≤ 1, discard, baseline stays 7
+      }
+      expect(last!.drift_note).toBeTruthy();
+      expect(last!.drift_note).toContain('drift');
+    });
+
+    it('does not warn before 5 clustered windows', () => {
+      const s = 'surfaces/g3-nodrift.md';
+      let last: ReturnType<typeof evaluateExperiment> | null = null;
+      for (let i = 0; i < 4; i++) {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+          surface: s,
+          direction: 'lower',
+          baseline: 7,
+        });
+        runExperiment(testDir, id);
+        last = evaluateExperiment(testDir, id, 7);
+      }
+      expect(last!.drift_note ?? null).toBeNull();
+    });
+
+    it('a result outside ±1 breaks the drift run', () => {
+      const s = 'surfaces/g3-break.md';
+      const mk = (v: number) => {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+          surface: s,
+          direction: 'lower',
+          baseline: 7,
+        });
+        runExperiment(testDir, id);
+        return evaluateExperiment(testDir, id, v);
+      };
+      mk(7);
+      mk(7);
+      mk(20); // far from baseline → breaks the run
+      mk(7);
+      const last = mk(7); // only 2 clustered since the break → no warn
+      expect(last.drift_note ?? null).toBeNull();
     });
   });
 

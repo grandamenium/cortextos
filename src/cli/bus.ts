@@ -9,7 +9,7 @@ import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
 import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
-import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
+import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig, suggestBaselineFromSurface } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
 import { createApproval, updateApproval } from '../bus/approval.js';
@@ -705,13 +705,30 @@ busCommand
   .option('--surface <path>', 'Surface file path')
   .option('--direction <dir>', 'Direction: higher or lower', 'higher')
   .option('--window <dur>', 'Measurement window', '24h')
-  .action(async (metric: string, hypothesis: string, opts: { surface?: string; direction?: string; window?: string }) => {
+  .option('--baseline <n>', 'Explicit starting baseline (default 0)')
+  .action(async (metric: string, hypothesis: string, opts: { surface?: string; direction?: string; window?: string; baseline?: string }) => {
     const env = resolveEnv();
     const agentDir = env.agentDir || process.cwd();
+
+    // G3: if the surface has prior results and no baseline was given, suggest
+    // the median of the last 5 as an informational starting point (stderr, so
+    // stdout stays the bare experiment id for capture). The agent may override
+    // with --baseline; the baseline itself is never auto-applied.
+    if (opts.baseline === undefined && opts.surface) {
+      const suggested = suggestBaselineFromSurface(agentDir, opts.surface);
+      if (suggested !== null) {
+        console.error(
+          `ℹ baseline suggestion for surface '${opts.surface}': ${suggested} ` +
+          `(median of recent results). Pass --baseline to set it; default is 0.`,
+        );
+      }
+    }
+
     const id = createExperiment(agentDir, env.agentName, metric, hypothesis, {
       surface: opts.surface,
       direction: opts.direction as 'higher' | 'lower',
       window: opts.window,
+      baseline: opts.baseline !== undefined ? parseFloat(opts.baseline) : undefined,
     });
     console.log(id);
 
@@ -761,6 +778,9 @@ busCommand
     });
     if (experiment.guardrail_note) {
       console.error(`⚠ ${experiment.guardrail_note}`);
+    }
+    if (experiment.drift_note) {
+      console.error(`⚠ ${experiment.drift_note}`);
     }
     console.log(JSON.stringify(experiment, null, 2));
   });
