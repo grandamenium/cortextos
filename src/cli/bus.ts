@@ -756,6 +756,9 @@ busCommand
       score: opts.score ? parseInt(opts.score, 10) : undefined,
       justification: opts.justification,
     });
+    if (experiment.guardrail_note) {
+      console.error(`⚠ ${experiment.guardrail_note}`);
+    }
     console.log(JSON.stringify(experiment, null, 2));
   });
 
