@@ -2277,6 +2277,19 @@ busCommand
         case 'no-crons':
           console.log(`Skipped ${agentArg}: config.json has no crons — empty crons.json written`);
           break;
+        case 'preserved-existing-crons':
+          console.log(
+            `Preserved ${agentArg}: config.json has no crons to migrate, but crons.json is non-empty — ` +
+            `live crons left untouched`
+          );
+          break;
+        case 'aborted-unparseable-config':
+          console.error(
+            `ABORTED ${agentArg}: config.json could not be parsed. Nothing was written — ` +
+            `crons.json and the migration marker are both untouched. Repair config.json and re-run.`
+          );
+          process.exit(1);
+          break;
         case 'migrated':
           console.log(
             `Migrated ${agentArg}: ${result.cronsMigrated} cron(s) migrated` +
@@ -2292,6 +2305,8 @@ busCommand
       const skippedAlready = summary.results.filter(r => r.status === 'skipped-already-migrated').length;
       const noConfig = summary.results.filter(r => r.status === 'no-config').length;
       const noCrons = summary.results.filter(r => r.status === 'no-crons').length;
+      const preserved = summary.results.filter(r => r.status === 'preserved-existing-crons');
+      const aborted = summary.results.filter(r => r.status === 'aborted-unparseable-config');
 
       console.log(`\nMigration summary:`);
       console.log(`  Agents processed    : ${summary.processed}`);
@@ -2299,6 +2314,17 @@ busCommand
       console.log(`  Already migrated    : ${skippedAlready}`);
       console.log(`  No config.json      : ${noConfig}`);
       console.log(`  No crons in config  : ${noCrons}`);
+      console.log(`  Live crons preserved: ${preserved.length}`);
+      console.log(`  Aborted (bad config): ${aborted.length}`);
+
+      if (aborted.length > 0) {
+        // Name them: a count cannot tell an operator which config.json to repair.
+        console.error(
+          `\nABORTED for ${aborted.length} agent(s) — config.json could not be parsed and nothing ` +
+          `was written for them: ${aborted.map(r => r.agentName).join(', ')}`
+        );
+        process.exit(1);
+      }
     }
   });
 

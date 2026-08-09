@@ -236,6 +236,19 @@ export interface CronEntry {
   /** "recurring" (default) restores on every session start.
    *  "once" restores only if fire_at is still in the future; deleted after firing. */
   type?: 'recurring' | 'once' | 'disabled';
+  /**
+   * Operator pause switch, mirroring `CronDefinition.enabled`.
+   *
+   * Added because it was already being WRITTEN in real config.json files while
+   * being absent from this interface — so the migration reader, which resolved
+   * enabled-ness from `type` alone, silently discarded it. A key that an operator
+   * can write and the reader cannot see is not a no-op: it reads as "this cron is
+   * paused" and behaves as "this cron is live". `enabled: false` here is now
+   * honoured exactly like `type: "disabled"`.
+   *
+   * @default true
+   */
+  enabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
