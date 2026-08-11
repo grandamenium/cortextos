@@ -383,6 +383,32 @@ export class CronScheduler {
         continue;
       }
 
+      // PERSISTED next_fire_at (theta 61) — authoritative when present and in
+      // the future, but ONLY on cold start (a fresh daemon process). Bypasses
+      // the referenceMs recomputation below so that a never-fired (or
+      // crashed-before-first-fire) cron does not slide forward by one interval
+      // on every daemon restart. A stale (past) persisted value falls through
+      // to the normal path, where the catch-up policy + last_fire_attempted_at
+      // guard apply. Skipped on reload: reload preserves unchanged crons via
+      // the changeKey guard above, and any cron reaching here on reload was
+      // modified — its schedule may differ from the one that produced the
+      // stored next_fire_at, so it must recompute.
+      // See docs/architecture/cron-persistent-next-fire.md.
+      if (!isReload && def.next_fire_at) {
+        const persisted = new Date(def.next_fire_at).getTime();
+        if (!isNaN(persisted) && persisted > now) {
+          nextScheduled.set(def.name, {
+            definition: def,
+            nextFireAt: persisted,
+            changeKey: key,
+          });
+          // Skips the fresh-schedule persist below when the future value is
+          // valid — no double-write, keeps the load idempotent across restarts.
+          continue;
+        }
+        // persisted is unparseable or in the past → fall through to catch-up.
+      }
+
       // New or modified cron — compute fresh nextFireAt.
       // Base: take the most recent of crons.json.last_fired_at,
       // crons.json.last_fire_attempted_at (set pre-onFire to detect crash
@@ -416,6 +442,29 @@ export class CronScheduler {
       }
 
       nextScheduled.set(def.name, { definition: def, nextFireAt, changeKey: key });
+
+      // Persist next_fire_at (theta 61) so subsequent restarts anchor to this
+      // computed future value instead of re-deriving from `now`. Only persist
+      // genuine FUTURE anchors: a catch-up fire (nextFireAt clamped to now) is
+      // about to run and its post-fire Site-1 write will persist the real next
+      // value, so writing `now` here would be redundant. Idempotent: skip when
+      // the stored value already matches. Non-fatal: a persist failure leaves
+      // the in-memory schedule authoritative.
+      if (
+        nextFireAt > now &&
+        (!def.next_fire_at || new Date(def.next_fire_at).getTime() !== nextFireAt)
+      ) {
+        try {
+          updateCron(this.agentName, def.name, {
+            next_fire_at: new Date(nextFireAt).toISOString(),
+          });
+        } catch (err) {
+          this.logger(
+            `[cron-scheduler] failed to persist next_fire_at for "${def.name}": ` +
+            `${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
     }
 
     // LAST-GOOD-SCHEDULE FALLBACK (corruption-only)
@@ -496,10 +545,15 @@ export class CronScheduler {
         // crash the tick loop — we log and keep the in-memory schedule intact.
         const nowIso = new Date(now).toISOString();
         const newFireCount = (cron.fire_count ?? 0) + 1;
+        // Compute the next fire once and persist it (theta 61) so a restart
+        // before the next tick re-anchors from this value instead of `now`.
+        const next = computeNextFireAt(cron, now);
+        const nextFireIso = isNaN(next) ? null : new Date(next).toISOString();
         try {
           updateCron(this.agentName, name, {
             last_fired_at: nowIso,
             fire_count: newFireCount,
+            ...(nextFireIso ? { next_fire_at: nextFireIso } : {}),
           });
         } catch (err) {
           this.logger(
@@ -509,11 +563,10 @@ export class CronScheduler {
           );
         }
 
-        // Advance in-memory nextFireAt
-        const next = computeNextFireAt(cron, now);
+        // Advance in-memory nextFireAt (reuse the value computed above)
         if (!isNaN(next)) {
           sc.nextFireAt = next;
-          sc.definition = { ...cron, last_fired_at: nowIso, fire_count: newFireCount };
+          sc.definition = { ...cron, last_fired_at: nowIso, fire_count: newFireCount, next_fire_at: nextFireIso };
         } else {
           // Unrecognised schedule after fire — remove from schedule to avoid infinite loops
           this.scheduled.delete(name);

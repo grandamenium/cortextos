@@ -343,9 +343,10 @@ describe('CronScheduler', () => {
     await vi.advanceTimersByTimeAsync(60_000 + TICK + 1_000 + 500);
 
     expect(flakyFire).toHaveBeenCalledTimes(2);
-    // 2 updateCron calls: 1 pre-fire attempted_at (iter 11) + 1 post-success
-    // last_fired_at/fire_count.
-    expect(mockUpdateCron).toHaveBeenCalledTimes(2);
+    // 3 updateCron calls: 1 fresh-schedule next_fire_at persist during load
+    // (theta 61, future anchor for this '1m' cron) + 1 pre-fire attempted_at
+    // (iter 11) + 1 post-success last_fired_at/fire_count.
+    expect(mockUpdateCron).toHaveBeenCalledTimes(3);
     expect(mockUpdateCron).toHaveBeenCalledWith(
       'test-agent',
       'test-cron',
@@ -793,5 +794,125 @@ describe('CronScheduler', () => {
     expect(names).toContain('a');
     expect(names).toContain('b');
     expect(names).not.toContain('c'); // disabled, not scheduled
+  });
+
+  // -------------------------------------------------------------------------
+  // theta 61 — persisted next_fire_at (anti-drift on daemon restart)
+  // Each "restart" is modelled as a fresh CronScheduler instance whose
+  // mocked crons.json carries the previously-persisted next_fire_at.
+  // -------------------------------------------------------------------------
+  describe('persisted next_fire_at (theta 61)', () => {
+    const WEEK = 168 * 60 * 60 * 1000;
+    const SIXH = 6 * 60 * 60 * 1000;
+    const T0 = new Date('2026-08-11T06:00:00.000Z').getTime();
+
+    function freshScheduler(localLogs: string[], localFired?: CronDefinition[]): CronScheduler {
+      return new CronScheduler({
+        agentName: 'test-agent',
+        onFire: (cron) => { localFired?.push(cron); return true; },
+        logger: (m) => { localLogs.push(m); },
+      });
+    }
+
+    it('Test 1: never-fired cron survives restart without drift', () => {
+      vi.setSystemTime(T0);
+      mockReadCrons.mockReturnValue([makeCron({ name: 'weekly', schedule: '168h' })]);
+      const a = freshScheduler([]);
+      a.start();
+      const first = a.getNextFireTimes().find(e => e.name === 'weekly')!.nextFireAt;
+      expect(first).toBe(T0 + WEEK);
+      // fresh-schedule persist wrote the future anchor
+      expect(mockUpdateCron).toHaveBeenCalledWith(
+        'test-agent', 'weekly',
+        expect.objectContaining({ next_fire_at: new Date(T0 + WEEK).toISOString() }),
+      );
+      a.stop();
+
+      // Restart 1h later; crons.json now carries the persisted next_fire_at.
+      vi.setSystemTime(T0 + 60 * 60 * 1000);
+      mockReadCrons.mockReturnValue([makeCron({
+        name: 'weekly', schedule: '168h',
+        next_fire_at: new Date(T0 + WEEK).toISOString(),
+      })]);
+      const b = freshScheduler([]);
+      b.start();
+      const after = b.getNextFireTimes().find(e => e.name === 'weekly')!.nextFireAt;
+      expect(after).toBe(T0 + WEEK); // NOT (T0 + 1h) + WEEK
+      b.stop();
+    });
+
+    it('Test 2: successfully-fired cron preserves future next_fire_at across restart', () => {
+      vi.setSystemTime(T0 + SIXH - 30_000);
+      mockReadCrons.mockReturnValue([makeCron({
+        name: 'sixh', schedule: '6h',
+        last_fired_at: new Date(T0).toISOString(),
+        next_fire_at: new Date(T0 + SIXH).toISOString(),
+      })]);
+      const s = freshScheduler([]);
+      s.start();
+      expect(s.getNextFireTimes().find(e => e.name === 'sixh')!.nextFireAt).toBe(T0 + SIXH);
+      s.stop();
+    });
+
+    it('Test 3: stale persisted next_fire_at falls through to catch-up', async () => {
+      vi.setSystemTime(T0);
+      const fired: CronDefinition[] = [];
+      const s = freshScheduler([], fired);
+      mockReadCrons.mockReturnValue([makeCron({
+        name: 'stale', schedule: '1m',
+        last_fired_at: new Date(T0 - 5 * 60_000).toISOString(),
+        next_fire_at: new Date(T0 - 4 * 60_000).toISOString(), // past → not authoritative
+      })]);
+      s.start();
+      await vi.advanceTimersByTimeAsync(TICK);
+      expect(fired.length).toBeGreaterThanOrEqual(1); // catch-up fired once immediately
+      s.stop();
+    });
+
+    it('Test 4: next_fire_at persisted on every successful fire', async () => {
+      vi.setSystemTime(T0);
+      const s = freshScheduler([], []);
+      mockReadCrons.mockReturnValue([makeCron({ name: 'oneMin', schedule: '1m' })]);
+      s.start();
+      mockUpdateCron.mockClear(); // ignore the fresh-schedule persist during start()
+      await vi.advanceTimersByTimeAsync(60_000 + TICK);
+      const postFire = mockUpdateCron.mock.calls.find(
+        c => c[1] === 'oneMin' && c[2] && 'last_fired_at' in c[2] && 'next_fire_at' in c[2],
+      );
+      expect(postFire).toBeDefined();
+      s.stop();
+    });
+
+    it('Test 5: persist-write failure does not crash the load', () => {
+      vi.setSystemTime(T0);
+      const localLogs: string[] = [];
+      mockUpdateCron.mockImplementation(() => { throw new Error('ENOSPC'); });
+      mockReadCrons.mockReturnValue([makeCron({ name: 'w', schedule: '6h' })]);
+      const s = freshScheduler(localLogs);
+      expect(() => s.start()).not.toThrow();
+      expect(s.getNextFireTimes().find(e => e.name === 'w')).toBeDefined(); // schedule intact
+      expect(localLogs.some(l => l.includes('failed to persist next_fire_at'))).toBe(true);
+      s.stop();
+    });
+
+    it('Test 6: schedule change on reload recomputes next_fire_at (ignores stale persisted)', () => {
+      vi.setSystemTime(T0);
+      mockReadCrons.mockReturnValue([makeCron({ name: 'chg', schedule: '12h' })]);
+      const s = freshScheduler([]);
+      s.start();
+      const before = s.getNextFireTimes().find(e => e.name === 'chg')!.nextFireAt;
+      expect(before).toBe(T0 + 12 * 60 * 60 * 1000);
+
+      // Modify the schedule; crons.json still holds the OLD (future) next_fire_at.
+      mockReadCrons.mockReturnValue([makeCron({
+        name: 'chg', schedule: '168h',
+        next_fire_at: new Date(T0 + 12 * 60 * 60 * 1000).toISOString(),
+      })]);
+      s.reload();
+      const after = s.getNextFireTimes().find(e => e.name === 'chg')!.nextFireAt;
+      expect(after).toBe(T0 + WEEK); // recomputed from now for the new schedule
+      expect(after).not.toBe(before);
+      s.stop();
+    });
   });
 });
