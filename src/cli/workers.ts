@@ -10,14 +10,15 @@ export const spawnWorkerCommand = new Command('spawn-worker')
   .requiredOption('--prompt <text>', 'Task prompt to inject at session start')
   .option('--parent <agent>', 'Parent agent name (for bus reply routing)')
   .option('--model <model>', 'Claude model to use (defaults to org default)')
-  .action(async (name: string, opts: { dir: string; prompt: string; parent?: string; model?: string }) => {
+  .option('--runtime <runtime>', 'Runtime to use: claude (default) or codex')
+  .action(async (name: string, opts: { dir: string; prompt: string; parent?: string; model?: string; runtime?: string }) => {
     const env = resolveEnv();
     const client = new IPCClient(env.instanceId);
     const dir = resolve(opts.dir);
 
     const response = await client.send({
       type: 'spawn-worker',
-      data: { name, dir, prompt: opts.prompt, parent: opts.parent, model: opts.model },
+      data: { name, dir, prompt: opts.prompt, parent: opts.parent, model: opts.model, runtime: opts.runtime },
     });
 
     if (response.success) {

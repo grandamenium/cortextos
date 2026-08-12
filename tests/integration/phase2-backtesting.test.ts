@@ -53,6 +53,12 @@ import type { CronDefinition, CronExecutionLogEntry } from '../../src/types/inde
 const TICK_MS    = 30_000;   // CronScheduler.TICK_INTERVAL_MS
 const ONE_MIN    = 60_000;
 const ONE_HOUR   = 3_600_000;
+// Matches CronScheduler.INJECTION_STAGGER_MS — the additive per-cron gap the
+// scheduler inserts between consecutive same-agent injections so their PTY paste
+// sequences don't collide.  Crons due in the same tick fire (non-blocking) at
+// TICK_MS + i * STAGGER_MS; advanceSim() below drains that window at each step
+// boundary so count snapshots don't miss a just-staggered fire.
+const STAGGER_MS = 1_500;
 const SIM_12H    = 12 * ONE_HOUR;
 const SIM_24H    = 24 * ONE_HOUR;
 const SIM_72H    = 72 * ONE_HOUR;
@@ -267,13 +273,22 @@ function readExecLog(agentName: string): CronExecutionLogEntry[] {
   return raw.split('\n').filter(l => l.trim()).map(l => JSON.parse(l) as CronExecutionLogEntry);
 }
 
-/** Advance fake timers in stepMs increments for totalMs. */
+/** Advance fake timers in stepMs increments for totalMs.
+ *
+ * After reaching totalMs, drain a short stagger window: a cron that catches up on
+ * a tick that lands exactly on the requested boundary is dispatched non-blocking
+ * and staggered a few seconds past it (cron i at +i * STAGGER_MS).  Without this
+ * drain, a count snapshot taken right after advanceSim() would miss that fire.
+ * The agents here have ≤4 crons/tick, so 6 × STAGGER_MS covers the worst case; the
+ * ~9s of extra simulated time is negligible against the 12h+ windows these tests
+ * measure and never crosses an hourly cadence to add a spurious fire. */
 async function advanceSim(totalMs: number, stepMs = ONE_MIN): Promise<void> {
   const steps = Math.ceil(totalMs / stepMs);
   for (let i = 0; i < steps; i++) {
     const remaining = totalMs - i * stepMs;
     await vi.advanceTimersByTimeAsync(Math.min(stepMs, remaining));
   }
+  await vi.advanceTimersByTimeAsync(6 * STAGGER_MS);
 }
 
 /** Event type accumulated by onFire callbacks. */

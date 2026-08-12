@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -281,6 +282,37 @@ def embed_query(client, config, query_text):
     return embed_content(client, config, query_text, task_type="RETRIEVAL_QUERY")
 
 
+def embed_query_rest(api_key, config, query_text, timeout=20):
+    """Embed a query string via the REST embedContent endpoint (stdlib only).
+
+    PERF: importing `google.genai` costs 18-50s on a loaded host (451MB venv,
+    heavy transitive imports) — which alone blew past the caller's execFileSync
+    timeout and made every kb-query look like an empty result. The query path
+    needs exactly one text embedding, so it does not need the SDK at all.
+
+    Verified byte-identical to the SDK path (max elementwise diff 0.0, cosine
+    1.0) for the same model / output_dimensionality / task_type, at ~1s instead
+    of ~24s. Ingest still uses the SDK because multimodal Parts need it.
+    """
+    model = config.get("embedding_model", "gemini-embedding-2-preview")
+    body = json.dumps({
+        "model": f"models/{model}",
+        "content": {"parts": [{"text": query_text}]},
+        "taskType": "RETRIEVAL_QUERY",
+        "outputDimensionality": config.get("embedding_dimensions", DEFAULT_EMBEDDING_DIMENSIONS),
+    }).encode()
+    req = urllib.request.Request(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent?key={api_key}",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.load(resp)
+    if _tracker:
+        _tracker.track_embedding(query_text)
+    return payload["embedding"]["values"]
+
+
 def describe_media(client, config, file_path, media_type="video"):
     """Use Gemini Flash to generate a text description of media."""
     from google.genai import types
@@ -496,12 +528,41 @@ def file_id(path, chunk_idx=None):
 # ---------------------------------------------------------------------------
 # Ingest logic
 # ---------------------------------------------------------------------------
-def already_exists(collection, doc_id):
-    """Check if a document ID already exists in the collection. Respects --force flag."""
+def content_hash(path):
+    """sha256 of a file's bytes — identity by CONTENT, not by path.
+
+    file_id() hashes only the path, so a doc_id is stable across edits. That
+    made the old existence check unable to tell "unchanged" from "modified":
+    without --force an edited file was skipped forever, and with --force every
+    file was re-embedded on every run. Callers pass this hash so an unchanged
+    file is skipped and a changed one is re-ingested.
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(131072), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def already_exists(collection, doc_id, file_hash=None):
+    """True if doc_id is present AND its content is unchanged.
+
+    Respects --force (always re-ingest). When file_hash is supplied it is
+    compared against the stored file_hash metadata: a mismatch means the file
+    was edited, so we report False and let the caller re-embed and upsert.
+    Records ingested before content hashing have no stored hash — treat those
+    as stale once so they pick up a hash on the next run.
+    """
     if args_force:
         return False
-    existing = collection.get(ids=[doc_id])
-    return bool(existing and existing["ids"])
+    existing = collection.get(ids=[doc_id], include=["metadatas"])
+    if not (existing and existing["ids"]):
+        return False
+    if file_hash is None:
+        return True
+    metas = existing.get("metadatas") or [{}]
+    stored = (metas[0] or {}).get("file_hash")
+    return stored == file_hash
 
 
 def ingest_text_file(client, config, collection, file_path):
@@ -518,10 +579,12 @@ def ingest_text_file(client, config, collection, file_path):
         overlap=config.get("text_chunk_overlap", DEFAULT_TEXT_CHUNK_OVERLAP),
     )
 
+    fhash = content_hash(file_path)
+
     count = 0
     for i, chunk in enumerate(chunks):
         doc_id = file_id(file_path, i)
-        if already_exists(collection, doc_id):
+        if already_exists(collection, doc_id, fhash):
             continue
 
         embedding = embed_content(client, config, chunk)
@@ -536,6 +599,7 @@ def ingest_text_file(client, config, collection, file_path):
                 "total_chunks": len(chunks),
                 "filename": file_path.name,
                 "file_ext": file_path.suffix.lower(),
+                "file_hash": fhash,
                 "ingested_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             }],
         )
@@ -1155,7 +1219,7 @@ def cmd_query(args):
     _tracker = UsageTracker("query")
 
     config = load_config()
-    client = get_genai_client(get_api_key(config))
+    api_key = get_api_key(config)
     collection_name = args.collection or config.get("default_collection", "default")
     collection = get_chroma_collection(collection_name)
 
@@ -1170,7 +1234,7 @@ def cmd_query(args):
     show_full = args.full
     type_filter = args.type  # e.g., "image", "video", "text", "pdf"
 
-    query_embedding = embed_query(client, config, args.question)
+    query_embedding = embed_query_rest(api_key, config, args.question)
 
     # Build ChromaDB where filter for type
     where_filter = None

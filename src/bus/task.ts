@@ -243,7 +243,6 @@ export function findTaskFile(paths: BusPaths, taskId: string): string | null {
     return null; // orgs/ missing or unreadable
   }
 
-  if (matches.length === 0) return null;
   if (matches.length > 1) {
     const orgList = matches.map((m) => m.org).join(', ');
     console.warn(
@@ -252,7 +251,65 @@ export function findTaskFile(paths: BusPaths, taskId: string): string | null {
       `Review task ID generation if this recurs.`,
     );
   }
-  return matches[0].path;
+  if (matches.length > 0) return matches[0].path;
+
+  // Prefix-match fallback. Agents commonly pass the timestamp-only id
+  // (`task_<epoch>`) while the on-disk file carries the random suffix
+  // (`task_<epoch>_<rand>.json`). No exact match was found above, so scan
+  // for files whose name is `<taskId>.json` or starts with `<taskId>_`.
+  // Same-org dir first (mirrors the fast path), then every sibling org.
+  const prefixMatches: Array<{ path: string; org: string }> = [];
+  scanPrefixDir(paths.taskDir, taskId, '(self)', prefixMatches);
+  try {
+    for (const entry of readdirSync(orgsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(orgsRoot, entry.name, 'tasks');
+      if (dir === paths.taskDir) continue; // already scanned above
+      scanPrefixDir(dir, taskId, entry.name, prefixMatches);
+    }
+  } catch { /* orgs/ missing or unreadable — self-scan result stands */ }
+
+  if (prefixMatches.length === 0) return null;
+  if (prefixMatches.length > 1) {
+    const list = prefixMatches.map((m) => `${m.org}:${m.path.split(/[\\/]/).pop()}`).join(', ');
+    throw new Error(
+      `Ambiguous task id prefix '${taskId}': matched ${prefixMatches.length} tasks (${list}). ` +
+      `Pass the full task id (including the _<random> suffix) to disambiguate.`,
+    );
+  }
+  console.warn(
+    `[task] Resolved partial task id '${taskId}' to '${prefixMatches[0].path.split(/[\\/]/).pop()}' ` +
+    `via prefix match. Prefer passing the full task id.`,
+  );
+  return prefixMatches[0].path;
+}
+
+/**
+ * Scan a single tasks dir for files matching `taskId` by prefix and push
+ * any hits into `out`. A file matches if its name is exactly
+ * `<taskId>.json` or begins with `<taskId>_` (the suffixed form). Missing
+ * or unreadable dirs are silently skipped.
+ */
+function scanPrefixDir(
+  dir: string,
+  taskId: string,
+  org: string,
+  out: Array<{ path: string; org: string }>,
+): void {
+  let files: string[];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return;
+  }
+  const exact = `${taskId}.json`;
+  const prefix = `${taskId}_`;
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    if (f === exact || f.startsWith(prefix)) {
+      out.push({ path: join(dir, f), org });
+    }
+  }
 }
 
 /**

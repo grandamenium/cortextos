@@ -63,6 +63,12 @@ import type { CronDefinition, CronExecutionLogEntry } from '../../src/types/inde
 const TICK_MS    = 30_000;
 const ONE_MIN    = 60_000;
 const ONE_HOUR   = 3_600_000;
+// Matches CronScheduler.INJECTION_STAGGER_MS — the additive per-cron gap the
+// scheduler inserts between consecutive same-agent injections so their PTY
+// paste sequences don't collide.  When N crons fire in one tick, cron i fires
+// at TICK_MS + i * STAGGER_MS, so batch tests must advance the fake clock by
+// at least TICK_MS + (N-1) * STAGGER_MS to see them all.
+const STAGGER_MS = 1_500;
 
 // ---------------------------------------------------------------------------
 // Per-test environment wiring (same pattern as phase5-e2e-simulation.test.ts)
@@ -667,8 +673,10 @@ describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift',
 
     scheduler.start();
 
-    // Advance by 2 ticks (30s × 2 = 1 min) — enough for all catch-up fires
-    await vi.advanceTimersByTimeAsync(2 * TICK_MS);
+    // All 100 crons catch-up on the first tick, but the scheduler staggers their
+    // injections by STAGGER_MS each (cron i fires at TICK_MS + i * STAGGER_MS) so
+    // the PTY paste sequences don't collide.  Advance past the last one.
+    await vi.advanceTimersByTimeAsync(TICK_MS + CRON_COUNT * STAGGER_MS + 5_000);
 
     // All 100 crons fired exactly once (catch-up)
     let totalFires = 0;
@@ -707,13 +715,17 @@ describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift',
     scheduler.stop();
   }, 30_000);
 
-  it('50 crons with slow PTY (5ms each): tick latency stays under TICK_INTERVAL_MS', async () => {
+  it('50 crons with slow PTY (5ms each): fires are staggered, tick never blocks', async () => {
     // Quantifies the sequential-fire drift concern from architectural finding AF-2.
+    // The scheduler dispatches each fire non-blocking (tick() returns immediately)
+    // and staggers consecutive same-agent injections by STAGGER_MS so their PTY
+    // paste sequences don't collide.
     const agent = 'fm-slow-pty';
     ensureAgentDir(agent);
 
+    const CRON_COUNT = 50;
     const pastTime = new Date(Date.now() - 2 * ONE_HOUR).toISOString();
-    for (let i = 0; i < 50; i++) {
+    for (let i = 0; i < CRON_COUNT; i++) {
       addCron(agent, makeCronDef(`slow-${i}`, '1h', { last_fired_at: pastTime }));
     }
 
@@ -725,10 +737,11 @@ describe('FM-5: Catch-up storm — 100+ overdue crons, bounded + no tick drift',
     });
 
     scheduler.start();
-    await vi.advanceTimersByTimeAsync(TICK_MS + 50 * 5 + 1000);
+    // cron i fires at TICK_MS + i * STAGGER_MS; advance past the last + PTY delay.
+    await vi.advanceTimersByTimeAsync(TICK_MS + CRON_COUNT * STAGGER_MS + 1000);
 
     // All 50 crons fired
-    expect(callCount).toBe(50);
+    expect(callCount).toBe(CRON_COUNT);
 
     scheduler.stop();
   }, 30_000);
@@ -1219,18 +1232,20 @@ describe('AF-2: Sequential fire under slow PTY — drift quantification', () => 
     });
 
     scheduler.start();
-    await vi.advanceTimersByTimeAsync(2 * TICK_MS + 50 * 10 + 2000);
+    // Fires are staggered by STAGGER_MS each (cron i at TICK_MS + i * STAGGER_MS)
+    // so consecutive PTY injections don't collide; advance past the last one.
+    await vi.advanceTimersByTimeAsync(TICK_MS + 50 * STAGGER_MS + 50 * 10 + 2000);
 
     expect(callCount).toBe(50);
-    // 50 × 10ms = 500ms — still well under TICK_INTERVAL_MS (30s)
+    // Dispatch is non-blocking: tick() returns immediately, so the 50 fires spread
+    // over 50 × STAGGER_MS of wall-clock without ever blocking the 30s tick loop.
     scheduler.stop();
   }, 30_000);
 
-  it('100 crons × 10ms PTY delay: 1s tick latency — acceptable, documented scaling limit', async () => {
-    // Documented finding: 100 crons × 10ms = 1s tick latency.
-    // This is acceptable (30s TICK_INTERVAL_MS has plenty of headroom).
-    // Scale limit: ~3000 crons × 10ms = 30s (would fill TICK_INTERVAL_MS).
-    // Promise.all parallelization is the path for scale beyond this threshold.
+  it('100 crons × 10ms PTY delay: staggered dispatch, non-blocking tick', async () => {
+    // Fires are dispatched non-blocking and staggered by STAGGER_MS each, so 100
+    // catch-up crons drain over ~100 × STAGGER_MS of wall-clock (cron i fires at
+    // TICK_MS + i * STAGGER_MS) without ever blocking the 30s tick loop.
     const agent = 'af-drift-100';
     ensureAgentDir(agent);
 
@@ -1246,8 +1261,8 @@ describe('AF-2: Sequential fire under slow PTY — drift quantification', () => 
     });
 
     scheduler.start();
-    // 100 × 10ms = 1s; advance 3 ticks to ensure all fire
-    await vi.advanceTimersByTimeAsync(3 * TICK_MS + 100 * 10 + 3000);
+    // cron i fires at TICK_MS + i * STAGGER_MS; advance past the last + PTY delay.
+    await vi.advanceTimersByTimeAsync(TICK_MS + 100 * STAGGER_MS + 100 * 10 + 3000);
 
     expect(callCount).toBe(100);
     scheduler.stop();

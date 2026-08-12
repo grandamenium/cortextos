@@ -170,6 +170,30 @@ export function queryKnowledgeBase(
       break;
   }
 
+  // A hung KB query used to be indistinguishable from an empty one: the old
+  // 30s timeout was longer than a healthy query but SHORTER than the degraded
+  // one, so python got SIGTERM'd mid-flight and the bare `catch { return null }`
+  // turned that into "0 results". Operators saw a 60s stall (two collections,
+  // serially) followed by a confident, wrong "No results found".
+  //
+  // Agents need a FAST, LOUD failure they can handle.
+  //
+  // Chief specified a 15s floor. Measured healthy latency on this host is
+  // 17-22s — `import chromadb` alone costs ~9s and PersistentClient init ~2.6s
+  // at load average ~40-47 (18-agent fleet). 15s would mark a WORKING KB as
+  // permanently down, so the default is 30s: still bounded, still loud, still
+  // half the old silent 60s stall. Lower it via KB_QUERY_TIMEOUT_MS once host
+  // load is back to sane levels — the floor allows down to 5s.
+  const KB_QUERY_TIMEOUT_FLOOR_MS = 5_000;
+  const KB_QUERY_TIMEOUT_DEFAULT_MS = 30_000;
+  const requestedQueryTimeout = Number(process.env.KB_QUERY_TIMEOUT_MS);
+  const queryTimeoutMs = Math.max(
+    KB_QUERY_TIMEOUT_FLOOR_MS,
+    Number.isFinite(requestedQueryTimeout) && requestedQueryTimeout > 0
+      ? requestedQueryTimeout
+      : KB_QUERY_TIMEOUT_DEFAULT_MS,
+  );
+
   const runQuery = (col: string): string | null => {
     try {
       return execFileSync(pythonPath, [
@@ -180,10 +204,25 @@ export function queryKnowledgeBase(
         '--json',
       ], {
         encoding: 'utf-8',
-        timeout: 30000,
+        timeout: queryTimeoutMs,
         env,
       });
-    } catch {
+    } catch (err) {
+      // Distinguish "the KB timed out / crashed" from "the KB had nothing".
+      // Conflating the two is what made this outage invisible for a week.
+      const e = err as NodeJS.ErrnoException & { signal?: string; stderr?: Buffer | string };
+      const timedOut = e.code === 'ETIMEDOUT' || e.signal === 'SIGTERM';
+      if (timedOut) {
+        throw new Error(
+          `[kb] ETIMEDOUT: query against collection '${col}' exceeded ${queryTimeoutMs}ms and was killed. ` +
+          `The knowledge base is degraded — treat this as a failure, not an empty result. ` +
+          `Override with KB_QUERY_TIMEOUT_MS if this is a legitimately slow host.`,
+        );
+      }
+      const stderr = e.stderr ? String(e.stderr).trim().split('\n').slice(-3).join(' | ') : '';
+      console.warn(
+        `[kb] Query against collection '${col}' failed: ${e.message}${stderr ? ` — ${stderr}` : ''}`,
+      );
       return null;
     }
   };
@@ -214,25 +253,25 @@ export function queryKnowledgeBase(
     }
   };
 
-  try {
-    let allResults: KBQueryResult[] = [];
-    let lastCollection = `shared-${org}`;
-    for (const col of collections) {
-      const output = runQuery(col);
-      allResults = allResults.concat(parseOutput(output));
-      lastCollection = col;
-    }
+  // NOTE: deliberately NOT wrapped in a try/catch. A timeout thrown by
+  // runQuery must reach the caller — swallowing it here is precisely the bug
+  // that let a fully-down KB masquerade as an empty one. Genuine per-collection
+  // errors are already logged and downgraded to null inside runQuery.
+  let allResults: KBQueryResult[] = [];
+  let lastCollection = `shared-${org}`;
+  for (const col of collections) {
+    const output = runQuery(col);
+    allResults = allResults.concat(parseOutput(output));
+    lastCollection = col;
+  }
 
-    if (allResults.length > 0) {
-      return {
-        results: allResults,
-        total: allResults.length,
-        query: question,
-        collection: collections.length === 1 ? lastCollection : `shared-${org}`,
-      };
-    }
-  } catch {
-    // Failed — return empty
+  if (allResults.length > 0) {
+    return {
+      results: allResults,
+      total: allResults.length,
+      query: question,
+      collection: collections.length === 1 ? lastCollection : `shared-${org}`,
+    };
   }
 
   return { results: [], total: 0, query: question, collection: `shared-${org}` };

@@ -57,6 +57,10 @@ import type { CronDefinition, CronExecutionLogEntry, BusPaths } from '../../src/
 const TICK_MS = 30_000;  // CronScheduler.TICK_INTERVAL_MS
 const ONE_MIN = 60_000;
 const ONE_HOUR = 3_600_000;
+// Matches CronScheduler.INJECTION_STAGGER_MS — the additive per-cron gap the
+// scheduler inserts between consecutive same-agent injections so their PTY paste
+// sequences don't collide.  Per agent, cron i fires at TICK_MS + i * STAGGER_MS.
+const STAGGER_MS = 1_500;
 const SIM_72H = 72 * ONE_HOUR;
 
 const CRONS_DIR = '.cortextOS/state/agents';
@@ -899,8 +903,11 @@ describe('Scenario 7: Concurrent scheduler ticks don\'t corrupt crons.json', () 
       schedulers.push(s);
     }
 
-    // One tick: all 5 schedulers fire all 3 crons concurrently
-    await vi.advanceTimersByTimeAsync(TICK_MS + 2_000);
+    // One tick: all 5 schedulers catch-up their 3 crons.  Each scheduler staggers
+    // its own crons by STAGGER_MS (cron i at TICK_MS + i * STAGGER_MS); the 5
+    // agents are independent and stagger in parallel.  Advance past each agent's
+    // 3rd cron.
+    await vi.advanceTimersByTimeAsync(TICK_MS + 3 * STAGGER_MS + 2_000);
 
     schedulers.forEach(s => s.stop());
 
