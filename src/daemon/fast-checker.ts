@@ -4,7 +4,7 @@ import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
-import { checkInbox, ackInbox } from '../bus/message.js';
+import { checkInbox, ackInbox, InboxLockedError } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -48,6 +48,8 @@ export class FastChecker {
   private telegramApi?: TelegramAPI;
   private chatId?: string;
   private allowedUserId?: number;
+  /** Consecutive poll cycles the inbox could not be READ (lock held). Not the same as an empty inbox. */
+  private inboxLockedCycles = 0;
 
   // External Telegram handler (set by daemon)
   private telegramMessages: Array<{ formatted: string; ackIds: string[] }> = [];
@@ -195,8 +197,30 @@ export class FastChecker {
       hasTelegramMessage = true;
     }
 
-    // Check agent inbox
-    const inboxMessages = checkInbox(this.paths);
+    // Check agent inbox.
+    //
+    // A locked inbox is NOT an empty one. Swallowing this is how an agent goes
+    // silently deaf: the poll cycle sees no messages, injects nothing, and the
+    // agent reports a clean inbox while mail piles up behind an abandoned lock.
+    // Log it loudly every cycle — a failure nobody can see is a failure nobody
+    // can fix. The lock now self-heals once it ages past LOCK_STALE_MS, so this
+    // should be transient; if it is not, the log is the only thing that will
+    // ever say so.
+    let inboxMessages: InboxMessage[] = [];
+    try {
+      inboxMessages = checkInbox(this.paths);
+      this.inboxLockedCycles = 0;
+    } catch (err) {
+      if (err instanceof InboxLockedError) {
+        this.inboxLockedCycles++;
+        this.log(
+          `INBOX NOT READ (cycle ${this.inboxLockedCycles}): ${err.message} ` +
+          `Messages may be queued and undelivered.`,
+        );
+      } else {
+        throw err;
+      }
+    }
     for (const msg of inboxMessages) {
       messageBlock += this.formatInboxMessage(msg);
       ackIds.push(msg.id);
