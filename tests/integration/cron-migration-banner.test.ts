@@ -248,7 +248,11 @@ describe('migrateCronsForAgent — cron-teaching upgrade banner', () => {
       { log: cap.log },
     );
 
-    expect(result.status).toBe('no-crons');
+    // A corrupt config.json now ABORTS the data migration (it used to degrade to an
+    // empty write plus the marker, which destroyed a live crons.json on --force).
+    // The point of THIS test is unchanged: the advisory is independent of the data
+    // migration, so it still runs and still does not throw when migration fails.
+    expect(result.status).toBe('aborted-unparseable-config');
     const banner = cap.lines.find((l) =>
       l.includes('cron-teaching upgrade recommended'),
     );

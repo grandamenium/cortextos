@@ -22,6 +22,24 @@
  *
  * ## Non-destructive
  * The original `crons` array in config.json is never modified.
+ *
+ * ## --force is a re-migration against a LIVE store, not a bootstrap
+ * `force: true` deletes the marker BEFORE the idempotency gate, so the whole body
+ * re-runs against a crons.json that is by then the authoritative daemon-managed
+ * store — one that has drifted from config.json on purpose (crons added, renamed,
+ * re-scheduled and paused through `update-cron` and the dashboard, none of which
+ * write back to config.json). Three guards exist for that case, and all three are
+ * load-bearing only on the `--force` path:
+ *
+ *   1. A source with nothing to migrate (config.json missing, or no crons array)
+ *      never overwrites a NON-EMPTY crons.json. Note that "no crons array" is the
+ *      normal steady state for every already-migrated agent, which makes the most
+ *      innocuous-looking config the most destructive input.
+ *   2. An UNPARSEABLE config.json aborts outright — no crons write, no marker.
+ *   3. A cron paused in the live store is not re-enabled by re-migrating it.
+ *
+ * `readCrons` is called for (1) and (3); before it was called nowhere here, which
+ * is what made a merge impossible by construction.
  */
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'fs';
@@ -166,8 +184,15 @@ function convertEntry(
   // Treat absent `type` as "recurring" (spec requirement)
   const effectiveType = type ?? 'recurring';
 
+  // Resolve pause intent AT THE READER, from every spelling an operator can write,
+  // rather than from one field we happen to model. `type: "disabled"` and
+  // `enabled: false` are two spellings of one instruction; honouring only the first
+  // meant the second was silently inert while looking authoritative on disk.
+  const disabledByType = effectiveType === 'disabled';
+  const disabledByFlag = entry.enabled === false;
+
   // Disabled crons: migrate as disabled (preserve operator intent)
-  if (effectiveType === 'disabled') {
+  if (disabledByType || disabledByFlag) {
     // Disabled entries still need a schedule — use interval or cron expression if present
     const schedule = cronExpr ?? interval;
     if (!schedule) {
@@ -252,8 +277,24 @@ export interface MigrationOptions {
 export interface MigrationResult {
   /** Agent name processed. */
   agentName: string;
-  /** Disposition: skipped-already-migrated | no-config | no-crons | migrated */
-  status: 'skipped-already-migrated' | 'no-config' | 'no-crons' | 'migrated';
+  /**
+   * Disposition.
+   *
+   * `preserved-existing-crons` — the source had nothing to migrate (config.json
+   * missing, or carrying no crons array) but the destination crons.json was
+   * NON-EMPTY. The live store is left untouched and the marker is (re)written.
+   *
+   * `aborted-unparseable-config` — config.json could not be parsed. Nothing is
+   * written: not crons.json, not the marker. See `runMigrationCore` for why this
+   * aborts rather than degrading to an empty write.
+   */
+  status:
+    | 'skipped-already-migrated'
+    | 'no-config'
+    | 'no-crons'
+    | 'migrated'
+    | 'preserved-existing-crons'
+    | 'aborted-unparseable-config';
   /** Number of crons written to crons.json (only set when status === "migrated"). */
   cronsMigrated?: number;
   /** Names of crons that were skipped (one-shots, missing fields, etc.). */
@@ -298,6 +339,47 @@ export function migrateCronsForAgent(
   return result;
 }
 
+/**
+ * True when this agent's crons.json already holds at least one cron.
+ *
+ * FAILS TOWARD PRESERVATION. If the store cannot be read at all we return true,
+ * because "I could not establish that the destination is empty" and "the
+ * destination is empty" are different states and only one of them makes an
+ * overwrite safe. The whole class of bug this guards against comes from treating
+ * an unread value as a known-empty one.
+ */
+function hasLiveCrons(agentName: string, log: (msg: string) => void): boolean {
+  try {
+    return readCrons(agentName).length > 0;
+  } catch (err) {
+    log(
+      `WARNING: could not read existing crons.json for "${agentName}" — assuming NON-EMPTY and ` +
+        `preserving it. Error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return true;
+  }
+}
+
+/**
+ * Names of crons the operator has currently paused in the LIVE store.
+ *
+ * Read at migration time rather than inferred from config.json, because the pause
+ * is applied to crons.json (via `update-cron` / the dashboard) and config.json has
+ * no way to learn about it. Without this, a --force re-migration silently flips a
+ * deliberately-paused cron back on and it starts firing again.
+ */
+function liveDisabledNames(agentName: string, log: (msg: string) => void): Set<string> {
+  try {
+    return new Set(readCrons(agentName).filter((c) => c.enabled === false).map((c) => c.name));
+  } catch (err) {
+    log(
+      `WARNING: could not read existing crons.json for "${agentName}" while resolving paused crons — ` +
+        `no re-enable fence applied. Error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return new Set();
+  }
+}
+
 /** Core migration logic. Public callers go through `migrateCronsForAgent`. */
 function runMigrationCore(
   agentName: string,
@@ -320,6 +402,14 @@ function runMigrationCore(
 
   // Read config.json — no-op on missing file
   if (!existsSync(configJsonPath)) {
+    if (hasLiveCrons(agentName, log)) {
+      log(
+        `No config.json found for "${agentName}" at ${configJsonPath}, but crons.json is NON-EMPTY — ` +
+          `preserving the live store (nothing to migrate is not the same as migrate nothing)`,
+      );
+      writeMarker(ctxRoot, agentName);
+      return { agentName, status: 'preserved-existing-crons' };
+    }
     log(`No config.json found for "${agentName}" at ${configJsonPath} — writing empty crons.json + marker`);
     writeCrons(agentName, []);
     writeMarker(ctxRoot, agentName);
@@ -330,15 +420,24 @@ function runMigrationCore(
   try {
     rawConfig = JSON.parse(readFileSync(configJsonPath, 'utf-8'));
   } catch (err) {
-    // Unreadable / corrupt config.json: write empty crons.json + marker so we
-    // don't retry on every boot with the same broken file
+    // ABORT — write nothing at all, and do NOT drop the marker.
+    //
+    // This path used to write an empty crons.json plus the marker so the daemon
+    // would not retry a broken file every boot. Both halves of that were wrong on
+    // a --force re-run against a live agent:
+    //   - The empty write destroys the authoritative store on the strength of a
+    //     value we never established. We did not read "no crons"; we failed to read.
+    //   - The marker then makes the loss permanent: once config.json is repaired,
+    //     the idempotency gate skips it forever, so the real content never migrates.
+    // Aborting leaves both artifacts untouched and the failure loud and recoverable.
+    // The cost is a repeated log line per boot while the file stays broken, which is
+    // the intended pressure.
     log(
-      `WARNING: failed to parse config.json for "${agentName}" — writing empty crons.json + marker. ` +
+      `ABORT: failed to parse config.json for "${agentName}" — wrote nothing (crons.json and ` +
+        `migration marker both left untouched). Repair the file and re-run. ` +
         `Error: ${err instanceof Error ? err.message : String(err)}`,
     );
-    writeCrons(agentName, []);
-    writeMarker(ctxRoot, agentName);
-    return { agentName, status: 'no-crons' };
+    return { agentName, status: 'aborted-unparseable-config' };
   }
 
   // Extract crons array — treat missing / empty as "no crons"
@@ -353,6 +452,15 @@ function runMigrationCore(
   }
 
   if (configCrons.length === 0) {
+    if (hasLiveCrons(agentName, log)) {
+      log(
+        `No crons array in config.json for "${agentName}", but crons.json is NON-EMPTY — ` +
+          `preserving the live store. This is the STEADY STATE for an already-migrated agent: ` +
+          `the config.json array is a spent one-time seed and is routinely absent.`,
+      );
+      writeMarker(ctxRoot, agentName);
+      return { agentName, status: 'preserved-existing-crons' };
+    }
     log(`No crons array in config.json for "${agentName}" — writing empty crons.json + marker`);
     writeCrons(agentName, []);
     writeMarker(ctxRoot, agentName);
@@ -363,9 +471,22 @@ function runMigrationCore(
   const converted: CronDefinition[] = [];
   const skipped: string[] = [];
 
+  // RE-ENABLE FENCE. A cron paused in the live store stays paused across a
+  // re-migration. config.json cannot express "I paused this yesterday" — the pause
+  // lives in crons.json — so a straight re-convert stamps `enabled: true` over it
+  // and the cron silently resumes firing. Observed twice in production on one cron.
+  const pausedInLiveStore = liveDisabledNames(agentName, log);
+
   for (const entry of configCrons) {
     const result = convertEntry(entry, agentName);
     if ('cron' in result) {
+      if (result.cron.enabled && pausedInLiveStore.has(result.cron.name)) {
+        result.cron.enabled = false;
+        log(
+          `  Re-enable fence: cron "${entry.name}" is paused in the live crons.json — ` +
+            `migrating it as DISABLED rather than re-enabling it from config.json`,
+        );
+      }
       converted.push(result.cron);
       log(`  Migrated cron "${entry.name}" for "${agentName}" (schedule: ${result.cron.schedule})`);
     } else {
