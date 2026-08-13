@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed — `GET /api/workflows/crons` re-read each agent's execution log once per cron
+
+`readLastExecution(agent, cronName)` re-read and re-parsed the agent's entire
+`cron-execution.log` once **per cron**. At 10 crons per agent that is ten full
+reads of the same file per request. `/health` already read each agent's log
+exactly once, which is why it benchmarked several times faster than `/crons`
+over the same dataset.
+
+Replaced with a single backward pass per agent building a
+`Map<cronName, lastEntry>`; keeping the first hit per name preserves "last entry
+in file order wins" exactly. Cost is now O(agents) reads instead of O(crons).
+
+Measured on `tests/integration/phase4-performance.test.ts`:
+
+| dataset | p50 before | p50 after | p95 before | p95 after |
+|---|---|---|---|---|
+| 50 crons  | 79.0ms | **19.4ms** | 88.7ms | **21.5ms** |
+| 100 crons | 76.3ms | **18.0ms** | 77.3ms | **18.8ms** |
+
 ### Hook Framework — Loop Detection (B1)
 
 - **`hook-loop-detector`**: new PreToolUse hook that detects and blocks repeated Claude tool-call loops. Two patterns are detected: (a) the same tool invoked with identical arguments 15+ times within the last 30 calls, and (b) two tools ping-ponging (24+ alternations within a 12-call dominant-pair window). Blocked calls are NOT recorded into history, so the wedge cannot self-perpetuate. History is time-windowed (60s) so a stale prior-session tail does not block the first call of a new session. After 30 minutes of continuous block, exactly one tool call is allowed through ("emergency escape") so the agent can issue a Telegram alert before re-entering the blocked window.

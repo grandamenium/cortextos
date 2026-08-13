@@ -46,10 +46,12 @@ Human tasks reference: `.claude/skills/human-tasks/SKILL.md`
 cortextos bus read-all-heartbeats
 
 # Check all pending approvals
-cortextos bus list-approvals --format json 2>/dev/null
+cortextos bus list-approvals --format json
 
 # Check stale human tasks
-cortextos bus list-tasks --project human-tasks --status pending 2>/dev/null
+# (no 2>/dev/null here: if this command errors, the error must be SEEN —
+# suppressed stderr once turned a broken flag into "0 stale human tasks")
+cortextos bus list-tasks --project human-tasks --status pending
 ```
 
 For each agent: if heartbeat is older than 5 hours, send an alert to that agent and flag in memory.
@@ -97,7 +99,7 @@ MEMORY_DIR="$(pwd)/memory"
 mkdir -p "$MEMORY_DIR"
 cat >> "$MEMORY_DIR/$TODAY.md" << MEMORY
 
-## Heartbeat Update - $(date -u +%H:%M UTC) / $LOCAL_TIME
+## Heartbeat Update - $(date -u +'%H:%M UTC') / $LOCAL_TIME
 - WORKING ON: <task_id or "none">
 - Status: <healthy/working/blocked>
 - Inbox: <N messages processed>

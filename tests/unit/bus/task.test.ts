@@ -166,6 +166,19 @@ describe('Task Management', () => {
       const pending = listTasks(paths, { status: 'pending' });
       expect(pending.length).toBe(1);
     });
+
+    it('filters by project (human-tasks detector path)', () => {
+      createTask(paths, 'paul', 'acme', 'Approve the invoice', { project: 'human-tasks' });
+      createTask(paths, 'paul', 'acme', 'Regular agent work');
+
+      const human = listTasks(paths, { project: 'human-tasks' });
+      expect(human.length).toBe(1);
+      expect(human[0].title).toBe('Approve the invoice');
+
+      // No-match project returns empty, not everything — a wrong project
+      // name must not silently degrade into an unfiltered list.
+      expect(listTasks(paths, { project: 'no-such-project' }).length).toBe(0);
+    });
   });
 });
 

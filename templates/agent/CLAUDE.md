@@ -111,6 +111,20 @@ Only senders whose hex pubkey is in this agent's `allowed_pubkeys` (in `buzz.jso
 
 ---
 
+## Slack Messages
+
+If this agent has a `slack.json` configured, it can also be messaged via Slack, same idea as Telegram — inbound messages arrive real-time via the daemon's Socket Mode connection and are injected the same way:
+
+```
+=== SLACK from [USER: <name>] (channel:<id>) ===
+<text>
+Reply using: cortextos slack send <channel> '<your reply>' --as <agent>
+```
+
+Reply with the exact command shown — it posts under this agent's configured Slack identity (display name/icon from `slack.json`). Slack is optional per-agent: no `slack.json` means Slack is simply not active for this agent, Telegram and everything else works as usual. See `docs/runbook/slack-adapter-setup.md` for setup.
+
+---
+
 ## Agent-to-Agent Messages
 
 ```

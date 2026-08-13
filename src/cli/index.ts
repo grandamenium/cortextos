@@ -27,6 +27,7 @@ import { importAgentCommand } from './import-agent.js';
 import { updateCommand } from './update.js';
 import { lifecycleCommand } from './lifecycle.js';
 import { buzzCommand } from './buzz.js';
+import { slackCommand } from './slack.js';
 import { CORTEXTOS_VERSION } from '../version.js';
 
 const program = new Command();
@@ -65,6 +66,7 @@ program.addCommand(injectWorkerCommand);
 program.addCommand(importAgentCommand);
 program.addCommand(updateCommand);
 program.addCommand(lifecycleCommand);
+program.addCommand(slackCommand);
 
 // crash-alert: SessionEnd hook — cross-platform replacement for crash-alert.sh
 const crashAlertCommand = new Command('crash-alert')
@@ -76,4 +78,13 @@ const crashAlertCommand = new Command('crash-alert')
   });
 program.addCommand(crashAlertCommand);
 
-program.parse();
+// Use parseAsync + a catch so a thrown Error from any action handler (e.g.
+// "Task <id> not found" from complete-task/update-task) prints a clean one-line
+// message and exits non-zero, instead of escaping as an uncaught exception that
+// crashes with a full stack trace (the sync program.parse() had no error
+// boundary). commander v14 awaits action results, so sync throws surface here as
+// rejections. Keeps a task's status transition from silently "sticking" on error.
+program.parseAsync(process.argv).catch((err: unknown) => {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+});

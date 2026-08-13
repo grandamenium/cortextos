@@ -153,6 +153,63 @@ function runTeachingCheck(args: TeachingCheckArgs): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Closed set of keys CronEntry actually supports, bound to the type at
+ * compile time: this object must have exactly one property per CronEntry
+ * field. Adding, removing, or renaming a CronEntry field without updating
+ * this map is a TypeScript error (excess or missing property), not a
+ * silent runtime gap — the previous version was a hand-maintained
+ * `Set(['name', ...])` literal with no link back to CronEntry, so the two
+ * could drift with no compiler signal.
+ */
+const CRON_ENTRY_KEY_MAP: Record<keyof CronEntry, true> = {
+  name: true,
+  interval: true,
+  cron: true,
+  fire_at: true,
+  prompt: true,
+  type: true,
+};
+const KNOWN_CRON_ENTRY_KEYS = new Set<string>(Object.keys(CRON_ENTRY_KEY_MAP));
+
+/**
+ * A config.json entry carrying a key outside CRON_ENTRY_KEY_MAP (e.g.
+ * `enabled`, a leftover from confusing this shape with CronDefinition's) is
+ * refused before it ever reaches convertEntry — see validateCronEntryShape
+ * and its call site in runMigrationCore.
+ */
+const KNOWN_CRON_ENTRY_TYPES = new Set(['recurring', 'once', 'disabled']);
+
+/**
+ * Check a raw config.json cron entry against the CronEntry schema before
+ * conversion. Returns human-readable warnings for any key or type value
+ * outside the known set. Any non-empty result gates the entry: the caller
+ * (runMigrationCore) refuses it outright instead of attempting conversion —
+ * this function no longer just describes a problem, it decides one.
+ */
+function validateCronEntryShape(entry: Record<string, unknown>): string[] {
+  const warnings: string[] = [];
+  const name = typeof entry.name === 'string' ? entry.name : '(unnamed)';
+
+  for (const key of Object.keys(entry)) {
+    if (!KNOWN_CRON_ENTRY_KEYS.has(key)) {
+      warnings.push(
+        `cron "${name}" has unrecognised key "${key}" — CronEntry only supports ` +
+          `${[...KNOWN_CRON_ENTRY_KEYS].join(', ')}; this key has no effect and is silently dropped`,
+      );
+    }
+  }
+
+  if (entry.type !== undefined && !KNOWN_CRON_ENTRY_TYPES.has(entry.type as string)) {
+    warnings.push(
+      `cron "${name}" has unrecognised type "${String(entry.type)}" — expected one of ` +
+        `${[...KNOWN_CRON_ENTRY_TYPES].join(', ')}; convertEntry falls back to "recurring"`,
+    );
+  }
+
+  return warnings;
+}
+
+/**
  * Convert a single CronEntry (config.json format) to a CronDefinition (crons.json format).
  *
  * Returns null with a reason string when the entry cannot be converted (e.g. one-shot crons).
@@ -200,14 +257,26 @@ function convertEntry(
       };
     }
     if (fireAtMs <= Date.now()) {
+      // "Already fired" would overstate what is actually known: this branch
+      // is a single timestamp comparison with no fire-history lookup anywhere
+      // in this function or its call chain, so a one-shot that never fired at
+      // all is indistinguishable from one that fired exactly as intended.
+      // Worded — and prefixed like the UNMIGRATABLE future-fire_at case below
+      // — for what is verifiable rather than what is assumed.
       return {
-        skip: `cron "${name}" has type "once" with past fire_at "${fire_at}" — skipping (already fired or expired)`,
+        skip: `CANNOT-VERIFY: cron "${name}" has type "once" with fire_at "${fire_at}" in the past — ` +
+          `dropping without firing it. No fire-history record exists to confirm this ever fired; ` +
+          `it is being discarded on the strength of a timestamp comparison alone.`,
       };
     }
-    // Future one-shot — still not representable in CronDefinition as of Subtask 1.1
+    // Future one-shot — still not representable in CronDefinition as of Subtask 1.1.
+    // This is a real gap, not a routine skip: the operator's intended future
+    // action will never fire. Prefixed so it doesn't read like the other,
+    // expected skip reasons below.
     return {
-      skip: `cron "${name}" has type "once" with future fire_at "${fire_at}" — skipping. ` +
-        `TODO: once CronDefinition supports fire_at, migrate this as a one-shot.`,
+      skip: `UNMIGRATABLE: cron "${name}" has type "once" with future fire_at "${fire_at}" — ` +
+        `this cron will NOT fire. CronDefinition has no fire_at support yet (TODO: once it does, ` +
+        `migrate this as a one-shot instead of dropping it).`,
     };
   }
 
@@ -258,6 +327,18 @@ export interface MigrationResult {
   cronsMigrated?: number;
   /** Names of crons that were skipped (one-shots, missing fields, etc.). */
   cronsSkipped?: string[];
+  /**
+   * Names of crons refused outright because validateCronEntryShape found an
+   * unrecognised key or type — these are never passed to convertEntry at
+   * all. Distinct from `cronsSkipped`: a skip is convertEntry declining a
+   * well-formed entry (e.g. a legitimate past one-shot); a refusal is the
+   * shape check gating a malformed one before conversion is even attempted.
+   * A caller (e.g. the migrate-crons CLI) should treat a non-empty
+   * `cronsRefused` as an exit-nonzero condition — the whole point of
+   * gating instead of only warning is that it must be checkable without
+   * reading log text.
+   */
+  cronsRefused?: string[];
 }
 
 /**
@@ -362,8 +443,25 @@ function runMigrationCore(
   // Convert each entry
   const converted: CronDefinition[] = [];
   const skipped: string[] = [];
+  const refused: string[] = [];
 
   for (const entry of configCrons) {
+    const warnings = validateCronEntryShape(entry as unknown as Record<string, unknown>);
+
+    // An unrecognised key or type gates the entry outright — it is never
+    // passed to convertEntry. This is the difference between a shape
+    // problem (refused, before conversion) and convertEntry declining a
+    // well-formed entry for its own reasons (skipped, e.g. a legitimate
+    // past one-shot). Refusing here, rather than only warning, is what
+    // makes "unknown key" checkable by a caller without reading log text.
+    if (warnings.length > 0) {
+      for (const warning of warnings) {
+        log(`  REFUSED for "${agentName}": ${warning}`);
+      }
+      refused.push(entry.name);
+      continue;
+    }
+
     const result = convertEntry(entry, agentName);
     if ('cron' in result) {
       converted.push(result.cron);
@@ -379,7 +477,7 @@ function runMigrationCore(
   writeMarker(ctxRoot, agentName);
 
   log(
-    `Migration complete for "${agentName}": ${converted.length} migrated, ${skipped.length} skipped`,
+    `Migration complete for "${agentName}": ${converted.length} migrated, ${skipped.length} skipped, ${refused.length} refused`,
   );
 
   return {
@@ -387,6 +485,7 @@ function runMigrationCore(
     status: 'migrated',
     cronsMigrated: converted.length,
     cronsSkipped: skipped,
+    cronsRefused: refused,
   };
 }
 

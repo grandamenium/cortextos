@@ -105,6 +105,20 @@ Only senders whose hex pubkey is in this agent's `allowed_pubkeys` (in `buzz.jso
 
 ---
 
+## Slack Messages
+
+If this agent has a `slack.json` configured, it can also be messaged via Slack, same idea as Telegram:
+
+```
+=== SLACK from [USER: <name>] (channel:<id>) ===
+<text>
+Reply using: cortextos slack send <channel> '<your reply>' --as <agent>
+```
+
+Reply with the exact command shown. No `slack.json` means Slack is simply inactive for this agent. See `docs/runbook/slack-adapter-setup.md` for setup.
+
+---
+
 ## Agent-to-Agent Messages
 
 ```

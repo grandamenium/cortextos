@@ -42,7 +42,7 @@ TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
 cat >> "memory/$TODAY.md" << MEMORY
 
-## Heartbeat Update - $(date -u +%H:%M UTC)
+## Heartbeat Update - $(date -u +'%H:%M UTC')
 - WORKING ON: <task_id or none>
 - CRM status: <contacts/followups/drafts/meetings>
 - Inbox: <clear / pending / blocked>

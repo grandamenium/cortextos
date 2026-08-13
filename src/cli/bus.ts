@@ -350,14 +350,16 @@ busCommand
   .command('list-tasks')
   .option('--agent <name>', 'Filter by agent')
   .option('--status <s>', 'Filter by status')
+  .option('--project <name>', 'Filter by project (e.g. human-tasks)')
   .option('--format <fmt>', 'Output format: json or text', 'text')
   .option('--respect-deps', 'Sort DAG-aware: unblocked tasks first, blocked tasks last')
-  .action((opts: { agent?: string; status?: string; format?: string; respectDeps?: boolean }) => {
+  .action((opts: { agent?: string; status?: string; project?: string; format?: string; respectDeps?: boolean }) => {
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
     const tasks = listTasks(paths, {
       agent: opts.agent,
       status: opts.status as TaskStatus,
+      project: opts.project,
       respectDeps: opts.respectDeps ?? false,
     });
 
@@ -371,26 +373,42 @@ busCommand
       console.log('  No tasks found.');
       return;
     }
-
-    const PRIORITY_ICON: Record<string, string> = { urgent: '🔴', high: '🟠', normal: '🔵', low: '⚪' };
-    const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
-
-    console.log(`\n  Tasks (${tasks.length})\n`);
-    const header = '  Status  Pri  ID                        Assignee         Title';
-    const separator = '  ' + '-'.repeat(header.length - 2);
-    console.log(header);
-    console.log(separator);
-
-    for (const t of tasks) {
-      const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
-      const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
-      const id = t.id.substring(0, 26).padEnd(26);
-      const assignee = (t.assigned_to || '-').substring(0, 16).padEnd(17);
-      const title = t.title.substring(0, 50);
-      console.log(`  ${statusIcon}${priIcon}${id}${assignee}${title}`);
-    }
-    console.log('');
+    console.log(formatTaskTable(tasks));
   });
+
+/**
+ * Render the list-tasks text table. IDs are copy-paste targets for
+ * update-task/complete-task, so they are NEVER truncated — column widths
+ * come from the data (same pattern as the crons table). Every column is
+ * separated by 2+ spaces; the only column that may truncate is the trailing
+ * title, and truncation is marked with "…". (The previous fixed-width render
+ * cut every 27-char id to 26 with no delimiter before the assignee, which
+ * produced plausible-but-wrong ids when copied.)
+ */
+export function formatTaskTable(tasks: Task[]): string {
+  const PRIORITY_ICON: Record<string, string> = { urgent: '🔴', high: '🟠', normal: '🔵', low: '⚪' };
+  const STATUS_ICON: Record<string, string> = { pending: '○', in_progress: '●', blocked: '◑', completed: '✓', done: '✓', cancelled: '✗' };
+  const TITLE_MAX = 50;
+
+  const idW = Math.max(2, ...tasks.map(t => t.id.length));
+  const assigneeW = Math.max(8, ...tasks.map(t => (t.assigned_to || '-').length));
+
+  const lines: string[] = [];
+  lines.push(`\n  Tasks (${tasks.length})\n`);
+  const header = `  Status  Pri  ${'ID'.padEnd(idW)}  ${'Assignee'.padEnd(assigneeW)}  Title`;
+  lines.push(header);
+  lines.push('  ' + '-'.repeat(header.length - 2));
+  for (const t of tasks) {
+    const statusIcon = (STATUS_ICON[t.status] || '?').padEnd(8);
+    const priIcon = (PRIORITY_ICON[t.priority] || '·').padEnd(5);
+    const id = t.id.padEnd(idW);
+    const assignee = (t.assigned_to || '-').padEnd(assigneeW);
+    const title = t.title.length > TITLE_MAX ? t.title.substring(0, TITLE_MAX - 1) + '…' : t.title;
+    lines.push(`  ${statusIcon}${priIcon}${id}  ${assignee}  ${title}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
 
 busCommand
   .command('log-event')
@@ -2280,9 +2298,17 @@ busCommand
         case 'migrated':
           console.log(
             `Migrated ${agentArg}: ${result.cronsMigrated} cron(s) migrated` +
-            (result.cronsSkipped?.length ? `, ${result.cronsSkipped.length} skipped (${result.cronsSkipped.join(', ')})` : '')
+            (result.cronsSkipped?.length ? `, ${result.cronsSkipped.length} skipped (${result.cronsSkipped.join(', ')})` : '') +
+            (result.cronsRefused?.length ? `, ${result.cronsRefused.length} REFUSED (${result.cronsRefused.join(', ')})` : '')
           );
           break;
+      }
+
+      // An unknown key/type must gate, not just print — checkable by exit
+      // code, not by reading log text.
+      if (result.cronsRefused?.length) {
+        console.error(`migrate-crons: ${result.cronsRefused.length} entr${result.cronsRefused.length === 1 ? 'y' : 'ies'} refused for "${agentArg}" — see REFUSED lines above.`);
+        process.exitCode = 1;
       }
     } else {
       // All-agents migration
@@ -2292,6 +2318,8 @@ busCommand
       const skippedAlready = summary.results.filter(r => r.status === 'skipped-already-migrated').length;
       const noConfig = summary.results.filter(r => r.status === 'no-config').length;
       const noCrons = summary.results.filter(r => r.status === 'no-crons').length;
+      const totalRefused = summary.results.reduce((sum, r) => sum + (r.cronsRefused?.length ?? 0), 0);
+      const agentsWithRefusals = summary.results.filter(r => (r.cronsRefused?.length ?? 0) > 0);
 
       console.log(`\nMigration summary:`);
       console.log(`  Agents processed    : ${summary.processed}`);
@@ -2299,6 +2327,15 @@ busCommand
       console.log(`  Already migrated    : ${skippedAlready}`);
       console.log(`  No config.json      : ${noConfig}`);
       console.log(`  No crons in config  : ${noCrons}`);
+      console.log(`  Entries refused     : ${totalRefused}`);
+
+      if (totalRefused > 0) {
+        console.error(
+          `migrate-crons: ${totalRefused} entr${totalRefused === 1 ? 'y' : 'ies'} refused across ${agentsWithRefusals.length} agent(s) ` +
+          `(${agentsWithRefusals.map(r => r.agentName).join(', ')}) — see REFUSED lines above.`
+        );
+        process.exitCode = 1;
+      }
     }
   });
 
