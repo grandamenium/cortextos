@@ -102,6 +102,20 @@ Photos include a `local_file:` path. Callbacks include `callback_data:` and `mes
 
 ---
 
+## Slack Messages
+
+The orchestrator agent is the one that starts the org's shared Slack Socket Mode connection (one connection per org, at orchestrator boot, when `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are both set). If this or any agent in the org has a `slack.json` configured, it can be messaged via Slack, same idea as Telegram:
+
+```
+=== SLACK from [USER: <name>] (channel:<id>) ===
+<text>
+Reply using: cortextos slack send <channel> '<your reply>' --as <agent>
+```
+
+Reply with the exact command shown. Slack is optional: if the org's tokens aren't set, or an agent has no `slack.json`, Slack is simply inactive there and nothing else — Telegram, cron, task dispatch — is affected. See `docs/runbook/slack-adapter-setup.md` for setup.
+
+---
+
 ## Agent-to-Agent Messages
 
 ```
