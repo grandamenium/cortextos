@@ -53,15 +53,55 @@ const EXCLUDED_DIR_PREFIXES = [
 // blocked as credential leaks. Anchored to a word start and required to be followed
 // by real key material, which tightens false positives without losing real sk- keys.
 //
-// CASE-INSENSITIVE as of 2026-08-13. The pattern was case-sensitive, so the single
-// most common real leak shape — `API_KEY=`, `TOKEN=`, `PASSWORD=`, `SECRET=` — went
-// straight through. The existing test for `API_KEY=123` passed only because the .env
-// FILENAME rule fires first, which gave false confidence that content scanning worked.
-// The asymmetry justifies erring wide: a false positive means a file is not committed
-// (recoverable, visible); a false negative means a credential IS committed.
-// `sk_live_`/`sk_test_` (Stripe's underscore form) added — matched by neither pattern before.
-const CREDENTIAL_PATTERNS =
-  /(?:token=|key=|password=|secret=|\bsk-[A-Za-z0-9_-]{8,}|\bsk_(?:live|test)_[A-Za-z0-9]{8,}|ghp_|xoxb-|AKIA)/i;
+// Case-insensitive AND value-shaped, as of 2026-08-13 (second revision).
+//
+// The bare `key=` / `token=` alternatives were unanchored substrings, so they matched
+// inside `monkey=`, `sortKey=`, `?apiKey=`. Adding /i alone made that far worse: an
+// adversarial re-review measured it across all 389 non-script files in the estate and
+// found 19 NEWLY blocked — every one a doc that merely MENTIONS a variable name, e.g.
+// `BOT_TOKEN=<token from BotFather>` and `grep -q "^GEMINI_API_KEY=."`. Several are
+// mandatory session-start reads, so they could never be auto-committed again.
+//
+// The "false positives are cheap" reasoning was wrong: 19 nightly hits reported as
+// credential_pattern_detected are indistinguishable from one real leak, which destroys
+// the signal the check exists to give. So require a word boundary AND an actual
+// secret-shaped VALUE (12+ chars of key material), which excludes placeholders like
+// `<token from BotFather>`, `.`, and `value`.
+const CREDENTIAL_PATTERNS = new RegExp(
+  [
+    // NAME=VALUE, but only when the value looks like real key material
+    // `:` is in the value class because Telegram bot tokens are `<digits>:<alnum>`,
+    // which is the single most likely real secret in THIS estate.
+    //
+    // The leading group exists because `\b` DOES NOT FIRE on an underscore — `_` is a
+    // word character, so `\btoken` never matches inside `TELEGRAM_BOT_TOKEN=`, the most
+    // realistic variable name here. Allowing any number of `WORD_` / `WORD-` prefix
+    // segments fixes that, while still rejecting `monkey=` and `sortKey=`, where the
+    // prefix does not end in a separator.
+    //
+    // THE SEPARATORS AROUND `=` ARE `[ \t]`, NOT `\s` (fixed 2026-08-13, third revision).
+    // `\s` MATCHES A NEWLINE, so `\s*=\s*` let the match run past the end of the line and
+    // consume the NEXT VARIABLE'S NAME as if it were this variable's value. An ordinary
+    // blank-valued template —
+    //     ACTIVITY_BOT_TOKEN=
+    //     ACTIVITY_CHAT_ID=
+    // — matched on the literal text `ACTIVITY_BOT_TOKEN=\nACTIVITY_CHAT_ID`, because
+    // `ACTIVITY_CHAT_ID` is 16 characters of the value class. Every `.env.example`, every
+    // setup doc, and every empty-valued config template was therefore a standing false
+    // positive, and the scanner reported them as credential_pattern_detected forever.
+    // Measured over the same 389-file corpus: 5 matches before, 4 after; the only file
+    // cleared is the false positive, and all four real credential stores still match.
+    // A credential never legitimately begins on the line after its `=`.
+    String.raw`(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|auth[_-]?token|access[_-]?token|bot[_-]?token|secret[_-]?key|token|password|passwd|secret)[ \t]*=[ \t]*['"]?[A-Za-z0-9_\-\/+.:]{12,}`,
+    // Vendor-prefixed keys are self-identifying — no value shape needed beyond length
+    String.raw`\bsk-[A-Za-z0-9_-]{8,}`,
+    String.raw`\bsk_(?:live|test)_[A-Za-z0-9]{8,}`,
+    String.raw`\bghp_[A-Za-z0-9]{8,}`,
+    String.raw`\bxoxb-[A-Za-z0-9-]{8,}`,
+    String.raw`\bAKIA[A-Z0-9]{12,}`,
+  ].join('|'),
+  'i',
+);
 
 const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
 

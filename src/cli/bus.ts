@@ -722,15 +722,26 @@ busCommand
     // MUST existsSync-guard agentDir. resolveEnv SYNTHESISES it as
     // join(projectRoot,'orgs',org,agentName) with no existence check, and agentName
     // falls back to basename(cwd). Outside an agent PTY (a scheduled task calling the
-    // shell wrapper, an ops script, a plain shell) CTX_AGENT_DIR is unset, the
-    // synthesised path does not exist, git throws ENOENT, and autoCommit's catch
-    // returns {status:'clean'} with exit 0 — a silent success reporting no work.
-    // Found by adversarial review 2026-08-13; it was a regression introduced by the
-    // agentDir change itself, in exactly the failure class this branch exists to kill.
-    const agentDir = env.agentDir && existsSync(env.agentDir) ? env.agentDir : undefined;
-    const projectDir = agentDir || env.projectRoot || env.frameworkRoot || process.cwd();
+    // shell wrapper, an ops script, a plain shell) CTX_AGENT_DIR is unset and the
+    // synthesised path does not exist.
+    //
+    // DO NOT fall back to projectRoot/frameworkRoot. resolveEnv pins projectRoot EQUAL
+    // to frameworkRoot, and the framework repo is precisely the WRONG target: it
+    // gitignores orgs/, so agent changes stay invisible while the caller's framework
+    // WIP gets staged instead. That was the original bug (fixed in 2aa12cd), and a
+    // naive existsSync guard re-created it in a worse form — the framework root IS a
+    // valid repo, so instead of a silent 'clean' it returned a confident 'staged' and
+    // mutated the wrong repo's index. Caught by adversarial re-review 2026-08-13.
+    //
+    // cwd is the honest fallback: inside an agent PTY it already IS the agent dir, and
+    // anywhere else autoCommit resolves it to that location's own repo root, which is
+    // what the caller actually pointed at.
+    const projectDir = env.agentDir && existsSync(env.agentDir) ? env.agentDir : process.cwd();
     const report = autoCommit(projectDir, opts.dryRun ?? false);
     console.log(JSON.stringify(report));
+    // Exit non-zero so the failure is visible to a shell wrapper or scheduled task.
+    // Printing JSON nobody parses and returning 0 is how an inert "fix" looks.
+    if (report.status === 'not_a_repo') process.exit(1);
   });
 
 busCommand

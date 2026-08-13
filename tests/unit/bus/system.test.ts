@@ -102,18 +102,19 @@ describe('Bus System', () => {
     // transcript. A claim that lives nowhere in the suite is not verified: the
     // suite would have passed identically with the change reverted.
 
-    it('resolves upward to the repo root when given a SUBDIRECTORY', () => {
+    it('resolves upward from a SUBDIRECTORY before scanning repo-root-relative files', () => {
       // git status --porcelain emits repo-root-relative paths. Pointed at a subdir,
       // every existsSync() guard misses and the credential/size checks silently no-op.
       mkdirSync(join(gitDir, 'nested', 'deeper'), { recursive: true });
-      writeFileSync(join(gitDir, 'top.txt'), 'hello');
+      writeFileSync(join(gitDir, 'root-leak.md'), 'API_KEY=0123456789abcdef');
       writeFileSync(join(gitDir, 'nested', 'inner.txt'), 'hello');
       // NOTE: this also pins -uall. Without it git collapses to '?? nested/' and the
       // file inside is staged as part of a directory, skipping the credential scan.
 
       const report = autoCommit(join(gitDir, 'nested', 'deeper'), true);
       expect(report.status).toBe('dry_run');
-      expect(report.staged).toContain('top.txt');
+      expect(report.blocked).toContain('root-leak.md:credential_pattern_detected');
+      expect(report.staged).not.toContain('root-leak.md');
       expect(report.staged).toContain('nested/inner.txt');
     });
 
@@ -177,6 +178,25 @@ describe('Bus System', () => {
       expect(blockedNames).toContain('leak3.md');
     });
 
+    it('does not let an EMPTY assignment consume the next line as its value', () => {
+      // `\s*=\s*` matched newlines, so a blank-valued template matched on the literal
+      // text `ACTIVITY_BOT_TOKEN=\nACTIVITY_CHAT_ID` — the next VARIABLE NAME was being
+      // read as this variable's value. That made every .env.example and every setup doc
+      // with empty assignments a permanent false positive, reported nightly as
+      // credential_pattern_detected, which is indistinguishable from a real leak.
+      // Codex's O4 measurement saw this file match and misattributed it to a
+      // "real-shaped sample token"; the file's values are in fact empty.
+      writeFileSync(join(gitDir, 'template.env.example'), 'ACTIVITY_BOT_TOKEN=\nACTIVITY_CHAT_ID=\n');
+      // a genuine same-line credential must still be caught — this test must not pass
+      // by making the scanner blind.
+      writeFileSync(join(gitDir, 'real-leak.md'), 'BOT_TOKEN=123456789:AAHdqTcvCH1vGWJxfSeofSA');
+
+      const report = autoCommit(gitDir, true);
+      expect(report.staged).toContain('template.env.example');
+      expect(report.blocked.join(' ')).not.toContain('template.env.example');
+      expect(report.blocked.join(' ')).toContain('real-leak.md');
+    });
+
     it('scans files inside a BRAND-NEW untracked directory (the -uall gap)', () => {
       // Without -uall git collapses this to a single '?? brandnew/' entry. The whole
       // directory is then staged as one unit, and because statSync(dir).isFile() is
@@ -205,7 +225,7 @@ describe('Bus System', () => {
     });
 
     it('filters out files with credential patterns', () => {
-      writeFileSync(join(gitDir, 'config.json'), '{"token=abc123"}');
+      writeFileSync(join(gitDir, 'config.json'), '{"token=abc123def456"}');
       writeFileSync(join(gitDir, 'readme.md'), 'just a readme');
 
       const report = autoCommit(gitDir, true);

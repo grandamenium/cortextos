@@ -53,12 +53,22 @@ Based on accumulated learnings:
 **Exploit vs Explore:** If something has been kept 3+ times in a row, exploit that pattern further. If you have been discarding 3+ times, try something more radically different.
 
 ### Step 4: Create Experiment
+
+**IDEMPOTENCY CHECK FIRST — this step can be re-entered.** The approval gate below tells a
+one-shot worker to STOP and be re-dispatched. A re-dispatched run re-enters Step 4 from the top,
+so creating unconditionally would produce a SECOND experiment for the same cycle. Check before
+creating:
+```bash
+cortextos bus list-experiments --metric "<metric_name>" --status proposed
+```
+If an experiment for this cycle already exists, DO NOT create another — reuse its id and continue.
+Only create when there is none:
 ```bash
 cortextos bus create-experiment "<metric_name>" "<your hypothesis>" --surface <path> --direction <higher|lower> --window <duration>
 ```
 If `approval_required` is true in `experiments/config.json`, you must manually create an approval before proceeding:
 ```bash
-APPR_ID=$(cortextos bus create-approval "Run experiment: <hypothesis>" experiments "Cycle: <cycle_name>, Metric: <metric_name>, Surface: <surface>")
+APPR_ID=$(cortextos bus create-approval "Run experiment: <hypothesis>" other "Cycle: <cycle_name>, Metric: <metric_name>, Surface: <surface>")
 cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Approval needed to run experiment for <metric_name> — check dashboard"
 # Block until approved, then continue to Step 5
 ```
