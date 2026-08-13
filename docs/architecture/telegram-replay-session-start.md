@@ -121,17 +121,18 @@ Does NOT auto-reopen, auto-complete, or auto-drop. Only signals.
 
 ### Part 3 — Downtime detection helper
 
-New file `state/<agent>/last-alive.txt` — single ISO timestamp, updated by fast-checker on every successful tick (piggyback on existing heartbeat/tick).
+Reuse the **existing** liveness signal `state/<agent>/heartbeat.json` (`last_heartbeat`, an ISO timestamp already refreshed on every `logEvent` and on `update-heartbeat`) rather than introducing a new `last-alive.txt` written on every fast-checker tick. This avoids a redundant ~1 Hz write path and a second liveness source that could drift from the canonical one.
 
-Read on session start; if `now - last_alive > 4h`, we're recovering from real downtime. Feeds Part 1's downtime warning and can be reused for future observability.
+Read `last_heartbeat` on session start; if `now - last_heartbeat > 4h`, we're recovering from real downtime. Feeds Part 1's downtime warning. Missing/unparseable heartbeat → treat downtime as 0 (no false alarm).
 
 ---
 
 ## Edge cases
 
 - **Cross-chat ordering:** sort by `archived_at` ASC preserves chronology across chats.
-- **Media messages:** existing formatter (`formatTelegramForInjection`) handles photo/voice/document/video — replay reuses it. No new code path.
-- **Double-inject on crash mid-cursor-flush:** atomic write via `atomicWriteSync`. If the process still crashes after inject and before flush, next replay resurfaces the same message — agent should treat message_id as idempotency key (see `agent.injectMessage` dedup path).
+- **Media messages:** the live FastChecker media formatters need the *downloaded local file path*, but the archive stores only `file_id`/`file_name`/`mime_type` — the downloaded file is fetched live and is likely gone after a downtime window. So replay uses a dedicated `[REPLAYED]` formatter that surfaces media as a note (type + file name + caption + "not re-downloaded — ask sender to resend"). Text messages replay in full. There is no reuse of the live media formatters.
+- **Dedup bypass (salt):** replayed injects are prefixed `[REPLAYED <archived_at>]`. This is required — a byte-identical re-inject would be silently swallowed by BOTH dedup layers (`AgentProcess` in-memory `MessageDedup` + FastChecker's persistent SHA-256 `.message-dedup-hashes`). The per-message `archived_at` also makes each replayed line unique.
+- **Double-inject on crash mid-cursor-flush:** atomic write via `atomicWriteSync`. On a write failure (e.g. ENOSPC) replay halts after the current inject and does NOT advance the cursor; the next start re-processes from the last durable watermark — agent should treat `message_id` as idempotency key.
 - **PTY not ready:** replay only fires AFTER PTY spawn-ready signal. If PTY dies mid-replay, cursor advances only for successfully-injected entries; next restart resumes.
 - **Chat_id types:** JSON key normalization — always cast `chat_id` to string when reading/writing cursor to avoid `-100...` int drift.
 - **First-time boot:** no cursor file, no archive → skip both replay and warn (both no-op cleanly).
