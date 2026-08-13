@@ -80,7 +80,13 @@ export interface SubmitResult {
 const PII_PATTERNS = {
   email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/,
   phone: /\+?[0-9]{1,3}[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}/,
-  credential: /(sk-|ghp_|xoxb-|AKIA|token=|key=|password=|secret=)/,
+  // Kept in step with CREDENTIAL_PATTERNS in src/bus/system.ts (2026-08-13). Two
+  // divergent definitions of "looks like a credential" existed in one codebase: this
+  // one still carried the unanchored `sk-` that matches inside ordinary words —
+  // "disk-", "task-", "risk-" — and was case-sensitive, missing `API_KEY=`/`TOKEN=`.
+  // If you change one, change the other.
+  credential:
+    /(?:token=|key=|password=|secret=|\bsk-[A-Za-z0-9_-]{8,}|\bsk_(?:live|test)_[A-Za-z0-9]{8,}|ghp_|xoxb-|AKIA)/i,
   telegram_chat_id: /chat_id[:\s]*[0-9]{6,}/,
   deployment_url: /https?:\/\/[a-z0-9.-]+\.(railway\.app|vercel\.app|herokuapp\.com|netlify\.app)/,
 };

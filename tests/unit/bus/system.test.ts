@@ -97,6 +97,103 @@ describe('Bus System', () => {
       rmSync(gitDir, { recursive: true, force: true });
     });
 
+    // --- Regression tests added 2026-08-13 after adversarial review ---
+    // These encode behaviour that was previously "verified" only in a session
+    // transcript. A claim that lives nowhere in the suite is not verified: the
+    // suite would have passed identically with the change reverted.
+
+    it('resolves upward to the repo root when given a SUBDIRECTORY', () => {
+      // git status --porcelain emits repo-root-relative paths. Pointed at a subdir,
+      // every existsSync() guard misses and the credential/size checks silently no-op.
+      mkdirSync(join(gitDir, 'nested', 'deeper'), { recursive: true });
+      writeFileSync(join(gitDir, 'top.txt'), 'hello');
+      writeFileSync(join(gitDir, 'nested', 'inner.txt'), 'hello');
+      // NOTE: this also pins -uall. Without it git collapses to '?? nested/' and the
+      // file inside is staged as part of a directory, skipping the credential scan.
+
+      const report = autoCommit(join(gitDir, 'nested', 'deeper'), true);
+      expect(report.status).toBe('dry_run');
+      expect(report.staged).toContain('top.txt');
+      expect(report.staged).toContain('nested/inner.txt');
+    });
+
+    it('returns not_a_repo — NOT clean — when the path is not a git work tree', () => {
+      // The whole point: a broken invocation must be distinguishable from a healthy
+      // no-op. Returning 'clean' here is the silent-success bug this guards against.
+      const notRepo = mkdtempSync(join(tmpdir(), 'cortextos-notrepo-'));
+      try {
+        const report = autoCommit(notRepo, true);
+        expect(report.status).toBe('not_a_repo');
+        expect(report.error).toBeTruthy();
+      } finally {
+        rmSync(notRepo, { recursive: true, force: true });
+      }
+    });
+
+    it('returns not_a_repo when the directory does not exist at all', () => {
+      const report = autoCommit(join(gitDir, 'does', 'not', 'exist'), true);
+      expect(report.status).toBe('not_a_repo');
+    });
+
+    it('handles paths with spaces without mangling them', () => {
+      // Without --porcelain -z git quotes these, the quotes survive into the path,
+      // git add fails, and the failure used to be swallowed while the file stayed
+      // in the reported staged list.
+      writeFileSync(join(gitDir, 'has space.txt'), 'hello');
+
+      const report = autoCommit(gitDir, false);
+      expect(report.staged).toContain('has space.txt');
+      const cached = execSync('git diff --cached --name-only', { cwd: gitDir, encoding: 'utf-8' });
+      expect(cached).toContain('has space.txt');
+      // the report must not claim anything it did not actually stage
+      for (const f of report.staged) {
+        expect(cached).toContain(f);
+      }
+    });
+
+    it('handles renames without emitting an "old -> new" pseudo-path', () => {
+      writeFileSync(join(gitDir, 'before.txt'), 'hello');
+      execSync('git add before.txt && git commit -m add', { cwd: gitDir, stdio: 'pipe' });
+      execSync('git mv before.txt after.txt', { cwd: gitDir, stdio: 'pipe' });
+
+      const report = autoCommit(gitDir, true);
+      expect(report.staged.some(f => f.includes('->'))).toBe(false);
+      expect(report.staged).toContain('after.txt');
+    });
+
+    it('blocks real credential formats and allows ordinary words containing sk-', () => {
+      // The unanchored `sk-` matched inside "disk-", "task-", "risk-" — which blocked
+      // nearly every agent memory file. Anchoring must not lose real keys.
+      writeFileSync(join(gitDir, 'ordinary.md'), 'disk-confirmed task-completion-rate risk-free');
+      writeFileSync(join(gitDir, 'leak1.md'), 'sk-ant-api03-abcdefghijkl');
+      writeFileSync(join(gitDir, 'leak2.md'), 'API_KEY=supersecretvalue');
+      writeFileSync(join(gitDir, 'leak3.md'), 'AKIAIOSFODNN7EXAMPLE');
+
+      const report = autoCommit(gitDir, true);
+      expect(report.staged).toContain('ordinary.md');
+      const blockedNames = report.blocked.join(' ');
+      expect(blockedNames).toContain('leak1.md');
+      expect(blockedNames).toContain('leak2.md');   // case-insensitive: was missed before
+      expect(blockedNames).toContain('leak3.md');
+    });
+
+    it('scans files inside a BRAND-NEW untracked directory (the -uall gap)', () => {
+      // Without -uall git collapses this to a single '?? brandnew/' entry. The whole
+      // directory is then staged as one unit, and because statSync(dir).isFile() is
+      // false BOTH the credential scan and the 10MB check are skipped — a new folder
+      // containing an API key would be committed unscanned. This is the security case.
+      mkdirSync(join(gitDir, 'brandnew'), { recursive: true });
+      writeFileSync(join(gitDir, 'brandnew', 'leaky.md'), 'API_KEY=supersecretleakedvalue');
+      writeFileSync(join(gitDir, 'brandnew', 'fine.md'), 'nothing here');
+
+      const report = autoCommit(gitDir, true);
+      // the directory itself must never appear as a staged unit
+      expect(report.staged).not.toContain('brandnew/');
+      expect(report.staged).toContain('brandnew/fine.md');
+      expect(report.blocked.join(' ')).toContain('brandnew/leaky.md');
+      expect(report.staged).not.toContain('brandnew/leaky.md');
+    });
+
     it('filters out .env files', () => {
       writeFileSync(join(gitDir, 'app.env'), 'SECRET=abc');
       writeFileSync(join(gitDir, 'safe.txt'), 'hello');

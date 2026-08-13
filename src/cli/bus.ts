@@ -718,7 +718,17 @@ busCommand
     // can never see agent changes, and stages unrelated framework WIP instead.
     // The agent estate is a separate repo nested under orgs/; autoCommit walks up
     // from here to that repo's toplevel.
-    const projectDir = env.agentDir || env.projectRoot || env.frameworkRoot || process.cwd();
+    //
+    // MUST existsSync-guard agentDir. resolveEnv SYNTHESISES it as
+    // join(projectRoot,'orgs',org,agentName) with no existence check, and agentName
+    // falls back to basename(cwd). Outside an agent PTY (a scheduled task calling the
+    // shell wrapper, an ops script, a plain shell) CTX_AGENT_DIR is unset, the
+    // synthesised path does not exist, git throws ENOENT, and autoCommit's catch
+    // returns {status:'clean'} with exit 0 — a silent success reporting no work.
+    // Found by adversarial review 2026-08-13; it was a regression introduced by the
+    // agentDir change itself, in exactly the failure class this branch exists to kill.
+    const agentDir = env.agentDir && existsSync(env.agentDir) ? env.agentDir : undefined;
+    const projectDir = agentDir || env.projectRoot || env.frameworkRoot || process.cwd();
     const report = autoCommit(projectDir, opts.dryRun ?? false);
     console.log(JSON.stringify(report));
   });

@@ -9,10 +9,15 @@ import type { BusPaths } from '../types/index.js';
 // --- Types ---
 
 export interface AutoCommitReport {
-  status: 'staged' | 'clean' | 'nothing_to_stage' | 'dry_run';
+  // 'not_a_repo' added 2026-08-13. Previously a failure to resolve the git root
+  // returned 'clean', which is indistinguishable from "resolved fine, nothing to do".
+  // That ambiguity is the silent-success class: a broken invocation reported the same
+  // thing as a healthy no-op. Callers can now tell them apart.
+  status: 'staged' | 'clean' | 'nothing_to_stage' | 'dry_run' | 'not_a_repo';
   staged: string[];
   blocked: string[];
   diff_stat?: string;
+  error?: string;
 }
 
 export interface AgentGoalStatus {
@@ -47,7 +52,16 @@ const EXCLUDED_DIR_PREFIXES = [
 // "task-", "risk-", "desk-" — so agent memory files (full of "task-" ids) were all
 // blocked as credential leaks. Anchored to a word start and required to be followed
 // by real key material, which tightens false positives without losing real sk- keys.
-const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|\bsk-[A-Za-z0-9_-]{8,}|ghp_|xoxb-|AKIA)/;
+//
+// CASE-INSENSITIVE as of 2026-08-13. The pattern was case-sensitive, so the single
+// most common real leak shape — `API_KEY=`, `TOKEN=`, `PASSWORD=`, `SECRET=` — went
+// straight through. The existing test for `API_KEY=123` passed only because the .env
+// FILENAME rule fires first, which gave false confidence that content scanning worked.
+// The asymmetry justifies erring wide: a false positive means a file is not committed
+// (recoverable, visible); a false negative means a credential IS committed.
+// `sk_live_`/`sk_test_` (Stripe's underscore form) added — matched by neither pattern before.
+const CREDENTIAL_PATTERNS =
+  /(?:token=|key=|password=|secret=|\bsk-[A-Za-z0-9_-]{8,}|\bsk_(?:live|test)_[A-Za-z0-9]{8,}|ghp_|xoxb-|AKIA)/i;
 
 const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
 
@@ -97,43 +111,84 @@ export function hardRestart(paths: BusPaths, agentName: string, reason?: string)
 }
 
 /**
- * Auto-commit safe files in a project directory.
- * Filters out dangerous files (credentials, env, large, binary).
- * Never pushes. Mirrors bash bus/auto-commit.sh.
+ * Stage safe files at the git repo root CONTAINING `projectDir`.
+ *
+ * Resolves upward to the toplevel and operates there — `git status --porcelain`
+ * emits repo-root-relative paths, so pointing this at a subdirectory would make
+ * every existsSync() guard below miss, silently disabling the credential and size
+ * checks while still returning success.
+ *
+ * Filters out credentials, .env, oversized and binary files. Never pushes.
+ * Returns 'not_a_repo' — NOT 'clean' — when the root cannot be resolved, so a
+ * broken invocation is distinguishable from a healthy no-op.
  */
 export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCommitReport {
-  // Resolve the git repo root CONTAINING projectDir, and operate from there.
-  // `git status --porcelain` emits repo-root-relative paths, so every later
-  // join()/`git add` must run from the toplevel — pointed at a subdirectory the
-  // existsSync() guards below all miss, and the credential/size checks silently
-  // no-op instead of blocking.
   let repoRoot: string;
   try {
     repoRoot = execSync('git rev-parse --show-toplevel', { cwd: projectDir, encoding: 'utf-8' }).trim();
-  } catch {
-    return { status: 'clean', staged: [], blocked: [] };
+  } catch (err) {
+    // Do NOT report 'clean' here. Reaching this branch means the directory does not
+    // exist or is not a work tree — the caller asked about something unusable, which
+    // is a different fact from "resolved fine, nothing to commit". Conflating them is
+    // how a silent success hides a broken invocation.
+    return {
+      status: 'not_a_repo',
+      staged: [],
+      blocked: [],
+      error: `could not resolve a git repo at ${projectDir}: ${(err as Error).message?.split('\n')[0] ?? 'unknown'}`,
+    };
   }
   if (!repoRoot) {
-    return { status: 'clean', staged: [], blocked: [] };
+    return { status: 'not_a_repo', staged: [], blocked: [], error: `empty toplevel for ${projectDir}` };
   }
   projectDir = repoRoot;
 
-  // Get changed files
+  // Get changed files.
+  //
+  // `-z` is REQUIRED, not a nicety. Without it git quotes any path containing a
+  // space or non-ASCII character (emitting a literal `"has space.txt"`), and renames
+  // arrive as `R  old -> new` on one line. The previous `line.slice(3)` handed both
+  // straight through, producing entries like `a.txt -> b.txt` and `"has space.txt"`
+  // that then FAILED `git add` — and the failure was swallowed by an empty catch, so
+  // the report listed files it had not staged. Worse, existsSync() is false for those
+  // mangled paths, which SKIPPED the credential scan and the 10MB check for exactly
+  // the files most likely to need them.
+  //
+  // With -z: entries are NUL-terminated and never quoted. A rename/copy emits TWO
+  // NUL-separated fields — `XY new` then `old` — so the extra field must be consumed.
   let porcelainOutput: string;
   try {
-    porcelainOutput = execSync('git status --porcelain', { cwd: projectDir, encoding: 'utf-8' });
-  } catch {
-    return { status: 'clean', staged: [], blocked: [] };
+    // `-uall` is a SECURITY requirement, not verbosity. By default git collapses an
+    // untracked directory to a single `?? nested/` entry. That directory then gets
+    // staged as one unit — and because statSync(dir).isFile() is false, the credential
+    // scan and the 10MB check are BOTH SKIPPED for every file inside it. A brand-new
+    // folder containing an API key would be staged unscanned. Found 2026-08-13 by a
+    // regression test written for the -z change, which failed for this reason.
+    porcelainOutput = execSync('git status --porcelain -z -uall', { cwd: projectDir, encoding: 'utf-8' });
+  } catch (err) {
+    return {
+      status: 'not_a_repo',
+      staged: [],
+      blocked: [],
+      error: `git status failed in ${projectDir}: ${(err as Error).message?.split('\n')[0] ?? 'unknown'}`,
+    };
   }
 
   if (!porcelainOutput.trim()) {
     return { status: 'clean', staged: [], blocked: [] };
   }
 
-  const changedFiles = porcelainOutput
-    .split('\n')
-    .filter(line => line.trim())
-    .map(line => line.slice(3)); // cut from column 4 (0-indexed col 3)
+  const fields = porcelainOutput.split('\0').filter(f => f.length > 0);
+  const changedFiles: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const entry = fields[i];
+    if (entry.length < 4) continue;
+    const xy = entry.slice(0, 2);
+    changedFiles.push(entry.slice(3));
+    // Rename/copy: the ORIGINAL path follows as its own field. Consume it so it is
+    // not mistaken for a status entry and sliced into nonsense.
+    if (xy[0] === 'R' || xy[0] === 'C' || xy[1] === 'R' || xy[1] === 'C') i++;
+  }
 
   const staged: string[] = [];
   const blocked: string[] = [];
@@ -208,13 +263,24 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
     return { status: 'dry_run', staged, blocked };
   }
 
-  // Stage safe files
+  // Stage safe files.
+  //
+  // A failed `git add` used to be swallowed while the path stayed in `staged`, so the
+  // returned report was a statement of INTENT, not of fact — it listed files that were
+  // never staged, and its own diff_stat contradicted it. Report only what actually
+  // staged, and surface the rest as blocked so a failure is visible instead of silent.
+  const actuallyStaged: string[] = [];
   for (const file of staged) {
     try {
-      execFileSync('git', ['add', file], { cwd: projectDir, stdio: 'pipe' });
-    } catch {
-      // Ignore individual add failures
+      execFileSync('git', ['add', '--', file], { cwd: projectDir, stdio: 'pipe' });
+      actuallyStaged.push(file);
+    } catch (err) {
+      blocked.push(`${file}:git_add_failed`);
     }
+  }
+
+  if (actuallyStaged.length === 0) {
+    return { status: 'nothing_to_stage', staged: [], blocked };
   }
 
   // Get diff stat
@@ -227,7 +293,7 @@ export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCom
     // Ignore
   }
 
-  return { status: 'staged', staged, blocked, diff_stat: diffStat };
+  return { status: 'staged', staged: actuallyStaged, blocked, diff_stat: diffStat };
 }
 
 /**
