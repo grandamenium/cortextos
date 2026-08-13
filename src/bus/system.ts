@@ -43,7 +43,11 @@ const EXCLUDED_DIR_PREFIXES = [
   '.venv/',
 ];
 
-const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|sk-|ghp_|xoxb-|AKIA)/;
+// `sk-` was an unanchored substring: it matched INSIDE ordinary words — "disk-",
+// "task-", "risk-", "desk-" — so agent memory files (full of "task-" ids) were all
+// blocked as credential leaks. Anchored to a word start and required to be followed
+// by real key material, which tightens false positives without losing real sk- keys.
+const CREDENTIAL_PATTERNS = /(?:token=|key=|password=|secret=|\bsk-[A-Za-z0-9_-]{8,}|ghp_|xoxb-|AKIA)/;
 
 const SCRIPT_EXTENSIONS = new Set(['.sh', '.py', '.js']);
 
@@ -98,12 +102,21 @@ export function hardRestart(paths: BusPaths, agentName: string, reason?: string)
  * Never pushes. Mirrors bash bus/auto-commit.sh.
  */
 export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCommitReport {
-  // Check if git repo
+  // Resolve the git repo root CONTAINING projectDir, and operate from there.
+  // `git status --porcelain` emits repo-root-relative paths, so every later
+  // join()/`git add` must run from the toplevel — pointed at a subdirectory the
+  // existsSync() guards below all miss, and the credential/size checks silently
+  // no-op instead of blocking.
+  let repoRoot: string;
   try {
-    execSync('git rev-parse --is-inside-work-tree', { cwd: projectDir, stdio: 'pipe' });
+    repoRoot = execSync('git rev-parse --show-toplevel', { cwd: projectDir, encoding: 'utf-8' }).trim();
   } catch {
     return { status: 'clean', staged: [], blocked: [] };
   }
+  if (!repoRoot) {
+    return { status: 'clean', staged: [], blocked: [] };
+  }
+  projectDir = repoRoot;
 
   // Get changed files
   let porcelainOutput: string;

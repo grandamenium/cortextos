@@ -713,7 +713,12 @@ busCommand
   .option('--dry-run', 'Show what would be staged without modifying git')
   .action((opts: { dryRun?: boolean }) => {
     const env = resolveEnv();
-    const projectDir = env.projectRoot || env.frameworkRoot || process.cwd();
+    // agentDir FIRST: projectRoot is pinned equal to frameworkRoot (see resolveEnv),
+    // and the framework repo gitignores orgs/ — so resolving to it means auto-commit
+    // can never see agent changes, and stages unrelated framework WIP instead.
+    // The agent estate is a separate repo nested under orgs/; autoCommit walks up
+    // from here to that repo's toplevel.
+    const projectDir = env.agentDir || env.projectRoot || env.frameworkRoot || process.cwd();
     const report = autoCommit(projectDir, opts.dryRun ?? false);
     console.log(JSON.stringify(report));
   });
