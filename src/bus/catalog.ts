@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSy
 import { join, resolve, relative } from 'path';
 import { execSync, execFileSync } from 'child_process';
 import { ensureDir } from '../utils/atomic.js';
+import { CREDENTIAL_PATTERNS } from './system.js';
 
 // --- Types ---
 
@@ -80,13 +81,13 @@ export interface SubmitResult {
 const PII_PATTERNS = {
   email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/,
   phone: /\+?[0-9]{1,3}[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}/,
-  // Kept in step with CREDENTIAL_PATTERNS in src/bus/system.ts (2026-08-13). Two
-  // divergent definitions of "looks like a credential" existed in one codebase: this
-  // one still carried the unanchored `sk-` that matches inside ordinary words —
-  // "disk-", "task-", "risk-" — and was case-sensitive, missing `API_KEY=`/`TOKEN=`.
-  // If you change one, change the other.
-  credential:
-    /(?:token=|key=|password=|secret=|\bsk-[A-Za-z0-9_-]{8,}|\bsk_(?:live|test)_[A-Za-z0-9]{8,}|ghp_|xoxb-|AKIA)/i,
+  // NOW IMPORTED, NOT COPIED (2026-08-13). This slot previously held a second, divergent
+  // regex under the comment "If you change one, change the other." That instruction failed
+  // exactly as instructions do: system.ts was revised three times in one day and this copy
+  // was left behind every time, so the two disagreed about what a credential looks like
+  // while both claimed to be in step. Adversarial review found it still stale.
+  // A comment cannot couple two definitions. One definition can.
+  credential: CREDENTIAL_PATTERNS,
   telegram_chat_id: /chat_id[:\s]*[0-9]{6,}/,
   deployment_url: /https?:\/\/[a-z0-9.-]+\.(railway\.app|vercel\.app|herokuapp\.com|netlify\.app)/,
 };

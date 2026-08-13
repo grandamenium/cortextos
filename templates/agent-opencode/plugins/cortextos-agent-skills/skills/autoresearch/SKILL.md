@@ -69,8 +69,21 @@ cortextos bus create-experiment "<metric_name>" "<your hypothesis>" --surface <p
 If `approval_required` is true in `experiments/config.json`, you must manually create an approval before proceeding:
 ```bash
 APPR_ID=$(cortextos bus create-approval "Run experiment: <hypothesis>" other "Cycle: <cycle_name>, Metric: <metric_name>, Surface: <surface>")
-cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Approval needed to run experiment for <metric_name> — check dashboard"
-# Block until approved, then continue to Step 5
+# DO NOT BLOCK AND DO NOT TELEGRAM VINCE DIRECTLY. This step used to say
+# `cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID ...` followed by "block until approved".
+# Both were wrong and it cost the weekly experiment pipeline silently (found 2026-08-12):
+#   - Telegramming Vince directly violates the standing routing rule for every agent except
+#     the orchestrator, which is the only one that talks to him.
+#   - A ONE-SHOT WORKER CANNOT BLOCK. Its session ends, the run is lost, and the cron still
+#     exits 0 - so the failure is invisible. Most experiment cycles run as one-shot workers.
+# Do this instead, then STOP this run:
+#   If you ARE the orchestrator:
+#     cortextos bus send-telegram $CTX_TELEGRAM_CHAT_ID "Approval needed to run experiment for <metric_name> - check dashboard"
+#   If you are ANY other agent or a one-shot worker:
+#     cortextos bus send-message orchestrator normal "Cycle <cycle_name> blocked pending approval $APPR_ID - metric <metric_name>"
+# Either way: STOP HERE. Do not wait, do not poll, do not continue to Step 5. You will be
+# re-dispatched once the approval is decided; the approval id above is how the work resumes.
+# If an approval for this cycle was ALREADY granted, skip this gate and continue to Step 5.
 ```
 
 ### Step 5: Make Changes and Run

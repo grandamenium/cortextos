@@ -178,6 +178,30 @@ describe('Bus System', () => {
       expect(blockedNames).toContain('leak3.md');
     });
 
+    it('blocks *_KEY= shapes that a narrower alternation silently stopped matching', () => {
+      // FALSE-NEGATIVE REGRESSION, caught by adversarial review 2026-08-13. A revision
+      // replaced the bare `key=` alternative with the fixed compounds `api_key`/`secret_key`,
+      // which silently stopped matching every one of these — all of which the previous
+      // production regex caught. A false negative means the secret IS COMMITTED, which is
+      // strictly worse than the false positives that revision was made to fix.
+      writeFileSync(join(gitDir, 'a.md'), 'PRIVATE_KEY=abcdefghijklmnop');
+      writeFileSync(join(gitDir, 'b.md'), 'ENCRYPTION_KEY=abcdefghijklmnop');
+      writeFileSync(join(gitDir, 'c.md'), 'SIGNING_KEY=abcdefghijklmnop');
+      writeFileSync(join(gitDir, 'd.md'), 'ssh_key=abcdefghijklmnop');
+      writeFileSync(join(gitDir, 'e.md'), 'AWS_SECRET_ACCESS_KEY=abcdefghijklmnop');
+      // ordinary words ending in "key" must STILL be allowed — the bare `key` alternative
+      // must not reintroduce the false positives the anchoring was added to remove.
+      writeFileSync(join(gitDir, 'fine.md'), 'monkey=abcdefghijklmnop turkey=abcdefghijklmnop');
+
+      const report = autoCommit(gitDir, true);
+      const blocked = report.blocked.join(' ');
+      for (const f of ['a.md', 'b.md', 'c.md', 'd.md', 'e.md']) {
+        expect(blocked).toContain(f);
+      }
+      expect(report.staged).toContain('fine.md');
+      expect(blocked).not.toContain('fine.md');
+    });
+
     it('does not let an EMPTY assignment consume the next line as its value', () => {
       // `\s*=\s*` matched newlines, so a blank-valued template matched on the literal
       // text `ACTIVITY_BOT_TOKEN=\nACTIVITY_CHAT_ID` — the next VARIABLE NAME was being

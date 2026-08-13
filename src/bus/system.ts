@@ -67,7 +67,12 @@ const EXCLUDED_DIR_PREFIXES = [
 // the signal the check exists to give. So require a word boundary AND an actual
 // secret-shaped VALUE (12+ chars of key material), which excludes placeholders like
 // `<token from BotFather>`, `.`, and `value`.
-const CREDENTIAL_PATTERNS = new RegExp(
+// EXPORTED so `src/bus/catalog.ts` can import this one definition instead of keeping a
+// second copy (2026-08-13). Two divergent regexes both claiming to define "looks like a
+// credential" existed for months; catalog.ts even carried the comment "If you change one,
+// change the other" — and it was changed alone anyway, twice. A comment is not a coupling.
+// The only fix that holds is a single definition with one importer.
+export const CREDENTIAL_PATTERNS = new RegExp(
   [
     // NAME=VALUE, but only when the value looks like real key material
     // `:` is in the value class because Telegram bot tokens are `<digits>:<alnum>`,
@@ -92,7 +97,23 @@ const CREDENTIAL_PATTERNS = new RegExp(
     // Measured over the same 389-file corpus: 5 matches before, 4 after; the only file
     // cleared is the false positive, and all four real credential stores still match.
     // A credential never legitimately begins on the line after its `=`.
-    String.raw`(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|auth[_-]?token|access[_-]?token|bot[_-]?token|secret[_-]?key|token|password|passwd|secret)[ \t]*=[ \t]*['"]?[A-Za-z0-9_\-\/+.:]{12,}`,
+    // BARE `key` IS REQUIRED — its loss was a false-negative REGRESSION (fixed 2026-08-13,
+    // fourth revision, found by adversarial review). The third revision replaced the parent
+    // commit's bare `key=` with the fixed compounds `api_key`/`secret_key` only. Measured
+    // against the parent (decf2ec), that silently stopped matching FIVE real shapes:
+    //   PRIVATE_KEY=  ENCRYPTION_KEY=  SIGNING_KEY=  ssh_key=  AWS_SECRET_ACCESS_KEY=
+    // all of which the production regex had caught. A false negative means a secret is
+    // COMMITTED — strictly worse than the false positives that revision existed to fix.
+    //
+    // Why it escaped the "loss direction checked explicitly" claim: that measurement compared
+    // the new regex against the *uncommitted intermediate* revision, not against what was
+    // actually in production. The comparison was real; the baseline was wrong. Same error as
+    // an invalid A/B arm — a control that cannot detect the loss proves nothing about it.
+    //
+    // Bare `key` does NOT reintroduce `monkey=`/`sortKey=`: the leading `(?:^|[^A-Za-z0-9])`
+    // and the `WORD_`/`WORD-` prefix group require a separator before the keyword, which is
+    // exactly what those words lack. Verified by test.
+    String.raw`(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|auth[_-]?token|access[_-]?token|bot[_-]?token|secret[_-]?key|passphrase|token|password|passwd|secret|key)[ \t]*=[ \t]*['"]?[A-Za-z0-9_\-\/+.:]{12,}`,
     // Vendor-prefixed keys are self-identifying — no value shape needed beyond length
     String.raw`\bsk-[A-Za-z0-9_-]{8,}`,
     String.raw`\bsk_(?:live|test)_[A-Za-z0-9]{8,}`,
