@@ -16,6 +16,7 @@ import { collectTelegramCommands, registerTelegramCommands } from '../bus/metric
 import { stripControlChars } from '../utils/validate.js';
 import { processMediaMessage } from '../telegram/media.js';
 import { stripBom } from '../utils/strip-bom.js';
+import { BuzzRelayClient, BuzzDispatcher, loadBuzzConfig, type NostrEvent } from '../buzz/index.js';
 
 type LogFn = (msg: string) => void;
 
@@ -39,6 +40,15 @@ function isPidAlive(pid: number): boolean {
 export class AgentManager {
   private agents: Map<string, { process: AgentProcess; checker: FastChecker; poller?: TelegramPoller; activityPoller?: TelegramPoller; telegramRejectCount?: number; telegramLastRejectAlertAt?: number }> = new Map();
   private workers: Map<string, WorkerProcess> = new Map();
+  /**
+   * Org-level singleton Buzz relay client + dispatcher, keyed by org — one
+   * shared WebSocket connection per org (mirrors the Slack Socket Mode
+   * shape: one relay per workspace/org, not one connection per agent).
+   * Only the org's orchestrator starts these; every other agent in the org
+   * registers into the same dispatcher instance without opening its own
+   * connection.
+   */
+  private buzzClients: Map<string, { client: BuzzRelayClient; dispatcher: BuzzDispatcher; started: boolean }> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
   // Tracks agents that received a start request while still stopping.
@@ -788,6 +798,19 @@ export class AgentManager {
       // operator pain. Non-orchestrator agents skip this entirely.
       await this.maybeStartActivityChannelPoller(name, org, agentDir, log);
     }
+
+    // Buzz (Nostr/NIP-29) registration + org-level relay start. Every agent
+    // with a buzz.json registers into the org's shared dispatcher (even if
+    // this agent isn't the orchestrator); only the orchestrator opens the
+    // actual relay connection. Non-blocking by construction — both the
+    // dispatcher registration and the relay start below are wrapped so a
+    // Buzz misconfiguration or outage can never block agent/orchestrator
+    // startup.
+    try {
+      await this.maybeRegisterBuzzAgent(name, org, agentDir, log);
+    } catch (err) {
+      log(`Buzz registration failed (non-fatal): ${err}`);
+    }
   }
 
   /**
@@ -913,6 +936,80 @@ export class AgentManager {
   }
 
   /**
+   * Ensures this org has a running Buzz relay client (started once, by the
+   * orchestrator only) and registers this agent's buzz.json into that org's
+   * shared BuzzDispatcher — mirrors maybeStartActivityChannelPoller's
+   * "org.json says who the orchestrator is, only it starts the shared
+   * connection" gate, but every agent (not just the orchestrator) still
+   * needs to register itself so the dispatcher knows to route messages to
+   * it. Safe no-op if the agent has no buzz.json, org is unset, or
+   * context.json is missing/corrupt.
+   */
+  private async maybeRegisterBuzzAgent(
+    name: string,
+    org: string | undefined,
+    agentDir: string,
+    log: LogFn,
+  ): Promise<void> {
+    if (!org) return;
+    const buzzConfig = loadBuzzConfig(agentDir);
+    if (!buzzConfig) return; // no buzz.json / no BUZZ_PRIVATE_KEY — Buzz disabled for this agent
+
+    let entry = this.buzzClients.get(org);
+    if (!entry) {
+      const relayUrl = buzzConfig.relay_url || process.env.BUZZ_RELAY_URL;
+      if (!relayUrl) {
+        log('Buzz configured but no relay_url (buzz.json or BUZZ_RELAY_URL) — skipping');
+        return;
+      }
+      const dispatcher = new BuzzDispatcher();
+      const client = new BuzzRelayClient(relayUrl, buzzConfig.secret_key, (msg) => log(`[buzz] ${msg}`));
+      client.onMessage((channelId, event: NostrEvent) => {
+        const results = dispatcher.dispatch(channelId, event);
+        for (const result of results) {
+          const target = this.agents.get(result.agentName);
+          if (!target) continue;
+          const formatted = FastChecker.formatBuzzTextMessage(event.pubkey, channelId, event.content);
+          target.checker.queueBuzzMessage(formatted);
+        }
+      });
+      entry = { client, dispatcher, started: false };
+      this.buzzClients.set(org, entry);
+    }
+
+    // Only the org's orchestrator opens the actual relay connection — same
+    // gate as the activity-channel poller. Checked on every call (not just
+    // entry creation) so a non-orchestrator registering first does not
+    // permanently prevent the orchestrator from later starting the shared
+    // connection once it also registers.
+    if (!entry.started) {
+      const orgDir = join(this.frameworkRoot, 'orgs', org);
+      let orchestratorName: string | undefined;
+      try {
+        const contextJson = stripBom(readFileSync(join(orgDir, 'context.json'), 'utf-8'));
+        orchestratorName = JSON.parse(contextJson).orchestrator;
+      } catch {
+        // No context.json — fall back to "whichever agent registers first
+        // starts the connection" rather than never starting it at all.
+      }
+      if (!orchestratorName || orchestratorName === name) {
+        entry.started = true;
+        try {
+          entry.client.start().catch((err) => {
+            log(`Buzz relay client wrapper crashed (non-fatal): ${err}`);
+          });
+        } catch (err) {
+          log(`Buzz relay client failed to start (non-fatal): ${err}`);
+        }
+      }
+    }
+
+    entry.dispatcher.register(name, buzzConfig);
+    entry.client.subscribeChannels(entry.dispatcher.allChannels());
+    log(`Buzz registered for org ${org} (channels: ${buzzConfig.channels.join(', ') || 'none'})`);
+  }
+
+  /**
    * Stop a specific agent.
    */
   async stopAgent(name: string, userInitiated = false): Promise<void> {
@@ -924,6 +1021,13 @@ export class AgentManager {
 
     if (entry.poller) entry.poller.stop();
     if (entry.activityPoller) entry.activityPoller.stop();
+    // Unregister from every org's Buzz dispatcher — harmless no-op for orgs
+    // this agent was never registered in. We don't track which org this
+    // agent belongs to on the entry itself, so this sweeps all of them
+    // rather than requiring an extra lookup.
+    for (const buzzEntry of this.buzzClients.values()) {
+      buzzEntry.dispatcher.unregister(name);
+    }
     entry.checker.stop();
     await entry.process.stop();
     this.agents.delete(name);
@@ -1024,6 +1128,17 @@ export class AgentManager {
         console.error(`[agent-manager] Error stopping ${name}:`, err);
       }
     }
+
+    // Close every org's shared Buzz relay connection now that all agents
+    // (and thus all dispatcher registrations) are torn down.
+    for (const [org, buzzEntry] of this.buzzClients) {
+      try {
+        buzzEntry.client.stop();
+      } catch (err) {
+        console.error(`[agent-manager] Error stopping Buzz relay client for org ${org}:`, err);
+      }
+    }
+    this.buzzClients.clear();
   }
 
   /**

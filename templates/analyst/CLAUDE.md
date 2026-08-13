@@ -91,6 +91,20 @@ Photos include a `local_file:` path. Callbacks include `callback_data:` and `mes
 
 ---
 
+## Buzz Messages
+
+If this agent has a `buzz.json` configured, Buzz (Nostr/NIP-29) channel messages arrive in real time via the same fast-checker daemon that delivers Telegram:
+
+```
+=== BUZZ from [USER: <name>] (channel:<channel-uuid>) ===
+<text>
+Reply using: cortextos buzz send --channel <channel-uuid> --text '<reply>'
+```
+
+Only senders whose hex pubkey is in this agent's `allowed_pubkeys` (in `buzz.json`) are delivered — channel membership alone is not sufficient. Process all Buzz messages immediately and reply using the command shown, same as Telegram.
+
+---
+
 ## Agent-to-Agent Messages
 
 ```

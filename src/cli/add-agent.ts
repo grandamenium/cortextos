@@ -21,8 +21,9 @@ export const addAgentCommand = new Command('add-agent')
   .option('--org <org>', 'Organization name')
   .option('--instance <id>', 'Instance ID', 'default')
   .option('--runtime <runtime>', `Agent runtime (${VALID_RUNTIMES.join(', ')})`, 'claude-code')
+  .option('--buzz-channel <uuid>', 'Buzz (Nostr/NIP-29) channel UUID to scaffold this agent onto')
   .description('Add a new agent to the organization')
-  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string }) => {
+  .action(async (name: string, options: { template: string; org?: string; instance: string; runtime: string; buzzChannel?: string }) => {
     if (!VALID_RUNTIMES.includes(options.runtime as RuntimeKind)) {
       console.error(`Error: --runtime must be one of: ${VALID_RUNTIMES.join(', ')} (got "${options.runtime}")`);
       process.exit(1);
@@ -338,6 +339,29 @@ export const addAgentCommand = new Command('add-agent')
       };
       writeFileSync(enabledPath, JSON.stringify(enabledAgents, null, 2) + '\n', 'utf-8');
       console.log(`  Registered in enabled-agents.json`);
+    }
+
+    // Scaffold buzz.json when --buzz-channel is given. Deliberately does
+    // NOT generate a keypair here — identity minting stays a separate,
+    // out-of-band operator step (buzz-admin generate-key), matching the
+    // Slack precedent of requiring the operator to create the Slack app
+    // and paste in a token rather than add-agent silently minting and
+    // printing a secret that could end up in scrollback/screen-recordings.
+    // allowed_pubkeys defaults to empty — fail-closed until the operator
+    // explicitly grants access, same posture as Slack's allowed_users.
+    if (options.buzzChannel) {
+      const buzzConfig = {
+        pubkey: '',
+        display_name: name,
+        channels: [options.buzzChannel],
+        allowed_pubkeys: [] as string[],
+      };
+      writeFileSync(join(agentDir, 'buzz.json'), JSON.stringify(buzzConfig, null, 2) + '\n', 'utf-8');
+      console.log(`  Scaffolded buzz.json for channel ${options.buzzChannel}`);
+      console.log(`    NOTE: pubkey is empty and allowed_pubkeys is empty (fail-closed).`);
+      console.log(`    Run \`buzz-admin generate-key\` to mint this agent's identity, fill in`);
+      console.log(`    "pubkey" above, set BUZZ_PRIVATE_KEY in ${join('orgs', org, 'agents', name, '.env')},`);
+      console.log(`    and add trusted senders' hex pubkeys to "allowed_pubkeys" before starting.`);
     }
 
     console.log(`\n  Agent "${name}" created.`);
