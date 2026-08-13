@@ -100,7 +100,15 @@ If goals changed since last check, create tasks to address them:
 cortextos bus create-task "<title>" --desc "<description>" --assignee $CTX_AGENT_NAME --priority normal
 ```
 
-## Step 7: Resume work
+## Step 7: Update long-term memory (if applicable)
+
+If you learned something this cycle that should persist across sessions:
+- Patterns that work/don't work
+- User preferences discovered
+- System behaviors noted
+- Append to MEMORY.md
+
+## Step 8: Resume work
 
 Pick your highest priority task and work on it.
 
@@ -113,14 +121,6 @@ When done:
 ```bash
 cortextos bus complete-task "<task_id>" "<summary of what was produced>"
 ```
-
-## Step 8: Update long-term memory (if applicable)
-
-If you learned something this cycle that should persist across sessions:
-- Patterns that work/don't work
-- User preferences discovered
-- System behaviors noted
-- Append to MEMORY.md
 
 ---
 
