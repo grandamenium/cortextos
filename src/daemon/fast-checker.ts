@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync } from 'fs';
-import { execFile } from 'child_process';
+import { updateHeartbeat } from '../bus/heartbeat.js';
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
@@ -141,9 +141,17 @@ export class FastChecker {
     const agentName = this.agent.name;
     this.heartbeatTimer = setInterval(() => {
       const ts = new Date().toISOString();
-      execFile('cortextos', ['bus', 'update-heartbeat', `[watchdog] ${agentName} alive — idle session ${ts}`], (err) => {
-        if (err) this.log(`Heartbeat watchdog error: ${err.message}`);
-      });
+      // In-process write with EXPLICIT agentName. The previous execFile
+      // shell-out inherited the daemon's env/cwd, where CTX_AGENT_NAME is
+      // unset — resolveEnv fell back to basename(cwd), so every agent's
+      // watchdog beat landed in one phantom state dir named after the
+      // framework checkout instead of the agent (2026-07-10 diagnosis,
+      // addendum 3). In-process removes the ambient-env failure class.
+      try {
+        updateHeartbeat(this.paths, agentName, `[watchdog] ${agentName} alive — idle session ${ts}`, { org: this.agent.org });
+      } catch (err) {
+        this.log(`Heartbeat watchdog error: ${err}`);
+      }
     }, HEARTBEAT_INTERVAL_MS);
 
     while (this.running) {

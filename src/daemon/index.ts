@@ -1,4 +1,6 @@
 import { AgentManager } from './agent-manager.js';
+import { installTimestampedConsole } from './log-timestamps.js';
+import { StalenessDetector } from './staleness-detector.js';
 import { IPCServer } from './ipc-server.js';
 import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'fs';
 import { spawnSync } from 'child_process';
@@ -223,6 +225,8 @@ class Daemon {
   private instanceId: string;
   private ctxRoot: string;
 
+  private stalenessDetector: StalenessDetector | null = null;
+
   constructor() {
     this.instanceId = process.env.CTX_INSTANCE_ID || 'default';
     // Always derive ctxRoot from instanceId to avoid inheriting a parent cortextOS's CTX_ROOT
@@ -230,6 +234,7 @@ class Daemon {
   }
 
   async start(): Promise<void> {
+    installTimestampedConsole();
     // Force restrictive default permissions for everything the daemon writes:
     // 0700 dirs, 0600 files. Belt-and-suspenders for explicit chmod calls.
     if (process.platform !== 'win32') {
@@ -265,6 +270,16 @@ class Daemon {
 
     // Discover and start agents
     await this.agentManager.discoverAndStart();
+
+    // Dual-source staleness detector: non-session wake trigger for the
+    // injection-stall class (flags only when heartbeat AND cron fires AND
+    // idle flag are all silent past threshold).
+    this.stalenessDetector = new StalenessDetector({
+      instanceId: this.instanceId,
+      ctxRoot: this.ctxRoot,
+      listAgents: () => this.agentManager!.getAgentRoster(),
+    });
+    this.stalenessDetector.start();
 
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
