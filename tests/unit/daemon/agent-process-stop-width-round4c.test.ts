@@ -66,6 +66,14 @@ function makeStubPty() {
     write(s: string) { writes.push(s); },
     isAlive() { return false; },   // false ⇒ kill() is skipped, per :272
     kill() { /* unreachable while isAlive() is false */ },
+    // Change A (death-confirmed stop) added an unconditional `pty.getPid()` read
+    // to stop() before the kill, to identify the OS child for a possible SIGKILL
+    // escalation. getPid() is a real method on every PTY subclass (AgentPTY etc.,
+    // used by getStatus()/start()); this stub predates that read. undefined here
+    // means "no live child" — consistent with isAlive()===false — so stop()'s
+    // `if (childPid && ...)` SIGKILL branch stays skipped and the measured floors
+    // and write assertions below are unchanged.
+    getPid() { return undefined; },
   };
 }
 

@@ -277,6 +277,139 @@ describe('AgentProcess - BUG-011 fix (stop awaits PTY exit)', () => {
   });
 });
 
+describe('AgentProcess - duplicate-PTY fix (death-confirmed + join-in-flight stop)', () => {
+  // Model a SIGHUP-immune child: node-pty's kill() sends SIGHUP with no
+  // escalation, so a wedged child never fires onExit and stays alive to the
+  // signal-0 liveness probe until a real SIGKILL is delivered. The spy answers
+  // both the signal-0 probes (isChildAlive) and the SIGKILL escalation.
+  function installKillSpy() {
+    let killed = false;
+    let sigkillCount = 0;
+    const spy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, sig?: string | number) => {
+      if (sig === 'SIGKILL') {
+        killed = true;
+        sigkillCount++;
+        return true;
+      }
+      // signal-0 liveness probe (isChildAlive)
+      if (killed) {
+        const e = new Error('ESRCH') as NodeJS.ErrnoException;
+        e.code = 'ESRCH';
+        throw e;
+      }
+      return true; // still alive
+    }) as unknown as typeof process.kill);
+    return { spy, sigkills: () => sigkillCount };
+  }
+
+  it('W1: stop() escalates to SIGKILL and reaps a SIGHUP-immune child before resolving', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+    expect(ap.getStatus().status).toBe('running');
+
+    const { spy, sigkills } = installKillSpy();
+    vi.useFakeTimers();
+    try {
+      let resolved = false;
+      const stopP = ap.stop().then(() => { resolved = true; });
+
+      // Advance through stop()'s graceful window: 1s (Ctrl-C) + 5s (/exit) +
+      // 15s (Promise.race bound). capturedOnExit is never fired — the child is
+      // wedged — so the sleep(15000) wins the race. stop() must NOT be resolved
+      // yet: the child is still alive and the SIGKILL escalation has to run.
+      await vi.advanceTimersByTimeAsync(1000 + 5000 + 14000);
+      expect(resolved).toBe(false);
+      expect(spy).not.toHaveBeenCalledWith(12345, 'SIGKILL');
+
+      // Cross the 15s race boundary. Now the graceful window has elapsed with the
+      // child still alive -> SIGKILL is delivered, the bounded poll observes death
+      // (signal-0 now throws ESRCH), and stop() resolves to 'stopped'.
+      await vi.advanceTimersByTimeAsync(2000);
+      await stopP;
+
+      expect(resolved).toBe(true);
+      expect(spy).toHaveBeenCalledWith(12345, 'SIGKILL');
+      expect(sigkills()).toBe(1);
+      expect(ap.getStatus().status).toBe('stopped');
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('W2: a re-entrant stop() joins the death-confirmed teardown (one SIGKILL, both resolve together)', async () => {
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    const { spy, sigkills } = installKillSpy();
+    vi.useFakeTimers();
+    try {
+      let p1done = false;
+      let p2done = false;
+      const p1 = ap.stop().then(() => { p1done = true; });
+      // Re-enter stop() while the first teardown is parked in its graceful
+      // window. Before Change B this returned immediately (silent no-op),
+      // letting the manager's eviction path spawn a fresh PTY alongside the
+      // still-alive predecessor. Now it must JOIN the in-flight teardown.
+      const p2 = ap.stop().then(() => { p2done = true; });
+
+      // Through the graceful window: neither resolves — the re-entrant stop is
+      // waiting on the SAME teardown, not short-circuiting out early.
+      await vi.advanceTimersByTimeAsync(1000 + 5000 + 14000);
+      expect(p1done).toBe(false);
+      expect(p2done).toBe(false);
+
+      // Cross the race boundary -> single SIGKILL -> death confirmed -> BOTH
+      // callers unblock at the same time off the shared teardown promise.
+      await vi.advanceTimersByTimeAsync(2000);
+      await Promise.all([p1, p2]);
+
+      expect(p1done).toBe(true);
+      expect(p2done).toBe(true);
+      // Exactly one teardown ran: the join shares it, so SIGKILL fires once.
+      expect(sigkills()).toBe(1);
+      expect(ap.getStatus().status).toBe('stopped');
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('fast-exit path adds no SIGKILL and no added latency (Change A false-kill guard)', async () => {
+    // Regression control: when the child exits cleanly inside the graceful
+    // window, the SIGKILL escalation must NOT run. This proves Change A is
+    // scoped to the timed-out case only — a normal stop is unchanged.
+    const ap = new AgentProcess('alice', mockEnv, {});
+    await ap.start();
+
+    let killed = false;
+    const spy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, sig?: string | number) => {
+      if (sig === 'SIGKILL') { killed = true; return true; }
+      // Child already exited (onExit fired): signal-0 reports dead.
+      const e = new Error('ESRCH') as NodeJS.ErrnoException;
+      e.code = 'ESRCH';
+      throw e;
+    }) as unknown as typeof process.kill);
+    // The PTY also reports not-alive after the exit, so pty.kill() is skipped.
+    mockPty.isAlive.mockReturnValue(false);
+
+    try {
+      const stopP = ap.stop();
+      // Fire the exit promptly — the child exits within the graceful window,
+      // winning the Promise.race well before the 15s bound.
+      await new Promise((r) => setTimeout(r, 50));
+      capturedOnExit!(0, 0);
+      await stopP;
+
+      expect(ap.getStatus().status).toBe('stopped');
+      expect(spy).not.toHaveBeenCalledWith(expect.anything(), 'SIGKILL');
+      expect(killed).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 10000);
+});
+
 describe('AgentProcess - disable-resurrection fix (.user-disable gate)', () => {
   it('disabled agent force-exit does NOT trigger crash recovery', async () => {
     // A disabled agent that force-exits/crashes arrives at handleExit with

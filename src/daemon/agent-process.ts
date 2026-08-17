@@ -46,6 +46,13 @@ export class AgentProcess {
   private sessionStart: Date | null = null;
   private status: AgentStatus['status'] = 'stopped';
   private stopping: boolean = false;
+  // Change B (join-in-flight re-entry): the single in-flight teardown promise.
+  // A stop() that arrives while a teardown is already running awaits THIS
+  // instead of returning immediately. The only re-entrant caller is the
+  // manager's eviction path (`await stale.process.stop()`), which must block
+  // until the real, death-confirmed teardown completes rather than racing a
+  // fresh spawn against a still-alive predecessor (the duplicate-PTY defect).
+  private stopInFlight: Promise<void> | null = null;
   // BUG-040 fix: persists across stop() return until handleExit clears it.
   // Required because BUG-032's CRLF + 5s wait can cause graceful shutdown to
   // exceed the 5s Promise.race timeout in stop(), which would otherwise reset
@@ -227,9 +234,28 @@ export class AgentProcess {
 
   /**
    * Stop the agent gracefully.
+   *
+   * Change B (join-in-flight): a re-entrant stop() awaits the in-flight teardown
+   * instead of the previous silent early no-op (`if (this.stopping) return;`).
+   * The only re-entrant caller is the manager's eviction path
+   * (`await stale.process.stop()`), which WANTS to block until the predecessor
+   * is truly dead before spawning fresh — the previous no-op let it return
+   * immediately and spawn a second live PTY alongside the still-alive first one.
    */
   async stop(): Promise<void> {
-    if (this.stopping) return;
+    if (this.stopping) {
+      if (this.stopInFlight) await this.stopInFlight;
+      return;
+    }
+    this.stopInFlight = this.runStop();
+    try {
+      await this.stopInFlight;
+    } finally {
+      this.stopInFlight = null;
+    }
+  }
+
+  private async runStop(): Promise<void> {
     this.stopping = true;
     // BUG-040 fix: stopRequested persists ACROSS stop()'s return until
     // handleExit clears it. This is the safety net for the case where the
@@ -285,6 +311,11 @@ export class AgentProcess {
       } catch {
         // Ignore write errors during shutdown
       }
+      // Change A (death-confirmed stop): capture the OS child pid BEFORE
+      // pty.kill(). node-pty's kill() can invalidate the handle, so getPid()
+      // is unreliable afterward — we need the pid to confirm death below.
+      const childPid = pty.getPid();
+
       // BUG-032 follow-up: only kill the PTY if the process is still alive.
       // After /exit + 5s wait, the child has usually exited cleanly. Calling
       // pty.kill() on an already-exited PTY tears down the file descriptor,
@@ -306,6 +337,33 @@ export class AgentProcess {
       // timeout reduces "Ignoring late exit from previous lifecycle" log noise.
       if (exitPromise) {
         await Promise.race([exitPromise, sleep(15000)]);
+      }
+
+      // Change A (death-confirmed stop): node-pty's kill() sends SIGHUP with no
+      // escalation, so a child that traps/ignores SIGHUP (or is simply slow to
+      // unwind) outlives the graceful window above. stop() would then return
+      // with the OS child still alive and untracked — free to co-emit alongside
+      // the next spawn under this agent name (the duplicate-PTY defect). If the
+      // child is still alive after the bounded race, escalate to SIGKILL and
+      // poll until the OS confirms it is gone before returning. This branch runs
+      // ONLY when the child survived the graceful window, so a normal fast exit
+      // adds ZERO latency and never sees a SIGKILL (no false kills).
+      if (childPid && isChildAlive(childPid)) {
+        this.log(`Graceful stop timed out — escalating to SIGKILL (pid ${childPid})`);
+        try {
+          process.kill(childPid, 'SIGKILL');
+        } catch {
+          // ESRCH: exited between the liveness check and the kill — fine.
+        }
+        // Bounded poll: 5s deadline / 100ms interval (hardcoded — a stop must
+        // not block the daemon indefinitely on a wedged, unkillable child).
+        const deadline = Date.now() + 5000;
+        while (isChildAlive(childPid) && Date.now() < deadline) {
+          await sleep(100);
+        }
+        if (isChildAlive(childPid)) {
+          this.log(`WARNING: pid ${childPid} still alive 5s after SIGKILL — proceeding anyway`);
+        }
       }
     }
 
@@ -1135,4 +1193,18 @@ export class AgentProcess {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Change A: OS-level pid liveness probe using the signal-0 idiom. Local copy of
+// the same helper duplicated in agent-manager.ts (isPidAlive), utils/lock.ts,
+// and pty/opencode-pty.ts: signal 0 sends nothing, it only tests process
+// existence + our permission to signal it. A process owned by another user
+// (EPERM) is alive; only ESRCH (process gone) counts as dead.
+function isChildAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }
