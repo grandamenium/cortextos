@@ -6,6 +6,7 @@ import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
+import { ensureRequiredHooks } from './hook-reconciler.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -552,6 +553,10 @@ export class AgentManager {
     if (!config) {
       config = this.loadAgentConfig(agentDir);
     }
+
+    // Reconcile required hooks into the agent's settings (agents spawned
+    // from older templates may lack them — 2026-07-09 stall diagnosis #1).
+    ensureRequiredHooks(agentDir, (msg) => console.log(`[agent-manager] ${name}: ${msg}`));
 
     const env: CtxEnv = {
       instanceId: this.instanceId,
@@ -1740,6 +1745,13 @@ export class AgentManager {
    */
   getAgentNames(): string[] {
     return [...this.agents.keys()];
+  }
+
+  /**
+   * Live roster with orgs — consumed by the daemon staleness detector.
+   */
+  getAgentRoster(): Array<{ name: string; org: string }> {
+    return [...this.agents.entries()].map(([name, v]) => ({ name, org: v.process.org }));
   }
 
   /**

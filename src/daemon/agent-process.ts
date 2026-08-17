@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { join, sep } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
@@ -31,6 +32,8 @@ const OPENCODE_CONTINUE_WEDGE_FAST_EXIT_MS = 60_000;
  */
 export class AgentProcess {
   readonly name: string;
+  /** Agent's org (read-only view of env.org) — used by fast-checker heartbeat writes. */
+  get org(): string { return this.env.org; }
   private env: CtxEnv;
   private config: AgentConfig;
   private pty: AgentPTY | CodexAppServerPTY | null = null;
@@ -197,7 +200,9 @@ export class AgentProcess {
     });
 
     try {
+      const spawnedAtMs = Date.now(); // before spawn: the boot prompt may submit while spawn() awaits bootstrap
       await this.pty.spawn(mode, prompt);
+      this.startBootDeliveryCheck(spawnedAtMs);
       // Codex exec-per-turn race: the new PTY's onExit can fire BEFORE this
       // line if `codex exec` completes its prompt quickly (CodexAppServerPTY's spawn
       // resolves once exec is launched, but the process may exit moments
@@ -387,6 +392,218 @@ export class AgentProcess {
    */
   injectMessage(content: string): boolean {
     return this.injectMessageDetailed(content).ok;
+  }
+
+  private promptFlagPath(): string {
+    return join(this.env.ctxRoot, 'state', this.name, 'last_prompt.flag');
+  }
+
+  private promptTextPath(): string {
+    return join(this.env.ctxRoot, 'state', this.name, 'last_prompt.txt');
+  }
+
+  /** mtime of last_prompt.flag in ms epoch; 0 when it has never been written. */
+  promptFlagMtimeMs(): number {
+    try {
+      return statSync(this.promptFlagPath()).mtimeMs;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Read the turn-start flag with its attribution payload (G-D2-2).
+   * hashCapable=false for the legacy plain-integer flag format (older hook) —
+   * confirmation then degrades to mtime-only for this agent.
+   */
+  promptFlagInfo(): { mtimeMs: number; sha256: string | null; hashCapable: boolean } {
+    const mtimeMs = this.promptFlagMtimeMs();
+    if (mtimeMs === 0) return { mtimeMs: 0, sha256: null, hashCapable: false };
+    try {
+      const raw = readFileSync(this.promptFlagPath(), 'utf-8').trim();
+      if (raw.startsWith('{')) {
+        const parsed = JSON.parse(raw) as { sha256?: string | null };
+        return { mtimeMs, sha256: parsed.sha256 ?? null, hashCapable: true };
+      }
+    } catch {
+      // Unreadable — treat as legacy.
+    }
+    return { mtimeMs, sha256: null, hashCapable: false };
+  }
+
+  /** True when the last submitted prompt (last_prompt.txt) contains `content`.
+   *  Per-injection attribution: one turn-start can flush N queued pastes and
+   *  each injection must find ITS OWN payload in the flushed prompt (G-D2-4). */
+  submittedPromptContains(content: string): boolean {
+    try {
+      return readFileSync(this.promptTextPath(), 'utf-8').includes(content);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Drop the dedup hash for a content block so its redelivery can inject.
+   *  Used by the deferred-confirmation tracker on G-D2-5 timeout. */
+  forgetDedup(content: string): void {
+    this.dedup.forget(content);
+  }
+
+  /**
+   * Inject with delivery confirmation (2026-07-09 dropped-Enter stall class;
+   * reworked 2026-07-10 for attribution + deferral — ACKFIX_REQUIREMENTS.md).
+   *
+   * confirmed values:
+   *   true  — turn started AND this payload appears in the submitted prompt
+   *           (attributed confirm; mtime-only on legacy hook flag format)
+   *   false — not confirmed within the fast window. When `deferred` is set,
+   *           the session is alive with an attribution channel: the paste is
+   *           queued for the next turn boundary (DEFERRED_CONFIRM, G-D2-1) —
+   *           caller must NOT ack yet, must NOT treat as failed, and should
+   *           track the hold until `deferred.deadline` (G-D2-5). Without
+   *           `deferred`, this is a legacy-channel DELIVERY_FAILED.
+   *   null  — no confirmation channel for this agent (hook never seen for
+   *           this agent, or runtime opts out): legacy fire-and-forget path
+   */
+  async injectMessageConfirmedDetailed(
+    content: string,
+  ): Promise<
+    | { ok: true; confirmed: boolean | null; enterAttempts: number;
+        deferred?: { injectedAt: number; deadline: number; contentSha: string } }
+    | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED'; message: string }
+  > {
+    if (!this.pty || this.status !== 'running') {
+      return { ok: false, code: 'NOT_RUNNING', message: `agent "${this.name}" is registered but not running (status: ${this.status})` };
+    }
+    if (this.dedup.isDuplicate(content)) {
+      this.log('Dedup: skipping duplicate message');
+      return { ok: false, code: 'DEDUPED', message: `inject for "${this.name}" deduped — content matches MessageDedup hash window` };
+    }
+
+    // The confirmation channel is the UserPromptSubmit hook's flag. If it has
+    // never been written for this agent, the session predates the hook (or
+    // the settings lack it) — requiring confirmation would deadlock acks, so
+    // fall back to the legacy path.
+    const hookSeen = this.promptFlagMtimeMs() > 0;
+    const confirmable =
+      hookSeen &&
+      'injectMessageConfirmed' in this.pty &&
+      typeof (this.pty as { injectMessageConfirmed?: unknown }).injectMessageConfirmed === 'function';
+
+    if (!confirmable) {
+      if ('injectMessage' in this.pty && typeof this.pty.injectMessage === 'function') {
+        this.pty.injectMessage(content);
+      } else {
+        injectMessageIntoPty((data) => this.pty?.write(data), content);
+      }
+      return { ok: true, confirmed: null, enterAttempts: 1 };
+    }
+
+    const injectedAt = Date.now();
+    const contentSha = createHash('sha256').update(content, 'utf-8').digest('hex');
+    // Capability probe BEFORE injecting: hash attribution needs the JSON flag
+    // format. Legacy plain-integer flags (older hook) keep the mtime-only
+    // predicate and the fast-fail path (G-D2-3 fallback family).
+    const hashCapable = this.promptFlagInfo().hashCapable;
+    const isConfirmed = hashCapable
+      ? () => this.promptFlagMtimeMs() > injectedAt && this.submittedPromptContains(content)
+      : () => this.promptFlagMtimeMs() > injectedAt;
+
+    const pty = this.pty as unknown as {
+      injectMessageConfirmed: (
+        c: string,
+        o: { isConfirmed: () => boolean; log?: (m: string) => void },
+      ) => Promise<{ confirmed: boolean; enterAttempts: number }> | null;
+      injectMessage: (c: string) => void;
+    };
+    const loop = pty.injectMessageConfirmed(content, {
+      isConfirmed,
+      log: (m) => this.log(m),
+    });
+    if (loop === null) {
+      // Runtime opted out (OpenCode) — use its own paste path.
+      pty.injectMessage(content);
+      return { ok: true, confirmed: null, enterAttempts: 1 };
+    }
+    const res = await loop;
+
+    // Confirm-time instrumentation (kirk-approved scope): every verdict logs
+    // the raw predicate inputs so the next anomaly self-documents.
+    const flag = this.promptFlagInfo();
+    const instrument = (verdict: string) => this.log(
+      `[confirm] verdict=${verdict} flagMtime=${Math.round(flag.mtimeMs)} injectedAt=${injectedAt} ` +
+      `delta=${Math.round(flag.mtimeMs - injectedAt)}ms flagSha=${flag.sha256 ? flag.sha256.slice(0, 12) : 'n/a'} ` +
+      `payloadSha=${contentSha.slice(0, 12)} hashCapable=${hashCapable} enterAttempts=${res.enterAttempts}`,
+    );
+
+    if (res.confirmed) {
+      instrument('CONFIRMED');
+      return { ok: true, ...res };
+    }
+
+    if (hashCapable) {
+      // Alive session, attribution channel present, payload not yet submitted:
+      // the paste is queued in the input box and will flush at the next turn
+      // boundary (kirk 14:00Z false-negative class). This is DEFERRED_CONFIRM
+      // (G-D2-1), not a failure — the dedup hash is KEPT during the hold so
+      // recovery/redelivery cannot double-inject; the tracker clears ALL dedup
+      // state if the G-D2-5 deadline expires.
+      const deferred = {
+        injectedAt,
+        deadline: injectedAt + AgentProcess.DEFERRED_CONFIRM_TIMEOUT_MS,
+        contentSha,
+      };
+      instrument('DEFERRED');
+      return { ok: true, ...res, deferred };
+    }
+
+    instrument('FAILED');
+    this.log(`DELIVERY_FAILED: no turn-start after ${res.enterAttempts} Enter attempts — content may be stuck in the input box`);
+    // The un-ACKed message will redeliver with identical content; drop the
+    // dedup hash so the retry is not silently swallowed as a duplicate.
+    this.dedup.forget(content);
+    return { ok: true, ...res };
+  }
+
+  /** G-D2-5: how long a DEFERRED_CONFIRM hold lasts before it times out to
+   *  DELIVERY_FAILED + dedup-forget + redelivery. */
+  static readonly DEFERRED_CONFIRM_TIMEOUT_MS = 10 * 60_000;
+
+  /**
+   * Boot-prompt delivery check. The startup/continue prompt is passed as a
+   * CLI argument, but its submission can still be lost to the same
+   * turn-boundary race as injected messages (observed: mccoy boot stall
+   * 2026-07-10 06:05-08:08Z). After bootstrap, verify a turn actually
+   * started (last_prompt.flag advanced past spawn time); if not, re-send
+   * Enter up to 3 times, then log DELIVERY_FAILED loudly.
+   */
+  private startBootDeliveryCheck(spawnedAtMs: number): void {
+    if (this.promptFlagMtimeMs() === 0) return; // hook never seen — no signal to check
+    const pty = this.pty as unknown as { sendEnter?: () => void } | null;
+    if (!pty || typeof pty.sendEnter !== 'function') return;
+
+    const INITIAL_GRACE_MS = 30_000;
+    const RETRY_INTERVAL_MS = 10_000;
+    const MAX_RETRIES = 3;
+    let retries = 0;
+
+    const check = () => {
+      if (!this.pty || this.status !== 'running') return;
+      if (this.promptFlagMtimeMs() > spawnedAtMs) return; // boot prompt submitted
+      if (retries >= MAX_RETRIES) {
+        this.log('DELIVERY_FAILED: boot prompt never started a turn after Enter retries');
+        return;
+      }
+      retries++;
+      this.log(`Boot-prompt delivery check: no turn-start yet — sending Enter (retry ${retries}/${MAX_RETRIES})`);
+      try {
+        (this.pty as unknown as { sendEnter: () => void }).sendEnter();
+      } catch { /* pty torn down */ }
+      const timer = setTimeout(check, RETRY_INTERVAL_MS);
+      timer.unref?.();
+    };
+
+    const timer = setTimeout(check, INITIAL_GRACE_MS);
+    timer.unref?.();
   }
 
   /**
