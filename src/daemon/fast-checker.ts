@@ -1,10 +1,10 @@
 import { readdirSync, readFileSync, existsSync, writeFileSync, unlinkSync, statSync } from 'fs';
 import { execFile } from 'child_process';
-import { join } from 'path';
+import { join, dirname, basename } from 'path';
 import { createHash } from 'crypto';
 import { hardRestart } from '../bus/system.js';
 import type { InboxMessage, BusPaths, TelegramMessage, TelegramCallbackQuery } from '../types/index.js';
-import { checkInbox, ackInbox } from '../bus/message.js';
+import { checkInbox, ackInbox, sendMessage } from '../bus/message.js';
 import { updateApproval } from '../bus/approval.js';
 import { AgentProcess } from './agent-process.js';
 import type { TelegramAPI } from '../telegram/api.js';
@@ -26,6 +26,14 @@ export function handoffGraceMs(runtime: string | undefined): number {
   if (runtime === 'codex-app-server' || runtime === 'opencode') return 600_000;
   return 120_000;
 }
+
+/**
+ * Percentage points of context growth beyond the session baseline that count as
+ * real work-fill. Below this margin, a session born at/above the handoff
+ * threshold has done no meaningful work, so a handoff is futile — the fresh
+ * session would be reborn at the same baseline and re-fire.
+ */
+const WORKFILL_MARGIN = 10;
 
 /**
  * Fast message checker for a single agent.
@@ -88,6 +96,15 @@ export class FastChecker {
   private ctxCircuitBrokenAt: number | null = null; // when circuit tripped (null = healthy)
   // Persisted to disk so --continue restarts don't reset the circuit breaker
   private ctxCircuitFile: string = '';
+  // Per-session (NOT persisted): first trustworthy ctx reading of this session,
+  // captured once the post-start grace window has expired. null = not yet captured.
+  private ctxSessionBaselinePct: number | null = null;
+  // Per-session (NOT persisted): once-per-session throttle for the futile-handoff alert.
+  private ctxBaselineAlertFiredAt: number = 0;
+  // Accepted edge: on the null-session_id restart path the new-session block is skipped,
+  // so these two fields (like the other per-session ctx fields) can carry a prior session's
+  // value across a cooperative restart. forceContextRestart resets them, and the guard is
+  // inert whenever ctxSessionStartedAt is 0, so this is no worse than the existing fields.
 
   constructor(
     agent: AgentProcess,
@@ -1046,6 +1063,26 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
   }
 
   /**
+   * Resolve the org's configured orchestrator agent name, or null if none is
+   * configured / resolvable. Mirrors how the daemon reads it elsewhere
+   * (agent-manager.maybeStartSlackSocketMode, AgentProcess.buildDeliverablesBlock):
+   * the `orchestrator` field lives in orgs/<org>/context.json under the framework
+   * root. The org is derived from the agent directory, whose canonical layout is
+   * <root>/orgs/<org>/agents/<name> (see add-agent.ts / resolvePaths). Returns null
+   * on any failure so the caller degrades to log-only.
+   */
+  private resolveOrchestratorName(): string | null {
+    try {
+      const org = basename(dirname(dirname(this.agent.getAgentDir())));
+      const contextPath = join(this.frameworkRoot, 'orgs', org, 'context.json');
+      const orchestrator = JSON.parse(readFileSync(contextPath, 'utf-8')).orchestrator;
+      return typeof orchestrator === 'string' && orchestrator ? orchestrator : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Context monitor — called on every poll cycle.
    * Reads context_status.json written by the statusLine bridge hook and takes
    * action when thresholds are crossed.
@@ -1100,6 +1137,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
           this.ctxHandoffFiredAt = 0;
           this.ctxHandoffDeadlineAt = 0;
           this.ctxWarningFiredAt = 0;
+          this.ctxSessionBaselinePct = null;
+          this.ctxBaselineAlertFiredAt = 0;
           this.log(`New session detected (${incomingSessionId.slice(0, 8)}…) — per-session ctx state reset`);
         }
         this.ctxLastSessionId = incomingSessionId;
@@ -1188,6 +1227,14 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
       return;
     }
 
+    // Capture the session baseline: the first trustworthy reading once the post-start
+    // grace window has expired. Gated on ctxSessionStartedAt > 0 — only when we actually
+    // observed this session's birth can we distinguish baseline-fill from work-fill.
+    // Without an anchor the guard stays inert and legacy handoff behavior is preserved.
+    if (this.ctxSessionStartedAt > 0 && !withinHandoffGrace && this.ctxSessionBaselinePct === null) {
+      this.ctxSessionBaselinePct = effectivePct;
+    }
+
     // Tier 1: warning — PTY injection only, no Telegram ping (context management is internal)
     if (effectivePct >= warn && !withinHandoffGrace && now - this.ctxWarningFiredAt > 15 * 60_000) {
       this.ctxWarningFiredAt = now;
@@ -1199,6 +1246,41 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
 
     // Tier 2: handoff (fires once per session lifecycle)
     if (effectivePct >= handoff && this.ctxHandoffFiredAt === 0 && !withinHandoffGrace) {
+      // Futile-handoff guard. A session BORN at/above the handoff threshold cannot be
+      // helped by a handoff — the fresh session inherits the same heavy resume baseline
+      // and re-fires immediately, thrashing in ~3-min clusters until the 3-fire breaker
+      // pauses auto-handoff. Suppress ONLY when the captured baseline itself meets/exceeds
+      // threshold AND almost no work-fill has accumulated on top of it. A born-low session
+      // that grows into the threshold (baseline < handoff) is the healthy path and reaches
+      // the normal handoff below untouched. Returning here means no lease is acquired, no
+      // fire is counted toward the 3-fire breaker, no Tier-3 deadline is armed, and no
+      // .force-fresh is pre-written — the handoff simply idles until real work-fill lands.
+      if (
+        this.ctxSessionBaselinePct !== null
+        && this.ctxSessionBaselinePct >= handoff
+        && effectivePct - this.ctxSessionBaselinePct < WORKFILL_MARGIN
+      ) {
+        if (this.ctxBaselineAlertFiredAt === 0) {
+          this.ctxBaselineAlertFiredAt = now;
+          const msg = `Context handoff SUPPRESSED for ${this.agent.name}: resume baseline `
+            + `${Math.round(this.ctxSessionBaselinePct)}% already meets/exceeds the ${handoff}% handoff `
+            + `threshold. A handoff cannot reduce a baseline it did not create — the fresh session would `
+            + `be born at the same level and re-fire. Review ctx_handoff_threshold or trim this agent's `
+            + `bootstrap. Auto-handoff idle until real work-fill accumulates.`;
+          this.log(msg);
+          // Route to the org's configured orchestrator as an internal bus message (agent
+          // inbox), NOT to the human's Telegram — this is an infra event, not a user ping.
+          // Best-effort: skip if no orchestrator is configured or it would be self-messaging,
+          // and swallow any bus failure — the this.log line above is the durable audit trail.
+          const orchestrator = this.resolveOrchestratorName();
+          if (orchestrator && orchestrator !== this.agent.name) {
+            try {
+              sendMessage(this.paths, this.agent.name, orchestrator, 'normal', msg);
+            } catch { /* non-fatal — bus send is best-effort */ }
+          }
+        }
+        return;
+      }
       const lease = requestContextHandoffLease({
         ctxRoot: this.paths.ctxRoot,
         agentName: this.agent.name,
@@ -1312,6 +1394,8 @@ Reply using: cortextos bus send-telegram ${chatId} '<your reply>'
     this.ctxHandoffFiredAt = 0;
     this.ctxHandoffDeadlineAt = 0;
     this.ctxWarningFiredAt = 0;
+    this.ctxSessionBaselinePct = null;
+    this.ctxBaselineAlertFiredAt = 0;
 
     // Release this dying session's context-handoff lease on teardown. This restart is
     // IN-PROCESS — sessionRefresh() below does stop()+start() on the same AgentProcess
