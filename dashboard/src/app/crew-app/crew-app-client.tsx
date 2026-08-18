@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CrewRoster } from '@/components/crew/crew-roster';
 import { CrewChat } from '@/components/crew/crew-chat';
@@ -21,6 +21,19 @@ function CrewAppInner() {
   const selected = searchParams.get('with');
   const { user, agents, roster, loading, moodFor, onAvatarChanged } = useCrew();
 
+  // iOS keyboard fix: 100dvh does NOT shrink when the on-screen keyboard
+  // opens, which buries the chat bar behind it. visualViewport tracks the
+  // true visible area, so pin the app's height to it when available.
+  const [viewportH, setViewportH] = useState<number | null>(null);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => setViewportH(Math.round(vv.height));
+    update();
+    vv.addEventListener('resize', update);
+    return () => vv.removeEventListener('resize', update);
+  }, []);
+
   const selectedAgent = agents.find((a) => a.name === selected) ?? null;
   const workingCount = roster.filter((r) => r.mood !== 'resting').length;
 
@@ -33,7 +46,10 @@ function CrewAppInner() {
   }
 
   return (
-    <div className="relative flex h-dvh flex-col overflow-hidden bg-background pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)]">
+    <div
+      className="relative flex h-dvh flex-col overflow-hidden bg-background pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)]"
+      style={viewportH !== null ? { height: `${viewportH}px` } : undefined}
+    >
       {/* Ambient glow behind the roster — decorative only. */}
       <div
         aria-hidden
@@ -49,13 +65,14 @@ function CrewAppInner() {
           Waking the crew…
         </div>
       ) : selectedAgent ? (
-        <div className="relative min-h-0 flex-1 p-2">
+        <div className="relative min-h-0 flex-1">
           <CrewChat
             agent={selectedAgent}
             user={user}
             mood={moodFor(selectedAgent.name)}
             onBack={back}
             onAvatarChanged={(v) => onAvatarChanged(selectedAgent.name, v)}
+            frameless
           />
         </div>
       ) : (

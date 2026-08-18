@@ -46,6 +46,8 @@ interface CrewChatProps {
   mood: CrewMood;
   onBack?: () => void;
   onAvatarChanged: (version: number | null) => void;
+  /** Standalone-app mode: edge-to-edge, no card chrome. */
+  frameless?: boolean;
 }
 
 function formatTime(iso: string): string {
@@ -101,7 +103,7 @@ function MessageContent({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewChatProps) {
+export function CrewChat({ agent, user, mood, onBack, onAvatarChanged, frameless = false }: CrewChatProps) {
   const [messages, setMessages] = useState<BusMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState('');
@@ -112,6 +114,10 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
   const [sending, setSending] = useState(false);
   const [ttsOn, setTtsOn] = useState(false);
   const spokenIdsRef = useRef<Set<string>>(new Set());
+  // Ids of messages WE delivered to the server this session, so the merge
+  // can keep them until the server copy shows up — then drop the local one.
+  const localIdsRef = useRef<Set<string>>(new Set());
+  const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const recorder = useVoiceRecorder();
   const sendingRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -136,8 +142,9 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
       // duplicated, when the server catches up.
       setMessages((prev) => {
         const ids = new Set(data.map((m) => m.id));
-        const keepOptimistic = prev.filter((m) => !ids.has(m.id) && m.id.startsWith('optimistic-'));
-        return [...data, ...keepOptimistic];
+        const pending = prev.filter((m) => localIdsRef.current.has(m.id) && !ids.has(m.id));
+        for (const m of data) localIdsRef.current.delete(m.id);
+        return [...data, ...pending];
       });
       setLoading(false);
     } catch {
@@ -190,9 +197,50 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
         .replace(/https?:\/\/\S+/g, 'link')
         .trim();
       if (!clean) continue;
-      synth.speak(new SpeechSynthesisUtterance(clean));
+      const u = new SpeechSynthesisUtterance(clean);
+      if (voiceRef.current) u.voice = voiceRef.current;
+      synth.speak(u);
     }
   }, [messages, ttsOn, loading, agent.name]);
+
+  // Pick the best system voice for spoken replies. iOS only exposes its
+  // Siri-quality voices to the web AFTER the user downloads one (Settings →
+  // Accessibility → Spoken Content → Voices), so re-score on voiceschanged.
+  useEffect(() => {
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
+    if (!synth) return;
+    function score(v: SpeechSynthesisVoice): number {
+      let sc = 0;
+      if (/premium/i.test(v.name)) sc += 8;
+      if (/enhanced/i.test(v.name)) sc += 6;
+      if (/siri/i.test(v.name)) sc += 5;
+      const lang = (v.lang || '').toLowerCase();
+      if (lang === 'en-au') sc += 3;
+      else if (lang === 'en-gb') sc += 2;
+      else if (lang.startsWith('en')) sc += 1;
+      if (v.localService) sc += 1;
+      return sc;
+    }
+    function pick() {
+      const en = synth!.getVoices().filter((v) => (v.lang || '').toLowerCase().startsWith('en'));
+      voiceRef.current = en.sort((a, b) => score(b) - score(a))[0] ?? null;
+    }
+    pick();
+    synth.addEventListener('voiceschanged', pick);
+    return () => synth.removeEventListener('voiceschanged', pick);
+  }, []);
+
+  function speak(text: string) {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) return;
+      const u = new SpeechSynthesisUtterance(text);
+      if (voiceRef.current) u.voice = voiceRef.current;
+      synth.speak(u);
+    } catch {
+      /* ignore */
+    }
+  }
 
   function toggleTts() {
     const next = !ttsOn;
@@ -204,12 +252,13 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
     }
     // Speaking inside the tap gesture both confirms the toggle and
     // unlocks speech synthesis on iOS.
-    try {
-      const synth = window.speechSynthesis;
-      if (next && synth) synth.speak(new SpeechSynthesisUtterance('Voice replies on'));
-      if (!next && synth) synth.cancel();
-    } catch {
-      /* ignore */
+    if (next) speak('Voice replies on');
+    else {
+      try {
+        window.speechSynthesis?.cancel();
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -332,11 +381,15 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
         body: JSON.stringify({ agent: agent.name, text: messageText }),
       });
       if (res.ok) {
-        // Optimistic bubble — replaced by the server copy on the next poll.
+        const sent = await res.json().catch(() => ({}));
+        const realId = sent.messageId ?? `local-${Date.now()}`;
+        localIdsRef.current.add(realId);
+        // Local bubble under the server's own id — the merge drops it the
+        // moment the server copy appears, so it can never show twice.
         setMessages((prev) => [
           ...prev,
           {
-            id: `optimistic-${Date.now()}`,
+            id: realId,
             from: user,
             to: agent.name,
             priority: 'normal',
@@ -362,10 +415,16 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
   }
 
   async function sendVoice() {
-    const blob = await recorder.stop();
-    if (!blob || blob.size === 0) return;
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     setSendError('');
+    const blob = await recorder.stop();
+    if (!blob || blob.size === 0) {
+      sendingRef.current = false;
+      setSending(false);
+      return;
+    }
     try {
       const form = new FormData();
       form.append('agent', agent.name);
@@ -376,10 +435,12 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
         setSendError(data.error || 'Failed to send voice message');
         return;
       }
+      const realId = data.messageId ?? `local-${Date.now()}`;
+      localIdsRef.current.add(realId);
       setMessages((prev) => [
         ...prev,
         {
-          id: `optimistic-${Date.now()}`,
+          id: realId,
           from: user,
           to: agent.name,
           priority: 'normal',
@@ -394,14 +455,23 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
     } catch {
       setSendError('Network error');
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-background">
+    <div
+      className={`flex h-full min-h-0 flex-col overflow-hidden bg-background ${
+        frameless ? '' : 'rounded-xl border'
+      }`}
+    >
       {/* Companion header */}
-      <div className="flex items-center gap-3 border-b bg-muted/20 px-3 py-2.5">
+      <div
+        className={`flex items-center gap-3 border-b px-3 py-2.5 ${
+          frameless ? 'bg-background/85 backdrop-blur' : 'bg-muted/20'
+        }`}
+      >
         {onBack && (
           <Button variant="ghost" size="sm" className="shrink-0" onClick={onBack} aria-label="Back to crew">
             <IconArrowLeft size={18} />
@@ -595,7 +665,7 @@ export function CrewChat({ agent, user, mood, onBack, onAvatarChanged }: CrewCha
             onPaste={handlePaste}
             placeholder={`Message ${agent.name}…`}
             rows={1}
-            className="max-h-32 min-h-9 flex-1 resize-none rounded-2xl border bg-muted/30 px-3.5 py-2 text-sm outline-none focus:border-primary/50"
+            className="max-h-32 min-h-9 flex-1 resize-none rounded-2xl border bg-muted/30 px-3.5 py-2 text-base outline-none focus:border-primary/50 md:text-sm"
           />
           <Button
             variant="ghost"
