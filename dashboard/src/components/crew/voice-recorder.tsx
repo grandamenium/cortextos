@@ -60,7 +60,7 @@ export function useVoiceRecorder(): VoiceRecorder {
     if (sessionRef.current) return true;
 
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setError('Microphone needs the HTTPS address — open cortex.kylebehrend.com');
+      setError('Microphone access requires HTTPS or localhost. Open the dashboard from a secure address.');
       return false;
     }
 
