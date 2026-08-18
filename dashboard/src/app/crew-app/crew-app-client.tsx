@@ -28,10 +28,23 @@ function CrewAppInner() {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
-    const update = () => setViewportH(Math.round(vv.height));
+    const update = () => {
+      setViewportH(Math.round(vv.height));
+      // iOS pans the whole page upward to reveal the focused input BEFORE
+      // our container shrinks, and the pan sticks afterwards — leaving the
+      // chat bar stranded near the top with dead space below. This app
+      // never legitimately scrolls the window (the root is overflow-hidden
+      // at exactly viewport height), so snap the pan back on every
+      // viewport change, after layout settles.
+      requestAnimationFrame(() => window.scrollTo(0, 0));
+    };
     update();
     vv.addEventListener('resize', update);
-    return () => vv.removeEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+    };
   }, []);
 
   const selectedAgent = agents.find((a) => a.name === selected) ?? null;
