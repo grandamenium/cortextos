@@ -767,8 +767,8 @@ busCommand
   .command('evaluate-experiment')
   .description('Evaluate a running experiment with a measured value')
   .argument('<id>', 'Experiment ID')
-  .argument('<value>', 'Measured value')
-  .option('--score <n>', 'Score 1-10')
+  .argument('<value>', 'Measured value (pass 0 as a placeholder when using --score)')
+  .option('--score <n>', 'Score 1-10 for qualitative metrics — the positional value must be the 0 placeholder; a nonzero value alongside --score is rejected')
   .option('--justification <text>', 'Justification text')
   .action((id: string, value: string, opts: { score?: string; justification?: string }) => {
     const env = resolveEnv();
