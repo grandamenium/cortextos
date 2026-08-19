@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { existsSync, readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 
 interface SkillInfo {
@@ -51,7 +51,17 @@ function scanSkillsDir(dir: string, source: string): SkillInfo[] {
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      // readdirSync's dirent type reflects the entry itself, not its target — a
+      // symlink (what agent skill installs are) always reports isDirectory() as
+      // false. Follow it with statSync to see what it actually points at.
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      if (entry.isSymbolicLink()) {
+        try {
+          if (!statSync(join(dir, entry.name)).isDirectory()) continue;
+        } catch {
+          continue; // broken symlink
+        }
+      }
       const skillFile = join(dir, entry.name, 'SKILL.md');
       if (!existsSync(skillFile)) continue;
 
@@ -111,7 +121,7 @@ export const listSkillsCommand = new Command('list-skills')
     }
 
     // Agent-level skills (highest priority, override others)
-    const agentSkills = join(agentDir, 'skills');
+    const agentSkills = join(agentDir, '.claude', 'skills');
     for (const skill of scanSkillsDir(agentSkills, 'agent')) {
       skillMap.set(skill.name, skill);
     }
