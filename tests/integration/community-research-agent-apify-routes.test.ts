@@ -34,10 +34,15 @@ describe('community research agent Apify routes', () => {
   });
 
   it('documents stable Actor identities and the paid-run gate', () => {
+    const skill = read(
+      'community/agents/research-agent/.claude/skills/source-collection/SKILL.md',
+    );
     const reference = read(
       'community/agents/research-agent/.claude/skills/source-collection/references/xquik-apify-actors.md',
     );
 
+    expect(skill).toContain('"--timeout", "30"');
+    expect(skill).toContain('timeout=30');
     expect(reference).toContain('wAusCMrm284Voaw86');
     expect(reference).toContain('AaT0BcKU5GQh97wdt');
     expect(reference).toContain('## Paid-Run Gate');
