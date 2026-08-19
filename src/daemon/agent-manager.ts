@@ -6,6 +6,7 @@ import { WorkerProcess } from './worker-process.js';
 import { FastChecker } from './fast-checker.js';
 import { CronScheduler } from './cron-scheduler.js';
 import { migrateCronsForAgent } from './cron-migration.js';
+import { appendExecutionLog } from './cron-execution-log.js';
 import type { CronDefinition } from '../types/index.js';
 import { TelegramAPI } from '../telegram/api.js';
 import { TelegramPoller } from '../telegram/poller.js';
@@ -83,6 +84,18 @@ export class AgentManager {
   private buzzClients: Map<string, { client: BuzzRelayClient; dispatcher: BuzzDispatcher; started: boolean }> = new Map();
   /** Daemon-level cron scheduler registry: one CronScheduler per enabled agent. */
   private cronSchedulers: Map<string, CronScheduler> = new Map();
+  /**
+   * Cron fires queued while the host is in a sleep-adjacent window, awaiting
+   * coalesced delivery at FullWake. Keyed by agent name; drained by
+   * drainCoalescedCronFires() when the SleepWakeDetector closes an episode.
+   */
+  private pendingCronFires: Map<string, Array<{ cron: string; prompt: string; firedAt: string }>> = new Map();
+  /**
+   * Wired by the daemon after the SleepWakeDetector starts. Defaults to
+   * "never in a sleep window" so cron delivery is byte-identical to current
+   * behavior until (and unless) a detector is attached.
+   */
+  private sleepWindowPredicate: () => boolean = () => false;
   // Tracks agents that received a start request while still stopping.
   // stopAgent() honors these after cleanup completes so restart-all is race-free.
   private pendingRestarts: Set<string> = new Set();
@@ -1933,6 +1946,17 @@ export class AgentManager {
       // Without the salt, every recurring cron after its first fire would be
       // dedup-rejected and treated as a dispatch failure.
       const firedAt = new Date().toISOString();
+
+      // Sleep-adjacent window (host recently woke, or is dark-waking mid-sleep):
+      // queue recurring fires for coalesced delivery at FullWake instead of
+      // stacking [CRON FIRED] blocks into a PTY nothing is consuming. One-shot
+      // crons (fire_at) fire at most once ever — no flood risk — and stay on
+      // the direct path so a lost queue can never lose them.
+      if (this.shouldQueueCronFire(cron)) {
+        this.queueCronFireForCoalescing(agentName, cron.name, prompt, firedAt);
+        return;
+      }
+
       const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
       const injected = this.injectAgent(agentName, injection);
       if (!injected) {
@@ -1951,6 +1975,113 @@ export class AgentManager {
 
     const count = scheduler.getNextFireTimes().length;
     console.log(`[daemon] Loaded ${count} external cron(s) for agent "${agentName}" from crons.json`);
+  }
+
+  // -------------------------------------------------------------------------
+  // Coalesced cron delivery (host-sleep wake flush)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Wire the host sleep/wake signal. The predicate is polled on every cron
+   * fire; exceptions are treated as "not in a sleep window" so a broken
+   * detector can only ever degrade to current (direct-inject) behavior.
+   */
+  setSleepWindowPredicate(predicate: () => boolean): void {
+    this.sleepWindowPredicate = predicate;
+  }
+
+  /** True when this fire should be queued for coalesced delivery instead of injected now. */
+  shouldQueueCronFire(cron: CronDefinition): boolean {
+    if (cron.fire_at) return false; // one-shots always deliver directly
+    try {
+      return this.sleepWindowPredicate();
+    } catch {
+      return false;
+    }
+  }
+
+  /** Queue one recurring-cron fire for coalesced delivery at FullWake. */
+  queueCronFireForCoalescing(agentName: string, cronName: string, prompt: string, firedAt: string): void {
+    const queue = this.pendingCronFires.get(agentName) ?? [];
+    queue.push({ cron: cronName, prompt, firedAt });
+    this.pendingCronFires.set(agentName, queue);
+    console.log(
+      `[agent-manager] cron "${cronName}" fire queued for coalesced delivery ` +
+      `(sleep-adjacent window) — ${queue.length} pending for "${agentName}"`
+    );
+  }
+
+  /**
+   * Deliver all queued cron fires, collapsing same-named fires per agent into
+   * ONE injection that names the count and span. Called by the daemon when the
+   * SleepWakeDetector closes a sleep episode (FullWake). Distinct cron names
+   * stay separate; a single queued fire is delivered byte-identical to the
+   * normal direct format. Collapsed (undelivered) fires get a 'coalesced'
+   * execution-log entry so the audit trail stays complete.
+   */
+  async drainCoalescedCronFires(): Promise<void> {
+    for (const [agentName, fires] of [...this.pendingCronFires]) {
+      this.pendingCronFires.delete(agentName);
+
+      // Group by cron name, preserving fire order within each group.
+      const groups = new Map<string, Array<{ cron: string; prompt: string; firedAt: string }>>();
+      for (const f of fires) {
+        const g = groups.get(f.cron);
+        if (g) g.push(f);
+        else groups.set(f.cron, [f]);
+      }
+
+      for (const [cronName, group] of groups) {
+        const latest = group[group.length - 1];
+        const injection = group.length === 1
+          ? `[CRON FIRED ${latest.firedAt}] ${cronName}: ${latest.prompt}`
+          : `[CRON FIRED ${latest.firedAt}] ${cronName}: ${latest.prompt}\n` +
+            `(coalesced: ${group.length} fires queued between ${group[0].firedAt} and ` +
+            `${latest.firedAt} while the host was asleep — handle ONCE, not ${group.length} times)`;
+
+        const start = Date.now();
+        const delivered = await this.injectWithRetry(agentName, injection);
+        const nowIso = new Date().toISOString();
+
+        for (const f of group.slice(0, -1)) {
+          appendExecutionLog(agentName, {
+            ts: nowIso,
+            cron: cronName,
+            status: 'coalesced',
+            attempt: 1,
+            duration_ms: 0,
+            error: `queued at ${f.firedAt}; coalesced into delivery of ${latest.firedAt}`,
+          });
+        }
+        if (!delivered) {
+          appendExecutionLog(agentName, {
+            ts: nowIso,
+            cron: cronName,
+            status: 'failed',
+            attempt: AgentManager.COALESCE_RETRY_DELAYS_MS.length + 1,
+            duration_ms: Date.now() - start,
+            error: `coalesced delivery failed after retries — next scheduled fire covers it`,
+          });
+          console.log(
+            `[agent-manager] coalesced delivery of "${cronName}" to "${agentName}" failed after retries`
+          );
+        }
+      }
+    }
+  }
+
+  /** Backoff schedule for coalesced-delivery injection retries. */
+  static readonly COALESCE_RETRY_DELAYS_MS = [1_000, 4_000, 16_000];
+
+  private async injectWithRetry(agentName: string, text: string): Promise<boolean> {
+    const delays = AgentManager.COALESCE_RETRY_DELAYS_MS;
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      if (this.injectAgent(agentName, text)) return true;
+      if (attempt < delays.length) {
+        await new Promise<void>(resolve => setTimeout(resolve, delays[attempt]));
+      }
+    }
+    return false;
   }
 
   /**

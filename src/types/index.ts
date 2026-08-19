@@ -447,9 +447,13 @@ export interface CronDefinition {
  * It is append-only; log rotation prunes to the last 1 000 lines.
  *
  * Status semantics:
- *   "fired"   — the fire attempt succeeded on this attempt.
- *   "retried" — this attempt failed but more retries remain (see `error`).
- *   "failed"  — final failure after exhausting all retries (see `error`).
+ *   "fired"     — the fire attempt succeeded on this attempt.
+ *   "retried"   — this attempt failed but more retries remain (see `error`).
+ *   "failed"    — final failure after exhausting all retries (see `error`).
+ *   "coalesced" — the fire was queued during a host-sleep window and collapsed
+ *                 into a single delivery with its same-named siblings at wake
+ *                 (the delivered sibling logs its own entry; see `error` for
+ *                 the queue/delivery timestamps).
  */
 export interface CronExecutionLogEntry {
   /** ISO 8601 UTC timestamp of the fire attempt. */
@@ -457,7 +461,7 @@ export interface CronExecutionLogEntry {
   /** Cron name (matches CronDefinition.name). */
   cron: string;
   /** Outcome of this attempt. */
-  status: 'fired' | 'retried' | 'failed';
+  status: 'fired' | 'retried' | 'failed' | 'coalesced';
   /** Attempt index (1-based). */
   attempt: number;
   /** Wall-clock duration of the fire attempt in milliseconds. */
