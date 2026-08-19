@@ -289,7 +289,7 @@ Semantic vector store. Three collections: `memory-{agent}` (auto-reindexed at he
 ```bash
 # Re-index memory at heartbeat
 cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force
 
 # Query before any task
 cortextos bus kb-query "your question" --org $CTX_ORG --agent $CTX_AGENT_NAME
