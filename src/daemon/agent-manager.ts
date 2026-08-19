@@ -13,6 +13,7 @@ import { SlackAPI } from '../slack/api.js';
 import { SlackSocketModeClient } from '../slack/socket-mode.js';
 import { dispatchSlackMessage, makeUserNameResolver, type DispatchTarget } from '../slack/dispatcher.js';
 import { resolvePaths } from '../utils/paths.js';
+import { replayMissedTelegram, warnStaleTasks, advanceCursorLive } from './telegram-replay.js';
 import { resolveEnv } from '../utils/env.js';
 import { recordInboundTelegram, cacheLastSent, logOutboundMessage, buildRecentHistory } from '../telegram/logging.js';
 import { collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
@@ -724,6 +725,35 @@ export class AgentManager {
       });
     }
 
+    // theta 63: session-start Telegram replay + stale-task / downtime warnings.
+    // Fire-and-forget after the PTY is bootstrapped so a recovery restart
+    // resurfaces Telegram messages archived while the PTY was down (and warns
+    // about in-progress tasks orphaned by the restart). Never throws into
+    // startAgent — a replay failure must not block the agent coming up.
+    void (async () => {
+      try {
+        for (let i = 0; i < 60 && !agentProcess.isBootstrapped(); i++) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        if (!agentProcess.isBootstrapped()) {
+          log('[telegram-replay] PTY not bootstrapped within 30s — skipping session-start replay');
+          return;
+        }
+        const inject = (content: string) => agentProcess.injectMessage(content);
+        const now = Date.now();
+        const res = replayMissedTelegram({
+          stateDir: paths.stateDir, logDir: paths.logDir, paths,
+          agentName: name, org: resolvedOrg, inject, now, log,
+        });
+        if (res.replayed > 0 || res.downtimeHours > 4) {
+          log(`[telegram-replay] replayed ${res.replayed} message(s); downtime ${res.downtimeHours.toFixed(1)}h`);
+        }
+        warnStaleTasks({ paths, agentName: name, org: resolvedOrg, inject, now, log });
+      } catch (err) {
+        log(`[telegram-replay] session-start replay error: ${err}`);
+      }
+    })();
+
     // Register Telegram slash commands at startup (fix for issue #1)
     if (telegramApi && botToken) {
       const scanDirs = [agentDir, this.frameworkRoot].filter(Boolean);
@@ -815,6 +845,15 @@ export class AgentManager {
         // agents — the JSONL had the data but it never reached the
         // event log.
         recordInboundTelegram(paths, this.ctxRoot, name, resolvedOrg, from, msg, log);
+
+        // theta 63: advance the replay cursor for messages handled while the PTY
+        // is live+bootstrapped, so session-start replay only resurfaces messages
+        // archived during a down window — not everything seen since boot. A rare
+        // crash between here and inject at worst re-replays idempotently.
+        if (typeof msg.message_id === 'number' && msgChatId != null &&
+            agentProcess.getStatus().status === 'running' && agentProcess.isBootstrapped()) {
+          advanceCursorLive(stateDir, msgChatId, msg.message_id);
+        }
 
         // Check for media messages (photo, document, voice, audio, video, video_note)
         const isMedia = !!(msg.photo || msg.document || msg.voice || msg.audio || msg.video || msg.video_note);
