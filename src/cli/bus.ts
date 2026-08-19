@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { sendMessage, checkInbox, ackInbox } from '../bus/message.js';
 import { validateAgentName, validateTaskId } from '../utils/validate.js';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
+import { createTask, updateTask, setTaskBrief, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, checkStaleTasks, archiveTasks, checkHumanTasks } from '../bus/task.js';
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
@@ -203,6 +203,26 @@ busCommand
 
     updateTask(paths, id, status as TaskStatus);
     console.log(`Updated ${id} -> ${status}`);
+  });
+
+busCommand
+  .command('set-brief')
+  .description('Attach a decision brief to a task for the dashboard detail panel: what to decide, why, the options, and the recommended action')
+  .argument('<id>', 'Task ID')
+  .requiredOption('--headline <text>', 'The blocker (blocked task) or the next step to take (pending/in_progress task)')
+  .requiredOption('--reason <text>', 'Impact of the block, or why the next step matters')
+  .requiredOption('--recommendation <text>', 'The single action you recommend the human take')
+  .option('--option <text>', 'A path forward (repeatable)', (val: string, acc: string[]) => { acc.push(val); return acc; }, [] as string[])
+  .action((id: string, opts: { headline: string; reason: string; recommendation: string; option: string[] }) => {
+    const env = resolveEnv();
+    const paths = resolvePaths(env.agentName, env.instanceId, env.org);
+    setTaskBrief(paths, id, {
+      headline: opts.headline,
+      reason: opts.reason,
+      options: opts.option,
+      recommendation: opts.recommendation,
+    });
+    console.log(`Set brief on ${id} (${opts.option.length} option${opts.option.length === 1 ? '' : 's'})`);
   });
 
 busCommand

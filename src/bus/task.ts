@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync, unlinkSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import type { Task, Priority, TaskStatus, BusPaths, StaleTaskReport, ArchiveReport } from '../types/index.js';
+import type { Task, TaskBrief, Priority, TaskStatus, BusPaths, StaleTaskReport, ArchiveReport } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 import { randomDigits } from '../utils/random.js';
 import { validatePriority, validateTaskId } from '../utils/validate.js';
@@ -285,6 +285,38 @@ export function updateTask(
     throw new Error(`Task ${taskId} update failed: ${err}`);
   }
   appendTaskAudit(paths, taskId, { event: 'update', agent: assignee || 'unknown', from: prevStatus, to: status });
+}
+
+/**
+ * Attach (or replace) an agent-authored decision brief on a task so the
+ * dashboard detail panel can surface it. Mirrors updateTask's read →
+ * mutate → atomic-write → audit shape. Stamps brief.updated_at with the
+ * write time so the UI can flag a stale brief against a newer status.
+ */
+export function setTaskBrief(
+  paths: BusPaths,
+  taskId: string,
+  brief: Omit<TaskBrief, 'updated_at'>,
+): void {
+  const filePath = findTaskFile(paths, taskId);
+  if (!filePath) {
+    throw new Error(
+      `Task ${taskId} not found in any org under ${paths.ctxRoot}/orgs/`,
+    );
+  }
+  let assignee: string | undefined;
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    const task: Task = JSON.parse(content);
+    assignee = task.assigned_to;
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    task.brief = { ...brief, updated_at: now };
+    task.updated_at = now;
+    atomicWriteSync(filePath, JSON.stringify(task));
+  } catch (err) {
+    throw new Error(`Task ${taskId} brief update failed: ${err}`);
+  }
+  appendTaskAudit(paths, taskId, { event: 'update', agent: assignee || 'unknown', note: 'brief' });
 }
 
 /**
