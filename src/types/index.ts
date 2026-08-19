@@ -342,7 +342,8 @@ export interface CronDefinition {
    *     The cron fires every N units after its previous fire (or after daemon start
    *     if it has never fired).
    *   - 5-field cron expression: `"0 8 * * *"`, `"0 0,6,12,18 * * *"`, `"0 16 * * 1"`
-   *     Evaluated against the daemon's wall clock (daemon timezone = server timezone).
+   *     Evaluated in the agent's configured timezone (config.json `timezone`)
+   *     when one is set; otherwise the daemon process's timezone.
    *
    * @example "6h"         — every six hours
    * @example "0 13 * * *" — daily at 13:00 UTC

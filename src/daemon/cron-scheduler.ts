@@ -70,15 +70,48 @@ function expandField(field: string, min: number, max: number): number[] {
 }
 
 /**
+ * Wall-clock fields of an epoch instant in a specific IANA timezone.
+ * Uses Intl so DST transitions are handled by the platform tz database.
+ */
+function wallClockFieldsInTz(ms: number, timezone: string): {
+  minute: number; hour: number; day: number; month: number; weekday: number;
+} {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    minute: "numeric",
+    hour: "numeric",
+    day: "numeric",
+    month: "numeric",
+    weekday: "short",
+    hourCycle: "h23",
+  }).formatToParts(new Date(ms));
+  const get = (type: string): string =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  const weekdays: Record<string, number> = {
+    Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+  };
+  return {
+    minute: parseInt(get("minute"), 10),
+    hour: parseInt(get("hour"), 10),
+    day: parseInt(get("day"), 10),
+    month: parseInt(get("month"), 10),
+    weekday: weekdays[get("weekday")] ?? 0,
+  };
+}
+
+/**
  * Compute the next fire timestamp (ms since epoch) for a 5-field cron
  * expression, starting from `fromMs` (exclusive — the next fire must be
  * strictly after fromMs, rounded forward to the next whole minute).
  *
- * @param expr   - 5-field cron expression ("min hour dom month dow").
- * @param fromMs - Starting epoch time in milliseconds.
- * @returns      Epoch ms of the next matching minute, or NaN if unparseable.
+ * @param expr     - 5-field cron expression ("min hour dom month dow").
+ * @param fromMs   - Starting epoch time in milliseconds.
+ * @param timezone - Optional IANA timezone (e.g. "America/Chicago") the
+ *                   expression is evaluated in. Omit to use the daemon
+ *                   process's local timezone (legacy behavior).
+ * @returns        Epoch ms of the next matching minute, or NaN if unparseable.
  */
-export function nextFireFromCron(expr: string, fromMs: number): number {
+export function nextFireFromCron(expr: string, fromMs: number, timezone?: string): number {
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) return NaN;
 
@@ -103,12 +136,18 @@ export function nextFireFromCron(expr: string, fromMs: number): number {
   let candidate = startMs;
 
   for (let i = 0; i < MAX_MINUTES; i++) {
-    const d = new Date(candidate);
-    const m  = d.getMinutes();
-    const h  = d.getHours();
-    const dy = d.getDate();
-    const mo = d.getMonth() + 1; // 1-12
-    const dw = d.getDay();       // 0-6
+    let m: number, h: number, dy: number, mo: number, dw: number;
+    if (timezone) {
+      const f = wallClockFieldsInTz(candidate, timezone);
+      m = f.minute; h = f.hour; dy = f.day; mo = f.month; dw = f.weekday;
+    } else {
+      const d = new Date(candidate);
+      m  = d.getMinutes();
+      h  = d.getHours();
+      dy = d.getDate();
+      mo = d.getMonth() + 1; // 1-12
+      dw = d.getDay();       // 0-6
+    }
 
     if (
       months.includes(mo) &&
@@ -153,13 +192,13 @@ function changeKeyFor(c: CronDefinition): string {
  * @param cron        - The cron definition.
  * @param referenceMs - Epoch ms to count forward from (usually now or lastFiredAt).
  */
-function computeNextFireAt(cron: CronDefinition, referenceMs: number): number {
+function computeNextFireAt(cron: CronDefinition, referenceMs: number, timezone?: string): number {
   const durationMs = parseDurationMs(cron.schedule);
   if (!isNaN(durationMs)) {
     return referenceMs + durationMs;
   }
   // Try as a cron expression
-  const next = nextFireFromCron(cron.schedule, referenceMs);
+  const next = nextFireFromCron(cron.schedule, referenceMs, timezone);
   return next;
 }
 
@@ -238,12 +277,19 @@ export interface CronSchedulerOptions {
   agentName: string;
   onFire: (cron: CronDefinition) => Promise<void> | void;
   logger?: (msg: string) => void;
+  /**
+   * IANA timezone (e.g. "America/Chicago") that 5-field cron expressions for
+   * this agent are evaluated in. Comes from the agent's config.json. Omit to
+   * keep legacy behavior (daemon process timezone).
+   */
+  timezone?: string;
 }
 
 export class CronScheduler {
   private readonly agentName: string;
   private readonly onFire: (cron: CronDefinition) => Promise<void> | void;
   private readonly logger: (msg: string) => void;
+  private readonly timezone?: string;
 
   /** In-memory schedule, keyed by cron name. */
   private scheduled: Map<string, ScheduledCron> = new Map();
@@ -278,6 +324,7 @@ export class CronScheduler {
     this.agentName = opts.agentName;
     this.onFire    = opts.onFire;
     this.logger    = opts.logger ?? ((msg: string) => process.stdout.write(msg + '\n'));
+    this.timezone  = opts.timezone;
   }
 
   // -------------------------------------------------------------------------
@@ -422,7 +469,7 @@ export class CronScheduler {
       if (stateFire) candidates.push(new Date(stateFire).getTime());
       const referenceMs = candidates.length > 0 ? Math.max(...candidates) : now;
 
-      let nextFireAt = computeNextFireAt(def, referenceMs);
+      let nextFireAt = computeNextFireAt(def, referenceMs, this.timezone);
 
       if (isNaN(nextFireAt)) {
         this.logger(
@@ -560,7 +607,7 @@ export class CronScheduler {
         }
 
         // Advance in-memory nextFireAt
-        const next = computeNextFireAt(cron, now);
+        const next = computeNextFireAt(cron, now, this.timezone);
         if (!isNaN(next)) {
           sc.nextFireAt = next;
           sc.definition = { ...cron, last_fired_at: nowIso, fire_count: newFireCount };
@@ -575,7 +622,7 @@ export class CronScheduler {
         // we don't re-fire the same scheduled slot on every subsequent tick —
         // that produced a busy-loop when an agent was unreachable. Treat the
         // failed window as a missed slot and schedule the next normal fire.
-        const next = computeNextFireAt(cron, now);
+        const next = computeNextFireAt(cron, now, this.timezone);
         if (!isNaN(next)) {
           sc.nextFireAt = next;
           this.logger(

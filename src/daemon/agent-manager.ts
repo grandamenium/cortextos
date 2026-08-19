@@ -1944,6 +1944,9 @@ export class AgentManager {
       agentName,
       onFire,
       logger: (msg) => console.log(`[daemon] ${msg}`),
+      // Evaluate 5-field cron expressions in the agent's own timezone
+      // (config.json) rather than the daemon process's timezone.
+      timezone: entry.process['config']?.timezone,
     });
 
     scheduler.start();

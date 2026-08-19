@@ -176,6 +176,59 @@ describe('nextFireFromCron', () => {
   });
 });
 
+describe('nextFireFromCron — timezone-aware evaluation', () => {
+  // Fixed epochs so results do not depend on the test runner's timezone.
+  // 2026-08-19 is CDT (UTC-5); 2026-01-15 is CST (UTC-6).
+  const AUG_19_MIDNIGHT_UTC = Date.UTC(2026, 7, 19, 0, 0, 0);
+  const JAN_15_MIDNIGHT_UTC = Date.UTC(2026, 0, 15, 0, 0, 0);
+
+  it('evaluates "0 8 * * *" in America/Chicago, not the process timezone (CDT)', () => {
+    const next = nextFireFromCron('0 8 * * *', AUG_19_MIDNIGHT_UTC, 'America/Chicago');
+    // 08:00 in Chicago on 2026-08-19 (CDT, UTC-5) = 13:00 UTC
+    expect(next).toBe(Date.UTC(2026, 7, 19, 13, 0, 0));
+  });
+
+  it('evaluates the same expression in UTC for comparison', () => {
+    const next = nextFireFromCron('0 8 * * *', AUG_19_MIDNIGHT_UTC, 'UTC');
+    expect(next).toBe(Date.UTC(2026, 7, 19, 8, 0, 0));
+  });
+
+  it('handles DST correctly: Chicago in January is CST (UTC-6)', () => {
+    const next = nextFireFromCron('0 8 * * *', JAN_15_MIDNIGHT_UTC, 'America/Chicago');
+    // 08:00 in Chicago on 2026-01-15 (CST, UTC-6) = 14:00 UTC
+    expect(next).toBe(Date.UTC(2026, 0, 15, 14, 0, 0));
+  });
+
+  it('rolls to the next day when the target local time has passed', () => {
+    // 10:00 UTC on 2026-08-19 is 05:00 in Chicago — 08:00 local is still ahead.
+    const morning = nextFireFromCron('0 8 * * *', Date.UTC(2026, 7, 19, 10, 0, 0), 'America/Chicago');
+    expect(morning).toBe(Date.UTC(2026, 7, 19, 13, 0, 0));
+    // 14:00 UTC is 09:00 in Chicago — 08:00 local has passed; next is tomorrow.
+    const after = nextFireFromCron('0 8 * * *', Date.UTC(2026, 7, 19, 14, 0, 0), 'America/Chicago');
+    expect(after).toBe(Date.UTC(2026, 7, 20, 13, 0, 0));
+  });
+
+  it('omitting the timezone preserves legacy process-local behavior', () => {
+    const fromMs = AUG_19_MIDNIGHT_UTC;
+    const withUtc = nextFireFromCron('0 8 * * *', fromMs, 'UTC');
+    const legacy = nextFireFromCron('0 8 * * *', fromMs);
+    // Both must land on an 08:00 wall clock in their respective zones and be
+    // whole-minute, future timestamps — the shapes are identical even when the
+    // process zone is not UTC.
+    expect(legacy % 60_000).toBe(0);
+    expect(legacy).toBeGreaterThan(fromMs);
+    expect(new Date(legacy).getMinutes()).toBe(0);
+    expect(new Date(legacy).getHours()).toBe(8);
+    expect(withUtc).toBe(Date.UTC(2026, 7, 19, 8, 0, 0));
+  });
+
+  it('matches day-of-week in the given timezone, not the process zone', () => {
+    // 2026-08-19 is a Wednesday. "0 8 * * 3" should hit the same day in Chicago.
+    const next = nextFireFromCron('0 8 * * 3', AUG_19_MIDNIGHT_UTC, 'America/Chicago');
+    expect(next).toBe(Date.UTC(2026, 7, 19, 13, 0, 0));
+  });
+});
+
 // ---------------------------------------------------------------------------
 // CronScheduler behaviour tests (fake timers)
 // ---------------------------------------------------------------------------
