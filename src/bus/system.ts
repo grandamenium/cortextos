@@ -1,10 +1,10 @@
 import { execSync, execFileSync } from 'child_process';
-import { existsSync, readFileSync, statSync, appendFileSync, writeFileSync } from 'fs';
-import { join, extname } from 'path';
+import { existsSync, readFileSync, statSync, appendFileSync, writeFileSync, realpathSync } from 'fs';
+import { join, extname, resolve as resolvePath } from 'path';
 import { readdirSync } from 'fs';
 import { ensureDir } from '../utils/atomic.js';
 import { TelegramAPI } from '../telegram/api.js';
-import type { BusPaths } from '../types/index.js';
+import type { BusPaths, CtxEnv } from '../types/index.js';
 
 // --- Types ---
 
@@ -93,9 +93,82 @@ export function hardRestart(paths: BusPaths, agentName: string, reason?: string)
 }
 
 /**
+ * Resolve the org-workspace repo directory for `bus auto-commit --org-repo`.
+ *
+ * In --org-repo mode the snapshot targets the agent's org workspace
+ * (`<projectRoot>/orgs/<org>`), never the framework repo. `orgs/` is
+ * gitignored by the framework repo but still lives inside its work tree, so
+ * git discovery from an org dir that was never `git init`ed silently walks up
+ * to the framework repo; without a guard, a snapshot would then commit
+ * framework-root junk onto the framework branch.
+ *
+ * Throws instead of guessing: no org in env, missing org dir, org dir not a
+ * git repo, or the org dir's git toplevel resolving to the framework repo root
+ * are all hard errors.
+ */
+export function resolveAutoCommitDir(
+  env: Pick<CtxEnv, 'org' | 'projectRoot' | 'frameworkRoot'>,
+): string {
+  const baseRoot = env.projectRoot || env.frameworkRoot;
+  if (!baseRoot) {
+    throw new Error(
+      'auto-commit --org-repo: cannot resolve the org workspace — CTX_PROJECT_ROOT / ' +
+      'CTX_FRAMEWORK_ROOT are not set. Run from an agent directory (with .cortextos-env) ' +
+      'or set them explicitly.',
+    );
+  }
+  if (!env.org) {
+    throw new Error(
+      "auto-commit --org-repo: CTX_ORG is not set. --org-repo snapshots the agent's org " +
+      'workspace (orgs/<org>/) and refuses to guess the target repo.',
+    );
+  }
+
+  const orgRepoDir = join(baseRoot, 'orgs', env.org);
+  if (!existsSync(orgRepoDir)) {
+    throw new Error(`auto-commit --org-repo: org workspace '${orgRepoDir}' does not exist.`);
+  }
+
+  let topLevel: string;
+  try {
+    topLevel = execSync('git rev-parse --show-toplevel', {
+      cwd: orgRepoDir,
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    }).trim();
+  } catch {
+    throw new Error(
+      `auto-commit --org-repo: org workspace '${orgRepoDir}' is not inside a git repository. ` +
+      `Initialize it first (git -C '${orgRepoDir}' init) — refusing to snapshot anything else.`,
+    );
+  }
+
+  // Hard guard: refuse if the resolved repo root is the framework repo root.
+  // git prints physical paths, so compare against the realpath'd framework root.
+  const frameworkRoot = env.frameworkRoot || env.projectRoot;
+  let frameworkRootReal: string;
+  try {
+    frameworkRootReal = realpathSync(frameworkRoot);
+  } catch {
+    frameworkRootReal = resolvePath(frameworkRoot);
+  }
+  if (resolvePath(topLevel) === frameworkRootReal) {
+    throw new Error(
+      `auto-commit --org-repo: REFUSING to run — '${orgRepoDir}' resolves to the FRAMEWORK ` +
+      `repo ('${topLevel}'), not an org repo. The org workspace is not its own git ` +
+      `repository; initialize it (git -C '${orgRepoDir}' init) before snapshotting.`,
+    );
+  }
+
+  return orgRepoDir;
+}
+
+/**
  * Auto-commit safe files in a project directory.
  * Filters out dangerous files (credentials, env, large, binary).
  * Never pushes. Mirrors bash bus/auto-commit.sh.
+ * With `--org-repo` callers resolve the directory via resolveAutoCommitDir()
+ * — this function snapshots whatever directory it is handed.
  */
 export function autoCommit(projectDir: string, dryRun: boolean = false): AutoCommitReport {
   // Check if git repo

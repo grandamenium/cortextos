@@ -8,7 +8,7 @@ import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTa
 import { saveOutput } from '../bus/save-output.js';
 import { logEvent } from '../bus/event.js';
 import { updateHeartbeat, readAllHeartbeats } from '../bus/heartbeat.js';
-import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../bus/system.js';
+import { selfRestart, hardRestart, autoCommit, resolveAutoCommitDir, checkGoalStaleness, postActivity } from '../bus/system.js';
 import { createExperiment, runExperiment, evaluateExperiment, listExperiments, gatherContext, manageCycle, loadExperimentConfig } from '../bus/experiment.js';
 import { browseCatalog, installCommunityItem, prepareSubmission, submitCommunityItem } from '../bus/catalog.js';
 import { collectMetrics, parseUsageOutput, storeUsageData, checkUpstream, collectTelegramCommands, registerTelegramCommands } from '../bus/metrics.js';
@@ -682,9 +682,20 @@ busCommand
   .command('auto-commit')
   .description('Stage safe files for commit (never pushes)')
   .option('--dry-run', 'Show what would be staged without modifying git')
-  .action((opts: { dryRun?: boolean }) => {
+  .option('--org-repo', "Target the agent's org workspace repo (orgs/<org>) instead of the project root; refuses to snapshot the framework repo")
+  .action((opts: { dryRun?: boolean; orgRepo?: boolean }) => {
     const env = resolveEnv();
-    const projectDir = env.projectRoot || env.frameworkRoot || process.cwd();
+    let projectDir: string;
+    if (opts.orgRepo) {
+      try {
+        projectDir = resolveAutoCommitDir(env);
+      } catch (err) {
+        console.error((err as Error).message ?? String(err));
+        process.exit(1);
+      }
+    } else {
+      projectDir = env.projectRoot || env.frameworkRoot || process.cwd();
+    }
     const report = autoCommit(projectDir, opts.dryRun ?? false);
     console.log(JSON.stringify(report));
   });
