@@ -397,6 +397,18 @@ export interface CronDefinition {
   fire_count?: number;
 
   /**
+   * ISO 8601 UTC timestamp of the next scheduled fire, persisted so the
+   * daemon does not re-anchor never-fired (or crashed-before-first-fire)
+   * crons to `restart_time + interval` on every restart. Treated as the
+   * authoritative future anchor by `loadCrons()` when present and still in
+   * the future; a past value falls through to the catch-up policy. Written
+   * by the scheduler after each fire and when a cron is scheduled fresh.
+   * Backwards-compatible: absent means "compute from scratch" (legacy
+   * behavior). See docs/architecture/cron-persistent-next-fire.md (theta 61).
+   */
+  next_fire_at?: string | null;
+
+  /**
    * ISO 8601 UTC timestamp for one-shot crons — when the cron should fire once
    * and then be deleted. Mutually exclusive with recurring `schedule` semantics:
    * if `fire_at` is set, the daemon treats this as a one-shot regardless of
