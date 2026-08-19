@@ -4,7 +4,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import type { InboxMessage, Priority, BusPaths } from '../types/index.js';
 import { PRIORITY_MAP } from '../types/index.js';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
-import { acquireLock, releaseLock } from '../utils/lock.js';
+import { withFileLockSync } from '../utils/lock.js';
 import { randomString } from '../utils/random.js';
 import { validateAgentName, validatePriority } from '../utils/validate.js';
 
@@ -92,18 +92,22 @@ export function sendMessage(
  * Reads inbox directory, moves messages to inflight, returns sorted array.
  * Recovers stale inflight messages (>5 minutes old).
  * Identical to bash check-inbox.sh behavior.
+ *
+ * @throws if the inbox lock cannot be acquired within the retry window —
+ *   "lock unavailable" must be loud, not indistinguishable from "inbox empty".
  */
 export function checkInbox(paths: BusPaths): InboxMessage[] {
   const { inbox, inflight } = paths;
   ensureDir(inbox);
   ensureDir(inflight);
 
-  // Acquire lock
-  if (!acquireLock(inbox)) {
-    return [];
-  }
-
-  try {
+  // Acquire via the retry path. A bare single-shot acquireLock here used to
+  // return [] on ANY contention — an empty result identical to a genuinely
+  // empty inbox, which silently blackholed the inbox whenever a stale lock
+  // was left behind. withFileLockSync retries with backoff (during which
+  // acquireLock reclaims stale/dead locks) and throws if the lock stays
+  // unavailable.
+  return withFileLockSync(inbox, () => {
     // Recover stale inflight messages (>5 min old)
     recoverStaleInflight(inflight, inbox, 300);
 
@@ -158,16 +162,18 @@ export function checkInbox(paths: BusPaths): InboxMessage[] {
     }
 
     return messages;
-  } finally {
-    releaseLock(inbox);
-  }
+  });
 }
 
 /**
  * Acknowledge a message by moving it from inflight to processed.
  * Identical to bash ack-inbox.sh behavior.
+ *
+ * Returns true if the message was found in inflight and moved; false on a
+ * miss (already ACK'd, or never checked out via checkInbox) so callers can
+ * surface the miss instead of reporting success unconditionally.
  */
-export function ackInbox(paths: BusPaths, messageId: string): void {
+export function ackInbox(paths: BusPaths, messageId: string): boolean {
   const { inflight, processed } = paths;
   ensureDir(processed);
 
@@ -176,7 +182,7 @@ export function ackInbox(paths: BusPaths, messageId: string): void {
   try {
     files = readdirSync(inflight).filter(f => f.endsWith('.json'));
   } catch {
-    return;
+    return false;
   }
 
   for (const file of files) {
@@ -186,12 +192,13 @@ export function ackInbox(paths: BusPaths, messageId: string): void {
       const msg = JSON.parse(content);
       if (msg.id === messageId) {
         renameSync(filePath, join(processed, file));
-        return;
+        return true;
       }
     } catch {
       // Skip corrupt files
     }
   }
+  return false;
 }
 
 /**

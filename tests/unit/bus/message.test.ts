@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync, writeFileSync, utimesSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { Worker } from 'worker_threads';
 import { sendMessage, checkInbox, ackInbox } from '../../../src/bus/message';
+import { acquireLock } from '../../../src/utils/lock';
 import { resolvePaths } from '../../../src/utils/paths';
 import type { BusPaths } from '../../../src/types';
 
@@ -123,20 +125,86 @@ describe('Message Bus', () => {
       expect(inboxFiles.length).toBe(0);
       expect(inflightFiles.length).toBe(1);
     });
+
+    it('recovers from a stale wedged lock instead of returning []', () => {
+      // Regression: a holder that crashed between mkdir and the pid write
+      // left a 0-byte pid .lock.d that wedged the inbox forever — every
+      // check-inbox silently returned [] while messages sat in inbox/.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        sendMessage(senderPaths, 'sender', 'receiver', 'urgent', 'wedged');
+
+        const lockDir = join(receiverPaths.inbox, '.lock.d');
+        mkdirSync(lockDir);
+        writeFileSync(join(lockDir, 'pid'), '');
+        const old = new Date(Date.now() - 120_000); // past the 60s stale default
+        utimesSync(lockDir, old, old);
+
+        const messages = checkInbox(receiverPaths);
+        expect(messages.length).toBe(1);
+        expect(messages[0].text).toBe('wedged');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('waits out a briefly-held lock and returns real messages', async () => {
+      sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'delayed');
+
+      // Hold the inbox lock from this (live) process — young + alive, so it
+      // is NOT reclaimable; checkInbox must sit in its retry loop. A worker
+      // thread (own event loop, unaffected by the sync-blocked main thread)
+      // releases the lock after ~300ms.
+      expect(acquireLock(receiverPaths.inbox)).toBe(true);
+      const lockDir = join(receiverPaths.inbox, '.lock.d');
+      const worker = new Worker(
+        `const { rmSync } = require('fs');
+         const { workerData } = require('worker_threads');
+         setTimeout(() => rmSync(workerData.lockDir, { recursive: true, force: true }), 300);`,
+        { eval: true, workerData: { lockDir } },
+      );
+      try {
+        const messages = checkInbox(receiverPaths);
+        expect(messages.length).toBe(1);
+        expect(messages[0].text).toBe('delayed');
+      } finally {
+        await worker.terminate();
+      }
+    });
   });
 
   describe('ackInbox', () => {
-    it('moves message from inflight to processed', () => {
+    it('moves message from inflight to processed and returns true', () => {
       const msgId = sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'test');
       checkInbox(receiverPaths); // moves to inflight
 
-      ackInbox(receiverPaths, msgId);
+      expect(ackInbox(receiverPaths, msgId)).toBe(true);
 
       const inflightFiles = readdirSync(receiverPaths.inflight).filter(f => f.endsWith('.json'));
       const processedFiles = readdirSync(receiverPaths.processed).filter(f => f.endsWith('.json'));
 
       expect(inflightFiles.length).toBe(0);
       expect(processedFiles.length).toBe(1);
+    });
+
+    it('returns false when the id is not in inflight (ack miss)', () => {
+      expect(ackInbox(receiverPaths, 'no-such-id')).toBe(false);
+    });
+
+    it('returns false for a message never checked out of the inbox', () => {
+      const msgId = sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'unread');
+      // No checkInbox: the message is still in inbox/, not inflight/.
+      expect(ackInbox(receiverPaths, msgId)).toBe(false);
+      // ...and the file must still be sitting in the inbox, untouched.
+      const inboxFiles = readdirSync(receiverPaths.inbox).filter(f => f.endsWith('.json'));
+      expect(inboxFiles.length).toBe(1);
+    });
+
+    it('returns false on double-ack', () => {
+      const msgId = sendMessage(senderPaths, 'sender', 'receiver', 'normal', 'once');
+      checkInbox(receiverPaths);
+      expect(ackInbox(receiverPaths, msgId)).toBe(true);
+      expect(ackInbox(receiverPaths, msgId)).toBe(false);
     });
   });
 });
