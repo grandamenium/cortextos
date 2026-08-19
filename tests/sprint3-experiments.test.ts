@@ -9,6 +9,7 @@ import {
   listExperiments,
   gatherContext,
   manageCycle,
+  suggestBaselineFromSurface,
 } from '../src/bus/experiment.js';
 
 describe('Sprint 3: Experiment Framework', () => {
@@ -254,6 +255,154 @@ describe('Sprint 3: Experiment Framework', () => {
     it('throws if experiment is not running', () => {
       const id = createExperiment(testDir, 'testbot', 'ctr', 'test');
       expect(() => evaluateExperiment(testDir, id, 10)).toThrow("expected 'running'");
+    });
+  });
+
+  describe('G1 zero-delta gate', () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    // Create + run + evaluate a flat (non-improving) window on a surface.
+    // direction=higher, baseline starts at 0, so value<=0 → discard.
+    function flat(surface: string, value = 0): ReturnType<typeof evaluateExperiment> {
+      const id = createExperiment(testDir, 'testbot', 'engagement', 'flat hypothesis', {
+        surface,
+        direction: 'higher',
+      });
+      runExperiment(testDir, id);
+      return evaluateExperiment(testDir, id, value);
+    }
+
+    it('flags the 3rd consecutive flat window on the same surface', () => {
+      const s = 'surfaces/g1.md';
+
+      const r1 = flat(s);
+      expect(r1.decision).toBe('discard');
+      expect(r1.guardrail_note ?? null).toBeNull();
+
+      const r2 = flat(s);
+      expect(r2.guardrail_note ?? null).toBeNull();
+
+      const r3 = flat(s);
+      expect(r3.decision).toBe('discard');
+      expect(r3.guardrail_note).toBeTruthy();
+      expect(r3.guardrail_note).toContain(s);
+
+      // Note is persisted to learnings.md (tamper-proof record)
+      const learnings = readFileSync(join(testDir, 'experiments', 'learnings.md'), 'utf-8');
+      expect(learnings).toContain('zero-delta gate');
+    });
+
+    it('does not accumulate flats spread across different surfaces', () => {
+      flat('surfaces/a.md');
+      flat('surfaces/b.md');
+      const r3 = flat('surfaces/c.md');
+      expect(r3.guardrail_note ?? null).toBeNull();
+    });
+
+    it('a keep resets the flat streak (does not chain)', async () => {
+      const s = 'surfaces/reset.md';
+      flat(s); // discard 1
+      flat(s); // discard 2
+
+      // A genuine improvement (keep) must break the streak. Space completions
+      // apart by >1s so the truncated-to-seconds completed_at ordering is
+      // unambiguous (the keep sorts newest before the following flat).
+      await sleep(1100);
+      const k = createExperiment(testDir, 'testbot', 'engagement', 'real improvement', {
+        surface: s,
+        direction: 'higher',
+      });
+      runExperiment(testDir, k);
+      const rk = evaluateExperiment(testDir, k, 5); // 5 > baseline 0 → keep
+      expect(rk.decision).toBe('keep');
+      expect(rk.guardrail_note ?? null).toBeNull();
+
+      await sleep(1100);
+      const r = flat(s, 0); // baseline now 5, value 0 → discard, but streak reset
+      expect(r.decision).toBe('discard');
+      expect(r.guardrail_note ?? null).toBeNull();
+    });
+  });
+
+  describe('G3 baseline drift', () => {
+    it('createExperiment honours an explicit baseline', () => {
+      const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+        surface: 'surfaces/g3.md',
+        baseline: 7,
+      });
+      const exp = JSON.parse(
+        readFileSync(join(testDir, 'experiments', 'history', `${id}.json`), 'utf-8').trim(),
+      );
+      expect(exp.baseline_value).toBe(7);
+    });
+
+    it('suggestBaselineFromSurface returns median of recent results (null when none)', () => {
+      const s = 'surfaces/g3-suggest.md';
+      expect(suggestBaselineFromSurface(testDir, s)).toBeNull();
+
+      // Produce completed results 4, 6, 8 on the surface (baseline 0, higher).
+      for (const v of [4, 6, 8]) {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+          surface: s,
+          direction: 'higher',
+        });
+        runExperiment(testDir, id);
+        evaluateExperiment(testDir, id, v);
+      }
+      // Median of [4,6,8] = 6.
+      expect(suggestBaselineFromSurface(testDir, s)).toBe(6);
+    });
+
+    it('warns when results cluster within ±1 of baseline for 5+ windows', () => {
+      const s = 'surfaces/g3-drift.md';
+      // Fixed baseline 7 via explicit baseline; direction lower so results at
+      // 7 (== baseline) discard without moving the baseline, keeping it pegged.
+      let last: ReturnType<typeof evaluateExperiment> | null = null;
+      for (let i = 0; i < 5; i++) {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+          surface: s,
+          direction: 'lower',
+          baseline: 7,
+        });
+        runExperiment(testDir, id);
+        last = evaluateExperiment(testDir, id, 7); // |7-7|=0 ≤ 1, discard, baseline stays 7
+      }
+      expect(last!.drift_note).toBeTruthy();
+      expect(last!.drift_note).toContain('drift');
+    });
+
+    it('does not warn before 5 clustered windows', () => {
+      const s = 'surfaces/g3-nodrift.md';
+      let last: ReturnType<typeof evaluateExperiment> | null = null;
+      for (let i = 0; i < 4; i++) {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+          surface: s,
+          direction: 'lower',
+          baseline: 7,
+        });
+        runExperiment(testDir, id);
+        last = evaluateExperiment(testDir, id, 7);
+      }
+      expect(last!.drift_note ?? null).toBeNull();
+    });
+
+    it('a result outside ±1 breaks the drift run', () => {
+      const s = 'surfaces/g3-break.md';
+      const mk = (v: number) => {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'h', {
+          surface: s,
+          direction: 'lower',
+          baseline: 7,
+        });
+        runExperiment(testDir, id);
+        return evaluateExperiment(testDir, id, v);
+      };
+      mk(7);
+      mk(7);
+      mk(20); // far from baseline → breaks the run
+      mk(7);
+      const last = mk(7); // only 2 clustered since the break → no warn
+      expect(last.drift_note ?? null).toBeNull();
     });
   });
 

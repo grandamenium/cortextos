@@ -25,6 +25,19 @@ export interface Experiment {
   started_at: string | null;
   completed_at: string | null;
   changes_description: string | null;
+  /**
+   * Set by the G1 zero-delta gate when an evaluation is the Nth consecutive
+   * flat (non-improving) window on the same surface. Optional/back-compat:
+   * absent on experiments created before the gate and on non-triggering ones.
+   */
+  guardrail_note?: string | null;
+  /**
+   * Set by the G3 baseline-drift detector when recent results on the surface
+   * cluster within DRIFT_DELTA of the baseline for DRIFT_WINDOW+ windows.
+   * Advisory only — never changes the decision or the baseline. Optional/
+   * back-compat: absent on non-triggering evaluations.
+   */
+  drift_note?: string | null;
 }
 
 export interface ExperimentCreateOptions {
@@ -33,6 +46,8 @@ export interface ExperimentCreateOptions {
   window?: string;
   measurement?: string;
   approval_required?: boolean;
+  /** Explicit starting baseline. Defaults to 0. See suggestBaselineFromSurface. */
+  baseline?: number;
 }
 
 export interface ExperimentEvaluateOptions {
@@ -117,6 +132,120 @@ function saveExperiment(agentDir: string, experiment: Experiment): void {
   atomicWriteSync(join(dir, `${experiment.id}.json`), JSON.stringify(experiment, null, 2));
 }
 
+/**
+ * G1 zero-delta gate limit: number of consecutive flat (non-improving) windows
+ * on the same surface that forces the surface to be abandoned. Per the
+ * autoresearch skill's zero-delta rule ("result <= baseline for the SAME
+ * surface change 3 windows in a row — discard and re-hypothesize").
+ */
+export const ZERO_DELTA_GATE_LIMIT = 3;
+
+/**
+ * Count how many of the most-recent CONSECUTIVE completed experiments on the
+ * given surface ended in 'discard' (a flat / non-improving window). A 'keep'
+ * breaks the streak — the skill's rule is explicitly about not chaining keeps
+ * on flat results, so any real improvement resets the counter. Ordered by
+ * completion time (newest first) so the streak reflects recent history, not
+ * creation order. Returns 0 for an empty surface (cannot group).
+ */
+function countConsecutiveFlatOnSurface(
+  agentDir: string,
+  surface: string,
+  excludeId: string,
+): number {
+  if (!surface) return 0;
+  const completed = listExperiments(agentDir, { status: 'completed' })
+    .filter((e) => e.surface === surface && e.id !== excludeId)
+    .sort(
+      (a, b) =>
+        new Date(b.completed_at ?? b.created_at).getTime() -
+        new Date(a.completed_at ?? a.created_at).getTime(),
+    );
+  let streak = 0;
+  for (const e of completed) {
+    if (e.decision === 'discard') streak++;
+    else break;
+  }
+  return streak;
+}
+
+/**
+ * G3 baseline-drift parameters. A run of DRIFT_WINDOW+ recent windows whose
+ * results all sit within DRIFT_DELTA of the current baseline means the metric
+ * is stuck — the baseline is pegged and no longer discriminating. Calibrated
+ * for 1-10 qualitative scores (±1). Detection is advisory only.
+ */
+export const DRIFT_DELTA = 1;
+export const DRIFT_WINDOW = 5;
+
+/** Median of a numeric list (average of the two middle values for even n). */
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+/**
+ * G3 create-time helper: suggest a starting baseline for a new experiment on
+ * a surface as the median of the last 5 completed results on that surface (or
+ * all of them if fewer than 5). Median — not min — so a single outlier window
+ * does not drag the floor. Returns null when the surface has no prior results,
+ * so the caller can fall back to the default baseline of 0.
+ */
+export function suggestBaselineFromSurface(
+  agentDir: string,
+  surface: string,
+): number | null {
+  if (!surface) return null;
+  const results = listExperiments(agentDir, { status: 'completed' })
+    .filter((e) => e.surface === surface && typeof e.result_value === 'number')
+    .sort(
+      (a, b) =>
+        new Date(b.completed_at ?? b.created_at).getTime() -
+        new Date(a.completed_at ?? a.created_at).getTime(),
+    )
+    .slice(0, 5)
+    .map((e) => e.result_value as number);
+  if (results.length === 0) return null;
+  return median(results);
+}
+
+/**
+ * G3 evaluate-time helper: detect baseline drift. Counts, newest-first, how
+ * many recent windows on the surface (the current result plus prior completed
+ * results) sit within DRIFT_DELTA of the reference baseline in an unbroken run.
+ * Returns the run length; the caller warns when it reaches DRIFT_WINDOW.
+ */
+function driftRunLength(
+  agentDir: string,
+  surface: string,
+  excludeId: string,
+  currentResult: number,
+  baselineRef: number,
+): number {
+  if (!surface) return 0;
+  const priorResults = listExperiments(agentDir, { status: 'completed' })
+    .filter(
+      (e) =>
+        e.surface === surface &&
+        e.id !== excludeId &&
+        typeof e.result_value === 'number',
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.completed_at ?? b.created_at).getTime() -
+        new Date(a.completed_at ?? a.created_at).getTime(),
+    )
+    .map((e) => e.result_value as number);
+  const sequence = [currentResult, ...priorResults];
+  let run = 0;
+  for (const v of sequence) {
+    if (Math.abs(v - baselineRef) <= DRIFT_DELTA) run++;
+    else break;
+  }
+  return run;
+}
+
 export function loadExperimentConfig(agentDir: string): ExperimentConfig {
   return loadConfig(agentDir);
 }
@@ -171,7 +300,7 @@ export function createExperiment(
     window: options?.window ?? cycleDefaults.window ?? '24h',
     measurement: options?.measurement ?? cycleDefaults.measurement ?? '',
     status: 'proposed',
-    baseline_value: 0,
+    baseline_value: options?.baseline ?? 0,
     result_value: null,
     decision: null,
     learning: '',
@@ -289,10 +418,59 @@ export function evaluateExperiment(
     experiment.decision = decision;
   }
 
+  // G1 zero-delta gate: if this is a flat (non-improving) window and the same
+  // surface already produced ZERO_DELTA_GATE_LIMIT-1 consecutive flat windows,
+  // the surface is exhausted. Force discard (belt-and-suspenders: a flat result
+  // already discards) and record a tamper-proof re-hypothesize note in the
+  // learning so the agent cannot keep chaining experiments on a dead surface.
+  let guardrailNote: string | null = null;
+  if (decision === 'discard' && experiment.surface) {
+    const priorFlat = countConsecutiveFlatOnSurface(
+      agentDir,
+      experiment.surface,
+      experiment.id,
+    );
+    if (priorFlat + 1 >= ZERO_DELTA_GATE_LIMIT) {
+      decision = 'discard';
+      experiment.decision = 'discard';
+      guardrailNote =
+        `G1 zero-delta gate: ${priorFlat + 1} consecutive flat windows on surface ` +
+        `'${experiment.surface}' — metric not moving. Abandon this surface and ` +
+        `re-hypothesize with a materially different change; do not keep chaining.`;
+      experiment.guardrail_note = guardrailNote;
+    }
+  }
+
+  // G3 baseline-drift detector (advisory only — never changes the decision or
+  // the baseline; baseline stays ground truth). If recent windows on the
+  // surface cluster within DRIFT_DELTA of the baseline for DRIFT_WINDOW+ in a
+  // row, the baseline is pegged and no longer discriminating — warn so the
+  // agent closes the cycle and re-creates with a fresh baseline.
+  let driftNote: string | null = null;
+  if (experiment.surface) {
+    const baselineRef = experiment.baseline_value;
+    const run = driftRunLength(
+      agentDir,
+      experiment.surface,
+      experiment.id,
+      measuredValue,
+      baselineRef,
+    );
+    if (run >= DRIFT_WINDOW) {
+      driftNote =
+        `baseline drift suspected: results stuck at ${baselineRef} ± ${DRIFT_DELTA} for ` +
+        `${run} windows on surface '${experiment.surface}'; consider closing this cycle ` +
+        `and re-creating with baseline=${baselineRef}.`;
+      experiment.drift_note = driftNote;
+    }
+  }
+
   // Build learning from options
   const learningParts: string[] = [];
   if (options?.learning) learningParts.push(options.learning);
   if (options?.justification) learningParts.push(options.justification);
+  if (guardrailNote) learningParts.push(`⚠ ${guardrailNote}`);
+  if (driftNote) learningParts.push(`⚠ ${driftNote}`);
   if (learningParts.length > 0) {
     experiment.learning = learningParts.join(' — ');
   }
