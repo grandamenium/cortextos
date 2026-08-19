@@ -56,6 +56,13 @@ class _StubResponse:
         self.usage_metadata = None
 
 
+class _StubEmbedResponse:
+    """Minimal stand-in for an embed_content result. The retry wrapper only
+    checks that a non-None result came back, so a single dummy vector suffices."""
+    def __init__(self):
+        self.embeddings = [type("_Emb", (), {"values": [0.0]})()]
+
+
 class _StubModels:
     def __init__(self, script):
         self._script = list(script)
@@ -74,11 +81,22 @@ class _StubModels:
         status = _STATUS_FOR_CODE.get(code, "UNKNOWN")
         raise _InjectedAPIError(code, status, message or f"injected {code} {status}")
 
-    def embed_content(self, *a, **kw):
-        raise RuntimeError(
-            "fault_injection: embed_content is not scripted. Tests should target "
-            "_retry_generate_content directly, not the full ingest_pdf pipeline."
-        )
+    def embed_content(self, model=None, contents=None, config=None, **kwargs):
+        # Scriptable mirror of generate_content (theta 62 quota-gate tests).
+        # Shares the same script/index so a single client can drive mixed
+        # embed/generate sequences. Code 200 returns a stub with an .embeddings
+        # attribute; any other code raises the mapped _InjectedAPIError.
+        if self._index >= len(self._script):
+            raise RuntimeError(
+                f"fault_injection: script exhausted at attempt {self._index + 1} "
+                f"(scripted {len(self._script)} responses)"
+            )
+        code, message = self._script[self._index]
+        self._index += 1
+        if code == 200:
+            return _StubEmbedResponse()
+        status = _STATUS_FOR_CODE.get(code, "UNKNOWN")
+        raise _InjectedAPIError(code, status, message or f"injected {code} {status}")
 
 
 class FaultInjectionClient:

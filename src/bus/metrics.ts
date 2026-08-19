@@ -25,10 +25,30 @@ export interface SystemMetrics {
   approvals_pending: number;
 }
 
+export interface KBRetryMetrics {
+  total: number;
+  success: number;
+  transient: number;
+  exhausted: number;
+  non_transient: number;
+  /**
+   * Count of calls short-circuited by the daily-quota fail-fast gate (theta 62,
+   * mmrag.py). Distinct from `exhausted` (backoff burned) — these avoided the
+   * ~65s backoff entirely, so they measure "wasted-attempts avoided" and are
+   * deliberately excluded from the retry `ratio` denominator.
+   */
+  fail_fast_quota: number;
+  retries_that_saved: number;
+  ratio: number | null;
+  window_h: number;
+  last_ts: string | null;
+}
+
 export interface MetricsReport {
   timestamp: string;
   agents: Record<string, AgentMetrics>;
   system: SystemMetrics;
+  kb_retry?: KBRetryMetrics;
 }
 
 export interface UsageData {
@@ -95,6 +115,58 @@ function isErrorEvent(line: string): boolean {
   }
   if (evt.category !== 'error') return false;
   return evt.severity === 'error' || evt.severity === 'critical';
+}
+
+/**
+ * Read the KB retry telemetry JSONL and return an aggregated summary for the
+ * last `windowH` hours. Returns null if the file does not exist (feature not
+ * yet instrumented). Malformed lines are skipped.
+ *
+ * ratio = retries_that_saved / (retries_that_saved + exhausted).
+ * A ratio of 1.0 = every burst caught; 0.0 = every burst exhausted.
+ * null when there is no denominator yet (no retries + no exhaustion).
+ */
+function readKBRetryMetrics(ctxRoot: string, windowH: number): KBRetryMetrics | null {
+  const path = join(ctxRoot, 'analytics', 'kb-retry-telemetry.jsonl');
+  if (!existsSync(path)) return null;
+  const cutoff = Date.now() - windowH * 3600 * 1000;
+  let total = 0, success = 0, transient = 0, exhausted = 0, nonTransient = 0, retriesSaved = 0, failFastQuota = 0;
+  let lastTs: string | null = null;
+  try {
+    const lines = readFileSync(path, 'utf-8').split('\n').filter(Boolean);
+    for (const line of lines) {
+      let evt: { ts?: string; outcome?: string; attempt?: number };
+      try { evt = JSON.parse(line); } catch { continue; }
+      if (!evt.ts || !evt.outcome) continue;
+      const t = new Date(evt.ts).getTime();
+      if (isNaN(t) || t < cutoff) continue;
+      total++;
+      if (!lastTs || evt.ts > lastTs) lastTs = evt.ts;
+      switch (evt.outcome) {
+        case 'success':
+          success++;
+          if ((evt.attempt ?? 1) > 1) retriesSaved++;
+          break;
+        case 'transient': transient++; break;
+        case 'exhausted': exhausted++; break;
+        case 'non_transient': nonTransient++; break;
+        case 'fail_fast_quota': failFastQuota++; break;
+      }
+    }
+  } catch { return null; }
+  const denom = retriesSaved + exhausted;
+  return {
+    total,
+    success,
+    transient,
+    exhausted,
+    non_transient: nonTransient,
+    fail_fast_quota: failFastQuota,
+    retries_that_saved: retriesSaved,
+    ratio: denom > 0 ? retriesSaved / denom : null,
+    window_h: windowH,
+    last_ts: lastTs,
+  };
 }
 
 export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
@@ -224,6 +296,10 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
     }
   }
 
+  // KB retry telemetry — read last 24h from analytics/kb-retry-telemetry.jsonl.
+  // Absent file = feature not instrumented yet; omit section entirely.
+  const kbRetry = readKBRetryMetrics(ctxRoot, 24);
+
   const report: MetricsReport = {
     timestamp,
     agents,
@@ -233,6 +309,7 @@ export function collectMetrics(ctxRoot: string, org?: string): MetricsReport {
       agents_total: agentsTotal,
       approvals_pending: approvalsPending,
     },
+    ...(kbRetry ? { kb_retry: kbRetry } : {}),
   };
 
   // Write to analytics reports
