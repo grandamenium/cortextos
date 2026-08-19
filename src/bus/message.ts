@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, renameSync, statSync, existsSync } from 'fs';
+import { readdirSync, readFileSync, renameSync, statSync, existsSync, appendFileSync } from 'fs';
 import { join } from 'path';
 import { createHmac, timingSafeEqual } from 'crypto';
 import type { InboxMessage, Priority, BusPaths } from '../types/index.js';
@@ -83,6 +83,33 @@ export function sendMessage(
   const inboxDir = join(paths.ctxRoot, 'inbox', to);
   ensureDir(inboxDir);
   atomicWriteSync(join(inboxDir, filename), JSON.stringify(message));
+
+  // Persist to the durable message-history log so agent-to-agent conversations
+  // survive inbox cleanup. The inbox copy is transient — it is moved to
+  // inflight on check and deleted/processed after ACK — so without this append
+  // the dashboard's Comms view has no source for agent chat history and renders
+  // channels as empty. The dashboard (dashboard/src/app/api/comms/*) already
+  // reads this file as its primary source; nothing wrote it until now.
+  //
+  // Best-effort and non-fatal: message delivery already succeeded above, so a
+  // logging failure must never break sends. Signature is intentionally omitted
+  // from the history record — it is a delivery-integrity field, not chat data.
+  try {
+    const historyDir = join(paths.ctxRoot, 'logs');
+    ensureDir(historyDir);
+    const historyLine = JSON.stringify({
+      id: msgId,
+      from,
+      to,
+      priority,
+      timestamp: message.timestamp,
+      text,
+      reply_to: replyTo || null,
+    });
+    appendFileSync(join(historyDir, 'message-history.jsonl'), historyLine + '\n', 'utf-8');
+  } catch {
+    /* history logging is best-effort — never fail a delivered message */
+  }
 
   return msgId;
 }
