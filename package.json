@@ -7,7 +7,9 @@
     "cortextos": "dist/cli.js"
   },
   "scripts": {
+    "prebuild": "node scripts/guard-live-build.mjs",
     "build": "tsup",
+    "build:deploy": "CORTEXTOS_ALLOW_LIVE_BUILD=1 tsup",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
