@@ -100,7 +100,41 @@ If goals changed since last check, create tasks to address them:
 cortextos bus create-task "<title>" --desc "<description>" --assignee $CTX_AGENT_NAME --priority normal
 ```
 
-## Step 7: Resume work
+## Step 7: Guardrail self-check
+
+Ask yourself: did I skip any procedures this cycle? Did I rationalize not doing something I should have?
+
+If yes, log it:
+```bash
+cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which one>","context":"<what happened>"}'
+```
+
+If you discovered a new pattern that should be a guardrail, add it to GUARDRAILS.md now.
+
+## Step 8: Update long-term memory (if applicable)
+
+If you learned something this cycle that should persist across sessions:
+- Patterns that work/don't work
+- User preferences discovered
+- System behaviors noted
+- Append to MEMORY.md
+
+## Step 9: Re-ingest memory to knowledge base
+
+Keep your memory searchable and current:
+
+```bash
+cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --force
+```
+
+This runs on every heartbeat cycle. Skip if GEMINI_API_KEY is not configured.
+
+A single call is correct while the corpus is small (~85KB today). If MEMORY.md plus the daily
+files grow past a few hundred KB, ingest the day's file every cycle and re-ingest MEMORY.md on
+a slower cadence, so one heartbeat cannot stall on a full-corpus re-embed.
+
+## Step 10: Resume work
 
 Pick your highest priority task and work on it.
 
@@ -113,14 +147,6 @@ When done:
 ```bash
 cortextos bus complete-task "<task_id>" "<summary of what was produced>"
 ```
-
-## Step 8: Update long-term memory (if applicable)
-
-If you learned something this cycle that should persist across sessions:
-- Patterns that work/don't work
-- User preferences discovered
-- System behaviors noted
-- Append to MEMORY.md
 
 ---
 

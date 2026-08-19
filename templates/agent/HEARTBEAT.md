@@ -85,7 +85,43 @@ Read GOALS.md. Goals are refreshed daily by the orchestrator each morning.
 - If goals are stale (>24h without update): message the orchestrator to request fresh goals
 - If you have no goals: message the orchestrator immediately. Don't idle.
 
-## Step 7: Resume work
+## Step 7: Guardrail self-check
+
+Full reference: `.claude/skills/guardrails-reference/SKILL.md`
+
+Ask yourself: did I skip any procedures this cycle? Did I rationalize not doing something I should have?
+
+If yes, log it:
+```bash
+cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which one>","context":"<what happened>"}'
+```
+
+If you discovered a new pattern that should be a guardrail, add it to GUARDRAILS.md now.
+
+## Step 8: Update long-term memory (if applicable)
+
+Full reference: `.claude/skills/memory/SKILL.md`
+
+If you learned something this cycle that should persist across sessions:
+- Patterns that work/don't work
+- User preferences discovered
+- System behaviors noted
+- Append to MEMORY.md
+
+## Step 9: Re-ingest memory to knowledge base
+
+Full reference: `.claude/skills/knowledge-base/SKILL.md`
+
+Keep your memory collection searchable and current:
+
+```bash
+cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
+  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
+```
+
+This runs automatically on every heartbeat cycle. It ensures past experiences, user preferences, and learned patterns are semantically searchable for future tasks. Skip if GEMINI_API_KEY is not configured.
+
+## Step 10: Resume work
 
 Full reference: `.claude/skills/tasks/SKILL.md`
 
@@ -103,42 +139,6 @@ cortextos bus complete-task "<task_id>" --result "<summary of what was produced>
 
 If you are blocked, see `.claude/skills/human-tasks/SKILL.md` for the human task and approval workflow.
 If you need an approval before acting, see `.claude/skills/approvals/SKILL.md`.
-
-## Step 8: Guardrail self-check
-
-Full reference: `.claude/skills/guardrails-reference/SKILL.md`
-
-Ask yourself: did I skip any procedures this cycle? Did I rationalize not doing something I should have?
-
-If yes, log it:
-```bash
-cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which one>","context":"<what happened>"}'
-```
-
-If you discovered a new pattern that should be a guardrail, add it to GUARDRAILS.md now.
-
-## Step 9: Update long-term memory (if applicable)
-
-Full reference: `.claude/skills/memory/SKILL.md`
-
-If you learned something this cycle that should persist across sessions:
-- Patterns that work/don't work
-- User preferences discovered
-- System behaviors noted
-- Append to MEMORY.md
-
-## Step 10: Re-ingest memory to knowledge base
-
-Full reference: `.claude/skills/knowledge-base/SKILL.md`
-
-Keep your memory collection searchable and current:
-
-```bash
-cortextos bus kb-ingest ./MEMORY.md ./memory/$(date -u +%Y-%m-%d).md \
-  --org $CTX_ORG --agent $CTX_AGENT_NAME --scope private --collection memory-$CTX_AGENT_NAME --force
-```
-
-This runs automatically on every heartbeat cycle. It ensures past experiences, user preferences, and learned patterns are semantically searchable for future tasks. Skip if GEMINI_API_KEY is not configured.
 
 ---
 
