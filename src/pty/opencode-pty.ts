@@ -173,7 +173,7 @@ export class OpencodePTY extends AgentPTY {
     }
   }
 
-  override injectMessage(content: string): void {
+  override async injectMessage(content: string): Promise<boolean> {
     // OpenCode v1.17.9's TUI does not reliably surface content delivered with
     // bracketed paste (`ESC[200~ ... ESC[201~`): sandbox validation showed the
     // shared injector could repaint the screen without the inbound message
@@ -204,39 +204,25 @@ export class OpencodePTY extends AgentPTY {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[opencode-pty] shell-mode reset (Escape) failed before injection (pty likely torn down): ${msg}`);
-      return;
+      return false;
     }
 
     if (mode === 'shell') {
-      setTimeout(() => {
-        try {
-          this.write('exit');
-          this.write(KEYS.ENTER);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.warn(`[opencode-pty] shell exit-recovery failed before injection (pty likely torn down): ${msg}`);
-          return;
-        }
-        setTimeout(() => {
-          try {
-            this.typeAndSubmit(safeContent);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.warn(`[opencode-pty] deferred injection failed after shell exit (pty likely torn down): ${msg}`);
-          }
-        }, INJECTION_SHELL_EXIT_SETTLE_MS).unref?.();
-      }, INJECTION_SHELL_RESET_DELAY_MS).unref?.();
-      return;
-    }
-
-    setTimeout(() => {
+      await sleep(INJECTION_SHELL_RESET_DELAY_MS);
       try {
-        this.typeAndSubmit(safeContent);
+        this.write('exit');
+        this.write(KEYS.ENTER);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[opencode-pty] deferred injection failed (pty likely torn down): ${msg}`);
+        console.warn(`[opencode-pty] shell exit-recovery failed before injection (pty likely torn down): ${msg}`);
+        return false;
       }
-    }, INJECTION_SHELL_RESET_DELAY_MS).unref?.();
+      await sleep(INJECTION_SHELL_EXIT_SETTLE_MS);
+      return this.typeAndSubmit(safeContent);
+    }
+
+    await sleep(INJECTION_SHELL_RESET_DELAY_MS);
+    return this.typeAndSubmit(safeContent);
   }
 
   /**
@@ -274,19 +260,31 @@ export class OpencodePTY extends AgentPTY {
     return SHELL_PROMPT_TAIL_PATTERN.test(lastNonEmpty) ? 'shell' : 'chat';
   }
 
-  private typeAndSubmit(safeContent: string): void {
+  /**
+   * Types content and submits it with a deferred ENTER (#510). Resolves
+   * `false` if either the initial typing or the deferred ENTER fails (PTY
+   * torn down mid-inject) — the caller must not treat this as delivered.
+   */
+  private async typeAndSubmit(safeContent: string): Promise<boolean> {
     const maxChunk = 4096;
-    for (let i = 0; i < safeContent.length; i += maxChunk) {
-      this.write(safeContent.slice(i, i + maxChunk));
-    }
-    setTimeout(() => {
-      try {
-        this.write(KEYS.ENTER);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[opencode-pty] deferred Enter failed (pty likely torn down): ${msg}`);
+    try {
+      for (let i = 0; i < safeContent.length; i += maxChunk) {
+        this.write(safeContent.slice(i, i + maxChunk));
       }
-    }, 300).unref?.();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[opencode-pty] deferred injection failed (pty likely torn down): ${msg}`);
+      return false;
+    }
+    await sleep(300);
+    try {
+      this.write(KEYS.ENTER);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[opencode-pty] deferred Enter failed (pty likely torn down): ${msg}`);
+      return false;
+    }
   }
 
   private prepareInjectedContent(content: string): string {
@@ -350,13 +348,10 @@ If it instructs you to send Telegram or bus output, run the required terminal co
 
       if (ready) {
         clearInterval(timer);
-        try {
-          this.injectMessage(prompt);
-        } catch {
-          // If the TUI exited during startup, AgentProcess exit handling will
-          // decide whether to recover. The lost startup prompt is preferable to
-          // crashing the daemon.
-        }
+        // Fire-and-forget: if the TUI exited during startup, AgentProcess exit
+        // handling will decide whether to recover. The lost startup prompt is
+        // preferable to crashing the daemon.
+        void this.injectMessage(prompt).catch(() => {});
       } else if (attempts >= STARTUP_INJECT_MAX_ATTEMPTS) {
         clearInterval(timer);
         this.getOutputBuffer().push('[opencode-pty] startup prompt not injected: TUI readiness not detected\n');
@@ -493,4 +488,8 @@ If it instructs you to send Telegram or bus output, run the required terminal co
 
 export function opencodeSessionExists(ctxRoot: string, agentName: string): boolean {
   return existsSync(join(ctxRoot, 'state', agentName, OPENCODE_SESSION_MARKER));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 }

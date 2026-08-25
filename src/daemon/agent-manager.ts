@@ -1830,19 +1830,20 @@ export class AgentManager {
    * Used by `cortextos bus test-cron-fire` to fire a cron immediately for testing.
    * Returns true if the agent is running and the inject succeeded; false otherwise.
    */
-  injectAgent(agentName: string, text: string): boolean {
-    return this.injectAgentDetailed(agentName, text).ok;
+  async injectAgent(agentName: string, text: string): Promise<boolean> {
+    return (await this.injectAgentDetailed(agentName, text)).ok;
   }
 
   /**
    * Inject text into an agent's PTY with structured outcome — issue #346.
    *
    * Returns NOT_FOUND if the agent isn't in the registry, NOT_RUNNING if
-   * registered but the PTY is gone, DEDUPED on a MessageDedup hash hit. The
-   * boolean-returning `injectAgent()` is preserved for callers (cron
-   * scheduler, fast-checker, fire-cron) that only need pass/fail.
+   * registered but the PTY is gone, DEDUPED on a MessageDedup hash hit,
+   * INJECT_FAILED if the deferred ENTER that submits the paste never landed
+   * (#510). The boolean-returning `injectAgent()` is preserved for callers
+   * (cron scheduler, fast-checker, fire-cron) that only need pass/fail.
    */
-  injectAgentDetailed(agentName: string, text: string): { ok: true } | { ok: false; code: 'NOT_FOUND' | 'NOT_RUNNING' | 'DEDUPED'; message: string } {
+  async injectAgentDetailed(agentName: string, text: string): Promise<{ ok: true } | { ok: false; code: 'NOT_FOUND' | 'NOT_RUNNING' | 'DEDUPED' | 'INJECT_FAILED'; message: string }> {
     const entry = this.agents.get(agentName);
     if (!entry) {
       return { ok: false, code: 'NOT_FOUND', message: `agent "${agentName}" not in registry` };
@@ -1934,7 +1935,7 @@ export class AgentManager {
       // dedup-rejected and treated as a dispatch failure.
       const firedAt = new Date().toISOString();
       const injection = `[CRON FIRED ${firedAt}] ${cron.name}: ${prompt}`;
-      const injected = this.injectAgent(agentName, injection);
+      const injected = await this.injectAgent(agentName, injection);
       if (!injected) {
         throw new Error(`injectAgent returned false for agent "${agentName}" — agent may not be running`);
       }

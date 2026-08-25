@@ -373,9 +373,13 @@ export class AgentPTY {
    * Claude Code accepts bracketed paste reliably, so the base implementation
    * keeps the historical shared injector. Runtime subclasses can override this
    * when their TUI has different paste semantics.
+   *
+   * Resolves `true` only once the deferred ENTER that submits the paste has
+   * actually been written (#510) — callers must await this before treating
+   * the inject as delivered.
    */
-  injectMessage(content: string): void {
-    injectMessageIntoPty((data) => this.write(data), content);
+  injectMessage(content: string): Promise<boolean> {
+    return injectMessageIntoPty((data) => this.write(data), content);
   }
 
   /**
