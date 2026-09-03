@@ -231,6 +231,18 @@
       "submitted_at": "2026-04-06T00:00:00Z"
     },
     {
+      "name": "cortext-self-diagnosis",
+      "description": "Diagnose cortextOS itself when the framework misbehaves: silent or wedged agents, crash loops, undelivered messages, crons that did not fire, a dead daemon. Evidence-first investigation across logs, the bus, state markers and daemon output that classifies local config vs a genuine framework bug, and drives a gated upstream fix",
+      "author": "cortextos",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["diagnostics", "debug", "troubleshooting", "framework", "daemon", "pr"],
+      "review_status": "approved",
+      "dependencies": [],
+      "install_path": "community/skills/cortext-self-diagnosis",
+      "submitted_at": "2026-09-03T00:00:00Z"
+    },
+    {
       "name": "onboarding",
       "description": "First-boot onboarding wizard — guides new agents through identity setup, Telegram configuration, and first session startup",
       "author": "cortextos",
