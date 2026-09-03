@@ -103,7 +103,7 @@ export function cronExpressionMinIntervalMs(expr: string): number {
   const FALLBACK_MS = 48 * 3_600_000;
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) return FALLBACK_MS;
-  const [minute, hour] = parts;
+  const [minute, hour, dom, , dow] = parts;
 
   // Every N minutes: */N * * * *
   const everyMin = /^\*\/(\d+)$/.exec(minute);
@@ -113,7 +113,15 @@ export function cronExpressionMinIntervalMs(expr: string): number {
   const everyHour = /^\*\/(\d+)$/.exec(hour);
   if (everyHour) return parseInt(everyHour[1], 10) * 3_600_000;
 
-  // Fixed hour — fires daily (or on restricted days; 24h is the minimum gap)
+  // Fixed hour restricted to a specific day-of-month (e.g. "0 7 1 * *"):
+  // fires at most once a month — 28 days is the minimum gap, not daily.
+  if (/^\d+$/.test(hour) && dom !== '*') return 28 * 24 * 3_600_000;
+
+  // Fixed hour restricted to a specific day-of-week (e.g. "0 9 * * 0"):
+  // fires at most once a week — 7 days is the minimum gap, not daily.
+  if (/^\d+$/.test(hour) && dow !== '*') return 7 * 24 * 3_600_000;
+
+  // Fixed hour, every day — fires daily (24h is the minimum gap)
   if (/^\d+$/.test(hour)) return 24 * 3_600_000;
 
   return FALLBACK_MS;

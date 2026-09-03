@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { updateCronFire, readCronState, parseDurationMs } from '../../../src/bus/cron-state';
+import { updateCronFire, readCronState, parseDurationMs, cronExpressionMinIntervalMs } from '../../../src/bus/cron-state';
 
 let tmpDir: string;
 
@@ -44,6 +44,36 @@ describe('parseDurationMs', () => {
   it('returns NaN for unknown unit', () => {
     expect(parseDurationMs('5y')).toBeNaN();
     expect(parseDurationMs('10s')).toBeNaN();
+  });
+});
+
+describe('cronExpressionMinIntervalMs', () => {
+  it('handles every-N-minutes expressions', () => {
+    expect(cronExpressionMinIntervalMs('*/5 * * * *')).toBe(5 * 60_000);
+  });
+
+  it('handles every-N-hours expressions', () => {
+    expect(cronExpressionMinIntervalMs('0 */6 * * *')).toBe(6 * 3_600_000);
+  });
+
+  it('treats a fixed hour with day-of-month restricted as monthly (28d minimum)', () => {
+    // A monthly cron like "0 7 1 * *" fires once a month, not daily.
+    expect(cronExpressionMinIntervalMs('0 7 1 * *')).toBe(28 * 24 * 3_600_000);
+  });
+
+  it('treats a fixed hour with day-of-week restricted as weekly (7d minimum)', () => {
+    // A weekly cron like "0 9 * * 0" fires once a week, not daily.
+    expect(cronExpressionMinIntervalMs('0 9 * * 0')).toBe(7 * 24 * 3_600_000);
+    expect(cronExpressionMinIntervalMs('0 9 * * 3')).toBe(7 * 24 * 3_600_000);
+  });
+
+  it('treats a fixed hour with no day restriction as daily', () => {
+    expect(cronExpressionMinIntervalMs('0 8 * * *')).toBe(24 * 3_600_000);
+  });
+
+  it('falls back to the conservative 48h default for unrecognized patterns', () => {
+    expect(cronExpressionMinIntervalMs('not-a-cron')).toBe(48 * 3_600_000);
+    expect(cronExpressionMinIntervalMs('* * * * *')).toBe(48 * 3_600_000);
   });
 });
 
