@@ -25,6 +25,20 @@ type LogFn = (msg: string) => void;
 const OPENCODE_CONTINUE_WEDGE_THRESHOLD = 3;
 const OPENCODE_CONTINUE_WEDGE_FAST_EXIT_MS = 60_000;
 
+// Liveness watchdog (2026-08-25 incident fix): a PTY child can die without its
+// onExit callback ever firing — e.g. if the daemon's own Node.js event loop
+// stalls badly enough that a queued exit callback is delayed indefinitely, or
+// dropped outright. When that happens, status stays stuck at 'running'
+// forever: normal crash recovery is entirely onExit-driven, so nothing
+// notices the agent is actually dead until a human runs `cortextos status`
+// and sees the live-pid check contradict it (that check only runs on demand,
+// it does not act). This watchdog polls the OS pid independently of onExit
+// and forces the same recovery path handleExit() would have taken. The
+// interval is a compromise: frequent enough to catch a stuck agent within a
+// few minutes, infrequent enough that N agents polling in parallel is
+// negligible overhead (one signal(pid, 0) syscall each).
+const LIVENESS_CHECK_INTERVAL_MS = 60_000;
+
 /**
  * Manages a single agent's lifecycle.
  * Replaces agent-wrapper.sh for one agent.
@@ -69,6 +83,17 @@ export class AgentProcess {
   // from an old PTY can race past stopRequested and trigger crash recovery on
   // the new agent.
   private lifecycleGeneration: number = 0;
+  // Liveness watchdog fix: handleExit() is now reachable from two independent
+  // triggers for the same PTY generation — the real onExit callback, and
+  // checkLiveness() below when it detects a dead pid before onExit ever
+  // fires. This makes handleExit() idempotent per generation: whichever
+  // trigger arrives first runs recovery once, and the other (if it arrives
+  // late) is a safe no-op instead of double-counting a crash or scheduling a
+  // duplicate restart.
+  private exitHandledForGeneration: number = -1;
+  // Liveness watchdog fix: interval handle, armed for the duration of a
+  // running lifecycle only (paired with sessionTimer's start/clear points).
+  private livenessCheckTimer: ReturnType<typeof setInterval> | null = null;
   // BUG-011 fix: stop() awaits this promise (resolved by the onExit handler in start())
   // to guarantee the PTY exit has fired before stopping=false is reset. Without
   // this, the exit handler can fire after stopping=false and trigger spurious
@@ -76,6 +101,11 @@ export class AgentProcess {
   private exitPromise: Promise<void> | null = null;
   private resolveExit: (() => void) | null = null;
   private dedup: MessageDedup;
+  // Serializes PTY injects so each PASTE+ENTER cycle completes before the next
+  // starts — otherwise simultaneously-firing crons collide and all but the
+  // first are silently dropped at the TUI (#510). Ordering barrier only;
+  // per-call success/failure is returned to each caller, not swallowed here.
+  private injectChain: Promise<void> = Promise.resolve();
   private log: LogFn;
   private onStatusChange: ((status: AgentStatus) => void) | null = null;
   // Issue #330: held here so CodexAppServerPTY can be re-wired across session refresh
@@ -223,6 +253,7 @@ export class AgentProcess {
 
       // Start session timer
       this.startSessionTimer();
+      this.startLivenessWatchdog();
 
       this.notifyStatusChange();
     } catch (err) {
@@ -263,6 +294,7 @@ export class AgentProcess {
     this.stopRequested = true;
     this.log('Stopping...');
     this.clearSessionTimer();
+    this.clearLivenessWatchdog();
 
     // Capture and null out pty BEFORE any awaits so handleExit() during graceful
     // shutdown doesn't race with us and trigger crash recovery or a double-kill.
@@ -413,12 +445,20 @@ export class AgentProcess {
   /**
    * Inject a message into the agent's PTY — structured outcome.
    *
-   * Distinguishes NOT_RUNNING (agent registered but no live PTY) from
-   * DEDUPED (content collapsed against the in-process MessageDedup window).
-   * See issue #346 — both used to surface as a bare `false` and got mistaken
-   * for "agent not found" by operators investigating restart/cron failures.
+   * Distinguishes NOT_RUNNING (agent registered but no live PTY), DEDUPED
+   * (content collapsed against the in-process MessageDedup window), and
+   * INJECT_FAILED (the deferred ENTER that actually submits the pasted
+   * content never landed — see #510). See issue #346 for NOT_RUNNING vs
+   * DEDUPED — both used to surface as a bare `false` and got mistaken for
+   * "agent not found" by operators investigating restart/cron failures.
+   *
+   * #510: this resolves only after the deferred ENTER has been confirmed
+   * (or confirmed failed). Callers that ACK an inbox message on `ok: true`
+   * (fast-checker's pollCycle) MUST await this — resolving early on the
+   * synchronous paste write alone let messages get ACK'd as "delivered"
+   * while sitting unsubmitted in a PTY that died before ENTER followed.
    */
-  injectMessageDetailed(content: string): { ok: true } | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED'; message: string } {
+  async injectMessageDetailed(content: string): Promise<{ ok: true } | { ok: false; code: 'NOT_RUNNING' | 'DEDUPED' | 'INJECT_FAILED'; message: string }> {
     if (!this.pty || this.status !== 'running') {
       return { ok: false, code: 'NOT_RUNNING', message: `agent "${this.name}" is registered but not running (status: ${this.status})` };
     }
@@ -428,23 +468,72 @@ export class AgentProcess {
       return { ok: false, code: 'DEDUPED', message: `inject for "${this.name}" deduped — content matches MessageDedup hash window` };
     }
 
-    if ('injectMessage' in this.pty && typeof this.pty.injectMessage === 'function') {
-      this.pty.injectMessage(content);
-    } else {
-      // CodexAppServerPTY intentionally models stdin writes itself and does not
-      // inherit AgentPTY. Feed it through the same write path used historically.
-      injectMessageIntoPty((data) => this.pty?.write(data), content);
+    // Pin the session this inject was accepted against (#510). If the agent
+    // restarts while this inject is queued or mid-flight, the generation
+    // advances and a "successful" write on the old, dying PTY is not trusted.
+    const acceptedGeneration = this.lifecycleGeneration;
+    const pty = this.pty;
+
+    // Serialize against any in-flight inject so simultaneously-firing crons
+    // can't interleave their PASTE+ENTER cycles into the same PTY and corrupt
+    // both messages (#510). Ordering barrier only: a predecessor's failure is
+    // ignored for sequencing, and the barrier is always released in `finally`
+    // so one bad inject can't wedge the queue — each caller still gets its
+    // own success/failure back.
+    const prior = this.injectChain;
+    let release!: () => void;
+    this.injectChain = new Promise<void>((r) => { release = r; });
+    try {
+      await prior.catch(() => {});
+
+      let submitted: boolean;
+      if ('injectMessage' in pty && typeof pty.injectMessage === 'function') {
+        submitted = await pty.injectMessage(content);
+      } else {
+        // CodexAppServerPTY intentionally models stdin writes itself and does not
+        // inherit AgentPTY. Feed it through the same write path used historically.
+        // Throw (don't optional-chain to a silent no-op) if the PTY was torn
+        // down mid-inject, so a dead write surfaces as INJECT_FAILED instead
+        // of a false "succeeded".
+        submitted = await injectMessageIntoPty((data) => {
+          if (!this.pty) throw new Error('PTY torn down during inject');
+          this.pty.write(data);
+        }, content);
+      }
+
+      if (submitted && this.lifecycleGeneration !== acceptedGeneration) {
+        // The write nominally succeeded, but the session was replaced while
+        // we waited on the deferred ENTER — whatever landed went to a session
+        // that's already gone. Don't trust it as a real delivery.
+        submitted = false;
+      }
+
+      if (!submitted) {
+        // Roll back the dedup hash so a caller's retry of the same content
+        // isn't wrongly swallowed as a duplicate.
+        this.dedup.forget(content);
+        const message = `inject for "${this.name}" did not submit (deferred ENTER failed or session restarted)`;
+        this.log(message);
+        return { ok: false, code: 'INJECT_FAILED', message };
+      }
+      return { ok: true };
+    } catch (err) {
+      this.dedup.forget(content);
+      const message = `inject for "${this.name}" failed: ${err instanceof Error ? err.message : String(err)}`;
+      this.log(message);
+      return { ok: false, code: 'INJECT_FAILED', message };
+    } finally {
+      release();
     }
-    return { ok: true };
   }
 
   /**
    * Inject a message into the agent's PTY (back-compat boolean wrapper).
-   * New callers that need to distinguish DEDUPED from NOT_RUNNING should use
-   * `injectMessageDetailed()` instead.
+   * New callers that need to distinguish DEDUPED/NOT_RUNNING/INJECT_FAILED
+   * should use `injectMessageDetailed()` instead.
    */
-  injectMessage(content: string): boolean {
-    return this.injectMessageDetailed(content).ok;
+  async injectMessage(content: string): Promise<boolean> {
+    return (await this.injectMessageDetailed(content)).ok;
   }
 
   /**
@@ -597,6 +686,14 @@ export class AgentProcess {
   }
 
   private handleExit(exitCode: number): void {
+    // Liveness watchdog fix: idempotent per lifecycleGeneration — see the
+    // exitHandledForGeneration field comment for why this can now be called
+    // twice for the same dead PTY (real onExit + checkLiveness()).
+    if (this.exitHandledForGeneration === this.lifecycleGeneration) {
+      return;
+    }
+    this.exitHandledForGeneration = this.lifecycleGeneration;
+
     // Capture last 16KB of the agent's stdout BEFORE nulling pty.
     // Used by the image-poison auto-recovery check below — reads the log
     // file so this works even if the PTY buffer has already been GC'd.
@@ -604,6 +701,7 @@ export class AgentProcess {
 
     this.pty = null;
     this.clearSessionTimer();
+    this.clearLivenessWatchdog();
 
     // When the cortextos daemon is shut down by PM2, SIGTERM propagates to
     // the whole process group and reaches each PTY's Claude Code child
@@ -1095,6 +1193,46 @@ export class AgentProcess {
       clearTimeout(this.sessionTimer);
       this.sessionTimer = null;
     }
+  }
+
+  /**
+   * Arm the liveness watchdog for this running lifecycle. Paired with
+   * clearLivenessWatchdog(), called from the same two places
+   * clearSessionTimer() is (runStop() and handleExit()) so the interval never
+   * outlives the PTY it is checking.
+   */
+  private startLivenessWatchdog(): void {
+    this.clearLivenessWatchdog();
+    this.livenessCheckTimer = setInterval(() => this.checkLiveness(), LIVENESS_CHECK_INTERVAL_MS);
+  }
+
+  private clearLivenessWatchdog(): void {
+    if (this.livenessCheckTimer) {
+      clearInterval(this.livenessCheckTimer);
+      this.livenessCheckTimer = null;
+    }
+  }
+
+  /**
+   * Liveness watchdog tick. Independent of the PTY's onExit callback — see
+   * the LIVENESS_CHECK_INTERVAL_MS comment for why onExit alone is not
+   * trustworthy enough (2026-08-25 incident: 9/12 agents stuck at
+   * status='running' with a dead pid for ~25 minutes, invisible until a human
+   * ran `cortextos status`).
+   *
+   * A no-op whenever there is nothing to check: not running, or `pty` is
+   * null (the brief window during an intentional stop() where the pid was
+   * deliberately killed — runStop() nulls `this.pty` before that happens, so
+   * this correctly stays quiet during a normal shutdown instead of mistaking
+   * it for a crash).
+   */
+  private checkLiveness(): void {
+    if (this.status !== 'running' || !this.pty) return;
+    const pid = this.pty.getPid();
+    if (pid && isChildAlive(pid)) return;
+
+    this.log(`Liveness watchdog: status=running but pid ${pid ?? '(none)'} is not alive — forcing crash recovery`);
+    this.handleExit(-1);
   }
 
   /**

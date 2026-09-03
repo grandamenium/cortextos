@@ -217,7 +217,7 @@ describe('context handoff fleet lease', () => {
       JSON.stringify(status),
       'utf-8',
     );
-    const injectMessage = vi.fn();
+    const injectMessage = vi.fn().mockResolvedValue(true);
     const agent = {
       name: agentName,
       injectMessage,

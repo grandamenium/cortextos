@@ -13,20 +13,34 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-echo "[pre-push] Running build..."
-if ! npm run build --silent; then
-  echo ""
-  echo "[pre-push] Build failed. Fix the error before pushing." >&2
-  echo "[pre-push] Push aborted." >&2
-  exit 1
-fi
+# Run build+tests in a clean subshell with every CTX_*-prefixed variable
+# unset first. A `git push` run from inside a live cortextOS agent shell
+# otherwise leaks that agent's real CTX_ROOT/CTX_AGENT_DIR/CTX_ORG/etc. into
+# the test process; a test that overrides only SOME of those vars for its
+# own sandbox (e.g. CTX_FRAMEWORK_ROOT but not CTX_AGENT_DIR) then silently
+# inherits the real value instead of an empty/sandboxed one — either
+# corrupting the fixture or tripping the sandbox-leak guard in
+# src/utils/env.ts (issue #313) on an otherwise-passing test. Unsetting
+# dynamically (compgen -v, not a hardcoded list) so any CTX_* var added
+# later is covered automatically, with no maintenance needed here.
+(
+  for v in $(compgen -v CTX_); do unset "$v"; done
 
-echo "[pre-push] Running tests..."
-if ! npm test --silent; then
-  echo ""
-  echo "[pre-push] Tests failed. Fix the failing tests before pushing." >&2
-  echo "[pre-push] Push aborted." >&2
-  exit 1
-fi
+  echo "[pre-push] Running build..."
+  if ! npm run build --silent; then
+    echo ""
+    echo "[pre-push] Build failed. Fix the error before pushing." >&2
+    echo "[pre-push] Push aborted." >&2
+    exit 1
+  fi
+
+  echo "[pre-push] Running tests..."
+  if ! npm test --silent; then
+    echo ""
+    echo "[pre-push] Tests failed. Fix the failing tests before pushing." >&2
+    echo "[pre-push] Push aborted." >&2
+    exit 1
+  fi
+)
 
 echo "[pre-push] Build and tests passed. Pushing..."

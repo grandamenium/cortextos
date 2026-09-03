@@ -498,14 +498,14 @@ describe('AD-5: User actions audit', () => {
     expect(() => new Date(persisted!.created_at)).not.toThrow();
   });
 
-  it('handleFireCron: result carries firedAt epoch for cooldown tracking and audit', () => {
+  it('handleFireCron: result carries firedAt epoch for cooldown tracking and audit', async () => {
     // Set up cron on disk for getCronByName to find
     addCron(AGENT, makeCron('manual-fire-audit'));
 
     const now = 1_700_000_000_000; // fixed epoch for determinism
     const injectFn = vi.fn().mockReturnValue(true);
 
-    const result = handleFireCron(AGENT, 'manual-fire-audit', injectFn, now);
+    const result = await handleFireCron(AGENT, 'manual-fire-audit', injectFn, now);
 
     expect(result.ok).toBe(true);
     // firedAt is the epoch ms of the fire — core audit field
