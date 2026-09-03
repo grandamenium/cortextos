@@ -6,6 +6,7 @@ import { AgentPTY } from '../pty/agent-pty.js';
 import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { OpencodePTY, opencodeSessionExists } from '../pty/opencode-pty.js';
+import { classifyCodexLiveness, classifyProcStateLiveness, type LivenessVerdict } from './recovery-watchdog.js';
 import { MessageDedup, injectMessage as injectMessageIntoPty } from '../pty/inject.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import { ensureDir } from '../utils/atomic.js';
@@ -473,6 +474,31 @@ export class AgentProcess {
           ? this.pty.isAwaitingInteractiveConfirmation()
           : false,
     };
+  }
+
+  /**
+   * Secondary-liveness verdict for the recovery watchdog's discriminator.
+   * Dispatches by runtime to the PTY's raw signals and runs the fail-safe
+   * classifier. Any missing PTY / uncertainty resolves to UNCERTAIN (veto).
+   */
+  probeLiveness(): LivenessVerdict {
+    if (!this.pty) return 'UNCERTAIN';
+    if (this.config.runtime === 'codex-app-server') {
+      const s = (this.pty as CodexAppServerPTY).probeLiveness();
+      let pidAlive = false;
+      if (s.pid != null) {
+        try {
+          process.kill(s.pid, 0);
+          pidAlive = true;
+        } catch (err) {
+          pidAlive = (err as NodeJS.ErrnoException).code === 'EPERM';
+        }
+      }
+      return classifyCodexLiveness({ socketAlive: s.socketAlive, pid: s.pid, pidAlive, turnInFlight: s.turnInFlight });
+    }
+    // claude-code / hermes / opencode all extend AgentPTY.
+    const s = (this.pty as AgentPTY).probeLiveness();
+    return classifyProcStateLiveness(s);
   }
 
   /**

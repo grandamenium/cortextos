@@ -22,6 +22,9 @@ import { stripBom } from '../utils/strip-bom.js';
 import { BuzzRelayClient, BuzzDispatcher, loadBuzzConfig, type NostrEvent } from '../buzz/index.js';
 import { computeDormancy, parseHeartbeatIntervalMs } from '../utils/dormancy.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME } from '../bus/crons-schema.js';
+import { hardRestart } from '../bus/system.js';
+import { RecoveryWatchdog, type LivenessVerdict, type MappedAgentSnapshot } from './recovery-watchdog.js';
+import type { Heartbeat } from '../types/index.js';
 
 type LogFn = (msg: string) => void;
 
@@ -136,6 +139,11 @@ export class AgentManager {
   // them, so staleness is measured relative to daemon start.
   private daemonStartMs: number = Date.now();
 
+  // Recovery watchdog: the single agent-recovery authority (one timer, one
+  // circuit-breaker registry, one recover() chokepoint). Owned here; started at
+  // the end of discoverAndStart() and stopped in stopAll().
+  private recoveryWatchdog: RecoveryWatchdog | null = null;
+
   constructor(instanceId: string, ctxRoot: string, frameworkRoot: string, org: string) {
     this.instanceId = instanceId;
     this.ctxRoot = ctxRoot;
@@ -236,6 +244,13 @@ export class AgentManager {
     // are normal operation and should fire the real BUG-011 alarm if a
     // race ever does leak through PR #11's protection.
     this.clearDaemonCrashMarkers();
+
+    // Start the single recovery watchdog once the initial roster is up. Guarded
+    // so a re-entered discoverAndStart never spawns a second timer.
+    if (!this.recoveryWatchdog) {
+      this.recoveryWatchdog = new RecoveryWatchdog(this, (m) => console.log(m));
+      this.recoveryWatchdog.start();
+    }
   }
 
   /**
@@ -1548,6 +1563,8 @@ export class AgentManager {
    * time `pty.kill()` runs, every agent already has its marker on disk.
    */
   async stopAll(): Promise<void> {
+    this.recoveryWatchdog?.stop();
+    this.recoveryWatchdog = null;
     this.slackSocketClient?.stop();
     this.slackSocketClient = null;
     this.slackSocketStarted = false;
@@ -1718,6 +1735,112 @@ export class AgentManager {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Read and parse an agent's canonical heartbeat.json. Returns null if missing
+   * or unparseable — best effort, never throws. Used by the recovery watchdog's
+   * content-freshness gate (which reads status/current_task, not the timestamp).
+   */
+  private readHeartbeat(agent: string): Heartbeat | null {
+    const hbPath = join(this.ctxRoot, 'state', agent, 'heartbeat.json');
+    if (!existsSync(hbPath)) return null;
+    try {
+      return JSON.parse(readFileSync(hbPath, 'utf-8')) as Heartbeat;
+    } catch {
+      return null;
+    }
+  }
+
+  // ---- RecoveryManager surface (consumed by RecoveryWatchdog) ----
+
+  /**
+   * Snapshot every mapped agent for the frozen-content trigger. Applies the same
+   * pid-liveness status correction as getAllStatuses (a 'running' entry whose pid
+   * is gone is reported 'stopped', so it carries no uptime and is not flagged).
+   */
+  getMappedContentSnapshot(_nowMs: number): MappedAgentSnapshot[] {
+    const enabledList = this.readInstanceEnableList();
+    const isEnabled = (name: string): boolean => enabledList[name]?.enabled !== false;
+    const out: MappedAgentSnapshot[] = [];
+    for (const [name, entry] of this.agents) {
+      const status = entry.process.getStatus();
+      const running = status.status === 'running' && !!status.pid && isPidAlive(status.pid);
+      out.push({
+        name,
+        org: enabledList[name]?.org,
+        enabled: isEnabled(name),
+        uptimeMs: running && status.uptime != null ? status.uptime * 1000 : null,
+        heartbeat: this.readHeartbeat(name),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Face-B dormant agents: enabled agents absent from the mapped set. Reuses
+   * computeDormancy exactly as getAllStatuses does, so the watchdog and the
+   * status surface agree on who is absent-dormant.
+   */
+  getAbsentDormantAgents(nowMs: number): Array<{ name: string; org?: string }> {
+    const daemonUptimeMs = nowMs - this.daemonStartMs;
+    const enabledList = this.readInstanceEnableList();
+    const isEnabled = (name: string): boolean => enabledList[name]?.enabled !== false;
+    const out: Array<{ name: string; org?: string }> = [];
+    for (const name of Object.keys(enabledList)) {
+      if (this.agents.has(name) || !isEnabled(name)) continue;
+      const d = computeDormancy({
+        agent: name,
+        org: enabledList[name]?.org,
+        enabled: true,
+        mapped: false,
+        nowMs,
+        lastSeenMs: this.readHeartbeatMs(name),
+        uptimeMs: null,
+        daemonUptimeMs,
+        expectedIntervalMs: this.readHeartbeatIntervalMs(name),
+      });
+      if (d.dormant) out.push({ name, org: enabledList[name]?.org });
+    }
+    return out;
+  }
+
+  /** Secondary-liveness verdict for a mapped agent (UNCERTAIN if not mapped). */
+  probeAgentLiveness(name: string): LivenessVerdict {
+    const entry = this.agents.get(name);
+    if (!entry) return 'UNCERTAIN';
+    try {
+      return entry.process.probeLiveness();
+    } catch {
+      return 'UNCERTAIN';
+    }
+  }
+
+  /** state/<agent> dir — for the watchdog's circuit file and .restart-planned probe. */
+  stateDirFor(name: string): string {
+    return join(this.ctxRoot, 'state', name);
+  }
+
+  /**
+   * Force-fresh restart action for the watchdog: writes .force-fresh +
+   * .restart-planned (so the next spawn skips --continue and crash-alert knows
+   * the restart was planned), then does a full teardown+rebuild via restartAgent.
+   * Paths are rooted at this.ctxRoot so stateDir matches readHeartbeat/readHeartbeatMs.
+   */
+  async forceFreshRestart(name: string, reason: string): Promise<void> {
+    const paths: BusPaths = {
+      ...resolvePaths(name, this.instanceId, this.resolveAgentOrg(name)),
+      ctxRoot: this.ctxRoot,
+      stateDir: join(this.ctxRoot, 'state', name),
+      logDir: join(this.ctxRoot, 'logs', name),
+    };
+    hardRestart(paths, name, reason);
+    await this.restartAgent(name);
+  }
+
+  /** Start-absent action for the watchdog: start an enabled-but-absent agent fresh. */
+  async startAbsent(name: string): Promise<void> {
+    await this.startAgent(name, '');
   }
 
   /**

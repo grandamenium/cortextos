@@ -1,5 +1,6 @@
 import { join } from 'path';
 import { existsSync, readFileSync, readdirSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { platform } from 'os';
 import type { AgentConfig, CtxEnv } from '../types/index.js';
 import { OutputBuffer } from './output-buffer.js';
@@ -404,6 +405,37 @@ export class AgentPTY {
    */
   getPid(): number | null {
     return this.pty?.pid || null;
+  }
+
+  /**
+   * Raw liveness signals for the recovery watchdog's discriminator
+   * (claude/hermes/opencode). Returns the pid, an OS pid-liveness result, and
+   * the coarse `ps -o stat=` process state — identical flags on macOS and Linux.
+   * pidAlive uses the signal-0 idiom (ESRCH = gone; EPERM = alive, owned by
+   * another user). procState is null when there is no pid or `ps` is
+   * missing/unparseable; the watchdog fails those SAFE to a veto.
+   */
+  probeLiveness(): { pid: number | null; pidAlive: boolean; procState: string | null } {
+    const pid = this.getPid();
+    if (pid == null) return { pid: null, pidAlive: false, procState: null };
+    let pidAlive: boolean;
+    try {
+      process.kill(pid, 0);
+      pidAlive = true;
+    } catch (err) {
+      pidAlive = (err as NodeJS.ErrnoException).code === 'EPERM';
+    }
+    let procState: string | null = null;
+    try {
+      const out = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], {
+        encoding: 'utf-8',
+        timeout: 2000,
+      });
+      procState = out.trim() || null;
+    } catch {
+      procState = null; // ps missing / pid gone / parse-fail — watchdog vetoes
+    }
+    return { pid, pidAlive, procState };
   }
 
   /**

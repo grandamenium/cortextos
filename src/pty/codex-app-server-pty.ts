@@ -211,6 +211,22 @@ export class CodexAppServerPTY {
     return this._appServerPty?.pid ?? null;
   }
 
+  /**
+   * Raw liveness signals for the recovery watchdog's discriminator. Surfaces the
+   * three in-process signals (no lsof/pgrep — app-server transport is known
+   * here): the socket/RPC alive flag, the app-server child pid, and whether a
+   * turn is currently in flight (`_turnCompletion` is non-null only between a
+   * turn's start and its resolve/reject). The watchdog combines these with a
+   * pid-liveness probe to reach a verdict.
+   */
+  probeLiveness(): { socketAlive: boolean; pid: number | null; turnInFlight: boolean } {
+    return {
+      socketAlive: this._alive,
+      pid: this.getPid(),
+      turnInFlight: this._turnCompletion !== null,
+    };
+  }
+
   onExit(handler: (exitCode: number, signal?: number) => void): void {
     this._onExitHandler = handler;
   }
