@@ -12,7 +12,7 @@ function createMockAgent(name = 'test-agent') {
   return {
     name,
     isBootstrapped: vi.fn().mockReturnValue(true),
-    injectMessage: vi.fn().mockReturnValue(true),
+    injectMessage: vi.fn().mockResolvedValue(true),
     write: vi.fn(),
   } as any;
 }
@@ -948,7 +948,7 @@ describe('FastChecker', () => {
       return {
         name,
         isBootstrapped: vi.fn().mockReturnValue(true),
-        injectMessage: vi.fn().mockReturnValue(true),
+        injectMessage: vi.fn().mockResolvedValue(true),
         write: vi.fn(),
         getAgentDir: () => testDir,
         getConfig: () => config,

@@ -64,12 +64,12 @@ export interface FireCronResult {
  * @param injectFn   - Injection function (agentManager.injectAgent or test stub).
  * @param nowMs      - Epoch ms for "now" (injectable for testing).
  */
-export function handleFireCron(
+export async function handleFireCron(
   agent: string | undefined,
   cronName: string | undefined,
-  injectFn: (agent: string, text: string) => boolean,
+  injectFn: (agent: string, text: string) => boolean | Promise<boolean>,
   nowMs = Date.now(),
-): FireCronResult {
+): Promise<FireCronResult> {
   if (!agent || !agent.trim()) {
     return { ok: false, error: 'Agent name is required.' };
   }
@@ -95,16 +95,27 @@ export function handleFireCron(
     return { ok: false, error: `Cooldown active — wait ${waitSec}s before firing again.` };
   }
 
-  // Inject into PTY
-  const injection = `[CRON: ${cronName}] ${cron.prompt}`;
-  const injected = injectFn(agent, injection);
-  if (!injected) {
-    return { ok: false, error: `Agent '${agent}' not found or not running.` };
-  }
-
-  // Record fire time for cooldown tracking
+  // Reserve the cooldown slot BEFORE the (now async, #510) inject — an inject
+  // can take 300ms+ waiting on the deferred ENTER, and without reserving the
+  // slot first, two manual fires issued within that window both pass the
+  // cooldown check above and double-fire. Roll back on failure/throw so a
+  // rejected fire doesn't burn the caller's cooldown window for nothing.
   const firedAt = nowMs;
   _manualFireLastFired.set(`${agent}::${cronName}`, firedAt);
+
+  // Inject into PTY
+  const injection = `[CRON: ${cronName}] ${cron.prompt}`;
+  let injected: boolean;
+  try {
+    injected = await injectFn(agent, injection);
+  } catch (err) {
+    _manualFireLastFired.delete(`${agent}::${cronName}`);
+    return { ok: false, error: `Inject failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!injected) {
+    _manualFireLastFired.delete(`${agent}::${cronName}`);
+    return { ok: false, error: `Agent '${agent}' not found or not running.` };
+  }
 
   return { ok: true, firedAt };
 }
@@ -567,7 +578,7 @@ export class IPCServer {
   /**
    * Handle an incoming IPC request.
    */
-  private handleRequest(request: IPCRequest, socket: Socket): void {
+  private async handleRequest(request: IPCRequest, socket: Socket): Promise<void> {
     // BUG-015: log every incoming IPC request with its source so we can
     // trace which CLI command triggered which daemon action. The source
     // field is populated by CLI clients (cortextos enable / disable / stop
@@ -726,7 +737,7 @@ export class IPCServer {
             // collision in MessageDedup window). Closes the conflation Boris
             // surfaced — the harness "3 not found errors" were dedup hits.
             // See issue #346.
-            const result = this.agentManager.injectAgentDetailed(agentToInject, textToInject);
+            const result = await this.agentManager.injectAgentDetailed(agentToInject, textToInject);
             if (result.ok) {
               response = { success: true, data: `Injected into agent ${agentToInject}` };
             } else {
@@ -753,7 +764,7 @@ export class IPCServer {
         case 'fire-cron': {
           const agentToFire = request.agent;
           const fireCronName = request.data?.name as string | undefined;
-          const fireCronResult = handleFireCron(
+          const fireCronResult = await handleFireCron(
             agentToFire,
             fireCronName,
             (a, text) => this.agentManager.injectAgent(a, text),

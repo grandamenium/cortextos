@@ -46,6 +46,18 @@ export class MessageDedup {
   clear(): void {
     this.hashes = [];
   }
+
+  /**
+   * Roll back a previously-recorded hash (#510). Used when an inject was
+   * accepted as non-duplicate but ultimately failed to submit (deferred
+   * ENTER lost to a torn-down/restarted PTY) — without this, a caller's
+   * retry of the identical content would be wrongly swallowed as a dupe.
+   */
+  forget(content: string): void {
+    const hash = createHash('md5').update(content).digest('hex');
+    const idx = this.hashes.indexOf(hash);
+    if (idx !== -1) this.hashes.splice(idx, 1);
+  }
 }
 
 /**
@@ -56,6 +68,12 @@ export class MessageDedup {
  * pasted text rather than typed input. This prevents special characters
  * from being interpreted as commands.
  *
+ * Resolves `true` only once the deferred ENTER that actually submits the
+ * pasted content has been written successfully — `false` if either write
+ * throws (PTY torn down mid-inject). Callers MUST await this before treating
+ * the message as delivered (#510): the paste alone lands in the input box
+ * unsubmitted, and is lost silently if the PTY dies before ENTER follows.
+ *
  * @param write Function to write to the PTY (pty.write)
  * @param content The message content to inject
  * @param enterDelay Milliseconds to wait before sending Enter (default 300ms)
@@ -64,38 +82,49 @@ export function injectMessage(
   write: (data: string) => void,
   content: string,
   enterDelay: number = 300,
-): void {
+): Promise<boolean> {
   // For very large messages, chunk the write to avoid overwhelming the PTY buffer
   const MAX_CHUNK = 4096;
 
-  if (content.length <= MAX_CHUNK) {
-    write(PASTE_START + content + PASTE_END);
-  } else {
-    // Chunked write for large messages
-    write(PASTE_START);
-    for (let i = 0; i < content.length; i += MAX_CHUNK) {
-      write(content.slice(i, i + MAX_CHUNK));
+  try {
+    if (content.length <= MAX_CHUNK) {
+      write(PASTE_START + content + PASTE_END);
+    } else {
+      // Chunked write for large messages
+      write(PASTE_START);
+      for (let i = 0; i < content.length; i += MAX_CHUNK) {
+        write(content.slice(i, i + MAX_CHUNK));
+      }
+      write(PASTE_END);
     }
-    write(PASTE_END);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[inject] paste write failed (pty likely torn down): ${msg}`);
+    return Promise.resolve(false);
   }
 
-  // Send Enter after a short delay to submit the pasted content.
-  // Why the try/catch: the write callback captures `this.pty` (or similar
-  // nullable PTY handle) via closure in callers. If the PTY is torn down
-  // during the enterDelay window — e.g. hard-restart IPC kills the child —
-  // the callback will read `null.write` and throw. Swallowing here keeps
-  // the daemon process alive; the dropped Enter is the acceptable cost.
+  // Send Enter after a short delay to submit the pasted content. Without this
+  // explicit ENTER, bracketed paste never auto-submits (that's the whole
+  // point of the mode — embedded newlines in a multi-line paste must not act
+  // as Enter). If the PTY is torn down during the enterDelay window — e.g.
+  // hard-restart IPC kills the child — the write throws and we resolve
+  // false so the caller (#510) treats this as a failed, retryable inject
+  // instead of a false success that silently drops the message.
   // Root cause: PR #196 fixed three this.pty! callers in agent-process.ts
-  // but missed worker-process.ts:93. This try/catch is the structural fix
-  // that covers every present and future caller.
-  setTimeout(() => {
-    try {
-      write(KEYS.ENTER);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[inject] deferred Enter failed (pty likely torn down): ${msg}`);
-    }
-  }, enterDelay);
+  // but missed worker-process.ts:93; this Promise-returning contract is the
+  // structural fix that covers every present and future caller.
+  return new Promise<boolean>((resolve) => {
+    setTimeout(() => {
+      try {
+        write(KEYS.ENTER);
+        resolve(true);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[inject] deferred Enter failed (pty likely torn down): ${msg}`);
+        resolve(false);
+      }
+    }, enterDelay);
+  });
 }
 
 /**
