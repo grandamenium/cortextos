@@ -7,7 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { CTX_FRAMEWORK_ROOT } from './config';
+import { CTX_FRAMEWORK_ROOT, getOrgContextPath } from './config';
 
 export const PARA_DIRS = [
   '00-inbox',
@@ -25,7 +25,23 @@ const VAULT_FALLBACK = process.env.CTX_VAULT_PATH
   ?? path.join(os.homedir(), 'storage', 'Documents', 'Github', 'sondres-orchestrator', 'vault');
 
 export function getVaultRoot(org: string): string | null {
-  // 1. Try parsing orgs/<org>/knowledge.md for an "Obsidian vault" path entry
+  // 1. Explicit per-org config field (preferred): orgs/<org>/context.json { "vaultPath": "…" }
+  const contextPath = getOrgContextPath(org);
+  if (fs.existsSync(contextPath)) {
+    try {
+      const ctx = JSON.parse(fs.readFileSync(contextPath, 'utf-8')) as {
+        vaultPath?: string;
+      };
+      const configured = ctx.vaultPath?.trim();
+      if (configured && fs.existsSync(configured) && fs.statSync(configured).isDirectory()) {
+        return configured;
+      }
+    } catch {
+      /* ignore malformed context.json, fall through to knowledge.md */
+    }
+  }
+
+  // 2. Legacy: parse orgs/<org>/knowledge.md for an "Obsidian vault" path entry
   const knowledgePath = path.join(CTX_FRAMEWORK_ROOT, 'orgs', org, 'knowledge.md');
   if (fs.existsSync(knowledgePath)) {
     try {
@@ -43,7 +59,7 @@ export function getVaultRoot(org: string): string | null {
     }
   }
 
-  // 2. Fallback to the known sondre-hq vault location
+  // 3. Fallback to the known sondre-hq vault location
   if (fs.existsSync(VAULT_FALLBACK) && fs.statSync(VAULT_FALLBACK).isDirectory()) {
     return VAULT_FALLBACK;
   }
