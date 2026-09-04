@@ -68,6 +68,115 @@ TRANSIENT_STATUS_NAMES = {"UNAVAILABLE", "RESOURCE_EXHAUSTED"}
 
 USAGE_FILE = MMRAG_DIR / "usage.json"
 
+# Retry telemetry — one JSONL line per attempt (success | transient | exhausted |
+# non_transient). Enables ground-truth analysis of retry:success ratio vs true
+# quota-hard failures. Directory auto-created lazily; write errors are swallowed
+# so telemetry never breaks the retry path itself.
+_RETRY_TELEMETRY_PATH = Path(
+    os.environ.get(
+        "KB_RETRY_TELEMETRY_PATH",
+        str(Path.home() / ".cortextos" / os.environ.get("CTX_INSTANCE_ID", "default") / "analytics" / "kb-retry-telemetry.jsonl"),
+    )
+)
+
+
+def _log_retry_event(func, model, attempt, total_attempts, backoff_s, outcome, http_code=None, status=None):
+    try:
+        _RETRY_TELEMETRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        rec = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+            "func": func,
+            "model": model,
+            "attempt": attempt,
+            "total_attempts": total_attempts,
+            "backoff_s": backoff_s,
+            "outcome": outcome,
+            "http_code": http_code,
+            "status": status,
+        }
+        with open(_RETRY_TELEMETRY_PATH, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass  # telemetry must never break the retry path
+
+
+# ---------------------------------------------------------------------------
+# Daily-quota fail-fast gate (theta 62)
+# ---------------------------------------------------------------------------
+# Per-minute rate limits clear within a backoff or two, so retrying is correct.
+# Daily-quota exhaustion (Gemini free tier ~1000 embed calls/day) does NOT
+# recover within the same UTC day, so the 5s+15s+45s backoff is pure dead time.
+# A single response can't distinguish the two, so we detect the daily case by
+# pattern: >=_QUOTA_STRIKES RESOURCE_EXHAUSTED outcomes inside a sliding
+# _QUOTA_WINDOW_SECONDS window. Once tripped, embed/generate calls fail fast
+# (raise immediately, no sleep) until UTC midnight or the next successful call.
+_RECENT_EXHAUSTED_MAX = 5        # cap on retained window entries
+_QUOTA_WINDOW_SECONDS = 300      # 5-minute sliding window
+_QUOTA_STRIKES = 2               # exhausted outcomes in-window that trip the gate
+_recent_exhausted = []           # epoch seconds of recent RESOURCE_EXHAUSTED outcomes
+_quota_drained_until = None      # epoch seconds; when set, fail-fast until this time
+
+
+def _next_utc_midnight(now):
+    """Epoch seconds of the next 00:00:00 UTC strictly after `now`."""
+    t = time.gmtime(now)
+    secs_into_day = t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec
+    return now - secs_into_day + 86400
+
+
+def _quota_reset(reason=None):
+    """Clear the fail-fast gate and the sliding window (on success or midnight
+    auto-release). Prints only when an active gate is actually being cleared."""
+    global _quota_drained_until, _recent_exhausted
+    if _quota_drained_until is not None and reason:
+        print(f"    [kb-retry] quota gate cleared — {reason}")
+    _quota_drained_until = None
+    _recent_exhausted = []
+
+
+def _record_exhausted(status, now):
+    """Record a RESOURCE_EXHAUSTED outcome; trip the daily-quota gate when the
+    sliding window shows >=_QUOTA_STRIKES within _QUOTA_WINDOW_SECONDS."""
+    global _quota_drained_until, _recent_exhausted
+    if status != "RESOURCE_EXHAUSTED":
+        return
+    cutoff = now - _QUOTA_WINDOW_SECONDS
+    _recent_exhausted = [t for t in _recent_exhausted if t >= cutoff]
+    _recent_exhausted.append(now)
+    _recent_exhausted = _recent_exhausted[-_RECENT_EXHAUSTED_MAX:]
+    if _quota_drained_until is None and len(_recent_exhausted) >= _QUOTA_STRIKES:
+        _quota_drained_until = _next_utc_midnight(now)
+        print(f"    [kb-retry] daily quota detected drained — fail-fast until "
+              f"{time.strftime('%H:%MZ', time.gmtime(_quota_drained_until))}")
+
+
+def _quota_gate_check(func, model):
+    """If the daily-quota gate is active, fail fast (no backoff). Auto-releases
+    once `now` passes UTC midnight. Emits a fail_fast_quota telemetry event and
+    raises an APIError subclass so existing `except APIError` callers still catch
+    it (mirrors the fault-injection error trick: bypass the SDK constructor,
+    which expects a real HTTP response object)."""
+    global _quota_drained_until
+    if _quota_drained_until is None:
+        return
+    now = time.time()
+    if now >= _quota_drained_until:
+        _quota_reset("UTC-midnight auto-release")
+        return
+    _log_retry_event(func, model, 0, 0, 0, "fail_fast_quota", 429, "RESOURCE_EXHAUSTED")
+    from google.genai import errors as _genai_errors
+
+    class _DailyQuotaDrainedError(_genai_errors.APIError):
+        def __init__(self):
+            msg = "daily quota drained (fail-fast; retry after UTC midnight)"
+            Exception.__init__(self, msg)
+            self.code = 429
+            self.status = "RESOURCE_EXHAUSTED"
+            self.message = msg
+
+    raise _DailyQuotaDrainedError()
+
+
 # ---------------------------------------------------------------------------
 # Usage Tracker
 # ---------------------------------------------------------------------------
@@ -174,6 +283,7 @@ def get_api_key(config):
         sys.exit(1)
     return key
 
+
 # ---------------------------------------------------------------------------
 # Gemini clients
 # ---------------------------------------------------------------------------
@@ -230,30 +340,76 @@ def _retry_generate_content(client, *, model, contents, backoffs=(5, 15, 45)):
     attempt count. Tests pass (0, 0, 0) to skip sleeps.
     """
     from google.genai import errors as _genai_errors
+    # theta 62: if the daily-quota gate is tripped, fail fast (no backoff waits).
+    _quota_gate_check("generate_content", model)
     last_err = None
+    total = len(backoffs)
     for attempt, backoff in enumerate(backoffs, start=1):
         try:
-            return client.models.generate_content(model=model, contents=contents)
+            result = client.models.generate_content(model=model, contents=contents)
+            _log_retry_event("generate_content", model, attempt, total, backoff, "success")
+            _quota_reset("probe succeeded")  # theta 62: a success means quota is back
+            return result
         except _genai_errors.APIError as e:
             last_err = e
             is_transient = (e.code in TRANSIENT_HTTP_CODES) or (e.status in TRANSIENT_STATUS_NAMES)
             if not is_transient:
+                _log_retry_event("generate_content", model, attempt, total, backoff, "non_transient", e.code, e.status)
                 raise
-            if attempt < len(backoffs):
-                print(f"    Transient error (HTTP {e.code} {e.status or ''}); retrying in {backoff}s (attempt {attempt}/{len(backoffs)})")
+            if attempt < total:
+                _log_retry_event("generate_content", model, attempt, total, backoff, "transient", e.code, e.status)
+                print(f"    Transient error (HTTP {e.code} {e.status or ''}); retrying in {backoff}s (attempt {attempt}/{total})")
                 time.sleep(backoff)
             else:
+                _log_retry_event("generate_content", model, attempt, total, backoff, "exhausted", e.code, e.status)
+                _record_exhausted(e.status, time.time())  # theta 62: feed the daily-quota detector
                 print(f"    Exhausted retries on transient error: HTTP {e.code} {e.status or ''}")
     raise last_err if last_err else RuntimeError("retry loop completed without response or error")
+
+
+def _retry_embed_content(client, *, model, contents, embed_config, backoffs=(5, 15, 45)):
+    """Call client.models.embed_content with bounded retries on transient APIErrors.
+
+    Mirrors _retry_generate_content — retries on TRANSIENT_HTTP_CODES / TRANSIENT_STATUS_NAMES
+    (429 / RESOURCE_EXHAUSTED are the common ones during ingest bursts against the
+    gemini-embedding-2-preview per-minute rate limit), re-raises other errors immediately.
+    """
+    from google.genai import errors as _genai_errors
+    # theta 62: if the daily-quota gate is tripped, fail fast (no backoff waits).
+    _quota_gate_check("embed_content", model)
+    last_err = None
+    total = len(backoffs)
+    for attempt, backoff in enumerate(backoffs, start=1):
+        try:
+            result = client.models.embed_content(model=model, contents=contents, config=embed_config)
+            _log_retry_event("embed_content", model, attempt, total, backoff, "success")
+            _quota_reset("probe succeeded")  # theta 62: a success means quota is back
+            return result
+        except _genai_errors.APIError as e:
+            last_err = e
+            is_transient = (e.code in TRANSIENT_HTTP_CODES) or (e.status in TRANSIENT_STATUS_NAMES)
+            if not is_transient:
+                _log_retry_event("embed_content", model, attempt, total, backoff, "non_transient", e.code, e.status)
+                raise
+            if attempt < total:
+                _log_retry_event("embed_content", model, attempt, total, backoff, "transient", e.code, e.status)
+                print(f"    Transient embed error (HTTP {e.code} {e.status or ''}); retrying in {backoff}s (attempt {attempt}/{total})")
+                time.sleep(backoff)
+            else:
+                _log_retry_event("embed_content", model, attempt, total, backoff, "exhausted", e.code, e.status)
+                _record_exhausted(e.status, time.time())  # theta 62: feed the daily-quota detector
+                print(f"    Exhausted retries on transient embed error: HTTP {e.code} {e.status or ''}")
+    raise last_err if last_err else RuntimeError("embed retry loop completed without response or error")
 
 
 def embed_content(client, config, content, task_type="RETRIEVAL_DOCUMENT"):
     """Embed content using Gemini Embedding 2. Content can be text string or list of Parts."""
     from google.genai import types
-    result = client.models.embed_content(
+    result = _retry_embed_content(
+        client,
         model=config.get("embedding_model", "gemini-embedding-2-preview"),
         contents=content,
-        config=types.EmbedContentConfig(
+        embed_config=types.EmbedContentConfig(
             output_dimensionality=config.get("embedding_dimensions", DEFAULT_EMBEDDING_DIMENSIONS),
             task_type=task_type,
         ),
@@ -317,7 +473,8 @@ def describe_media(client, config, file_path, media_type="video"):
         ),
     }
 
-    response = client.models.generate_content(
+    response = _retry_generate_content(
+        client,
         model=config.get("gemini_model", "gemini-2.5-flash"),
         contents=[
             types.Part.from_bytes(data=data, mime_type=mime),
