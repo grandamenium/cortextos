@@ -33,9 +33,7 @@ HUMAN_TASK_ID=$(cortextos bus create-task "[HUMAN] <what needs to be done>" \
 echo "HUMAN_TASK_ID=$HUMAN_TASK_ID"
 
 # 2. Block your own task on it
-cortextos bus update-task "$YOUR_TASK_ID" blocked \
-  "Blocked by human task: $HUMAN_TASK_ID" \
-  "$HUMAN_TASK_ID"
+cortextos bus update-task "$YOUR_TASK_ID" blocked
 
 # 3. Notify orchestrator to surface in next briefing
 cortextos bus send-message "$CTX_ORCHESTRATOR_AGENT" normal \
@@ -54,8 +52,7 @@ You receive an inbox message automatically when the human task is marked complet
 
 ```bash
 # Unblock immediately — don't wait
-cortextos bus update-task "$YOUR_TASK_ID" in_progress \
-  "Human task completed — resuming"
+cortextos bus update-task "$YOUR_TASK_ID" in_progress
 
 # Resume work
 ```

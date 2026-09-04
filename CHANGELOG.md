@@ -127,7 +127,8 @@ File-based inter-agent messaging with strict format parity with the bash referen
 - **`checkStaleTasks()`**: Identifies in-progress tasks untouched >2h, pending tasks unstarted >24h, and overdue tasks past `due_date`
 - **`archiveTasks()`**: Moves completed tasks older than 7 days to `tasks/archive/`, sets `archived: true`. Supports `dry_run` mode.
 - **`checkHumanTasks()`**: Finds tasks assigned to `human` or `user` that are stale (>24h pending, >2h in-progress)
-- **Blocked task flow**: `update-task blocked "reason" <blocker_id>` — records `blocked_by` field, auto-sends unblock message when blocker completes
+- **Blocked task flow**: `blocked_by` edges are set at creation via `create-task --blocked-by <ids>`; `check-deps <id>` lists open blockers and an unblock message is sent when a blocker completes.
+  *(Corrected 2026-08-24: the form previously documented here, `update-task blocked "reason" <blocker_id>`, is rejected by the CLI — `update-task` takes exactly `<id> <status>`. There is no CLI path to add a blocker edge to an already-created task.)*
 
 ### Event Logging (Analytics)
 
@@ -241,7 +242,7 @@ Structured hypothesis-test-evaluate loop for autonomous agent experimentation.
 | Command | Description |
 |---------|-------------|
 | `bus create-task '<title>' ['<desc>']` | Create a new task |
-| `bus update-task <id> <status> ['<note>'] ['<blocker_id>']` | Update task status |
+| `bus update-task <id> <status>` | Update task status (exactly two arguments — extra args are a hard error) |
 | `bus complete-task <id> ['<result>']` | Mark task complete with result summary |
 | `bus list-tasks [--agent <name>] [--status <s>] [--org <o>]` | List tasks with filters |
 | `bus check-stale-tasks` | Report stale in-progress, stale pending, and overdue tasks |

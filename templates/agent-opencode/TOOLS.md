@@ -54,10 +54,10 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 | `create-task "<title>" --desc "<desc>"` | Create a task (visible on dashboard) |
 | `update-task <id> <status>` | Update status: pending / in_progress / blocked / completed |
 | `complete-task <id> --result "<what>"` | Mark done with result |
-| `list-tasks [--status S] [--agent A] [--all-orgs]` | List / filter tasks |
-| `check-stale-tasks [--all-orgs]` | Find tasks stale >2h in_progress or >24h pending |
+| `list-tasks [--status S] [--agent A]` | List / filter tasks |
+| `check-stale-tasks` | Find tasks stale >2h in_progress or >24h pending |
 | `check-human-tasks` | Check for stale human-assigned tasks |
-| `archive-tasks [--dry-run] [--all-orgs]` | Archive completed tasks >7d |
+| `archive-tasks [--dry-run]` | Archive completed tasks >7d |
 
 ### Messages — full docs: `plugins/cortextos-agent-skills/skills/comms/SKILL.md`
 | Command | What it does |
@@ -90,7 +90,7 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 |---|---|
 | `create-approval "<title>" <category> "[context]"` | Request human approval |
 | `update-approval <id> <approved\|rejected> "[note]"` | Resolve an approval |
-| `list-approvals [--status S] [--all-orgs]` | List approvals |
+| `list-approvals` | List approvals |
 
 ### Knowledge Base — full docs: `plugins/cortextos-agent-skills/skills/knowledge-base/SKILL.md`
 | Command | What it does |

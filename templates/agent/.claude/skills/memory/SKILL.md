@@ -24,9 +24,9 @@ Session-scoped context journal. Written at key checkpoints, not continuously.
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
-cat >> "memory/$TODAY.md" << MEMEOF
+printf '\n## Session Start - %s\n' "$(date -u +'%H:%M:%S UTC')" >> "memory/$TODAY.md"
+cat >> "memory/$TODAY.md" << 'MEMEOF'
 
-## Session Start - $(date -u +'%H:%M:%S UTC')
 - Status: online
 - Crons active: <output of `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
@@ -44,9 +44,9 @@ Don't wait for the heartbeat. Use for: significant decisions, user preferences l
 ### On heartbeat
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
-cat >> "memory/$TODAY.md" << MEMEOF
+printf '\n## Heartbeat - %s\n' "$(date -u +'%H:%M:%S UTC')" >> "memory/$TODAY.md"
+cat >> "memory/$TODAY.md" << 'MEMEOF'
 
-## Heartbeat - $(date -u +'%H:%M:%S UTC')
 - Current focus: <what I am working on and why>
 - Active threads: <anything in progress or being monitored — state of each>
 - Key decisions: <decisions made since last entry with brief rationale>
@@ -58,9 +58,9 @@ MEMEOF
 ### On session end (before any restart)
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
-cat >> "memory/$TODAY.md" << MEMEOF
+printf '\n## Session End - %s\n' "$(date -u +'%H:%M:%S UTC')" >> "memory/$TODAY.md"
+cat >> "memory/$TODAY.md" << 'MEMEOF'
 
-## Session End - $(date -u +'%H:%M:%S UTC')
 - Status: [done/interrupted/context-full]
 - Current state: [where things stand — specific enough that the next session can resume cold]
 - Active threads: [anything in progress or mid-task with current state]

@@ -172,8 +172,26 @@ export async function middleware(request: NextRequest) {
   const response = NextResponse.next();
   response.headers.set('Access-Control-Allow-Origin', corsOrigin);
   response.headers.set('Vary', 'Origin');
-  // Standard security headers
-  response.headers.set('X-Frame-Options', 'DENY');
+  // Standard security headers.
+  // The Agent City scene bundle is framed by /city, a first-party page on this
+  // same origin. DENY blocks even same-origin framing, so that one path relaxes
+  // to SAMEORIGIN — which still refuses every other site, which is what this
+  // header is here to do. Everything else stays DENY.
+  //
+  // The bundle it refers to is GENERATED, not committed: it is produced by
+  // orgs/<org>/agents/city/build/build-internal.mjs into dashboard/public/agent-city/,
+  // which is gitignored because the build bakes live fleet state into it. So a
+  // fresh clone will NOT contain the directory this relaxation exists for, and
+  // /city renders an explicit "not built" state until someone runs that build.
+  // Said out loud because this comment justifies a WEAKENED control: a reviewer
+  // who goes looking for the bundle, does not find it, and concludes the
+  // relaxation is unjustified or vestigial would be wrong both ways, and one of
+  // those wrong turns removes a header exemption that a real first-party page
+  // depends on.
+  response.headers.set(
+    'X-Frame-Options',
+    pathname.startsWith('/agent-city/') ? 'SAMEORIGIN' : 'DENY',
+  );
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'no-referrer');
   if (process.env.NODE_ENV === 'production') {

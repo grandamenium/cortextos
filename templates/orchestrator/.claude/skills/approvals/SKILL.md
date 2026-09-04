@@ -67,7 +67,7 @@ note: <user's note>
 **Approved:**
 ```bash
 # Unblock task
-cortextos bus update-task "$TASK_ID" in_progress "Approval received — executing"
+cortextos bus update-task "$TASK_ID" in_progress
 # Execute the action
 # Complete the task
 cortextos bus complete-task "$TASK_ID" --result "<what was done>"

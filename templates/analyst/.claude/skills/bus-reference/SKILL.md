@@ -82,13 +82,12 @@ cortextos bus complete-task "task_abc123" --result "Deployed landing page to pro
 List and filter tasks. Use during every heartbeat to check your queue.
 
 ```bash
-cortextos bus list-tasks [--status S] [--agent A] [--priority P] [--all-orgs]
+cortextos bus list-tasks [--status S] [--agent A] [--priority P]
 ```
 
 - **--status**: Filter by `pending` | `in_progress` | `blocked` | `completed`
 - **--agent**: Filter by agent name
 - **--priority**: Filter by `urgent` | `high` | `normal` | `low`
-- **--all-orgs**: Show tasks across all orgs
 
 Example:
 ```bash
@@ -280,7 +279,7 @@ cortextos bus read-all-heartbeats
 Find stale tasks: in_progress >2h, pending >24h, stale human tasks, overdue.
 
 ```bash
-cortextos bus check-stale-tasks [--all-orgs]
+cortextos bus check-stale-tasks
 ```
 
 ### check-goal-staleness
@@ -301,7 +300,7 @@ cortextos bus check-human-tasks
 Archive completed tasks older than 7 days.
 
 ```bash
-cortextos bus archive-tasks [--dry-run] [--all-orgs]
+cortextos bus archive-tasks [--dry-run]
 ```
 
 ### notify-agent

@@ -620,10 +620,17 @@ export function checkStaleTasks(paths: BusPaths): StaleTaskReport {
   const STALE_IN_PROGRESS = 7200;   // 2 hours
   const STALE_PENDING = 86400;      // 24 hours
   const STALE_HUMAN = 86400;        // 24 hours
+  // `blocked` is a legitimate state, so a blocked task alarms nothing and
+  // nobody looks at it. 4 hours is deliberately tighter than the pending
+  // threshold: a task blocked on an approval or another agent is waiting on
+  // something that should move within a working session, and the whole point
+  // of the bucket is to surface it while it is still actionable.
+  const STALE_BLOCKED = 14400;      // 4 hours
 
   const report: StaleTaskReport = {
     stale_in_progress: [],
     stale_pending: [],
+    stale_blocked: [],
     stale_human: [],
     overdue: [],
   };
@@ -647,6 +654,14 @@ export function checkStaleTasks(paths: BusPaths): StaleTaskReport {
     // Stale pending: created_at > 24 hours ago
     if (task.status === 'pending' && createdAge > STALE_PENDING) {
       report.stale_pending.push(task);
+    }
+
+    // Stale blocked: updated_at > 4 hours ago. Uses updated_at (not created_at)
+    // so the clock measures how long it has sat blocked, not how old the task
+    // is — a task blocked five minutes ago is not stale just because it was
+    // created last week.
+    if (task.status === 'blocked' && age > STALE_BLOCKED) {
+      report.stale_blocked.push(task);
     }
 
     // Human tasks: assigned to "human" or "user", or in human-tasks project

@@ -39,6 +39,65 @@ describe('Bus events', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
+  /**
+   * Regression tests for the silent-metadata-drop bug (2026-08-20).
+   *
+   * logEvent used to fall through to `{}` when a metadata STRING did not
+   * parse, so a shell-quoting mistake in any of the ~139 documented `--meta`
+   * call sites produced a stored event with empty metadata at exit code 0
+   * while printing "Logged". The audit trail recorded that something happened
+   * and lost what it was, and every signal available to the caller said it had
+   * worked. It now throws instead.
+   */
+  it('logEvent parses a valid metadata STRING into structured metadata', () => {
+    logEvent(paths, 'spark', 'eros-os', 'action', 'valid_meta', 'info', '{"a":1,"b":"two"}');
+
+    const today = new Date().toISOString().split('T')[0];
+    const eventFile = join(paths.analyticsDir, 'events', 'spark', `${today}.jsonl`);
+    const entries = readFileSync(eventFile, 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(entries[0].metadata).toEqual({ a: 1, b: 'two' });
+  });
+
+  it('logEvent THROWS on unparseable metadata instead of silently storing {}', () => {
+    expect(() =>
+      logEvent(paths, 'spark', 'eros-os', 'action', 'bad_meta', 'info', '{"broken": not json}'),
+    ).toThrow(/not valid JSON/);
+  });
+
+  it('logEvent writes NO event at all when metadata is unparseable', () => {
+    const today = new Date().toISOString().split('T')[0];
+    const eventFile = join(paths.analyticsDir, 'events', 'spark', `${today}.jsonl`);
+
+    expect(() =>
+      logEvent(paths, 'spark', 'eros-os', 'action', 'bad_meta', 'info', '{"nope"'),
+    ).toThrow();
+
+    // The failure must be total: a rejected event must not leave a partial or
+    // metadata-less row behind, or the audit gap is merely relocated.
+    const wrote = existsSync(eventFile)
+      ? readFileSync(eventFile, 'utf-8').trim().split('\n').filter(Boolean)
+      : [];
+    expect(wrote).toHaveLength(0);
+  });
+
+  it('logEvent rejects valid JSON that is not an object (scalar / array)', () => {
+    expect(() =>
+      logEvent(paths, 'spark', 'eros-os', 'action', 'scalar_meta', 'info', '5'),
+    ).toThrow(/must be a JSON object/);
+    expect(() =>
+      logEvent(paths, 'spark', 'eros-os', 'action', 'array_meta', 'info', '[1,2]'),
+    ).toThrow(/must be a JSON object/);
+  });
+
+  it('logEvent still accepts an object metadata argument unchanged', () => {
+    logEvent(paths, 'spark', 'eros-os', 'action', 'obj_meta', 'info', { untouched: true });
+
+    const today = new Date().toISOString().split('T')[0];
+    const eventFile = join(paths.analyticsDir, 'events', 'spark', `${today}.jsonl`);
+    const entries = readFileSync(eventFile, 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(entries[0].metadata).toEqual({ untouched: true });
+  });
+
   it('logEvent appends a JSONL entry to the daily events file', () => {
     logEvent(paths, 'spark', 'eros-os', 'action', 'test_event', 'info', { foo: 'bar' });
 

@@ -436,7 +436,15 @@ busCommand
     }
     const env = resolveEnv();
     const paths = resolvePaths(env.agentName, env.instanceId, env.org);
-    logEvent(paths, env.agentName, env.org, category as EventCategory, event, severity as EventSeverity, opts.meta, { refreshHeartbeat: true });
+    // Surface a malformed --meta as a clean error + non-zero exit rather than a
+    // stack trace. Previously bad JSON was swallowed and the event was written
+    // with empty metadata at exit 0, so callers had no way to notice.
+    try {
+      logEvent(paths, env.agentName, env.org, category as EventCategory, event, severity as EventSeverity, opts.meta, { refreshHeartbeat: true });
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
     console.log(`Logged ${category}/${event} (${severity})`);
   });
 

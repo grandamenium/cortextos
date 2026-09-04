@@ -243,7 +243,7 @@ After workflows and tools are configured:
       "$CTX_AGENT_DIR/IDENTITY.md" \
       --org $CTX_ORG --scope private \
       --agent $CTX_AGENT_NAME \
-      --collection "memory-$CTX_AGENT_NAME" --force
+      --force
     ```
 
     Ingest any additional files the user specified in their answers.
@@ -358,8 +358,11 @@ Do NOT rewrite TOOLS.md from memory. The template contains the authoritative ref
 ### Step 18b: Verify agent is enabled
 
 ```bash
-ENABLED=$(cat "${CTX_ROOT}/config/enabled-agents.json" 2>/dev/null || echo '[]')
-if ! echo "$ENABLED" | jq -e --arg name "$CTX_AGENT_NAME" '.[] | select(. == $name)' > /dev/null 2>&1; then
+# enabled-agents.json is an OBJECT keyed by agent name:
+#   {"chief": {"enabled": true, "status": "configured", "org": "..."}, ...}
+# Index the key; do not iterate it as a list of names.
+ENABLED=$(cat "${CTX_ROOT}/config/enabled-agents.json" 2>/dev/null || echo '{}')
+if ! echo "$ENABLED" | jq -e --arg name "$CTX_AGENT_NAME" '.[$name].enabled == true' > /dev/null 2>&1; then
   echo "WARNING: $CTX_AGENT_NAME not found in enabled-agents.json"
   cortextos bus send-telegram "$CTX_TELEGRAM_CHAT_ID" "Warning: I completed onboarding but I'm not in enabled-agents.json. Run: cortextos start $CTX_AGENT_NAME"
 fi

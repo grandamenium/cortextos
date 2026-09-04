@@ -39,12 +39,35 @@ export function logEvent(
   validateEventCategory(category);
   validateEventSeverity(severity);
 
-  // Parse metadata if it's a string
+  // Parse metadata if it's a string.
+  //
+  // BUG-FIX 2026-08-20: this used to silently fall through to `{}` when the
+  // string did not parse, so a malformed --meta produced a stored event with
+  // empty metadata at exit code 0 while printing "Logged". The audit trail
+  // recorded that something happened and lost what it was, and every signal
+  // available to the caller said it had worked. A shell-quoting mistake in any
+  // of the ~139 documented `--meta` call sites hit this path.
+  //
+  // Fail loudly instead: an unparseable metadata string is a caller bug, and a
+  // caller that cannot serialise its own metadata should find out at the point
+  // of the mistake rather than weeks later via a hole in the event log.
   let meta: Record<string, unknown> = {};
   if (typeof metadata === 'string') {
-    if (isValidJson(metadata)) {
-      meta = JSON.parse(metadata);
+    if (!isValidJson(metadata)) {
+      throw new Error(
+        `log-event: --meta is not valid JSON, refusing to write an event with silently-empty metadata. ` +
+        `Received: ${metadata.length > 200 ? metadata.slice(0, 200) + '…' : metadata}. ` +
+        `Hint: never interpolate shell variables into a JSON string — build it with \`jq -nc --arg\` instead.`,
+      );
     }
+    const parsed: unknown = JSON.parse(metadata);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(
+        `log-event: --meta must be a JSON object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}. ` +
+        `Received: ${metadata.slice(0, 200)}`,
+      );
+    }
+    meta = parsed as Record<string, unknown>;
   } else if (metadata) {
     meta = metadata;
   }

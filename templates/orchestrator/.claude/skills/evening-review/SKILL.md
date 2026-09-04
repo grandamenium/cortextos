@@ -108,7 +108,7 @@ After scoring, generate 3-5 improvement proposals based on what broke, what was 
 
 Store in memory:
 ```bash
-cat >> "memory/$TODAY.md" << MEMEOF
+cat >> "memory/$TODAY.md" << 'MEMEOF'
 
 ## Evening Self-Evaluation
 - Score: X/25
@@ -251,9 +251,9 @@ cortextos bus update-heartbeat "evening review complete - transitioning to night
 
 # Write to memory
 TODAY=$(date -u +%Y-%m-%d)
-cat >> "memory/$TODAY.md" << MEMEOF
+printf '\n## Evening Review Complete - %s\n' "$(date -u +%H:%M:%S)" >> "memory/$TODAY.md"
+cat >> "memory/$TODAY.md" << 'MEMEOF'
 
-## Evening Review Complete - $(date -u +%H:%M:%S)
 - Tasks completed today: X (all agents combined)
 - Tasks dispatched overnight: X
 - Self-eval score: X/25

@@ -55,8 +55,7 @@ You receive an inbox message automatically when the human task is marked complet
 
 ```bash
 # Unblock immediately — don't wait
-cortextos bus update-task "$YOUR_TASK_ID" in_progress \
-  "Human task completed — resuming"
+cortextos bus update-task "$YOUR_TASK_ID" in_progress
 
 # Resume work
 ```

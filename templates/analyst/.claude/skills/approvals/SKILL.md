@@ -42,7 +42,7 @@ Categories: `external-comms` | `financial` | `deployment` | `data-deletion` | `o
 ### 2. Block your task on the approval
 
 ```bash
-cortextos bus update-task "$TASK_ID" blocked "Awaiting approval: $APPR_ID" "$APPR_ID"
+cortextos bus update-task "$TASK_ID" blocked
 ```
 
 ### 3. Notify the user
@@ -66,7 +66,7 @@ note: <user's note>
 **Approved:**
 ```bash
 # Unblock task
-cortextos bus update-task "$TASK_ID" in_progress "Approval received — executing"
+cortextos bus update-task "$TASK_ID" in_progress
 # Execute the action
 # Complete the task
 cortextos bus complete-task "$TASK_ID" --result "<what was done>"

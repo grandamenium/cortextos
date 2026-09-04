@@ -61,7 +61,7 @@ Agent secrets: `orgs/{org}/agents/{agent}/.env`
 |---|---|
 | `create-approval "<title>" <category> "[context]"` | Request human approval |
 | `update-approval <id> <approved\|rejected> "[note]"` | Resolve an approval |
-| `list-approvals [--status S]` | List approvals |
+| `list-approvals` | List approvals |
 
 ### Knowledge Base
 | Command | What it does |

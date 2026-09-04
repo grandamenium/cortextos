@@ -19,6 +19,7 @@ import {
   IconTarget,
   IconMessages,
   IconNotes,
+  IconBuildingSkyscraper,
 } from '@tabler/icons-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
@@ -38,6 +39,7 @@ const navItems: NavItem[] = [
   { label: 'Agents', href: '/agents', icon: IconRobot, section: 'core' },
   { label: 'Tasks', href: '/tasks', icon: IconListCheck, section: 'core' },
   { label: 'Activity', href: '/activity', icon: IconActivity, section: 'core' },
+  { label: 'Agent City', href: '/city', icon: IconBuildingSkyscraper, section: 'core' },
 
   // Operations
   { label: 'Comms', href: '/comms', icon: IconMessages, section: 'ops' },

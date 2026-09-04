@@ -92,6 +92,66 @@ describe('Advanced Task Management', () => {
       expect(report.stale_in_progress[0].id).toBe('task_001_001');
     });
 
+    /**
+     * Regression tests for the missing stale_blocked bucket (2026-08-20).
+     *
+     * `blocked` is a LEGITIMATE state, so nothing alarms on it and nobody
+     * looks. Before this bucket existed a task could sit blocked indefinitely
+     * while checkStaleTasks returned four empty arrays — "all clear" — and a
+     * real task had been blocked 21 hours when the gap was found. Four empty
+     * arrays are indistinguishable from a checker with no bucket to fill.
+     */
+    it('identifies stale blocked tasks (>4h)', () => {
+      createBackdatedTask(paths, {
+        id: 'task_blk_001',
+        title: 'Stale blocked',
+        status: 'blocked',
+        updated_at: hoursAgo(5), // blocked 5 hours
+        created_at: hoursAgo(9),
+      });
+      createBackdatedTask(paths, {
+        id: 'task_blk_002',
+        title: 'Recently blocked',
+        status: 'blocked',
+        updated_at: hoursAgo(1), // blocked 1 hour — not stale yet
+        created_at: hoursAgo(1),
+      });
+
+      const report = checkStaleTasks(paths);
+      expect(report.stale_blocked.length).toBe(1);
+      expect(report.stale_blocked[0].id).toBe('task_blk_001');
+    });
+
+    it('measures how long a task has been BLOCKED, not how old it is', () => {
+      // An old task blocked moments ago must NOT be stale: using created_at
+      // here would flag every long-lived task the instant it blocked.
+      createBackdatedTask(paths, {
+        id: 'task_blk_003',
+        title: 'Old task, just blocked',
+        status: 'blocked',
+        updated_at: hoursAgo(0),
+        created_at: hoursAgo(72),
+      });
+
+      const report = checkStaleTasks(paths);
+      expect(report.stale_blocked.length).toBe(0);
+    });
+
+    it('reports a blocked task in stale_blocked and nowhere else', () => {
+      createBackdatedTask(paths, {
+        id: 'task_blk_004',
+        title: 'Blocked only',
+        status: 'blocked',
+        updated_at: hoursAgo(30),
+        created_at: hoursAgo(30),
+      });
+
+      const report = checkStaleTasks(paths);
+      expect(report.stale_blocked.map((t) => t.id)).toContain('task_blk_004');
+      expect(report.stale_pending.map((t) => t.id)).not.toContain('task_blk_004');
+      expect(report.stale_in_progress.map((t) => t.id)).not.toContain('task_blk_004');
+    });
+
     it('identifies stale pending tasks (>24h)', () => {
       createBackdatedTask(paths, {
         id: 'task_003_003',

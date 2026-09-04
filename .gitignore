@@ -77,3 +77,11 @@ docs/phase-reports/
 leakage-fixture.json
 **/leakage-fixture.json
 *.leakage-fixture.json
+
+# Agent City scene bundle — GENERATED, and it bakes live fleet state (roster,
+# task titles, events) into app.js at build time. That is correct for a local
+# artifact and disqualifying for a public repo, so it is never committed.
+# Each installation generates its own from its own bus:
+#   node orgs/<org>/agents/city/build/build-internal.mjs
+# The /city page renders an explicit "not built" state when it is absent.
+dashboard/public/agent-city/

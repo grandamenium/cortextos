@@ -609,6 +609,15 @@ export interface TelegramVideoNote {
 export interface StaleTaskReport {
   stale_in_progress: Task[];
   stale_pending: Task[];
+  /**
+   * Tasks sitting in `blocked` longer than the threshold.
+   *
+   * Added 2026-08-20. `blocked` is a LEGITIMATE state, so nothing alarms on it
+   * and nobody looks — a task could sit blocked indefinitely while this report
+   * returned four empty arrays, i.e. "all clear". Four empty arrays are
+   * indistinguishable from a checker with no bucket to fill.
+   */
+  stale_blocked: Task[];
   stale_human: Task[];
   overdue: Task[];
 }

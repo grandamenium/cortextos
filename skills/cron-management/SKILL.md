@@ -6,7 +6,7 @@ description: "Manage scheduled tasks (crons). Use when: setting up crons on sess
 # Cron Management
 
 Your scheduled tasks are **daemon-managed external crons**. They are stored in
-`${CTX_ROOT}/state/{agent}/crons.json` and scheduled by the cortextOS daemon.
+`${CTX_ROOT}/.cortextOS/state/agents/{agent}/crons.json` and scheduled by the cortextOS daemon.
 Crons survive agent restarts, context compactions, and daemon restarts automatically —
 you do NOT need to recreate them on session start.
 
