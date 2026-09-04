@@ -116,6 +116,19 @@ describe('Bus System', () => {
       expect(report.staged).toContain('readme.md');
     });
 
+    it('blocks Groq (gsk_), Nebius (nfp_), and Google (AIza) key prefixes', () => {
+      writeFileSync(join(gitDir, 'groq.md'), 'gsk_AbCdEfGhIjKlMnOpQrSt1234567890');
+      writeFileSync(join(gitDir, 'nebius.md'), 'nfp_AbCdEfGhIjKlMnOpQrSt1234567890');
+      writeFileSync(join(gitDir, 'google.md'), 'AIzaSyAbCdEfGhIjKlMnOpQrSt1234567890');
+      writeFileSync(join(gitDir, 'clean.md'), 'nothing sensitive here');
+
+      const report = autoCommit(gitDir, true);
+      for (const f of ['groq.md', 'nebius.md', 'google.md']) {
+        expect(report.blocked.some(b => b.includes(f) && b.includes('credential')), f).toBe(true);
+      }
+      expect(report.staged).toContain('clean.md');
+    });
+
     it('allows script files even with credential-like patterns', () => {
       writeFileSync(join(gitDir, 'deploy.sh'), '#!/bin/bash\ntoken=get_from_env');
       writeFileSync(join(gitDir, 'app.py'), 'password=input("Enter:")');
