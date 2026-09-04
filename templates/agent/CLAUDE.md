@@ -49,7 +49,7 @@ TARGET: Every significant piece of work (>10 minutes) = at least 1 task created.
 
 ## Mandatory Memory Protocol
 
-You have THREE memory layers. All are mandatory.
+You have FOUR memory layers. All are mandatory.
 
 ### Layer 1: Daily Memory (memory/YYYY-MM-DD.md)
 Write to this file:
@@ -62,8 +62,38 @@ Write to this file:
 ### Layer 2: Long-Term Memory (MEMORY.md)
 Update when you learn something that should persist across sessions.
 
+### Layer 3: People Memory (memory/people/{name}.md)
+Each person you interact with gets their own file. See `.claude/skills/people-memory/SKILL.md` for full reference.
+- **Load** the person's file when they message you (before responding)
+- **Update** after meaningful interactions (new info, completed task, feedback)
+- **Don't** load all people files at session start — only on demand
+
+### Layer 4: Company Knowledge Base (KB)
+Query before starting any significant task: `cortextos bus kb-query "<topic>" --org $CTX_ORG`
+Write learnings after completing tasks: `cortextos bus kb-ingest <file> --org $CTX_ORG --scope shared`
+
 CONSEQUENCE: Without daily memory, session crashes lose all context. You start from zero.
 TARGET: >= 3 memory entries per session.
+
+---
+
+## Selective Context Loading
+
+**Problem:** Loading everything at session start wastes context and slows you down.
+
+**Rule:** Load context on demand, not upfront.
+
+| Context | When to load |
+|---------|-------------|
+| IDENTITY, SOUL, GOALS, MEMORY.md | Session start (always) |
+| GUARDRAILS, HEARTBEAT, TOOLS | Session start (always) |
+| memory/people/{name}.md | When that person messages you |
+| KB query results | Before starting a task on that topic |
+| Skill files | When the skill is triggered |
+| Other agents' state | When coordinating with them |
+| Yesterday's memory | Only if resuming interrupted work |
+
+**Don't** read all skill files at session start. **Don't** load all people files. **Don't** query KB without a specific question.
 
 ---
 
@@ -91,7 +121,11 @@ Messages arrive in real time via the fast-checker daemon:
 Reply using: cortextos bus send-telegram <chat_id> "<reply>"
 ```
 
+**Group chat gate — applies before replying.** In group chats, default to silence. Reply ONLY when the message names/@-mentions this agent, replies to this agent's previous message, or capitan explicitly routes it here. If a group message is addressed to another agent or person, do not reply at all.
+
 Photos include a `local_file:` path. Callbacks include `callback_data:` and `message_id:`. Process all immediately and reply using the command shown.
+
+**Before replying:** Load the person's memory file if it exists: `cat memory/people/<slug>.md 2>/dev/null`. This gives you context about past interactions. If no file exists and this is a meaningful first interaction, create one after responding.
 
 **Telegram formatting:** Uses Telegram's regular Markdown (not MarkdownV2). Do NOT escape characters like `!`, `.`, `(`, `)`, `-` with backslashes. Just write plain natural text. Only `_`, `*`, `` ` ``, and `[` have special meaning.
 
@@ -214,6 +248,7 @@ Sessions auto-restart with `--continue` every ~71 hours. On context exhaustion, 
 - **.claude/skills/comms/** - Message handling reference (Telegram + agent inbox formats)
 - **.claude/skills/cron-management/** - Cron setup, persistence, and troubleshooting
 - **.claude/skills/tasks/** - Task creation, lifecycle, and KPI logging
+- **.claude/skills/people-memory/** - Per-person memory (load on message, update after interactions)
 
 ---
 
