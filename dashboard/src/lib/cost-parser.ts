@@ -210,6 +210,12 @@ interface CodexTokenEntry {
  */
 function parseCodexJsonlFile(filePath: string, agent: string, org: string): CostEntry[] {
   const entries: CostEntry[] = [];
+  const previousBySession = new Map<string, {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  }>();
   let content: string;
   try {
     content = fs.readFileSync(filePath, 'utf-8');
@@ -224,11 +230,41 @@ function parseCodexJsonlFile(filePath: string, agent: string, org: string): Cost
       const model = raw.model;
       if (!model) continue;
 
-      const inputTokens = raw.input_tokens ?? 0;
-      const outputTokens = raw.output_tokens ?? 0;
-      const cacheReadTokens = raw.cache_read_tokens ?? 0;
-      const cacheWriteTokens = raw.cache_write_tokens ?? 0;
-      if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheWriteTokens === 0) continue;
+      const cumulative = {
+        inputTokens: raw.input_tokens ?? 0,
+        outputTokens: raw.output_tokens ?? 0,
+        cacheReadTokens: raw.cache_read_tokens ?? 0,
+        cacheWriteTokens: raw.cache_write_tokens ?? 0,
+      };
+      let { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = cumulative;
+      let isCumulativeDelta = false;
+
+      // Codex's tokenUsage.total counters are cumulative for the lifetime of a
+      // thread. Logs preserve those totals on every turn, so price only the
+      // increase since the previous row for the same session. A decrease in
+      // any counter means Codex reset its totals; treat that row as the new
+      // baseline. Legacy rows without a session_id remain independent.
+      if (raw.session_id) {
+        const previous = previousBySession.get(raw.session_id);
+        if (previous &&
+            cumulative.inputTokens >= previous.inputTokens &&
+            cumulative.outputTokens >= previous.outputTokens &&
+            cumulative.cacheReadTokens >= previous.cacheReadTokens &&
+            cumulative.cacheWriteTokens >= previous.cacheWriteTokens) {
+          isCumulativeDelta = true;
+          inputTokens -= previous.inputTokens;
+          outputTokens -= previous.outputTokens;
+          cacheReadTokens -= previous.cacheReadTokens;
+          cacheWriteTokens -= previous.cacheWriteTokens;
+        }
+        previousBySession.set(raw.session_id, cumulative);
+      }
+
+      // Keep a zero-delta cumulative snapshot so an upsert can replace an
+      // inflated row imported by an older parser at the same identity.
+      if (!isCumulativeDelta &&
+          inputTokens === 0 && outputTokens === 0 &&
+          cacheReadTokens === 0 && cacheWriteTokens === 0) continue;
 
       const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
       const costUsd = calculateCost(model, inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens);
@@ -285,15 +321,27 @@ export function scanCodexLogsCosts(): CostEntry[] {
 // ---------------------------------------------------------------------------
 
 const INSERT_COST = db.prepare(`
-  INSERT OR IGNORE INTO cost_entries (timestamp, agent, org, model, input_tokens, output_tokens, total_tokens, cost_usd, source_file)
+  INSERT INTO cost_entries (timestamp, agent, org, model, input_tokens, output_tokens, total_tokens, cost_usd, source_file)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT DO UPDATE SET
+    org = excluded.org,
+    input_tokens = excluded.input_tokens,
+    output_tokens = excluded.output_tokens,
+    total_tokens = excluded.total_tokens,
+    cost_usd = excluded.cost_usd
+  WHERE cost_entries.org IS NOT excluded.org
+     OR cost_entries.input_tokens IS NOT excluded.input_tokens
+     OR cost_entries.output_tokens IS NOT excluded.output_tokens
+     OR cost_entries.total_tokens IS NOT excluded.total_tokens
+     OR cost_entries.cost_usd IS NOT excluded.cost_usd
 `);
 
 /**
- * Persist cost entries to SQLite. Skips duplicates via INSERT OR IGNORE.
+ * Persist cost entries to SQLite. Identical rows are skipped; corrected rows
+ * update the existing identity so parser fixes also repair historical data.
  */
 export function persistCostEntries(entries: CostEntry[]): number {
-  let inserted = 0;
+  let changed = 0;
   const insertMany = db.transaction((items: CostEntry[]) => {
     for (const e of items) {
       const result = INSERT_COST.run(
@@ -307,11 +355,11 @@ export function persistCostEntries(entries: CostEntry[]): number {
         e.cost_usd,
         e.source_file ?? null,
       );
-      if (result.changes > 0) inserted++;
+      if (result.changes > 0) changed++;
     }
   });
   insertMany(entries);
-  return inserted;
+  return changed;
 }
 
 /**
@@ -324,7 +372,7 @@ export function persistCostEntries(entries: CostEntry[]): number {
  * union explicitly so any future overlap (e.g., a codex agent that also gets
  * scanned through claude's projects dir) does not double-count.
  */
-export function syncCosts(): { scanned: number; inserted: number } {
+export function syncCosts(): { scanned: number; changed: number } {
   const claudeEntries = scanClaudeProjectsCosts();
   const codexEntries = scanCodexLogsCosts();
 
@@ -337,8 +385,8 @@ export function syncCosts(): { scanned: number; inserted: number } {
     merged.push(entry);
   }
 
-  const inserted = merged.length > 0 ? persistCostEntries(merged) : 0;
-  return { scanned: merged.length, inserted };
+  const changed = merged.length > 0 ? persistCostEntries(merged) : 0;
+  return { scanned: merged.length, changed };
 }
 
 // ---------------------------------------------------------------------------
