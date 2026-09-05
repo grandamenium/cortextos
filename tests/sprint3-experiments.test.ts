@@ -206,7 +206,8 @@ describe('Sprint 3: Experiment Framework', () => {
       expect(result.status).toBe('completed');
       expect(result.decision).toBe('keep');
       expect(result.result_value).toBe(42);
-      expect(result.baseline_value).toBe(42); // updated to measured
+      expect(result.baseline_value).toBe(0); // never mutated — the baseline the experiment ran against
+      expect(result.new_baseline).toBe(42);  // ratchet target for future experiments
       expect(result.completed_at).toBeTruthy();
       expect(result.learning).toBe('Emojis work');
 
@@ -254,6 +255,81 @@ describe('Sprint 3: Experiment Framework', () => {
     it('throws if experiment is not running', () => {
       const id = createExperiment(testDir, 'testbot', 'ctr', 'test');
       expect(() => evaluateExperiment(testDir, id, 10)).toThrow("expected 'running'");
+    });
+
+    // Regression tests for the evaluate double defect (2026-07-09):
+    // D1 — --score silently replaced a real positional measurement;
+    // D2 — a 'keep' overwrote baseline_value on the completed record, and the
+    //      TSV/learnings then printed baseline == measured.
+    describe('score/measurement contract (D1)', () => {
+      it('rejects a nonzero measured value combined with --score', () => {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'qualitative', {
+          direction: 'higher',
+        });
+        runExperiment(testDir, id);
+        expect(() => evaluateExperiment(testDir, id, 16, { score: 8 }))
+          .toThrow(/EITHER a measured value OR --score/);
+        // and the experiment is untouched — still running, still evaluable
+        const retry = evaluateExperiment(testDir, id, 16);
+        expect(retry.result_value).toBe(16);
+      });
+
+      it('accepts --score with the documented 0 placeholder', () => {
+        const id = createExperiment(testDir, 'testbot', 'quality', 'qualitative', {
+          direction: 'higher',
+        });
+        runExperiment(testDir, id);
+        const result = evaluateExperiment(testDir, id, 0, { score: 7 });
+        expect(result.result_value).toBe(7);
+        expect(result.decision).toBe('keep'); // 7 > baseline 0
+      });
+    });
+
+    describe('completed-record immutability (D2)', () => {
+      it('keep decision preserves baseline_value and records new_baseline separately', () => {
+        const id = createExperiment(testDir, 'testbot', 'throughput', 'ship more', {
+          direction: 'higher',
+        });
+        runExperiment(testDir, id);
+        const result = evaluateExperiment(testDir, id, 16);
+        expect(result.decision).toBe('keep');
+        expect(result.baseline_value).toBe(0);
+        expect(result.new_baseline).toBe(16);
+
+        // persisted record matches the returned one (no mutation on disk either)
+        const onDisk = JSON.parse(
+          readFileSync(join(testDir, 'experiments', 'history', `${id}.json`), 'utf-8'),
+        );
+        expect(onDisk.baseline_value).toBe(0);
+        expect(onDisk.new_baseline).toBe(16);
+      });
+
+      it('discard decision records new_baseline as null', () => {
+        const id = createExperiment(testDir, 'testbot', 'throughput', 'ship more', {
+          direction: 'higher',
+        });
+        runExperiment(testDir, id);
+        const result = evaluateExperiment(testDir, id, 0); // 0 not > 0 → discard
+        expect(result.decision).toBe('discard');
+        expect(result.new_baseline).toBeNull();
+      });
+
+      it('TSV and learnings record the ORIGINAL baseline, not the measured value', () => {
+        const id = createExperiment(testDir, 'testbot', 'throughput', 'ship more', {
+          direction: 'higher',
+        });
+        runExperiment(testDir, id);
+        evaluateExperiment(testDir, id, 16);
+
+        const tsv = readFileSync(join(testDir, 'experiments', 'results.tsv'), 'utf-8');
+        const row = tsv.split('\n').find(l => l.startsWith(id))!;
+        const cols = row.split('\t');
+        expect(cols[3]).toBe('16'); // measured_value
+        expect(cols[4]).toBe('0');  // baseline — original, not ratcheted
+
+        const learnings = readFileSync(join(testDir, 'experiments', 'learnings.md'), 'utf-8');
+        expect(learnings).toContain('**Result:** 16 (baseline: 0)');
+      });
     });
   });
 
