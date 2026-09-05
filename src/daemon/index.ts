@@ -1,5 +1,6 @@
 import { AgentManager } from './agent-manager.js';
 import { IPCServer } from './ipc-server.js';
+import { SleepWakeDetector, formatDurationShort, hhmmUtc } from './sleep-wake-detector.js';
 import { readdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
@@ -147,39 +148,48 @@ function getOperatorChatCreds(frameworkRoot: string): { chatId: string; botToken
   return null;
 }
 
-function sendCrashLoopAlertBestEffort(
-  frameworkRoot: string,
-  crashCount: number,
-  errStr: string,
-): boolean {
+/**
+ * Best-effort synchronous Telegram send to the operator chat. Bounded
+ * timeout, never throws. Shared by the crash-loop alert and the wake notice.
+ */
+function sendOperatorTelegramBestEffort(frameworkRoot: string, text: string): boolean {
   const creds = getOperatorChatCreds(frameworkRoot);
   if (!creds) {
-    console.error('[daemon] Crash-loop alert: no operator chat configured ' +
+    console.error('[daemon] Operator telegram: no operator chat configured ' +
       '(set CTX_OPERATOR_CHAT_ID + CTX_OPERATOR_BOT_TOKEN, or ensure at least one agent .env exists)');
     return false;
   }
-  const message =
-    `🚨 CRITICAL: cortextos daemon is crash-looping\n` +
-    `${crashCount} crashes in 15 minutes\n` +
-    `Last error: ${errStr.slice(0, 500)}\n` +
-    `Next alert in 30 min if the pattern continues.`;
   try {
     const r = spawnSync('curl', [
       '-s', '--max-time', '3',
       '-X', 'POST',
       `https://api.telegram.org/bot${creds.botToken}/sendMessage`,
       '-d', `chat_id=${creds.chatId}`,
-      '--data-urlencode', `text=${message}`,
+      '--data-urlencode', `text=${text}`,
     ], { timeout: TELEGRAM_SEND_TIMEOUT_MS, stdio: 'pipe' });
-    if (r.status === 0) {
-      console.error('[daemon] Crash-loop alert sent to operator chat');
-      return true;
-    }
-    console.error('[daemon] Crash-loop alert send failed (non-fatal)');
-    return false;
+    return r.status === 0;
   } catch {
     return false;
   }
+}
+
+function sendCrashLoopAlertBestEffort(
+  frameworkRoot: string,
+  crashCount: number,
+  errStr: string,
+): boolean {
+  const message =
+    `🚨 CRITICAL: cortextos daemon is crash-looping\n` +
+    `${crashCount} crashes in 15 minutes\n` +
+    `Last error: ${errStr.slice(0, 500)}\n` +
+    `Next alert in 30 min if the pattern continues.`;
+  const sent = sendOperatorTelegramBestEffort(frameworkRoot, message);
+  if (sent) {
+    console.error('[daemon] Crash-loop alert sent to operator chat');
+  } else {
+    console.error('[daemon] Crash-loop alert send failed (non-fatal)');
+  }
+  return sent;
 }
 
 /**
@@ -220,6 +230,7 @@ function handleFatal(
 class Daemon {
   private agentManager: AgentManager | null = null;
   private ipcServer: IPCServer | null = null;
+  private wakeDetector: SleepWakeDetector | null = null;
   private instanceId: string;
   private ctxRoot: string;
 
@@ -266,11 +277,37 @@ class Daemon {
     // Discover and start agents
     await this.agentManager.discoverAndStart();
 
+    // Wake notice: after the host sleeps >10 min (clamshell/suspend), send ONE
+    // operator Telegram per sleep episode once uptime is sustained (FullWake).
+    // Queued crons/messages flush right after wake, so this tells the operator
+    // why a burst of catch-up activity is arriving.
+    this.wakeDetector = new SleepWakeDetector({
+      onWake: (ep) => {
+        const gaps = ep.gapCount > 1 ? ` across ${ep.gapCount} sleep intervals` : '';
+        const message =
+          `😴 Fleet host was asleep ${formatDurationShort(ep.totalSleptMs)}` +
+          `${gaps} (${hhmmUtc(ep.sleptFromMs)}–${hhmmUtc(ep.wokeAtMs)} UTC).\n` +
+          `Back online — agents are catching up on queued work.`;
+        const sent = sendOperatorTelegramBestEffort(frameworkRoot, message);
+        console.log(
+          `[daemon] wake-notice: slept ${formatDurationShort(ep.totalSleptMs)} ` +
+          `(${new Date(ep.sleptFromMs).toISOString()} → ${new Date(ep.wokeAtMs).toISOString()}, ` +
+          `${ep.gapCount} gap(s)) — telegram ${sent ? 'sent' : 'NOT sent'}`
+        );
+      },
+      logger: (msg) => console.log(`[daemon] ${msg}`),
+    });
+    this.wakeDetector.start();
+
     console.log(`[daemon] Running (pid: ${process.pid})`);
 
     // Handle shutdown signals
     const shutdown = async () => {
       console.log('[daemon] Shutting down...');
+      if (this.wakeDetector) {
+        this.wakeDetector.stop();
+        this.wakeDetector = null;
+      }
       try {
         if (this.agentManager) {
           await this.agentManager.stopAll();
