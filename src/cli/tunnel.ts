@@ -206,6 +206,8 @@ function writePlist(instance: string, port: number): void {
     <array>
         <string>${cfPath}</string>
         <string>tunnel</string>
+        <string>--config</string>
+        <string>${CLOUDFLARED_CONFIG}</string>
         <string>--no-autoupdate</string>
         <string>run</string>
         <string>${TUNNEL_NAME}</string>
@@ -302,8 +304,9 @@ function unloadService(): void {
 const startCommand = new Command('start')
   .option('--instance <id>', 'Instance ID', 'default')
   .option('--port <port>', 'Dashboard port', '3000')
+  .option('--hostname <hostname>', 'Public hostname to route to the tunnel (creates a CNAME in your Cloudflare zone)')
   .description('Create (or reuse) the Cloudflare tunnel and start it as a launchd service')
-  .action(async (options: { instance: string; port: string }) => {
+  .action(async (options: { instance: string; port: string; hostname?: string }) => {
     const port = parseInt(options.port, 10);
 
     checkPlatform();
@@ -327,7 +330,31 @@ const startCommand = new Command('start')
       console.log(`  Tunnel: ${tunnel.name} (${tunnel.id}) — created`);
     }
 
-    const tunnelUrl = `https://${tunnel.id}.cfargotunnel.com`;
+    // <id>.cfargotunnel.com is NOT directly reachable — Cloudflare only
+    // serves tunnels through a hostname CNAME'd to that address. Without
+    // --hostname we still record the cfargotunnel address for reference,
+    // but the real URL requires a DNS route (see guidance printed below).
+    let tunnelUrl = `https://${tunnel.id}.cfargotunnel.com`;
+    let routedHostname: string | null = null;
+    if (options.hostname) {
+      try {
+        execSync(`cloudflared tunnel route dns ${TUNNEL_NAME} ${options.hostname}`, {
+          encoding: 'utf-8',
+          stdio: 'pipe',
+          timeout: 30000,
+        });
+        routedHostname = options.hostname;
+      } catch (err) {
+        // "route already exists" is fine if it points at this tunnel;
+        // cloudflared exits non-zero either way, so verify via DNS intent
+        // is out of scope here — surface the error and keep going.
+        console.warn(`  warning: could not create DNS route for ${options.hostname}: ${(err as Error).message.split('\n')[0]}`);
+        console.warn(`  If the record already routes to this tunnel, ignore this warning.`);
+        routedHostname = options.hostname;
+      }
+      tunnelUrl = `https://${routedHostname}`;
+      console.log(`  DNS route: ${routedHostname} -> ${TUNNEL_NAME}`);
+    }
 
     // 4. Write cloudflared config.yaml
     writeCloudflaredConfig(tunnel.id, port);
@@ -376,7 +403,15 @@ const startCommand = new Command('start')
       createdAt: new Date().toISOString(),
     });
 
-    console.log(`\n  Dashboard URL: ${tunnelUrl}`);
+    if (routedHostname) {
+      console.log(`\n  Dashboard URL: ${tunnelUrl}`);
+    } else {
+      console.log(`\n  Tunnel address: ${tunnelUrl}`);
+      console.log(`  NOTE: cfargotunnel.com addresses are not directly reachable.`);
+      console.log(`  Route a hostname from your Cloudflare zone to this tunnel:`);
+      console.log(`    cloudflared tunnel route dns ${TUNNEL_NAME} dash.your-domain.com`);
+      console.log(`  or re-run: cortextos tunnel start --port ${port} --hostname dash.your-domain.com`);
+    }
     console.log(`  TUNNEL_URL saved to: ${getTunnelConfigPath(options.instance)}\n`);
     console.log(`  The tunnel will restart automatically after reboot.`);
     console.log(`  Start the dashboard with: cortextos dashboard\n`);
