@@ -1,0 +1,63 @@
+/* Crew companion chat — shared keyframes for critters and typing bubbles.
+   Imported once by the /crew page. All class names are crew- prefixed to
+   stay out of the global namespace. */
+
+@keyframes crew-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95%, 97% { transform: scaleY(0.08); }
+}
+
+.crew-blink {
+  animation: crew-blink 4.8s ease-in-out infinite;
+}
+
+@keyframes crew-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.crew-antenna-pulse {
+  animation: crew-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes crew-float {
+  0% { transform: translateY(0); opacity: 0.9; }
+  100% { transform: translateY(-7px); opacity: 0; }
+}
+
+.crew-zz {
+  animation: crew-float 2.4s ease-out infinite;
+}
+
+/* Typing indicator — three staggered bouncing dots. */
+@keyframes crew-bounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-4px); }
+}
+
+.crew-dot {
+  animation: crew-bounce 1.2s ease-in-out infinite;
+}
+
+.crew-dot:nth-child(2) { animation-delay: 0.15s; }
+.crew-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Soft breathing glow on the ring around a typing companion's avatar. */
+@keyframes crew-ring {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.12); }
+}
+
+.crew-ring-typing {
+  animation: crew-ring 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crew-blink,
+  .crew-antenna-pulse,
+  .crew-zz,
+  .crew-dot,
+  .crew-ring-typing {
+    animation: none;
+  }
+}
