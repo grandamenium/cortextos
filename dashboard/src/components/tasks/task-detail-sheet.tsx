@@ -79,6 +79,8 @@ export function TaskDetailSheet({
   const [updating, setUpdating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmProceed, setConfirmProceed] = useState(false);
+  const [proceeding, setProceeding] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editDesc, setEditDesc] = useState('');
@@ -165,6 +167,26 @@ export function TaskDetailSheet({
     }
   }
 
+  async function handleProceed() {
+    if (!task) return;
+    setProceeding(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}/proceed`, { method: 'POST' });
+      if (res.ok) {
+        setConfirmProceed(false);
+        onEdit?.(task.id);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || 'Failed to proceed');
+      }
+    } catch {
+      setError('Network error');
+    } finally {
+      setProceeding(false);
+    }
+  }
+
   async function handleStatusChange(newStatus: TaskStatus) {
     if (!task) return;
     setUpdating(true);
@@ -181,7 +203,7 @@ export function TaskDetailSheet({
 
   return (
     <>
-    <Sheet open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setEditing(false); setConfirmDelete(false); setError(null); setPreviewOutput(null); } }}>
+    <Sheet open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setEditing(false); setConfirmDelete(false); setConfirmProceed(false); setError(null); setPreviewOutput(null); } }}>
       <SheetContent side="right" className="sm:max-w-lg overflow-y-auto">
         <SheetHeader>
           {editing ? (
@@ -293,6 +315,79 @@ export function TaskDetailSheet({
               <p className="text-sm whitespace-pre-wrap">{task.description}</p>
             </div>
           ) : null}
+
+          {/* Decision brief — agent-authored guidance so a human can decide
+              what to do without reading the full Telegram thread. Field
+              labels adapt to the lane: a blocked task frames headline/reason
+              as the blocker + its impact; other lanes frame them as the next
+              step + why it matters. */}
+          {task.brief && (
+            <div className={`rounded-lg border p-3 ${task.status === 'blocked' ? 'border-destructive/40 bg-destructive/5' : 'border-primary/30 bg-primary/5'}`}>
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                {task.status === 'blocked' ? 'Blocker — how to unblock' : 'Next step for you'}
+              </p>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">{task.status === 'blocked' ? 'Blocker' : 'Next step'}</p>
+                  <p className="text-sm font-medium whitespace-pre-wrap">{task.brief.headline}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">{task.status === 'blocked' ? 'Impact' : 'Why it matters'}</p>
+                  <p className="text-sm whitespace-pre-wrap">{task.brief.reason}</p>
+                </div>
+                {task.brief.options?.length > 0 && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Options</p>
+                    <ul className="list-disc pl-5 text-sm space-y-0.5">
+                      {task.brief.options.map((opt, i) => (
+                        <li key={i} className="whitespace-pre-wrap">{opt}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div>
+                  <p className="text-xs text-muted-foreground">Recommended action</p>
+                  <p className="text-sm font-medium whitespace-pre-wrap">{task.brief.recommendation}</p>
+                </div>
+                {/* Action the recommendation. For an agent-owned task this
+                    approves the agent's plan (message + unblock); for a
+                    human-owned task the human is the actor, so it completes the
+                    task. Inline confirm so a stray click can't dispatch it. */}
+                {(() => {
+                  const humanOwned = !task.assignee || task.assignee === 'human' || task.assignee === 'user';
+                  const idleLabel = humanOwned ? 'Mark as done' : 'Proceed with recommended action';
+                  const confirmText = humanOwned
+                    ? 'Mark this task done?'
+                    : `Send to ${task.assignee} and unblock?`;
+                  const busyLabel = humanOwned ? 'Completing…' : 'Proceeding…';
+                  return (
+                    <div>
+                      {confirmProceed ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground mr-1">{confirmText}</span>
+                          <Button size="sm" onClick={handleProceed} disabled={proceeding}>
+                            {proceeding ? busyLabel : 'Confirm'}
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => setConfirmProceed(false)} disabled={proceeding}>
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button size="sm" onClick={() => setConfirmProceed(true)}>
+                          {idleLabel}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })()}
+                {task.brief.updated_at && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Brief updated <TimeAgo date={task.brief.updated_at} />
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Edit save/cancel */}
           {editing && (
