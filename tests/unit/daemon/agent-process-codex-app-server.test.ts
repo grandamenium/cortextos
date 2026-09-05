@@ -113,7 +113,7 @@ beforeEach(() => {
 
 describe('AgentProcess codex-app-server runtime', () => {
   it('selects CodexAppServerPTY for runtime codex-app-server', async () => {
-    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server', allow_codex_app_server: true });
     await ap.start();
 
     expect(mockCodexAppServerPty.spawn).toHaveBeenCalledWith('fresh', expect.any(String));
@@ -121,7 +121,7 @@ describe('AgentProcess codex-app-server runtime', () => {
   });
 
   it('wires Telegram handle to CodexAppServerPTY before start', async () => {
-    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server', allow_codex_app_server: true });
     const api = { sendChatAction: vi.fn().mockResolvedValue(undefined) };
 
     ap.setTelegramHandle(api as any, '12345');
@@ -131,7 +131,7 @@ describe('AgentProcess codex-app-server runtime', () => {
   });
 
   it('sends back-online Telegram directly from daemon on fresh start (issue #392)', async () => {
-    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server', allow_codex_app_server: true });
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const api = { sendChatAction: vi.fn().mockResolvedValue(undefined), sendMessage };
 
@@ -154,7 +154,7 @@ describe('AgentProcess codex-app-server runtime', () => {
     );
     fsMocks.readFileSync.mockReturnValue(handoffDocPath);
 
-    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server', allow_codex_app_server: true });
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const api = { sendChatAction: vi.fn().mockResolvedValue(undefined), sendMessage };
 
@@ -183,7 +183,7 @@ describe('AgentProcess codex-app-server runtime', () => {
   });
 
   it('uses direct kill path on stop, not Claude /exit choreography', async () => {
-    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server', allow_codex_app_server: true });
     await ap.start();
     expect(capturedOnExit).not.toBeNull();
 
@@ -215,7 +215,7 @@ describe('AgentProcess codex-app-server runtime', () => {
       if (path === codexThreadPath) return false;
       return false;
     });
-    const apFresh = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const apFresh = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server', allow_codex_app_server: true });
     await apFresh.start();
     expect(mockCodexAppServerPty.spawn).toHaveBeenLastCalledWith('fresh', expect.any(String));
 
@@ -226,8 +226,54 @@ describe('AgentProcess codex-app-server runtime', () => {
       if (path === codexThreadPath) return true;
       return false;
     });
-    const apContinue = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const apContinue = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server', allow_codex_app_server: true });
     await apContinue.start();
     expect(mockCodexAppServerPty.spawn).toHaveBeenLastCalledWith('continue', expect.any(String));
+  });
+});
+
+describe('AgentProcess codex-app-server opt-in guard', () => {
+  it('refuses to start codex-app-server without allow_codex_app_server (blocks by default)', async () => {
+    const ap = new AgentProcess('codex-app-agent', mockEnv, { runtime: 'codex-app-server' });
+    const statuses: string[] = [];
+    ap.onStatusChanged(s => statuses.push(s.status));
+
+    await ap.start();
+
+    // Note: the PTY mocks share one spawn fn, so this also proves no silent
+    // fallback to AgentPTY happened.
+    expect(mockCodexAppServerPty.spawn).not.toHaveBeenCalled();
+    expect(ap.getStatus().status).toBe('halted');
+    expect(statuses).toContain('halted');
+  });
+
+  it('refuses when allow_codex_app_server is explicitly false', async () => {
+    const ap = new AgentProcess('codex-app-agent', mockEnv, {
+      runtime: 'codex-app-server',
+      allow_codex_app_server: false,
+    });
+    await ap.start();
+
+    expect(mockCodexAppServerPty.spawn).not.toHaveBeenCalled();
+    expect(ap.getStatus().status).toBe('halted');
+  });
+
+  it('starts codex-app-server when allow_codex_app_server is true', async () => {
+    const ap = new AgentProcess('codex-app-agent', mockEnv, {
+      runtime: 'codex-app-server',
+      allow_codex_app_server: true,
+    });
+    await ap.start();
+
+    expect(mockCodexAppServerPty.spawn).toHaveBeenCalledWith('fresh', expect.any(String));
+    expect(ap.getStatus().status).not.toBe('halted');
+  });
+
+  it('does not gate other runtimes (claude-code starts without the flag)', async () => {
+    const ap = new AgentProcess('claude-agent', mockEnv, { runtime: 'claude-code' });
+    await ap.start();
+
+    expect(mockAgentPty.spawn).toHaveBeenCalled();
+    expect(ap.getStatus().status).not.toBe('halted');
   });
 });
