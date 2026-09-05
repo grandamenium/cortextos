@@ -59,6 +59,9 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Test hook installer
+        run: bash tests/setup-hooks.test.sh
+
       - name: Run codex parity tests
         run: npm run test:codex
 
