@@ -10,6 +10,21 @@
 
 set -euo pipefail
 
+# Git exports GIT_DIR and friends into hooks, and everything this hook runs
+# inherits them. The test suite creates git fixtures; with GIT_DIR inherited,
+# those fixtures operate on THIS repository instead of their own temp dirs.
+# Observed on 2026-08-25, all three in one session: commits named "init" and
+# "fixture" landing on the branch being pushed, core.bare flipped to true (after
+# which every ordinary git command dies with "must be run in a work tree"), and
+# a filter.evil.clean entry left behind in the config by the malicious-filter
+# security test.
+#
+# This must come before the git call below: with GIT_DIR pointing at a repo
+# whose work tree git cannot infer, rev-parse --show-toplevel itself fails.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_QUARANTINE_PATH \
+      GIT_COMMON_DIR GIT_NAMESPACE
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 

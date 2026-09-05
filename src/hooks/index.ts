@@ -254,7 +254,18 @@ export function isClaudeDirOperation(
   // thing left to vet.
   const canonAgentDir = canonicalizePath(resolve(base));
   const claudeRoot = join(canonAgentDir, '.claude');
-  const target = resolve(canonAgentDir, filePath);
+  const rawBase = resolve(base);
+  let target = resolve(canonAgentDir, filePath);
+
+  // The caller may hand us an absolute path built from the *uncanonical* agent
+  // dir, which is the normal case on macOS where /tmp and /var are themselves
+  // symlinks. Such a path is legitimate, but it would fail the containment check
+  // below against a canonicalized claudeRoot, and a genuine write into .claude
+  // would be refused. Rebase it onto the canonical dir first. This does not
+  // weaken anything: every component under .claude is still vetted for symlinks.
+  if (rawBase !== canonAgentDir && target.startsWith(rawBase + sep)) {
+    target = join(canonAgentDir, target.slice(rawBase.length + 1));
+  }
 
   // Lexical containment within the agent's own .claude/.
   if (target !== claudeRoot && !target.startsWith(claudeRoot + sep)) return false;
