@@ -1,0 +1,51 @@
+{
+  "agent_name": "novice-builder",
+  "enabled": true,
+  "runtime": "opencode",
+  "_runtime_alternative": "codex-app-server is a documented alternative runtime for this template; swap the runtime field and the adapter section of the operator's cortex-ledger.json together, they are not independent.",
+  "startup_delay": 0,
+  "max_session_seconds": 255600,
+  "max_crashes_per_day": 10,
+  "working_directory": "",
+  "timezone": "",
+  "approval_rules": {
+    "always_ask": [],
+    "never_ask": []
+  },
+  "model": "",
+  "_model_note": "Placeholder. The operator sets this per docs/adapters.md; one agent binds one provider and one model.",
+  "temperature": 0.1,
+  "prompt": "{file:./prompts/builder.md}",
+  "permission": {
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "edit": "allow",
+    "todowrite": "allow",
+    "lsp": "allow",
+    "bash": {
+      "*": "allow",
+      "git push*": "deny",
+      "git merge*": "deny",
+      "git reset --hard*": "deny",
+      "git branch -D*": "deny",
+      "git checkout .*": "deny",
+      "gh pr merge*": "deny"
+    },
+    "webfetch": "deny",
+    "websearch": "deny",
+    "external_directory": {
+      "*": "deny"
+    }
+  },
+  "read_only": false,
+  "crons": [
+    {
+      "name": "heartbeat",
+      "type": "recurring",
+      "interval": "4h",
+      "prompt": "Read HEARTBEAT.md and follow its instructions."
+    }
+  ]
+}
