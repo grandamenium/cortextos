@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const fsMocks = {
   existsSync: vi.fn().mockReturnValue(false),
@@ -6,6 +6,8 @@ const fsMocks = {
   writeFileSync: vi.fn(),
   unlinkSync: vi.fn(),
   appendFileSync: vi.fn(),
+  readlinkSync: vi.fn(),
+  realpathSync: vi.fn((p: string) => p),
 };
 
 vi.mock('fs', async () => {
@@ -17,6 +19,18 @@ vi.mock('fs', async () => {
     get writeFileSync() { return fsMocks.writeFileSync; },
     get unlinkSync() { return fsMocks.unlinkSync; },
     get appendFileSync() { return fsMocks.appendFileSync; },
+    get readlinkSync() { return fsMocks.readlinkSync; },
+    get realpathSync() { return fsMocks.realpathSync; },
+  };
+});
+
+const execFileSyncMock = vi.fn();
+
+vi.mock('child_process', async () => {
+  const actual = await vi.importActual<typeof import('child_process')>('child_process');
+  return {
+    ...actual,
+    get execFileSync() { return execFileSyncMock; },
   };
 });
 
@@ -82,6 +96,9 @@ beforeEach(() => {
   fsMocks.writeFileSync.mockReset();
   fsMocks.unlinkSync.mockReset();
   fsMocks.appendFileSync.mockReset();
+  fsMocks.readlinkSync.mockReset();
+  fsMocks.realpathSync.mockReset().mockImplementation((p: string) => p);
+  execFileSyncMock.mockReset();
   requestMock.mockReset();
   notifyMock.mockReset();
   closeMock.mockReset();
@@ -1414,6 +1431,216 @@ describe('CodexAppServerPTY thread/tokenUsage/updated → codex-tokens.jsonl', (
       total: { cachedInputTokens: 0, inputTokens: 100, outputTokens: 50, reasoningOutputTokens: 0, totalTokens: 150 },
       modelContextWindow: 200000,
     })).not.toThrow();
+  });
+});
+
+describe('CodexAppServerPTY boot reap', () => {
+  const STATE_DIR = '/tmp/ctx/state/codex-app-agent';
+  const MARKER_PATH = `${STATE_DIR}/codex-app-server-process.json`;
+  const SOCKET_PATH = `${STATE_DIR}/codex.sock`;
+  const ORPHAN_PID = 987654;
+
+  interface ReapInternals {
+    reapPreviousAppServer(): Promise<boolean>;
+    writeProcessMarker(): void;
+    kill(): void;
+    getOutputBuffer(): { getRecent(): string };
+    _appServerPty: { pid: number; kill: () => void } | null;
+  }
+
+  let killSpy: ReturnType<typeof vi.spyOn>;
+  let killState: { alive: boolean; signals: Array<string | number> };
+
+  function installKillSpy(
+    initialAlive: boolean,
+    lethalSignals: Array<string | number> = ['SIGTERM', 'SIGKILL'],
+  ) {
+    killState = { alive: initialAlive, signals: [] };
+    killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, sig?: string | number) => {
+      if (sig === 0 || sig === undefined) {
+        if (killState.alive) return true;
+        const err = new Error('ESRCH') as NodeJS.ErrnoException;
+        err.code = 'ESRCH';
+        throw err;
+      }
+      killState.signals.push(sig);
+      if (lethalSignals.includes(sig)) killState.alive = false;
+      return true;
+    }) as typeof process.kill);
+  }
+
+  // Configure the OS introspection helpers for BOTH platforms so the test is
+  // deterministic wherever it runs: linux reads /proc/<pid>/cwd via readlinkSync,
+  // darwin shells out to lsof/ps via execFileSync. A null means "cannot read".
+  function setIntrospection(opts: { command?: string | null; cwd?: string | null }) {
+    const { command = null, cwd = null } = opts;
+    fsMocks.readlinkSync.mockImplementation(() => {
+      if (cwd == null) throw new Error('no cwd');
+      return cwd;
+    });
+    execFileSyncMock.mockImplementation((file: string) => {
+      if (file === 'ps') {
+        if (command == null) throw new Error('no command');
+        return command;
+      }
+      if (file === 'lsof') {
+        if (cwd == null) throw new Error('no cwd');
+        return `p${ORPHAN_PID}\nfcwd\nn${cwd}\n`;
+      }
+      return '';
+    });
+  }
+
+  function markerJson(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      runtime: 'codex-app-server',
+      pid: ORPHAN_PID,
+      cwd: STATE_DIR,
+      socketPath: SOCKET_PATH,
+      updated_at: '2026-09-08T00:00:00Z',
+      ...overrides,
+    });
+  }
+
+  function makeReapPty(): ReapInternals {
+    return new CodexAppServerPTY(mockEnv, {}) as unknown as ReapInternals;
+  }
+
+  afterEach(() => {
+    killSpy?.mockRestore();
+  });
+
+  it('reaps a valid recorded orphan (SIGTERM sent, marker unlinked, returns true)', async () => {
+    installKillSpy(true);
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockReturnValue(markerJson());
+    setIntrospection({ command: 'codex app-server --enable goals --listen unix://./codex.sock', cwd: STATE_DIR });
+
+    const pty = makeReapPty();
+    const reaped = await pty.reapPreviousAppServer();
+
+    expect(reaped).toBe(true);
+    expect(killState.signals).toContain('SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, 'SIGTERM');
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith(MARKER_PATH);
+  });
+
+  it('escalates to SIGKILL when the orphan survives SIGTERM (destructive force-kill positive control)', async () => {
+    // Only SIGKILL is lethal here: the orphan stays alive through the whole
+    // SIGTERM grace poll (waitForProcessExit returns still-alive), forcing the
+    // escalation, then dies once SIGKILL is sent. This exercises the destructive
+    // force-kill branch of terminateStaleProcess rather than read-verifying it.
+    installKillSpy(true, ['SIGKILL']);
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockReturnValue(markerJson());
+    setIntrospection({ command: 'codex app-server --enable goals --listen unix://./codex.sock', cwd: STATE_DIR });
+
+    const pty = makeReapPty();
+    const reaped = await pty.reapPreviousAppServer();
+
+    expect(reaped).toBe(true);
+    expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, 'SIGKILL');
+    expect(killState.signals).toContain('SIGKILL');
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith(MARKER_PATH);
+  }, 10000);
+
+  it('GUARD cwd mismatch: no signal, marker cleared, returns false', async () => {
+    installKillSpy(true);
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockReturnValue(markerJson());
+    setIntrospection({ command: 'codex app-server --listen unix://./codex.sock', cwd: '/some/other/dir' });
+
+    const pty = makeReapPty();
+    const reaped = await pty.reapPreviousAppServer();
+
+    expect(reaped).toBe(false);
+    expect(killState.signals).toEqual([]);
+    expect(killSpy).not.toHaveBeenCalledWith(ORPHAN_PID, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(ORPHAN_PID, 'SIGKILL');
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith(MARKER_PATH);
+  });
+
+  it('GUARD command mismatch: no signal, marker cleared, returns false', async () => {
+    installKillSpy(true);
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockReturnValue(markerJson());
+    setIntrospection({ command: '/usr/bin/some-unrelated-process --serve', cwd: STATE_DIR });
+
+    const pty = makeReapPty();
+    const reaped = await pty.reapPreviousAppServer();
+
+    expect(reaped).toBe(false);
+    expect(killState.signals).toEqual([]);
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith(MARKER_PATH);
+  });
+
+  it('GUARD dead pid (process.kill(pid,0) throws ESRCH): no signal, marker cleared', async () => {
+    installKillSpy(false);
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockReturnValue(markerJson());
+    setIntrospection({ command: 'codex app-server', cwd: STATE_DIR });
+
+    const pty = makeReapPty();
+    const reaped = await pty.reapPreviousAppServer();
+
+    expect(reaped).toBe(false);
+    expect(killState.signals).toEqual([]);
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith(MARKER_PATH);
+  });
+
+  it('GUARD introspection failure / FAIL-SAFE (read* return null): no signal, marker cleared', async () => {
+    installKillSpy(true);
+    fsMocks.existsSync.mockReturnValue(true);
+    fsMocks.readFileSync.mockReturnValue(markerJson());
+    // execFileSync + readlinkSync both throw => command and cwd unreadable.
+    setIntrospection({ command: null, cwd: null });
+
+    const pty = makeReapPty();
+    const reaped = await pty.reapPreviousAppServer();
+
+    expect(reaped).toBe(false);
+    expect(killState.signals).toEqual([]);
+    expect(killSpy).not.toHaveBeenCalledWith(ORPHAN_PID, 'SIGTERM');
+    expect(killSpy).not.toHaveBeenCalledWith(ORPHAN_PID, 'SIGKILL');
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith(MARKER_PATH);
+  });
+
+  it('marker lifecycle: writeProcessMarker writes {pid,cwd,...}; kill() unlinks the marker path', () => {
+    installKillSpy(true);
+    const pty = makeReapPty();
+    pty._appServerPty = { pid: 88, kill: vi.fn() };
+
+    pty.writeProcessMarker();
+    expect(fsMocks.writeFileSync).toHaveBeenCalledWith(
+      MARKER_PATH,
+      expect.stringContaining('"pid": 88'),
+      'utf-8',
+    );
+    expect(fsMocks.writeFileSync).toHaveBeenCalledWith(
+      MARKER_PATH,
+      expect.stringContaining(`"cwd": "${STATE_DIR}"`),
+      'utf-8',
+    );
+
+    // existsSync stays false so removeSocket() does not also unlink the socket:
+    // the marker unlink must be distinct from the socket unlink.
+    fsMocks.existsSync.mockReturnValue(false);
+    pty.kill();
+    expect(fsMocks.unlinkSync).toHaveBeenCalledWith(MARKER_PATH);
+    expect(fsMocks.unlinkSync).not.toHaveBeenCalledWith(SOCKET_PATH);
+  });
+
+  it('no marker: no-op (no process.kill, no execFileSync, returns false)', async () => {
+    installKillSpy(true);
+    fsMocks.existsSync.mockReturnValue(false);
+
+    const pty = makeReapPty();
+    const reaped = await pty.reapPreviousAppServer();
+
+    expect(reaped).toBe(false);
+    expect(killSpy).not.toHaveBeenCalled();
+    expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 });
 
