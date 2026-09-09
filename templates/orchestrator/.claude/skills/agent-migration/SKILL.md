@@ -57,7 +57,7 @@ cortextos add-agent <new_name> --template agent --org $CTX_ORG
 Get a Telegram bot token from the user (they must create via @BotFather). Get chat ID via getUpdates after user sends /start + any message.
 
 ```bash
-cat > "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<new_name>/.env" << EOF
+cat > "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<new_name>/.env" <<'EOF'
 BOT_TOKEN=<token>
 CHAT_ID=<chat_id>
 ALLOWED_USER=<user_id>
@@ -173,19 +173,13 @@ Write each file fresh. Do not copy-paste from source. Rewrite using extracted kn
 
 ```bash
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-cat > "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<new_name>/goals.json" << EOF
-{
-  "focus": "<agent's core purpose, one sentence>",
-  "goals": [
-    "<standing goal 1>",
-    "<standing goal 2>",
-    "<standing goal 3>"
-  ],
-  "bottleneck": "",
-  "updated_at": "$TIMESTAMP",
-  "updated_by": "$CTX_AGENT_NAME"
-}
-EOF
+jq -n --arg ts "$TIMESTAMP" --arg by "$CTX_AGENT_NAME" '{
+  focus: "<agent'\''s core purpose, one sentence>",
+  goals: ["<standing goal 1>", "<standing goal 2>", "<standing goal 3>"],
+  bottleneck: "",
+  updated_at: $ts,
+  updated_by: $by
+}' > "$CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<new_name>/goals.json"
 cortextos goals generate-md --agent <new_name> --org $CTX_ORG
 ```
 

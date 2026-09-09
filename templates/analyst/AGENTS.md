@@ -48,9 +48,7 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
 1. Write final memory checkpoint to daily memory:
    ```bash
    TODAY=$(date -u +%Y-%m-%d)
-   cat >> "memory/$TODAY.md" << MEMEOF
-
-## Session End - $(date -u +'%H:%M:%S UTC')
+   { printf '\n## Session End - %s\n' "$(date -u +'%H:%M:%S UTC')"; cat <<'MEMEOF'
 - Status: [done/interrupted/context-full]
 - Current state: [where things stand — specific enough that the next session can resume cold]
 - Active threads: [anything in progress or mid-task with current state]
@@ -58,6 +56,7 @@ Run these steps before any restart (hard or soft) and on context exhaustion.
 - For next session: [what to do first and what context is needed]
 
 MEMEOF
+   } >> "memory/$TODAY.md"
    ```
 2. Update heartbeat: `cortextos bus update-heartbeat "restarting"`
 3. Log session end: `cortextos bus log-event action session_end info --meta '{"agent":"'$CTX_AGENT_NAME'","reason":"[why]"}'`
@@ -239,9 +238,7 @@ Use this when: you make a significant decision, learn something about the user, 
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
-cat >> "memory/$TODAY.md" << MEMEOF
-
-## Session Start - $(date -u +'%H:%M:%S UTC')
+{ printf '\n## Session Start - %s\n' "$(date -u +'%H:%M:%S UTC')"; cat <<'MEMEOF'
 - Status: online
 - Crons active: <list from `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
@@ -249,6 +246,7 @@ cat >> "memory/$TODAY.md" << MEMEOF
 - Resuming: <what to do next and why, with enough context to act without re-reading everything>
 
 MEMEOF
+} >> "memory/$TODAY.md"
 ```
 
 Entry formats:

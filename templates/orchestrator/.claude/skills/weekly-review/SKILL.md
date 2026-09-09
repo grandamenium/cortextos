@@ -163,9 +163,7 @@ cortextos bus update-heartbeat "weekly review complete - next week planned"
 
 # Write to memory
 TODAY=$(date -u +%Y-%m-%d)
-cat >> "memory/$TODAY.md" << MEMEOF
-
-## Weekly Review - $(date -u +%H:%M:%S)
+{ printf '\n## Weekly Review - %s\n' "$(date -u +%H:%M:%S)"; cat <<'MEMEOF'
 
 ### Summary
 - Total tasks completed this week: X (all agents)
@@ -180,6 +178,7 @@ cat >> "memory/$TODAY.md" << MEMEOF
 ### System Improvements Queued
 - [improvement 1]
 MEMEOF
+} >> "memory/$TODAY.md"
 
 # Update MEMORY.md with persistent learnings
 # Add any new patterns, preferences, or system behaviors discovered this week

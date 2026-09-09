@@ -134,9 +134,7 @@ Before the morning review cron fires, ensure this data is ready in today's memor
 
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
-cat >> "memory/$TODAY.md" << MEMEOF
-
-## Overnight Summary - $(date -u +%H:%M:%S)
+{ printf '\n## Overnight Summary - %s\n' "$(date -u +%H:%M:%S)"; cat <<'MEMEOF'
 
 ### Completed
 - [task] by [agent] -- [deliverable at path/]
@@ -151,6 +149,7 @@ cat >> "memory/$TODAY.md" << MEMEOF
 ### Agent Status at Morning
 [list each agent: status, last heartbeat]
 MEMEOF
+} >> "memory/$TODAY.md"
 
 cortextos bus update-heartbeat "morning briefing data ready - overnight complete"
 ```
