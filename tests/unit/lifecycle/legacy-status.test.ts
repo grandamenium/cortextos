@@ -888,6 +888,13 @@ describe('legacy lifecycle status collector', () => {
       last_heartbeat: '2026-08-10T11:00:00.000Z',
     });
     execFileSync('git', ['init'], { cwd: frameworkRoot, stdio: 'ignore' });
+    // Disable git's background auto-maintenance/gc on the fixture repo. Otherwise a git
+    // invocation (the commit below, or one collectLegacyStatus spawns) can trigger
+    // `git maintenance run --auto`, which creates a transient `.git/objects/maintenance.lock`.
+    // The treeMetadata walk then races that file: readdirSync enumerates it but it vanishes
+    // before lstatSync, throwing ENOENT and flaking this snapshot comparison.
+    execFileSync('git', ['config', 'maintenance.auto', 'false'], { cwd: frameworkRoot });
+    execFileSync('git', ['config', 'gc.auto', '0'], { cwd: frameworkRoot });
     execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: frameworkRoot });
     execFileSync('git', ['config', 'user.name', 'Lifecycle Test'], { cwd: frameworkRoot });
     execFileSync('git', ['add', '.'], { cwd: frameworkRoot });
