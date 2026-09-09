@@ -16,6 +16,11 @@ export default defineConfig({
   test: {
     globals: true,
     testTimeout: 10000,
+    // The suite includes process, filesystem, fake-timer, and scheduler tests.
+    // Letting Vitest size the pool from a high-core workstation can starve the
+    // timing-sensitive workers and leave child-process fixtures open. Four
+    // workers keeps the plain `npm test` gate deterministic locally and in CI.
+    maxWorkers: 4,
     include: [
       'tests/**/*.test.ts',
       'dashboard/src/**/__tests__/**/*.test.ts',
