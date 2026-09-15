@@ -133,11 +133,17 @@ describe('AgentPTY broadened auto-accept token match (rec B)', () => {
   beforeEach(() => { vi.useFakeTimers(); mockPty.write.mockClear(); });
   afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
-  it('injects Enter for a "directory" trust-prompt variant', async () => {
+  it('injects Down+Enter for a "directory" trust-prompt variant', async () => {
+    // The trust screen's default selection is "No, exit" (the same "No"-first
+    // ordering as the bypass screen), so a bare Enter QUITS the agent — exit 1 on
+    // every spawn. The selection must move DOWN to "Yes, I trust this folder" and
+    // only then confirm.
     const pty = newPty({});
     await pty.spawn('fresh', 'P');
     pty.getOutputBuffer().push('Do you trust the files in this directory?');
     await vi.advanceTimersByTimeAsync(1300);
+    expect(mockPty.write).toHaveBeenCalledWith('\x1b[B');
+    await vi.advanceTimersByTimeAsync(400);
     expect(mockPty.write).toHaveBeenCalledWith('\r');
   });
 
@@ -157,6 +163,53 @@ describe('AgentPTY broadened auto-accept token match (rec B)', () => {
     pty.getOutputBuffer().push('please accept the changes and open the directory');
     await vi.advanceTimersByTimeAsync(2000);
     expect(mockPty.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('AgentPTY credit-metered model modal (renders POST-bootstrap)', () => {
+  beforeEach(() => { vi.useFakeTimers(); mockPty.write.mockClear(); });
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+  // A credit-metered model (e.g. Fable 5.1 on a Claude Pro plan) only raises its
+  // confirmation modal on the session's FIRST model call — by which point the
+  // status bar (containing "permissions") has already bootstrapped the session and
+  // the first-run poll has self-stopped. So this modal needs its own watcher that
+  // deliberately runs past bootstrap; the fixtures below all include "permissions".
+  it('injects Down+Enter to KEEP the configured model, after bootstrap', async () => {
+    const pty = newPty({});
+    await pty.spawn('fresh', 'P');
+    pty.getOutputBuffer().push('permissions');
+    pty.getOutputBuffer().push(
+      'Fable 5.1 now uses usage credits. Switch to Sonnet 5 and continue / ' +
+      'Continue with Fable 5.1. Enter to confirm',
+    );
+    await vi.advanceTimersByTimeAsync(1300);
+    // Default is "Switch to <other model> and continue" — taking it would silently
+    // run the agent on a different model than config.json specifies.
+    expect(mockPty.write).toHaveBeenCalledWith('\x1b[B');
+    await vi.advanceTimersByTimeAsync(400);
+    expect(mockPty.write).toHaveBeenCalledWith('\r');
+  });
+
+  it('does NOT inject when only SOME of the modal tokens are present', async () => {
+    // Three of the four tokens (credits/Switch/Continue) but no "confirm" footer:
+    // live agent prose must never trigger a keystroke into a running session.
+    const pty = newPty({});
+    await pty.spawn('fresh', 'P');
+    pty.getOutputBuffer().push('permissions');
+    pty.getOutputBuffer().push('Continue with the credits report, then Switch the branch');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mockPty.write).not.toHaveBeenCalled();
+  });
+
+  it('injects at most once even while the modal text lingers in the buffer', async () => {
+    const pty = newPty({});
+    await pty.spawn('fresh', 'P');
+    pty.getOutputBuffer().push('permissions');
+    pty.getOutputBuffer().push('usage credits Switch Continue confirm');
+    await vi.advanceTimersByTimeAsync(10000);
+    const downs = mockPty.write.mock.calls.filter((c: unknown[]) => c[0] === '\x1b[B');
+    expect(downs).toHaveLength(1);
   });
 });
 
