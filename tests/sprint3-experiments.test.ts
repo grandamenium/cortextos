@@ -257,6 +257,72 @@ describe('Sprint 3: Experiment Framework', () => {
     });
   });
 
+  describe('G1 zero-delta gate', () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    // Create + run + evaluate a flat (non-improving) window on a surface.
+    // direction=higher, baseline starts at 0, so value<=0 → discard.
+    function flat(surface: string, value = 0): ReturnType<typeof evaluateExperiment> {
+      const id = createExperiment(testDir, 'testbot', 'engagement', 'flat hypothesis', {
+        surface,
+        direction: 'higher',
+      });
+      runExperiment(testDir, id);
+      return evaluateExperiment(testDir, id, value);
+    }
+
+    it('flags the 3rd consecutive flat window on the same surface', () => {
+      const s = 'surfaces/g1.md';
+
+      const r1 = flat(s);
+      expect(r1.decision).toBe('discard');
+      expect(r1.guardrail_note ?? null).toBeNull();
+
+      const r2 = flat(s);
+      expect(r2.guardrail_note ?? null).toBeNull();
+
+      const r3 = flat(s);
+      expect(r3.decision).toBe('discard');
+      expect(r3.guardrail_note).toBeTruthy();
+      expect(r3.guardrail_note).toContain(s);
+
+      // Note is persisted to learnings.md (tamper-proof record)
+      const learnings = readFileSync(join(testDir, 'experiments', 'learnings.md'), 'utf-8');
+      expect(learnings).toContain('zero-delta gate');
+    });
+
+    it('does not accumulate flats spread across different surfaces', () => {
+      flat('surfaces/a.md');
+      flat('surfaces/b.md');
+      const r3 = flat('surfaces/c.md');
+      expect(r3.guardrail_note ?? null).toBeNull();
+    });
+
+    it('a keep resets the flat streak (does not chain)', async () => {
+      const s = 'surfaces/reset.md';
+      flat(s); // discard 1
+      flat(s); // discard 2
+
+      // A genuine improvement (keep) must break the streak. Space completions
+      // apart by >1s so the truncated-to-seconds completed_at ordering is
+      // unambiguous (the keep sorts newest before the following flat).
+      await sleep(1100);
+      const k = createExperiment(testDir, 'testbot', 'engagement', 'real improvement', {
+        surface: s,
+        direction: 'higher',
+      });
+      runExperiment(testDir, k);
+      const rk = evaluateExperiment(testDir, k, 5); // 5 > baseline 0 → keep
+      expect(rk.decision).toBe('keep');
+      expect(rk.guardrail_note ?? null).toBeNull();
+
+      await sleep(1100);
+      const r = flat(s, 0); // baseline now 5, value 0 → discard, but streak reset
+      expect(r.decision).toBe('discard');
+      expect(r.guardrail_note ?? null).toBeNull();
+    });
+  });
+
   describe('listExperiments', () => {
     it('returns all experiments sorted by created_at desc', () => {
       createExperiment(testDir, 'bot1', 'metric_a', 'hyp1');

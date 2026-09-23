@@ -25,6 +25,12 @@ export interface Experiment {
   started_at: string | null;
   completed_at: string | null;
   changes_description: string | null;
+  /**
+   * Set by the G1 zero-delta gate when an evaluation is the Nth consecutive
+   * flat (non-improving) window on the same surface. Optional/back-compat:
+   * absent on experiments created before the gate and on non-triggering ones.
+   */
+  guardrail_note?: string | null;
 }
 
 export interface ExperimentCreateOptions {
@@ -115,6 +121,43 @@ function saveExperiment(agentDir: string, experiment: Experiment): void {
   const dir = historyDir(agentDir);
   ensureDir(dir);
   atomicWriteSync(join(dir, `${experiment.id}.json`), JSON.stringify(experiment, null, 2));
+}
+
+/**
+ * G1 zero-delta gate limit: number of consecutive flat (non-improving) windows
+ * on the same surface that forces the surface to be abandoned. Per the
+ * autoresearch skill's zero-delta rule ("result <= baseline for the SAME
+ * surface change 3 windows in a row — discard and re-hypothesize").
+ */
+export const ZERO_DELTA_GATE_LIMIT = 3;
+
+/**
+ * Count how many of the most-recent CONSECUTIVE completed experiments on the
+ * given surface ended in 'discard' (a flat / non-improving window). A 'keep'
+ * breaks the streak — the skill's rule is explicitly about not chaining keeps
+ * on flat results, so any real improvement resets the counter. Ordered by
+ * completion time (newest first) so the streak reflects recent history, not
+ * creation order. Returns 0 for an empty surface (cannot group).
+ */
+function countConsecutiveFlatOnSurface(
+  agentDir: string,
+  surface: string,
+  excludeId: string,
+): number {
+  if (!surface) return 0;
+  const completed = listExperiments(agentDir, { status: 'completed' })
+    .filter((e) => e.surface === surface && e.id !== excludeId)
+    .sort(
+      (a, b) =>
+        new Date(b.completed_at ?? b.created_at).getTime() -
+        new Date(a.completed_at ?? a.created_at).getTime(),
+    );
+  let streak = 0;
+  for (const e of completed) {
+    if (e.decision === 'discard') streak++;
+    else break;
+  }
+  return streak;
 }
 
 export function loadExperimentConfig(agentDir: string): ExperimentConfig {
@@ -289,10 +332,34 @@ export function evaluateExperiment(
     experiment.decision = decision;
   }
 
+  // G1 zero-delta gate: if this is a flat (non-improving) window and the same
+  // surface already produced ZERO_DELTA_GATE_LIMIT-1 consecutive flat windows,
+  // the surface is exhausted. Force discard (belt-and-suspenders: a flat result
+  // already discards) and record a tamper-proof re-hypothesize note in the
+  // learning so the agent cannot keep chaining experiments on a dead surface.
+  let guardrailNote: string | null = null;
+  if (decision === 'discard' && experiment.surface) {
+    const priorFlat = countConsecutiveFlatOnSurface(
+      agentDir,
+      experiment.surface,
+      experiment.id,
+    );
+    if (priorFlat + 1 >= ZERO_DELTA_GATE_LIMIT) {
+      decision = 'discard';
+      experiment.decision = 'discard';
+      guardrailNote =
+        `G1 zero-delta gate: ${priorFlat + 1} consecutive flat windows on surface ` +
+        `'${experiment.surface}' — metric not moving. Abandon this surface and ` +
+        `re-hypothesize with a materially different change; do not keep chaining.`;
+      experiment.guardrail_note = guardrailNote;
+    }
+  }
+
   // Build learning from options
   const learningParts: string[] = [];
   if (options?.learning) learningParts.push(options.learning);
   if (options?.justification) learningParts.push(options.justification);
+  if (guardrailNote) learningParts.push(`⚠ ${guardrailNote}`);
   if (learningParts.length > 0) {
     experiment.learning = learningParts.join(' — ');
   }
