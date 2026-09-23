@@ -254,7 +254,17 @@ export function isClaudeDirOperation(
   // thing left to vet.
   const canonAgentDir = canonicalizePath(resolve(base));
   const claudeRoot = join(canonAgentDir, '.claude');
-  const target = resolve(canonAgentDir, filePath);
+  // canonicalizePath again: when filePath is already absolute (the real-world
+  // case — Claude Code always sends absolute file_paths), resolve()'s
+  // right-to-left semantics return it unchanged, ignoring canonAgentDir
+  // entirely. On macOS that leaves target on the lexical /var/... path while
+  // claudeRoot is canonical /private/var/..., so a genuinely-contained write
+  // fails the prefix check as a false negative (and, worse, a symlink escape
+  // rooted at the lexical path could slip past containment undetected).
+  // Re-canonicalizing here is a no-op when filePath was relative (already
+  // anchored on the canonical base) and correctly resolves the mount-point
+  // symlink when filePath was absolute.
+  const target = canonicalizePath(resolve(canonAgentDir, filePath));
 
   // Lexical containment within the agent's own .claude/.
   if (target !== claudeRoot && !target.startsWith(claudeRoot + sep)) return false;
