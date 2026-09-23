@@ -174,6 +174,57 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_org ON messages(org);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
   `);
+
+  // Older databases did not enforce the identity used by the cost sync, so
+  // repeated scans could insert the same JSONL row more than once. Migrate
+  // once by retaining the newest copy, then enforce that identity in SQLite.
+  const hasCostIdentityIndex = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?")
+    .get('idx_cost_entries_identity');
+  if (!hasCostIdentityIndex) {
+    const migrateCostIdentity = db.transaction(() => {
+      // Another process may have completed the migration while this process
+      // waited for the writer lock.
+      const alreadyMigrated = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?")
+        .get('idx_cost_entries_identity');
+      if (alreadyMigrated) return;
+
+      const conflicts = db.prepare(`
+        SELECT COUNT(*) AS count
+        FROM (
+          SELECT 1
+          FROM cost_entries
+          GROUP BY COALESCE(source_file, ''), timestamp, model, agent
+          HAVING COUNT(*) > 1 AND (
+            MIN(org) IS NOT MAX(org)
+            OR MIN(input_tokens) IS NOT MAX(input_tokens)
+            OR MIN(output_tokens) IS NOT MAX(output_tokens)
+            OR MIN(total_tokens) IS NOT MAX(total_tokens)
+            OR MIN(cost_usd) IS NOT MAX(cost_usd)
+          )
+        )
+      `).get() as { count: number };
+      if (conflicts.count > 0) {
+        console.warn(
+          `[db] Found ${conflicts.count} conflicting duplicate cost group(s); keeping the newest row for source-log resync`,
+        );
+      }
+
+      db.exec(`
+        DELETE FROM cost_entries
+        WHERE id NOT IN (
+          SELECT MAX(id)
+          FROM cost_entries
+          GROUP BY COALESCE(source_file, ''), timestamp, model, agent
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_entries_identity
+          ON cost_entries(COALESCE(source_file, ''), timestamp, model, agent);
+      `);
+    });
+    migrateCostIdentity.immediate();
+  }
 }
 
 // globalThis singleton survives Next.js hot reload
