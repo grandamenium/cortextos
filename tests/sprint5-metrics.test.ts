@@ -74,10 +74,13 @@ describe('Sprint 5: Observability & Metrics', () => {
       const stateDir = join(ctxRoot, 'state', 'bot1');
       mkdirSync(stateDir, { recursive: true });
 
-      // Old heartbeat (6 hours ago)
+      // Heartbeat 6h old for an agent whose configured cadence is 2h — well past
+      // the derived stale threshold (2 x 2h = 4h). Staleness is derived from the
+      // agent's OWN loop_interval, not a fleet-wide constant.
       const oldTime = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
       writeFileSync(join(stateDir, 'heartbeat.json'), JSON.stringify({
         last_heartbeat: oldTime,
+        loop_interval: '2h',
       }), 'utf-8');
 
       const report = collectMetrics(ctxRoot);
