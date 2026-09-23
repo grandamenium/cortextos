@@ -57,7 +57,7 @@ Before spawning, answer:
 ```bash
 cortextos spawn-worker <worker-name> \
   --dir <absolute-path-to-project-dir> \
-  --prompt "Read AGENTS.md for your task. Deliverables: <list>. When done: cortextos bus send-message $CTX_AGENT_NAME normal 'Done: <summary>'" \
+  --prompt "Read AGENTS.md for your task. Deliverables: <list>. When done, send EXACTLY: cortextos bus send-message $CTX_AGENT_NAME normal 'Done: <summary>' — then STOP (no further output). Do not keep working after the deliverable." \
   --parent $CTX_AGENT_NAME
 ```
 
@@ -106,6 +106,8 @@ Nudge a stuck worker (equivalent of tmux send-keys):
 ```bash
 cortextos inject-worker <worker-name> "Continue with phase 3. What's blocking you?"
 ```
+
+**REAP ON DONE (prevents budget leak):** the moment a worker sends its `Done:` message, terminate it — `cortextos terminate-worker <worker-name>`. Never leave a finished worker running. Periodically run `cortextos list-workers` and terminate any that are done or idle.
 
 ### Step 6: Cleanup
 
