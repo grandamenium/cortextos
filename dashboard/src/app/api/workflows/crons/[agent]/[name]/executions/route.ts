@@ -20,7 +20,7 @@ import { NextRequest } from 'next/server';
 import {
   readExecutionLogPage,
   entriesToCsv,
-} from '@/app/api/workflows/crons/[agent]/executions/route';
+} from '@/lib/cron-execution-log';
 
 export const dynamic = 'force-dynamic';
 
