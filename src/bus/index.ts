@@ -9,6 +9,7 @@ export { createApproval, updateApproval, listPendingApprovals } from './approval
 export {
   selfRestart,
   autoCommit,
+  resolveAutoCommitDir,
   checkGoalStaleness,
   postActivity,
   type AutoCommitReport,
