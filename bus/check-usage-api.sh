@@ -7,12 +7,19 @@
 #
 # Usage:
 #   cortextos bus check-usage-api [--warn-7day N] [--warn-5h N] [--chat-id ID]
+#                                 [--no-telegram]
 #
 # Options:
-#   --warn-7day N   Warn (via Telegram) if 7-day utilization >= N% (default: 80)
-#   --warn-5h N     Warn (via Telegram) if 5-hour utilization >= N% (default: 90)
+#   --warn-7day N   Warn if 7-day utilization >= N% (default: 80)
+#   --warn-5h N     Warn if 5-hour utilization >= N% (default: 90)
 #   --chat-id ID    Telegram chat ID to send alerts to (uses CTX_TELEGRAM_CHAT_ID if omitted)
+#   --no-telegram   Suppress direct Telegram alerts (alias: --suppress). Alerts still
+#                   route to CTX_USAGE_ALERT_AGENT if that env var is set.
 #   --force         Bypass the 3-minute result cache
+#
+# Env:
+#   CTX_USAGE_ALERT_AGENT   If set, every alert is also routed to this agent via
+#                           `bus send-message`. Default empty (Telegram-only).
 #
 # Output: JSON with utilization fields + codex plan info, or exits 1 on error.
 #
@@ -29,14 +36,17 @@ source "$SCRIPT_DIR/_ctx-env.sh"
 WARN_7DAY=80
 WARN_5H=90
 CHAT_ID="${CTX_TELEGRAM_CHAT_ID:-}"
+ALERT_AGENT="${CTX_USAGE_ALERT_AGENT:-}"
+SUPPRESS_TELEGRAM=false
 FORCE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --warn-7day) WARN_7DAY="$2"; shift 2 ;;
-    --warn-5h)   WARN_5H="$2";   shift 2 ;;
-    --chat-id)   CHAT_ID="$2";   shift 2 ;;
-    --force)     FORCE=true;     shift   ;;
+    --warn-7day)   WARN_7DAY="$2"; shift 2 ;;
+    --warn-5h)     WARN_5H="$2";   shift 2 ;;
+    --chat-id)     CHAT_ID="$2";   shift 2 ;;
+    --no-telegram|--suppress) SUPPRESS_TELEGRAM=true; shift ;;
+    --force)       FORCE=true;     shift   ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -111,6 +121,49 @@ except:
   echo "$result"
 }
 
+# ── Codex usage windows: THE single derive-by-seconds source of truth ────────
+# Reads wham/usage JSON on stdin. Assigns each window to its slot by
+# limit_window_seconds (18000 -> 5h, 604800 -> 7d), NEVER by position. Emits one
+# eval-able line of shell assignments. Empty/absent wham or an absent window is
+# graceful (-1 / empty); an UNRECOGNIZED limit_window_seconds fails loud (stderr
+# + exit 1) so a schema change can never be silently mislabeled.
+_codex_windows() {
+  python3 -c '
+import sys, json
+raw = sys.stdin.read().strip()
+slots = {"5h": {}, "7d": {}}
+if raw:
+    try:
+        wham = json.loads(raw)
+    except Exception:
+        wham = {}
+    rl = wham.get("rate_limit", {}) or {}
+    for key in ("primary_window", "secondary_window"):
+        w = rl.get(key)
+        if not w:
+            continue
+        lws = w.get("limit_window_seconds")
+        if lws == 18000:
+            slots["5h"] = w
+        elif lws == 604800:
+            slots["7d"] = w
+        else:
+            sys.stderr.write("unrecognized limit_window_seconds=%r in %s\n" % (lws, key))
+            sys.exit(1)
+def pct(w):
+    v = w.get("used_percent")
+    return v if v is not None else -1
+def num(w, k):
+    v = w.get(k)
+    return v if v is not None else ""
+w5, w7 = slots["5h"], slots["7d"]
+print("CODEX_5H=%s CODEX_7D=%s CODEX_5H_SECS=%s CODEX_7D_SECS=%s CODEX_5H_RESET_SECS=%s CODEX_7D_RESET_SECS=%s" % (
+    pct(w5), pct(w7),
+    num(w5, "limit_window_seconds"), num(w7, "limit_window_seconds"),
+    num(w5, "reset_after_seconds"), num(w7, "reset_after_seconds")))
+'
+}
+
 # ── Codex plan helper (JWT decode + wham/usage live % + SQLite token counts) ──
 _codex_json() {
   local auth_file="$HOME/.codex/auth.json"
@@ -120,7 +173,17 @@ _codex_json() {
   local wham_json=""
   wham_json=$(_codex_wham_usage 2>/dev/null) || true
 
-  CODEX_AUTH="$auth_file" CODEX_DB="$db_file" WHAM_JSON="$wham_json" python3 -c "
+  # Derive windows ONCE by seconds. A non-zero exit (unrecognized window) has
+  # already printed to stderr; propagate it so `set -e` exits loudly.
+  local WINS
+  WINS=$(printf '%s' "$wham_json" | _codex_windows) || return 1
+  eval "$WINS"
+
+  CODEX_AUTH="$auth_file" CODEX_DB="$db_file" WHAM_JSON="$wham_json" \
+  CODEX_5H="${CODEX_5H:--1}" CODEX_7D="${CODEX_7D:--1}" \
+  CODEX_5H_SECS="${CODEX_5H_SECS:-}" CODEX_7D_SECS="${CODEX_7D_SECS:-}" \
+  CODEX_5H_RESET_SECS="${CODEX_5H_RESET_SECS:-}" CODEX_7D_RESET_SECS="${CODEX_7D_RESET_SECS:-}" \
+  python3 -c "
 import json, base64, time, os, re, sqlite3
 from datetime import datetime, timezone
 
@@ -141,20 +204,34 @@ except Exception as e:
     result['token_expires_in_hours'] = None
     result['jwt_error'] = str(e)
 
-# Live usage % from wham/usage API
+# Live usage %: consume ONLY the env values _codex_windows already derived
+# by seconds. No positional derivation happens here.
+def _env_num(name):
+    v = os.environ.get(name, '')
+    if v in ('', '-1'):
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        try:
+            return float(v)
+        except ValueError:
+            return None
+result['utilization_5h']         = _env_num('CODEX_5H')
+result['utilization_7d']         = _env_num('CODEX_7D')
+result['reset_5h_seconds']       = _env_num('CODEX_5H_RESET_SECS')
+result['reset_7d_seconds']       = _env_num('CODEX_7D_RESET_SECS')
+result['limit_window_seconds_5h'] = _env_num('CODEX_5H_SECS')
+result['limit_window_seconds_7d'] = _env_num('CODEX_7D_SECS')
+
+# limit_reached / allowed are top-level flags (positional-independent).
 wham_raw = os.environ.get('WHAM_JSON', '')
 if wham_raw:
     try:
         wham = json.loads(wham_raw)
         rl = wham.get('rate_limit', {})
-        pw = rl.get('primary_window', {})
-        sw = rl.get('secondary_window', {})
-        result['utilization_5h']  = pw.get('used_percent')
-        result['utilization_7d']  = sw.get('used_percent')
-        result['reset_5h_seconds'] = pw.get('reset_after_seconds')
-        result['reset_7d_seconds'] = sw.get('reset_after_seconds')
-        result['limit_reached']   = rl.get('limit_reached', False)
-        result['allowed']         = rl.get('allowed', True)
+        result['limit_reached'] = rl.get('limit_reached', False)
+        result['allowed']       = rl.get('allowed', True)
     except Exception:
         pass
 
@@ -273,10 +350,25 @@ fi
 # Cache the result
 echo "$RESPONSE" > "$CACHE_FILE"
 
-# ── Threshold checks + Telegram alerts ──────────────────────────────────────
+# ── Threshold checks + alerts ────────────────────────────────────────────────
 ALERT_SENT=false
 
-if [[ -n "$CHAT_ID" ]]; then
+# _alert <message> [priority] — the ONE routing sink. Routes to a configured
+# orchestrator agent (if CTX_USAGE_ALERT_AGENT set) AND/OR Telegram (unless
+# --no-telegram / no chat id). Public default (agent empty) is Telegram-only.
+_alert() {
+  local msg="$1"; local priority="${2:-normal}"
+  if [[ -n "$ALERT_AGENT" ]]; then
+    node "$SCRIPT_DIR/../dist/cli.js" bus send-message "$ALERT_AGENT" "$priority" "$msg" >/dev/null 2>&1 || true
+  fi
+  if [[ "$SUPPRESS_TELEGRAM" == "false" && -n "$CHAT_ID" && -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
+    bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$msg" 2>/dev/null || true
+  fi
+  echo "$msg" >&2
+  ALERT_SENT=true
+}
+
+if [[ -n "$CHAT_ID" || -n "$ALERT_AGENT" ]]; then
   FIVE_H=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('five_hour',{}).get('utilization'); print(v if v is not None else -1)" 2>/dev/null || echo -1)
   SEVEN_D=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('seven_day',{}).get('utilization'); print(v if v is not None else -1)" 2>/dev/null || echo -1)
   SEVEN_D_RESET=$(echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('seven_day',{}).get('resets_at','unknown'))" 2>/dev/null || echo "unknown")
@@ -285,39 +377,37 @@ if [[ -n "$CHAT_ID" ]]; then
   # 7-day critical threshold
   if python3 -c "import sys; v=float('${SEVEN_D}'); sys.exit(0 if v >= ${WARN_7DAY} else 1)" 2>/dev/null; then
     SEND_MSG="CODE RED: Claude Max 7-day usage at ${SEVEN_D}%. Resets: ${SEVEN_D_RESET}. Agents will hit hard limit soon. Action needed: reduce agent frequency or pause non-critical crons."
-    # Use send-telegram if available
-    if [[ -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
-      bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
-    fi
-    ALERT_SENT=true
-    echo "$SEND_MSG" >&2
+    _alert "$SEND_MSG" high
   fi
 
   # 5-hour warning threshold
   if python3 -c "import sys; v=float('${FIVE_H}'); sys.exit(0 if v >= ${WARN_5H} else 1)" 2>/dev/null; then
     SEND_MSG="Warning: Claude Max 5-hour window at ${FIVE_H}%. Resets: ${FIVE_H_RESET}."
-    if [[ -f "$SCRIPT_DIR/send-telegram.sh" ]]; then
-      bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
-    fi
-    echo "$SEND_MSG" >&2
+    _alert "$SEND_MSG" normal
   fi
 
-  # Codex usage threshold checks (from wham/usage)
+  # Codex usage threshold checks (from wham/usage). Windows derived by seconds,
+  # NEVER positionally.
   CODEX_WHAM=$(_codex_wham_usage 2>/dev/null || echo "")
   if [[ -n "$CODEX_WHAM" ]]; then
-    CODEX_5H=$(echo "$CODEX_WHAM" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('rate_limit',{}).get('primary_window',{}).get('used_percent',-1))" 2>/dev/null || echo -1)
-    CODEX_7D=$(echo "$CODEX_WHAM" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('rate_limit',{}).get('secondary_window',{}).get('used_percent',-1))" 2>/dev/null || echo -1)
+    if ! WINS="$(printf '%s' "$CODEX_WHAM" | _codex_windows)"; then
+      echo "check-usage-api: unrecognized codex usage window; aborting" >&2
+      exit 1
+    fi
+    eval "$WINS"
+    CODEX_5H="${CODEX_5H:--1}"
+    CODEX_7D="${CODEX_7D:--1}"
     CODEX_LIMIT=$(echo "$CODEX_WHAM" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('rate_limit',{}).get('limit_reached',False))" 2>/dev/null || echo "False")
 
     if [[ "$CODEX_LIMIT" == "True" ]]; then
       SEND_MSG="CODE RED: Codex rate limit reached. Sessions blocked until window resets."
-      [[ -f "$SCRIPT_DIR/send-telegram.sh" ]] && bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
+      _alert "$SEND_MSG" high
     elif python3 -c "import sys; v=float('${CODEX_7D}'); sys.exit(0 if v >= ${WARN_7DAY} else 1)" 2>/dev/null; then
       SEND_MSG="Warning: Codex 7-day usage at ${CODEX_7D}%."
-      [[ -f "$SCRIPT_DIR/send-telegram.sh" ]] && bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
+      _alert "$SEND_MSG" normal
     elif python3 -c "import sys; v=float('${CODEX_5H}'); sys.exit(0 if v >= ${WARN_5H} else 1)" 2>/dev/null; then
       SEND_MSG="Warning: Codex 5-hour window at ${CODEX_5H}%."
-      [[ -f "$SCRIPT_DIR/send-telegram.sh" ]] && bash "$SCRIPT_DIR/send-telegram.sh" "$CHAT_ID" "$SEND_MSG" 2>/dev/null || true
+      _alert "$SEND_MSG" normal
     fi
   fi
 fi
