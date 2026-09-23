@@ -77,7 +77,18 @@ Read GOALS.md for any new objectives. If goals changed, create tasks:
 cortextos bus create-task "<title>" --desc "<description>" --assignee $CTX_AGENT_NAME
 ```
 
-## Step 8: Resume work
+## Step 8: Guardrail self-check
+
+Ask yourself: did I skip any procedures this cycle? Did I rationalize not doing something I should have?
+
+If yes, log it:
+```bash
+cortextos bus log-event action guardrail_triggered info --meta '{"guardrail":"<which one>","context":"<what happened>"}'
+```
+
+If you discovered a new pattern that should be a guardrail, add it to GUARDRAILS.md now.
+
+## Step 9: Resume work
 
 Pick your highest priority task and work on it.
 
