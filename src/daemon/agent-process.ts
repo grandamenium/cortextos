@@ -297,13 +297,13 @@ export class AgentProcess {
           pty.write('\x04'); // Ctrl+D
           await sleep(3000);
         } else if (this.config.runtime === 'codex-app-server') {
-          // Codex uses an exec-per-turn model — there is no persistent REPL
-          // between turns, so /exit + sleep below are no-ops on CodexAppServerPTY
-          // (write() just buffers). The only meaningful stop step is
-          // pty.kill(), which terminates the in-flight `codex exec` (if any)
-          // and flips _alive=false. Skipping the 6s Claude-REPL dance makes
-          // `bus hard-restart` feel responsive instead of appearing to do
-          // nothing for several seconds.
+          // Codex app-server is a persistent, long-lived child (not a REPL): it
+          // has no /exit handshake, so a graceful-stop write here would be a
+          // no-op (CodexAppServerPTY.write() just buffers). This branch is
+          // intentionally empty; the child is reaped by the shared pty.kill() +
+          // SIGKILL-escalation block below. Skipping the Claude-REPL /exit dance
+          // also makes `bus hard-restart` feel responsive instead of appearing
+          // to do nothing for several seconds.
         } else if (this.config.runtime === 'opencode') {
           // OpenCode runs as a TUI. It does not use Claude Code's `/exit`
           // command contract, so stop with Ctrl-C and then let the shared
