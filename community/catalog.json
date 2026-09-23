@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-07-31T16:35:00Z",
+  "updated_at": "2026-09-08T09:16:58.920Z",
   "items": [
     {
       "name": "agentic-crm-assistant",
@@ -8,7 +8,14 @@
       "author": "cortextos",
       "type": "agent",
       "version": "0.1.0",
-      "tags": ["personal-assistant", "crm", "calendar", "email", "meetings", "relationships"],
+      "tags": [
+        "personal-assistant",
+        "crm",
+        "calendar",
+        "email",
+        "meetings",
+        "relationships"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/agents/agentic-crm-assistant",
@@ -20,7 +27,12 @@
       "author": "cortextos",
       "type": "agent",
       "version": "1.0.0",
-      "tags": ["orchestrator", "management", "reviews", "goals"],
+      "tags": [
+        "orchestrator",
+        "management",
+        "reviews",
+        "goals"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/agents/orchestrator",
@@ -32,7 +44,12 @@
       "author": "cortextos",
       "type": "agent",
       "version": "1.0.0",
-      "tags": ["analyst", "metrics", "research", "health"],
+      "tags": [
+        "analyst",
+        "metrics",
+        "research",
+        "health"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/agents/analyst",
@@ -44,7 +61,11 @@
       "author": "cortextos",
       "type": "agent",
       "version": "1.0.0",
-      "tags": ["agent", "worker", "general-purpose"],
+      "tags": [
+        "agent",
+        "worker",
+        "general-purpose"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/agents/agent",
@@ -56,7 +77,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["tasks", "workflow", "kpi", "visibility"],
+      "tags": [
+        "tasks",
+        "workflow",
+        "kpi",
+        "visibility"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/tasks",
@@ -68,7 +94,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["telegram", "messaging", "comms", "inbox"],
+      "tags": [
+        "telegram",
+        "messaging",
+        "comms",
+        "inbox"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/comms",
@@ -80,7 +111,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["research", "experiments", "theta-wave", "optimization"],
+      "tags": [
+        "research",
+        "experiments",
+        "theta-wave",
+        "optimization"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/autoresearch",
@@ -92,7 +128,13 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["m2c1", "builds", "worker", "autonomous", "software"],
+      "tags": [
+        "m2c1",
+        "builds",
+        "worker",
+        "autonomous",
+        "software"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/m2c1-worker",
@@ -104,7 +146,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["workers", "parallel", "spawn", "isolation"],
+      "tags": [
+        "workers",
+        "parallel",
+        "spawn",
+        "isolation"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/worker-agents",
@@ -116,7 +163,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["rag", "knowledge", "search", "memory"],
+      "tags": [
+        "rag",
+        "knowledge",
+        "search",
+        "memory"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/knowledge-base",
@@ -128,7 +180,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["approvals", "safety", "human-in-loop", "guardrails"],
+      "tags": [
+        "approvals",
+        "safety",
+        "human-in-loop",
+        "guardrails"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/approvals",
@@ -140,7 +197,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["memory", "continuity", "session", "persistence"],
+      "tags": [
+        "memory",
+        "continuity",
+        "session",
+        "persistence"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/memory",
@@ -152,7 +214,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["cron", "scheduling", "recurring", "automation"],
+      "tags": [
+        "cron",
+        "scheduling",
+        "recurring",
+        "automation"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/cron-management",
@@ -164,7 +231,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["heartbeat", "health", "monitoring", "dashboard"],
+      "tags": [
+        "heartbeat",
+        "health",
+        "monitoring",
+        "dashboard"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/heartbeat",
@@ -176,7 +248,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["human-tasks", "blockers", "escalation", "routing"],
+      "tags": [
+        "human-tasks",
+        "blockers",
+        "escalation",
+        "routing"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/human-tasks",
@@ -188,7 +265,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["agents", "lifecycle", "management", "crash-recovery"],
+      "tags": [
+        "agents",
+        "lifecycle",
+        "management",
+        "crash-recovery"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/agent-management",
@@ -200,7 +282,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["activity", "broadcast", "org", "visibility"],
+      "tags": [
+        "activity",
+        "broadcast",
+        "org",
+        "visibility"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/activity-channel",
@@ -212,7 +299,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["events", "logging", "activity", "dashboard"],
+      "tags": [
+        "events",
+        "logging",
+        "activity",
+        "dashboard"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/event-logging",
@@ -224,7 +316,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["diagnostics", "debug", "troubleshooting", "health"],
+      "tags": [
+        "diagnostics",
+        "debug",
+        "troubleshooting",
+        "health"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/system-diagnostics",
@@ -236,7 +333,14 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["diagnostics", "debug", "troubleshooting", "framework", "daemon", "pr"],
+      "tags": [
+        "diagnostics",
+        "debug",
+        "troubleshooting",
+        "framework",
+        "daemon",
+        "pr"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/cortext-self-diagnosis",
@@ -248,7 +352,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["onboarding", "setup", "first-boot", "configuration"],
+      "tags": [
+        "onboarding",
+        "setup",
+        "first-boot",
+        "configuration"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/onboarding",
@@ -260,7 +369,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["morning", "briefing", "review", "daily"],
+      "tags": [
+        "morning",
+        "briefing",
+        "review",
+        "daily"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/morning-review",
@@ -272,7 +386,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["evening", "review", "daily", "wrap-up"],
+      "tags": [
+        "evening",
+        "review",
+        "daily",
+        "wrap-up"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/evening-review",
@@ -284,7 +403,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["weekly", "review", "performance", "metrics"],
+      "tags": [
+        "weekly",
+        "review",
+        "performance",
+        "metrics"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/weekly-review",
@@ -296,7 +420,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["theta-wave", "research", "overnight", "autonomous"],
+      "tags": [
+        "theta-wave",
+        "research",
+        "overnight",
+        "autonomous"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/theta-wave",
@@ -308,7 +437,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["goals", "strategy", "tracking", "management"],
+      "tags": [
+        "goals",
+        "strategy",
+        "tracking",
+        "management"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/goal-management",
@@ -320,7 +454,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["git", "version-control", "pr", "workflow"],
+      "tags": [
+        "git",
+        "version-control",
+        "pr",
+        "workflow"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/local-version-control",
@@ -332,7 +471,12 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["nighttime", "autonomous", "quiet", "overnight"],
+      "tags": [
+        "nighttime",
+        "autonomous",
+        "quiet",
+        "overnight"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/nighttime-mode",
@@ -344,7 +488,13 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["voice", "elevenlabs", "conversational-ai", "gateway", "tools"],
+      "tags": [
+        "voice",
+        "elevenlabs",
+        "conversational-ai",
+        "gateway",
+        "tools"
+      ],
       "review_status": "pending",
       "dependencies": [],
       "install_path": "community/skills/voice-agent-factory",
@@ -356,11 +506,68 @@
       "author": "cortextos",
       "type": "skill",
       "version": "1.0.0",
-      "tags": ["migration", "codex", "claude-code", "runtime", "agent", "codex-app-server"],
+      "tags": [
+        "migration",
+        "codex",
+        "claude-code",
+        "runtime",
+        "agent",
+        "codex-app-server"
+      ],
       "review_status": "approved",
       "dependencies": [],
       "install_path": "community/skills/claude-to-codex-migration",
       "submitted_at": "2026-07-31T16:35:00Z"
+    },
+    {
+      "name": "cortex-ledger",
+      "description": "Durable task ledger operating procedure: start the run before touching files, close out with the artifacts the guards check for, and let the owner close the task.",
+      "author": "aundre1",
+      "type": "skill",
+      "version": "0.1.0",
+      "tags": [
+        "ledger",
+        "task-board",
+        "guards",
+        "review"
+      ],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/skills/cortex-ledger",
+      "submitted_at": "2026-09-07T00:00:00Z"
+    },
+    {
+      "name": "blind-reviewer",
+      "description": "Agent template for a reviewer that receives a diff and an issue and nothing else, on a different provider from the builder, and outputs a validated verdict.json.",
+      "author": "aundre1",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": [
+        "review",
+        "blind-review",
+        "verdict",
+        "quality"
+      ],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/agents/blind-reviewer",
+      "submitted_at": "2026-09-07T00:00:00Z"
+    },
+    {
+      "name": "novice-builder",
+      "description": "Agent template for a careful junior-engineer builder that verifies before claiming, never edits a failing test, and reports blockers and scope overruns instead of improvising past them.",
+      "author": "aundre1",
+      "type": "agent",
+      "version": "0.1.0",
+      "tags": [
+        "builder",
+        "novice-framing",
+        "guardrails"
+      ],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/agents/novice-builder",
+      "submitted_at": "2026-09-07T00:00:00Z"
     }
   ]
 }
