@@ -13,9 +13,17 @@
       "type": "recurring",
       "interval": "4h",
       "prompt": "Read HEARTBEAT.md and follow its instructions. Update your heartbeat, check inbox, and work on your highest priority task."
+    },
+    {
+      "name": "context-watch",
+      "type": "recurring",
+      "interval": "*/15 * * * *",
+      "prompt": "Run this bash: CTX_FILE=\"${CTX_ROOT}/state/${CTX_AGENT_NAME}/context_status.json\"; [ ! -f \"$CTX_FILE\" ] && echo \"no context_status.json yet, skip\" && exit 0; PCT=$(jq -r \".live_used_percentage // \\\"null\\\"\" \"$CTX_FILE\" 2>/dev/null); [ \"$PCT\" = \"null\" ] && echo \"live=null, skip\" && exit 0; PCT=${PCT%.*}; [ \"${PCT:-0}\" -lt 90 ] && echo \"live=$PCT ok\" && exit 0; IN_PROG=$(cortextos bus list-tasks --agent \"$CTX_AGENT_NAME\" --status in_progress --format json 2>/dev/null | jq length); [ \"${IN_PROG:-1}\" -gt 0 ] && echo \"in_progress=$IN_PROG, skip\" && exit 0; TODAY=$(date -u +%Y-%m-%d); DAILY=\"$(pwd)/memory/${TODAY}.md\"; LAST=$(grep CONTEXT_AUTORESTART \"$DAILY\" 2>/dev/null | tail -1 | grep -oE \"[0-9]{2}:[0-9]{2}Z\" | head -1); NOW=$(date -u +%H%M); [ -n \"$LAST\" ] && LM=$(echo \"$LAST\"|tr -d :Z) && D=$((10#$NOW-10#$LM)) && [ $D -ge 0 ] && [ $D -lt 400 ] && echo \"cooldown\" && exit 0; mkdir -p \"$(dirname \"$DAILY\")\"; echo \"$(date -u +%H:%MZ) CONTEXT_AUTORESTART at live=${PCT}% (idle)\" >> \"$DAILY\"; cortextos bus log-event action context_autorestart warning --meta \"{\\\"live_pct\\\":${PCT}}\"; cortextos bus hard-restart --reason \"context-live-${PCT}-pct-idle\""
     }
   ],
   "ecosystem": {
-    "local_version_control": { "enabled": true }
+    "local_version_control": {
+      "enabled": true
+    }
   }
 }
