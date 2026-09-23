@@ -210,6 +210,16 @@ export interface AgentConfig {
    */
   runtime?: 'claude-code' | 'hermes' | 'codex-app-server' | 'opencode';
   /**
+   * Explicit opt-in required to start an agent with the 'codex-app-server'
+   * runtime. That runtime loads orgs/<org>/secrets.env and the agent .env
+   * into the codex child unscrubbed and runs sandbox 'danger-full-access'
+   * with approvals 'never' — a full-write-access session holding every org
+   * secret. Absent or false, the daemon refuses to construct
+   * CodexAppServerPTY and halts the agent instead (dashboard-visible). See
+   * agent-process.ts start().
+   */
+  allow_codex_app_server?: boolean;
+  /**
    * Optional OpenCode agent name to pass as `opencode --agent <name>`.
    * Only applies to runtime: 'opencode'.
    */
