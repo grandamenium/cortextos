@@ -239,7 +239,7 @@ cortextos bus submit-community-item <name> <type> "<description>"
 3. Create the agent:
    ```bash
    cp -r $CTX_FRAMEWORK_ROOT/templates/agent $CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<name>
-   cat > $CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<name>/.env << EOF
+   cat > $CTX_FRAMEWORK_ROOT/orgs/$CTX_ORG/agents/<name>/.env <<'EOF'
    BOT_TOKEN=<token>
    CHAT_ID=<chat_id>
    EOF
