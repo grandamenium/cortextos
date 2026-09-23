@@ -92,8 +92,16 @@ export const ecosystemCommand = new Command('ecosystem')
     // and is just a Node script, so PM2 spawns it cleanly on every platform.
     const isWindows = process.platform === 'win32';
     const nextBin = join(dashboardDir, 'node_modules', 'next', 'dist', 'bin', 'next');
+    // Prefer the production server when a build exists (.next/BUILD_ID is
+    // only written by `next build`). `next dev` relies on HMR/streaming
+    // connections that stall behind Cloudflare tunnels, leaving pages
+    // permanently un-hydrated — e.g. the login button stuck on "Loading…"
+    // because the CSRF fetch effect never runs. Fall back to dev mode so
+    // fresh installs without a build still boot.
+    const hasProdBuild = existsSync(join(dashboardDir, '.next', 'BUILD_ID'));
+    const nextMode = hasProdBuild ? 'start' : 'dev';
     const dashboardScript = isWindows && existsSync(nextBin) ? nextBin : 'npm';
-    const dashboardArgs = isWindows && existsSync(nextBin) ? 'dev' : 'run dev';
+    const dashboardArgs = isWindows && existsSync(nextBin) ? nextMode : `run ${nextMode}`;
 
     // windowsHide: stops PM2 from attaching a visible "next-server" console
     // window to the dashboard process at boot on Windows. PM2's default
