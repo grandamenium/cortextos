@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { execSync } from 'child_process';
 import {
   collectMetrics,
   parseUsageOutput,
   storeUsageData,
   collectTelegramCommands,
   registerTelegramCommands,
+  checkUpstream,
 } from '../src/bus/metrics.js';
 
 describe('Sprint 5: Observability & Metrics', () => {
@@ -460,5 +462,79 @@ describe('Sprint 5: Observability & Metrics', () => {
       expect(result.error).toBe('Bad Request');
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+describe('checkUpstream: ahead/behind/identical relative to upstream/main', () => {
+  let upstreamDir: string;
+  let localDir: string;
+
+  const git = (dir: string, cmd: string) =>
+    execSync(`git ${cmd}`, { cwd: dir, stdio: 'pipe', encoding: 'utf-8' });
+
+  const commitFile = (dir: string, name: string, content: string, msg: string) => {
+    writeFileSync(join(dir, name), content);
+    git(dir, 'add -A');
+    git(dir, `commit -m "${msg}"`);
+  };
+
+  beforeEach(() => {
+    // Upstream "canonical" repo with a main branch and one base commit.
+    upstreamDir = mkdtempSync(join(tmpdir(), 'cortextos-upstream-'));
+    git(upstreamDir, 'init -b main');
+    git(upstreamDir, 'config user.email "test@test.com"');
+    git(upstreamDir, 'config user.name "Test"');
+    commitFile(upstreamDir, 'base.txt', 'base\n', 'base');
+
+    // Local clone-like repo: separate init, add `upstream` remote, fetch, and
+    // check out a local main tracking upstream/main at the shared base commit.
+    localDir = mkdtempSync(join(tmpdir(), 'cortextos-local-'));
+    git(localDir, 'init -b main');
+    git(localDir, 'config user.email "test@test.com"');
+    git(localDir, 'config user.name "Test"');
+    git(localDir, `remote add upstream "${upstreamDir}"`);
+    git(localDir, 'fetch upstream main');
+    git(localDir, 'checkout -B main upstream/main');
+  });
+
+  afterEach(() => {
+    rmSync(upstreamDir, { recursive: true, force: true });
+    rmSync(localDir, { recursive: true, force: true });
+  });
+
+  it('reports up_to_date when local is AHEAD of upstream (the crew case)', () => {
+    // Local adds commits upstream does not have; upstream has none HEAD lacks.
+    commitFile(localDir, 'local-only-a.txt', 'a\n', 'local ahead a');
+    commitFile(localDir, 'local-only-b.txt', 'b\n', 'local ahead b');
+
+    // Sanity: HEAD..upstream/main is empty (0), the ahead condition the guard targets.
+    const behindBy = git(localDir, 'rev-list HEAD..upstream/main --count').trim();
+    expect(behindBy).toBe('0');
+    const aheadBy = git(localDir, 'rev-list upstream/main..HEAD --count').trim();
+    expect(aheadBy).toBe('2');
+
+    const result = checkUpstream(localDir);
+
+    expect(result.status).toBe('up_to_date');
+    // No mass-deletion diff must be surfaced for the ahead/diverged case.
+    expect(result.diff_stat).toBeUndefined();
+    expect(result.changes).toBeUndefined();
+    expect(result.commit_log).toBeUndefined();
+  });
+
+  it('reports updates_available with the true commit count when local is BEHIND upstream', () => {
+    // Advance upstream by two commits after local synced; local stays behind.
+    commitFile(upstreamDir, 'new-a.txt', 'a\n', 'upstream new a');
+    commitFile(upstreamDir, 'new-b.txt', 'b\n', 'upstream new b');
+
+    const result = checkUpstream(localDir);
+
+    expect(result.status).toBe('updates_available');
+    expect(result.commits).toBe(2);
+  });
+
+  it('reports up_to_date when local HEAD equals upstream/main', () => {
+    const result = checkUpstream(localDir);
+    expect(result.status).toBe('up_to_date');
   });
 });

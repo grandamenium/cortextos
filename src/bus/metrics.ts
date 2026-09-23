@@ -379,6 +379,14 @@ export function checkUpstream(
     commitCount = parseInt(execSync('git rev-list HEAD..upstream/main --count', { ...execOpts, stdio: 'pipe' }).trim(), 10);
   } catch { /* default 0 */ }
 
+  // Heads differ but there are no upstream commits HEAD lacks: local is ahead of
+  // or diverged from upstream/main. Nothing to pull. Do NOT build a two-dot
+  // HEAD..upstream/main diff here — it would read as a mass deletion (files
+  // present on HEAD but absent upstream) and falsely report updates_available.
+  if (commitCount === 0) {
+    return { status: 'up_to_date', commits: 0, message: 'No upstream commits to pull; local is ahead of or diverged from upstream/main' };
+  }
+
   let diffStat = '';
   try {
     const stat = execSync('git diff HEAD..upstream/main --stat', { ...execOpts, stdio: 'pipe' });
