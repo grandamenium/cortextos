@@ -660,3 +660,120 @@ describe('AgentProcess - first-run observability (awaitingConfirmation)', () => 
     expect(ap.getStatus().awaitingConfirmation).toBeFalsy();
   });
 });
+
+describe('AgentProcess - liveness watchdog (2026-08-25 incident fix)', () => {
+  const LIVENESS_CHECK_INTERVAL_MS = 60_000;
+
+  // Signal-0 spy: pid is always reported alive (no ESRCH). Same style as
+  // installKillSpy() above but the watchdog only ever calls process.kill with
+  // signal 0, so there is no SIGKILL branch to model.
+  function installAlivePidSpy() {
+    return vi.spyOn(process, 'kill').mockImplementation((() => true) as unknown as typeof process.kill);
+  }
+
+  // pid is reported dead (ESRCH) from the very first check.
+  function installDeadPidSpy() {
+    return vi.spyOn(process, 'kill').mockImplementation((() => {
+      const e = new Error('ESRCH') as NodeJS.ErrnoException;
+      e.code = 'ESRCH';
+      throw e;
+    }) as unknown as typeof process.kill);
+  }
+
+  it('does not touch a healthy agent (pid alive)', async () => {
+    const spy = installAlivePidSpy();
+    vi.useFakeTimers();
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+      expect(mockPty.spawn).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(LIVENESS_CHECK_INTERVAL_MS * 3);
+
+      expect(ap.getStatus().status).toBe('running');
+      expect(mockPty.spawn).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('detects a dead pid with no onExit and forces crash recovery', async () => {
+    const spy = installDeadPidSpy();
+    vi.useFakeTimers();
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+      expect(ap.getStatus().status).toBe('running');
+
+      // Watchdog tick fires; onExit (capturedOnExit) is never called — this is
+      // exactly the incident scenario: the child is gone but no exit event
+      // ever arrived.
+      await vi.advanceTimersByTimeAsync(LIVENESS_CHECK_INTERVAL_MS);
+      expect(ap.getStatus().status).toBe('crashed');
+
+      // Default backoff for crash #1 is 5s — advance past it and confirm a
+      // real restart was attempted.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockPty.spawn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('is idempotent when a late real onExit fires for the same generation the watchdog already recovered', async () => {
+    const spy = installDeadPidSpy();
+    const fs = await import('fs');
+    const mockAppend = vi.mocked(fs.appendFileSync);
+    vi.useFakeTimers();
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+      const onExitAtSpawn = capturedOnExit;
+
+      await vi.advanceTimersByTimeAsync(LIVENESS_CHECK_INTERVAL_MS);
+      expect(ap.getStatus().status).toBe('crashed');
+      const crashLogWritesAfterWatchdog = mockAppend.mock.calls.filter(
+        (c) => String(c[1]).includes('CRASH:'),
+      ).length;
+      expect(crashLogWritesAfterWatchdog).toBe(1);
+
+      // The real onExit for the SAME PTY generation arrives late (still
+      // before the scheduled restart runs) — must be a no-op, not a second
+      // crash count / second scheduled restart.
+      onExitAtSpawn!(1, 0);
+      expect(mockAppend.mock.calls.filter((c) => String(c[1]).includes('CRASH:')).length).toBe(
+        crashLogWritesAfterWatchdog,
+      );
+
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockPty.spawn).toHaveBeenCalledTimes(2); // one restart, not two
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+
+  it('stays quiet during an intentional stop() even if the OS pid check would report dead', async () => {
+    const spy = installDeadPidSpy();
+    vi.useFakeTimers();
+    try {
+      const ap = new AgentProcess('alice', mockEnv, {});
+      await ap.start();
+
+      const stopP = ap.stop();
+      // runStop() nulls this.pty synchronously before any await, so the
+      // watchdog's `!this.pty` guard should keep it quiet through the whole
+      // shutdown sequence regardless of what the pid probe would say.
+      await vi.advanceTimersByTimeAsync(1000 + 5000 + LIVENESS_CHECK_INTERVAL_MS);
+      await stopP;
+
+      expect(ap.getStatus().status).toBe('stopped');
+      expect(mockPty.spawn).toHaveBeenCalledOnce(); // no spurious recovery restart
+    } finally {
+      vi.useRealTimers();
+      spy.mockRestore();
+    }
+  });
+});
