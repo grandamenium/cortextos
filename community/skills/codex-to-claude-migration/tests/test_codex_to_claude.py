@@ -377,17 +377,23 @@ try:
         and cfg["model"] == "claude-opus-9-9"
         and "codex_context_cap" not in cfg
         and cfg["ctx_handoff_threshold"] == 85
-        and cfg["enabled"] is False and cfg["telegram_polling"] is False,
+        and cfg["enabled"] is True and cfg["telegram_polling"] is False,
         "config transformed + knobs carried + disabled",
     )
     by = {c["name"]: c for c in cfg["crons"]}
     ok(set(by) == {"digest", "paused", "regonly"}, "cron UNION of config + registry")
     ok(
-        by["paused"]["type"] == "disabled" and by["digest"]["type"] == "recurring"
+        all(c["type"] == "disabled" for c in cfg["crons"])
         and all(set(c) <= convert.CRON_CONFIG_KEYS for c in cfg["crons"])
         and by["regonly"].get("cron") == "0 9 * * *",
-        "registry-disabled cron stays disabled",
+        "default: EVERY cron carried disabled (source still runs them), daemon schema only",
     )
+    _t2 = os.path.join(tmp, "t2"); os.makedirs(_t2)
+    json.dump({"crons": []}, open(os.path.join(_t2, "config.json"), "w"))
+    _out = {c["name"]: c for c in convert.migrate_crons(src, _t2, "alpha-codex", "alpha-claude",
+                                                         ctx, True, [], disable_all=False)}
+    ok(_out["paused"]["type"] == "disabled" and _out["digest"]["type"] == "recurring",
+       "--enable-crons (cutover): source enabled-state preserved, registry-disabled stays off")
     ok(
         "agents/alpha-claude" in by["digest"]["prompt"]
         and ".claude/skills/digest" in by["digest"]["prompt"],
@@ -489,6 +495,41 @@ try:
         + ("" if r.returncode == 0 else "\n" + r.stdout),
     )
     ok(SECRET not in r.stdout, "verify output never prints a secret value")
+
+    _c = json.load(open(os.path.join(tgt, "config.json"))); _c["crons"][0]["type"] = "recurring"
+    json.dump(_c, open(os.path.join(tgt, "config.json"), "w"))
+    r = subprocess.run(vcmd, capture_output=True, text=True, env=env)
+    ok(r.returncode == 1 and "no double fires" in r.stdout, "CONVICT: a live cron on the copy fails verify by default")
+    r = subprocess.run(vcmd + ["--expect-crons-enabled"], capture_output=True, text=True, env=env)
+    ok(r.returncode == 0, "ACQUIT: --expect-crons-enabled accepts live crons at cutover")
+    _c["crons"][0]["type"] = "disabled"; json.dump(_c, open(os.path.join(tgt, "config.json"), "w"))
+
+    # cutover helper: flips config.json AND calls update-cron, so both agree
+    cut = [sys.executable, os.path.join(SCRIPTS, "cutover_crons.py"), "--target-dir", tgt,
+           "--target-agent", "alpha-claude", "--instance", "x"]
+    r = subprocess.run(cut + ["--from-source", "--source-dir", src, "--source-agent", "alpha-codex",
+                              "--source-ctx-root", ctx], capture_output=True, text=True, env=env)
+    ok(r.returncode == 0 and "would run" in r.stdout
+       and json.load(open(os.path.join(tgt, "config.json")))["crons"][0]["type"] == "disabled",
+       "cutover helper dry-run writes nothing")
+    r = subprocess.run(cut + ["--from-source", "--source-dir", src, "--source-agent", "alpha-codex",
+                              "--source-ctx-root", ctx, "--apply"], capture_output=True, text=True, env=env)
+    _types = {c["name"]: c["type"] for c in json.load(open(os.path.join(tgt, "config.json")))["crons"]}
+    ok(r.returncode == 0 and _types == {"digest": "recurring", "paused": "disabled", "regonly": "recurring"},
+       f"cutover --from-source enables exactly the source-live crons in config.json ({_types})")
+    _treg = os.path.join(ctx, ".cortextOS", "state", "agents", "alpha-claude"); os.makedirs(_treg, exist_ok=True)
+    json.dump({"crons": [{"name": "digest", "enabled": True}, {"name": "regonly", "enabled": False},
+                         {"name": "paused", "enabled": False}]}, open(os.path.join(_treg, "crons.json"), "w"))
+    r = subprocess.run(vcmd + ["--expect-crons-enabled"], capture_output=True, text=True, env=env)
+    ok(r.returncode == 1 and "regonly" in r.stdout, "CONVICT: config/registry cron drift fails verify")
+    json.dump({"crons": [{"name": "digest", "enabled": True}, {"name": "regonly", "enabled": True},
+                         {"name": "paused", "enabled": False}]}, open(os.path.join(_treg, "crons.json"), "w"))
+    r = subprocess.run(vcmd + ["--expect-crons-enabled"], capture_output=True, text=True, env=env)
+    ok(r.returncode == 0, "ACQUIT: config and registry agree after cutover")
+    shutil.rmtree(_treg)
+    _c = json.load(open(os.path.join(tgt, "config.json")))
+    for _x in _c["crons"]: _x["type"] = "disabled"
+    json.dump(_c, open(os.path.join(tgt, "config.json"), "w"))
 
     # NEGATIVE: plant the secret in a target file -> leak gate fails, location reported
     open(os.path.join(tgt, "memory", "notes.md"), "w").write(f"oops {SECRET}\n")

@@ -31,7 +31,7 @@ never modified, disabled or stopped; the result is always a second agent.
 | `config.json` runtime/model | `runtime: claude-code`, Claude model id | Opus by default: the `claude-opus-*` id from `cortextos bus list-models claude-code` |
 | crons (config.json + live registry) | `config.json` crons[] | UNION, paths translated, emitted in the daemon's config schema only (`name,type,interval,cron,fire_at,prompt`; a disabled cron is `type: "disabled"` — an `enabled` key makes the daemon REFUSE the cron) |
 | `.env` | `.env` (0600) | BOT_TOKEN NOT carried by default (source still polls the bot); the copy is marked bus-only with `telegram_polling: false`, without which `cortextos enable` refuses it |
-| `state/<src>/` | `state/<target>/` | `.onboarded`, heartbeat, handoffs/ carried; delivery/scheduling state (`pending-reminders.json`, `.telegram-offset`, dedup hashes, `cron-state.json`) stays with the live source; codex thread files excluded; `.force-fresh` marker written |
+| `state/<src>/` | `state/<target>/` | `.onboarded`, crash/ctx-circuit markers, handoffs/ carried; heartbeat and delivery/scheduling state (`heartbeat.json`, `pending-reminders.json`, `.telegram-offset`, dedup hashes, `cron-state.json`) stay with the live source; codex thread files excluded; `.force-fresh` marker written |
 | identity/soul/memory/goals/workspaces | same | 1:1; >100 MB items (and their sqlite -wal/-shm sidecars) and virtualenvs listed, not copied. Carried history dirs (memory/, handoffs/, logs/, docs/, ...) are left as written — only instructions, skills and scripts get path rewrites |
 
 Detail: `references/hooks-disposition.md`, `references/mcp-json-keys.md`,
@@ -81,9 +81,10 @@ plus the JSON (stdout: `model`, `env_vars`, `actions`) is the approval artifact.
 - **Bot**: `none` (default — no BOT_TOKEN; bus-only until a token is added) or
   `new` with a fresh @BotFather token (`--bot-mode new --new-bot-token <t>`).
   Reusing the source's bot is out of scope: it would require stopping the source.
-- **Crons**: carry as-is (default) or `--disable-crons` (every recurring cron carried as
-  `type: "disabled"`; use for test copies so nothing fires twice alongside the
-  still-running source).
+- **Crons**: carried OFF by default (every cron `type: "disabled"`), because the
+  codex source keeps running and live crons on the copy would fire every job twice.
+  `--enable-crons` keeps the source's enabled-state — use it only if the source is
+  already stopped. Otherwise turn crons on at cutover (below).
 - **Boot**: leave disabled (default) or `--boot now`.
 - **Large items**: `--include-large` to also copy >100 MB items.
 
@@ -102,8 +103,10 @@ target's cron registry from config.json on first boot). verify.py takes the matc
 
 `add-agent` first is mandatory: convert.py overlays onto the claude skeleton and
 refuses `--apply` without `.claude/settings.json` in the target. add-agent registers
-the target `enabled:true`; convert.py flips it to `enabled:false` in BOTH config.json
-and the registry unless `--boot now`.
+the target `enabled:true`; convert.py flips the REGISTRY entry to `enabled:false`
+(the daemon's off switch) unless `--boot now`, and leaves `config.json` enabled — so
+`cortextos enable <target> --instance <id>` alone boots it later, and
+`cortextos disable` stops it.
 
 ### Flags reference
 
@@ -114,13 +117,14 @@ and the registry unless `--boot now`.
 | convert.py | `--apply` | write (default is dry-run) |
 | convert.py | `--model` | Claude id; default Opus from list-models |
 | convert.py | `--bot-mode none\|new`, `--new-bot-token` | bot handling (see STEP 3) |
-| convert.py | `--disable-crons` | carry recurring crons as `type: "disabled"` |
+| convert.py | `--enable-crons` | keep source cron enabled-state (default: all carried disabled); `--disable-crons` is an accepted no-op |
 | convert.py | `--include-large` | also copy >100 MB items |
 | convert.py | `--boot now\|no`, `--org`, `--instance` | `--boot now` runs `cortextos enable <target> --instance <instance> [--org <org>]` |
 | convert.py | `--target-ctx-root` | target instance CTX_ROOT when it differs from the source's `--ctx-root` |
 | verify.py | `--ctx-root` | the TARGET instance CTX_ROOT |
 | verify.py | `--source-ctx-root` | the source instance CTX_ROOT, when different |
-| verify.py | `--expect-boot`, `--bot-mode`, `--codex-config` | match what convert was run with |
+| cutover_crons.py | `--names` or `--from-source`, `--apply` | cutover: turn crons on in config.json and the registry together |
+| verify.py | `--expect-boot`, `--bot-mode`, `--codex-config`, `--expect-crons-enabled` | match what convert was run with (by default verify FAILS if any carried cron is live) |
 
 ### Test copy in an isolated instance (recommended before a real migration)
 
@@ -128,31 +132,79 @@ Run the copy where it cannot touch the live fleet: a separate framework root and
 instance. Example with `T` = a scratch checkout of cortextOS (built) and instance `c2c-test`:
 
 ```bash
-# org files the agent reads; symlinks so nothing is copied or edited
+# save as a script and run it (`zsh test-copy.sh` or `bash test-copy.sh`); do not
+# paste into an interactive shell — `set -e` would close it on the first error.
+# `set -e` stops at the first failed step; if a wait loop
+# below runs longer than ~5 minutes, Ctrl-C and check $WORK/daemon.log.
+set -e
+# `tenv` runs a command against the TEST instance only:
+# it drops any agent-session paths you may be running inside and points at T.
+TEST_CTX="$HOME/.cortextos/c2c-test"
+tenv() { env -u CTX_AGENT_NAME -u CTX_AGENT_DIR -u CTX_PROJECT_ROOT \
+  CTX_INSTANCE_ID=c2c-test CTX_ROOT="$TEST_CTX" CTX_FRAMEWORK_ROOT="$T" CTX_ORG="$ORG" "$@"; }
+
+# 1. org files the agent reads; symlinks so nothing is copied or edited
 mkdir -p "$T/orgs/$ORG/agents"
 for f in secrets.env knowledge.md context.json; do
-  [ -e "$FRAMEWORK/orgs/$ORG/$f" ] && [ ! -e "$T/orgs/$ORG/$f" ] && \
-    ln -s "$FRAMEWORK/orgs/$ORG/$f" "$T/orgs/$ORG/$f"; done
-# compare bundled skills against the templates the skeleton will come from
+  if [ -e "$FRAMEWORK/orgs/$ORG/$f" ] && [ ! -e "$T/orgs/$ORG/$f" ]; then
+    ln -s "$FRAMEWORK/orgs/$ORG/$f" "$T/orgs/$ORG/$f"; fi; done
+
+# 2. detect, comparing bundled skills against the templates the skeleton comes from
 python3 "$SKILL_DIR/scripts/detect.py" --src-dir "$SRC_DIR" --ctx-root "$CTX_ROOT" \
   --agent "$SRC_AGENT" --framework-root "$T" > "$WORK/manifest.json"
-# use T's own CLI so the skeleton and registry come from T (add-agent prints a
-# "cortextos start" hint at the end — ignore it, it targets the default instance)
-env -u CTX_ROOT -u CTX_AGENT_NAME -u CTX_AGENT_DIR -u CTX_PROJECT_ROOT \
-  CTX_FRAMEWORK_ROOT="$T" CTX_INSTANCE_ID=c2c-test \
-  node "$T/dist/cli.js" add-agent "$TARGET" --template agent --org "$ORG" --instance c2c-test
-# dry-run first with the SAME flags as below minus --apply, then:
-python3 "$SKILL_DIR/scripts/convert.py" --manifest "$WORK/manifest.json" \
-  --src-dir "$SRC_DIR" --target-dir "$T/orgs/$ORG/agents/$TARGET" --target-agent "$TARGET" \
-  --ctx-root "$CTX_ROOT" --target-ctx-root "$HOME/.cortextos/c2c-test" \
-  --org "$ORG" --instance c2c-test --disable-crons --apply
+
+# 3. dry-run, then review the plan (nothing is written; its "no .claude/settings.json
+#    — run add-agent first" NOTE is expected here, add-agent is the next step)
+CONVERT=(python3 "$SKILL_DIR/scripts/convert.py" --manifest "$WORK/manifest.json"
+  --src-dir "$SRC_DIR" --target-dir "$T/orgs/$ORG/agents/$TARGET" --target-agent "$TARGET"
+  --ctx-root "$CTX_ROOT" --target-ctx-root "$TEST_CTX" --org "$ORG" --instance c2c-test)
+"${CONVERT[@]}"
+
+# 4. skeleton from T's own CLI, then apply and verify. add-agent ends with "edit .env
+#    with your Telegram settings" and "cortextos start" hints — ignore both: the copy
+#    is bus-only on purpose and "start" targets the default instance.
+tenv node "$T/dist/cli.js" add-agent "$TARGET" --template agent --org "$ORG" --instance c2c-test
+"${CONVERT[@]}" --apply
 python3 "$SKILL_DIR/scripts/verify.py" --target-dir "$T/orgs/$ORG/agents/$TARGET" \
-  --target-agent "$TARGET" --ctx-root "$HOME/.cortextos/c2c-test" \
+  --target-agent "$TARGET" --ctx-root "$TEST_CTX" \
   --source-ctx-root "$CTX_ROOT" --source-dir "$SRC_DIR" --source-agent "$SRC_AGENT"
-# boot it on its own daemon (CTX_ROOT must be set, or cron state lands in the cwd):
-env CTX_INSTANCE_ID=c2c-test CTX_ROOT="$HOME/.cortextos/c2c-test" CTX_FRAMEWORK_ROOT="$T" \
-  CTX_ORG="$ORG" node "$T/dist/daemon.js" --instance c2c-test &
+
+# 5. register a probe sender so the copy's bus replies have an inbox to land in
+python3 -c 'import json,sys; p=sys.argv[1]; r=json.load(open(p)); r["c2c-probe"]={"enabled":False,"org":sys.argv[2]}; json.dump(r,open(p,"w"),indent=2)' \
+  "$TEST_CTX/config/enabled-agents.json" "$ORG"
+
+# 6. start a daemon for the test instance, then enable the copy on it
+tenv node "$T/dist/daemon.js" --instance c2c-test > "$WORK/daemon.log" 2>&1 &
+# the daemon records its own pid ($! would be a subshell, since tenv is a function)
+until [ -S "$TEST_CTX/daemon.sock" ]; do sleep 1; done
+tenv node "$T/dist/cli.js" enable "$TARGET" --instance c2c-test --org "$ORG"
+# ready = the first turn finished (the Stop hook wrote the idle flag)
+until [ -f "$TEST_CTX/state/$TARGET/last_idle.flag" ]; do sleep 3; done
+
+# 7. read-only probe; the reply lands in $TEST_CTX/inbox/c2c-probe/
+tenv env CTX_AGENT_NAME=c2c-probe node "$T/dist/cli.js" bus send-message "$TARGET" normal \
+  'Read-only probe: reply with your runtime and model id. Take no other action.'
+until [ -n "$(ls -A "$TEST_CTX/inbox/c2c-probe" 2>/dev/null)" ]; do sleep 3; done
+cat "$TEST_CTX/inbox/c2c-probe/"*
+
+# 8. stop: disable the copy (so a later test daemon does not auto-boot it), then
+#    stop ONLY the test daemon via its own pid file (it stops the claude session too)
+tenv node "$T/dist/cli.js" disable "$TARGET" --instance c2c-test
+DAEMON_PID="$(cat "$TEST_CTX/daemon.pid")"
+kill "$DAEMON_PID"
+while kill -0 "$DAEMON_PID" 2>/dev/null; do sleep 1; done; echo "test daemon stopped"
 ```
+
+When you are done with the test copy, delete it and its instance
+(`$T/orgs/$ORG/agents/$TARGET` and `$TEST_CTX`): it holds the source's credentials.
+
+On boot the daemon may log "cron-teaching upgrade recommended ... Run cortextos bus
+upgrade-cron-teaching <target>". That is the daemon's generic scan of any agent's
+instruction files for old cron advice (the source has the same text); review it
+separately, it is not a migration issue.
+
+The copy's own `cortextos` calls run the host's installed CLI (whatever `cortextos`
+resolves to on PATH), pointed at the test instance through its env — not `T`'s build.
 
 convert.py can run in any shell: it queries `cortextos bus list-models` host-wide.
 
@@ -185,9 +237,33 @@ already sat in plain text in a SOURCE file and was carried 1:1 is printed as a
 `[FINDING]` to redact, not a failure), `.env` 0600 without BOT_TOKEN and `telegram_polling: false`
 (bot-mode none), `.onboarded` carried, no codex thread file.
 
-Tier 2 boot probe (explicit go only; costs tokens): enable the target, wait for the
-Claude status bar in `stdout.log` (bootstrap), send a bus probe, confirm the reply
-and `last_idle.flag`, then disable it. Label it a boot probe, not a soak.
+Tier 2 boot probe (explicit go only; costs tokens): enable the target, wait for
+`state/<target>/last_idle.flag` (the first turn finished), send a read-only bus probe
+from a registered sender, confirm the reply, then disable it (see the test-copy
+recipe for exact commands). Label it a boot probe, not a soak.
+
+### CUTOVER — only when the Claude copy should REPLACE the codex agent
+
+The copy and the source must never both be live on the same work. In this order:
+
+1. Stop the codex source: `cortextos disable <source> --instance <id>`, and confirm its
+   process is gone (`cortextos status`).
+2. If the copy should take over the source's Telegram bot, put that `BOT_TOKEN` in the
+   copy's `.env` and set `telegram_polling` back to true in its `config.json` (only now
+   — one poller per bot).
+3. Enable the copy: `cortextos enable <target> --instance <id>`.
+4. Turn its crons on in BOTH config.json and the live registry (flipping only the
+   registry is undone by any later re-migration, which rebuilds it from config.json):
+   ```bash
+   python3 "$SKILL_DIR/scripts/cutover_crons.py" --target-dir <target dir> \
+     --target-agent <target> --instance <id> \
+     --from-source --source-dir <source dir> --source-agent <source> \
+     --source-ctx-root <source CTX_ROOT> --apply     # or --names a,b instead of --from-source
+   ```
+   Then `verify.py ... --expect-crons-enabled` asserts both files agree.
+5. Watch the first cron fires (`cortextos bus get-cron-log <target>`).
+
+Rollback: `cortextos disable <target>` then `cortextos enable <source>`.
 
 ### STEP 6 — REPORT
 
@@ -226,7 +302,8 @@ gained, transformed, 1:1. End with the exact enable command.
 - BOT_TOKEN is not carried by default (one poller per bot).
 - `.cortextos-env` / `.playwright-mcp` are never copied; codex `plugins/` and
   `.agents/` never land in the target.
-- The target is left DISABLED in config.json AND the registry unless `--boot now`.
+- The target is left DISABLED via its registry entry unless `--boot now`;
+  `config.json` stays enabled so the standard `cortextos enable` boots it.
 
 ## Tests
 

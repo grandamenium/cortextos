@@ -18,7 +18,7 @@ Usage:
              --target-agent <name> --ctx-root <CTX_ROOT> [--apply]
              [--model <claude-id>] [--bot-mode none|new] [--new-bot-token <t>]
              [--boot now|no] [--org <org>] [--instance <id>]
-             [--disable-crons] [--include-large]
+             [--enable-crons] [--include-large]
 
 Secrets contract: no MCP secret value is ever read into output, written to
 .mcp.json, or written to any file. MCP env/header/arg values become ${VAR}
@@ -261,7 +261,10 @@ def transform_config(
         tgt_cfg["model"] = model
     else:
         tgt_cfg.pop("model", None)
-    tgt_cfg["enabled"] = False
+    # The registry entry is the single off switch (set enabled:false below). The daemon
+    # skips an agent if EITHER says disabled, and `cortextos enable` flips only the
+    # registry — so config.json stays enabled or that command could never boot it.
+    tgt_cfg["enabled"] = True
     if bus_only:
         # No BOT_TOKEN carried: the copy is bus-only. Without this flag the daemon
         # and `cortextos enable` treat the missing token as a misconfiguration.
@@ -272,7 +275,7 @@ def transform_config(
         actions,
         f"config.json: runtime codex-app-server -> claude-code, model "
         f"{src_cfg.get('model')!r} -> {model!r}, dropped codex-only {dropped}, "
-        f"carried {sorted(carried)}, enabled=false",
+        f"carried {sorted(carried)}; enabled stays true here, the registry entry is the off switch",
     )
 
 
@@ -291,7 +294,7 @@ def migrate_crons(
     winning on conflict. Disabled-state survives (disabled in EITHER = type
     "disabled"). Output uses only the daemon's config cron schema.
     Prompts get the skills path and the agents/<source> workspace segment
-    translated. --disable-crons carries every recurring cron as type "disabled" (test copies)."""
+    translated. Unless --enable-crons, every recurring cron is carried as type "disabled"."""
     src_cfg = _load_json(os.path.join(src_dir, "config.json")) or {}
     config_crons = src_cfg.get("crons") or []
     reg_path = os.path.join(
@@ -376,7 +379,8 @@ def migrate_crons(
         actions,
         f"crons migrated: {len(out)} (UNION of {len(config_crons)} config + "
         f"{len(registry_crons)} registry)"
-        + ("; ALL carried DISABLED (--disable-crons)" if disable_all else ""),
+        + ("; ALL carried DISABLED (default; source still runs them — turn them on at "
+           "cutover: cortextos bus update-cron <target> <name> --enabled true)" if disable_all else ""),
     )
     return out
 
@@ -766,11 +770,13 @@ def main():
     ap.add_argument("--boot", choices=["now", "no"], default="no")
     ap.add_argument("--org", default=None)
     ap.add_argument("--instance", default="default")
-    ap.add_argument(
-        "--disable-crons",
-        action="store_true",
-        help='carry every recurring cron as type "disabled" (test copies)',
-    )
+    # Crons are carried OFF by default: the source keeps running, so live crons on the
+    # copy would fire every job twice. The owner turns them on at cutover.
+    ap.add_argument("--enable-crons", action="store_true",
+                    help="carry crons with their source enabled-state (only once the "
+                         "codex source is stopped; default: every cron carried disabled)")
+    ap.add_argument("--disable-crons", action="store_true",
+                    help="no-op, kept for compatibility (disabled is the default)")
     ap.add_argument(
         "--include-large",
         action="store_true",
@@ -885,7 +891,7 @@ def main():
         args.ctx_root,
         args.apply,
         actions,
-        disable_all=args.disable_crons,
+        disable_all=not args.enable_crons,
     )
     write_claude_md(args.src_dir, args.target_dir, args.apply, actions)
     flag_codex_wording(manifest, actions)

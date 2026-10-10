@@ -173,6 +173,8 @@ def main():
         "--codex-config", default=os.path.expanduser("~/.codex/config.toml")
     )
     ap.add_argument("--bot-mode", choices=["none", "new"], default="none")
+    ap.add_argument("--expect-crons-enabled", action="store_true",
+                    help="convert ran with --enable-crons (cutover); else assert all off")
     args = ap.parse_args()
     td = args.target_dir
     src_ctx = args.source_ctx_root or args.ctx_root
@@ -194,7 +196,8 @@ def main():
     entry = reg.get(args.target_agent) if isinstance(reg, dict) else None
     chk(isinstance(entry, dict), f"registry entry present for '{args.target_agent}'")
     want = bool(args.expect_boot)
-    chk(cfg.get("enabled") is want, f"config.json enabled == {want}")
+    chk(cfg.get("enabled") is True,
+        "config.json enabled == True (registry is the off switch; `cortextos enable` boots it)")
     chk(
         isinstance(entry, dict) and entry.get("enabled") is want,
         f"registry enabled == {want} (the daemon reads the registry)",
@@ -296,6 +299,22 @@ def main():
             want_crons <= got,
             f"all source-union crons carried (missing {sorted(want_crons - got)})",
         )
+        live = sorted(c.get("name") for c in cfg.get("crons") or []
+                      if c.get("type") not in ("disabled", "once"))
+        if not args.expect_crons_enabled:
+            chk(not live, f"every carried cron is disabled while the codex source still "
+                          f"runs (live: {live}) — no double fires")
+        else:
+            # config.json and the live registry must agree, or a re-migration (which
+            # rebuilds crons.json from config.json) silently flips crons back
+            treg = _load_json(os.path.join(args.ctx_root, ".cortextOS", "state", "agents",
+                                           args.target_agent, "crons.json"))
+            if isinstance(treg, dict):
+                reg_on = {c.get("name") for c in treg.get("crons") or []
+                          if c.get("enabled") is not False}
+                drift = sorted(set(live) ^ reg_on)
+                chk(not drift, f"cron on/off agrees between config.json and the live "
+                               f"registry (disagree: {drift}) — use cutover_crons.py")
         bad_keys = sorted(
             {k for c in cfg.get("crons") or [] for k in c}
             - {"name", "type", "interval", "cron", "fire_at", "prompt"}
@@ -373,8 +392,9 @@ def main():
         print(f"  [{'PASS' if ok else 'FAIL'}] {label}")
     print(
         "\nTier 2 (live boot probe) is run by the operator with explicit go: enable the "
-        "target, wait for the Claude status bar (bootstrap), send it a bus probe, "
-        "confirm a reply + last_idle.flag, then disable it."
+        "target, wait for state/<target>/last_idle.flag, send a read-only bus probe "
+        "from a registered sender, confirm the reply, then disable it (SKILL.md "
+        "test-copy recipe)."
     )
     sys.exit(0 if passed == len(checks) else 1)
 
