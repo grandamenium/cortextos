@@ -38,8 +38,8 @@ def ok(cond, label):
         print(f"  FAIL {label}")
 
 
-SECRET = "ntn_FAKEsecret0123456789abcdefXYZ"  # synthetic
-BEARER_SECRET = "sk-fake-0123456789abcdefghijkl"  # synthetic
+SECRET = "FAKEsecretVALUE0123456789abcdefXYZ"  # synthetic
+BEARER_SECRET = "fakebearer0123456789abcdefghijkl"  # synthetic
 CODEX_TOML = f'''
 model = "gpt-5-codex"
 [mcp_servers.notes]
