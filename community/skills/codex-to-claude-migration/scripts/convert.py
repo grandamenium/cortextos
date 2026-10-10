@@ -44,6 +44,9 @@ REF_REWRITES = (
     (CODEX_SKILLS_PATH, CLAUDE_SKILLS_PATH),
     (".agents/skills", CLAUDE_SKILLS_PATH),
 )
+# Carried history is a record, not instructions: its codex paths are left as written.
+HISTORY_DIRS = {"memory", "handoffs", "logs", "tmp", "deliverables", "outputs", "docs",
+                "research", "archive", "telegram-images", "experiments", "reports"}
 TEXT_EXT = (
     ".md",
     ".sh",
@@ -60,16 +63,17 @@ TEXT_EXT = (
 # Boot-state continuity carried so the claude agent does NOT cold-onboard. Codex
 # session files (codex-app-server-thread.json / -process.json) are deliberately
 # absent: they are meaningless to Claude and the target starts a fresh session.
+# The copy runs ALONGSIDE the still-live source, so only identity-of-history state is
+# carried. Delivery/scheduling state (.telegram-offset, .message-dedup-hashes,
+# cron-state.json, pending-reminders.json) stays with the source: carried, it would
+# make the copy re-fire the source's reminders or skip messages it never saw.
 STATE_CONTINUITY_FILES = (
     ".onboarded",
-    "heartbeat.json",
-    ".telegram-offset",
-    "cron-state.json",
-    ".message-dedup-hashes",
     ".crash_alert_dedup.json",
     ".ctx-circuit.json",
-    "pending-reminders.json",
 )
+STATE_NOT_CARRIED = ("heartbeat.json", ".telegram-offset", ".message-dedup-hashes", "cron-state.json",
+                     "pending-reminders.json")
 STATE_CONTINUITY_DIRS = ("handoffs",)
 
 # Source config keys that never carry: identity/runtime fields the migration sets
@@ -167,28 +171,27 @@ def surface_large_or_binary(name, src, actions):
 
 
 def list_claude_models(runner=None):
-    """Return [(tier, id)] from `cortextos bus list-models claude-code`, or [] if the
-    command is unavailable. Output lines look like `best      claude-opus-5-5`."""
-    runner = runner or (
-        lambda: subprocess.run(
-            ["cortextos", "bus", "list-models", "claude-code"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    )
+    """Return ([(tier, id)], error) from `cortextos bus list-models claude-code`.
+    Output lines look like `best      claude-opus-5-5`. The model list is host-wide,
+    so the call strips per-instance env: under an isolated instance with no daemon
+    of its own the command would otherwise fail ("Daemon is not running")."""
+    def _default():
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CTX_INSTANCE_ID", "CTX_ROOT")}
+        return subprocess.run(["cortextos", "bus", "list-models", "claude-code"],
+                              capture_output=True, text=True, timeout=60, env=env)
     try:
-        r = runner()
-    except Exception:
-        return []
+        r = (runner or _default)()
+    except Exception as e:
+        return [], str(e)
     if getattr(r, "returncode", 1) != 0:
-        return []
+        return [], ((r.stderr or r.stdout or "").strip().splitlines() or ["exit != 0"])[-1]
     out = []
     for line in (r.stdout or "").splitlines():
         parts = line.split()
         if len(parts) == 2 and parts[0] in ("best", "strong", "fast", "legacy"):
             out.append((parts[0], parts[1]))
-    return out
+    return out, None
 
 
 def resolve_model(param, models, actions):
@@ -213,7 +216,7 @@ def resolve_model(param, models, actions):
             log(actions, f"NEEDS-HUMAN: list-models reports no claude-opus-* id — fell back "
                          f"to '{mid}' (first best-tier Claude id); confirm or pass --model")
             return mid
-    log(actions, "NEEDS-HUMAN: `cortextos bus list-models claude-code` returned nothing — "
+    log(actions, "NEEDS-HUMAN: `cortextos bus list-models claude-code` returned no models — "
                  "model left unset (Claude Code default); pass --model")
     return None
 
@@ -436,11 +439,14 @@ def rewrite_all_refs(roots, apply, actions):
     the reported count is real rather than a scan of a target that does not exist."""
     total, files = 0, 0
     for root in roots:
+        if os.path.basename(os.path.normpath(root)) in HISTORY_DIRS:
+            continue
         walk = [(os.path.dirname(root), [], [os.path.basename(root)])] \
             if os.path.isfile(root) else os.walk(root)
         for dp, dn, fns in walk:
             dn[:] = [d for d in dn if d not in ("node_modules", ".git")
-                     and not detect.VENV_RE.match(d)]
+                     and not detect.VENV_RE.match(d)
+                     and not (dp == root and d in HISTORY_DIRS)]
             for fn in fns:
                 if fn.endswith(TEXT_EXT):
                     n = rewrite_refs_in_file(os.path.join(dp, fn), apply)
@@ -448,7 +454,8 @@ def rewrite_all_refs(roots, apply, actions):
                         total += n
                         files += 1
     log(actions, f"ref-rewrite sweep: {total} codex skill-path ref(s) -> .claude/skills "
-                 f"in {files} file(s)")
+                 f"in {files} file(s); history dirs left as written: "
+                 f"{sorted(HISTORY_DIRS)}")
     return total
 
 
@@ -458,6 +465,10 @@ def rewrite_all_refs(roots, apply, actions):
 def copy_custom_skills(src_dir, target_dir, manifest, apply, actions):
     tgt_root = os.path.join(target_dir, ".claude", "skills")
     copied = []
+    for d in manifest.get("skills", {}).get("data_only", []):
+        copy_tree(os.path.join(src_dir, d["path"]), os.path.join(tgt_root, d["name"]),
+                  apply, actions, f"skill dir '{d['name']}' (NO SKILL.md — carried as "
+                  f"data, not a working skill)")
     for s in manifest.get("skills", {}).get("custom", []):
         name = s["name"]
         if s["disposition"] == "needs_human":
@@ -565,7 +576,7 @@ def emit_mcp_json(manifest, target_dir, apply, actions):
         env_vars.extend(p["env_vars"])
     log(
         actions,
-        f"MCP: wrote {len(servers)} server(s) to .mcp.json with env-var "
+        f"MCP: {'wrote' if apply else 'would write'} {len(servers)} server(s) to .mcp.json with env-var "
         f"references only: {sorted(servers)}; enableAllProjectMcpServers=true",
     )
     for f in manifest.get("mcp", {}).get("inline_secrets", []):
@@ -607,6 +618,11 @@ def carry_env(src_dir, target_dir, bot_mode, new_bot_token, apply, actions):
             out.append(line.rstrip("\n"))
     if bot_mode == "new":
         out.append("BOT_TOKEN=" + (new_bot_token or "REPLACE_ME_WITH_NEW_BOT_TOKEN"))
+    else:
+        # Explicitly EMPTY, not absent: the daemon loads orgs/<org>/secrets.env first
+        # and the agent .env overrides it, so an absent key would let the copy inherit
+        # an org-level BOT_TOKEN and message the principal through the org bot.
+        out.append("BOT_TOKEN=")
     dst = os.path.join(target_dir, ".env")
     if apply:
         with open(dst, "w") as f:
@@ -654,13 +670,19 @@ def carry_state(ctx_root, source_agent, target_agent, apply, actions, target_ctx
     log(
         actions,
         f"state carried into state/{target_agent}/: {carried or '(none)'}; "
-        f"codex thread/session files excluded; .force-fresh dropped",
+        f"codex thread/session files excluded; .force-fresh marker written; NOT "
+        f"carried (stay with the live source): {list(STATE_NOT_CARRIED)}",
     )
 
 
 def set_registry_enabled(ctx_root, agent, enabled, apply, actions):
     reg_path = os.path.join(ctx_root, "config", "enabled-agents.json")
     reg = _load_json(reg_path)
+    if not isinstance(reg, dict) or reg.get(agent) is None:
+        if not apply:
+            log(actions, f"registry (dry-run): '{agent}' not registered yet — expected "
+                         f"before add-agent; --apply sets it enabled={enabled}")
+            return
     if not isinstance(reg, dict):
         log(actions, f"WARNING: {reg_path} missing/unparseable — registry not modified")
         return
@@ -747,7 +769,7 @@ def main():
     ap.add_argument(
         "--disable-crons",
         action="store_true",
-        help="carry every cron enabled:false (test copies)",
+        help='carry every recurring cron as type "disabled" (test copies)',
     )
     ap.add_argument(
         "--include-large",
@@ -773,7 +795,9 @@ def main():
         sys.exit(2)
     if not os.path.isfile(os.path.join(args.target_dir, ".claude", "settings.json")):
         msg = (f"{args.target_dir} has no .claude/settings.json — lay the claude skeleton "
-               f"first: `cortextos add-agent {args.target_agent} --template agent --org <org>`")
+               f"first: `cortextos add-agent {args.target_agent} --template agent "
+               f"--org {args.org or '<org>'} --instance {args.instance}` (for an isolated "
+               f"instance also set CTX_FRAMEWORK_ROOT/CTX_INSTANCE_ID; see SKILL.md)")
         if args.apply:
             print(f"ERROR: {msg}", file=sys.stderr)
             sys.exit(1)
@@ -828,6 +852,9 @@ def main():
         else:
             log(actions, f"NOT CARRIED: {nc['name']} — {nc['reason']}")
 
+    for rel, n in sorted((manifest.get("carried_token_shapes") or {}).items()):
+        log(actions, f"WARNING: carried file '{rel}' holds {n} credential-shaped "
+                     f"string(s) — copied verbatim; redact in source and target (value not shown)")
     carry_env(
         args.src_dir,
         args.target_dir,
@@ -836,7 +863,10 @@ def main():
         args.apply,
         actions,
     )
-    model = resolve_model(args.model, list_claude_models(), actions)
+    models, models_err = list_claude_models()
+    if models_err:
+        log(actions, f"WARNING: `cortextos bus list-models claude-code` failed: {models_err}")
+    model = resolve_model(args.model, models, actions)
     transform_config(
         args.src_dir,
         args.target_dir,

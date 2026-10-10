@@ -422,8 +422,8 @@ try:
     )
     envtxt = open(os.path.join(tgt, ".env")).read()
     ok(
-        "BOT_TOKEN" not in envtxt and "CHAT_ID=1000000000" in envtxt,
-        ".env carried without BOT_TOKEN",
+        "BOT_TOKEN=\n" in envtxt and "123:FAKE" not in envtxt and "CHAT_ID=1000000000" in envtxt,
+        ".env carried with BOT_TOKEN explicitly empty (blocks org secrets.env inheritance)",
     )
     ok(
         stat.S_IMODE(os.stat(os.path.join(tgt, ".env")).st_mode) == 0o600,
@@ -515,6 +515,82 @@ try:
 finally:
     os.environ.clear()
     os.environ.update(old_env)
+    shutil.rmtree(tmp, ignore_errors=True)
+
+# ---------- live-test regressions (naive-subagent run on a real agent) ----------
+print("[regress] fixes from the live naive run")
+tmp = tempfile.mkdtemp()
+try:
+    src = os.path.join(tmp, "orgs", "o", "agents", "beta-codex"); os.makedirs(src)
+    json.dump({"runtime": "codex-app-server", "crons": []}, open(os.path.join(src, "config.json"), "w"))
+    open(os.path.join(src, "AGENTS.md"), "w").write("a\n")
+    sk = os.path.join(src, "plugins", "cortextos-agent-skills", "skills")
+    os.makedirs(os.path.join(sk, "stub")); open(os.path.join(sk, "stub", "trigger-eval.json"), "w").write("{}")
+    open(os.path.join(src, "big.db"), "w").write("x" * 64)
+    open(os.path.join(src, "big.db-wal"), "w").write("w")
+    open(os.path.join(src, "small.txt"), "w").write("s")
+    _old = detect.HUGE_ITEM_BYTES; detect.HUGE_ITEM_BYTES = 32
+    try:
+        mm = detect.detect(src, os.path.join(tmp, "ctx"), "beta-codex", codex_config=os.path.join(tmp, "none.toml"))
+    finally:
+        detect.HUGE_ITEM_BYTES = _old
+    ok([d["name"] for d in mm["skills"]["data_only"]] == ["stub"] and not mm["skills"]["custom"],
+       "skill dir without SKILL.md is data-only, never counted as a skill")
+    nc = {n["name"] for n in mm["buckets"]["not_carried"]}
+    ok({"big.db", "big.db-wal"} <= nc and "big.db-wal" not in mm["buckets"]["port_verbatim"]
+       and "small.txt" in mm["buckets"]["port_verbatim"], "sqlite -wal sidecar follows its not-carried db")
+
+    os.makedirs(os.path.join(src, "scripts"))
+    open(os.path.join(src, "scripts", "q.sh"), "w").write('A="${CTX_AGENT_NAME:-beta-codex}"\n')
+    open(os.path.join(src, "scripts", "audit.py"), "w").write("open('codex-tokens.jsonl')\n")
+    open(os.path.join(src, "scripts", "other.sh"), "w").write("echo beta-codex-extra\n")
+    regd2 = os.path.join(tmp, "ctx2", ".cortextOS", "state", "agents", "beta-codex"); os.makedirs(regd2)
+    json.dump({"crons": [{"name": "regonly", "schedule": "1h", "prompt": "p"}]}, open(os.path.join(regd2, "crons.json"), "w"))
+    mm2 = detect.detect(src, os.path.join(tmp, "ctx2"), "beta-codex", codex_config=os.path.join(tmp, "none.toml"))
+    sr = mm2["instructions"]["source_self_refs"]
+    ok(set(sr) == {"scripts/q.sh", "scripts/audit.py"}, f"self-ref + codex-artifact scan flags exactly the right files ({sorted(sr)})")
+    ok(mm2["config"]["registry_only_crons"] == ["regonly"], "registry-only cron reported at detect time")
+
+    open(os.path.join(src, "small.txt"), "w").write("note Bearer abcdefghijklmnopqrstuvwxyz0123 end\n")
+    th = detect.token_shape_hits(src, ["small.txt", "scripts"])
+    ok(th == {"small.txt": 1}, f"token-shape scan counts a Bearer token in carried content ({th})")
+    ok(not detect.token_shape_hits(src, ["scripts"]), "ACQUIT: plain scripts have no token shapes")
+
+    # leak provenance: a secret already in the source is a FINDING, not a migration leak
+    tgt = os.path.join(tmp, "tgt"); os.makedirs(os.path.join(tgt, "memory"))
+    os.makedirs(os.path.join(src, "memory"))
+    open(os.path.join(src, "memory", "h.md"), "w").write(f"old note {SECRET}\n")
+    open(os.path.join(tgt, "memory", "h.md"), "w").write(f"old note {SECRET}\n")
+    vals = {"[mcp_servers.x.env].K": [SECRET]}
+    intro, pre = verify.find_leaks(tgt, vals, src)
+    ok(intro == [] and pre == {"[mcp_servers.x.env].K": ["memory/h.md"]},
+       "secret carried from the source = FINDING, not a verify failure")
+    open(os.path.join(tgt, ".mcp.json"), "w").write(json.dumps({"k": SECRET}))
+    intro, pre = verify.find_leaks(tgt, vals, src)
+    ok(intro == ["[mcp_servers.x.env].K"], "CONVICT: secret in .mcp.json (no source twin) = migration leak")
+
+    # history dirs are not rewritten; instruction files are
+    h = os.path.join(tgt, "memory", "p.md"); open(h, "w").write("plugins/cortextos-agent-skills/skills/x\n")
+    i = os.path.join(tgt, "AGENTS.md"); open(i, "w").write("plugins/cortextos-agent-skills/skills/x\n")
+    convert.rewrite_all_refs([tgt], True, [])
+    ok("plugins/" in open(h).read() and ".claude/skills/x" in open(i).read(),
+       "carried history left as written; instruction file rewritten")
+
+    # delivery/scheduling state stays with the live source
+    ctx = os.path.join(tmp, "ctx"); ss = os.path.join(ctx, "state", "beta-codex"); os.makedirs(ss)
+    for fn in (".onboarded", "pending-reminders.json", ".telegram-offset", "cron-state.json"):
+        open(os.path.join(ss, fn), "w").write("{}")
+    convert.carry_state(ctx, "beta-codex", "beta-claude", True, [])
+    ts = os.path.join(ctx, "state", "beta-claude")
+    ok(os.path.isfile(os.path.join(ts, ".onboarded")) and not any(
+        os.path.exists(os.path.join(ts, f)) for f in ("pending-reminders.json", ".telegram-offset", "cron-state.json")),
+       "reminders/offset/cron-state NOT carried into a side-by-side copy")
+
+    # list-models failure surfaces its error instead of a silent empty list
+    class _R: returncode = 1; stdout = ""; stderr = "Daemon is not running"
+    models, err = convert.list_claude_models(lambda: _R())
+    ok(models == [] and "Daemon is not running" in err, "list-models failure reports its real error")
+finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
 # ---------- leakage guard over the shipped skill ----------

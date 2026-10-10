@@ -70,27 +70,41 @@ def codex_inline_values(codex_config):
     # the embedded credential is caught even if the wrapper was reformatted.
     res = {}
     for loc, v in out.items():
-        if len(v) < MIN_SECRET_LEN or not detect.looks_secret(loc.rsplit(".", 1)[-1], v):
+        if len(v) < MIN_SECRET_LEN or not detect.looks_secret(
+            loc.rsplit(".", 1)[-1], v
+        ):
             continue
-        cands = {v} | {t for t in re.findall(r"[A-Za-z0-9_.+/=-]{16,}", v)
-                       if detect.looks_secret("", t)}
+        cands = {v} | {
+            t
+            for t in re.findall(r"[A-Za-z0-9_.+/=-]{16,}", v)
+            if detect.looks_secret("", t)
+        }
         res[loc] = sorted(cands)
     return res
 
 
-def find_leaks(target_dir, values):
-    """Return sorted config locations whose value appears in any target text file.
-    The agent's own .env is excluded: it is the agent secrets file carried 1:1, not
-    a destination of the MCP mapping."""
+def _source_twins(rel, source_dir):
+    """Source paths a target file came from (skills moved from the codex layout)."""
+    parts = rel.split(os.sep)
+    if parts[:2] == [".claude", "skills"] and len(parts) > 2:
+        rest = os.path.join(*parts[2:])
+        return [os.path.join(source_dir, detect.CODEX_SKILLS_REL, rest),
+                os.path.join(source_dir, detect.CODEX_REPO_SKILLS_REL, rest)]
+    return [os.path.join(source_dir, rel)]
+
+
+def find_leaks(target_dir, values, source_dir=None):
+    """Return (introduced, preexisting): config locations whose value appears in a
+    target text file. A hit whose source twin already holds the same value was
+    carried, not created, by the migration — that is a security FINDING about the
+    source, reported separately; anything else (e.g. .mcp.json) is a migration leak.
+    The agent's own .env is excluded: it is the agent secrets file carried 1:1."""
+    introduced, pre = set(), {}
     if not values:
-        return []
-    hits = set()
+        return [], {}
     for dp, dn, fns in os.walk(target_dir):
-        dn[:] = [
-            d
-            for d in dn
-            if d not in ("node_modules", ".git") and not detect.VENV_RE.match(d)
-        ]
+        dn[:] = [d for d in dn if d not in ("node_modules", ".git")
+                 and not detect.VENV_RE.match(d)]
         for fn in fns:
             if fn == ".env" or not (fn.endswith(SCAN_EXT) or fn.startswith(".mcp")):
                 continue
@@ -102,10 +116,27 @@ def find_leaks(target_dir, values):
                     txt = f.read()
             except Exception:
                 continue
+            rel = os.path.relpath(fp, target_dir)
             for loc, cands in values.items():
-                if any(c in txt for c in cands):
-                    hits.add(loc)
-    return sorted(hits)
+                hit = [c for c in cands if c in txt]
+                if not hit:
+                    continue
+                carried = False
+                if source_dir:
+                    for twin in _source_twins(rel, source_dir):
+                        try:
+                            with open(twin, errors="ignore") as f:
+                                stxt = f.read()
+                        except Exception:
+                            continue
+                        if any(c in stxt for c in hit):
+                            carried = True
+                            break
+                if carried:
+                    pre.setdefault(loc, []).append(rel)
+                else:
+                    introduced.add(loc)
+    return sorted(introduced), pre
 
 
 def mcp_refs_only(mcp):
@@ -127,8 +158,11 @@ def main():
     ap.add_argument("--target-agent", required=True)
     ap.add_argument("--ctx-root", required=True)
     ap.add_argument("--source-dir", default=None)
-    ap.add_argument("--source-ctx-root", default=None,
-                    help="source instance CTX_ROOT if different from --ctx-root")
+    ap.add_argument(
+        "--source-ctx-root",
+        default=None,
+        help="source instance CTX_ROOT if different from --ctx-root",
+    )
     ap.add_argument("--source-agent", default=None)
     ap.add_argument(
         "--expect-boot",
@@ -187,7 +221,11 @@ def main():
         )
 
     leftover = []
+    history = {"memory", "handoffs", "logs", "tmp", "deliverables", "outputs", "docs",
+               "research", "archive", "telegram-images", "experiments", "reports"}
     for dp, dn, fns in os.walk(td):
+        if dp == td:
+            dn[:] = [d for d in dn if d not in history]
         dn[:] = [
             d
             for d in dn
@@ -206,7 +244,7 @@ def main():
                         leftover.append(os.path.relpath(fp, td))
                 except Exception:
                     pass
-    chk(not leftover, f"no codex skill-path refs left ({leftover[:5]})")
+    chk(not leftover, f"no codex skill-path refs left outside history dirs (found: {leftover[:5]})")
 
     # skills: every source skill present unless it was a needs-human leak
     skills_root = os.path.join(td, ".claude", "skills")
@@ -228,7 +266,7 @@ def main():
                 missing.append(s["name"])
         chk(
             not missing,
-            f"every portable source skill present in .claude/skills ({missing})",
+            f"every portable source skill present in .claude/skills (missing: {missing})",
         )
 
         # crons: union preserved
@@ -258,10 +296,15 @@ def main():
             want_crons <= got,
             f"all source-union crons carried (missing {sorted(want_crons - got)})",
         )
-        bad_keys = sorted({k for c in cfg.get("crons") or [] for k in c}
-                          - {"name", "type", "interval", "cron", "fire_at", "prompt"})
-        chk(not bad_keys, f"target crons use only the daemon cron schema (extra keys "
-                          f"{bad_keys} would make the daemon REFUSE them)")
+        bad_keys = sorted(
+            {k for c in cfg.get("crons") or [] for k in c}
+            - {"name", "type", "interval", "cron", "fire_at", "prompt"}
+        )
+        chk(
+            not bad_keys,
+            f"target crons use only the daemon cron schema (extra keys "
+            f"{bad_keys} would make the daemon REFUSE them)",
+        )
         src_cfg = _load_json(os.path.join(args.source_dir, "config.json")) or {}
         chk(
             src_cfg.get("runtime") == "codex-app-server",
@@ -279,25 +322,36 @@ def main():
                 and settings.get("enableAllProjectMcpServers"),
                 "enableAllProjectMcpServers set (unattended session will not stall)",
             )
-    leaks = find_leaks(td, codex_inline_values(args.codex_config))
-    chk(
-        not leaks,
-        f"no ~/.codex/config.toml inline secret value appears in any target "
-        f"file (leaked locations: {leaks})",
-    )
+    leaks, preexisting = find_leaks(td, codex_inline_values(args.codex_config),
+                                    args.source_dir)
+    chk(not leaks, f"the migration copied no ~/.codex/config.toml inline secret into any "
+                   f"target file (leaked locations: {leaks})")
+    for loc, files in sorted(preexisting.items()):
+        print(f"  [FINDING] secret from {loc} already sat in plain text in the SOURCE "
+              f"and was carried 1:1 into: {sorted(files)} — redact it in source and "
+              f"target (not a migration leak; not a verify failure)")
+
+    for rel, n in sorted(detect.token_shape_hits(
+            td, [d for d in os.listdir(td) if d not in (".env", ".claude", ".mcp.json")]).items()):
+        print(f"  [WARN] {rel}: {n} credential-shaped string(s) in carried content "
+              f"(value not shown) — redact")
 
     # .env
     envp = os.path.join(td, ".env")
     if os.path.isfile(envp):
         chk(oct(os.stat(envp).st_mode & 0o777) == "0o600", ".env is 0600")
-        has_tok = any(
-            line.startswith("BOT_TOKEN=") and line.strip() != "BOT_TOKEN="
-            for line in open(envp, errors="ignore")
-        )
         if args.bot_mode == "none":
-            chk(not has_tok, ".env has no BOT_TOKEN (source still owns the bot)")
-            chk(cfg.get("telegram_polling") is False,
-                "telegram_polling false (bus-only copy; enable accepts it without a bot)")
+            env_lines = [line.strip() for line in open(envp, errors="ignore")]
+            tok_lines = [line for line in env_lines if line.startswith("BOT_TOKEN=")]
+            chk(
+                tok_lines == ["BOT_TOKEN="],
+                ".env sets BOT_TOKEN= explicitly EMPTY (absent would inherit an org "
+                "secrets.env BOT_TOKEN; the source still owns its bot)",
+            )
+            chk(
+                cfg.get("telegram_polling") is False,
+                "telegram_polling false (bus-only copy; enable accepts it without a bot)",
+            )
 
     # state
     sd = os.path.join(args.ctx_root, "state", args.target_agent)

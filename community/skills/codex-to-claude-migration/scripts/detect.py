@@ -127,6 +127,40 @@ SECRET_QUERY_RE = re.compile(
 )
 
 
+# Credential-shaped strings, for the carried-content warning (values never printed).
+TOKEN_SHAPE_RE = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_-]{16,}|sk_(?:live|test)_[A-Za-z0-9]{16,}|ntn_[A-Za-z0-9]{20,}|"
+    r"secret_[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+    r"xox[abpr]-[A-Za-z0-9-]{10,}|sbp_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}|"
+    r"AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|"
+    r"\d{8,10}:[A-Za-z0-9_-]{30,})|Bearer\s+[A-Za-z0-9._-]{20,}")
+
+
+def token_shape_hits(root, names=None):
+    """{relpath: count} of credential-shaped strings in text files under root (or only
+    under the given top-level names). Counts only; values are never returned."""
+    hits = {}
+    tops = [os.path.join(root, n) for n in names] if names is not None else [root]
+    for top in tops:
+        walk = [(os.path.dirname(top), [], [os.path.basename(top)])] \
+            if os.path.isfile(top) else (os.walk(top) if os.path.isdir(top) else [])
+        for dp, dn, fns in walk:
+            dn[:] = [d for d in dn if d not in ("node_modules", ".git", "__pycache__")
+                     and not VENV_RE.match(d)]
+            for fn in fns:
+                fp = os.path.join(dp, fn)
+                try:
+                    if os.path.islink(fp) or os.path.getsize(fp) > 5 * 1024 * 1024:
+                        continue
+                    txt = open(fp, errors="strict").read()
+                except Exception:
+                    continue
+                n = len(TOKEN_SHAPE_RE.findall(txt))
+                if n:
+                    hits[os.path.relpath(fp, root)] = n
+    return hits
+
+
 def read_json(path):
     try:
         with open(path) as f:
@@ -431,7 +465,7 @@ def detect(src_dir, ctx_root, agent, codex_config=None, framework_root=None):
             "bundled_present": [],
             "bundled_customized": [],
             "custom": [],
-            "claude_residue_only": [],
+            "claude_residue_only": [], "data_only": [],
         },
         "mcp": {
             "config_path": None,
@@ -476,6 +510,7 @@ def detect(src_dir, ctx_root, agent, codex_config=None, framework_root=None):
             ],
             "working_directory": cfg.get("working_directory", ""),
             "cron_count": len(cfg.get("crons") or []),
+            "cron_names": sorted({c.get("name") for c in cfg.get("crons") or [] if c.get("name")}),
         }
         if runtime != "codex-app-server":
             m["hard_stops"].append(
@@ -516,6 +551,39 @@ def detect(src_dir, ctx_root, agent, codex_config=None, framework_root=None):
                 if CODEX_IDENTITY_RE.search(line):
                     codex_lines.setdefault(fn, []).append(i)
     m["instructions"]["codex_wording_lines"] = codex_lines
+
+    # Files that still name the SOURCE agent (e.g. `--agent <src>`, a script default
+    # of CTX_AGENT_NAME:-<src>) or depend on codex-only artifacts. History is
+    # excluded: it is a record. Flagged, never rewritten (code and prose).
+    self_re = re.compile(r"(?<![\w.])" + re.escape(agent) + r"(?![\w-])")
+    codex_art = re.compile(r"codex-tokens\.jsonl|codex-app-server-thread")
+    refs = {}
+    scan_roots = [os.path.join(src_dir, f) for f in INSTRUCTION_FILES + ("goals.json",)]
+    for d in ("scripts", "tools", "bin"):
+        scan_roots.append(os.path.join(src_dir, d))
+    for root in scan_roots:
+        walk = [(os.path.dirname(root), [], [os.path.basename(root)])] \
+            if os.path.isfile(root) else (os.walk(root) if os.path.isdir(root) else [])
+        for dp, dn, fns in walk:
+            dn[:] = [x for x in dn if x not in ("node_modules", ".git", "__pycache__")]
+            for fn in fns:
+                fp = os.path.join(dp, fn)
+                try:
+                    if os.path.getsize(fp) > 2 * 1024 * 1024:
+                        continue
+                    txt = open(fp, errors="strict").read()
+                except Exception:
+                    continue
+                why = [w for w, rx in (("names source agent", self_re),
+                                       ("codex-only artifact", codex_art)) if rx.search(txt)]
+                if why:
+                    refs[os.path.relpath(fp, src_dir)] = why
+    m["instructions"]["source_self_refs"] = refs
+    if refs:
+        m["buckets"]["needs_human"].append(
+            f"{len(refs)} instruction/script file(s) still name '{agent}' or read "
+            f"codex-only artifacts (see instructions.source_self_refs) — repoint to the "
+            f"new agent or retire")
     if codex_lines:
         m["buckets"]["needs_human"].append(
             "instruction files describe the agent as a codex agent "
@@ -538,6 +606,15 @@ def detect(src_dir, ctx_root, agent, codex_config=None, framework_root=None):
             if not os.path.isdir(sp) or name in seen:
                 continue
             seen.add(name)
+            if not os.path.isfile(os.path.join(sp, "SKILL.md")):
+                # a dir with no SKILL.md is not a loadable skill (Claude ignores it);
+                # carry its files so nothing is lost, but never count it as a skill
+                m["skills"]["data_only"].append({"name": name,
+                                                 "path": os.path.relpath(sp, src_dir)})
+                m["buckets"]["needs_human"].append(
+                    f"skill dir '{name}' has no SKILL.md — carried as data into "
+                    f".claude/skills/{name}, not a working skill; restore its SKILL.md")
+                continue
             if name in CLAUDE_BUNDLED_SKILLS:
                 m["skills"]["bundled_present"].append(name)
                 tpl = _skill_md(os.path.join(codex_tpl, name))
@@ -638,6 +715,14 @@ def detect(src_dir, ctx_root, agent, codex_config=None, framework_root=None):
             "cannot have two pollers)"
         )
 
+    # --- crons: the live registry can hold crons config.json does not ---
+    regp = os.path.join(ctx_root, ".cortextOS", "state", "agents", agent, "crons.json")
+    reg = read_json(regp) or {}
+    reg_names = {c.get("name") for c in (reg.get("crons") or []) if c.get("name")}
+    cfg_names = set(m["config"].get("cron_names") or [])
+    m["config"]["registry_only_crons"] = sorted(reg_names - cfg_names)
+    m["config"]["cron_union_count"] = len(reg_names | cfg_names)
+
     # --- live state ---
     state = os.path.join(ctx_root, "state", agent)
     m["state"] = {
@@ -696,8 +781,26 @@ def detect(src_dir, ctx_root, agent, codex_config=None, framework_root=None):
                 )
             else:
                 m["buckets"]["port_verbatim"].append(name)
+    # sqlite sidecars travel with their database: a -wal/-shm/-journal copied without
+    # the db it belongs to is useless and misleading
+    skipped = {nc["name"] for nc in m["buckets"]["not_carried"]}
+    for name in list(m["buckets"]["port_verbatim"]):
+        for suf in ("-wal", "-shm", "-journal"):
+            if name.endswith(suf) and name[: -len(suf)] in skipped:
+                m["buckets"]["port_verbatim"].remove(name)
+                m["buckets"]["not_carried"].append(
+                    {"name": name, "reason": f"sqlite sidecar of not-carried "
+                                             f"{name[: -len(suf)]}"})
     if os.path.isfile(os.path.join(src_dir, "goals.json")):
         m["buckets"]["one_to_one"].append("goals.json")
+    # carried history is copied verbatim; warn (counts only) when it holds
+    # credential-shaped strings so they can be redacted before the copy is used
+    tok = token_shape_hits(src_dir, [n for n in m["buckets"]["port_verbatim"]])
+    m["carried_token_shapes"] = tok
+    if tok:
+        m["buckets"]["needs_human"].append(
+            f"WARNING: {sum(tok.values())} credential-shaped string(s) in {len(tok)} carried "
+            f"file(s) (see carried_token_shapes; values not shown) — redact before use")
     if os.path.isdir(os.path.join(src_dir, ".claude")):
         m["buckets"]["dropped"].append(
             ".claude/ in source (pre-codex residue) — target gets the template's"
