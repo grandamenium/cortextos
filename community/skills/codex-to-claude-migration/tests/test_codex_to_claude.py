@@ -123,6 +123,21 @@ ok(
     "env var names namespaced by server without double prefix",
 )
 
+# ---------- default model: Opus (owner decision) ----------
+print("[model] resolve_model")
+_acts = []
+ok(convert.resolve_model(None, [("best", "claude-fable-9"), ("best", "claude-opus-9-9"),
+                                ("strong", "claude-opus-9")], _acts) == "claude-opus-9-9",
+   "no --model: best-tier claude-opus-* wins over an earlier best-tier id")
+ok(convert.resolve_model(None, [("best", "claude-fable-9"), ("strong", "claude-opus-9")], _acts)
+   == "claude-opus-9", "no best-tier opus: any-tier claude-opus-* still preferred")
+_acts = []
+ok(convert.resolve_model(None, [("best", "opus"), ("best", "claude-fable-9")], _acts) == "claude-fable-9"
+   and any("NEEDS-HUMAN" in a for a in _acts), "no opus id at all: best-tier fallback, flagged")
+ok(convert.resolve_model("claude-sonnet-9", [("best", "claude-opus-9-9")], []) == "claude-sonnet-9",
+   "--model overrides the Opus default")
+ok(convert.resolve_model(None, [], []) is None, "empty list-models: model left unset")
+
 # ---------- verify helpers: convict + acquit ----------
 print("[verify] mcp_refs_only + find_leaks")
 ok(
@@ -161,7 +176,7 @@ try:
     os.makedirs(bindir)
     fake = os.path.join(bindir, "cortextos")
     open(fake, "w").write(
-        "#!/bin/sh\n[ \"$2\" = list-models ] && printf 'best      opus\\nbest      claude-test-9\\nfast      claude-mini-1\\n'\nexit 0\n"
+        "#!/bin/sh\n[ \"$2\" = list-models ] && printf 'best      opus\\nbest      claude-test-9\\nbest      claude-opus-9-9\\nstrong    claude-opus-9\\nfast      claude-mini-1\\n'\nexit 0\n"
     )
     os.chmod(fake, 0o755)
     env = dict(os.environ, HOME=home, PATH=bindir + os.pathsep + os.environ["PATH"])
@@ -345,8 +360,8 @@ try:
         "DRY-RUN writes nothing (target + state unchanged)",
     )
     ok(
-        json.loads(r.stdout)["model"] == "claude-test-9",
-        "model resolved to first best-tier claude-* id",
+        json.loads(r.stdout)["model"] == "claude-opus-9-9",
+        "default model = best-tier claude-opus-* id, not the first best-tier id",
     )
 
     r = subprocess.run(base + ["--apply"], capture_output=True, text=True, env=env)
@@ -359,7 +374,7 @@ try:
     cfg = json.load(open(os.path.join(tgt, "config.json")))
     ok(
         cfg["runtime"] == "claude-code"
-        and cfg["model"] == "claude-test-9"
+        and cfg["model"] == "claude-opus-9-9"
         and "codex_context_cap" not in cfg
         and cfg["ctx_handoff_threshold"] == 85
         and cfg["enabled"] is False and cfg["telegram_polling"] is False,

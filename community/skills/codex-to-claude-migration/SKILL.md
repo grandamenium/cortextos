@@ -28,7 +28,7 @@ never modified, disabled or stopped; the result is always a second agent.
 | `plugins/cortextos-agent-skills/skills/<x>`, `.agents/skills/<x>` | `.claude/skills/<x>` | bundled skills come from the claude skeleton; custom skills leakage-grepped then copied |
 | (no per-agent hooks; adapter does it natively) | `.claude/settings.json` hooks | from the skeleton; plan-mode / AskUserQuestion / PreCompact Telegram hooks are GAINED |
 | `~/.codex/config.toml [mcp_servers.*]` (host-global) | target `.mcp.json` | `${VAR}` references ONLY; secrets never copied; env vars to set are listed |
-| `config.json` runtime/model | `runtime: claude-code`, Claude model id | model resolved from `cortextos bus list-models claude-code` |
+| `config.json` runtime/model | `runtime: claude-code`, Claude model id | Opus by default: the `claude-opus-*` id from `cortextos bus list-models claude-code` |
 | crons (config.json + live registry) | `config.json` crons[] | UNION, paths translated, emitted in the daemon's config schema only (`name,type,interval,cron,fire_at,prompt`; a disabled cron is `type: "disabled"` — an `enabled` key makes the daemon REFUSE the cron) |
 | `.env` | `.env` (0600) | BOT_TOKEN NOT carried by default (source still polls the bot); the copy is marked bus-only with `telegram_polling: false`, without which `cortextos enable` refuses it |
 | `state/<src>/` | `state/<target>/` | `.onboarded` + continuity markers carried; codex thread files excluded; `.force-fresh` |
@@ -71,7 +71,8 @@ plus the JSON (stdout: `model`, `env_vars`, `actions`) is the approval artifact.
 ### STEP 3 — ASK, then WAIT
 
 - **Target name** (default `<source minus -codex>-claude`). Never the source's own dir.
-- **Model** (default: first best-tier Claude id from list-models; `--model` overrides).
+- **Model** (default: Opus — the `claude-opus-*` id from `cortextos bus list-models
+  claude-code`, best tier first; `--model` overrides).
 - **Bot**: `none` (default — no BOT_TOKEN; bus-only until a token is added) or
   `new` with a fresh @BotFather token (`--bot-mode new --new-bot-token <t>`).
   Reusing the source's bot is out of scope: it would require stopping the source.

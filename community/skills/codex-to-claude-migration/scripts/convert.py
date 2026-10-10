@@ -192,30 +192,29 @@ def list_claude_models(runner=None):
 
 
 def resolve_model(param, models, actions):
-    """--model wins (warned if the harness does not list it); else the first full
-    `claude-*` id in the `best` tier. None => leave unset (harness default)."""
+    """--model wins (warned if the harness does not list it). Default is Opus (owner
+    decision): the first full `claude-opus-*` id list-models reports, best tier
+    first. Without one, fall back to the first best-tier `claude-*` id and flag it.
+    None => leave unset (harness default)."""
     ids = [m for _, m in models]
     if param:
         if ids and param not in ids:
-            log(
-                actions,
-                f"WARNING: --model '{param}' is not in `cortextos bus list-models "
-                f"claude-code` — using it anyway; confirm the id",
-            )
+            log(actions, f"WARNING: --model '{param}' is not in `cortextos bus list-models "
+                         f"claude-code` — using it anyway; confirm the id")
         return param
+    opus = [m for t, m in models if t == "best" and m.startswith("claude-opus-")] or \
+        [m for _, m in models if m.startswith("claude-opus-")]
+    if opus:
+        log(actions, f"model: resolved '{opus[0]}' (default Opus id from list-models; "
+                     f"override with --model)")
+        return opus[0]
     for tier, mid in models:
         if tier == "best" and mid.startswith("claude-"):
-            log(
-                actions,
-                f"model: resolved '{mid}' (first best-tier Claude id from "
-                f"list-models; override with --model)",
-            )
+            log(actions, f"NEEDS-HUMAN: list-models reports no claude-opus-* id — fell back "
+                         f"to '{mid}' (first best-tier Claude id); confirm or pass --model")
             return mid
-    log(
-        actions,
-        "NEEDS-HUMAN: `cortextos bus list-models claude-code` returned nothing — "
-        "model left unset (Claude Code default); pass --model",
-    )
+    log(actions, "NEEDS-HUMAN: `cortextos bus list-models claude-code` returned nothing — "
+                 "model left unset (Claude Code default); pass --model")
     return None
 
 
@@ -732,7 +731,7 @@ def main():
     ap.add_argument(
         "--model",
         default=None,
-        help="Claude model id (default: first best-tier id from "
+        help="Claude model id (default: the claude-opus-* id from "
         "`cortextos bus list-models claude-code`)",
     )
     ap.add_argument(
