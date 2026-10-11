@@ -1,0 +1,29 @@
+# The claude "stdlib" — 24 skills bundled by `templates/agent/.claude/skills/`.
+# Any source skill whose name is in this list ships for free via
+# `cortextos add-agent --template agent` — it is NOT re-copied. Every codex-bundled
+# skill (templates/agent-codex, 23) is in this list. Only skills NOT listed here are
+# "custom" and are leakage-grepped + copied into .claude/skills/.
+activity-channel
+agent-browser
+agent-management
+approvals
+auto-skill
+autoresearch
+bus-reference
+comms
+cortext-self-diagnosis
+cron-management
+env-management
+event-logging
+guardrails-reference
+heartbeat
+human-tasks
+knowledge-base
+m2c1-worker
+memory
+onboarding
+soul-philosophy
+system-diagnostics
+tasks
+tool-registration
+worker-agents
