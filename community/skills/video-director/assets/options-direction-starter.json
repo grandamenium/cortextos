@@ -1,0 +1,61 @@
+{
+  "kind": "options",
+  "title": "Acme launch film",
+  "version": "v0.1",
+  "date": "2026-10-28",
+  "decision": "Direction",
+  "frames_dir": "options-direction-v0.1",
+  "summary": "Two directions that differ in their central idea, each with its whole visual plan.",
+  "options": [
+    {
+      "key": "A",
+      "name": "Hero in a color field",
+      "from": "Style name; plus the reference technique only if references were studied",
+      "summary": "One person, things arriving around them.",
+      "frames": [
+        {
+          "id": "01a",
+          "label": "Start of 01"
+        },
+        {
+          "id": "01b",
+          "label": "End of 01"
+        }
+      ],
+      "recommended": true,
+      "plan": {
+        "The idea": "One sentence with the product in it.",
+        "Product at the turn": "What the product does that the story needs.",
+        "Media": "Lead medium (at least half the film), plus each insert and its one job.",
+        "Drawing style": "One style, named exactly.",
+        "Recurring element": "What it is, how it changes state, where it appears in each medium.",
+        "Moving between ideas": "One way for the whole film.",
+        "End line": "Restates the idea."
+      }
+    },
+    {
+      "key": "B",
+      "name": "One surface, one camera",
+      "from": "Style name; plus the reference technique only if references were studied",
+      "summary": "The product as one tilted surface the camera glides across.",
+      "frames": [
+        {
+          "id": "03a",
+          "label": "Start of 03"
+        }
+      ],
+      "plan": {
+        "The idea": "",
+        "Product at the turn": "",
+        "Media": "",
+        "Drawing style": "",
+        "Recurring element": "",
+        "Moving between ideas": "",
+        "End line": ""
+      }
+    }
+  ],
+  "questions": [
+    "Which direction?"
+  ]
+}

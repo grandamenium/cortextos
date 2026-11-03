@@ -1,0 +1,144 @@
+{
+  "kind": "storyboard",
+  "type": "product-launch",
+  "narrated": false,
+  "title": "Acme launch film",
+  "version": "v0.1",
+  "date": "2026-10-28",
+  "format": "16:9, 1920×1080",
+  "length": "about 14 seconds",
+  "frames_dir": "frames-v0.1",
+  "style": {
+    "changes": "",
+    "dissolves": false,
+    "exits": "",
+    "emphasis": "",
+    "arrival": ""
+  },
+  "summary": "What is new in this version, in one or two sentences.",
+  "scenes": [
+    {
+      "id": "01",
+      "name": "Cold open",
+      "start": 0,
+      "end": 5,
+      "kind": "Warm",
+      "lines": [
+        "There's always another call",
+        "And never enough hours in the day"
+      ],
+      "frames": [
+        {
+          "id": "01a",
+          "label": "Start"
+        },
+        {
+          "id": "01b",
+          "label": "End"
+        }
+      ],
+      "change": "Chips pile up around the hero at different depths.",
+      "motion": [
+        {
+          "from": "01a",
+          "to": "01b",
+          "move": "Pile-up (overwhelm-surround)",
+          "timing": "0.3s first chip; from 3.0s one every 0.25s",
+          "easing": "expo.out landings, 0.45s each",
+          "carries": "the hero photo stays still with a 4% push-in"
+        }
+      ],
+      "sound": "Music builds as the pile grows; no arrival effects.",
+      "to_next": {
+        "move": "Gather into a tile",
+        "carries": "the hero's chip shrinks into the first mosaic tile",
+        "timing": "0.6s",
+        "easing": "power3.inOut; color hard-cuts on the first word",
+        "camera": "locked frame; hard color cut on motion"
+      }
+    },
+    {
+      "id": "02",
+      "name": "Platform",
+      "start": 5,
+      "end": 10,
+      "kind": "Warm → Cool",
+      "lines": [
+        "Acme is the platform",
+        "that knows your team"
+      ],
+      "frames": [
+        {
+          "id": "02a",
+          "label": "Ghost shape"
+        },
+        {
+          "id": "02b",
+          "label": "Half filled"
+        },
+        {
+          "id": "02c",
+          "label": "Full mosaic"
+        }
+      ],
+      "change": "Tiles fill the brand shape one group at a time.",
+      "motion": [
+        {
+          "from": "02a",
+          "to": "02b",
+          "move": "Tiles fly in on curved paths",
+          "timing": "60ms stagger, 0.5s each",
+          "easing": "expo.out"
+        },
+        {
+          "from": "02b",
+          "to": "02c",
+          "move": "Fill from the edges in",
+          "timing": "1.2s total",
+          "easing": "power2.out"
+        }
+      ],
+      "sound": "Music's first full beat lands with the last tile.",
+      "to_next": {
+        "move": "Push into one tile",
+        "carries": "the hero's tile opens into the product surface",
+        "timing": "1.4s",
+        "easing": "power2.inOut",
+        "camera": "push into one tile"
+      }
+    },
+    {
+      "id": "03",
+      "name": "Home",
+      "start": 10,
+      "end": 14,
+      "lines": [
+        "It sees what needs attention"
+      ],
+      "frames": [
+        "03a"
+      ],
+      "change": "The draft lifts toward the camera; the cursor clicks it.",
+      "motion": "Single frame: the call row lifts 120px toward the camera over 0.45s (power3.out) and unfolds into the draft; cursor travels 0.75s (power3.out), settles 0.15s, presses 0.08s; the draft writes in line by line; the result holds still 1.2s.",
+      "sound": "One click on the press."
+    }
+  ],
+  "rules": [
+    [
+      "One home position for lines",
+      "Top-center about 9% down; center only when nothing else is on screen."
+    ]
+  ],
+  "questions": [
+    "Can you send the official logo file and font?",
+    "Which names and logos may be shown?"
+  ],
+  "techniques": [
+    {
+      "name": "One persistent actor",
+      "where": "01 → 03",
+      "what": "The hero's chip becomes a mosaic tile, then opens into the product.",
+      "source": "Reference film notes"
+    }
+  ]
+}
