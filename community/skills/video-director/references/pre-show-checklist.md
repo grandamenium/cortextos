@@ -12,5 +12,6 @@ For every page or render you send, go through each frame and confirm, in writing
 8. Colors come from the brand, each with a job.
 9. Each picture says its line before it is read, and one drawing style holds across every frame.
 10. Renders: the scenes covered and every placeholder are listed first; in a film with people shown as footage, no person's action is a still with a push.
+11. Renders: every cut strip opened; the motion watch's findings confirmed or dismissed in frames, or the render reported as "not watched in motion".
 
 Then tell the user, in plain language: what changed since the last version, what you could not do or check, and the open questions. Put questions for the user at the bottom of the page as well.

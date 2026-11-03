@@ -12,7 +12,7 @@ description: >
   storyboard first" or "it feels like slides". Not for recording a real product screen as a demo, adding
   captions to existing footage, or a single standalone animation such as a logo sting or lower third.
 triggers: ["make a video", "animate this script", "make an explainer", "storyboard", "product launch video", "promo video", "brand film", "social short", "it feels like slides", "cut a 15-second version", "comedy ad", "video director"]
-external_calls: ["youtube.com (yt-dlp, reference films, only with the user's OK)", "OpenAI via the Codex CLI (still images)", "Higgsfield API via the higgsfield CLI (video clips, optional)", "registry.npmjs.org (npx hyperframes)", "cdn.jsdelivr.net (Simple Icons logos)", "commons.wikimedia.org (logos)"]
+external_calls: ["youtube.com (yt-dlp, reference films, only with the user's OK)", "OpenAI via the Codex CLI (still images)", "Higgsfield API via the higgsfield CLI (video clips, optional)", "generativelanguage.googleapis.com (Gemini API motion watch, optional, only with the user's OK)", "registry.npmjs.org (npx hyperframes)", "cdn.jsdelivr.net (Simple Icons logos)", "commons.wikimedia.org (logos)"]
 ---
 
 > **Bundled scripts require Python 3.** Run them with `python3` (or `python` if that is the only Python 3 your environment exposes).
@@ -100,7 +100,7 @@ Ask these as explicit decisions; never infer them or bury them in a settings lis
 - **Viewer**: who watches, what they know and doubt, where they watch, what they should think or do afterward.
 - **Length**: check it against the type's usual range.
 - **Names and logos**: which may be shown.
-- **Media tools**: their clip tool (Higgsfield, another, or none) and stills (Codex or their own photos). If the proof needs real motion and there's no clip tool, say so (`references/media.md`).
+- **Media tools**: their clip tool (Higgsfield, another, or none) and stills (Codex or their own photos). If the proof needs real motion and there's no clip tool, say so (`references/media.md`). Also ask whether cuts may be uploaded to Google's Gemini API for the motion watch (`references/build-and-qa.md`).
 - **Inspiration**: ask in these words: "Would you like to draw inspiration from reference videos or build something from scratch?" Reference videos: ask for any film or style they have in mind (a named film counts as a reference) and for an OK to download. From scratch: skip stage 3. Unsure: recommend one in a line (from scratch for a common type; references for an uncovered look or a high-stakes film).
 
 Write the answers into `brief.md`. Don't invent answers; ask.
@@ -178,7 +178,7 @@ Read `references/motion-library.md`, `references/motion-spec.md` and the type fi
 
 ### 8. Animated test
 
-Build the 2-4 hardest scenes in HyperFrames first (the type file may say otherwise), with `data-text-role` on every element that holds words, and run `scripts/check_render.py` on the test before showing it. Before writing composition HTML, read the HyperFrames tool's own docs (`npx hyperframes docs compositions`, `npx hyperframes docs data-attributes`, `npx hyperframes docs gsap`) and use `npx hyperframes check`, `preview` and `render`. Run the outside comparison in `references/build-and-qa.md` (a reference film of the same type, or the type's numbers for a film built from scratch) and report where ours loses. Ask the user to watch for pacing and for anything that still feels like slides. Build notes: `references/build-and-qa.md`.
+Build the 2-4 hardest scenes in HyperFrames first (the type file may say otherwise), with `data-text-role` on every element that holds words, and run `scripts/check_render.py` on the test before showing it. Before writing composition HTML, read the HyperFrames tool's own docs (`npx hyperframes docs compositions`, `npx hyperframes docs data-attributes`, `npx hyperframes docs gsap`) and use `npx hyperframes check`, `preview` and `render`. Run the outside comparison in `references/build-and-qa.md` (a reference film of the same type, or the type's numbers for a film built from scratch) and report where ours loses. Ask the user to watch for pacing and for anything that still feels like slides. Run the cut strips and motion watch from stage 9 on the test too. Build notes: `references/build-and-qa.md`.
 
 **Every render the user sees** opens by saying which scenes it covers and what is still a placeholder. In a film with people shown as footage, a person's action is moving footage (a generated or supplied clip), never a still with a push; a shot not ready is left out or marked as a placeholder on screen. In live-action story ads, the product's screen is a screen recording of the real app unless a rebuilt interface was approved at stage 5.
 
@@ -188,9 +188,11 @@ Build the rest and any cutdowns and render. **No render goes to the user until t
 
 ```bash
 python3 <skill>/scripts/check_render.py build/ --motion --video output/cut-v3.mp4 --out output/checks-v3
+python3 <skill>/scripts/cut_frames.py output/cut-v3.mp4 --out output/cuts-v3
+python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --upload-allowed --notes direction-notes.md
 ```
 
-The check measures text, reading windows and motion, and writes strips for visual review. Exact structural failures must be fixed. Contextual candidates need a recorded visual judgment; missing measurement coverage remains incomplete. Follow `references/build-and-qa.md` for review decisions, exceptions and dependency failures. Open every strip before showing the render.
+The check measures text, reading windows and motion, and writes strips for visual review. Exact structural failures must be fixed. Contextual candidates need a recorded visual judgment; missing measurement coverage remains incomplete. Follow `references/build-and-qa.md` for review decisions, exceptions and dependency failures. Open every strip before showing the render. The cut strips (required) and the motion watch run on every render the user sees, stage 8 onward. Pass `--upload-allowed` only if the brief allows uploads; confirm each watch finding in frames before acting; when it reports not watched, say "not watched in motion".
 
 Every element holding on-screen words carries `data-text-role`: `opening`, `line`, `emphasis`, `card`, `label`, `caption`, `name`, `typed`, `legal`, or a named UI role (`ui-title`, `ui-row`, `ui-pill`; one role per kind of UI text, so each is checked for one size). `ui-read` marks UI text the viewer must read.
 

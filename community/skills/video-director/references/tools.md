@@ -10,4 +10,6 @@
 | Render check | `scripts/check_render.py` | Required before any render goes out: text sizes by role, reading time, motion strips |
 | Script language | `scripts/scan_script.py` | Candidate surfacer; review in context |
 | Delivery size | `scripts/check_delivery.py` | Exact byte/frame limits |
+| Frames at every cut | `scripts/cut_frames.py` | Four frames around each cut, side by side |
+| Watching in motion | `scripts/watch_cut.py` (Gemini API, `GEMINI_API_KEY`) | A video model lists motion problems with times; candidates to confirm in frames |
 | Logos | Official files (Simple Icons, the company's brand page, Wikimedia Commons) | Check each SVG for scripts before use; note the source |

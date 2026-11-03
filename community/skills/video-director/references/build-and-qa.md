@@ -5,6 +5,7 @@
 - Building in HyperFrames
 - The render check (required)
 - Other checks before sending any render
+- Watching in motion
 - Blind comparison with a reference
 - Check against the type's numbers (films built from scratch)
 - Retiming
@@ -77,6 +78,30 @@ Make a contact sheet and read it, then check:
 - **Muted watch**: with the sound off, a first-time viewer can say what this is and what to do next (narration-led explainers excepted).
 
 Then get a fresh read: give a new agent only the render (or its contact sheets), the script and the design rules from SKILL.md, and ask for the three worst problems with timestamps. Fix those, and repeat until what comes back is minor.
+
+## Watching in motion
+
+Still frames miss what only shows in motion: a transition that jars, a person who jumps from one place to another between shots, a pointer that lands in the wrong spot and reads as two, a stretch that drags. Two checks run on every render the user sees, from the animated test on.
+
+**Frames at every cut** (always). `scripts/cut_frames.py` finds the cuts (or takes `--times` from the motion spec) and writes one strip per cut: 0.2 s and 0.07 s before, 0.07 s and 0.2 s after. Open every strip and look for a jump in where a person or object is, a pop, a doubled element or a flash.
+
+```bash
+python3 <skill>/scripts/cut_frames.py output/cut-v3.mp4 --out output/cuts-v3
+```
+
+**The motion watch** (on by default when a key is set up and the user allowed uploads in the brief). `scripts/watch_cut.py` uploads the cut to the Gemini API and asks `gemini-3.5-flash-lite` to watch it and list problems with times. It requests 10 frames a second; the API may use its 1 fps default instead (see below). Pass `--upload-allowed` only when the brief allows uploads: without it, nothing leaves the machine. Pass `--notes direction-notes.md` so deliberate choices (a long hold, a hard stop) aren't reported as faults.
+
+```bash
+python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --upload-allowed --notes direction-notes.md
+```
+
+- **Every finding is a candidate.** Pull frames at its time (8-10 fps, 1 s either side) and confirm it before changing anything; say which ones you confirmed and which you dismissed, and why.
+- **Check the frame rate it reports.** The script compares the token count with what each frame rate would cost and reports 10, 1 or unknown. At 1 or unknown, fast cuts and short pops may have been missed: lean on the cut strips and say so.
+- **Key**: `GEMINI_API_KEY` in the environment, or a `GEMINI_API_KEY=` line in a file passed with `--env-file`. The user makes the key in Google AI Studio.
+- **Upload permission**: the cut leaves the machine. Google keeps uploads up to 48 hours; the script deletes its upload whatever happens and records whether that worked (`upload_deleted`). On Google's free tier, content may be used to improve Google's products; on a paid tier it is not. For client work, ask in the brief whether this is allowed.
+- **Cost**: about $0.30 per million input tokens for Flash-Lite (Google's pricing page, November 2026). At 10 fps a minute of video is about 43,000 tokens, roughly 1-2 cents a watch; free-tier use costs nothing.
+- **No key, no permission, or an error**: the script exits 3 (or 1) and writes `status: not_watched` with the reason. Say "not watched in motion" and why in the report; never imply the cut was checked in motion.
+- **It is extra coverage, not a hold.** A render without the watch can go to the user with that line in the report. The cut strips and the render check are required.
 
 ## Blind comparison with a reference
 

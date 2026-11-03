@@ -29,7 +29,7 @@ A note that changes how something looks (a new end card, a different ground, a n
   ```
   Raise the crf by 2 and run it again if the file is still over 30 MB.
 - Add one line to the project's build log: the version, the notes it answers, and what changed.
-- The render check (`build-and-qa.md`) runs on every round before the render goes out.
+- The render check, the cut strips and the motion watch (`build-and-qa.md`) run on every round before the render goes out. Report the watch as watched (with the frame rate it used) or "not watched in motion".
 
 ## 4. When a check disagrees with a user choice
 
@@ -44,7 +44,7 @@ When the user still sees choppy motion after the render check passes, find the c
    ffmpeg -v info -ss <t-2> -t 4 -i output/cut-vN.mp4 -vf mpdecimate,showinfo -f null - 2>&1 | grep -o "pts_time:[0-9.]*"
    ```
    The times are counted from `<t-2>`. A gap of more than one frame between listed times while something should be moving means the render repeated frames there. Gaps during a hold are expected.
-2. Pull 8 fps strips at the time the user named (section 1) and look at every frame.
+2. Pull 8 fps strips at the time the user named (section 1) and look at every frame. If a key is set up, run `watch_cut.py` on a short clip around that time and compare its findings with the strips.
 3. Compare the render with the composition's own snapshot at the same frame (`npx hyperframes snapshot`). If they differ, something set earlier in the timeline has stayed applied in the render (a crop, a mask, a transform). Fix that state, not the timing. If they match, the move itself is the problem: see the motion findings table in `build-and-qa.md`.
 
 ## 6. An ideas pass every third round
