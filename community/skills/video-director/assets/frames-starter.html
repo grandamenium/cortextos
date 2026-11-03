@@ -1,0 +1,90 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Storyboard frames</title>
+<!-- Copy this file and frame-kit.js into the project's storyboard/ folder. Replace BRAND and FRAMES.
+     Render with: python3 <skill>/scripts/render_frames.py storyboard/frames.html --all --out storyboard/frames-v0.1 -->
+<script src="frame-kit.js"></script>
+</head>
+<body>
+<div id="stage"></div>
+<script>
+/* Brand tokens. Use flat brand colors with readable type contrast.
+   The mark is a mask (white = inside) in its own viewBox; it frames photos in SHAPE_MOSAIC. */
+const BRAND = {
+  size: [1920, 1080],
+  font: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif',
+  grounds: {
+    warm: "#c0262e",   // flat brand colors; a gradient only if the brand uses one
+    cool: "#3a55c8"
+  },
+  mark: {
+    viewBox: [400, 220],
+    mask: '<circle cx="120" cy="110" r="100" fill="white"/><rect x="190" y="20" width="190" height="180" rx="48" fill="white"/>'
+  },
+  caption: { mode: "top", size: 58, weight: 520 }
+};
+
+const IMG = (name) => `../assets/images/${name}`;
+const TEAM = ["face-a.png", "face-b.png", "face-c.png", "face-d.png", "face-e.png", "face-f.png"].map(IMG);
+const { GROUND, SWEEP, STAGE, SLAB, PHOTO, FACE, CHIP, SHAPE_MOSAIC, CAPTION, CURSOR, NOTE, far, VISUAL_TOP } = KIT;
+
+const FRAMES = {
+  /* Scene 01, start: one person, one thing arriving. The line stays at its top-center home position.
+     p.variant comes from #01a&variant=cool, so one frame can be rendered in each color option. */
+  "01a": (p) => `${GROUND(p.variant || "warm")}
+${PHOTO(IMG("hero.png"), 240, 240, 590, 620)}
+${CHIP(760, 300, FACE(TEAM[0], 64), "Jordan · calling", "Acme launch")}
+${CAPTION("There's always another <b>call</b>", { mode: "top" })}
+${NOTE("one chip lands near the phone; the last word swaps on a hard cut")}`,
+
+  /* Scene 01, end: the pile-up, near chips sharp and far ones blurred. */
+  "01b": (p) => `${GROUND(p.variant || "warm")}
+${PHOTO(IMG("hero.png"), 240, 240, 590, 620)}
+${CHIP(1180, 240, FACE(TEAM[1], 56), "Brief due", "Thursday", { extra: far(2), scale: .8 })}
+${CHIP(1420, 260, FACE(TEAM[2], 56), "Review deck", "2:00 PM", { extra: far(1), scale: .9 })}
+${CHIP(760, 300, FACE(TEAM[0], 64), "Jordan · calling", "Acme launch")}
+${CHIP(900, 720, FACE(TEAM[3], 64), "Deadline moved", "Today 5 PM")}
+${CHIP(1340, 640, FACE(TEAM[4], 56), "New request", "From Priya", { extra: far(1), scale: .9 })}
+${CAPTION("And never enough hours in the day", { mode: "top" })}
+${NOTE("chips land faster, at different depths; the first chip stays sharp until the build is complete")}`,
+
+  /* Scene 02, start: the color sweep is the change. A faint ghost of the mark shows the shape that will fill. */
+  "02a": () => `${SWEEP("warm", "cool", 0.55)}
+${SHAPE_MOSAIC(560, VISUAL_TOP() + 40, 800, { ghost: true })}
+${SHAPE_MOSAIC(560, VISUAL_TOP() + 40, 800, { photos: [IMG("hero.png")], keep: (r, c) => r === 1 && c === 1 })}
+${CAPTION("Acme is the platform")}
+${NOTE("the hero's chip shrinks into the first tile; cool sweeps in from the right")}`,
+
+  "02b": () => `${GROUND("cool")}
+${SHAPE_MOSAIC(560, VISUAL_TOP() + 40, 800, { ghost: true })}
+${SHAPE_MOSAIC(560, VISUAL_TOP() + 40, 800, { photos: TEAM, keep: (r, c) => (r + c) % 2 === 0 })}
+${CAPTION("that knows <b>your team</b>")}
+${NOTE("tiles fly in along curved paths and fill the ghost about halfway")}`,
+
+  "02c": () => `${GROUND("cool")}
+${SHAPE_MOSAIC(560, VISUAL_TOP() + 40, 800, { photos: TEAM })}
+${CAPTION("that knows <b>your team</b>")}`,
+
+  /* Scene 03: the product acting on something. One row lifts out of a surface that runs off the frame and
+     unfolds into a drafted reply while the cursor presses; the other rows stay behind, smaller and blurred.
+     No single white panel holding the whole scene. */
+  "03a": () => `${GROUND("cool")}
+${STAGE(16, -5, `
+${SLAB(-120, VISUAL_TOP() + 120, -160, 760, `<div style="font-size:30px;color:#6e6e78">Today</div>
+<div style="display:flex;align-items:center;gap:16px;font-size:30px;margin-top:18px">${FACE(TEAM[1], 48)} Review Priya's deck</div>
+<div style="display:flex;align-items:center;gap:16px;font-size:30px;margin-top:18px">${FACE(TEAM[2], 48)} Call with Jordan, 3:15</div>`, far(1))}
+${SLAB(760, VISUAL_TOP() + 60, 140, 640, `<div style="display:flex;align-items:center;gap:16px;font-size:32px;font-weight:620">${FACE(TEAM[0], 56)} Follow-up to Jordan</div>
+<div style="font-size:24px;color:#6e6e78;margin:14px 0 18px">Drafted from the 3:15 call</div>
+<div style="font-size:26px;line-height:1.45">Hi Jordan, here are the three changes we agreed on, with the new launch date</div>`)}`)}
+${CURSOR(1250, 610)}
+${CAPTION("It sees what needs attention")}
+${NOTE("the call row lifts toward the camera and unfolds into the draft; cursor approaches, settles, presses; the draft writes in line by line")}`
+};
+
+KIT.install();
+KIT.renderFrame();
+</script>
+</body>
+</html>

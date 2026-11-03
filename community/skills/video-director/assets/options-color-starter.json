@@ -1,0 +1,44 @@
+{
+  "kind": "options",
+  "title": "Acme launch film",
+  "version": "v0.1",
+  "date": "2026-10-28",
+  "decision": "Color treatment",
+  "frames_dir": "options-color-v0.1",
+  "summary": "One direction in two color treatments. Switch at the top.",
+  "variants": {
+    "label": "Color",
+    "items": [
+      {
+        "key": "warm",
+        "name": "Warm"
+      },
+      {
+        "key": "cool",
+        "name": "Cool"
+      }
+    ]
+  },
+  "options": [
+    {
+      "key": "A",
+      "name": "Hero in a color field",
+      "from": "Style name; plus the reference technique only if references were studied",
+      "summary": "One person, things arriving around them.",
+      "frames": [
+        {
+          "id": "01a",
+          "label": "Start of 01"
+        },
+        {
+          "id": "01b",
+          "label": "End of 01"
+        }
+      ],
+      "recommended": true
+    }
+  ],
+  "questions": [
+    "Which color treatment?"
+  ]
+}

@@ -361,6 +361,18 @@
       "dependencies": [],
       "install_path": "community/skills/claude-to-codex-migration",
       "submitted_at": "2026-07-31T16:35:00Z"
+    },
+    {
+      "name": "video-director",
+      "description": "Directs short videos (about 6 s to 3 min) that mix motion graphics with generated or supplied photos and clips: brief and script, 2-3 design options at every decision, a zoomable storyboard with reviewer notes, a motion spec, an animated test and a HyperFrames build, with render checks for text size, reading time and choppy motion.",
+      "author": "SallyRS",
+      "type": "skill",
+      "version": "1.0.0",
+      "tags": ["video", "motion-graphics", "storyboard", "hyperframes", "explainer", "product-launch", "ads"],
+      "review_status": "pending",
+      "dependencies": [],
+      "install_path": "community/skills/video-director",
+      "submitted_at": "2026-11-03T05:07:59Z"
     }
   ]
 }
