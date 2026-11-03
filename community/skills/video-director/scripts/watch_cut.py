@@ -4,7 +4,7 @@
 python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --upload-allowed --notes direction-notes.md
 
 Uploads the MP4 to the Gemini API (Files API), asks the model to watch it at --fps frames a second, and writes
-watch.json and watch.md: awkward transitions, jumps in space or continuity, frozen or jerky stretches, things
+watch.json and watch.md: the shots as the model saw them, then still photos standing in for action, awkward transitions, jumps in space or continuity, frozen or jerky stretches, things
 appearing or disappearing, text or pointers in the wrong place, and pacing that drags, each with a time. The
 findings are candidates: pull frames at each time and confirm before changing anything. The upload is deleted
 afterwards whatever happens (Google also deletes uploads after 48 hours); watch.json records whether it was.
@@ -36,18 +36,27 @@ import urllib.parse
 import urllib.request
 
 API = "https://generativelanguage.googleapis.com"
-MODEL = "gemini-3.5-flash-lite"
+MODEL = "gemini-3.6-flash"   # caught every known problem in the calibration renders; Flash-Lite missed still photos
 # Gemini 3 models at the default media resolution: 70 tokens per video frame, 25 per second of audio
 # (Google AI Studio docs, media-resolution page, read 2026-11-03).
 TOKENS_PER_FRAME = 70
 AUDIO_TOKENS_PER_S = 25
-KINDS = ["transition", "continuity-jump", "frozen", "jerky", "pop-in", "pop-out", "misplaced-text",
+KINDS = ["still-as-motion", "transition", "continuity-jump", "frozen", "jerky", "pop-in", "pop-out", "misplaced-text",
          "misplaced-pointer", "pacing", "other"]
 
-PROMPT = """You are checking a short rendered video before a client sees it. Watch it in motion and list every
-place a first-time viewer would notice something wrong. Look for:
+PROMPT = """You are a strict video editor checking a short rendered video before a client sees it. The client has
+seen polished ads and will notice anything that looks cheap. Watch it in motion.
+
+Step 1. Go through the video shot by shot. For each shot give its start and end in seconds, what happens, and what
+actually moves: is it live footage where people or things move on their own, or a still picture (a photo, a
+screenshot) that only the camera zooms or slides across? Be literal: a person who keeps the exact same pose while
+the frame slowly enlarges is a still photo, not footage.
+
+Step 2. List every place a first-time viewer would notice something wrong:
+- still-as-motion: a still photo or screenshot standing in for an action (a person's head shake, a reach, sitting
+  down, typing; an app being used), so it reads as a slideshow
 - transition: an awkward or abrupt change between shots or layouts; a flash, an empty frame, a bad crossfade
-- continuity-jump: a person or object jumps to another place, pose or outfit between shots for no reason
+- continuity-jump: a person or object jumps to another place, pose or outfit between shots with no action between
 - frozen: a stretch where nothing moves that is not a deliberate final hold
 - jerky: motion that stutters, steps or changes speed suddenly
 - pop-in / pop-out: something appears or disappears with no cause
@@ -55,9 +64,10 @@ place a first-time viewer would notice something wrong. Look for:
   something it should not, or pointing at the wrong thing
 - pacing: a stretch that drags, or text that leaves before it can be read
 - other: anything else clearly wrong
-Give times as seconds from the start of the video (numbers, not m:ss). Report only what you can see or hear; if the
-video looks fine, return {"findings": []}. Return JSON only, in this shape:
-{"findings": [{"start": 3.2, "end": 3.6, "kind": "transition", "severity": "high", "what": "one plain sentence"}]}
+Finding nothing is rare in a draft; look again before returning an empty list. Give times as seconds from the start
+(numbers, not m:ss). Report only what you can see or hear. Return JSON only, in this shape:
+{"shots": [{"start": 0.0, "end": 2.4, "what_happens": "...", "what_moves": "footage: she walks to the desk"}],
+ "findings": [{"start": 3.2, "end": 3.6, "kind": "still-as-motion", "severity": "high", "what": "one plain sentence"}]}
 severity is high, medium or low."""
 
 
@@ -88,10 +98,17 @@ def request(method: str, url: str, key: str, data: bytes | None = None, headers:
             timeout: float = 600) -> tuple[dict, dict]:
     if not allowed_host(url):
         raise NotWatched(f"refusing to send the API key to {urllib.parse.urlparse(url).hostname}")
-    req = urllib.request.Request(url, data=data, method=method, headers={"x-goog-api-key": key, **(headers or {})})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read()
-        return (json.loads(body) if body.strip() else {}), {k.lower(): v for k, v in resp.headers.items()}
+    for attempt in range(4):
+        req = urllib.request.Request(url, data=data, method=method, headers={"x-goog-api-key": key, **(headers or {})})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read()
+                return (json.loads(body) if body.strip() else {}), {k.lower(): v for k, v in resp.headers.items()}
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 500, 503) or attempt == 3:
+                raise
+            time.sleep(10 * (attempt + 1))   # the model is busy; Google says spikes are usually short
+    raise RuntimeError("unreachable")
 
 
 def probe(video: Path) -> tuple[float, bool]:
@@ -143,6 +160,22 @@ def seconds_of(value) -> float:
     if not m:
         raise ValueError(f"not a time: {value!r}")
     return int(m.group(1) or 0) * 60 + float(m.group(2))
+
+
+def parse_shots(text: str) -> list[dict]:
+    try:
+        data = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip()))
+    except json.JSONDecodeError:
+        return []
+    shots = data.get("shots") if isinstance(data, dict) else None
+    out = []
+    for sh in shots if isinstance(shots, list) else []:
+        try:
+            out.append({"start": round(seconds_of(sh["start"]), 2), "end": round(seconds_of(sh.get("end", sh["start"])), 2),
+                        "what_happens": str(sh.get("what_happens", "")).strip(), "what_moves": str(sh.get("what_moves", "")).strip()})
+        except (KeyError, ValueError, TypeError, AttributeError):
+            continue
+    return out
 
 
 def parse_findings(text: str, total: float) -> tuple[list[dict], int]:
@@ -201,6 +234,9 @@ def write(out: Path, report: dict) -> None:
             lines += ["", report["note"]]
         lines += ["", f"{len(report['findings'])} candidate(s). Pull frames at each time and confirm before acting.", ""]
         lines += [f"- **{f['start']:.2f}-{f['end']:.2f}s** {f['kind']} ({f['severity']}): {f['what']}" for f in report["findings"]]
+        if report.get("shots"):
+            lines += ["", "## Shots as the model saw them", ""]
+            lines += [f"- {sh['start']:.2f}-{sh['end']:.2f}s: {sh['what_happens']} ({sh['what_moves']})" for sh in report["shots"]]
     if "upload_deleted" in report:
         lines += ["", f"Upload deleted from Google: {'yes' if report['upload_deleted'] else 'NO, it stays up to 48 hours'}."]
     (out / "watch.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -239,6 +275,7 @@ def watch(args, base: dict) -> dict:
     if not text.strip():
         raise NotWatched(f"the model returned no answer: {json.dumps(resp)[:300]}")
     findings, dropped = parse_findings(text, seconds)
+    shots = parse_shots(text)
     usage = resp.get("usageMetadata") or {}
     fps = applied_fps(usage.get("promptTokenCount"), prompt, seconds, audio, args.fps)
     if fps == args.fps:
@@ -252,7 +289,7 @@ def watch(args, base: dict) -> dict:
         note += f" {dropped} finding(s) had no usable time or fell outside the video and were dropped."
     return {**base, "status": "watched", "seconds": round(seconds, 2), "fps_applied": fps,
             "prompt_tokens": usage.get("promptTokenCount"), "output_tokens": usage.get("candidatesTokenCount"),
-            "note": note.strip(), "findings": findings}
+            "note": note.strip(), "findings": findings, "shots": shots}
 
 
 def main() -> int:

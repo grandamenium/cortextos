@@ -89,17 +89,19 @@ Still frames miss what only shows in motion: a transition that jars, a person wh
 python3 <skill>/scripts/cut_frames.py output/cut-v3.mp4 --out output/cuts-v3
 ```
 
-**The motion watch** (on by default when a key is set up and the user allowed uploads in the brief). `scripts/watch_cut.py` uploads the cut to the Gemini API and asks `gemini-3.5-flash-lite` to watch it and list problems with times. It requests 10 frames a second; the API may use its 1 fps default instead (see below). Pass `--upload-allowed` only when the brief allows uploads: without it, nothing leaves the machine. Pass `--notes direction-notes.md` so deliberate choices (a long hold, a hard stop) aren't reported as faults.
+**The motion watch** (on by default when a key is set up and the user allowed uploads in the brief). `scripts/watch_cut.py` uploads the cut to the Gemini API and asks `gemini-3.6-flash` to describe each shot and what moves in it, then list problems with times, including still photos or screenshots standing in for an action. It requests 10 frames a second; the API may use its 1 fps default instead (see below). Pass `--upload-allowed` only when the brief allows uploads: without it, nothing leaves the machine. Pass `--notes direction-notes.md` so deliberate choices (a long hold, a hard stop) aren't reported as faults.
 
 ```bash
 python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --upload-allowed --notes direction-notes.md
 ```
 
+- **Read its shot list too** (`watch.md`): a shot it calls a still picture is a finding even if it didn't list it.
 - **Every finding is a candidate.** Pull frames at its time (8-10 fps, 1 s either side) and confirm it before changing anything; say which ones you confirmed and which you dismissed, and why.
 - **Check the frame rate it reports.** The script compares the token count with what each frame rate would cost and reports 10, 1 or unknown. At 1 or unknown, fast cuts and short pops may have been missed: lean on the cut strips and say so.
 - **Key**: `GEMINI_API_KEY` in the environment, or a `GEMINI_API_KEY=` line in a file passed with `--env-file`. The user makes the key in Google AI Studio.
 - **Upload permission**: the cut leaves the machine. Google keeps uploads up to 48 hours; the script deletes its upload whatever happens and records whether that worked (`upload_deleted`). On Google's free tier, content may be used to improve Google's products; on a paid tier it is not. For client work, ask in the brief whether this is allowed.
-- **Cost**: about $0.30 per million input tokens for Flash-Lite (Google's pricing page, November 2026). At 10 fps a minute of video is about 43,000 tokens, roughly 1-2 cents a watch; free-tier use costs nothing.
+- **Model**: `gemini-3.6-flash` by default. In calibration on renders with known problems it caught three still photos standing in for a person's actions and a jumping cursor, and reported nothing in a clean cut; `gemini-3.5-flash-lite` caught one of the three stills, so don't use it to save money. `--model gemini-3.8-flash` is newer at the same price but untested here. Busy-model errors are retried three times.
+- **Cost**: $0.75 per million input tokens and $3.75 per million output tokens for 3.6 Flash until 31 December 2026, then double (Google's pricing page, November 2026). At 10 fps a minute of video is about 43,000 tokens, roughly 3-4 cents a watch (6-8 cents from 2027); free-tier use costs nothing.
 - **No key, no permission, or an error**: the script exits 3 (or 1) and writes `status: not_watched` with the reason. Say "not watched in motion" and why in the report; never imply the cut was checked in motion.
 - **It is extra coverage, not a hold.** A render without the watch can go to the user with that line in the report. The cut strips and the render check are required.
 
