@@ -50,3 +50,32 @@ test('a crash reservation never emits again', () => {
   writeFileSync(join(dir, 'state/notices/cortext-v2-release.json'), '');
   const result = run(dir); assert.equal(result.status, 0); assert.equal(result.stdout, '');
 });
+
+function instrumentedRun(dir, failedSync) {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const descriptors = new Map(), synced = [], output = [];
+  const process = { env: { CTX_ROOT: dir }, stdout: { write: text => output.push(text) }, stderr: { write() {} }, exitCode: 0 };
+  const instrumented = { ...fs,
+    openSync(path, ...args) { const fd = fs.openSync(path, ...args); descriptors.set(fd, path); return fd; },
+    fsyncSync(fd) {
+      const path = descriptors.get(fd); synced.push(path);
+      if (path === failedSync) throw Object.assign(new Error('fixture sync failure'), { code: 'EIO' });
+      fs.fsyncSync(fd);
+    },
+  };
+  vm.runInNewContext(readFileSync(helper, 'utf8'), { require: name => name === 'node:fs' ? instrumented : require(name), process });
+  return { synced, output, process };
+}
+
+test('new parent entries are synced before reservation and output', () => {
+  const dir = root(), result = instrumentedRun(dir);
+  assert.deepEqual(result.synced, [dir, join(dir, 'state'), join(dir, 'state/notices/cortext-v2-release.json'), join(dir, 'state/notices')]);
+  assert.equal(result.output.length, 1);
+});
+
+test('parent sync failure emits zero bytes', () => {
+  for (const parent of ['', 'state']) {
+    const dir = root(), result = instrumentedRun(dir, join(dir, parent));
+    assert.equal(result.output.length, 0); assert.equal(result.process.exitCode, 1);
+  }
+});

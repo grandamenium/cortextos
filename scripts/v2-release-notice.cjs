@@ -3,7 +3,7 @@
 
 // Called by the existing updater agent after a normal V1 merge. No daemon, migration, or network work.
 const { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, writeFileSync } = require('node:fs');
-const { isAbsolute, join, parse, resolve } = require('node:path');
+const { dirname, isAbsolute, join, parse, resolve } = require('node:path');
 
 const NOTICE_ID = 'cortext-v2-release';
 const NOTICE = 'Cortext V2 is out. V2 comes with Agent Architects membership: join.agentarchitects.net; your current version keeps working. If you choose to install V2, its orchestrator will offer to help bring your agents over.';
@@ -13,6 +13,13 @@ function directory(path, create) {
     try { mkdirSync(path, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
   if (!lstatSync(path).isDirectory()) throw new Error('Notice state must use real directories, not links');
+  // Also sync an existing entry: a previous attempt may have created it but failed its parent sync.
+  if (create) syncDirectory(dirname(path));
+}
+
+function syncDirectory(path) {
+  const fd = openSync(path, 'r');
+  try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
 function emitNotice() {
@@ -37,8 +44,7 @@ function emitNotice() {
     fsyncSync(fd);
   } finally { closeSync(fd); }
   // Persist the directory entry before output. A storage failure produces no notice.
-  const dir = openSync(notices, 'r');
-  try { fsyncSync(dir); } finally { closeSync(dir); }
+  syncDirectory(notices);
   process.stdout.write(`${NOTICE}\n`);
 }
 
