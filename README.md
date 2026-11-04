@@ -1,3 +1,5 @@
+> **Cortext V2 is out.** V2 comes with Agent Architects membership: [join.agentarchitects.net](https://join.agentarchitects.net). Your current version keeps working. If you choose to install [V2](https://github.com/Agent-Architects/cortextos), its orchestrator will offer to help bring your agents over.
+
 ![npm version](https://img.shields.io/npm/v/cortextos) ![License](https://img.shields.io/badge/license-MIT-green) ![Node](https://img.shields.io/badge/node-20%2B-brightgreen) ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 
 # cortextOS
