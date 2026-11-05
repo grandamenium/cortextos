@@ -79,7 +79,7 @@ cp -r "$CTX_FRAMEWORK_ROOT/templates/$TEMPLATE" \
 # Same getUpdates response: .result[0].message.from.id
 
 # Step 5: Write .env (CRITICAL - do this BEFORE cortextos enable)
-cat > "$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT_NAME/.env" << EOF
+cat > "$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT_NAME/.env" <<'EOF'
 BOT_TOKEN=<token from BotFather>
 CHAT_ID=<chat_id from getUpdates>
 ALLOWED_USER=<user_id from getUpdates>
@@ -116,11 +116,7 @@ THEIR_USER_ID="<THEIR user_id>"
 cortextos add-agent "$AGENT_NAME" --template agent --org "$ORG"
 
 # Step 2: Write THEIR .env (CRITICAL - must be THEIR credentials)
-cat > "$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT_NAME/.env" << EOF
-BOT_TOKEN=$THEIR_BOT_TOKEN
-CHAT_ID=$THEIR_CHAT_ID
-ALLOWED_USER=$THEIR_USER_ID
-EOF
+printf 'BOT_TOKEN=%s\nCHAT_ID=%s\nALLOWED_USER=%s\n' "$THEIR_BOT_TOKEN" "$THEIR_CHAT_ID" "$THEIR_USER_ID" > "$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT_NAME/.env"
 chmod 600 "$CTX_FRAMEWORK_ROOT/orgs/$ORG/agents/$AGENT_NAME/.env"
 
 # Step 3: Enable

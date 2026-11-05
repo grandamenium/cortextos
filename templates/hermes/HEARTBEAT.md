@@ -53,14 +53,13 @@ cortextos bus log-event heartbeat agent_heartbeat info --meta '{"agent":"'$CTX_A
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
-cat >> "memory/$TODAY.md" << MEMORY
-
-## Heartbeat Update - $(date -u +%H:%M)
+{ printf '\n## Heartbeat Update - %s\n' "$(date -u +%H:%M)"; cat <<'MEMORY'
 - WORKING ON: <task_id or "none">
 - Status: <healthy/working/blocked>
 - Inbox: <N messages processed>
 - Next action: <what you will do next>
 MEMORY
+} >> "memory/$TODAY.md"
 ```
 
 ## Step 6: Re-index memory to KB

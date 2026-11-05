@@ -40,14 +40,13 @@ cortextos bus log-event heartbeat agent_heartbeat info --meta '{"agent":"'$CTX_A
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
-cat >> "memory/$TODAY.md" << MEMORY
-
-## Heartbeat Update - $(date -u +'%H:%M UTC')
+{ printf '\n## Heartbeat Update - %s\n' "$(date -u +'%H:%M UTC')"; cat <<'MEMORY'
 - WORKING ON: <task_id or none>
 - CRM status: <contacts/followups/drafts/meetings>
 - Inbox: <clear / pending / blocked>
 - Next action: <what happens next>
 MEMORY
+} >> "memory/$TODAY.md"
 ```
 
 ## 6. Resume Highest Priority Work

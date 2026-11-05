@@ -24,15 +24,14 @@ Session-scoped context journal. Written at key checkpoints, not continuously.
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
 mkdir -p memory
-cat >> "memory/$TODAY.md" << MEMEOF
-
-## Session Start - $(date -u +'%H:%M:%S UTC')
+{ printf '\n## Session Start - %s\n' "$(date -u +'%H:%M:%S UTC')"; cat <<'MEMEOF'
 - Status: online
 - Crons active: <output of `cortextos bus list-crons $CTX_AGENT_NAME`>
 - Inbox: <N messages or "empty">
 - Current state: <where things stand — what is in progress, pending, or needs attention>
 - Resuming: <what to do next and why, with enough context to act without re-reading everything>
 MEMEOF
+} >> "memory/$TODAY.md"
 ```
 
 ### Mid-work inline note (write immediately when something important happens)
@@ -44,29 +43,27 @@ Don't wait for the heartbeat. Use for: significant decisions, user preferences l
 ### On heartbeat
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
-cat >> "memory/$TODAY.md" << MEMEOF
-
-## Heartbeat - $(date -u +'%H:%M:%S UTC')
+{ printf '\n## Heartbeat - %s\n' "$(date -u +'%H:%M:%S UTC')"; cat <<'MEMEOF'
 - Current focus: <what I am working on and why>
 - Active threads: <anything in progress or being monitored — state of each>
 - Key decisions: <decisions made since last entry with brief rationale>
 - Context notes: <anything non-obvious — user preferences, environment state, blockers>
 - Next: <what I am doing next>
 MEMEOF
+} >> "memory/$TODAY.md"
 ```
 
 ### On session end (before any restart)
 ```bash
 TODAY=$(date -u +%Y-%m-%d)
-cat >> "memory/$TODAY.md" << MEMEOF
-
-## Session End - $(date -u +'%H:%M:%S UTC')
+{ printf '\n## Session End - %s\n' "$(date -u +'%H:%M:%S UTC')"; cat <<'MEMEOF'
 - Status: [done/interrupted/context-full]
 - Current state: [where things stand — specific enough that the next session can resume cold]
 - Active threads: [anything in progress or mid-task with current state]
 - Key decisions: [significant decisions from this session worth carrying forward]
 - For next session: [what to do first and what context is needed]
 MEMEOF
+} >> "memory/$TODAY.md"
 ```
 
 ### Reading today's memory (on resume)

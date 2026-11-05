@@ -497,7 +497,7 @@ cd "$CTX_FRAMEWORK_ROOT" && cortextos add-agent <analyst_name> --template analys
 # Write .env for the analyst
 # IMPORTANT: ALLOWED_USER must be the NUMERIC Telegram user ID (e.g. 1234567890), NOT a username.
 # Use the same user ID from your own .env (ORCH_USER_ID from Phase 6a setup).
-cat > "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/agents/<analyst_name>/.env" << EOF
+cat > "${CTX_FRAMEWORK_ROOT}/orgs/${CTX_ORG}/agents/<analyst_name>/.env" <<'EOF'
 BOT_TOKEN=<token from user>
 CHAT_ID=<chat_id from getUpdates>
 ALLOWED_USER=<numeric user ID from getUpdates - same as your ORCH_USER_ID>
