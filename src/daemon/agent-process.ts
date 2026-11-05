@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { join, sep } from 'path';
+import { join } from 'path';
 import { homedir } from 'os';
 import type { AgentConfig, AgentStatus, CtxEnv } from '../types/index.js';
 import { AgentPTY } from '../pty/agent-pty.js';
@@ -7,6 +7,7 @@ import { CodexAppServerPTY } from '../pty/codex-app-server-pty.js';
 import { HermesPTY, hermesDbExists } from '../pty/hermes-pty.js';
 import { OpencodePTY, opencodeSessionExists } from '../pty/opencode-pty.js';
 import { MessageDedup, injectMessage as injectMessageIntoPty } from '../pty/inject.js';
+import { findClaudeProjectDir } from '../utils/claude-project-dir.js';
 import type { TelegramAPI } from '../telegram/api.js';
 import type { MessageConnector } from '../connectors/index.js';
 import { TelegramConnector } from '../connectors/index.js';
@@ -989,15 +990,11 @@ export class AgentProcess {
     const launchDir = this.config.working_directory || this.env.agentDir;
     if (!launchDir) return false;
 
-    // Claude projects dir uses the absolute path with all separators replaced by dashes
-    // e.g. /Users/foo/agents/boss -> -Users-foo-agents-boss (leading sep becomes -)
+    // Claude Code's own projects-dir naming (utils/claude-project-dir.ts): physical path,
+    // every non-alphanumeric character -> "-", long paths hashed.
     // Use homedir() for cross-platform compatibility (HOME is not set on Windows).
-    const convDir = join(
-      homedir(),
-      '.claude',
-      'projects',
-      launchDir.split(sep).join('-'),
-    );
+    const convDir = findClaudeProjectDir(join(homedir(), '.claude', 'projects'), launchDir);
+    if (!convDir) return false;
 
     try {
       const files = require('fs').readdirSync(convDir);
