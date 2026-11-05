@@ -23,6 +23,7 @@ import { stripBom } from '../utils/strip-bom.js';
 import { BuzzRelayClient, BuzzDispatcher, loadBuzzConfig, type NostrEvent } from '../buzz/index.js';
 import { computeDormancy, parseHeartbeatIntervalMs } from '../utils/dormancy.js';
 import { CRONS_DIRECTORY, CRONS_FILENAME } from '../bus/crons-schema.js';
+import { discoverSourceAgentCandidates } from './agent-discovery.js';
 
 type LogFn = (msg: string) => void;
 
@@ -2001,40 +2002,10 @@ export class AgentManager {
    * lookups via `resolveAgentOrg()`.
    */
   private discoverAgents(): Array<{ name: string; dir: string; org: string; config: AgentConfig }> {
-    const agents: Array<{ name: string; dir: string; org: string; config: AgentConfig }> = [];
-
-    const orgsBase = join(this.frameworkRoot, 'orgs');
-    if (!existsSync(orgsBase)) return agents;
-
-    let orgNames: string[] = [];
-    try {
-      orgNames = readdirSync(orgsBase, { withFileTypes: true })
-        .filter(d => d.isDirectory())
-        .map(d => d.name);
-    } catch {
-      return agents; // unreadable orgs dir — treat as empty
-    }
-
-    for (const org of orgNames) {
-      const agentsBase = join(orgsBase, org, 'agents');
-      if (!existsSync(agentsBase)) continue;
-
-      try {
-        const dirs = readdirSync(agentsBase, { withFileTypes: true })
-          .filter(d => d.isDirectory())
-          .map(d => d.name);
-
-        for (const name of dirs) {
-          const dir = join(agentsBase, name);
-          const config = this.loadAgentConfig(dir);
-          agents.push({ name, dir, org, config });
-        }
-      } catch {
-        // Ignore read errors for this org — continue scanning others
-      }
-    }
-
-    return agents;
+    return discoverSourceAgentCandidates(this.frameworkRoot).map(candidate => ({
+      ...candidate,
+      config: this.loadAgentConfig(candidate.dir),
+    }));
   }
 
   /**

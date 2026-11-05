@@ -1,8 +1,9 @@
 import { Command } from 'commander';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
+import { discoverSourceAgentCandidates } from '../daemon/agent-discovery.js';
 
 export const ecosystemCommand = new Command('ecosystem')
   .option('--instance <id>', 'Instance ID', 'default')
@@ -23,22 +24,9 @@ export const ecosystemCommand = new Command('ecosystem')
       projectRoot = existsSync(join(canonical, 'orgs')) ? canonical : process.cwd();
     }
 
-    // Find all agents
-    const agents: Array<{ name: string; dir: string; org?: string }> = [];
-
-    // Scan orgs/*/agents/*
-    const orgsDir = join(projectRoot, 'orgs');
-    if (existsSync(orgsDir)) {
-      for (const org of readdirSync(orgsDir, { withFileTypes: true })) {
-        if (!org.isDirectory()) continue;
-        const agentsDir = join(orgsDir, org.name, 'agents');
-        if (!existsSync(agentsDir)) continue;
-        for (const agent of readdirSync(agentsDir, { withFileTypes: true })) {
-          if (!agent.isDirectory()) continue;
-          agents.push({ name: agent.name, dir: join(agentsDir, agent.name), org: org.name });
-        }
-      }
-    }
+    // Use the daemon's own roster authority. A second directory walk had
+    // drifted and counted shared/hidden infrastructure as runnable agents.
+    const agents = discoverSourceAgentCandidates(projectRoot);
 
     if (agents.length === 0) {
       console.log('No agents found. Add agents first: cortextos add-agent <name>');
