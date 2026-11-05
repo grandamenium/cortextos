@@ -247,7 +247,7 @@ describe('AgentProcess opencode runtime', () => {
         : handoffDocPath,
     );
 
-    const ap = new AgentProcess('codex-agent', mockEnv, { runtime: 'codex-app-server' });
+    const ap = new AgentProcess('codex-agent', mockEnv, { runtime: 'codex-app-server', allow_codex_app_server: true });
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const api = { sendChatAction: vi.fn().mockResolvedValue(undefined), sendMessage };
 
