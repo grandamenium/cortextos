@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
+import { appendFileSync, existsSync, readFileSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
@@ -78,8 +79,18 @@ const TURN_PERMISSION_OVERRIDES = {
 } as const;
 
 const SOCKET_BASENAME = 'codex.sock';
+const PROCESS_MARKER_BASENAME = 'codex-app-server-process.json';
 const SOCKET_PATH_WARN_BYTES = 100;
 const BOOTSTRAP_PATTERN = '[codex-app-server] ready';
+
+// Boot-reap tuning (mirrors opencode-pty.ts). A daemon --continue restart or a
+// non-graceful death orphans the previous `codex app-server` child, which keeps
+// holding codex's per-thread writer lock. The next spawn's thread/resume then
+// fails "already has an active writer". Before starting a new app-server we
+// reap the previously-recorded child: SIGTERM -> poll -> SIGKILL -> poll.
+const REAP_POLL_INTERVAL_MS = 200;
+const REAP_SIGTERM_GRACE_MS = 2000;
+const REAP_SIGKILL_GRACE_MS = 2000;
 
 const SLASH_REWRITE_RE = /^\/([a-z][a-z0-9_-]*)(?:\s+([\s\S]*))?$/i;
 const LOCAL_SLASH_COMMANDS = new Set(['goal']);
@@ -118,6 +129,7 @@ export class CodexAppServerPTY {
   private _socketCwd: string;
   private _threadStatePath: string;
   private _socketPointerPath: string;
+  private _processMarkerPath: string;
   private _threadId: string | null = null;
   private _telegramApi: TelegramAPI | null = null;
   private _chatId: string | null = null;
@@ -130,6 +142,7 @@ export class CodexAppServerPTY {
     this._stateDir = join(env.ctxRoot, 'state', env.agentName);
     this._threadStatePath = join(this._stateDir, 'codex-app-server-thread.json');
     this._socketPointerPath = join(this._stateDir, 'codex-app-server-socket.json');
+    this._processMarkerPath = join(this._stateDir, PROCESS_MARKER_BASENAME);
     const socket = this.resolveSocketPath();
     this._socketPath = socket.path;
     this._socketListenArg = socket.listenArg;
@@ -146,7 +159,9 @@ export class CodexAppServerPTY {
     this._alive = true;
 
     try {
+      await this.reapPreviousAppServer();
       await this.startAppServerWithRetry();
+      this.writeProcessMarker();
       await this.connectRpc();
       await this.initializeRpc();
       await this.startOrResumeThread(mode);
@@ -198,6 +213,7 @@ export class CodexAppServerPTY {
       }
       this._appServerPty = null;
     }
+    this.removeProcessMarker();
     this.removeSocket();
     this._onExitHandler?.(0, undefined);
     this._onExitHandler = null;
@@ -969,6 +985,134 @@ export class CodexAppServerPTY {
     this.removeSocket();
   }
 
+  /**
+   * Record the live app-server child so the NEXT spawn can reap it if this
+   * daemon dies non-gracefully (kill() removes the marker on a clean stop).
+   * Non-fatal: a missing marker only means the next boot skips the reap.
+   */
+  private writeProcessMarker(): void {
+    const pid = this.getPid();
+    if (!pid) return;
+    try {
+      writeFileSync(this._processMarkerPath, JSON.stringify({
+        runtime: 'codex-app-server',
+        pid,
+        cwd: this._socketCwd,
+        socketPath: this._socketPath,
+        updated_at: new Date().toISOString(),
+      }, null, 2) + '\n', 'utf-8');
+    } catch {
+      // Non-fatal: the marker is only a boot-reap aid after daemon crashes.
+    }
+  }
+
+  private removeProcessMarker(): void {
+    try {
+      unlinkSync(this._processMarkerPath);
+    } catch {
+      // Already gone.
+    }
+  }
+
+  /**
+   * Kill the app-server child recorded by a previous daemon lifecycle before
+   * starting a new one. An orphaned app-server keeps holding codex's per-thread
+   * writer lock, so a fresh thread/resume fails "already has an active writer".
+   *
+   * The guard is fail-safe: it never signals on doubt. All of the following
+   * must hold or the marker is cleared and the reap is skipped (returns false):
+   *   1. the recorded pid is a live process;
+   *   2. it is not us or our own live child (PID-reuse protection);
+   *   3. its cwd matches the recorded app-server cwd (realpath-normalized on
+   *      both sides so a /tmp vs /private/tmp symlink difference on darwin does
+   *      not cause a false skip); a null cwd fails the guard;
+   *   4. its command is actually a codex app-server.
+   */
+  private async reapPreviousAppServer(): Promise<boolean> {
+    if (!existsSync(this._processMarkerPath)) return false;
+
+    const skip = (reason: string): boolean => {
+      this._outputBuffer.push(`[codex-app-server] boot reap skipped: ${reason}\n`);
+      this.removeProcessMarker();
+      return false;
+    };
+
+    let pid: number;
+    let expectedCwd: string;
+    try {
+      const parsed = JSON.parse(readFileSync(this._processMarkerPath, 'utf-8')) as {
+        pid?: unknown;
+        cwd?: unknown;
+      };
+      pid = typeof parsed.pid === 'number' ? parsed.pid : 0;
+      expectedCwd = typeof parsed.cwd === 'string' ? parsed.cwd : this._socketCwd;
+    } catch {
+      return skip('unreadable process marker');
+    }
+
+    // (1) recorded pid must be a live process.
+    if (!(pid > 0) || !isReapTargetAlive(pid)) {
+      return skip(`recorded pid ${pid} is not alive`);
+    }
+    // (2) never signal ourselves or our own live child.
+    if (pid === process.pid || pid === this.getPid()) {
+      return skip(`recorded pid ${pid} is the current process`);
+    }
+    // (3) the live pid's cwd must match the recorded app-server cwd.
+    const actualCwd = readProcessCwd(pid);
+    if (!actualCwd || actualCwd !== normalizeRealpath(expectedCwd)) {
+      return skip(`recorded pid ${pid} cwd mismatch`);
+    }
+    // (4) the live pid must actually be a codex app-server.
+    const command = readProcessCommand(pid);
+    if (!command || !command.includes('codex') || !command.includes('app-server')) {
+      return skip(`recorded pid ${pid} is not a codex app-server`);
+    }
+
+    await this.terminateStaleProcess(pid);
+    this._outputBuffer.push(`[codex-app-server] reaped stale app-server pid=${pid}\n`);
+    this.removeProcessMarker();
+    return true;
+  }
+
+  /**
+   * Terminate a recorded stale app-server and CONFIRM it is dead before
+   * returning: SIGTERM -> poll for exit -> SIGKILL escalation -> poll again.
+   * Bounded and best-effort: a target that survives even SIGKILL is logged, not
+   * allowed to block boot.
+   */
+  private async terminateStaleProcess(pid: number): Promise<void> {
+    if (!isReapTargetAlive(pid)) return;
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // ESRCH (already gone) or EPERM — nothing more we can do; treat as reaped.
+      return;
+    }
+    if (await this.waitForProcessExit(pid, REAP_SIGTERM_GRACE_MS)) return;
+
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      return;
+    }
+    if (await this.waitForProcessExit(pid, REAP_SIGKILL_GRACE_MS)) return;
+
+    this._outputBuffer.push(
+      `[codex-app-server] stale process ${pid} survived SIGKILL during reap; continuing boot\n`,
+    );
+  }
+
+  /** Poll until the pid is gone or the grace window elapses. Returns true if dead. */
+  private async waitForProcessExit(pid: number, graceMs: number): Promise<boolean> {
+    const deadline = Date.now() + graceMs;
+    while (Date.now() < deadline) {
+      if (!isReapTargetAlive(pid)) return true;
+      await sleep(REAP_POLL_INTERVAL_MS);
+    }
+    return !isReapTargetAlive(pid);
+  }
+
   private writeIdleFlag(): void {
     try {
       writeFileSync(join(this._stateDir, 'last_idle.flag'), Math.floor(Date.now() / 1000).toString(), 'utf-8');
@@ -1047,4 +1191,68 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// OS-level pid liveness probe using the signal-0 idiom (mirrors isReapTargetAlive
+// in opencode-pty.ts): signal 0 sends nothing, it only tests existence + our
+// permission to signal. ESRCH => the process is gone (dead); EPERM => it exists
+// but is owned elsewhere (alive).
+function isReapTargetAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/** The full command line of a live pid, or null if it cannot be read. */
+function readProcessCommand(pid: number): string | null {
+  try {
+    const out = execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The working directory of a live pid, or null if it cannot be read. */
+function readProcessCwd(pid: number): string | null {
+  try {
+    if (process.platform === 'linux') {
+      const cwd = readlinkSync(`/proc/${pid}/cwd`).trim();
+      return cwd || null;
+    }
+    const out = execFileSync('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+      encoding: 'utf8',
+      timeout: 2000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const line of out.split('\n')) {
+      if (line.startsWith('n')) {
+        const cwd = line.slice(1).trim();
+        return cwd || null;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Realpath-normalize a directory so it can be compared against the already
+ * resolved cwd reported by lsof/readlink. Falls back to the raw path if it
+ * cannot be resolved (e.g. the dir no longer exists).
+ */
+function normalizeRealpath(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return dir;
+  }
 }
