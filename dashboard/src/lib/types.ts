@@ -72,6 +72,21 @@ export interface Task {
   notes?: string;
   source_file?: string;
   outputs?: TaskOutput[];
+  brief?: TaskBrief;
+}
+
+/**
+ * Agent-authored decision brief. Lane-dependent semantics: for a blocked
+ * task `headline` is the blocker and `reason` is its impact; for a
+ * pending/in_progress task `headline` is the next step and `reason` is
+ * why it matters. Mirrors the `TaskBrief` in the daemon's src/types.
+ */
+export interface TaskBrief {
+  headline: string;
+  reason: string;
+  options: string[];
+  recommendation: string;
+  updated_at?: string;
 }
 
 // -- Approval Types --

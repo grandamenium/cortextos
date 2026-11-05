@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createTask, updateTask, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile, archiveTasks } from '../../../src/bus/task';
+import { createTask, updateTask, setTaskBrief, completeTask, claimTask, readTaskAudit, checkTaskDependencies, compactTasks, listTasks, findTaskFile, archiveTasks } from '../../../src/bus/task';
 import type { BusPaths } from '../../../src/types';
 
 describe('Task Management', () => {
@@ -99,6 +99,42 @@ describe('Task Management', () => {
 
       const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
       expect(content.status).toBe('in_progress');
+    });
+  });
+
+  describe('setTaskBrief', () => {
+    it('attaches a brief with a server-stamped updated_at', () => {
+      const taskId = createTask(paths, 'paul', 'acme', 'Brief task');
+      setTaskBrief(paths, taskId, {
+        headline: 'Waiting on DNS record',
+        reason: 'Deploy cannot proceed until the CNAME resolves',
+        options: ['Add the CNAME now', 'Switch to the IP temporarily'],
+        recommendation: 'Add the CNAME now',
+      });
+
+      const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
+      expect(content.brief.headline).toBe('Waiting on DNS record');
+      expect(content.brief.options).toHaveLength(2);
+      expect(content.brief.recommendation).toBe('Add the CNAME now');
+      expect(content.brief.updated_at).toBeTruthy();
+      // Setting a brief also bumps the task's own updated_at.
+      expect(content.updated_at).toBe(content.brief.updated_at);
+    });
+
+    it('replaces an existing brief', () => {
+      const taskId = createTask(paths, 'paul', 'acme', 'Brief task');
+      setTaskBrief(paths, taskId, { headline: 'A', reason: 'a', options: [], recommendation: 'do a' });
+      setTaskBrief(paths, taskId, { headline: 'B', reason: 'b', options: ['x'], recommendation: 'do b' });
+
+      const content = JSON.parse(readFileSync(join(paths.taskDir, `${taskId}.json`), 'utf-8'));
+      expect(content.brief.headline).toBe('B');
+      expect(content.brief.options).toEqual(['x']);
+    });
+
+    it('throws for an unknown task id', () => {
+      expect(() =>
+        setTaskBrief(paths, 'task-does-not-exist', { headline: 'x', reason: 'y', options: [], recommendation: 'z' }),
+      ).toThrow(/not found/);
     });
   });
 

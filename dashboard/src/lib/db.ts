@@ -62,6 +62,7 @@ function initializeSchema(db: Database.Database): void {
       updated_at TEXT,
       completed_at TEXT,
       notes TEXT,
+      brief TEXT,
       source_file TEXT
     );
 
@@ -174,6 +175,16 @@ function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_messages_org ON messages(org);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
   `);
+
+  // Additive migrations for DBs created before a column existed. CREATE TABLE
+  // IF NOT EXISTS won't add columns to an already-present table, so add them
+  // here guarded by a table_info check (ADD COLUMN has no IF NOT EXISTS).
+  const taskCols = new Set(
+    (db.prepare(`PRAGMA table_info(tasks)`).all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!taskCols.has('brief')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN brief TEXT`);
+  }
 }
 
 // globalThis singleton survives Next.js hot reload

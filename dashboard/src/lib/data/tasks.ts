@@ -51,7 +51,7 @@ export function getTasks(filters?: TaskFilters): Task[] {
     const rows = db
       .prepare(
         `SELECT id, title, description, status, priority, assignee, org, project,
-                needs_approval, created_at, updated_at, completed_at, notes, source_file
+                needs_approval, created_at, updated_at, completed_at, notes, brief, source_file
          FROM tasks ${where}
          ORDER BY created_at DESC`
       )
@@ -72,7 +72,7 @@ export function getTaskById(id: string): Task | null {
     const row = db
       .prepare(
         `SELECT id, title, description, status, priority, assignee, org, project,
-                needs_approval, created_at, updated_at, completed_at, notes, source_file
+                needs_approval, created_at, updated_at, completed_at, notes, brief, source_file
          FROM tasks WHERE id = ?`
       )
       .get(id) as Record<string, unknown> | undefined;
@@ -120,7 +120,7 @@ export function getTasksCompletedToday(org?: string): Task[] {
     const rows = db
       .prepare(
         `SELECT id, title, description, status, priority, assignee, org, project,
-                needs_approval, created_at, updated_at, completed_at, notes, source_file
+                needs_approval, created_at, updated_at, completed_at, notes, brief, source_file
          FROM tasks ${where}
          ORDER BY completed_at DESC`
       )
@@ -190,6 +190,16 @@ function rowToTask(row: Record<string, unknown>): Task {
     updated_at: (row.updated_at as string) ?? undefined,
     completed_at: (row.completed_at as string) ?? undefined,
     notes: (row.notes as string) ?? undefined,
+    brief: parseBrief(row.brief),
     source_file: (row.source_file as string) ?? undefined,
   };
+}
+
+function parseBrief(value: unknown): Task['brief'] {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  try {
+    return JSON.parse(value) as Task['brief'];
+  } catch {
+    return undefined;
+  }
 }

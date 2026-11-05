@@ -93,6 +93,43 @@ describe('syncTasks', () => {
     expect(row.org).toBe('testorg');
   });
 
+  it('round-trips a task brief through SQLite as JSON', () => {
+    writeJSON('orgs/testorgb/tasks/task-brief.json', {
+      id: 'task-brief',
+      title: 'Briefed Task',
+      status: 'blocked',
+      created_at: '2025-01-01T00:00:00Z',
+      brief: {
+        headline: 'Waiting on DNS',
+        reason: 'Deploy blocked until CNAME resolves',
+        options: ['Add the CNAME', 'Use the IP'],
+        recommendation: 'Add the CNAME',
+        updated_at: '2025-01-01T00:05:00Z',
+      },
+    });
+
+    expect(syncTasks('testorgb')).toBe(1);
+
+    const row = db.prepare('SELECT brief FROM tasks WHERE id = ?').get('task-brief') as { brief: string };
+    const brief = JSON.parse(row.brief);
+    expect(brief.headline).toBe('Waiting on DNS');
+    expect(brief.options).toHaveLength(2);
+    expect(brief.recommendation).toBe('Add the CNAME');
+  });
+
+  it('stores null brief when the task has none', () => {
+    writeJSON('orgs/testorgn/tasks/task-nobrief.json', {
+      id: 'task-nobrief',
+      title: 'No Brief',
+      status: 'pending',
+      created_at: '2025-01-01T00:00:00Z',
+    });
+
+    expect(syncTasks('testorgn')).toBe(1);
+    const row = db.prepare('SELECT brief FROM tasks WHERE id = ?').get('task-nobrief') as { brief: string | null };
+    expect(row.brief).toBeNull();
+  });
+
   it('skips unchanged files on re-sync (mtime check)', () => {
     writeJSON('orgs/testorg2/tasks/task-2.json', {
       id: 'task-2',
