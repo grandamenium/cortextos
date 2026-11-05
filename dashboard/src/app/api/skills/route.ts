@@ -33,7 +33,7 @@ function getInstalledAgents(frameworkRoot: string, slug: string): string[] {
     if (!fs.existsSync(agentsDir)) continue;
     for (const agentEntry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
       if (!agentEntry.isDirectory()) continue;
-      const skillPath = path.join(agentsDir, agentEntry.name, 'skills', slug);
+      const skillPath = path.join(agentsDir, agentEntry.name, '.claude', 'skills', slug);
       if (fs.existsSync(skillPath)) {
         installed.push(`${orgEntry.name}/${agentEntry.name}`);
       }
@@ -97,7 +97,7 @@ export async function POST(request: Request) {
       return Response.json({ error: `Skill not found: ${slug}` }, { status: 404 });
     }
 
-    const skillsDir = path.join(frameworkRoot, 'orgs', org, 'agents', agent, 'skills');
+    const skillsDir = path.join(frameworkRoot, 'orgs', org, 'agents', agent, '.claude', 'skills');
     fs.mkdirSync(skillsDir, { recursive: true });
     const linkPath = path.join(skillsDir, slug);
 
@@ -119,7 +119,7 @@ export async function DELETE(request: Request) {
     }
 
     const frameworkRoot = getFrameworkRoot();
-    const linkPath = path.join(frameworkRoot, 'orgs', org, 'agents', agent, 'skills', slug);
+    const linkPath = path.join(frameworkRoot, 'orgs', org, 'agents', agent, '.claude', 'skills', slug);
 
     try {
       const stat = fs.lstatSync(linkPath);
