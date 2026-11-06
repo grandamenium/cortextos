@@ -57,8 +57,9 @@ The frame kit's layout check uses these: it reads `BRAND.size` and, if set, `BRA
 
 ## Captions
 
-- Decide in the brief whether captions are burned in. If yes, give them their own zone (usually low-center in 16:9, inside the 9:16 safe box) and keep all other text out of it.
-- Captions follow the narration word for word. On-screen lines then carry only what the narration doesn't say.
+- Decide in the brief whether captions are burned in. When the brief doesn't say: burn them in for social shorts and anything posted to a feed (feeds ignore a caption track inside the file, and those films are watched muted); otherwise ship them as `.srt` and `.vtt` files beside the film, plus a captions track the viewer can switch on inside the `.mp4` (`ffmpeg -i cut.mp4 -i cut.srt -map 0 -map 1 -c copy -c:s mov_text cut-captioned.mp4`). If they are burned in, give them their own zone (usually low-center in 16:9, inside the 9:16 safe box) and keep all other text out of it.
+- Captions follow the narration and spoken lines word for word. A bleeped word is captioned "[bleep]" ("Oh, [bleep]!"), never with asterisks.
+- On-screen lines carry only what the narration doesn't say.
 - Never more than two caption lines; break at phrase boundaries.
 
 ## Typed product text

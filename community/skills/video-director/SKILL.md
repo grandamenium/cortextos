@@ -174,11 +174,11 @@ Read `references/motion-library.md`, `references/motion-spec.md` and the type fi
 3. Plan sound with the picture: `references/sound-and-voice.md`.
 4. Write it into the storyboard JSON and `motion-spec.md`, rebuild with `--strict`, and show the user.
 
-`--strict` checks required move, timing, easing and detailed motion notes, and repeated camera fields. Review surfaced fade/blur candidates against context and the film's style. It prints NOTE lines for scenes that look too short to read.
+`--strict` checks the motion fields (`references/storyboard-format.md`); review its fade/blur candidates and NOTE lines.
 
 ### 8. Animated test
 
-Build the 2-4 hardest scenes in HyperFrames first (the type file may say otherwise), with `data-text-role` on every element that holds words, and run `scripts/check_render.py` on the test before showing it. Before writing composition HTML, read the HyperFrames tool's own docs (`npx hyperframes docs compositions`, `npx hyperframes docs data-attributes`, `npx hyperframes docs gsap`) and use `npx hyperframes check`, `preview` and `render`. Run the outside comparison in `references/build-and-qa.md` (a reference film of the same type, or the type's numbers for a film built from scratch) and report where ours loses. Ask the user to watch for pacing and for anything that still feels like slides. Run the cut strips and motion watch from stage 9 on the test too. Build notes: `references/build-and-qa.md`.
+Build the 2-4 hardest scenes in HyperFrames first (the type file may say otherwise), with `data-text-role` on every element that holds words. Read the HyperFrames docs before writing composition HTML (`references/build-and-qa.md`). Run the outside comparison described there (a reference film of the same type, or the type's numbers for a film built from scratch) and report where ours loses. Ask the user to watch for pacing and for anything that still feels like slides. Run the stage 9 checks on the test too.
 
 **Every render the user sees** opens by saying which scenes it covers and what is still a placeholder. In a film with people shown as footage, a person's action is moving footage (a generated or supplied clip), never a still with a push; a shot not ready is left out or marked as a placeholder on screen. In live-action story ads, the product's screen is a screen recording of the real app unless a rebuilt interface was approved at stage 5.
 
@@ -189,14 +189,23 @@ Build the rest and any cutdowns and render. **No render goes to the user until t
 ```bash
 python3 <skill>/scripts/check_render.py build/ --motion --video output/cut-v3.mp4 --out output/checks-v3
 python3 <skill>/scripts/cut_frames.py output/cut-v3.mp4 --out output/cuts-v3
+python3 <skill>/scripts/action_frames.py --actions build/actions.json --build build/ --video output/cut-v3.mp4 --out output/actions-v3
+python3 <skill>/scripts/continuity_sheet.py output/cut-v3.mp4 --items build/continuity.json --out output/continuity-v3
+python3 <skill>/scripts/sound_balance.py --music build/audio/music.wav --effects build/audio/effects.wav --voice build/audio/voice.wav --events build/audio/events.json --out output/sound-v3
 python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --upload-allowed --notes direction-notes.md
 ```
 
-The check measures text, reading windows and motion, and writes strips for visual review. Exact structural failures must be fixed. Contextual candidates need a recorded visual judgment; missing measurement coverage remains incomplete. Follow `references/build-and-qa.md` for review decisions, exceptions and dependency failures. Open every strip before showing the render. The cut strips (required) and the motion watch run on every render the user sees, stage 8 onward. Pass `--upload-allowed` only if the brief allows uploads; confirm each watch finding in frames before acting; when it reports not watched, say "not watched in motion".
+Exact render-check failures must be fixed; candidates need a recorded visual judgment (`references/build-and-qa.md`). Required on every render the user sees from stage 8, every strip and sheet opened:
+- **Cut strips** at every cut, and **action strips** at every click, press or touch inside a shot (a pointer off its target fails).
+- **Continuity sheets** for footage films: one verdict line per recurring prop and garment; `--verify` passes.
+- **Sound balance** from the mix's stems, for films with effects or voice. Claude can't hear: report the numbers.
+- **A fresh read** by a new agent, or a build-log line saying why not.
+
+The motion watch is extra coverage (`--upload-allowed` only if the brief allows; confirm findings in frames; otherwise say "not watched in motion"). A clean watch is never proof: it sees low-resolution frames.
 
 Every element holding on-screen words carries `data-text-role`: `opening`, `line`, `emphasis`, `card`, `label`, `caption`, `name`, `typed`, `legal`, or a named UI role (`ui-title`, `ui-row`, `ui-pill`; one role per kind of UI text, so each is checked for one size). `ui-read` marks UI text the viewer must read.
 
-Then check the rest: overlaps during transitions, frozen stretches, text too small at phone size, warped hands or faces in generated clips, measured spacing, the close against the type's numbers, and a muted watch. Get a fresh read from a new agent that sees only the render, the script and the design rules, then repeat the outside comparison.
+Then check the rest: overlaps during transitions, frozen stretches, text too small at phone size, warped hands or faces in generated clips, measured spacing, the close against the type's numbers, and a muted watch. Then repeat the outside comparison.
 
 ### 10. Polish rounds
 
@@ -204,9 +213,9 @@ Once the full film exists, most of the work is rounds of notes against timestamp
 
 1. **Find each note in the frames before changing anything.** Pull frames at the time given, 1 s either side, and say back the moment by what is on screen and what you will change. When a word in the note could mean a line of text or an object on screen, say which one you took it to mean.
 2. **Show design changes as stills first.** Any change to how something looks gets labeled stills next to the current frame, with a recommendation, before it is built.
-3. **One new numbered render per round**, a phone copy under 30 MB checked with `python3 <skill>/scripts/check_delivery.py output/cut-vN-phone.mp4 --max-mb 30`, and one build-log line describing changes.
+3. **One new numbered render per round**, with the stage 9 checks, a phone copy under 30 MB, and one build-log line.
 4. **When a check disagrees with something the user chose on purpose**, list it as the user's call with the evidence; don't quietly undo their choice.
-5. **When the user still sees choppiness after the render check passes**, follow the choppiness steps in `references/polish-rounds.md` instead of guessing.
+5. **Choppiness the render check missed**: follow `references/polish-rounds.md`, don't guess.
 6. **After every third round, and before calling a cut final, do an ideas pass**: run the beat method in `references/visual-ideas.md` on each key line and offer the best ideas as stills. Rounds that only answer notes make a film smoother, not stronger.
 
 ## Design rules for every type

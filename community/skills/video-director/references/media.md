@@ -61,13 +61,14 @@ Run stills on GPT 6.1 Sol at high effort, as above. If the user's Codex plan doe
 - **One style descriptor, pasted word for word into every clip prompt** (medium, palette with hex values, line and material, texture, lighting, realism), plus a style-key image: an abstract swatch for faceless films, a character sheet for a recurring character.
 - **One clip holds one location and one action.** Replace mood words ("cinematic", "stunning") with their visual causes.
 - **Continuity across clips**: repeat the same 3-6 visual attributes of each person and place verbatim in every prompt; use reference images ("ingredients") of each character, place and prop.
-- **First-and-last-frame** generation gives a controlled move between two approved stills; use it when a generated clip must join a designed scene, with the last frame matching the next scene so the join is a match cut.
+- **First-and-last-frame** generation gives a controlled move between two approved stills; use it when a generated clip must join a designed scene, with the last frame matching the next scene so the join is a match cut. For a person's action, prefer a start frame only: on one film, clips given both a start and an end frame made the person jump to another place mid-clip, and start-frame-only clips were clean.
+- **A reference image shows the clip's target look.** A frame from before a change (the earlier outfit, a door still open) pulls the clip back to that state; references of the approved outfit, the face or a prop are fine.
 - **Timestamp prompting** puts 2-4 shots in one 8-second generation.
 - Known limits: glasses and hands change between frames, on-screen text from the video model is unusable, characters drift across separate clips. Treat first generations as rehearsals.
 
 ## Higgsfield clips
 
-Set `--aspect_ratio` to the film's format (16:9 for a wide film) unless the shot is cropped into a frame. Estimate cost first with `higgsfield generate cost` and the same flags.
+Set `--aspect_ratio` to the film's format (16:9 for a wide film) unless the shot is cropped into a frame. Estimate cost first with `higgsfield generate cost` and the same flags, and check the balance before starting a batch with `higgsfield account status` (it prints to stderr, so don't discard stderr when reading it).
 
 Living portrait from an approved still:
 
@@ -82,8 +83,8 @@ Action clip (a person doing something, as in a live-action story ad), with the c
 ```bash
 cd <project>/assets/video && higgsfield generate create seedance_2_0 --start-image ../images/<scene-still>.png \
   --image-references ../images/<character-front>.png --image-references ../images/<character-full>.png \
-  --aspect_ratio 16:9 --duration 5 --resolution 1080p --generate_audio false --mode std --genre comedy \
-  --prompt "<shot size, lens, camera>. <the character description, pasted word for word>. <one action, start to finish>. <the place>. <light>."
+  --aspect_ratio 16:9 --duration 5 --resolution 1080p --generate_audio true --mode std --genre comedy \
+  --prompt "<shot size, lens, camera>. <the character description, pasted word for word>. <one action, start to finish, saying who moves each object>. <the place>. <light>. Sound: only the natural sound of what is on screen, no speech, no music."
 ```
 
 Download the result URL it prints into `assets/video/`. Check model names with `higgsfield model list` if the command fails. Keep a generation record in `assets/video/LEDGER.md`: model, prompt, start image, job id, and which seconds were used.
@@ -93,7 +94,7 @@ Download the result URL it prints into `assets/video/`. Check model names with `
 - When a clip must join a designed scene, generate it with first and last frames so the join is a match cut.
 - Each hero clip only needs 1-2 seconds on screen; trim in the build.
 
-**Check every clip before using it.** Pull frames (one per 0.25 s) and look for: the face changing identity, hands or fingers warping or multiplying, props changing size or disappearing, objects passing through each other, framing drift, anything appearing before its cause. Regenerate rather than send a flawed clip with a note. Look at stills and clips full size, in motion, as a skeptical stranger would. If a shot comes back "looks fake" twice, recommend a different approach (a designed frame, a different shot) instead of a third try.
+**Check every clip before using it,** and its start still against `build/continuity.json` before generating it (`build-and-qa.md`, Continuity sheets). Pull frames (one per 0.25 s) and look for: the face changing identity, hands or fingers warping or multiplying, props changing size or disappearing, objects passing through each other, framing drift, anything appearing before its cause, an object moving with nothing moving it. Video models also add their own camera cuts inside long clips: find them as spikes in the difference between one frame and the next (`ffmpeg -i clip.mp4 -vf "select='gt(scene,0.3)',showinfo" -f null - 2>&1 | grep pts_time`), and use only takes, or parts of takes, without them. Regenerate rather than send a flawed clip with a note. Look at stills and clips full size, in motion, as a skeptical stranger would. If a shot comes back "looks fake" twice, recommend a different approach (a designed frame, a different shot) instead of a third try.
 
 ## Without Higgsfield
 

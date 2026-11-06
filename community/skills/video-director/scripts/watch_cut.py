@@ -5,9 +5,14 @@ python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --u
 
 Uploads the MP4 to the Gemini API (Files API), asks the model to watch it at --fps frames a second, and writes
 watch.json and watch.md: the shots as the model saw them, then still photos standing in for action, awkward transitions, jumps in space or continuity, frozen or jerky stretches, things
-appearing or disappearing, text or pointers in the wrong place, and pacing that drags, each with a time. The
+appearing or disappearing, objects moving by themselves, props or clothes that change between shots, text or
+pointers in the wrong place, and pacing that drags, each with a time. The
 findings are candidates: pull frames at each time and confirm before changing anything. The upload is deleted
 afterwards whatever happens (Google also deletes uploads after 48 hours); watch.json records whether it was.
+
+The model sees each frame at low resolution (about 70 tokens a frame), so it cannot see small UI mistakes such as
+a pointer 70 px off its target in a 1080p frame: use action_frames.py for those. A clean watch is never proof that
+a cut is clean (on one film it passed a cut in which the user found eight problems).
 
 Nothing is uploaded without --upload-allowed: pass it only when the user agreed in the brief that cuts may go to
 Google. The key comes from GEMINI_API_KEY, or a GEMINI_API_KEY= line in --env-file. Without permission, without a
@@ -41,8 +46,8 @@ MODEL = "gemini-3.6-flash"   # caught every known problem in the calibration ren
 # (Google AI Studio docs, media-resolution page, read 2026-11-03).
 TOKENS_PER_FRAME = 70
 AUDIO_TOKENS_PER_S = 25
-KINDS = ["still-as-motion", "transition", "continuity-jump", "frozen", "jerky", "pop-in", "pop-out", "misplaced-text",
-         "misplaced-pointer", "pacing", "other"]
+KINDS = ["still-as-motion", "transition", "continuity-jump", "moves-by-itself", "prop-change", "clothes-change", "frozen",
+         "jerky", "pop-in", "pop-out", "misplaced-text", "misplaced-pointer", "pacing", "other"]
 
 PROMPT = """You are a strict video editor checking a short rendered video before a client sees it. The client has
 seen polished ads and will notice anything that looks cheap. Watch it in motion.
@@ -64,7 +69,22 @@ Step 2. List every place a first-time viewer would notice something wrong:
   something it should not, or pointing at the wrong thing
 - pacing: a stretch that drags, or text that leaves before it can be read
 - other: anything else clearly wrong
-Finding nothing is rare in a draft; look again before returning an empty list. Give times as seconds from the start
+
+Step 3. Check physical sense separately, shot by shot and between shots. Generated footage often breaks it and it
+is easy to miss while following the story:
+- moves-by-itself: an object moves with nothing visibly moving it: a door swings open or shut with no hand on it,
+  a chair slides with no one pushing, a cup or a bag shifts on a table, a curtain moves with no wind
+- prop-change: a recurring object is a different object in another shot (another bottle, another mug, another
+  laptop), changes size or color, or changes state with no action between (a door shut in one shot and open in a
+  later one, a laptop closed then open)
+- clothes-change: a person's clothes, hair or accessories differ between shots (a long top becomes a short one,
+  sleeves change, hair goes from down to up) with no action between
+- pop-in / pop-out within a shot: something appears or vanishes while the camera is on it
+Name the object and both shots for every one of these. They are faults even when the director's notes describe
+the beat around them.
+
+Finding nothing is rare in a draft; look again before returning an empty list. Small things you could not see
+clearly (a pointer a few pixels off, small text) are not "fine": you cannot judge them, so leave them out. Give times as seconds from the start
 (numbers, not m:ss). Report only what you can see or hear. Return JSON only, in this shape:
 {"shots": [{"start": 0.0, "end": 2.4, "what_happens": "...", "what_moves": "footage: she walks to the desk"}],
  "findings": [{"start": 3.2, "end": 3.6, "kind": "still-as-motion", "severity": "high", "what": "one plain sentence"}]}
@@ -232,7 +252,9 @@ def write(out: Path, report: dict) -> None:
         lines.append(f"Model {report['model']}; requested {report['fps_requested']:g} fps; rate used: {rate}.")
         if report.get("note"):
             lines += ["", report["note"]]
-        lines += ["", f"{len(report['findings'])} candidate(s). Pull frames at each time and confirm before acting.", ""]
+        lines += ["", f"{len(report['findings'])} candidate(s). Pull frames at each time and confirm before acting.",
+                  "The model sees each frame at low resolution and misses small UI mistakes; a short or empty list is "
+                  "not proof the cut is clean.", ""]
         lines += [f"- **{f['start']:.2f}-{f['end']:.2f}s** {f['kind']} ({f['severity']}): {f['what']}" for f in report["findings"]]
         if report.get("shots"):
             lines += ["", "## Shots as the model saw them", ""]
@@ -253,7 +275,9 @@ def watch(args, base: dict) -> dict:
     seconds, audio = probe(args.video)
     prompt = PROMPT
     if args.notes and args.notes.is_file():
-        prompt += "\n\nContext from the director (deliberate choices are not faults):\n" + args.notes.read_text(encoding="utf-8")[:6000]
+        prompt += ("\n\nContext from the director. Deliberate holds, pacing and framing described here are not faults. "
+                   "Continuity, physical sense, props and clothes are always checked, whatever the notes say:\n"
+                   + args.notes.read_text(encoding="utf-8")[:6000])
     state: dict = {}
     try:
         f = wait_active(args.api_base, key, start_upload(args.api_base, key, args.video, state))
