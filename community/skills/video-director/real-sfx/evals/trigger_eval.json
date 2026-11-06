@@ -1,0 +1,82 @@
+[
+ {
+  "query": "ok so i rendered my product launch animation from hyperframes (promo.mp4, 28s) and its dead silent. can you add proper sound effects, whooshes on the cuts and some ui clicks? i have a folder of sfx packs on D:\\sfx",
+  "should_trigger": true
+ },
+ {
+  "query": "озвучь этот ролик, у меня есть папка со звуками, музыку оставь как есть",
+  "should_trigger": true
+ },
+ {
+  "query": "my after effects logo sting sounds cheap, the whoosh is synthetic. can you replace it with real recorded sounds from my library and line them up to the frames",
+  "should_trigger": true
+ },
+ {
+  "query": "add impact hits and risers to this trailer cut, sync them to the scene changes, and give me the SFX as a separate wav so i can tweak it in premiere",
+  "should_trigger": true
+ },
+ {
+  "query": "накидай сфх на моушен: свуши на склейки, клики на появление кнопок, ничего синтетического",
+  "should_trigger": true
+ },
+ {
+  "query": "can you do sound design for my ui animation? the button presses and toggles need little tick sounds",
+  "should_trigger": true
+ },
+ {
+  "query": "this tiktok edit has music but zero sound effects, put hits on the drops and whooshes on the transitions, keep the song",
+  "should_trigger": true
+ },
+ {
+  "query": "я сделал ролик в hyperframes, добавь звуки в композицию прямо в проект, чтобы они не пропали при рендере",
+  "should_trigger": true
+ },
+ {
+  "query": "the sfx in my video are out of sync by like 100ms and they all sound the same, fix the sound design",
+  "should_trigger": true
+ },
+ {
+  "query": "i have a bunch of Mister Horse and Epidemic SFX packs, set up something that picks sounds for my motion graphics automatically",
+  "should_trigger": true
+ },
+ {
+  "query": "write a python script that generates a 440hz sine wave and saves it as a wav file",
+  "should_trigger": false
+ },
+ {
+  "query": "transcribe this interview video and burn subtitles into it",
+  "should_trigger": false
+ },
+ {
+  "query": "normalize the loudness of this podcast episode to -16 LUFS and remove the hiss",
+  "should_trigger": false
+ },
+ {
+  "query": "make a 30 second promo video for my app from this URL",
+  "should_trigger": false
+ },
+ {
+  "query": "cut the silences out of this talking head video and tighten the pacing",
+  "should_trigger": false
+ },
+ {
+  "query": "recommend some royalty free background music for a corporate explainer",
+  "should_trigger": false
+ },
+ {
+  "query": "color grade this footage to a teal and orange look and add film grain",
+  "should_trigger": false
+ },
+ {
+  "query": "generate a text-to-speech voiceover for this script in a warm female voice",
+  "should_trigger": false
+ },
+ {
+  "query": "convert my mp4 to a gif at 15 fps, max 5 MB",
+  "should_trigger": false
+ },
+ {
+  "query": "my react web app should play a sound when a user clicks save, implement it with the web audio api",
+  "should_trigger": false
+ }
+]

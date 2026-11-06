@@ -1,0 +1,58 @@
+{
+ "skill_name": "real-sfx",
+ "evals": [
+  {
+   "id": 1,
+   "name": "cuts-and-hook-silent-render",
+   "prompt": "Вот отрендеренный ролик <VIDEO> (моушен-графика, без звука). Озвучь его реальными звуками из моих библиотек: свуши на склейки, хиты на тяжёлые моменты, UI-звуки на появление элементов. Мне нужен новый mp4 и отдельный wav.",
+   "expected_output": "New mp4 with SFX on the cuts and appearances, a separate wav, a cue report, critique scoreboard with every axis >= 8, no synthesized sound.",
+   "assertions": [
+    "Output mp4 has the original video stream and an audio stream, same duration (+-0.2 s)",
+    "A separate WAV with the SFX is delivered",
+    "There is a sound within the first 2 seconds",
+    "At least 80% of strong cuts have a sound within 120 ms",
+    "No sound is synthesized (every sound is a library file or a uisfx cue)",
+    "True peak is at or below -1 dBTP",
+    "The run used verify and critique before presenting, and reported scores"
+   ]
+  },
+  {
+   "id": 2,
+   "name": "voiceover-keep-and-duck",
+   "prompt": "Ролик <VIDEO> с дикторским голосом. Добавь звуковой дизайн реальными звуками, голос должен остаться чистым и разборчивым.",
+   "expected_output": "Voice-over preserved (correlation with source > 0.9 outside SFX), SFX ducked under speech (--voice-safe), SFX 6-10 dB below the voice, no ambience bed.",
+   "assertions": [
+    "Original voice audio is present in the output",
+    "--voice-safe (or equivalent ducking) was used",
+    "SFX are quieter than the original audio by 3-11 LU",
+    "No ambience bed is placed under speech",
+    "Separate WAV delivered"
+   ]
+  },
+  {
+   "id": 3,
+   "name": "music-led-beat-snap",
+   "prompt": "Ролик <VIDEO> под музыку. Добавь звуки на склейки и акценты, музыку оставь, попади в бит там, где это уместно.",
+   "expected_output": "Music kept, beats detected, hits snapped to the beat when within 50 ms, no extra rhythmic layer on top of the music.",
+   "assertions": [
+    "Original music is preserved",
+    "beats.py was used and its usable flag respected",
+    "Hits within 50 ms of a beat are on the beat (or the reason for not snapping is given)",
+    "Music is ducked or SFX trimmed so the SFX do not bury it"
+   ]
+  },
+  {
+   "id": 4,
+   "name": "hyperframes-native-clips",
+   "prompt": "Вот проект HyperFrames <PROJECT>. Добавь звуки прямо в композицию, чтобы они переживали перерендер.",
+   "expected_output": "Moments read from the composition (no frame analysis), clips exported to assets/sfx, <audio> elements with ids and data-start/data-duration, no composition rule broken.",
+   "assertions": [
+    "from_hyperframes.py was used rather than frame analysis",
+    "Every <audio> has a unique id",
+    "Overlapping audio clips use different data-track-index values",
+    "Processed clips are files in assets/sfx and referenced with relative paths",
+    "The agent asked before calling another skill or running render"
+   ]
+  }
+ ]
+}

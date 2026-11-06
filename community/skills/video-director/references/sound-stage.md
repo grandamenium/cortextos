@@ -8,6 +8,7 @@ How to make a film's sound, step by step, chosen by the kind of film. The rules 
 - Choose the path
 - Path A: live action
 - Path B: motion design and app screens
+- Placing effects with real-sfx
 - Music, for every film with music
 - Where sounds come from, and their licences
 - `assets/audio/SOURCES.md`
@@ -83,7 +84,26 @@ The lessons behind these steps, and what failed, are in `types/live-action-story
 3. **Get word times** with `whisper-cli -ml 1` (as in path A, step 4) and place picture changes at phrase breaks and each reveal on the word that names it (`sound-and-voice.md`, Narration).
 4. **Add its row to `SOURCES.md`**: who voiced it, or the text-to-speech service and plan, and the date.
 
-**Optional companion skill:** [real-sfx](https://github.com/Clipwing/skills/tree/main/skills/real-sfx) by Clipwing finds sound moments in a HyperFrames composition, a screen recording or the picture, picks real recordings from your own sound libraries, and places them on the exact frame. It works well for path B. Install it on its own from its repository if you want it; this skill doesn't include it and works without it. Its sounds come from your libraries, so each file still needs its line in `SOURCES.md`.
+## Placing effects with real-sfx
+
+This skill includes [real-sfx](https://github.com/Clipwing/skills/tree/main/skills/real-sfx) by Alexander Korbanov at Clipwing (MIT) in `<skill>/real-sfx/`: its files unchanged, plus a `LICENSE` file. For path B, read `<skill>/real-sfx/SKILL.md` and use it for steps 2 and 3: it finds the moments in the HyperFrames composition, a screen recording or the picture, picks real recordings from the user's own sound libraries, places each on the exact frame, and returns the film with a separate effects track. Without a sound library it has only its interface sounds, so do path B by hand from the sources below.
+
+1. **Set it up once per machine,** with the library list kept outside the skill folder so an update of this skill doesn't wipe it:
+
+   ```bash
+   export REAL_SFX_CONFIG=~/.config/real-sfx/config.json REAL_SFX_INDEX=~/.config/real-sfx/library_index.json
+   python3 <skill>/real-sfx/scripts/setup.py init --library main="<the user's sound folder>" --index
+   python3 <skill>/real-sfx/scripts/setup.py check
+   ```
+
+   Set the two variables in every shell that runs its scripts. Ask the user where their sounds are; never point it at a folder they haven't named.
+2. **Run its scripts from the project folder** as `python3 <skill>/real-sfx/scripts/<script>.py`, with its `work/` and `result/` folders inside `build/audio/sfx/`. Its own rule holds: it never changes the project's other files or its own folder.
+3. **Give it only the moments from path B, step 1,** as its own event list (`real-sfx/references/typed-cues.md`, then `from_cues.py`), not its automatic moment finding, and skip its small-sound layer (`texture.py`) and bed (`bed.py`) unless the user asks for them. Where its defaults and this skill's effects rules differ (`sound-and-voice.md`, Effects), this skill's rules win.
+4. **Prefer real recordings for interface moments too:** run it with `--ui library`. Its bundled interface pack (uisfx, 78 cues, CC0) is made by synthesis, and synthetic clicks were called weird choices on one film. Use uisfx only when the libraries have no fitting sound and the user has heard the cue and agreed.
+5. **Bring its result into this skill's checks:** its effects track becomes `build/audio/effects.wav`; write `build/audio/events.json` from its cue report, marking which events must be heard; then set levels with `sound_balance.py` (step 4 above). Its own critique and listening page are extra evidence, not a replacement for those checks or for the user's ears.
+6. **Copy every file it placed into `assets/audio/effects/` and add its `SOURCES.md` row,** from its cue report: the library file, where the user got it and its licence. `check_sources.py` checks only files in `assets/audio/`, so a file left in the library has no check. A uisfx cue's row reads: uisfx (bundled with real-sfx), CC0, any use, no credit needed.
+
+It needs ffmpeg with the `drawtext` and `rubberband` filters (on macOS, Homebrew's `ffmpeg-full`) and, for some scripts, numpy. Its optional listening models download only when their install step is run with `--yes` (about 16 MB and 3.1 GB, from huggingface.co).
 
 ## Music, for every film with music
 
@@ -103,7 +123,7 @@ The lessons behind these steps, and what failed, are in `types/live-action-story
 
 ## Where sounds come from, and their licences
 
-Download sounds into the project's own `assets/audio/` only. Never commit downloaded sound files to a public repository, and never bundle them with a skill or template: Mixkit's and Pixabay's licences forbid sharing the files on their own, and a repository is sharing them.
+Download sounds into the project's own `assets/audio/` only. Never commit downloaded sound files to a public repository, and never bundle them with a skill or template: Mixkit's and Pixabay's licences forbid sharing the files on their own, and a repository is sharing them. The uisfx pack inside `real-sfx/` is CC0, which is why it can ship with this skill.
 
 | Source | What it has | What its licence allows |
 |---|---|---|

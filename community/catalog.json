@@ -364,10 +364,10 @@
     },
     {
       "name": "video-director",
-      "description": "Directs short videos (about 6 s to 3 min) that mix motion graphics with generated or supplied photos and clips: brief and script, 2-3 design options at every decision, a zoomable storyboard with reviewer notes, a motion spec, an animated test and a HyperFrames build, plus a sound stage (effects, music fitted to the film's bar lines, a licence record for every sound) and captions set by where the film is posted, with render checks for text size, reading time, choppy motion, pointer clicks on target, props and clothes that stay the same between shots, and sound balance.",
+      "description": "Directs short videos (about 6 s to 3 min) that mix motion graphics with generated or supplied photos and clips: brief and script, 2-3 design options at every decision, a zoomable storyboard with reviewer notes, a motion spec, an animated test and a HyperFrames build, plus a sound stage (real recorded effects placed with the included real-sfx by Clipwing, music fitted to the film's bar lines, a licence record for every sound) and captions set by where the film is posted, with render checks for text size, reading time, choppy motion, pointer clicks on target, props and clothes that stay the same between shots, and sound balance.",
       "author": "SallyRS",
       "type": "skill",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "tags": ["video", "motion-graphics", "storyboard", "hyperframes", "explainer", "product-launch", "ads"],
       "review_status": "pending",
       "dependencies": [],

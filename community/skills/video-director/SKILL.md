@@ -12,7 +12,7 @@ description: >
   storyboard first" or "it feels like slides". Not for recording a real product screen as a demo, adding
   captions to existing footage, or a single standalone animation such as a logo sting or lower third.
 triggers: ["make a video", "animate this script", "make an explainer", "storyboard", "product launch video", "promo video", "brand film", "social short", "it feels like slides", "cut a 15-second version", "comedy ad", "video director"]
-external_calls: ["youtube.com (yt-dlp, reference films, only with the user's OK)", "OpenAI via the Codex CLI (still images)", "Higgsfield API via the higgsfield CLI (video clips, optional)", "generativelanguage.googleapis.com (Gemini API motion watch, optional, only with the user's OK)", "registry.npmjs.org (npx hyperframes)", "cdn.jsdelivr.net (Simple Icons logos)", "commons.wikimedia.org (logos)", "freesound.org, bigsoundbank.com, mixkit.co, pixabay.com (sound effect downloads, optional)", "huggingface.co (whisper.cpp tiny.en model for checking spoken lines, one download, optional)"]
+external_calls: ["youtube.com (yt-dlp, reference films, only with the user's OK)", "OpenAI via the Codex CLI (still images)", "Higgsfield API via the higgsfield CLI (video clips, optional)", "generativelanguage.googleapis.com (Gemini API motion watch, optional, only with the user's OK)", "registry.npmjs.org (npx hyperframes)", "cdn.jsdelivr.net (Simple Icons logos)", "commons.wikimedia.org (logos)", "freesound.org, bigsoundbank.com, mixkit.co, pixabay.com (sound effect downloads, optional)", "huggingface.co (whisper.cpp tiny.en model for checking spoken lines, one download, optional)", "huggingface.co, pypi.org, download.pytorch.org (real-sfx listening models and their Python packages, each only when its install step is run with --yes, optional)"]
 ---
 
 > **Bundled scripts run with `python3`.**
@@ -306,6 +306,7 @@ Before sending any page or render, go through every frame against `references/pr
 | `references/text-and-captions.md` | Any on-screen text: the text systems, reading times, safe areas by format |
 | `references/sound-and-voice.md` | Stages 2 and 7: narration, music, effects, silence, mix |
 | `references/sound-stage.md` | Stages 7-9: making the sound by film type, fitting music, sound sources and licences |
+| `real-sfx/SKILL.md` | Path B effects: real-sfx by Clipwing, included; read it only when `sound-stage.md` sends you there |
 | `references/motion-library.md` | Stage 7: proven shot shapes and transition families |
 | `references/motion-spec.md` | Stage 7: scene length, house settings, named moves, spec format |
 | `references/text-treatments.md` | Choosing how text looks and moves: the treatments seen in strong films, with sizes and timings |
