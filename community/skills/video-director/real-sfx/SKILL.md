@@ -18,6 +18,19 @@ The goal: the film sounds as if a person with a good library had cut it. So:
   (step 1). The critique measures this as a number (the `doubling` axis).
 - **Do not change the project or the skill folder.** Put all working files in your own folder (`work/`, `result/`).
 
+## Inside Video Director
+
+*(Added in Video Director's copy; not in Clipwing's original. `UPSTREAM.md` lists every change.)* This copy lives
+inside the Video Director skill and is run by its Sound stage: `../references/sound-stage.md`, "Sound engineering".
+Those steps decide which moments get a sound, give this skill only those (`build/audio/sfx/events.json`), pin the
+recordings the user chose (`sound_handoff.py pins`), run it with `--ui library`, `--no-loudnorm` and no texture layer or
+bed, and take back only the effects track and the resolved cues (`sound_handoff.py collect`). Follow them, and read
+this file only for options they don't cover. Set `REAL_SFX_CONFIG`, `REAL_SFX_INDEX`, `REAL_SFX_TASTE`,
+`REAL_SFX_RATINGS`, `REAL_SFX_STEADY` and `REAL_SFX_STYLES` to paths under `~/.config/real-sfx/` (the plugin installs
+each version in a new folder, so anything written here is left behind on the next update), and don't use
+`--remember`, which writes into this folder (so does `learn_style.py`: copy a learned style into
+`~/.config/real-sfx/styles/`).
+
 ## Quick path
 
 First `python scripts/setup.py check` (ffmpeg, main/extra libraries, index, uisfx) and

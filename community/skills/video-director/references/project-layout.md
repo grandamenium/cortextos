@@ -26,6 +26,11 @@ Create this layout at stage 1. Every later stage writes into it.
   assets/audio/             music, voiceover, effects; SOURCES.md lists each file's source
                             and licence (sound-stage.md); never in a public repository
   build/                    the HyperFrames project
+  build/audio/              the stems (music, effects, voice), sound-plan.json (every moment that
+                            makes a sound) and events.json (sound-stage.md)
+  build/audio/sfx/          real-sfx's working files: its event list, pins, cue sheet, results
   output/                   rendered cuts
-  output/build-log.md       one line per render: version, notes answered, what changed
+  output/build-log.md       one line per render: version, notes answered, what changed, and for
+                            films with effects: planned/placed sounds, picks chosen by the user,
+                            and anything quiet, unplanned or off its frame
 ```

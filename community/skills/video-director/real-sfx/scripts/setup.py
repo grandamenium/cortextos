@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import AUDIO_EXT, SKILL_DIR, config_path, is_sound_file
+from common import AUDIO_EXT, SKILL_DIR, config_path, index_path, is_sound_file
 
 EXAMPLE = {
     "libraries": [],
@@ -70,8 +70,7 @@ def check():
         ok &= n is not None or lib.get("enabled", True) is False
     if not cfg.get("libraries"):
         print("  no libraries configured: only uisfx UI cues will be available")
-    idx = Path(cfg.get("index_path", "library_index.json"))
-    idx = idx if idx.is_absolute() else SKILL_DIR / idx
+    idx = index_path(cfg)        # honours REAL_SFX_INDEX, as every other script does
     if idx.exists():
         d = json.loads(idx.read_text(encoding="utf-8"))
         print(f"  index    {d['count']} sounds  ({idx.name})")

@@ -85,7 +85,7 @@ Read `references/checkpoints.md` for response templates and stage-specific loadi
 | 5 | Look decisions | one decision at a time, 2-3 options each | Each pick |
 | 6 | Storyboard | every scene, start and end frames, notes page | Approved, or notes |
 | 7 | Motion spec | scene lengths, then a named move, timing and easing for every change | Approved |
-| 7-9 | Sound | clip sound or library effects by film type, fitted music, `assets/audio/SOURCES.md` | Does it sound right? |
+| 7-9 | Sound | a sound plan, clip sound by film type, library effects placed with real-sfx, fitted music, `assets/audio/SOURCES.md` | Does it sound right? |
 | 8 | Animated test | the 2-4 hardest scenes in HyperFrames (a run from the start for live-action story ads) | Does it move right? |
 | 9 | Full build | the whole film and its cutdowns, checked frame by frame | Final |
 | 10 | Polish rounds | one new numbered render per round of notes, each note checked against its frames first | Each round signed off |
@@ -172,7 +172,7 @@ Read `references/motion-library.md`, `references/motion-spec.md` and the type fi
 
 1. **Fix scene lengths first**, by the type's rule (shot shape, narrated sentence, unit, step or beat), so every line stays readable (`references/text-and-captions.md` has the reading times). Short scenes force everything on screen in the first second. Tell the user the new total.
 2. Give **every change inside a scene and every change between scenes** a named move, timing, easing, and what carries over.
-3. Plan sound with the picture (`references/sound-and-voice.md`) and start the Sound stage (`references/sound-stage.md`).
+3. Plan sound with the picture (`references/sound-and-voice.md`): write the sound plan, every moment that makes a sound, and start the Sound stage (`references/sound-stage.md`).
 4. Write it into the storyboard JSON and `motion-spec.md`, rebuild with `--strict`, and show the user.
 
 `--strict` checks the motion fields (`references/storyboard-format.md`); review its fade/blur candidates and NOTE lines.
@@ -192,6 +192,7 @@ python3 <skill>/scripts/check_render.py build/ --motion --video output/cut-v3.mp
 python3 <skill>/scripts/cut_frames.py output/cut-v3.mp4 --out output/cuts-v3
 python3 <skill>/scripts/action_frames.py --actions build/actions.json --motion-spec motion-spec.md --build build/ --video output/cut-v3.mp4 --out output/actions-v3
 python3 <skill>/scripts/continuity_sheet.py output/cut-v3.mp4 --items build/continuity.json --out output/continuity-v3
+python3 <skill>/scripts/sound_handoff.py collect build/audio/sound-plan.json --resolved build/audio/sfx/result/fx_resolved_cues.json --track build/audio/sfx/result/fx_sfx_track.wav --fps 30
 python3 <skill>/scripts/check_sources.py assets/audio
 python3 <skill>/scripts/sound_balance.py --music build/audio/music.wav --effects build/audio/effects.wav --voice build/audio/voice.wav --events build/audio/events.json --out output/sound-v3
 python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --upload-allowed --notes direction-notes.md
@@ -200,7 +201,7 @@ python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --u
 Exact render-check failures must be fixed; candidates need a recorded visual judgment (`references/build-and-qa.md`). Required on every render the user sees from stage 8, every strip and sheet opened:
 - **Cut strips** at every cut; **action strips** at every click, press or touch inside a shot (a pointer off its target fails), or an empty `actions.json` for a film with none.
 - **Continuity sheets** for films with generated clips of recurring people, places or props: one verdict line per recurring prop and garment; `--verify` passes.
-- **Sound balance** from the mix's stems, for films with effects or voice. Claude can't hear: report the numbers.
+- **Sound** for films with effects or voice: effects made by Sound engineering (`references/sound-stage.md`), the plan matched (`sound_handoff.py collect`), and the balance from the stems. Claude can't hear: report the numbers.
 - **A fresh read** by a new agent, or a build-log line saying why not.
 
 The motion watch is extra coverage (`--upload-allowed` only if the brief allows; confirm findings in frames; otherwise say "not watched in motion"). A clean watch is never proof: it sees low-resolution frames.
@@ -305,8 +306,8 @@ Before sending any page or render, go through every frame against `references/pr
 | `references/storyboard-format.md` | Writing storyboard or options JSON; the notes round trip |
 | `references/text-and-captions.md` | Any on-screen text: the text systems, reading times, safe areas by format |
 | `references/sound-and-voice.md` | Stages 2 and 7: narration, music, effects, silence, mix |
-| `references/sound-stage.md` | Stages 7-9: making the sound by film type, fitting music, sound sources and licences |
-| `real-sfx/SKILL.md` | Path B effects: real-sfx by Clipwing, included; read it only when `sound-stage.md` sends you there |
+| `references/sound-stage.md` | Stages 7-9: the sound plan, making the sound by film type, Sound engineering with real-sfx, fitting music, sound sources and licences |
+| `real-sfx/SKILL.md` | real-sfx (Clipwing), whose scripts Sound engineering runs; only for options `sound-stage.md` doesn't cover |
 | `references/motion-library.md` | Stage 7: proven shot shapes and transition families |
 | `references/motion-spec.md` | Stage 7: scene length, house settings, named moves, spec format |
 | `references/text-treatments.md` | Choosing how text looks and moves: the treatments seen in strong films, with sizes and timings |

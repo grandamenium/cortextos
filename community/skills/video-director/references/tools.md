@@ -17,7 +17,8 @@
 | Bar lines of a music track | `aubio beat <track.wav>` or librosa's `beat_track` | For fitting music on bar lines (`sound-stage.md`); if neither is installed, say so and don't guess the bars |
 | Fitting music to the film | `scripts/fit_music.py` | Cuts a track into pieces, places and stretches each, dips it under lines; flags stretches over 3% and cuts off the bar lines |
 | Sound sources list | `scripts/check_sources.py` | Every file in `assets/audio/` has a `SOURCES.md` row with a licence, and every row has its file |
-| Real recorded effects | `real-sfx/`, [real-sfx](https://github.com/Clipwing/skills/tree/main/skills/real-sfx) by Clipwing, included | Finds sound moments and places real recordings from the user's own libraries; set-up and use: `sound-stage.md`, Placing effects with real-sfx |
+| Real recorded effects | `real-sfx/`, this skill's copy of [real-sfx](https://github.com/Clipwing/skills/tree/main/skills/real-sfx) by Clipwing | Places real recordings from the user's sound library on the planned frames and writes the effects track; set-up and steps: `sound-stage.md`, Sound engineering |
+| Hand-off to and from real-sfx | `scripts/sound_handoff.py` | `events`: the sound plan as real-sfx's event list; `pins`: the plan's labels and chosen recordings for its cue sheet; `collect`: its results as `effects.wav`, `events.json`, `assets/audio/effects/` and `SOURCES.md` rows, checked against the plan |
 | What a generated clip's audio says | `whisper-cli` (whisper.cpp) with the tiny English model, `-ml 1` for word times | Catches extra words in clip audio (`sound-stage.md`, path A); if missing, say so rather than skip the check silently |
 | Watching in motion | `scripts/watch_cut.py` (Gemini API, `GEMINI_API_KEY`) | A video model lists motion problems with times; candidates to confirm in frames |
 | Logos | Official files (Simple Icons, the company's brand page, Wikimedia Commons) | Check each SVG for scripts before use; note the source |

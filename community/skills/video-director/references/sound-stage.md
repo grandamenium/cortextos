@@ -6,9 +6,10 @@ How to make a film's sound, step by step, chosen by the kind of film. The rules 
 
 - When it runs
 - Choose the path
+- The sound plan
 - Path A: live action
 - Path B: motion design and app screens
-- Placing effects with real-sfx
+- Sound engineering: placing effects with real-sfx
 - Music, for every film with music
 - Where sounds come from, and their licences
 - `assets/audio/SOURCES.md`
@@ -18,9 +19,9 @@ How to make a film's sound, step by step, chosen by the kind of film. The rules 
 
 The Sound stage runs beside stages 7-9, not after them:
 
-1. **Stage 7 (motion spec):** plan the sound with the picture (`sound-and-voice.md`). Choose the path below. Once scene lengths are approved, write the music time map and the Suno prompts and send them to the user, so the tracks are back before the animated test. If the user supplies their own track instead, add its row to `SOURCES.md` with its licence and fit it the same way (Music, step 4 on). If no track is ready by the animated test, render the test without music, say so first, and fit the music for the next render.
-2. **Stage 8 (animated test):** the test carries real sound, made the way its path says: clip sound for live action, placed effects for motion design, and the fitted music. Ask the user to listen for the sound as well as the movement.
-3. **Stage 9 (full build):** the rest of the film's sound, then `sound_balance.py` from the stems (`build-and-qa.md`, Sound balance).
+1. **Stage 7 (motion spec):** plan the sound with the picture (`sound-and-voice.md`). Choose the path below and write the sound plan (below). Once scene lengths are approved, write the music time map and the Suno prompts and send them to the user, so the tracks are back before the animated test. If the user supplies their own track instead, add its row to `SOURCES.md` with its licence and fit it the same way (Music, step 4 on). If no track is ready by the animated test, render the test without music, say so first, and fit the music for the next render.
+2. **Stage 8 (animated test):** the test carries real sound, made the way its path says: clip sound for live action, effects placed by Sound engineering (below) for the test's scenes, and the fitted music. Ask the user to listen for the sound as well as the movement.
+3. **Stage 9 (full build):** Sound engineering for the whole film, then the mix from stems and `sound_balance.py` (`build-and-qa.md`, Sound balance). Each polish round that moves the picture runs Sound engineering again from step 2, so every sound follows its event.
 
 **Gate: the user listens and says the sound works.** A passing `sound_balance.py` is numbers, not a listen.
 
@@ -34,6 +35,25 @@ The Sound stage runs beside stages 7-9, not after them:
 | A film cut from supplied footage (a recap, a brand film from a shoot) | B, with the footage's own sound | keep the footage's own sound where it matters (a speech, a crowd), music under it, library effects rarely |
 
 A film can mix paths: a product launch with one live-action scene uses path A for that scene's clips and path B for the rest. Music, below, applies to every path.
+
+## The sound plan
+
+At stage 7, write `build/audio/sound-plan.json` from the motion spec: one entry for every moment that makes a sound, in any path, and nothing else. It is what the effects are made from and checked against, so a sound that isn't in it doesn't go in the film.
+
+```json
+[{"t": 7.25, "label": "calendar ding", "type": "chime", "hear": "must-hear"},
+ {"t": 21.15, "label": "click: Best Light in the Dock", "type": "click", "hear": "must-hear"},
+ {"t": 15.1, "label": "shirt flick and rustle", "type": "cloth", "hear": "texture", "source": "clip", "len": 4.5}]
+```
+
+- `t`: film seconds, the first frame of the event (from the composition's own times where it has them: a press at 0.9 s in a scene starting at 20.25 s is 21.15).
+- `label`: what happens on screen. It names the sound in every report and in `SOURCES.md`.
+- `type`: real-sfx's kind of event (click, pop, chime, success, hit, thump, whoosh, key, and their synonyms: the real-sfx skill's `references/typed-cues.md`).
+- `hear`: `must-hear` (the ding, the click that matters) or `texture` (a rustle, steps, a room).
+- `source`: `library` (the default: placed by Sound engineering), `clip` (the clip's own sound, path A) or `none` (a moment kept silent on purpose).
+- Once the user has heard and approved a recording for a moment: `file` (its full path), and as needed `role`, `slice`, `gain_db`, `pitch`, `fade_in`, `fade_out` (`scripts/sound_handoff.py` lists them). Every later run then uses that recording at that level.
+
+Show the user the plan with the motion spec, as a list of moments and where each sound comes from.
 
 ## Path A: live action
 
@@ -68,14 +88,13 @@ The lessons behind these steps, and what failed, are in `types/live-action-story
    ```
 
    The tiny English model is one download from the whisper.cpp releases (`models/download-ggml-model.sh tiny.en` in its repository). `-ml 1` gives one word per segment with its start and end time, so an extra word can be cut out by time. Report what each clip says. If `whisper-cli` isn't installed, say the words weren't checked.
-5. **Library effects only where the clip's own sound fails and the edit pass (step 3) can't fix it,** which in practice means clicks and alerts on the product's screen. Hand-placed library footsteps and chair sounds never matched a person's movements (`types/live-action-story.md`); remake that clip's sound with step 3 instead. Take effects from the sources below and place each by hand on the frame of its event. Background people stay silent; the music carries them.
+5. **Library effects only where the clip's own sound fails and the edit pass (step 3) can't fix it,** which in practice means clicks and alerts on the product's screen, and an added sound such as a bleep over a swear. Hand-placed library footsteps and chair sounds never matched a person's movements (`types/live-action-story.md`); remake that clip's sound with step 3 instead. Give those moments `"source": "library"` in the sound plan (the clip moments stay `"clip"`) and place them with Sound engineering, below; the clips' own sound stays in its own stem. Background people stay silent; the music carries them.
 
 ## Path B: motion design and app screens
 
-1. **List the moments that make a real sound,** from the motion spec: usually only the one click or tap that matters, a message arriving on a phone, a machine on screen. No sound on text, lines arriving or the logo (`sound-and-voice.md`, Effects). Most motion-design films need fewer than five effects; many need none.
-2. **Get real recordings** for those moments from the sources below. Never synthesize an effect: synthetic clicks were called weird choices on one film and were replaced with real trackpad recordings.
-3. **Place each one on the frame of its event,** never before it. Trim any silence at the start of a library file first, or the sound lands late by that much. Keep the effects on their own stem (`build/audio/effects.wav`) with an events file (`build/audio/events.json`) marking which must be heard.
-4. **Set levels by measurement** with `sound_balance.py`, not by fader.
+1. **List the moments that make a real sound** in the sound plan (above): usually only the one click or tap that matters, a message arriving on a phone, a machine on screen. No sound on text, lines arriving or the logo (`sound-and-voice.md`, Effects). Most motion-design films need fewer than five effects; many need none.
+2. **Make and place them with Sound engineering** (below): real recordings from the user's sound library, each on the frame of its event, on their own stem (`build/audio/effects.wav`) with an events file (`build/audio/events.json`) marking which must be heard. Never synthesize an effect: synthetic clicks were called weird choices on one film and were replaced with real trackpad recordings.
+3. **Set levels by measurement** with `sound_balance.py`, then by the user's ears, not by fader.
 
 **Narration**, when the brief has it (any path):
 
@@ -84,26 +103,88 @@ The lessons behind these steps, and what failed, are in `types/live-action-story
 3. **Get word times** with `whisper-cli -ml 1` (as in path A, step 4) and place picture changes at phrase breaks and each reveal on the word that names it (`sound-and-voice.md`, Narration).
 4. **Add its row to `SOURCES.md`**: who voiced it, or the text-to-speech service and plan, and the date.
 
-## Placing effects with real-sfx
+## Sound engineering: placing effects with real-sfx
 
-This skill includes [real-sfx](https://github.com/Clipwing/skills/tree/main/skills/real-sfx) by Alexander Korbanov at Clipwing (MIT) in `<skill>/real-sfx/`: its files unchanged, plus a `LICENSE` file. For path B, read `<skill>/real-sfx/SKILL.md` and use it for steps 2 and 3: it finds the moments in the HyperFrames composition, a screen recording or the picture, picks real recordings from the user's own sound libraries, places each on the exact frame, and returns the film with a separate effects track. Without a sound library it has only its interface sounds, so do path B by hand from the sources below.
+Every library effect, in either path, is made here. The work is done by [real-sfx](https://github.com/Clipwing/skills/tree/main/skills/real-sfx) by Alexander Korbanov at Clipwing (MIT), kept as this skill's own copy: `<real-sfx>` below is its folder, `<skill>/real-sfx`. It picks real recordings from the user's own sound library, places each on its frame and writes the effects track. This skill decides which moments get a sound, checks each pick, sets the levels against the music and keeps the sources list; real-sfx's own `SKILL.md` is needed only for options this section doesn't cover.
 
-1. **Set it up once per machine,** with the library list kept outside the skill folder so an update of this skill doesn't wipe it:
+**Set it up once per machine.** Its settings and what it learns go in `~/.config/real-sfx/`, never in its folder: the plugin installs each version of this skill in a new folder, so anything written there is left behind on the next update.
+
+```bash
+mkdir -p ~/.config/real-sfx/styles
+cat > ~/.config/real-sfx/env.sh <<'SH'
+export REAL_SFX_CONFIG="$HOME/.config/real-sfx/config.json" REAL_SFX_INDEX="$HOME/.config/real-sfx/library_index.json"
+export REAL_SFX_TASTE="$HOME/.config/real-sfx/taste.json" REAL_SFX_RATINGS="$HOME/.config/real-sfx/taste_ratings.json"
+export REAL_SFX_STEADY="$HOME/.config/real-sfx/ambience_steady.json" REAL_SFX_STYLES="$HOME/.config/real-sfx/styles"
+SH
+. ~/.config/real-sfx/env.sh
+python3 <real-sfx>/scripts/setup.py init --library main="<the user's sound folder>" --index
+python3 <real-sfx>/scripts/setup.py check
+```
+
+Run `. ~/.config/real-sfx/env.sh` in every shell that runs its scripts, and never use its `--remember` option (it writes into its folder). Ask the user where their sounds are; never point it at a folder they haven't named. The library is a folder of its own outside the project and outside any repository (on one film, `sfx-library/` beside the project folders); only the recordings a film uses are copied into its `assets/audio/effects/` (step 7). With no sound library yet, ask them to download recordings for the planned moments into such a folder first (sources below). The library's own `SOURCES.md` (one row per file with its licence) lets step 7 fill the project's rows. It needs ffmpeg with the `drawtext` and `rubberband` filters (on macOS, Homebrew's `ffmpeg-full`, first in `PATH`), and numpy for some of its scripts.
+
+**The steps,** from the project folder, with real-sfx's working files in `build/audio/sfx/`:
+
+1. **The plan.** `build/audio/sound-plan.json`, written at stage 7 (The sound plan, above).
+2. **Hand over the plan:**
 
    ```bash
-   export REAL_SFX_CONFIG=~/.config/real-sfx/config.json REAL_SFX_INDEX=~/.config/real-sfx/library_index.json
-   python3 <skill>/real-sfx/scripts/setup.py init --library main="<the user's sound folder>" --index
-   python3 <skill>/real-sfx/scripts/setup.py check
+   python3 <skill>/scripts/sound_handoff.py events build/audio/sound-plan.json --out build/audio/sfx/events.json --duration <film seconds>
    ```
 
-   Set the two variables in every shell that runs its scripts. Ask the user where their sounds are; never point it at a folder they haven't named.
-2. **Run its scripts from the project folder** as `python3 <skill>/real-sfx/scripts/<script>.py`, with its `work/` and `result/` folders inside `build/audio/sfx/`. Its own rule holds: it never changes the project's other files or its own folder.
-3. **Give it only the moments from path B, step 1,** as its own event list (`real-sfx/references/typed-cues.md`, then `from_cues.py`), not its automatic moment finding, and skip its small-sound layer (`texture.py`) and bed (`bed.py`) unless the user asks for them. Where its defaults and this skill's effects rules differ (`sound-and-voice.md`, Effects), this skill's rules win.
-4. **Prefer real recordings for interface moments too:** run it with `--ui library`. Its bundled interface pack (uisfx, 78 cues, CC0) is made by synthesis, and synthetic clicks were called weird choices on one film. Use uisfx only when the libraries have no fitting sound and the user has heard the cue and agreed.
-5. **Bring its result into this skill's checks:** its effects track becomes `build/audio/effects.wav`; write `build/audio/events.json` from its cue report, marking which events must be heard; then set levels with `sound_balance.py` (step 4 above). Its own critique and listening page are extra evidence, not a replacement for those checks or for the user's ears.
-6. **Copy every file it placed into `assets/audio/effects/` and add its `SOURCES.md` row,** from its cue report: the library file, where the user got it and its licence. `check_sources.py` checks only files in `assets/audio/`, so a file left in the library has no check. A uisfx cue's row reads: uisfx (bundled with real-sfx), CC0, any use, no credit needed.
+   It writes the library moments as real-sfx's event list. It flags (exit 2) a sound on text or the logo, a kind real-sfx doesn't know, a named recording for a typing run (name it with `from_cues.py --kind key=slices:<ids>` instead), and more than five library effects. Answer each line: change the plan, or tell the user. The plan's times are final film times: after a retime, move every `t` through the map (`build-and-qa.md`, Retiming) before running this again.
+3. **Place them:**
 
-It needs ffmpeg with the `drawtext` and `rubberband` filters (on macOS, Homebrew's `ffmpeg-full`) and, for some scripts, numpy. Its optional listening models download only when their install step is run with `--yes` (about 16 MB and 3.1 GB, from huggingface.co).
+   ```bash
+   python3 <real-sfx>/scripts/from_hyperframes.py build/ --out build/audio/sfx/hf-moments.json --video output/cut-v3-silent.mp4
+   python3 <real-sfx>/scripts/from_cues.py build/audio/sfx/events.json --video output/cut-v3-silent.mp4 --out build/audio/sfx/cues.json \
+     --ui library --no-stems --moments build/audio/sfx/hf-moments.json
+   python3 <skill>/scripts/sound_handoff.py pins build/audio/sound-plan.json --cues build/audio/sfx/cues.json --out build/audio/sfx/pins.json
+   python3 <real-sfx>/scripts/sheet.py apply build/audio/sfx/cues.json build/audio/sfx/pins.json
+   ```
+
+   `output/cut-v3-silent.mp4` is the HyperFrames render before any sound is added; if the render has sound, make a silent copy first (`ffmpeg -i output/cut-v3.mp4 -an -c:v copy output/cut-v3-silent.mp4`). `from_hyperframes.py` reads every scene start and move out of the composition; `from_cues.py` then lists the strong picture moments that have no planned sound. Most are cuts and moves, which stay silent here. If one is a real thing on screen making a sound, ask the user before adding it to the plan. Read its `routes:` line and any "NOT mapped" kinds. `pins` and `sheet.py apply` put the plan's labels back (real-sfx names cues by kind) and pin the recordings the plan names, with the kind's role and the recording's own pitch; a planned moment real-sfx left quiet is reported, not pinned.
+4. **Check every pick before anything is rendered:**
+
+   ```bash
+   python3 <real-sfx>/scripts/mix.py build/audio/sfx/cues.json --out build/audio/sfx/result/fx.mp4 --plan --no-loudnorm
+   ```
+
+   Read the table: each file must fit its moment. Automatic picks can't be trusted with a small library: on one film they put a pop sound on a censor bleep, a censor beep and a 2.5 s bell on people joining a call, and swapped the calendar ding with the call's join chime, because those kinds share one role and real-sfx varies its picks across a film. A library file named only by a number isn't recognized by role (four trackpad clicks were indexed as "misc"), so search by folder or name (`<real-sfx>/scripts/search.py --query <words>`). Where a pick doesn't fit, write the right recording into the plan (`file`, and `role`, `slice` as needed) and go back to step 2. A `WARN slice ... holds two hits` means the piece holds two sounds: shorten it or ask the user.
+5. **Render the effects track:** the same `mix.py` command without `--plan`. `--no-loudnorm` keeps each sound at real-sfx's level for its role; the mix sets the film's loudness (step 8).
+6. **Check the timing:** `python3 <real-sfx>/scripts/verify.py build/audio/sfx/result/fx_resolved_cues.json build/audio/sfx/result/fx_sfx_track.wav` measures where each sound really lands. Any sound off its moment, or a clipping track, is fixed before going on.
+7. **Bring it back:**
+
+   ```bash
+   python3 <skill>/scripts/sound_handoff.py collect build/audio/sound-plan.json --resolved build/audio/sfx/result/fx_resolved_cues.json \
+     --track build/audio/sfx/result/fx_sfx_track.wav --fps <the film's frame rate>
+   python3 <skill>/scripts/check_sources.py assets/audio
+   ```
+
+   It copies the effects track to `build/audio/effects.wav` and writes `build/audio/events.json` from the plan's `hear` column, at the times real-sfx placed them. It copies every recording real-sfx used into `assets/audio/effects/` and adds its `SOURCES.md` row, with the source and licence taken from the library's own `SOURCES.md`; a uisfx cue's row reads CC0, any use. It flags (exit 2) a planned moment left quiet, a sound nobody planned (not copied and given no row), a sound more than one frame off its planned time, and a row with no licence. A different recording with the name of one already in `effects/` gets its folder's name in front. Fix each flag, or tell the user.
+8. **Mix and measure.** Build the mix from stems and run `sound_balance.py` (`build-and-qa.md`, Sound balance). Put the effects stem's gain in the mix graph (on one film the approved effects sat 12 dB above real-sfx's track) and change one sound's level with `gain_db` in the plan, so the next run keeps it. For clicks and pops (under about 0.3 s), `sound_balance.py`'s 0.4 s window reads far lower than a click sounds: on one film the five trackpad clicks the user approved measured 8-32 dB under the music, flagged "buried" or "missing". Don't raise a short sound just to clear that flag; report its number and ask the user whether they hear it. A short sound flagged as sticking out is real.
+9. **The user listens.** Send the render with each planned moment, its time and its number from step 8. real-sfx's own `critique.py` and listening page are extra evidence, never the verdict: on one film its critique scored the first effects pass 9.6-10 on every point but loudness, and the user called it awful (too many sounds, too loud, footsteps that didn't match the steps on screen). When the user approves a sound, write its recording and level into the plan (`file`, `role`, `slice`, `gain_db`, any fades). On that film, a plan carrying the approved picks rebuilt the approved effects track sample for sample.
+
+**What this skill changes in real-sfx's defaults,** and why:
+
+| real-sfx on its own | Here |
+|---|---|
+| Finds the moments itself (from the composition, the picture or a screen recording) and sounds most of them | Only the planned moments; its own list of moments is a check for missed sounds, never a source |
+| Interface sounds from its bundled uisfx pack (made by synthesis) | `--ui library`: real recordings first. Use uisfx only when the library has nothing that fits and the user has heard it and agreed |
+| A small-sound layer (`texture.py`) and a dark bed (`bed.py`) under an effects-only film | Neither, unless the user asks: music or the clips' sound carries the film |
+| The film's loudness set to -14 LUFS | `--no-loudnorm`; loudness is set in the mix with the music and voice |
+| A new MP4 with its sound | Only the effects track and the resolved cues are used; the film is mixed from stems |
+| Its critique and listening scores | Extra evidence; `sound_balance.py`, `check_sources.py` and the user's ears decide |
+| Remembers kinds and taste in its own folder | Its settings, index and taste live in `~/.config/real-sfx/`. A style learned with its `learn_style.py` is still written into its folder: copy it into `~/.config/real-sfx/styles/` |
+
+**What its outputs become:**
+
+| real-sfx writes | Becomes |
+|---|---|
+| `fx_sfx_track.wav` (effects only, 48 kHz, from 0:00) | `build/audio/effects.wav`, the effects stem |
+| `fx_resolved_cues.json` (each sound's file, time and level) | `build/audio/events.json` (with the plan), the timing check, and the `SOURCES.md` rows |
+| each recording it used | a copy in `assets/audio/effects/` |
+| `fx_cue_report.md` | read at step 4 and kept in `build/audio/sfx/` |
 
 ## Music, for every film with music
 
@@ -123,7 +204,7 @@ It needs ffmpeg with the `drawtext` and `rubberband` filters (on macOS, Homebrew
 
 ## Where sounds come from, and their licences
 
-Download sounds into the project's own `assets/audio/` only. Never commit downloaded sound files to a public repository, and never bundle them with a skill or template: Mixkit's and Pixabay's licences forbid sharing the files on their own, and a repository is sharing them. The uisfx pack inside `real-sfx/` is CC0, which is why it can ship with this skill.
+Download sounds into the user's sound library folder (Sound engineering, above) or the project's own `assets/audio/`, never into a repository. Never commit downloaded sound files to a public repository, and never bundle them with a skill or template: Mixkit's and Pixabay's licences forbid sharing the files on their own, and a repository is sharing them. The uisfx pack inside the real-sfx skill is CC0, which is why it can ship with this plugin.
 
 | Source | What it has | What its licence allows |
 |---|---|---|
@@ -147,4 +228,4 @@ Add a line at the top saying the files stay in this project and are never commit
 
 ## What to report
 
-At stage 8 and every render after it: the path used, scene by scene where it differs; where each sound came from (clip, edit pass, library, music); what speech-to-text found in each clip with generated sound; each music piece's stretch and any off-bar cut; `SOURCES.md` complete or what is missing; `check_sources.py`'s result; and `sound_balance.py`'s numbers. Then ask the user to listen.
+At stage 8 and every render after it: the path used, scene by scene where it differs; where each sound came from (clip, edit pass, library, music); for library effects, the plan against what was placed (`sound_handoff.py collect`: planned, placed, quiet, unplanned, off its frame), which picks were automatic and which the user chose, and `verify.py`'s result; what speech-to-text found in each clip with generated sound; each music piece's stretch and any off-bar cut; `SOURCES.md` complete or what is missing; `check_sources.py`'s result; and `sound_balance.py`'s numbers, with short sounds marked as measured low by its window. Then ask the user to listen, moment by moment.

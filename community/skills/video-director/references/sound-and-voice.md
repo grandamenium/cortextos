@@ -44,7 +44,7 @@ Corporate ukulele, claps and whistling only when they truly fit the brand.
 ## Effects
 
 - No effects by default.
-- Use real recordings with a reusable licence (sources and what each licence allows: `sound-stage.md`), a different one each time: real trackpad clicks (BigSoundBank, CC0) replaced synthetic interface clicks the user called weird choices.
+- Use real recordings with a reusable licence (sources and what each licence allows: `sound-stage.md`), placed with Sound engineering there, a different one each time: real trackpad clicks (BigSoundBank, CC0) replaced synthetic interface clicks the user called weird choices.
 - If used, an effect is the sound of a real thing on screen (a machine, a game, a phone receiving a message), or a click on the one press that matters in a UI film. It lands on the frame of the event, never before. Its level is set by measurement (Measuring the balance, below), not kept under the music by rule.
 - Never a sound on text, a line arriving, or the logo. When the music has its own ending, that ending carries the logo: a chime added on top was rejected.
 - A sound the story needs (a calendar ding, the one click that matters) is checked against the music at that moment (Measuring the balance, below). On one film a ding was 4-5 dB under the music and inaudible; it needed +12 dB and a 6 dB dip in the music under it.

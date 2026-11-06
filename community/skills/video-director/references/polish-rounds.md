@@ -28,7 +28,7 @@ A note that changes how something looks (a new end card, a different ground, a n
   ffmpeg -v error -i output/cut-v17.mp4 -c:v libx264 -crf 25 -preset slow -c:a aac -b:a 128k -movflags +faststart output/cut-v17-phone.mp4
   ```
   Raise the crf by 2 and run it again if the file is still over 30 MB.
-- Add one line to the project's build log: the version, the notes it answers, and what changed.
+- Add one line to the project's build log: the version, the notes it answers, and what changed. For a film with library effects, add the sound line from `sound_handoff.py collect` (planned, placed, quiet, unplanned) and which picks the user chose; if the picture moved, Sound engineering ran again from step 2.
 - Every round runs the same checks before the render goes out (`build-and-qa.md`): the render check, cut strips, action strips at every click, press or touch inside a shot (films that have them), the continuity sheets with a verdict per item (films with generated clips of recurring people, places or props), sound balance from the stems (films with effects or voice), the fresh read, and the motion watch when allowed. A note that touched one scene doesn't make the others safe: a remade clip can change a prop, a retime can move a pointer off its target, a level change can bury another effect. Report the watch as watched (with the frame rate it used) or "not watched in motion", and never as proof the cut is clean.
 - When the user finds a problem by eye that the checks passed, add the moment to `build/actions.json` or the item to `build/continuity.json` (or the sound to `build/audio/events.json`) so every later round checks it.
 
