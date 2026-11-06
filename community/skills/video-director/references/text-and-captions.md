@@ -57,7 +57,15 @@ The frame kit's layout check uses these: it reads `BRAND.size` and, if set, `BRA
 
 ## Captions
 
-- Decide in the brief whether captions are burned in. When the brief doesn't say: burn them in for social shorts and anything posted to a feed (feeds ignore a caption track inside the file, and those films are watched muted); otherwise ship them as `.srt` and `.vtt` files beside the film, plus a captions track the viewer can switch on inside the `.mp4` (`ffmpeg -i cut.mp4 -i cut.srt -map 0 -map 1 -c copy -c:s mov_text cut-captioned.mp4`). If they are burned in, give them their own zone (usually low-center in 16:9, inside the 9:16 safe box) and keep all other text out of it.
+- Where the film is posted sets the default; the brief asks where, and you state the caption choice that follows for the user to confirm or change:
+
+  | Posted to | Default | Why |
+  |---|---|---|
+  | TikTok, Instagram Reels, YouTube Shorts | burned in | watched muted; the apps' own auto-captions are optional and plain |
+  | LinkedIn, Facebook and Instagram feeds, paid social ads | burned in | autoplay is muted, and a caption track inside the file is usually ignored |
+  | A website, YouTube (regular videos), a presentation, TV | separate files | the player shows them cleanly, viewers can turn them off, and they are easy to edit or translate |
+
+  Separate files means `.srt` and `.vtt` beside the film, plus a captions track the viewer can switch on inside the `.mp4` (`ffmpeg -i cut.mp4 -i cut.srt -map 0 -map 1 -c copy -c:s mov_text cut-captioned.mp4`). A film posted to both kinds of place gets both: a burned-in copy for social and a clean copy with caption files. If they are burned in, give them their own zone (usually low-center in 16:9, inside the 9:16 safe box) and keep all other text out of it.
 - Captions follow the narration and spoken lines word for word. A bleeped word is captioned "[bleep]" ("Oh, [bleep]!"), never with asterisks.
 - On-screen lines carry only what the narration doesn't say.
 - Never more than two caption lines; break at phrase boundaries.

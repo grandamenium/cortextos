@@ -41,7 +41,7 @@ The numbers below come from three films measured for one project (Logitech "An U
 4. **Screens inside person clips.** A clip model draws fake interfaces and text, so a person's clip never shows a readable screen. Frame the screen away from the camera, off-angle or out of focus, then either cut to an insert of the real recording or lay the recording over the screen in the build, tracked to it.
 5. **Show the result on the person.** The turn and the payoff show the product working on the character, not a narrator saying it does. A film that only talks about the feature needs a long claim close to explain it.
 6. **The gag needs its setup.** Whatever the payoff reveals (the part left unfixed, the reaction) is planted earlier in the film.
-7. **The person does one thing per shot.** One clip holds one location and one action. Use the action-clip command in `../media.md` with the character's reference stills, not the living-portrait command: a locked-off "subtle" prompt returns a near-still clip.
+7. **The person does one thing per shot.** One clip holds one location and one action. Use the sound-on action-clip command in `../sound-stage.md` (path A, step 1) with the character's reference stills, not the living-portrait command: a locked-off "subtle" prompt returns a near-still clip.
 
 ## Look decisions (stage 5)
 
@@ -49,7 +49,7 @@ In order: how the product is shown (a screen recording, or an approved rebuild),
 
 ## Text and sound
 
-- Captions of spoken lines are a brief decision, and by default they are not burned in: they ship as separate files (`../text-and-captions.md`, Captions). If the user wants them burned in, they sit in one home position, at least 3% of the frame height on a phone-watched film. The measured films set their few lines about 45-50% down over the picture (Logitech) or in a bar about 93% down (Progressive); pick one and keep it. Keep the bottom 17% clear of captions unless the type sits in a bar there on purpose.
+- Captions of spoken lines follow where the ad is posted (`../text-and-captions.md`, Captions): burned in for TikTok, Reels, Shorts and social feeds; separate files for a website or YouTube. One ad shown on its own website shipped its captions as files. Burned-in captions sit in one home position, at least 3% of the frame height on a phone-watched film. The measured films set their few lines about 45-50% down over the picture (Logitech) or in a bar about 93% down (Progressive); pick one and keep it. Keep the bottom 17% clear of captions unless the type sits in a bar there on purpose.
 - A thought line in voiceover is cut unless it says something the picture doesn't. On one film a two-word thought before the product moment added nothing and was cut.
 - A screen the viewer must read (a clock, an alert) gets its own close-up insert, at least 4% of the frame height for the words that matter. Over the shoulder, a laptop screen is unreadable.
 - Music carries the pace (`../sound-and-voice.md`).
@@ -57,9 +57,9 @@ In order: how the product is shown (a screen recording, or an approved rebuild),
 
 ## Sound and voices from the clips
 
-From one live-action story ad, over several rounds of the user's notes. Claude can't hear any of this: every claim about a sound comes from the user, a measurement or a listening model, and the report says which.
+From one live-action story ad, over several rounds of the user's notes. The order of work is in `../sound-stage.md`, path A; these are the lessons behind it. Claude can't hear any of this: every claim about a sound comes from the user, a measurement or a listening model, and the report says which.
 
-- **People's sounds come from the video model.** Make every person clip with its sound on from the start (`../media.md`, the action-clip command), prompted for only the natural sound of what is on screen: no speech, no music. Steps, the chair, the door and clothes are then timed to the picture because they come from it.
+- **People's sounds come from the video model.** Make every person clip with its sound on from the start (`../sound-stage.md`, path A, step 1), prompted for only the natural sound of what is on screen: no speech, no music. Steps, the chair, the door and clothes are then timed to the picture because they come from it.
 - **Adding sound to an approved clip**: run Seedance 2.5 `video_edit` with the clip as the video reference and keep only its audio (find the edit model's exact id with `higgsfield model list` and estimate cost with `higgsfield generate cost` first). Check alignment by motion correlation (on one film it was within 0-2 frames), and check what the audio says with a speech-to-text pass (`whisper-cli` with the tiny English model; `../tools.md`): takes added extra words, such as "Hi" or the line said twice.
 - **The lead's on-camera lines** worked voiced by the video model on her own clip, so the voice matches her mouth.
 - **Generated text-to-speech voices**: never use emotion tags. ElevenLabs voices with "[cheerful]" laughed first, and all eight tried sounded too high and eager. Ask for a relaxed, low-to-medium voice.

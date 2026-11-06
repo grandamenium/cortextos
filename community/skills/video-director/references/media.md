@@ -78,14 +78,16 @@ cd <project>/assets/video && higgsfield generate create seedance_2_0 --start-ima
   --prompt "Subtle living portrait. Locked-off camera, no camera movement, no zoom, framing stays exactly the same. <the person> stays in the same pose. <one small action: a slow breath, one natural blink, a slight nod, a small adjustment of what they hold>. Everything else unchanged."
 ```
 
-Action clip (a person doing something, as in a live-action story ad), with the character's approved reference stills:
+Action clip (a person doing something), with the character's approved reference stills. Sound is off by default, so the film's own music, narration and effects carry it:
 
 ```bash
 cd <project>/assets/video && higgsfield generate create seedance_2_0 --start-image ../images/<scene-still>.png \
   --image-references ../images/<character-front>.png --image-references ../images/<character-full>.png \
-  --aspect_ratio 16:9 --duration 5 --resolution 1080p --generate_audio true --mode std --genre comedy \
-  --prompt "<shot size, lens, camera>. <the character description, pasted word for word>. <one action, start to finish, saying who moves each object>. <the place>. <light>. Sound: only the natural sound of what is on screen, no speech, no music."
+  --aspect_ratio 16:9 --duration 5 --resolution 1080p --generate_audio false --mode std \
+  --prompt "<shot size, lens, camera>. <the character description, pasted word for word>. <one action, start to finish, saying who moves each object>. <the place>. <light>."
 ```
+
+In a live-action story ad, or a film whose brief says its people's own sound is heard, make the clip with its sound: `--generate_audio true`, add `--genre comedy` for a comedy, and end the prompt with "Sound: only the natural sound of what is on screen, no speech, no music." (or the character's line in quotes, when they speak in this clip). The steps that follow are in `sound-stage.md`, path A.
 
 Download the result URL it prints into `assets/video/`. Check model names with `higgsfield model list` if the command fails. Keep a generation record in `assets/video/LEDGER.md`: model, prompt, start image, job id, and which seconds were used.
 
@@ -94,7 +96,7 @@ Download the result URL it prints into `assets/video/`. Check model names with `
 - When a clip must join a designed scene, generate it with first and last frames so the join is a match cut.
 - Each hero clip only needs 1-2 seconds on screen; trim in the build.
 
-**Check every clip before using it,** and its start still against `build/continuity.json` before generating it (`build-and-qa.md`, Continuity sheets). Pull frames (one per 0.25 s) and look for: the face changing identity, hands or fingers warping or multiplying, props changing size or disappearing, objects passing through each other, framing drift, anything appearing before its cause, an object moving with nothing moving it. Video models also add their own camera cuts inside long clips: find them as spikes in the difference between one frame and the next (`ffmpeg -i clip.mp4 -vf "select='gt(scene,0.3)',showinfo" -f null - 2>&1 | grep pts_time`), and use only takes, or parts of takes, without them. Regenerate rather than send a flawed clip with a note. Look at stills and clips full size, in motion, as a skeptical stranger would. If a shot comes back "looks fake" twice, recommend a different approach (a designed frame, a different shot) instead of a third try.
+**Check every clip before using it,** and, in a film with recurring people, places or props, its start still against `build/continuity.json` before generating it (`build-and-qa.md`, Continuity sheets). Pull frames (one per 0.25 s) and look for: the face changing identity, hands or fingers warping or multiplying, props changing size or disappearing, objects passing through each other, framing drift, anything appearing before its cause, an object moving with nothing moving it. Video models also add their own camera cuts inside long clips: find them as spikes in the difference between one frame and the next (`ffmpeg -i clip.mp4 -vf "select='gt(scene,0.3)',showinfo" -f null - 2>&1 | grep pts_time`), and use only takes, or parts of takes, without them. Regenerate rather than send a flawed clip with a note. Look at stills and clips full size, in motion, as a skeptical stranger would. If a shot comes back "looks fake" twice, recommend a different approach (a designed frame, a different shot) instead of a third try.
 
 ## Without Higgsfield
 

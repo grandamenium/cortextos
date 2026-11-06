@@ -7,7 +7,7 @@
 - Other checks before sending any render
 - Watching in motion
 - Action moments inside a shot
-- Continuity sheets (footage films)
+- Continuity sheets (generated clips)
 - Sound balance
 - The fresh read (required)
 - Blind comparison with a reference
@@ -82,7 +82,7 @@ Make a contact sheet and read it, then check:
 - **Muted watch**: with the sound off, a first-time viewer can say what this is and what to do next (narration-led explainers excepted).
 
 - **Phone copy**: every render the user sees has a phone copy under 30 MB (`polish-rounds.md`, section 3), from the animated test on, not only in polish rounds.
-- **Captions**: shipped as separate files and a switchable track unless the brief says burned in (`text-and-captions.md`).
+- **Captions**: burned in or shipped as separate files according to where the film is posted (`text-and-captions.md`, Captions); a film posted to both kinds of place gets both versions.
 
 Then get the fresh read (section below).
 
@@ -111,14 +111,14 @@ python3 <skill>/scripts/watch_cut.py output/cut-v3.mp4 --out output/watch-v3 --u
 - **Model**: `gemini-3.6-flash` by default. In calibration on renders with known problems it caught three still photos standing in for a person's actions and a jumping cursor, and reported nothing in a clean cut; `gemini-3.5-flash-lite` caught one of the three stills, so don't use it to save money. `--model gemini-3.8-flash` is newer at the same price but untested here. Busy-model errors are retried three times.
 - **Cost**: $0.75 per million input tokens and $3.75 per million output tokens for 3.6 Flash until 31 December 2026, then double (Google's pricing page, November 2026). At 10 fps a minute of video is about 43,000 tokens, roughly 3-4 cents a watch (6-8 cents from 2027); free-tier use costs nothing.
 - **No key, no permission, or an error**: the script exits 3 (or 1) and writes `status: not_watched` with the reason. Say "not watched in motion" and why in the report; never imply the cut was checked in motion.
-- **It is extra coverage, not a hold.** A render without the watch can go to the user with that line in the report. The render check, cut strips, action strips, continuity sheets, sound balance and the fresh read are required.
+- **It is extra coverage, not a hold.** A render without the watch can go to the user with that line in the report. The render check, cut strips and the fresh read are required, and so are action strips, continuity sheets and sound balance for the films that need them (see each section).
 - **A clean watch is never proof.** The model sees each frame at low resolution (about 70 tokens a frame), so it can't see small UI mistakes: a pointer stopping 70 px below the item it should click, in a 1080p frame, is invisible to it. On one film's v3 the default watch found none of the eight problems the user then found by eye (a calibrated director's checklist found three). Report what it found and what it can't see; never "the watch found nothing, so the cut is clean".
 
 ## Action moments inside a shot
 
 Cut strips show the frames around cuts. The moment a click, a press, a hand on a knob or a pointer landing happens is usually in the middle of a shot, and nothing else looks at it closely. On one film the pointer on a join screen stopped 45 px below the camera menu and 70 px below the camera item it was meant to click; the cut strips, the render check and the motion watch all passed it, and the user found it by eye.
 
-From the motion spec, list every action moment in `build/actions.json`: time, a label saying what should happen, and either a target box in video pixels or, in a HyperFrames UI scene, the composition, the pointer's selector and the target's selector:
+From the motion spec, list every action moment in `build/actions.json`. A film with no click, press or touch inside a shot (most films with no pointer and no hand on a control) writes `[]`; the script then records that there were none and passes. Pass `--motion-spec motion-spec.md` as well: with an empty list it flags any line of the spec that mentions a click, tap, press, touch or pointer. Otherwise give each moment: time, a label saying what should happen, and either a target box in video pixels or, in a HyperFrames UI scene, the composition, the pointer's selector and the target's selector:
 
 ```json
 [{"time": 36.94, "label": "picks the app's camera in the camera menu", "composition": "compositions/join.html", "pointer": "#ptr", "target": "#opt"},
@@ -126,7 +126,7 @@ From the motion spec, list every action moment in `build/actions.json`: time, a 
 ```
 
 ```bash
-python3 <skill>/scripts/action_frames.py --actions build/actions.json --build build/ --video output/cut-v3.mp4 --out output/actions-v3
+python3 <skill>/scripts/action_frames.py --actions build/actions.json --motion-spec motion-spec.md --build build/ --video output/cut-v3.mp4 --out output/actions-v3
 ```
 
 - Each action gets a strip: the whole frame, then zoomed crops at -0.2 s, -0.07 s, the action and +0.07 s, with the target boxed in red and the pointer's tip marked in yellow.
@@ -134,7 +134,9 @@ python3 <skill>/scripts/action_frames.py --actions build/actions.json --build bu
 - A failed pointer check (exit 2) is an exact failure: fix the move's end point, render again. Exit 1 is the script failing, not the pointer. A composition loaded twice in the film needs `local_time` on each action.
 - For footage, look at each strip for the hand actually touching what it acts on (a door opened by its knob, not swinging by itself) and for anything appearing or vanishing.
 
-## Continuity sheets (footage films)
+## Continuity sheets (generated clips)
+
+Required for films with generated clips of recurring people, places or props: separate generations drift. A film cut from real supplied footage (a recap, a shoot) or with no recurring person, place or prop needs none; say so in the report.
 
 Generated clips change props and clothes between shots, and the change is often several shots apart, so neither the cut strips nor a quick watch shows it. On one film the water bottle was a different bottle in three shots, the front door was open in later shots after she had shut it, and her top changed between a sports bra and a crop top. Each was found by the user.
 
@@ -167,7 +169,7 @@ List the sounds that matter in `build/audio/events.json` as `must-hear` (a ding,
 python3 <skill>/scripts/sound_balance.py --music build/audio/music.wav --effects build/audio/effects.wav --voice build/audio/voice.wav --events build/audio/events.json --out output/sound-v3
 ```
 
-It measures every stem's momentary loudness (EBU R128, 0.4 s window) and flags effects sticking out above the music, must-hear events under it, texture sounds above it and voices too close to it. Give `--effects`, `--voice` or both. Its thresholds are starting values, not tested against listeners; a must-hear sound the user already approved can sit higher (one approved ding measured about +13 dB): report it, don't lower it. Exit 2 means flagged: change the mix or tell the user the numbers and ask. Report every labeled event's difference against the music with the render, so the user knows what to listen for. A clean report doesn't mean the mix sounds right; the user's ears decide. How to make the sounds: `sound-and-voice.md`, and for live-action films `types/live-action-story.md`.
+It measures every stem's momentary loudness (EBU R128, 0.4 s window) and flags effects sticking out above the music, must-hear events under it, texture sounds above it and voices too close to it. Give `--effects`, `--voice` or both. Its thresholds are starting values, not tested against listeners; a must-hear sound the user already approved can sit higher (one approved ding measured about +13 dB): report it, don't lower it. Exit 2 means flagged: change the mix or tell the user the numbers and ask. Report every labeled event's difference against the music with the render, so the user knows what to listen for. A clean report doesn't mean the mix sounds right; the user's ears decide. How to make the sounds: `sound-stage.md`.
 
 ## The fresh read (required)
 

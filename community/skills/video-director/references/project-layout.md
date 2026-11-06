@@ -23,7 +23,8 @@ Create this layout at stage 1. Every later stage writes into it.
                             or the user's own photos
   assets/video/             generated clips and any supplied footage, with LEDGER.md
   assets/logos/             official marks, with where each came from
-  assets/audio/             music, voiceover, effects, with source and rights
+  assets/audio/             music, voiceover, effects; SOURCES.md lists each file's source
+                            and licence (sound-stage.md); never in a public repository
   build/                    the HyperFrames project
   output/                   rendered cuts
   output/build-log.md       one line per render: version, notes answered, what changed

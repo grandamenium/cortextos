@@ -14,7 +14,10 @@
 | Action moments | `scripts/action_frames.py` | Zoomed frames at each click or touch inside a shot; fails when a HyperFrames pointer's tip misses its target |
 | Props and clothes across shots | `scripts/continuity_sheet.py` | One sheet per recurring item, a tile per shot; `--verify` needs a verdict per item |
 | Sound balance | `scripts/sound_balance.py` | Each effect and voice against the music at that moment, from the mix's stems |
-| Bar lines of a music track | `aubio beat <track.wav>` or librosa's `beat_track` | For fitting music on bar lines (`sound-and-voice.md`); if neither is installed, say so and don't guess the bars |
-| What a generated clip's audio says | `whisper-cli` with the tiny English model | Catches extra words in clip audio (`types/live-action-story.md`); if missing, say so rather than skip the check silently |
+| Bar lines of a music track | `aubio beat <track.wav>` or librosa's `beat_track` | For fitting music on bar lines (`sound-stage.md`); if neither is installed, say so and don't guess the bars |
+| Fitting music to the film | `scripts/fit_music.py` | Cuts a track into pieces, places and stretches each, dips it under lines; flags stretches over 3% and cuts off the bar lines |
+| Sound sources list | `scripts/check_sources.py` | Every file in `assets/audio/` has a `SOURCES.md` row with a licence, and every row has its file |
+| Real recorded effects (optional) | [real-sfx](https://github.com/Clipwing/skills/tree/main/skills/real-sfx), a separate skill by Clipwing | Finds sound moments and places real recordings from your own libraries; install it on its own (`sound-stage.md`) |
+| What a generated clip's audio says | `whisper-cli` (whisper.cpp) with the tiny English model, `-ml 1` for word times | Catches extra words in clip audio (`sound-stage.md`, path A); if missing, say so rather than skip the check silently |
 | Watching in motion | `scripts/watch_cut.py` (Gemini API, `GEMINI_API_KEY`) | A video model lists motion problems with times; candidates to confirm in frames |
 | Logos | Official files (Simple Icons, the company's brand page, Wikimedia Commons) | Check each SVG for scripts before use; note the source |
