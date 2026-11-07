@@ -16,6 +16,10 @@ export default defineConfig({
   test: {
     globals: true,
     testTimeout: 10000,
+    // Strip inherited agent-session env (CTX_*) and git hook env (GIT_DIR etc.)
+    // so `npm test` behaves the same inside an agent PTY or a git hook as in a
+    // plain shell, and can never touch the enclosing repository.
+    setupFiles: ['tests/setup-isolate-env.ts'],
     include: [
       'tests/**/*.test.ts',
       'dashboard/src/**/__tests__/**/*.test.ts',
