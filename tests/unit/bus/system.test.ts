@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execSync } from 'child_process';
-import { selfRestart, hardRestart, autoCommit, checkGoalStaleness, postActivity } from '../../../src/bus/system';
+import { selfRestart, hardRestart, autoCommit, resolveAutoCommitDir, checkGoalStaleness, postActivity } from '../../../src/bus/system';
 import type { BusPaths } from '../../../src/types';
 
 function makePaths(testDir: string, agent: string = 'test-agent'): BusPaths {
@@ -172,6 +172,96 @@ describe('Bus System', () => {
       const report = autoCommit(gitDir);
       expect(report.status).toBe('nothing_to_stage');
       expect(report.blocked.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('resolveAutoCommitDir', () => {
+    let fwDir: string;
+    let orgDir: string;
+
+    function initRepo(dir: string): void {
+      execSync('git init', { cwd: dir, stdio: 'pipe' });
+      execSync('git config user.email "test@test.com"', { cwd: dir, stdio: 'pipe' });
+      execSync('git config user.name "Test"', { cwd: dir, stdio: 'pipe' });
+      writeFileSync(join(dir, '.gitkeep'), '');
+      execSync('git add .gitkeep && git commit -m "init"', { cwd: dir, stdio: 'pipe' });
+    }
+
+    beforeEach(() => {
+      // Simulated framework repo containing an org repo at orgs/myorg
+      fwDir = mkdtempSync(join(tmpdir(), 'cortextos-resolve-test-'));
+      initRepo(fwDir);
+      orgDir = join(fwDir, 'orgs', 'myorg');
+      mkdirSync(orgDir, { recursive: true });
+      initRepo(orgDir);
+    });
+
+    afterEach(() => {
+      rmSync(fwDir, { recursive: true, force: true });
+    });
+
+    it('resolves the org repo from agent env, not the framework root', () => {
+      const dir = resolveAutoCommitDir({ org: 'myorg', projectRoot: fwDir, frameworkRoot: fwDir });
+      expect(dir).toBe(orgDir);
+    });
+
+    it('snapshot of resolved dir sees org files, never framework-root files', () => {
+      // Untracked junk at the framework root (e.g. a stale build backup dir)
+      mkdirSync(join(fwDir, 'dist.pre-backup'), { recursive: true });
+      writeFileSync(join(fwDir, 'dist.pre-backup', 'stale.txt'), 'stale');
+      writeFileSync(join(orgDir, 'notes.md'), 'org data');
+
+      const dir = resolveAutoCommitDir({ org: 'myorg', projectRoot: fwDir, frameworkRoot: fwDir });
+      const report = autoCommit(dir, true);
+      expect(report.status).toBe('dry_run');
+      expect(report.staged).toContain('notes.md');
+      expect(report.staged.some(f => f.includes('dist.pre-backup'))).toBe(false);
+    });
+
+    it('refuses when the org dir git-resolves to the framework repo', () => {
+      // Org dir exists but was never git init'ed — discovery walks up to fwDir
+      const bareOrg = join(fwDir, 'orgs', 'bareorg');
+      mkdirSync(bareOrg, { recursive: true });
+
+      expect(() =>
+        resolveAutoCommitDir({ org: 'bareorg', projectRoot: fwDir, frameworkRoot: fwDir }),
+      ).toThrow(/FRAMEWORK repo/);
+    });
+
+    it('refuses when CTX_ORG is not set', () => {
+      expect(() =>
+        resolveAutoCommitDir({ org: '', projectRoot: fwDir, frameworkRoot: fwDir }),
+      ).toThrow(/CTX_ORG/);
+    });
+
+    it('refuses when the org workspace does not exist', () => {
+      expect(() =>
+        resolveAutoCommitDir({ org: 'ghost', projectRoot: fwDir, frameworkRoot: fwDir }),
+      ).toThrow(/does not exist/);
+    });
+
+    it('refuses when the org workspace is not inside any git repository', () => {
+      const plainBase = mkdtempSync(join(tmpdir(), 'cortextos-norepo-test-'));
+      const prevCeiling = process.env.GIT_CEILING_DIRECTORIES;
+      try {
+        mkdirSync(join(plainBase, 'orgs', 'solo'), { recursive: true });
+        // Stop git discovery from walking above the temp dir (e.g. into a
+        // repo that happens to contain the system tmpdir).
+        process.env.GIT_CEILING_DIRECTORIES = plainBase;
+        expect(() =>
+          resolveAutoCommitDir({ org: 'solo', projectRoot: plainBase, frameworkRoot: plainBase }),
+        ).toThrow(/not inside a git repository/);
+      } finally {
+        if (prevCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+        else process.env.GIT_CEILING_DIRECTORIES = prevCeiling;
+        rmSync(plainBase, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses when no project or framework root is set', () => {
+      expect(() =>
+        resolveAutoCommitDir({ org: 'myorg', projectRoot: '', frameworkRoot: '' }),
+      ).toThrow(/CTX_PROJECT_ROOT/);
     });
   });
 
