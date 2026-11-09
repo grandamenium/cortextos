@@ -1,0 +1,18 @@
+# Codex-only leakage tokens — grepped in custom skills by detect.py.
+# Grep-clean is NECESSARY but NOT SUFFICIENT: a clean skill can still assume codex
+# tool semantics that never appear as a literal string (confirm with the boot probe).
+#
+# == Mechanically rewritable (convert.py rewrites these everywhere in the target) ==
+plugins/cortextos-agent-skills/skills   # -> .claude/skills
+.agents/skills                          # codex repo-scoped skills -> .claude/skills
+#
+# == Behavioral leakage (NEEDS-HUMAN; skill is NOT auto-copied if hit outside prose) ==
+apply_patch            # codex file-edit tool; Claude uses Edit/Write
+update_plan            # codex plan tool; Claude uses its own task list
+request_user_input     # codex interactive prompt; Claude agents use the bus/approvals
+codex exec             # shells out to the codex CLI
+~/.codex               # codex host state (auth, config.toml, skills symlinks)
+CODEX_HOME             # same
+#
+# A token found ONLY in SKILL.md/README/references/docs or a data corpus dir is
+# documented, not depended on — reported as a note, never a needs-human flag.
