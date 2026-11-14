@@ -73,11 +73,19 @@ export async function middleware(request: NextRequest) {
   // GAP-0034: /api/workflows/health is an unauthenticated health probe — must be
   // reachable from monitoring contexts (load balancers, watcher crons, external
   // watchdogs) without requiring a session cookie. Auth-gating defeats the purpose.
+  // Crew PWA static assets must be fetchable without a session: browsers
+  // request the manifest/icons outside the page's cookie context during
+  // "Add to Home Screen", and a 307-to-login would break the install.
+  // All four are static public files with nothing sensitive in them.
   if (
     pathname.startsWith('/login') ||
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/_next') ||
     pathname === '/favicon.ico' ||
+    pathname === '/crew.webmanifest' ||
+    pathname === '/crew-icon-192.png' ||
+    pathname === '/crew-icon-512.png' ||
+    pathname === '/crew-apple-touch.png' ||
     pathname === '/api/workflows/health'
   ) {
     const response = NextResponse.next();
