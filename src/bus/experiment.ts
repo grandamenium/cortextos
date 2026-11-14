@@ -95,6 +95,9 @@ export interface ExperimentConfig {
 
 // --- Helpers ---
 
+const THETA_WAVE_METRIC = 'system_effectiveness';
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 function nowISO(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
@@ -133,6 +136,97 @@ function saveConfig(agentDir: string, config: ExperimentConfig): void {
   const dir = join(agentDir, 'experiments');
   ensureDir(dir);
   atomicWriteSync(join(dir, 'config.json'), JSON.stringify(config, null, 2));
+}
+
+// --- Theta-wave learnings.md auto-write ---
+
+/** Returns the theta-wave cycle number if the hypothesis carries a `TW<N>:` prefix, else null. */
+export function parseThetaWaveNumber(hypothesis: string): number | null {
+  const m = /^TW(\d+):/.exec(hypothesis);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Format a single theta-wave learnings.md entry block (File B format).
+ * Pure/deterministic — unit-testable in isolation.
+ */
+export function formatThetaWaveLearningEntry(params: {
+  n: number;
+  date: string; // preformatted "Mon D, YYYY"
+  score: string; // String(result_value)
+  decision: 'keep' | 'discard';
+  hypothesis: string;
+  learning: string; // may be ''
+}): string {
+  const body =
+    params.learning.trim().length > 0
+      ? params.learning
+      : 'No learning field was recorded for this cycle';
+  return (
+    `## TW${params.n} — ${params.date}\n\n` +
+    `**Score: ${params.score}/10** — ${params.decision.toUpperCase()}\n\n` +
+    `${params.hypothesis}\n\n` +
+    `${body}\n`
+  );
+}
+
+/** Format a completed_at ISO instant as "Mon D, YYYY" (UTC, locale-independent). */
+function formatThetaWaveDate(iso: string): string {
+  const d = new Date(iso);
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+}
+
+/**
+ * When a completed experiment is a theta-wave cycle (metric === system_effectiveness AND
+ * hypothesis begins `TW<N>:`), append a `## TW<N>` entry to the calling agent's own
+ * theta-wave learnings.md, so the record cannot exist without the log. No-op for any
+ * other metric. Idempotent: never duplicates an existing `## TW<N>` heading.
+ * Fails loud if, after writing, the heading is still absent.
+ *
+ * If the experiment IS on the system_effectiveness metric but the hypothesis lacks the
+ * `TW<N>:` prefix, warn loudly to stderr and skip the write (the evaluation is not blocked).
+ */
+export function writeThetaWaveLearning(agentDir: string, experiment: Experiment): void {
+  if (experiment.metric !== THETA_WAVE_METRIC) return; // non-theta-wave metric: silent no-op
+
+  const n = parseThetaWaveNumber(experiment.hypothesis);
+  if (n === null) {
+    console.warn(
+      `[theta-wave] system_effectiveness evaluation for experiment ${experiment.id} had no ` +
+        `'TW<N>:' hypothesis prefix — theta-wave learnings was NOT written`,
+    );
+    return;
+  }
+
+  const dir = join(agentDir, '.claude', 'skills', 'theta-wave');
+  const filePath = join(dir, 'learnings.md');
+  const headingRe = new RegExp(`^## TW${n}(?![0-9])`, 'm'); // (?![0-9]) => TW11 != TW113
+
+  ensureDir(dir);
+  if (!existsSync(filePath)) {
+    appendFileSync(filePath, '# Theta Wave Learnings\n\n', 'utf-8');
+  }
+  const existing = readFileSync(filePath, 'utf-8');
+
+  if (!headingRe.test(existing)) {
+    const entry = formatThetaWaveLearningEntry({
+      n,
+      date: formatThetaWaveDate(experiment.completed_at ?? nowISO()),
+      score: String(experiment.result_value),
+      decision: experiment.decision ?? 'discard',
+      hypothesis: experiment.hypothesis,
+      learning: experiment.learning,
+    });
+    appendFileSync(filePath, '\n' + entry, 'utf-8'); // leading \n = blank line before heading
+  }
+
+  // Fail-loud VERIFY backstop — post-condition is "the heading exists", write or dedupe.
+  const after = readFileSync(filePath, 'utf-8');
+  if (!headingRe.test(after)) {
+    throw new Error(
+      `theta-wave learnings write for TW${n} did not produce a '## TW${n}' heading at ${filePath}`,
+    );
+  }
 }
 
 // --- Public API ---
@@ -301,6 +395,11 @@ export function evaluateExperiment(
   if (decision === 'keep') {
     experiment.baseline_value = measuredValue;
   }
+
+  // Fold the theta-wave learnings.md write into evaluate so the record cannot exist
+  // without the log. No-op unless this is a theta-wave cycle. Fails loud BEFORE any
+  // persistent write, so a failed log aborts the whole evaluation (status stays 'running').
+  writeThetaWaveLearning(agentDir, experiment);
 
   saveExperiment(agentDir, experiment);
 
