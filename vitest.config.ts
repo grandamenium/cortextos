@@ -16,6 +16,10 @@ export default defineConfig({
   test: {
     globals: true,
     testTimeout: 10000,
+    // Strip ambient CTX_* vars (agent shells export them) before each test
+    // file so the suite behaves identically in any shell — see the setup
+    // file for the full rationale.
+    setupFiles: ['tests/setup/hermetic-env.ts'],
     include: [
       'tests/**/*.test.ts',
       'dashboard/src/**/__tests__/**/*.test.ts',
