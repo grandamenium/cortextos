@@ -252,9 +252,17 @@ export function isClaudeDirOperation(
   // Canonicalize the agent dir first (resolves legitimate symlinks on the install
   // path, e.g. /tmp -> /private/tmp), so the .claude subtree below it is the only
   // thing left to vet.
-  const canonAgentDir = canonicalizePath(resolve(base));
+  const lexAgentDir = resolve(base);
+  const canonAgentDir = canonicalizePath(lexAgentDir);
   const claudeRoot = join(canonAgentDir, '.claude');
-  const target = resolve(canonAgentDir, filePath);
+  // A file_path spelled via the non-canonical agent dir (e.g. /var/... on macOS
+  // where agentDir canonicalizes to /private/var/...) is rebased onto the
+  // canonical dir. Only that prefix is rewritten; everything below it is still
+  // vetted by hasSymlinkComponent.
+  const lexTarget = resolve(lexAgentDir, filePath);
+  const target = lexTarget.startsWith(lexAgentDir + sep)
+    ? join(canonAgentDir, lexTarget.slice(lexAgentDir.length + 1))
+    : resolve(canonAgentDir, filePath);
 
   // Lexical containment within the agent's own .claude/.
   if (target !== claudeRoot && !target.startsWith(claudeRoot + sep)) return false;
