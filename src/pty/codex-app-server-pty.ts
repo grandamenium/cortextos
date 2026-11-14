@@ -881,10 +881,11 @@ export class CodexAppServerPTY {
   }
 
   /**
-   * Append a per-turn token usage record to <ctxRoot>/logs/<agent>/codex-tokens.jsonl
+   * Append the thread's cumulative token totals after each turn to
+   * <ctxRoot>/logs/<agent>/codex-tokens.jsonl
    * so the dashboard cost-parser can scan it alongside ~/.claude/projects/*.jsonl.
-   * One JSONL line per `thread/tokenUsage/updated` notification; dedup by
-   * (session_id, turn_id) is the parser's responsibility.
+   * One JSONL line is written per `thread/tokenUsage/updated` notification;
+   * the parser converts consecutive totals into per-turn deltas by session.
    */
   private appendCodexTokenLog(params: Record<string, unknown>): void {
     const tokenUsage = isRecord(params.tokenUsage) ? params.tokenUsage : null;
