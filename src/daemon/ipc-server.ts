@@ -506,7 +506,7 @@ export class IPCServer {
           try {
             const request: IPCRequest = JSON.parse(data);
             data = '';
-            this.handleRequest(request, socket);
+            void this.handleRequest(request, socket);
           } catch {
             // Incomplete JSON, wait for more data
           }
@@ -567,7 +567,7 @@ export class IPCServer {
   /**
    * Handle an incoming IPC request.
    */
-  private handleRequest(request: IPCRequest, socket: Socket): void {
+  private async handleRequest(request: IPCRequest, socket: Socket): Promise<void> {
     // BUG-015: log every incoming IPC request with its source so we can
     // trace which CLI command triggered which daemon action. The source
     // field is populated by CLI clients (cortextos enable / disable / stop
@@ -686,12 +686,13 @@ export class IPCServer {
         }
 
         case 'terminate-worker': {
-          const workerName = request.data?.name as string | undefined;
+          const workerName = request.data?.name;
           if (!workerName) {
             response = { success: false, error: 'terminate-worker requires: name' };
+          } else if (typeof workerName !== 'string' || workerName.length > 64 || !WORKER_NAME_REGEX.test(workerName)) {
+            response = { success: false, error: 'Invalid worker name' };
           } else {
-            this.agentManager.terminateWorker(workerName)
-              .catch(err => console.error(`[ipc] terminate-worker failed:`, err));
+            await this.agentManager.terminateWorker(workerName);
             response = { success: true, data: `Terminating worker ${workerName}` };
           }
           break;
