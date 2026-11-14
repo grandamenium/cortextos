@@ -222,8 +222,29 @@ export const initCommand = new Command('init')
         existsSync(join(projectRoot, '.git')) &&
         existsSync(join(projectRoot, 'scripts', 'setup-hooks.sh'))) {
       try {
-        execSync('bash scripts/setup-hooks.sh', { cwd: projectRoot, stdio: 'ignore' });
-        console.log('  Installed git pre-push hook (build + test gate)');
+        // Capture stdout rather than discarding it: setup-hooks.sh is
+        // non-clobbering and exits 0 whether it installed the hook, found it
+        // already installed, or LEFT AN EXISTING HOOK IN PLACE. Reporting
+        // "Installed" on exit code alone claimed a build+test gate was active
+        // when a pre-existing hook (e.g. a dotfiles pre-push) meant it was not
+        // — a false assurance about a security control, which is worse than
+        // saying nothing because it stops the operator from looking.
+        const out = execSync('bash scripts/setup-hooks.sh', {
+          cwd: projectRoot,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).toString();
+
+        if (/^\s*Skipped:/m.test(out)) {
+          const line = out.split('\n').find(l => /^\s*Skipped:/.test(l))?.trim();
+          console.log(`  ${line}`);
+          console.log('  WARNING: the build + test pre-push gate is NOT active in this clone.');
+          console.log('           Chain it from your own hook, or install it with:');
+          console.log('             bash scripts/setup-hooks.sh   (after moving your hook aside)');
+        } else if (/^\s*Already installed:/m.test(out)) {
+          console.log('  Git pre-push hook already installed (build + test gate)');
+        } else {
+          console.log('  Installed git pre-push hook (build + test gate)');
+        }
       } catch {
         console.log('  Skipped git pre-push hook install (run: bash scripts/setup-hooks.sh)');
       }
