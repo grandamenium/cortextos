@@ -32,7 +32,20 @@ cortextos bus update-task <task_id> in_progress
 cortextos bus complete-task <task_id> --result "[output summary]"
 ```
 
-### 5. Log KPI (if measurable)
+### 5. Write learnings to KB (if the task produced reusable knowledge)
+```bash
+# Write a brief learning file, then ingest
+cat > /tmp/task-learning.md << 'EOF'
+## <Task title> — <date>
+**What:** <what was done>
+**Learned:** <key takeaway — technique, gotcha, or decision>
+**Tags:** <topic>, <agent>, <date>
+EOF
+cortextos bus kb-ingest /tmp/task-learning.md --org $CTX_ORG --scope shared --force
+```
+Skip this step for routine/trivial tasks. Write when: you discovered something non-obvious, solved a hard problem, or made a decision others should know about.
+
+### 6. Log KPI (if measurable)
 ```bash
 cortextos bus log-event task task_completed info --meta '{"task_id":"ID","kpi_key":"metric_name","value":1}'
 ```
@@ -64,3 +77,4 @@ Tasks with `needs_approval: true` create an approval item that must be reviewed 
 - **Be specific** - clear titles, descriptions with success criteria
 - **Complete thoroughly** - include what was accomplished and where outputs are
 - **Log KPIs** - when work advances a measurable goal
+- **Write learnings to KB** - when you discover something reusable (not every task — only non-obvious findings)
