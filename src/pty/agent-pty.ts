@@ -190,12 +190,14 @@ export class AgentPTY {
 
     // Claude Code shows interactive prompts on first run that must be auto-accepted
     // when running headless (no human at the PTY). There are TWO distinct screens:
-    //   1. "trust this folder?"      — default is "Yes, I trust"  -> bare Enter accepts.
+    //   1. "trust this folder?" (Claude Code 2.1.x) — options are "No, exit"
+    //      (DEFAULT) and "Yes, I trust this folder".
     //   2. "Bypass Permissions mode" (Claude Code 2.1.x+) — options are
-    //      "1. No, exit" (DEFAULT) and "2. Yes, I accept". A bare Enter here would
-    //      select "No, exit" and QUIT the agent (exit code 1) — the headless
-    //      crash-loop. We must move the selection DOWN then confirm: Down-arrow
-    //      (\x1b[B) + Enter.
+    //      "1. No, exit" (DEFAULT) and "2. Yes, I accept".
+    // BOTH screens default to "No, exit", so a bare Enter on either one selects
+    // "No, exit" and QUITS the agent (exit code 1) — the headless crash-loop.
+    // We must move the selection DOWN then confirm on each: Down-arrow
+    // (\x1b[B) + Enter.
     // The screens render a few seconds apart, so poll briefly and handle each once.
     // The TUI separates words with cursor-positioning escape codes, so we strip ANSI
     // and match on CO-OCCURRING, prompt-specific tokens (not stray single words) so
@@ -229,8 +231,22 @@ export class AgentPTY {
         return;
       }
       if (showingTrust && !trustHandled) {
+        // Trust screen: on Claude Code 2.1.x the options render as
+        //   "❯ No, exit"  (DEFAULT)
+        //   "  Yes, I trust this folder"
+        // i.e. the SAME "No, exit"-first ordering as the bypass screen, so a bare
+        // Enter picks "No, exit" and the agent exits(1) on every single spawn —
+        // the headless crash-loop. Move DOWN to "Yes, I trust this folder", then
+        // confirm. Polling deliberately continues here (unlike the bypass branch)
+        // because the bypass screen renders immediately after this one and still
+        // needs handling.
         trustHandled = true;
-        this.pty.write('\r');     // trust screen default is "Yes, I trust"
+        this.pty.write('\x1b[B'); // arrow down to "Yes, I trust this folder"
+        setTimeout(() => {
+          // Bootstrap-guard the deferred confirm so a late session bootstrap
+          // cannot swallow the CR into the live session.
+          if (this.pty && !this.outputBuffer.isBootstrapped()) this.pty.write('\r');
+        }, 350);
         return;
       }
     }, 1200);
@@ -246,6 +262,49 @@ export class AgentPTY {
         }
       }
     }, 45000);
+
+    // Credit-metered model modal — needs its OWN watcher, deliberately NOT gated on
+    // isBootstrapped(). A credit-metered model (e.g. Fable 5.1 on a Claude Pro plan)
+    // only renders this modal when the session makes its FIRST model call, which is
+    // after Claude Code's status bar is already up — and that status bar contains
+    // "permissions", so isBootstrapped() has flipped true and promptPoll above has
+    // already cleared itself. Handling it there is therefore dead code; it has to be
+    // watched for separately, past bootstrap.
+    //
+    //   "❯ Switch to <other model> and continue"  (DEFAULT)
+    //   "  Continue with <configured model>"
+    //
+    // Taking the default would silently run the agent on a DIFFERENT model than
+    // config.json specifies, so move DOWN to keep the configured one. Detection
+    // requires BOTH option labels plus the credit text so live agent prose can
+    // never trigger a stray keystroke into a running session.
+    let creditsHandled = false;
+    const creditPoll = setInterval(() => {
+      if (!this.pty || creditsHandled) { clearInterval(creditPoll); return; }
+      const recent = this.outputBuffer.getRecent().replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      if (!this.detectCreditPrompt(recent)) return;
+      creditsHandled = true;
+      this.pty.write('\x1b[B'); // arrow down to "Continue with <configured model>"
+      setTimeout(() => {
+        if (this.pty) this.pty.write('\r');
+        clearInterval(creditPoll);
+      }, 350);
+    }, 1200);
+    // Backstop: the modal appears on the first model call, well inside this window.
+    setTimeout(() => clearInterval(creditPoll), 180000);
+  }
+
+  // Matches ONLY the credit-metered model modal. Must use SINGLE words: the TUI
+  // separates words with cursor-forward escape codes rather than spaces, and the
+  // caller strips those to the empty string — so "Switch to" arrives as "Switchto"
+  // and any multi-word phrase can never match. Four co-occurring tokens (both
+  // option labels, the credit text, and the confirm footer) keep this tight enough
+  // that live agent prose can't trigger a keystroke into a running session.
+  private detectCreditPrompt(recent: string): boolean {
+    return recent.includes('credits')
+      && recent.includes('Switch')
+      && recent.includes('Continue')
+      && recent.includes('confirm');
   }
 
   // first-run observability fix: co-occurring, prompt-specific tokens only — never a
