@@ -12,6 +12,16 @@ node_modules
 dist/
 ecosystem.config.js
 
+# Community catalog installs — local artifacts, not framework source.
+# `cortextos bus install-community-item <name>` copies
+# community/{agents,orgs}/<name> to templates/{personas,orgs}/<name>
+# (src/bus/catalog.ts:266-271). The source already lives under community/ and is
+# tracked, so committing the copy duplicates tracked content and lets the two
+# drift silently. Regenerate at any time with:
+#   cortextos bus install-community-item <name>
+templates/personas/
+templates/orgs/
+
 # User-created org data (not part of the framework)
 orgs/
 # But community subdirectories ARE part of the framework
