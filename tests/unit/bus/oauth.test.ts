@@ -7,9 +7,24 @@ import { tmpdir } from 'os';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+// Keychain + home dir are mocked so tests never read the real Claude Code login
+const { mockExecFileSync, fakeHome } = vi.hoisted(() => ({
+  mockExecFileSync: vi.fn(),
+  fakeHome: { dir: '' },
+}));
+vi.mock('child_process', async (orig) => ({
+  ...(await orig<typeof import('child_process')>()),
+  execFileSync: mockExecFileSync,
+}));
+vi.mock('os', async (orig) => ({
+  ...(await orig<typeof import('os')>()),
+  homedir: () => fakeHome.dir,
+}));
+
 const {
   loadAccounts,
   getActiveAccount,
+  readClaudeCodeToken,
   checkUsageApi,
   refreshOAuthToken,
   rotateOAuth,
@@ -56,11 +71,78 @@ function writeStore(store = SAMPLE_STORE) {
 
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), 'cortextos-oauth-test-'));
+  fakeHome.dir = join(tmpDir, 'home');
   mockFetch.mockReset();
+  mockExecFileSync.mockReset();
+  mockExecFileSync.mockImplementation(() => { throw new Error('no keychain item'); });
+  vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', '');
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   try { rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
+});
+
+function claudeCreds(accessToken: string, expiresAt = Date.now() + FOUR_HOURS_MS) {
+  return JSON.stringify({ claudeAiOauth: { accessToken, refreshToken: 'rtok_never_used', expiresAt } });
+}
+
+function writeCredentialsFile(content: string) {
+  const { mkdirSync, writeFileSync } = require('fs');
+  mkdirSync(join(fakeHome.dir, '.claude'), { recursive: true });
+  writeFileSync(join(fakeHome.dir, '.claude', '.credentials.json'), content);
+}
+
+function withPlatform(platform: string, fn: () => void) {
+  const original = process.platform;
+  Object.defineProperty(process, 'platform', { value: platform });
+  try { fn(); } finally { Object.defineProperty(process, 'platform', { value: original }); }
+}
+
+describe('readClaudeCodeToken', () => {
+  it('prefers CLAUDE_CODE_OAUTH_TOKEN', () => {
+    vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', 'tok_env');
+    writeCredentialsFile(claudeCreds('tok_file'));
+    expect(readClaudeCodeToken()).toEqual({ token: 'tok_env', source: 'env' });
+  });
+
+  it('reads ~/.claude/.credentials.json', () => {
+    writeCredentialsFile(claudeCreds('tok_file'));
+    expect(readClaudeCodeToken()).toEqual({ token: 'tok_file', source: 'credentials.json' });
+  });
+
+  it('reads the macOS Keychain item read-only', () => {
+    mockExecFileSync.mockReturnValue(claudeCreds('tok_keychain') + '\n');
+    withPlatform('darwin', () => {
+      expect(readClaudeCodeToken()).toEqual({ token: 'tok_keychain', source: 'keychain' });
+    });
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'security',
+      ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+      expect.anything(),
+    );
+  });
+
+  it('skips an expired credentials file and falls through to the Keychain', () => {
+    writeCredentialsFile(claudeCreds('tok_stale', Date.now() - 1000));
+    mockExecFileSync.mockReturnValue(claudeCreds('tok_keychain'));
+    withPlatform('darwin', () => {
+      expect(readClaudeCodeToken()?.token).toBe('tok_keychain');
+    });
+  });
+
+  it('does not touch the Keychain off macOS', () => {
+    withPlatform('linux', () => {
+      expect(readClaudeCodeToken()).toBeNull();
+    });
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('returns null when nothing is available', () => {
+    withPlatform('darwin', () => {
+      expect(readClaudeCodeToken()).toBeNull();
+    });
+  });
 });
 
 describe('loadAccounts', () => {
@@ -164,6 +246,23 @@ describe('checkUsageApi', () => {
     const call = mockFetch.mock.calls[0];
     expect(call[1].headers.Authorization).toBe('Bearer tok_primary_abc');
     expect(call[1].headers['anthropic-beta']).toBe('oauth-2025-04-20');
+  });
+
+  it('falls back to the local Claude Code login when no accounts.json', async () => {
+    writeCredentialsFile(claudeCreds('tok_file'));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ five_hour: { utilization: 42 }, seven_day: { utilization: 17 } }),
+    });
+
+    const result = await checkUsageApi(tmpDir, { force: true });
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe('Bearer tok_file');
+    expect(result.account).toBe('credentials.json');
+    expect(result.five_hour_utilization).toBeCloseTo(0.42);
+  });
+
+  it('throws when no token source is available', async () => {
+    await expect(checkUsageApi(tmpDir, { force: true })).rejects.toThrow('No OAuth token available');
   });
 });
 

@@ -15,6 +15,7 @@
 import { existsSync, readFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { execFileSync } from 'child_process';
 import { atomicWriteSync, ensureDir } from '../utils/atomic.js';
 
 // --- Types ---
@@ -164,6 +165,53 @@ function saveCache(ctxRoot: string, snapshot: UsageSnapshot): void {
   } catch { /* ignore */ }
 }
 
+// --- Claude Code login (read-only) ---
+
+/**
+ * Read the access token of the local Claude Code login: env first, then
+ * ~/.claude/.credentials.json (Linux), then the macOS Keychain item
+ * "Claude Code-credentials". READ-ONLY — never refresh this token: refresh
+ * tokens are one-time use and Claude Code owns them, so refreshing here
+ * would log every agent session out.
+ */
+export function readClaudeCodeToken(): { token: string; source: string } | null {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return { token: process.env.CLAUDE_CODE_OAUTH_TOKEN, source: 'env' };
+  }
+
+  const parse = (raw: string): string | undefined => {
+    try {
+      const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string; expiresAt?: number } };
+      const oauth = parsed.claudeAiOauth;
+      if (!oauth?.accessToken) return undefined;
+      if (oauth.expiresAt && oauth.expiresAt < Date.now()) return undefined;
+      return oauth.accessToken;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const credsPath = join(homedir(), '.claude', '.credentials.json');
+  if (existsSync(credsPath)) {
+    const token = parse(readFileSync(credsPath, 'utf-8'));
+    if (token) return { token, source: 'credentials.json' };
+  }
+
+  if (process.platform === 'darwin') {
+    try {
+      const raw = execFileSync(
+        'security',
+        ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 },
+      );
+      const token = parse(raw.trim());
+      if (token) return { token, source: 'keychain' };
+    } catch { /* no keychain item or access denied */ }
+  }
+
+  return null;
+}
+
 // --- check-usage-api ---
 
 /**
@@ -199,9 +247,10 @@ export async function checkUsageApi(
       accessToken = active.account.access_token;
       accountName = active.name;
     } else {
-      accessToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-      accountName = 'env';
-      if (!accessToken) throw new Error('No OAuth token available (no accounts.json and CLAUDE_CODE_OAUTH_TOKEN not set)');
+      const local = readClaudeCodeToken();
+      if (!local) throw new Error('No OAuth token available (no accounts.json, CLAUDE_CODE_OAUTH_TOKEN not set, no unexpired Claude Code login found)');
+      accessToken = local.token;
+      accountName = local.source;
     }
   }
 
