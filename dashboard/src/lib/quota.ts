@@ -40,6 +40,35 @@ export interface QuotaResponse extends QuotaSnapshot {
   cache_age_ms: number;
 }
 
+export interface UsageApiBody {
+  five_hour?: { utilization?: number | null } | null;
+  seven_day?: { utilization?: number | null } | null;
+  five_hour_utilization?: number;
+  seven_day_utilization?: number;
+  fiveHourUtilization?: number;
+  sevenDayUtilization?: number;
+}
+
+/**
+ * Usage API body → 0–1 fractions. The API returns NESTED windows with WHOLE
+ * percentages ({ five_hour: { utilization: 4, resets_at } }), so nested values
+ * are always divided by 100. The old `v > 1 ? v / 100 : v` read 1% as 100%
+ * ("0% remaining" on a fresh account). Flat fields are a legacy fallback of
+ * unknown scale and keep that heuristic. Mirrors parseUsageResponse in
+ * src/bus/oauth.ts.
+ */
+export function parseUsageFractions(data: UsageApiBody): { fiveH: number; sevenD: number } {
+  const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+  const pct = (v: number | null | undefined): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? clamp01(v / 100) : undefined;
+  const legacy = (v: number | undefined): number =>
+    typeof v === 'number' && Number.isFinite(v) ? clamp01(v > 1 ? v / 100 : v) : 0;
+  return {
+    fiveH: pct(data.five_hour?.utilization) ?? legacy(data.five_hour_utilization ?? data.fiveHourUtilization),
+    sevenD: pct(data.seven_day?.utilization) ?? legacy(data.seven_day_utilization ?? data.sevenDayUtilization),
+  };
+}
+
 function getOAuthToken(): { token: string; source: QuotaSnapshot['source'] } | null {
   if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
     return { token: process.env.CLAUDE_CODE_OAUTH_TOKEN, source: 'env' };
@@ -87,32 +116,7 @@ async function fetchFresh(): Promise<QuotaSnapshot | null> {
   });
   if (!response.ok) return null;
 
-  // The Anthropic OAuth usage API actually returns NESTED objects:
-  //   { five_hour: { utilization: 77.0, resets_at: "..." }, seven_day: {...}, ... }
-  // We previously parsed flat fields (five_hour_utilization) which always
-  // returned undefined → normalize → 0 → "100% remaining" regardless of
-  // real usage. Hence the "stuck at 100%" UX bug. Keep the flat fallbacks
-  // in case the API ever returns either shape.
-  const data = (await response.json()) as {
-    five_hour?: { utilization?: number };
-    seven_day?: { utilization?: number };
-    five_hour_utilization?: number;
-    seven_day_utilization?: number;
-    fiveHourUtilization?: number;
-    sevenDayUtilization?: number;
-  };
-
-  const normalize = (v: number | undefined): number => {
-    if (v === undefined || v === null) return 0;
-    return v > 1 ? v / 100 : v;
-  };
-
-  const fiveH = normalize(
-    data.five_hour?.utilization ?? data.five_hour_utilization ?? data.fiveHourUtilization,
-  );
-  const sevenD = normalize(
-    data.seven_day?.utilization ?? data.seven_day_utilization ?? data.sevenDayUtilization,
-  );
+  const { fiveH, sevenD } = parseUsageFractions(await response.json());
 
   return {
     five_hour_remaining_pct: Math.round((1 - fiveH) * 100),

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -11,6 +11,7 @@ const {
   loadAccounts,
   getActiveAccount,
   checkUsageApi,
+  parseUsageResponse,
   refreshOAuthToken,
   rotateOAuth,
   ALERT_5H,
@@ -164,6 +165,100 @@ describe('checkUsageApi', () => {
     const call = mockFetch.mock.calls[0];
     expect(call[1].headers.Authorization).toBe('Bearer tok_primary_abc');
     expect(call[1].headers['anthropic-beta']).toBe('oauth-2025-04-20');
+  });
+});
+
+describe('parseUsageResponse', () => {
+  const nested = (five: number, seven: number) => ({
+    five_hour: { utilization: five, resets_at: '2026-10-25T07:00:00.000Z' },
+    seven_day: { utilization: seven, resets_at: '2026-10-31T01:00:00.000Z' },
+  });
+
+  it.each([
+    [0, 0],
+    [1, 0.01], // the old v > 1 heuristic read this as 100%
+    [4, 0.04],
+    [100, 1],
+  ])('treats nested utilization %d as a percentage → %d', (raw, expected) => {
+    const usage = parseUsageResponse(nested(raw, raw));
+    expect(usage.five_hour_utilization).toBeCloseTo(expected);
+    expect(usage.seven_day_utilization).toBeCloseTo(expected);
+  });
+
+  it('clamps out-of-range values to 0..1', () => {
+    const usage = parseUsageResponse(nested(120, -3));
+    expect(usage.five_hour_utilization).toBe(1);
+    expect(usage.seven_day_utilization).toBe(0);
+  });
+
+  it('passes resets_at through', () => {
+    const usage = parseUsageResponse(nested(4, 1));
+    expect(usage.five_hour_resets_at).toBe('2026-10-25T07:00:00.000Z');
+    expect(usage.seven_day_resets_at).toBe('2026-10-31T01:00:00.000Z');
+  });
+
+  it('returns null resets_at and 0 utilization when the windows are missing or null', () => {
+    expect(parseUsageResponse({})).toEqual({
+      five_hour_utilization: 0,
+      seven_day_utilization: 0,
+      five_hour_resets_at: null,
+      seven_day_resets_at: null,
+    });
+    const usage = parseUsageResponse({ five_hour: { utilization: null, resets_at: null }, seven_day: null });
+    expect(usage.five_hour_utilization).toBe(0);
+    expect(usage.five_hour_resets_at).toBeNull();
+  });
+});
+
+describe('checkUsageApi resets_at', () => {
+  it('surfaces resets_at in the result, the cache and latest.json; a 1% window is not a full one', async () => {
+    writeStore();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        five_hour: { utilization: 1, resets_at: '2026-10-25T07:00:00.000Z' },
+        seven_day: { utilization: 4, resets_at: '2026-10-31T01:00:00.000Z' },
+      }),
+    });
+
+    const result = await checkUsageApi(tmpDir, { force: true });
+    expect(result.five_hour_utilization).toBeCloseTo(0.01);
+    expect(result.seven_day_utilization).toBeCloseTo(0.04);
+    expect(result.five_hour_resets_at).toBe('2026-10-25T07:00:00.000Z');
+    expect(result.seven_day_resets_at).toBe('2026-10-31T01:00:00.000Z');
+
+    const latest = JSON.parse(readFileSync(join(tmpDir, 'state', 'usage', 'latest.json'), 'utf-8'));
+    expect(latest.five_hour_resets_at).toBe('2026-10-25T07:00:00.000Z');
+
+    const cached = await checkUsageApi(tmpDir);
+    expect(cached.cached).toBe(true);
+    expect(cached.seven_day_resets_at).toBe('2026-10-31T01:00:00.000Z');
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  it('reads a pre-fix cache (no resets_at keys) back with null resets_at', async () => {
+    writeStore();
+    const usageDir = join(tmpDir, 'state', 'usage');
+    mkdirSync(usageDir, { recursive: true });
+    writeFileSync(
+      join(usageDir, 'cache.json'),
+      JSON.stringify({
+        snapshot: {
+          account: 'primary',
+          five_hour_utilization: 0.04,
+          seven_day_utilization: 0.01,
+          fetched_at: '2026-10-25T00:00:00.000Z',
+        },
+        expires_at: Date.now() + 60_000,
+      }),
+    );
+
+    const result = await checkUsageApi(tmpDir);
+    expect(result.cached).toBe(true);
+    expect(result.five_hour_utilization).toBe(0.04);
+    expect(result.five_hour_resets_at).toBeNull();
+    expect(result.seven_day_resets_at).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

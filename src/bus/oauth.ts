@@ -48,6 +48,8 @@ export interface UsageSnapshot {
   account: string;
   five_hour_utilization: number;
   seven_day_utilization: number;
+  five_hour_resets_at: string | null; // ISO 8601 from the API, null if absent
+  seven_day_resets_at: string | null;
   fetched_at: string;
 }
 
@@ -60,6 +62,8 @@ export interface CheckUsageResult {
   account: string;
   five_hour_utilization: number;
   seven_day_utilization: number;
+  five_hour_resets_at: string | null;
+  seven_day_resets_at: string | null;
   cached: boolean;
   fetched_at: string;
 }
@@ -166,6 +170,51 @@ function saveCache(ctxRoot: string, snapshot: UsageSnapshot): void {
 
 // --- check-usage-api ---
 
+export interface UsageApiResponse {
+  five_hour?: { utilization?: number | null; resets_at?: string | null } | null;
+  seven_day?: { utilization?: number | null; resets_at?: string | null } | null;
+  five_hour_utilization?: number;
+  seven_day_utilization?: number;
+  fiveHourUtilization?: number;
+  sevenDayUtilization?: number;
+}
+
+export interface ParsedUsage {
+  five_hour_utilization: number; // 0.0–1.0
+  seven_day_utilization: number; // 0.0–1.0
+  five_hour_resets_at: string | null;
+  seven_day_resets_at: string | null;
+}
+
+const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
+
+/**
+ * Parse the Anthropic OAuth usage API body into 0.0–1.0 fractions.
+ *
+ * The API returns NESTED windows with WHOLE percentages:
+ *   { five_hour: { utilization: 4, resets_at: "..." }, seven_day: { utilization: 1, ... } }
+ * so nested utilization is always divided by 100. The old `v > 1 ? v / 100 : v`
+ * heuristic read 1% as 100% (and anything <= 1% as a full window), which raised
+ * false CODE REDs on fresh accounts and false rotations. The flat fields are a
+ * legacy fallback of unknown scale and keep that heuristic.
+ */
+export function parseUsageResponse(data: UsageApiResponse): ParsedUsage {
+  const pct = (v: number | null | undefined): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? clamp01(v / 100) : undefined;
+  const legacy = (v: number | undefined): number =>
+    typeof v === 'number' && Number.isFinite(v) ? clamp01(v > 1 ? v / 100 : v) : 0;
+  const resetsAt = (v: string | null | undefined): string | null => (typeof v === 'string' && v ? v : null);
+
+  return {
+    five_hour_utilization:
+      pct(data.five_hour?.utilization) ?? legacy(data.five_hour_utilization ?? data.fiveHourUtilization),
+    seven_day_utilization:
+      pct(data.seven_day?.utilization) ?? legacy(data.seven_day_utilization ?? data.sevenDayUtilization),
+    five_hour_resets_at: resetsAt(data.five_hour?.resets_at),
+    seven_day_resets_at: resetsAt(data.seven_day?.resets_at),
+  };
+}
+
 /**
  * Fetch utilization from Anthropic usage API for the active account.
  * Respects 3-minute TTL cache to avoid hitting rate limits.
@@ -178,7 +227,8 @@ export async function checkUsageApi(
   if (!opts.force) {
     const cache = loadCache(ctxRoot);
     if (cache && cache.expires_at > Date.now()) {
-      return { ...cache.snapshot, cached: true };
+      // Caches written before resets_at was tracked lack the fields.
+      return { five_hour_resets_at: null, seven_day_resets_at: null, ...cache.snapshot, cached: true };
     }
   }
 
@@ -216,40 +266,17 @@ export async function checkUsageApi(
     throw new Error(`Usage API returned ${response.status}: ${await response.text()}`);
   }
 
-  // The Anthropic OAuth usage API returns NESTED objects:
-  //   { five_hour: { utilization, resets_at }, seven_day: {...}, ... }
-  // The earlier flat-only parsing always returned undefined → normalize → 0
-  // → "100% remaining" regardless of real usage. That made the watchdog
-  // blind to real burn (it tripped only on ccusage's heuristic) and
-  // hid Sondre's actual quota in the dashboard. Keep flat fallbacks in
-  // case the API ever returns either shape.
-  const data = await response.json() as {
-    five_hour?: { utilization?: number };
-    seven_day?: { utilization?: number };
-    five_hour_utilization?: number;
-    seven_day_utilization?: number;
-    fiveHourUtilization?: number;
-    sevenDayUtilization?: number;
-  };
-
-  // Normalize 0–100 → 0.0–1.0 if needed
-  const normalize = (v: number | undefined) => {
-    if (v === undefined) return 0;
-    return v > 1 ? v / 100 : v;
-  };
-
-  const fiveHour = normalize(
-    data.five_hour?.utilization ?? data.five_hour_utilization ?? data.fiveHourUtilization,
-  );
-  const sevenDay = normalize(
-    data.seven_day?.utilization ?? data.seven_day_utilization ?? data.sevenDayUtilization,
-  );
+  const usage = parseUsageResponse(await response.json());
+  const fiveHour = usage.five_hour_utilization;
+  const sevenDay = usage.seven_day_utilization;
   const fetchedAt = new Date().toISOString();
 
   const snapshot: UsageSnapshot = {
     account: accountName,
     five_hour_utilization: fiveHour,
     seven_day_utilization: sevenDay,
+    five_hour_resets_at: usage.five_hour_resets_at,
+    seven_day_resets_at: usage.seven_day_resets_at,
     fetched_at: fetchedAt,
   };
 

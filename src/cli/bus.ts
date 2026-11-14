@@ -2555,6 +2555,8 @@ busCommand
         console.log(`Account: ${result.account}${cached}`);
         console.log(`5h utilization:  ${pct(result.five_hour_utilization)}${warn5h}`);
         console.log(`7d utilization:  ${pct(result.seven_day_utilization)}${warn7d}`);
+        if (result.five_hour_resets_at) console.log(`5h resets at: ${result.five_hour_resets_at}`);
+        if (result.seven_day_resets_at) console.log(`7d resets at: ${result.seven_day_resets_at}`);
         console.log(`Fetched at: ${result.fetched_at}`);
       }
     } catch (err) {
