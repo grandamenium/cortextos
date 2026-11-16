@@ -124,6 +124,7 @@ Codex agents track context window usage from `thread/tokenUsage/updated` events 
 - `ctx_warning_threshold` — default 70.
 - `ctx_handoff_threshold` — default 80.
 - `codex_context_cap` — fallback context window cap (tokens) used when codex-app-server reports `modelContextWindow=null`. Default 256000. Override per-model only if you know the actual cap.
+- `codex_permission_profile` — `managed` (default) keeps Cortext's unattended `never` + full-access policy; `native` inherits the local Codex app-server defaults. Native mode requires the client path to handle any approval requests those defaults emit.
 
 ---
 
