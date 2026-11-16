@@ -267,6 +267,16 @@ export interface AgentConfig {
    */
   codex_context_cap?: number;
   /**
+   * Permission source for codex-app-server agents.
+   *
+   * `managed` (default) preserves Cortext's unattended policy by explicitly
+   * setting approvalPolicy=never and danger-full-access on threads and turns.
+   * `native` omits those overrides and inherits the local Codex app-server
+   * defaults. Use native only with a client that can service any approval
+   * requests emitted by those defaults.
+   */
+  codex_permission_profile?: 'managed' | 'native';
+  /**
    * Fallback context window cap (tokens) for opencode agents when the OpenCode
    * model cache does not expose a context limit. Only applies to runtime:
    * 'opencode'.

@@ -325,6 +325,30 @@ Reply using: cortextos bus send-telegram 7940429114 '<your reply>'
     });
   });
 
+  it('inherits native Codex turn permissions when explicitly configured', async () => {
+    requestMock.mockResolvedValue({ result: {} });
+    const pty = new CodexAppServerPTY(mockEnv, { codex_permission_profile: 'native' });
+    (pty as unknown as { _alive: boolean })._alive = true;
+    (pty as unknown as { _threadId: string })._threadId = 'thread-native';
+    (pty as unknown as { _rpc: { request: typeof requestMock } })._rpc = { request: requestMock };
+
+    const start = (pty as unknown as {
+      startTurn(input: unknown[]): Promise<void>;
+    }).startTurn([{ type: 'text', text: 'hello', text_elements: [] }]);
+    await Promise.resolve();
+
+    expect(requestMock).toHaveBeenCalledWith('turn/start', {
+      threadId: 'thread-native',
+      input: [{ type: 'text', text: 'hello', text_elements: [] }],
+    });
+
+    (pty as unknown as { handleRpcMessage(message: unknown): void }).handleRpcMessage({
+      method: 'turn/completed',
+      params: {},
+    });
+    await start;
+  });
+
   it('rewrites /skill_name to native UserInput.skill via skills/list', async () => {
     requestMock
       .mockResolvedValueOnce({
@@ -991,6 +1015,22 @@ describe('CodexAppServerPTY thread lifecycle', () => {
       expect.stringContaining('"threadId": "fresh-thread"'),
       'utf-8',
     );
+  });
+
+  it('inherits native Codex thread permissions when explicitly configured', async () => {
+    requestMock.mockResolvedValue({ result: { thread: { id: 'native-thread' } } });
+    const pty = new CodexAppServerPTY(mockEnv, { codex_permission_profile: 'native' });
+    (pty as unknown as { _rpc: { request: typeof requestMock } })._rpc = { request: requestMock };
+
+    await (pty as unknown as { startOrResumeThread(mode: 'fresh' | 'continue'): Promise<void> }).startOrResumeThread('fresh');
+
+    expect(requestMock).toHaveBeenCalledWith('thread/start', {
+      cwd: '/tmp/fw/orgs/acme/agents/codex-app-agent',
+      config: { features: { goals: true } },
+      sessionStartSource: 'startup',
+      experimentalRawEvents: false,
+      persistExtendedHistory: true,
+    });
   });
 
   it('resumes the persisted thread in continue mode', async () => {
