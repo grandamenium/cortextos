@@ -180,8 +180,32 @@ describe('processMediaMessage', () => {
     expect(result!.type).toBe('voice');
     expect(result!.text).toBe('');
     expect(result!.duration).toBe(5);
-    expect(result!.file_path).toMatch(/voice_\d+\.ogg$/);
+    expect(result!.file_path).toBe(join(downloadDir, 'voice_1700000000_42_1.ogg'));
     expect(existsSync(result!.file_path!)).toBe(true);
+  });
+
+  it('preserves every same-second voice note, including repeated message IDs across chats', async () => {
+    const messages = Array.from({ length: 8 }, (_, i) => makeMsg({
+      message_id: i + 1,
+      voice: { file_id: `note_${i}`, duration: 5 },
+    }));
+    messages.push(makeMsg({
+      chat: { id: -123, type: 'group' },
+      message_id: 1,
+      voice: { file_id: 'other_chat_note', duration: 5 },
+    }));
+
+    const paths = await Promise.all(messages.map(async msg => {
+      const id = msg.voice!.file_id;
+      const api = createMockApi(`voice/${id}.ogg`, Buffer.from(id));
+      const result = await processMediaMessage(msg, api, downloadDir);
+      return result!.file_path!;
+    }));
+
+    expect(new Set(paths).size).toBe(messages.length);
+    paths.forEach((file, i) => {
+      expect(readFileSync(file, 'utf8')).toBe(messages[i].voice!.file_id);
+    });
   });
 
   it('voice message has undefined transcript when transcription disabled', async () => {

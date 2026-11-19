@@ -142,7 +142,7 @@ export async function processMediaMessage(
 
   // Voice
   if (msg.voice) {
-    const fileName = `voice_${date}.ogg`;
+    const fileName = `voice_${date}_${chatId}_${msg.message_id}.ogg`;
     const fileResponse = await api.getFile(msg.voice.file_id);
     const filePath = fileResponse?.result?.file_path;
     if (!filePath) return null;
